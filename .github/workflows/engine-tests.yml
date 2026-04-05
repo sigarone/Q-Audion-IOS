@@ -1,0 +1,16 @@
+name: QAudionEngine Tests
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cd QAudionEngine && swift build -c release
+      - name: Test
+        run: cd QAudionEngine && swift test --parallel
