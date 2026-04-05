@@ -1,0 +1,18 @@
+{
+  "padding_vectors": [
+    {
+      "description": "Small payload padded to 256",
+      "payload_size": 10,
+      "target_size": 256,
+      "expected_output_size": 256,
+      "expected_padding_length": 244
+    },
+    {
+      "description": "Large payload exceeds target",
+      "payload_size": 255,
+      "target_size": 256,
+      "expected_output_size": 257,
+      "expected_padding_length": 0
+    }
+  ]
+}
