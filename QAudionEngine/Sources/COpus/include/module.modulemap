@@ -1,0 +1,4 @@
+module COpus {
+    header "opus.h"
+    export *
+}
