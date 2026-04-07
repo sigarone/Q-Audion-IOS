@@ -1,4 +1,10 @@
 module CLiboqs {
-    header "oqs.h"
+    header "oqs/oqs.h"
+    header "oqs/common.h"
+    header "oqs/rand.h"
+    header "oqs/kem.h"
+    header "oqs/kem_ml_kem.h"
+    header "oqs/sha3.h"
+    header "oqs/sha3_ops.h"
     export *
 }

@@ -19,7 +19,16 @@ let package = Package(
             path: "Sources/CLiboqs",
             publicHeadersPath: "include",
             cSettings: [
-                .headerSearchPath("include")
+                .headerSearchPath("include"),
+                .headerSearchPath("src"),
+                .headerSearchPath("src/mlkem"),
+                .headerSearchPath("src/common"),
+                .headerSearchPath("src/common/sha3"),
+                .headerSearchPath("src/common/sha3/xkcp_low/KeccakP-1600/plain-64bits"),
+                .headerSearchPath("src/common/pqclean_shims"),
+                .define("OQS_ENABLE_KEM_ml_kem_1024"),
+                .define("MLK_CONFIG_PARAMETER_SET", to: "1024"),
+                .define("MLK_CONFIG_FILE", to: "\"mlkem_native_config.h\""),
             ]
         ),
         .target(
@@ -27,7 +36,15 @@ let package = Package(
             path: "Sources/COpus",
             publicHeadersPath: "include",
             cSettings: [
-                .headerSearchPath("include")
+                .headerSearchPath("include"),
+                .headerSearchPath("include/opus"),
+                .headerSearchPath("src"),
+                .headerSearchPath("src/opus_src"),
+                .headerSearchPath("src/celt"),
+                .headerSearchPath("src/silk"),
+                .headerSearchPath("src/silk/float"),
+                .define("HAVE_CONFIG_H"),
+                .define("OPUS_BUILD"),
             ]
         ),
         .target(
