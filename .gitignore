@@ -6,3 +6,6 @@ DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 *.xcodeproj
 .build/
+
+# Signal-iOS fork (managed separately)
+Signal-iOS/
