@@ -15,7 +15,24 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "CLiboqs",
+            path: "Sources/CLiboqs",
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("include")
+            ]
+        ),
+        .target(
+            name: "COpus",
+            path: "Sources/COpus",
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("include")
+            ]
+        ),
+        .target(
             name: "QAudionEngine",
+            dependencies: ["CLiboqs", "COpus"],
             path: "Sources/QAudionEngine"
         ),
         .testTarget(
