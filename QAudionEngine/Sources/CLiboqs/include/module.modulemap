@@ -1,0 +1,4 @@
+module CLiboqs {
+    header "oqs.h"
+    export *
+}
