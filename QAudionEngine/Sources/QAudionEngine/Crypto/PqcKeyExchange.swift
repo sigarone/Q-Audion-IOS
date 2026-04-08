@@ -125,6 +125,24 @@ public struct PqcKeyExchange {
     }
 }
 
+    // MARK: - Raw key interop (Android ASN.1 compatibility)
+
+    /// Extract raw public key bytes (strip ASN.1 if present from Android Bouncy Castle).
+    /// iOS liboqs uses raw format natively; this handles keys received from Android.
+    public static func extractRawPublicKey(_ encodedKey: Data) -> Data {
+        let rawSize = 1568  // ML-KEM-1024 public key
+        if encodedKey.count == rawSize { return encodedKey }
+        if encodedKey.count > rawSize { return encodedKey.suffix(rawSize) }
+        return encodedKey
+    }
+
+    /// Wrap raw public key for Android Bouncy Castle consumption.
+    /// Android's extractRawPublicKey() handles the reverse direction.
+    public static func wrapRawPublicKey(_ rawKey: Data) -> Data {
+        return rawKey
+    }
+}
+
 public enum PqcKeyExchangeError: Error {
     case emptyPublicKey
     case emptyCiphertext

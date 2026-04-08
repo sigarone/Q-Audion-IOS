@@ -62,11 +62,11 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     }
 
     public func sendOpaqueMessage(recipientId: String, payload: Data) {
-        send(type: "opaque_message", data: ["recipientId": recipientId, "payload": payload.base64EncodedString()])
+        send(type: "opaque_message", data: ["recipient_id": recipientId, "data": payload.base64EncodedString()])
     }
 
     public func sendAudioFrame(recipientId: String, frame: Data) {
-        send(type: "audio_frame", data: ["recipientId": recipientId, "frame": frame.base64EncodedString()])
+        send(type: "audio_frame", data: ["recipient_id": recipientId, "frame": frame.base64EncodedString()])
     }
 
     public func registerHandler(type: String, handler: @escaping MessageHandler) {

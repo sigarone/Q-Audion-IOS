@@ -10,6 +10,8 @@ public final class AdaptivePadding: @unchecked Sendable {
     private var _totalFramesPadded: Int64 = 0
     private var _totalFramesUnpadded: Int64 = 0
     private var _totalPaddingBytes: Int64 = 0
+    private var _totalRandomRatioSum: Int64 = 0  // fixed-point: ratio * 10000
+    private static let ratioScale: Float = 10_000.0
 
     public init(targetFrameSize: Int = defaultTargetFrameSize) {
         precondition(targetFrameSize >= 2, "targetFrameSize must be >= 2")
@@ -44,9 +46,11 @@ public final class AdaptivePadding: @unchecked Sendable {
         }
         output.append(UInt8((paddingLength >> 8) & 0xFF))
         output.append(UInt8(paddingLength & 0xFF))
+        let randomRatio = 1.0 - confidenceScore
         lock.lock()
         _totalFramesPadded += 1
         _totalPaddingBytes += Int64(paddingLength)
+        _totalRandomRatioSum += Int64(randomRatio * Self.ratioScale)
         lock.unlock()
         return output
     }
@@ -64,9 +68,11 @@ public final class AdaptivePadding: @unchecked Sendable {
 
     public var statistics: PaddingStatistics {
         lock.lock(); defer { lock.unlock() }
+        let avgRatio = _totalFramesPadded > 0 ? (Float(_totalRandomRatioSum) / Self.ratioScale) / Float(_totalFramesPadded) : 0
         return PaddingStatistics(totalFramesPadded: _totalFramesPadded,
             totalFramesUnpadded: _totalFramesUnpadded,
-            averagePaddingBytes: _totalFramesPadded > 0 ? Float(_totalPaddingBytes) / Float(_totalFramesPadded) : 0)
+            averagePaddingBytes: _totalFramesPadded > 0 ? Float(_totalPaddingBytes) / Float(_totalFramesPadded) : 0,
+            averageRandomRatio: avgRatio)
     }
 }
 
@@ -74,6 +80,7 @@ public struct PaddingStatistics {
     public let totalFramesPadded: Int64
     public let totalFramesUnpadded: Int64
     public let averagePaddingBytes: Float
+    public let averageRandomRatio: Float  // 0.0 = all zero-fill (high confidence), 1.0 = all random (low confidence)
 }
 
 public enum AdaptivePaddingError: Error {
