@@ -13,6 +13,9 @@ let package = Package(
             targets: ["QAudionEngine"]
         )
     ],
+    dependencies: [
+        .package(url: "https://github.com/nicklama/onnxruntime-swift-package-manager", from: "1.17.0"),
+    ],
     targets: [
         .target(
             name: "CLiboqs",
@@ -49,8 +52,15 @@ let package = Package(
         ),
         .target(
             name: "QAudionEngine",
-            dependencies: ["CLiboqs", "COpus"],
-            path: "Sources/QAudionEngine"
+            dependencies: [
+                "CLiboqs",
+                "COpus",
+                .product(name: "OnnxRuntimeBindings", package: "onnxruntime-swift-package-manager"),
+            ],
+            path: "Sources/QAudionEngine",
+            resources: [
+                .copy("Resources/aasist_raw_base_int8.onnx")
+            ]
         ),
         .testTarget(
             name: "QAudionEngineTests",
