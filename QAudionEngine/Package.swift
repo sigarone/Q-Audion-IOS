@@ -45,6 +45,7 @@ let package = Package(
                 .headerSearchPath("src/opus_src"),
                 .headerSearchPath("src/celt"),
                 .headerSearchPath("src/silk"),
+                .headerSearchPath("src/silk/fixed"),
                 .headerSearchPath("src/silk/float"),
                 .define("HAVE_CONFIG_H"),
                 .define("OPUS_BUILD"),

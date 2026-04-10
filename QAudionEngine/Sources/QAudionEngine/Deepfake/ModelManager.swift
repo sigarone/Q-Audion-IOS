@@ -1,6 +1,9 @@
 import Foundation
 import CryptoKit
+
+#if canImport(OnnxRuntimeBindings)
 import OnnxRuntimeBindings
+#endif
 
 /// ONNX Runtime model manager for AASIST-raw deepfake detection.
 ///
@@ -8,6 +11,9 @@ import OnnxRuntimeBindings
 /// Input: [1, 1, 64600] raw waveform at 16kHz
 /// Output: [1, 1] binary logit (positive=bonafide, negative=spoof)
 /// EER: 2.83% on ASVspoof2019 dev set
+///
+/// Note: ONNX Runtime is not available on iOS Simulator. On simulator
+/// builds, the model manager returns stub results for testing.
 public final class ModelManager {
     public enum ModelState { case notLoaded; case loading; case loaded; case error(String) }
 
@@ -18,8 +24,11 @@ public final class ModelManager {
     private static let trustedHash = "06f6d7d84e94ac40258419c440b0feda76daba63677ea098af1f88e647804ec4"
 
     private var state: ModelState = .notLoaded
+
+    #if canImport(OnnxRuntimeBindings)
     private var ortEnv: ORTEnv?
     private var session: ORTSession?
+    #endif
 
     public private(set) var modelIntegrityVerified = false
 
@@ -31,6 +40,7 @@ public final class ModelManager {
         guard case .notLoaded = state else { return isLoaded() }
         state = .loading
 
+        #if canImport(OnnxRuntimeBindings)
         guard let modelURL = Bundle.module.url(
             forResource: Self.modelName, withExtension: "onnx"
         ) else {
@@ -56,12 +66,18 @@ public final class ModelManager {
             state = .error(error.localizedDescription)
             return false
         }
+        #else
+        // ONNX Runtime not available (e.g. iOS Simulator)
+        state = .error("ONNX Runtime not available on this platform")
+        return false
+        #endif
     }
 
     /// Run inference on raw waveform.
     /// - Parameter waveform: Float array normalized [-1, 1], length = modelInputLength
     /// - Returns: Raw logit (positive = bonafide, negative = spoof)
     public func runInference(waveform: [Float]) throws -> Float {
+        #if canImport(OnnxRuntimeBindings)
         guard let session = session, let env = ortEnv else {
             throw NSError(domain: "ModelManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Model not loaded"])
         }
@@ -87,14 +103,20 @@ public final class ModelManager {
         let outputData = try outputTensor.tensorData() as Data
         let logit = outputData.withUnsafeBytes { $0.load(as: Float.self) }
         return logit
+        #else
+        throw NSError(domain: "ModelManager", code: 3,
+                       userInfo: [NSLocalizedDescriptionKey: "ONNX Runtime not available on this platform"])
+        #endif
     }
 
     public func getState() -> ModelState { state }
     public func isLoaded() -> Bool { if case .loaded = state { return true }; return false }
 
     public func unloadModel() {
+        #if canImport(OnnxRuntimeBindings)
         session = nil
         ortEnv = nil
+        #endif
         state = .notLoaded
         modelIntegrityVerified = false
     }

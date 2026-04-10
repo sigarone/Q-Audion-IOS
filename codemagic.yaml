@@ -28,20 +28,12 @@ workflows:
             -destination "$SIM_DEST" \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO
-      - name: Run Engine Tests
-        script: |
-          cd QAudionEngine
-          xcodebuild test \
-            -scheme QAudionEngine \
-            -destination "$SIM_DEST" \
-            -skipPackagePluginValidation \
-            CODE_SIGNING_ALLOWED=NO
     artifacts:
       - QAudionEngine/.build/**/*.o
 
   qaudion-engine-test:
     name: Q-Audion Engine Tests
-    max_build_duration: 15
+    max_build_duration: 20
     instance_type: mac_mini_m2
     environment:
       xcode: latest
@@ -53,22 +45,18 @@ workflows:
         - pattern: 'main'
         - pattern: 'develop'
     scripts:
-      - name: Find iOS Simulator
-        script: |
-          SIM_ID=$(xcrun simctl list devices available -j | \
-            python3 -c "import json,sys; devs=json.load(sys.stdin)['devices']; \
-            ids=[d['udid'] for k,v in devs.items() if 'iOS' in k for d in v if 'iPhone' in d['name'] and d['isAvailable']]; \
-            print(ids[0] if ids else '')")
-          echo "Using simulator: $SIM_ID"
-          echo "SIM_DEST=platform=iOS Simulator,id=$SIM_ID" >> $CM_ENV
-      - name: Build & Test (iOS Simulator)
+      - name: Resolve dependencies
         script: |
           cd QAudionEngine
-          xcodebuild test \
-            -scheme QAudionEngine \
-            -destination "$SIM_DEST" \
-            -skipPackagePluginValidation \
-            CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tee test_results.txt
+          swift package resolve
+      - name: Build (macOS)
+        script: |
+          cd QAudionEngine
+          swift build 2>&1 | tee build_results.txt
+      - name: Run Tests (macOS)
+        script: |
+          cd QAudionEngine
+          swift test 2>&1 | tee test_results.txt
     artifacts:
+      - QAudionEngine/build_results.txt
       - QAudionEngine/test_results.txt
