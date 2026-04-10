@@ -1,7 +1,9 @@
 import Foundation
 import CryptoKit
 
-#if canImport(OnnxRuntimeBindings)
+// ONNX Runtime is only available on real devices and macOS,
+// NOT on iOS Simulator (binary framework lacks simulator slices).
+#if !targetEnvironment(simulator)
 import OnnxRuntimeBindings
 #endif
 
@@ -25,7 +27,7 @@ public final class ModelManager {
 
     private var state: ModelState = .notLoaded
 
-    #if canImport(OnnxRuntimeBindings)
+    #if !targetEnvironment(simulator)
     private var ortEnv: ORTEnv?
     private var session: ORTSession?
     #endif
@@ -40,7 +42,7 @@ public final class ModelManager {
         guard case .notLoaded = state else { return isLoaded() }
         state = .loading
 
-        #if canImport(OnnxRuntimeBindings)
+        #if !targetEnvironment(simulator)
         guard let modelURL = Bundle.module.url(
             forResource: Self.modelName, withExtension: "onnx"
         ) else {
@@ -67,8 +69,8 @@ public final class ModelManager {
             return false
         }
         #else
-        // ONNX Runtime not available (e.g. iOS Simulator)
-        state = .error("ONNX Runtime not available on this platform")
+        // ONNX Runtime not available on iOS Simulator
+        state = .error("ONNX Runtime not available on iOS Simulator")
         return false
         #endif
     }
@@ -77,7 +79,7 @@ public final class ModelManager {
     /// - Parameter waveform: Float array normalized [-1, 1], length = modelInputLength
     /// - Returns: Raw logit (positive = bonafide, negative = spoof)
     public func runInference(waveform: [Float]) throws -> Float {
-        #if canImport(OnnxRuntimeBindings)
+        #if !targetEnvironment(simulator)
         guard let session = session, let env = ortEnv else {
             throw NSError(domain: "ModelManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Model not loaded"])
         }
@@ -105,7 +107,7 @@ public final class ModelManager {
         return logit
         #else
         throw NSError(domain: "ModelManager", code: 3,
-                       userInfo: [NSLocalizedDescriptionKey: "ONNX Runtime not available on this platform"])
+                       userInfo: [NSLocalizedDescriptionKey: "ONNX Runtime not available on iOS Simulator"])
         #endif
     }
 
@@ -113,7 +115,7 @@ public final class ModelManager {
     public func isLoaded() -> Bool { if case .loaded = state { return true }; return false }
 
     public func unloadModel() {
-        #if canImport(OnnxRuntimeBindings)
+        #if !targetEnvironment(simulator)
         session = nil
         ortEnv = nil
         #endif
