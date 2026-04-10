@@ -5,45 +5,16 @@ workflows:
     instance_type: mac_mini_m2
     environment:
       xcode: 16.2
-      cocoapods: default
-    triggering:
-      events:
-        - tag
-      tag_patterns:
-        - pattern: 'v*'
-    scripts:
-      - name: Find iOS Simulator
-        script: |
-          SIM_ID=$(xcrun simctl list devices available -j | \
-            python3 -c "import json,sys; devs=json.load(sys.stdin)['devices']; \
-            ids=[d['udid'] for k,v in devs.items() if 'iOS' in k for d in v if 'iPhone' in d['name'] and d['isAvailable']]; \
-            print(ids[0] if ids else '')")
-          echo "Using simulator: $SIM_ID"
-          echo "SIM_DEST=platform=iOS Simulator,id=$SIM_ID" >> $CM_ENV
-      - name: Build QAudionEngine (iOS Simulator)
-        script: |
-          cd QAudionEngine
-          xcodebuild build \
-            -scheme QAudionEngine \
-            -destination "$SIM_DEST" \
-            -skipPackagePluginValidation \
-            CODE_SIGNING_ALLOWED=NO
-    artifacts:
-      - QAudionEngine/.build/**/*.o
-
-  qaudion-engine-test:
-    name: Q-Audion Engine Tests
-    max_build_duration: 20
-    instance_type: mac_mini_m2
-    environment:
-      xcode: 16.2
     triggering:
       events:
         - push
         - pull_request
+        - tag
       branch_patterns:
         - pattern: 'main'
         - pattern: 'develop'
+      tag_patterns:
+        - pattern: 'v*'
     scripts:
       - name: Resolve dependencies
         script: |
