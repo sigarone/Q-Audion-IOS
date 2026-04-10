@@ -12,14 +12,22 @@ workflows:
       tag_patterns:
         - pattern: 'v*'
     scripts:
-      - name: Build QAudionEngine (Swift Package)
+      - name: Build QAudionEngine (iOS Simulator)
         script: |
           cd QAudionEngine
-          swift build -c release
+          xcodebuild build \
+            -scheme QAudionEngine \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO
       - name: Run Engine Tests
         script: |
           cd QAudionEngine
-          swift test --parallel
+          xcodebuild test \
+            -scheme QAudionEngine \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO
     artifacts:
       - QAudionEngine/.build/**/*.o
 
@@ -37,13 +45,14 @@ workflows:
         - pattern: 'main'
         - pattern: 'develop'
     scripts:
-      - name: Build
+      - name: Build & Test (iOS Simulator)
         script: |
           cd QAudionEngine
-          swift build
-      - name: Test
-        script: |
-          cd QAudionEngine
-          swift test --parallel 2>&1 | tee test_results.txt
+          xcodebuild test \
+            -scheme QAudionEngine \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee test_results.txt
     artifacts:
       - QAudionEngine/test_results.txt
