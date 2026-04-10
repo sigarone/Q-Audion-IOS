@@ -7,23 +7,45 @@ enum CallState: String {
     case connecting
     case ringing
     case active
+    case encrypted
     case ended
 }
 
 @MainActor
 final class AppState: ObservableObject {
+    // MARK: - Auth state
     @Published var isAuthenticated: Bool = false
+    @Published var currentUserId: String?
+    @Published var errorMessage: String?
+
+    // MARK: - Call state
     @Published var isInCall: Bool = false
     @Published var callState: CallState = .idle
-    @Published var currentUserId: String?
+    @Published var callContactId: String?
     @Published var deepfakeAlert: Bool = false
-    @Published var errorMessage: String?
+
+    // MARK: - Security badge state (updated during call)
+    @Published var confidenceLevel: String = "green"  // "green", "yellow", "red"
+    @Published var confidenceScore: Float = 0.97
+    @Published var backendType: String = "PQC"  // "PQC", "BCR", "STD"
+    @Published var pskActive: Bool = false
+    @Published var pskName: String = ""
+    @Published var pskFingerprint: String = ""
+    @Published var rekeyCount: Int = 0
+    @Published var encryptionAlgo: String = "ML-KEM-1024 + AES-256-GCM"
+    @Published var transportType: String = "P2P Direct"
+    @Published var latencyMs: Int = 0
+
+    // MARK: - Server connection state
+    @Published var serverUrl: String = "https://api.qaudion.com"
+    @Published var connectionStatus: String = "not_configured"  // "connected", "connecting", "error", "not_configured"
+    @Published var backendMode: String = "dual"  // "signal_only", "dual", "bcrypto_only"
 
     var engine: QAudionEngine?
     let authService = AuthService()
     let callService = CallService()
 
-    private let defaultServerUrl = "https://api.qaudion.com"
+    private var defaultServerUrl: String { serverUrl }
 
     func initialize() {
         let config = EngineConfig.production()
@@ -90,8 +112,12 @@ final class AppState: ObservableObject {
             errorMessage = "Engine not available"
             return
         }
+        callContactId = contactId
         callState = .connecting
         isInCall = true
+        confidenceLevel = "green"
+        confidenceScore = 0.97
+        rekeyCount = 0
         do {
             try callService.startCall(engine: engine, contactId: contactId)
             callState = .active
@@ -107,8 +133,29 @@ final class AppState: ObservableObject {
         callState = .ended
         isInCall = false
         deepfakeAlert = false
+        callContactId = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.callState = .idle
+        }
+    }
+
+    func setMuted(_ muted: Bool) {
+        engine?.audioProcessor?.setMuted(muted)
+    }
+
+    func setSpeaker(_ enabled: Bool) {
+        engine?.audioProcessor?.setSpeaker(enabled)
+    }
+
+    func testConnection() async {
+        connectionStatus = "connecting"
+        let config = BackendConfig(serverUrl: serverUrl)
+        let rest = BCryptoRestClient(config: config)
+        do {
+            _ = try await rest.get("/api/v1/health")
+            connectionStatus = "connected"
+        } catch {
+            connectionStatus = "error"
         }
     }
 }

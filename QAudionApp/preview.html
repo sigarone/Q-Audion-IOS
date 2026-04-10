@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Q-Audion iOS Preview — Android-Aligned</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #111; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', sans-serif; gap: 32px; flex-wrap: wrap; padding: 24px; }
+h1 { width: 100%; text-align: center; color: #fff; font-size: 20px; margin-bottom: 4px; }
+h2 { width: 100%; text-align: center; color: #666; font-size: 13px; margin-bottom: 16px; font-weight: 400; }
+.phone { width: 375px; height: 812px; background: #000; border-radius: 44px; overflow: hidden; border: 3px solid #333; position: relative; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+.notch { width: 160px; height: 34px; background: #000; position: absolute; top: 0; left: 50%; transform: translateX(-50%); border-radius: 0 0 20px 20px; z-index: 10; }
+.status-bar { height: 54px; display: flex; align-items: flex-end; justify-content: space-between; padding: 0 24px 4px; color: white; font-size: 12px; font-weight: 600; }
+.screen { height: calc(100% - 54px); overflow: hidden; position: relative; }
+.label { color: #888; font-size: 13px; text-align: center; margin-top: 10px; font-weight: 500; }
+
+/* Call Screen */
+.call-screen { background: linear-gradient(180deg, rgba(20,20,30,1) 0%, #000 100%); height: 100%; display: flex; flex-direction: column; align-items: center; }
+.call-status-label { margin-top: 30px; display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; }
+.call-status-label.encrypted { color: #30D158; }
+.shield-circle { width: 90px; height: 90px; border-radius: 50%; background: rgba(255,255,255,0.04); display: flex; align-items: center; justify-content: center; margin-top: 14px; }
+.shield-icon { font-size: 40px; background: linear-gradient(135deg, #00C9FF, #0A84FF); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.call-contact { color: white; font-size: 24px; font-weight: 600; margin-top: 10px; }
+.call-timer { color: rgba(255,255,255,0.45); font-size: 18px; font-family: 'SF Mono', monospace; margin-top: 4px; }
+
+/* Security Badge */
+.badge-compact { display: inline-flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.08); backdrop-filter: blur(20px); padding: 7px 14px; border-radius: 20px; margin-top: 20px; cursor: pointer; }
+.badge-dot { width: 10px; height: 10px; border-radius: 50%; }
+.badge-dot.green { background: #30D158; box-shadow: 0 0 6px #30D158; }
+.badge-dot.yellow { background: #FFD60A; box-shadow: 0 0 6px #FFD60A; }
+.badge-dot.red { background: #FF3B30; box-shadow: 0 0 10px #FF3B30; animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 6px #FF3B30; } 50% { box-shadow: 0 0 16px #FF3B30; } }
+.badge-lock { color: white; font-size: 12px; }
+.badge-label { font-size: 11px; font-weight: 700; font-family: monospace; }
+.badge-label.pqc { color: #30D158; }
+.badge-label.bcr { color: #0A84FF; }
+.badge-psk { font-size: 9px; font-weight: 700; color: #000; background: #FFD60A; padding: 1px 5px; border-radius: 3px; }
+.badge-chevron { color: #666; font-size: 10px; }
+
+/* Expanded badge */
+.badge-expanded { background: rgba(255,255,255,0.06); backdrop-filter: blur(20px); border-radius: 14px; padding: 14px 16px; margin: 6px 20px 0; width: calc(100% - 40px); }
+.badge-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+.badge-key { color: #888; font-size: 12px; }
+.badge-val { color: #ccc; font-size: 12px; font-weight: 500; }
+.badge-val.green { color: #30D158; }
+.badge-confidence { font-size: 28px; font-weight: 700; font-family: system-ui; }
+.badge-divider { height: 0.5px; background: rgba(255,255,255,0.08); margin: 6px 0; }
+.badge-val.latency-good { color: #30D158; }
+
+/* Deepfake alert */
+.deepfake-alert { background: rgba(255,59,48,0.85); border-radius: 14px; padding: 12px 16px; margin: 12px 16px; display: flex; align-items: center; gap: 10px; box-shadow: 0 0 20px rgba(255,59,48,0.3); }
+.deepfake-alert-icon { font-size: 18px; }
+.deepfake-alert-title { color: white; font-size: 14px; font-weight: 700; }
+.deepfake-alert-sub { color: rgba(255,255,255,0.85); font-size: 11px; }
+
+/* Call controls */
+.call-controls { display: flex; gap: 48px; margin-top: auto; padding: 24px 0 44px; }
+.call-btn { width: 60px; height: 60px; border-radius: 30px; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+.call-btn.mute { background: rgba(255,255,255,0.12); }
+.call-btn.mute.active { background: #0A84FF; }
+.call-btn.end { background: #FF3B30; }
+.call-btn.speaker { background: rgba(255,255,255,0.12); }
+.call-btn-label { color: rgba(255,255,255,0.6); font-size: 10px; text-align: center; margin-top: 5px; }
+
+/* Settings */
+.settings-screen { background: #000; height: 100%; overflow-y: auto; }
+.nav-bar { height: 48px; display: flex; align-items: center; justify-content: center; border-bottom: 0.5px solid rgba(255,255,255,0.06); }
+.nav-title { color: white; font-size: 17px; font-weight: 600; }
+.settings-content { padding: 0 16px 100px; }
+.section-header { color: #888; font-size: 13px; text-transform: uppercase; padding: 16px 0 6px; display: flex; align-items: center; gap: 6px; }
+.section-header .icon { font-size: 14px; }
+.form-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; background: rgba(255,255,255,0.05); margin-bottom: 0.5px; }
+.form-row:first-of-type { border-radius: 10px 10px 0 0; }
+.form-row:last-of-type { border-radius: 0 0 10px 10px; margin-bottom: 0; }
+.form-row:only-of-type { border-radius: 10px; }
+.form-label { color: white; font-size: 15px; }
+.form-value { color: #888; font-size: 15px; }
+.form-caption { color: #666; font-size: 12px; padding: 4px 4px 0; }
+.toggle { width: 51px; height: 31px; background: #30D158; border-radius: 16px; position: relative; flex-shrink: 0; }
+.toggle::after { content: ''; width: 27px; height: 27px; background: white; border-radius: 14px; position: absolute; top: 2px; right: 2px; }
+.toggle.off { background: #39393D; }
+.toggle.off::after { right: auto; left: 2px; }
+.chevron { color: #555; font-size: 13px; }
+.slider-row { padding: 6px 14px 12px; background: rgba(255,255,255,0.05); }
+.slider-label { color: #888; font-size: 12px; margin-bottom: 4px; }
+.slider { width: 100%; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; position: relative; }
+.slider-fill { height: 100%; background: #0A84FF; border-radius: 2px; }
+.slider-thumb { width: 22px; height: 22px; background: white; border-radius: 11px; position: absolute; top: -9px; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+.status-dot { width: 8px; height: 8px; border-radius: 4px; display: inline-block; margin-right: 6px; }
+.status-dot.green { background: #30D158; }
+.status-dot.gray { background: #555; }
+.segment { display: flex; background: rgba(255,255,255,0.06); border-radius: 8px; padding: 2px; }
+.segment-btn { flex: 1; text-align: center; font-size: 12px; padding: 6px 8px; border-radius: 6px; color: #888; }
+.segment-btn.active { background: rgba(255,255,255,0.12); color: white; }
+.btn-blue { color: #0A84FF; font-size: 15px; font-weight: 500; }
+.btn-red { color: #FF3B30; font-size: 15px; }
+.tab-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 83px; background: rgba(20,20,20,0.95); display: flex; justify-content: space-around; align-items: flex-start; padding-top: 8px; border-top: 0.5px solid rgba(255,255,255,0.08); }
+.tab { text-align: center; color: #666; font-size: 10px; }
+.tab.active { color: #0A84FF; }
+</style>
+</head>
+<body>
+
+<h1>Q-Audion iOS — Android-Aligned UI Preview</h1>
+<h2>CallSecurityBadge + Settings matching Android QAudion Security Screen</h2>
+
+<!-- CALL: Security Badge Compact -->
+<div>
+<div class="phone">
+  <div class="notch"></div>
+  <div class="status-bar"><span>9:41</span><span>●●●● 5G 🔋</span></div>
+  <div class="screen">
+    <div class="call-screen">
+      <div class="call-status-label encrypted">🔒 Encrypted call</div>
+      <div class="shield-circle">
+        <div class="shield-icon">🛡️</div>
+      </div>
+      <div class="call-contact">alice_bcrypto</div>
+      <div class="call-timer">04:17</div>
+
+      <!-- Security Badge: Compact -->
+      <div class="badge-compact">
+        <span class="badge-lock">🔒</span>
+        <span class="badge-dot green"></span>
+        <span class="badge-label pqc">PQC</span>
+        <span class="badge-psk">PSK</span>
+        <span class="badge-chevron">▼</span>
+      </div>
+
+      <div style="flex:1"></div>
+
+      <div class="call-controls">
+        <div style="text-align:center">
+          <div class="call-btn mute">🎙️</div>
+          <div class="call-btn-label">Mute</div>
+        </div>
+        <div style="text-align:center">
+          <div class="call-btn end">📞</div>
+          <div class="call-btn-label">End</div>
+        </div>
+        <div style="text-align:center">
+          <div class="call-btn speaker">🔊</div>
+          <div class="call-btn-label">Speaker</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="label">Call — Badge Compact</div>
+</div>
+
+<!-- CALL: Security Badge Expanded -->
+<div>
+<div class="phone">
+  <div class="notch"></div>
+  <div class="status-bar"><span>9:41</span><span>●●●● 5G 🔋</span></div>
+  <div class="screen">
+    <div class="call-screen">
+      <div class="call-status-label encrypted">🔒 Encrypted call</div>
+      <div class="shield-circle">
+        <div class="shield-icon">🛡️</div>
+      </div>
+      <div class="call-contact">alice_bcrypto</div>
+      <div class="call-timer">04:17</div>
+
+      <!-- Security Badge: Expanded -->
+      <div class="badge-compact" style="margin-bottom:0; border-radius: 20px 20px 0 0;">
+        <span class="badge-lock">🔒</span>
+        <span class="badge-dot green"></span>
+        <span class="badge-label pqc">PQC</span>
+        <span class="badge-psk">PSK</span>
+        <span class="badge-chevron">▲</span>
+      </div>
+      <div class="badge-expanded">
+        <div class="badge-row">
+          <span class="badge-key">Status</span>
+          <span class="badge-val green" style="font-weight:700">GENUINE</span>
+        </div>
+        <div class="badge-row">
+          <span class="badge-key">Confidence</span>
+          <span class="badge-confidence" style="color:#30D158">97%</span>
+        </div>
+        <div class="badge-divider"></div>
+        <div class="badge-row">
+          <span class="badge-key">PSK</span>
+          <span class="badge-val">office-key • A3F2…9B1C</span>
+        </div>
+        <div class="badge-row">
+          <span class="badge-key">Re-key</span>
+          <span class="badge-val">12 rotations</span>
+        </div>
+        <div class="badge-row">
+          <span class="badge-key">Encryption</span>
+          <span class="badge-val">ML-KEM-1024 + AES-256-GCM</span>
+        </div>
+        <div class="badge-row">
+          <span class="badge-key">Transport</span>
+          <span class="badge-val">P2P Direct</span>
+        </div>
+        <div class="badge-row">
+          <span class="badge-key">Latency</span>
+          <span class="badge-val latency-good">42 ms</span>
+        </div>
+      </div>
+
+      <div style="flex:1"></div>
+      <div class="call-controls">
+        <div style="text-align:center"><div class="call-btn mute">🎙️</div><div class="call-btn-label">Mute</div></div>
+        <div style="text-align:center"><div class="call-btn end">📞</div><div class="call-btn-label">End</div></div>
+        <div style="text-align:center"><div class="call-btn speaker">🔊</div><div class="call-btn-label">Speaker</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="label">Call — Badge Expanded</div>
+</div>
+
+<!-- CALL: Deepfake Alert (RED) -->
+<div>
+<div class="phone">
+  <div class="notch"></div>
+  <div class="status-bar"><span>9:41</span><span>●●●● 5G 🔋</span></div>
+  <div class="screen">
+    <div class="call-screen">
+      <div class="call-status-label encrypted">🔒 Encrypted call</div>
+      <div class="shield-circle">
+        <div class="shield-icon">🛡️</div>
+      </div>
+      <div class="call-contact">suspicious_caller</div>
+      <div class="call-timer">01:23</div>
+
+      <div class="badge-compact">
+        <span class="badge-lock">🔒</span>
+        <span class="badge-dot red"></span>
+        <span class="badge-label pqc">PQC</span>
+        <span class="badge-chevron">▼</span>
+      </div>
+
+      <div style="flex:1"></div>
+
+      <!-- Deepfake Alert Banner -->
+      <div class="deepfake-alert">
+        <span class="deepfake-alert-icon">⚠️</span>
+        <div>
+          <div class="deepfake-alert-title">Deepfake Alert</div>
+          <div class="deepfake-alert-sub">Potential voice manipulation detected</div>
+        </div>
+      </div>
+
+      <div class="call-controls">
+        <div style="text-align:center"><div class="call-btn mute">🎙️</div><div class="call-btn-label">Mute</div></div>
+        <div style="text-align:center"><div class="call-btn end">📞</div><div class="call-btn-label">End</div></div>
+        <div style="text-align:center"><div class="call-btn speaker">🔊</div><div class="call-btn-label">Speaker</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="label">Call — Deepfake Alert (RED)</div>
+</div>
+
+<!-- SETTINGS: Android-Aligned -->
+<div>
+<div class="phone">
+  <div class="notch"></div>
+  <div class="status-bar"><span>9:41</span><span>●●●● WiFi 🔋</span></div>
+  <div class="screen">
+    <div class="settings-screen">
+      <div class="nav-bar"><div class="nav-title">Q-Audion Security</div></div>
+      <div class="settings-content">
+
+        <div class="section-header"><span class="icon">🛡️</span> Deepfake Protection</div>
+        <div class="form-row" style="border-radius:10px 10px 0 0"><span class="form-label">Guardian Mode</span><div class="toggle"></div></div>
+        <div class="slider-row" style="border-radius:0 0 10px 10px">
+          <div class="slider-label">Sensitivity: 75%</div>
+          <div class="slider"><div class="slider-fill" style="width:75%"></div><div class="slider-thumb" style="left:calc(75% - 11px)"></div></div>
+        </div>
+        <div class="form-caption">Real-time deepfake detection during calls</div>
+
+        <div class="section-header"><span class="icon">👤</span> Voice Authentication</div>
+        <div class="form-row" style="border-radius:10px 10px 0 0"><span class="form-label">Voice Auth</span><div class="toggle"></div></div>
+        <div class="form-row" style="border-radius:0 0 10px 10px"><span class="form-label">Enroll Voice</span><span style="color:#30D158;font-size:13px">Enrolled ✓</span></div>
+
+        <div class="section-header"><span class="icon">🔑</span> Pre-Shared Keys</div>
+        <div class="form-row" style="border-radius:10px 10px 0 0"><span class="form-label">Enable PSK</span><div class="toggle"></div></div>
+        <div class="form-row" style="border-radius:0 0 10px 10px"><span class="form-label">Manage Keys</span><span class="form-value">3 keys <span class="chevron">›</span></span></div>
+        <div class="form-caption">Defense-in-depth: PSK mixed via HKDF with KEM</div>
+
+        <div class="section-header"><span class="icon">📱</span> NFC Key Exchange</div>
+        <div class="form-row" style="border-radius:10px 10px 0 0"><span class="form-label">NFC Exchange</span><div class="toggle"></div></div>
+        <div class="form-row" style="border-radius:0 0 10px 10px"><span class="form-label">Exchange Keys</span><span class="chevron">›</span></div>
+        <div class="form-caption">Last sync: 2 hours ago</div>
+
+        <div class="section-header"><span class="icon">🖥️</span> BCrypto Server</div>
+        <div class="form-row" style="border-radius:10px 10px 0 0"><span class="form-label">Server URL</span><span class="form-value" style="font-size:12px">api.qaudion.com</span></div>
+        <div class="form-row"><span class="form-label">Connection</span><span class="form-value"><span class="status-dot green"></span>Connected</span></div>
+        <div class="form-row">
+          <span class="form-label">Backend</span>
+          <div class="segment" style="width:180px">
+            <div class="segment-btn">Signal</div>
+            <div class="segment-btn active">Dual</div>
+            <div class="segment-btn">BCrypto</div>
+          </div>
+        </div>
+        <div class="form-row" style="border-radius:0 0 10px 10px"><span class="btn-blue">Test Connection</span></div>
+
+        <div class="section-header"><span class="icon">🕶️</span> Privacy & Anonymization</div>
+        <div class="form-row" style="border-radius:10px 10px 0 0"><span class="form-label">Enable Proxy</span><div class="toggle off"></div></div>
+        <div class="form-row" style="border-radius:0 0 10px 10px"><span class="form-label">Force Relay Mode</span><div class="toggle off"></div></div>
+        <div class="form-caption">Route all media through relay to hide IP</div>
+
+        <div class="section-header"><span class="icon">ℹ️</span> About</div>
+        <div class="form-row" style="border-radius:10px 10px 0 0"><span class="form-label">App Version</span><span class="form-value">1.0.0</span></div>
+        <div class="form-row" style="border-radius:0 0 10px 10px"><span class="form-label">Engine</span><span class="form-value">QAudionEngine v1.0</span></div>
+
+      </div>
+    </div>
+  </div>
+</div>
+<div class="label">Settings — Android-Aligned</div>
+</div>
+
+</body>
+</html>
