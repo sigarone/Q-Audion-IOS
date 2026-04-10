@@ -14,7 +14,7 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/nicklama/onnxruntime-swift-package-manager", from: "1.17.0"),
+        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", from: "1.17.0"),
     ],
     targets: [
         .target(
@@ -55,7 +55,7 @@ let package = Package(
             dependencies: [
                 "CLiboqs",
                 "COpus",
-                .product(name: "OnnxRuntimeBindings", package: "onnxruntime-swift-package-manager"),
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
             ],
             path: "Sources/QAudionEngine",
             resources: [
