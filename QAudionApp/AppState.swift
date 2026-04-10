@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import CryptoKit
 import QAudionEngine
 
 enum CallState: String {
@@ -9,6 +10,25 @@ enum CallState: String {
     case active
     case encrypted
     case ended
+}
+
+// MARK: - Messaging Models
+
+struct Conversation: Identifiable {
+    let id: String
+    let contactName: String
+    var lastMessage: String
+    var lastMessageTime: Date
+    var unreadCount: Int
+    var isEncrypted: Bool
+}
+
+struct ChatMessage: Identifiable {
+    let id: String
+    let text: String
+    let timestamp: Date
+    let isSent: Bool
+    let isEncrypted: Bool
 }
 
 @MainActor
@@ -37,6 +57,10 @@ final class AppState: ObservableObject {
     @Published var framesRx: Int = 0
     @Published var waveformEnabled: Bool = false
 
+    // MARK: - Messaging state
+    @Published var conversations: [Conversation] = []
+    @Published var currentMessages: [ChatMessage] = []
+
     // MARK: - Security badge state (updated during call)
     @Published var confidenceLevel: String = "green"  // "green", "yellow", "red"
     @Published var confidenceScore: Float = 0.97
@@ -57,6 +81,7 @@ final class AppState: ObservableObject {
     var engine: QAudionEngine?
     let authService = AuthService()
     let callService = CallService()
+    let messageCrypto = MessageCrypto()
 
     private var defaultServerUrl: String { serverUrl }
 
@@ -228,6 +253,78 @@ final class AppState: ObservableObject {
         } catch {
             connectionStatus = "error"
         }
+    }
+
+    // MARK: - Messaging
+
+    func sendMessage(to contactId: String, text: String) async {
+        let messageId = UUID().uuidString
+        let now = Date()
+
+        // Add to local messages immediately for responsiveness
+        let outgoing = ChatMessage(
+            id: messageId,
+            text: text,
+            timestamp: now,
+            isSent: true,
+            isEncrypted: true
+        )
+        currentMessages.append(outgoing)
+
+        // Update conversation preview
+        if let idx = conversations.firstIndex(where: { $0.id == contactId }) {
+            conversations[idx].lastMessage = text
+            conversations[idx].lastMessageTime = now
+        }
+
+        // Encrypt and send via backend
+        do {
+            guard let content = text.data(using: .utf8) else { return }
+            // Use a derived key for message encryption (32 bytes for AES-256)
+            let keyMaterial = Data(SHA256.hash(data: Data((contactId + (currentUserId ?? "")).utf8)))
+            let encrypted = try messageCrypto.encrypt(message: content, key: keyMaterial)
+            // Package encrypted payload: nonce + ciphertext + tag
+            var payload = Data()
+            payload.append(encrypted.nonce)
+            payload.append(encrypted.ciphertext)
+            payload.append(encrypted.tag)
+
+            let config = BackendConfig(serverUrl: serverUrl, accessToken: authService.loadToken())
+            let ws = BCryptoWebSocketClient(config: config)
+            let api = BCryptoMessageApiImpl(ws: ws)
+            _ = try await api.sendMessage(recipientId: contactId, content: payload)
+        } catch {
+            errorMessage = "Send failed: \(error.localizedDescription)"
+        }
+    }
+
+    func loadMessages(for contactId: String) async {
+        // In production this would fetch from backend storage.
+        // For now keep local state. Populate demo data if empty.
+        if currentMessages.isEmpty {
+            let now = Date()
+            currentMessages = [
+                ChatMessage(id: UUID().uuidString, text: "Hey, are you available for a secure call?",
+                            timestamp: now.addingTimeInterval(-300), isSent: false, isEncrypted: true),
+                ChatMessage(id: UUID().uuidString, text: "Yes, line is encrypted. Go ahead.",
+                            timestamp: now.addingTimeInterval(-240), isSent: true, isEncrypted: true),
+                ChatMessage(id: UUID().uuidString, text: "Sending the documents now.",
+                            timestamp: now.addingTimeInterval(-120), isSent: false, isEncrypted: true),
+            ]
+        }
+    }
+
+    func createConversation(contactId: String) {
+        guard !conversations.contains(where: { $0.id == contactId }) else { return }
+        let conversation = Conversation(
+            id: contactId,
+            contactName: contactId,
+            lastMessage: "Tap to start chatting",
+            lastMessageTime: Date(),
+            unreadCount: 0,
+            isEncrypted: true
+        )
+        conversations.insert(conversation, at: 0)
     }
 
     // MARK: - Waveform Helpers

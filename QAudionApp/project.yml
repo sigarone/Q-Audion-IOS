@@ -1,0 +1,34 @@
+name: QAudionApp
+options:
+  bundleIdPrefix: com.qaudion
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "16.2"
+
+packages:
+  QAudionEngine:
+    path: ../QAudionEngine
+
+targets:
+  QAudionApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: .
+        excludes:
+          - "*.html"
+          - "*.yml"
+          - project.yml
+    settings:
+      base:
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_ENTITLEMENTS: QAudion.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: "5.9"
+        CODE_SIGNING_ALLOWED: "NO"
+    dependencies:
+      - package: QAudionEngine
+    resources:
+      - path: Assets.xcassets

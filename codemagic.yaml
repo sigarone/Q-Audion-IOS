@@ -64,3 +64,41 @@ workflows:
       - QAudionEngine/test_results.txt
       - QAudionEngine/lint_results.txt
       - QAudionEngine/coverage.lcov
+
+  qaudion-app-build:
+    name: Q-Audion App Build
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      xcode: 16.2
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
+    scripts:
+      - name: Install XcodeGen
+        script: brew install xcodegen
+      - name: Generate Xcode Project
+        script: |
+          cd QAudionApp
+          xcodegen generate
+      - name: Find Simulator
+        script: |
+          SIM_ID=$(xcrun simctl list devices available -j | \
+            python3 -c "import json,sys; devs=json.load(sys.stdin)['devices']; \
+            ids=[d['udid'] for k,v in devs.items() if 'iOS' in k for d in v if 'iPhone' in d['name'] and d['isAvailable']]; \
+            print(ids[0] if ids else '')")
+          echo "SIM_DEST=platform=iOS Simulator,id=$SIM_ID" >> $CM_ENV
+      - name: Build App
+        script: |
+          cd QAudionApp
+          xcodebuild build \
+            -project QAudionApp.xcodeproj \
+            -scheme QAudionApp \
+            -destination "$SIM_DEST" \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tail -50
+    artifacts:
+      - QAudionApp/build/Build/Products/**/*.app
