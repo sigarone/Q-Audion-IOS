@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Q-AUDION | Icon Design Sheet</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&amp;family=Space+Grotesk:wght@500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-lowest": "#0e0e0e",
+                        "primary-fixed-dim": "#00daf3",
+                        "surface-container-high": "#2a2a2a",
+                        "on-primary-fixed-variant": "#004f58",
+                        "primary": "#ffffff",
+                        "on-surface-variant": "#b9cac9",
+                        "surface-tint": "#00daf3",
+                        "on-secondary": "#0a3254",
+                        "tertiary": "#ffffff",
+                        "surface-container-low": "#1b1b1b",
+                        "surface-variant": "#353535",
+                        "on-primary-fixed": "#001f24",
+                        "on-tertiary-fixed": "#190064",
+                        "on-primary-container": "#006f7c",
+                        "on-tertiary-container": "#603bff",
+                        "on-surface": "#e2e2e2",
+                        "surface-dim": "#131313",
+                        "error-container": "#93000a",
+                        "inverse-primary": "#006875",
+                        "surface-container-highest": "#353535",
+                        "on-secondary-fixed": "#001d36",
+                        "primary-fixed": "#9cf0ff",
+                        "on-secondary-container": "#9abbe4",
+                        "on-primary": "#00363d",
+                        "background": "#131313",
+                        "error": "#ffb4ab",
+                        "outline": "#839493",
+                        "secondary-container": "#294b6f",
+                        "on-error-container": "#ffdad6",
+                        "surface-container": "#1f1f1f",
+                        "secondary-fixed-dim": "#a8c9f3",
+                        "primary-container": "#9cf0ff",
+                        "secondary": "#a8c9f3",
+                        "on-tertiary-fixed-variant": "#4100db",
+                        "on-secondary-fixed-variant": "#27496c",
+                        "tertiary-fixed-dim": "#c8bfff",
+                        "inverse-surface": "#e2e2e2",
+                        "tertiary-fixed": "#e5deff",
+                        "tertiary-container": "#e5deff",
+                        "inverse-on-surface": "#303030",
+                        "secondary-fixed": "#d1e4ff",
+                        "surface-bright": "#393939",
+                        "on-error": "#690005",
+                        "on-background": "#e2e2e2",
+                        "surface": "#131313",
+                        "on-tertiary": "#2c009e",
+                        "outline-variant": "#3a4a49"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Space Grotesk"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            background-color: #0a0a0a;
+            background-image: 
+                radial-gradient(circle at 50% 50%, rgba(0, 218, 243, 0.03) 0%, transparent 80%),
+                linear-gradient(to right, rgba(255, 255, 255, 0.01) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(255, 255, 255, 0.01) 1px, transparent 1px);
+            background-size: 100% 100%, 40px 40px, 40px 40px;
+        }
+        .icon-grid-bg {
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        .glass-panel {
+            backdrop-filter: blur(24px);
+            background: rgba(21, 21, 21, 0.6);
+        }
+        .shield-gradient {
+            background: linear-gradient(135deg, #00E5FF 0%, #0A4FFF 100%);
+        }
+        .metallic-surface {
+            background: linear-gradient(145deg, #1a1a1a, #0a0a0a);
+        }
+        .atom-ring {
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            border-radius: 50%;
+            position: absolute;
+            transform: rotateX(60deg);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="text-on-surface font-body antialiased min-h-screen pb-24">
+<!-- Top Navigation Anchor -->
+<header class="w-full top-0 sticky bg-[#0e0e0e] z-50 shadow-[0_0_15px_rgba(0,218,243,0.08)]">
+<div class="flex justify-between items-center px-6 py-4 w-full">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-cyan-400" style="font-variation-settings: 'FILL' 1;">security</span>
+<span class="text-xl font-black text-white uppercase tracking-widest font-['Inter']">Q-AUDION</span>
+</div>
+<div class="flex gap-6 items-center">
+<nav class="hidden md:flex gap-8">
+<a class="text-white hover:text-cyan-300 transition-colors duration-200 font-bold tracking-tighter" href="#">DESIGN SYSTEM</a>
+<a class="text-gray-500 hover:text-cyan-300 transition-colors duration-200 font-bold tracking-tighter" href="#">ASSETS</a>
+</nav>
+<span class="material-symbols-outlined text-cyan-400 cursor-pointer active:scale-95 duration-100">settings</span>
+</div>
+</div>
+</header>
+<main class="max-w-7xl mx-auto px-6 pt-12">
+<!-- Hero Header -->
+<div class="mb-16">
+<h1 class="text-5xl md:text-7xl font-black tracking-tighter text-white mb-4">Aegis Cipher <br/><span class="text-primary-fixed-dim">Visual Identity</span></h1>
+<p class="text-on-surface-variant max-w-2xl text-lg">Systematic iconographic specifications for the Q-Audion secure communications suite. Engineered for high-fidelity rendering across all digital touchpoints.</p>
+</div>
+<!-- Main Bento Grid -->
+<div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+<!-- 1. APP ICON - Primary Highlight -->
+<div class="md:col-span-8 bg-surface-container-lowest rounded-xl p-8 icon-grid-bg relative overflow-hidden group">
+<div class="relative z-10">
+<div class="flex justify-between items-start mb-12">
+<div>
+<span class="font-label text-primary-fixed-dim font-bold text-xs tracking-widest uppercase">Variant 01</span>
+<h2 class="text-2xl font-bold text-white mt-2">APP ICON</h2>
+</div>
+<span class="font-label text-on-surface-variant text-sm bg-surface-container-high px-3 py-1 rounded">1024px / 512px</span>
+</div>
+<div class="flex items-center justify-center py-12">
+<!-- iOS App Icon Representation -->
+<div class="w-64 h-64 rounded-[4.5rem] metallic-surface p-[2px] shadow-[0_20px_50px_rgba(0,0,0,0.8),0_0_30px_rgba(0,218,243,0.15)] relative overflow-hidden">
+<div class="w-full h-full rounded-[4.4rem] metallic-surface flex items-center justify-center relative overflow-hidden">
+<!-- Shield Background Glow -->
+<div class="absolute inset-0 bg-cyan-400/5 blur-3xl rounded-full"></div>
+<!-- Simplified Shield -->
+<div class="relative w-32 h-40 flex items-center justify-center">
+<div class="absolute inset-0 shield-gradient opacity-90" style="clip-path: polygon(0% 10%, 50% 0%, 100% 10%, 100% 60%, 50% 100%, 0% 60%); shadow: inset 0 2px 4px rgba(255,255,255,0.3)"></div>
+<!-- Atom Ellipses -->
+<div class="atom-ring w-24 h-8 rotate-12"></div>
+<div class="atom-ring w-24 h-8 -rotate-45"></div>
+<div class="w-3 h-3 bg-white rounded-full shadow-[0_0_10px_#fff] z-20"></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- 2. FAVICON -->
+<div class="md:col-span-4 bg-surface-container-low rounded-xl p-8 flex flex-col justify-between border border-white/5">
+<div>
+<span class="font-label text-primary-fixed-dim font-bold text-xs tracking-widest uppercase">Variant 02</span>
+<h2 class="text-2xl font-bold text-white mt-2">FAVICON</h2>
+<p class="text-on-surface-variant text-sm mt-2">Pixel-optimized for 16px and 32px rasterization.</p>
+</div>
+<div class="flex flex-col items-center gap-8 py-8">
+<div class="w-16 h-16 shield-gradient flex items-center justify-center rounded-lg shadow-lg shadow-cyan-900/20" style="clip-path: polygon(0% 10%, 50% 0%, 100% 10%, 100% 60%, 50% 100%, 0% 60%);">
+<div class="w-2 h-2 bg-white rounded-full"></div>
+</div>
+<div class="flex items-end gap-4 opacity-50">
+<div class="w-8 h-8 shield-gradient" style="clip-path: polygon(0% 10%, 50% 0%, 100% 10%, 100% 60%, 50% 100%, 0% 60%);"></div>
+<div class="w-4 h-4 shield-gradient" style="clip-path: polygon(0% 10%, 50% 0%, 100% 10%, 100% 60%, 50% 100%, 0% 60%);"></div>
+</div>
+</div>
+<div class="font-label text-on-surface-variant text-xs text-center">32px / 16px OPTIMIZED</div>
+</div>
+<!-- 3. TAB BAR ICON -->
+<div class="md:col-span-4 bg-surface-container-low rounded-xl p-8 border border-white/5">
+<span class="font-label text-primary-fixed-dim font-bold text-xs tracking-widest uppercase">Variant 03</span>
+<h2 class="text-2xl font-bold text-white mt-2">TAB BAR</h2>
+<div class="flex justify-center items-center h-48">
+<div class="p-6 border border-cyan-400/20 rounded-xl glass-panel">
+<svg fill="none" height="40" viewbox="0 0 40 40" width="40" xmlns="http://www.w3.org/2000/svg">
+<path d="M20 4L34 8V20C34 29.2 28 37.6 20 40C12 37.6 6 29.2 6 20V8L20 4Z" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+<circle cx="20" cy="20" fill="#00daf3" r="3"></circle>
+</svg>
+</div>
+</div>
+<div class="font-label text-on-surface-variant text-xs text-center mt-4">25px iOS STANDARD • 2px STROKE</div>
+</div>
+<!-- 4. NOTIFICATION ICON -->
+<div class="md:col-span-4 bg-surface-container-low rounded-xl p-8 border border-white/5">
+<span class="font-label text-primary-fixed-dim font-bold text-xs tracking-widest uppercase">Variant 04</span>
+<h2 class="text-2xl font-bold text-white mt-2">PUSH NOTIF</h2>
+<div class="flex flex-col justify-center items-center h-48 gap-4">
+<div class="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center">
+<div class="w-6 h-6 bg-white" style="clip-path: polygon(0% 10%, 50% 0%, 100% 10%, 100% 60%, 50% 100%, 0% 60%);"></div>
+</div>
+<div class="bg-primary-fixed-dim text-on-primary-fixed text-[10px] font-bold px-2 py-0.5 rounded-full font-label uppercase">Alpha Overlay</div>
+</div>
+<div class="font-label text-on-surface-variant text-xs text-center mt-4">48px MASK • SOLID WHITE</div>
+</div>
+<!-- 5. MONOCHROME -->
+<div class="md:col-span-4 bg-surface-container-low rounded-xl p-8 border border-white/5">
+<span class="font-label text-primary-fixed-dim font-bold text-xs tracking-widest uppercase">Variant 05</span>
+<h2 class="text-2xl font-bold text-white mt-2">MONOCHROME</h2>
+<div class="flex justify-around items-center h-48">
+<div class="flex flex-col items-center gap-2">
+<div class="w-16 h-16 border-2 border-white/40 flex items-center justify-center rounded" style="clip-path: polygon(0% 10%, 50% 0%, 100% 10%, 100% 60%, 50% 100%, 0% 60%);"></div>
+<span class="text-[10px] font-label text-on-surface-variant uppercase">Dark Mode</span>
+</div>
+<div class="flex flex-col items-center gap-2">
+<div class="w-16 h-16 bg-white border-2 border-black/10 flex items-center justify-center rounded" style="clip-path: polygon(0% 10%, 50% 0%, 100% 10%, 100% 60%, 50% 100%, 0% 60%);"></div>
+<span class="text-[10px] font-label text-on-surface-variant uppercase">Light Mode</span>
+</div>
+</div>
+<div class="font-label text-on-surface-variant text-xs text-center mt-4">ADAPTIVE STROKE • UNIVERSAL</div>
+</div>
+</div>
+<!-- System Metadata -->
+<div class="mt-24 pt-12 border-t border-white/5 grid grid-cols-1 md:grid-cols-4 gap-8">
+<div>
+<h4 class="font-label text-white text-sm font-bold uppercase mb-4">Color Palette</h4>
+<div class="flex gap-2">
+<div class="w-8 h-8 rounded bg-[#00E5FF] shadow-[0_0_10px_rgba(0,229,255,0.4)]"></div>
+<div class="w-8 h-8 rounded bg-[#0A4FFF]"></div>
+<div class="w-8 h-8 rounded bg-white"></div>
+<div class="w-8 h-8 rounded bg-[#0a0a0a] border border-white/10"></div>
+</div>
+</div>
+<div>
+<h4 class="font-label text-white text-sm font-bold uppercase mb-4">Technical Spec</h4>
+<p class="text-xs text-on-surface-variant leading-relaxed">All icons must adhere to the 8px grid system. Strokes should maintain a consistent 2px weight for UI icons and 1px weight for favicons.</p>
+</div>
+<div>
+<h4 class="font-label text-white text-sm font-bold uppercase mb-4">Rendering</h4>
+<p class="text-xs text-on-surface-variant leading-relaxed">SVG exports should be flattened. Ensure all paths are closed. Use 'Non-Zero' fill rules for complex shield geometry.</p>
+</div>
+<div class="flex justify-end items-end">
+<div class="text-right">
+<div class="text-white font-bold font-label text-xl tracking-tighter">VER. 2.0.4-SEC</div>
+<div class="text-cyan-400 font-label text-[10px] uppercase">Aegis Cipher Security Protocol</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Bottom Navigation Shell -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 py-3 bg-[#0e0e0e] border-t border-white/5 shadow-[0_-4px_20px_rgba(0,0,0,0.5)]">
+<div class="flex flex-col items-center justify-center text-gray-600 transition-all duration-300 ease-in-out hover:text-cyan-200 cursor-pointer">
+<span class="material-symbols-outlined">shield</span>
+<span class="font-['Space_Grotesk'] font-bold text-[10px] uppercase mt-1">Secure</span>
+</div>
+<div class="flex flex-col items-center justify-center text-cyan-400 drop-shadow-[0_0_8px_rgba(0,218,243,0.4)] transition-all duration-300 ease-in-out cursor-pointer">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">lock</span>
+<span class="font-['Space_Grotesk'] font-bold text-[10px] uppercase mt-1">Vault</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-600 transition-all duration-300 ease-in-out hover:text-cyan-200 cursor-pointer">
+<span class="material-symbols-outlined">graphic_eq</span>
+<span class="font-['Space_Grotesk'] font-bold text-[10px] uppercase mt-1">Signals</span>
+</div>
+<div class="flex flex-col items-center justify-center text-gray-600 transition-all duration-300 ease-in-out hover:text-cyan-200 cursor-pointer">
+<span class="material-symbols-outlined">sensors</span>
+<span class="font-['Space_Grotesk'] font-bold text-[10px] uppercase mt-1">Status</span>
+</div>
+</nav>
+</body></html>

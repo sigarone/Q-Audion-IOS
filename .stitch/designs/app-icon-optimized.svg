@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0A1628"/>
+      <stop offset="100%" stop-color="#050A14"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="40%" stop-color="#0A84FF"/>
+      <stop offset="100%" stop-color="#0A4FFF"/>
+    </linearGradient>
+    <linearGradient id="shieldFill" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#1A2A40"/>
+      <stop offset="100%" stop-color="#0D1520"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="8" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="outerGlow">
+      <feGaussianBlur stdDeviation="18" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="ios"><rect width="1024" height="1024" rx="224"/></clipPath>
+  </defs>
+  <g clip-path="url(#ios)">
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+    <!-- Subtle radial glow behind shield -->
+    <circle cx="512" cy="460" r="320" fill="#00E5FF" opacity="0.04"/>
+    <!-- Shield body -->
+    <g transform="translate(512,470)">
+      <!-- Shield fill -->
+      <path d="M0,-240 L210,-155 L210,65 C210,200 0,310 0,310 C0,310 -210,200 -210,65 L-210,-155Z"
+            fill="url(#shieldFill)"/>
+      <!-- Shield border glow -->
+      <path d="M0,-240 L210,-155 L210,65 C210,200 0,310 0,310 C0,310 -210,200 -210,65 L-210,-155Z"
+            fill="none" stroke="url(#shield)" stroke-width="10" filter="url(#outerGlow)" opacity="0.5"/>
+      <!-- Shield border -->
+      <path d="M0,-240 L210,-155 L210,65 C210,200 0,310 0,310 C0,310 -210,200 -210,65 L-210,-155Z"
+            fill="none" stroke="url(#shield)" stroke-width="7"/>
+    </g>
+    <!-- Atom orbital rings -->
+    <g transform="translate(512,430)" filter="url(#glow)">
+      <!-- Orbit 1: horizontal ellipse -->
+      <ellipse cx="0" cy="0" rx="110" ry="40" fill="none" stroke="#00E5FF" stroke-width="4" opacity="0.7"
+               transform="rotate(-20)"/>
+      <!-- Orbit 2: tilted -->
+      <ellipse cx="0" cy="0" rx="110" ry="40" fill="none" stroke="#0A84FF" stroke-width="3.5" opacity="0.6"
+               transform="rotate(40)"/>
+      <!-- Orbit 3: opposite tilt -->
+      <ellipse cx="0" cy="0" rx="110" ry="40" fill="none" stroke="#00E5FF" stroke-width="3" opacity="0.5"
+               transform="rotate(100)"/>
+      <!-- Nucleus -->
+      <circle cx="0" cy="0" r="18" fill="#00E5FF" opacity="0.9"/>
+      <circle cx="0" cy="0" r="10" fill="white" opacity="0.9"/>
+      <!-- Electron dots -->
+      <circle cx="95" cy="-35" r="6" fill="#00E5FF" opacity="0.8" transform="rotate(-20)"/>
+      <circle cx="-80" cy="30" r="5" fill="#0A84FF" opacity="0.7" transform="rotate(40)"/>
+      <circle cx="70" cy="-25" r="5" fill="#00E5FF" opacity="0.7" transform="rotate(100)"/>
+    </g>
+    <!-- Sound wave arcs (left) -->
+    <g transform="translate(512,430)" opacity="0.4" filter="url(#glow)">
+      <path d="M-230,-60 C-260,-30 -260,30 -230,60" fill="none" stroke="#00E5FF" stroke-width="5" stroke-linecap="round"/>
+      <path d="M-260,-90 C-300,-45 -300,45 -260,90" fill="none" stroke="#00E5FF" stroke-width="4" stroke-linecap="round"/>
+      <path d="M-290,-115 C-340,-58 -340,58 -290,115" fill="none" stroke="#00E5FF" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <!-- Sound wave arcs (right) -->
+    <g transform="translate(512,430)" opacity="0.4" filter="url(#glow)">
+      <path d="M230,-60 C260,-30 260,30 230,60" fill="none" stroke="#00E5FF" stroke-width="5" stroke-linecap="round"/>
+      <path d="M260,-90 C300,-45 300,45 260,90" fill="none" stroke="#00E5FF" stroke-width="4" stroke-linecap="round"/>
+      <path d="M290,-115 C340,-58 340,58 290,115" fill="none" stroke="#00E5FF" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <!-- Castle/fortress top (from original logo) -->
+    <g transform="translate(512,230)" fill="#1A2A40" stroke="url(#shield)" stroke-width="4">
+      <rect x="-60" y="-30" width="120" height="50" rx="3"/>
+      <rect x="-50" y="-55" width="25" height="30" rx="2"/>
+      <rect x="-12" y="-55" width="25" height="30" rx="2"/>
+      <rect x="25" y="-55" width="25" height="30" rx="2"/>
+    </g>
+    <!-- Q-AUDION text -->
+    <text x="512" y="830" font-family="Inter, SF Pro, -apple-system, sans-serif" font-size="72" font-weight="800"
+          fill="white" text-anchor="middle" letter-spacing="6" opacity="0.95">Q-AUDION</text>
+    <!-- Subtitle -->
+    <text x="512" y="880" font-family="Inter, SF Pro, -apple-system, sans-serif" font-size="28" font-weight="500"
+          fill="#00E5FF" text-anchor="middle" letter-spacing="8" opacity="0.6">POST-QUANTUM SECURITY</text>
+  </g>
+</svg>

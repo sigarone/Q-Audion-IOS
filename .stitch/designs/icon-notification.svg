@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- Notification icon: solid white shield silhouette -->
+  <path d="M12 1.5 L21 6 L21 13 C21 19 12 23 12 23 C12 23 3 19 3 13 L3 6Z"
+        fill="white"/>
+</svg>

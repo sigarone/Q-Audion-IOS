@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 25" width="25" height="25">
+  <!-- Tab bar icon: outline-only shield, SF Symbol style, 2px stroke -->
+  <path d="M12.5 2 L21 6 L21 13 C21 18.5 12.5 23 12.5 23 C12.5 23 4 18.5 4 13 L4 6Z"
+        fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+  <!-- Simplified atom: just center dot + one ring -->
+  <circle cx="12.5" cy="11.5" r="1.5" fill="currentColor"/>
+  <ellipse cx="12.5" cy="11.5" rx="5" ry="2.5" fill="none" stroke="currentColor" stroke-width="1" transform="rotate(-25,12.5,11.5)"/>
+</svg>
