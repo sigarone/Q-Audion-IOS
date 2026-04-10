@@ -14,5 +14,83 @@
       "expected_output_size": 257,
       "expected_padding_length": 0
     }
-  ]
+  ],
+  "hkdf_vectors": [
+    {
+      "description": "Root key derivation from shared secret",
+      "shared_secret_hex": "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe",
+      "info_string": "q-audion-root-ratchet",
+      "output_length_bytes": 32,
+      "comment": "Both platforms must derive identical root key from same shared secret"
+    },
+    {
+      "description": "Chain key derivation from shared secret",
+      "shared_secret_hex": "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe",
+      "info_string": "q-audion-frame-key",
+      "output_length_bytes": 32,
+      "comment": "Both platforms must derive identical chain key"
+    },
+    {
+      "description": "PSK mixing with shared secret",
+      "psk_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "shared_secret_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "info_string": "q-audion-psk-mix",
+      "output_length_bytes": 32,
+      "comment": "PSK mixed via HKDF: ikm=psk, salt=sharedSecret, info=psk-mix"
+    }
+  ],
+  "aead_vectors": [
+    {
+      "description": "AES-256-GCM encrypt/decrypt round-trip",
+      "key_hex": "0102030405060708091011121314151617181920212223242526272829303132",
+      "plaintext_hex": "48656c6c6f20512d417564696f6e",
+      "comment": "Plaintext is 'Hello Q-Audion'. Nonces are random so ciphertext varies, but round-trip must succeed"
+    }
+  ],
+  "frame_wire_vectors": [
+    {
+      "description": "Standard encrypted frame wire format",
+      "version": 1,
+      "flags": 0,
+      "sequence_number": 42,
+      "timestamp": 1234567890,
+      "nonce_hex": "abababababababababababab",
+      "payload_hex": "0102030405",
+      "tag_hex": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "expected_bytes_hex_prefix": "010000002a00000000499602d20c",
+      "comment": "First 15 bytes: version(1) + flags(1) + seqNum(4 BE) + timestamp(8 BE) + nonceLen(1)"
+    }
+  ],
+  "capability_exchange_vectors": [
+    {
+      "description": "QUAD OFFER message",
+      "magic_hex": "51415544",
+      "version": 1,
+      "type": 1,
+      "comment": "OFFER carries ML-KEM-1024 public key (1568 bytes raw)"
+    },
+    {
+      "description": "QUAD ACCEPT message",
+      "magic_hex": "51415544",
+      "version": 1,
+      "type": 2,
+      "comment": "ACCEPT carries ML-KEM-1024 ciphertext (1568 bytes)"
+    }
+  ],
+  "crypto_constants": {
+    "ml_kem_algorithm": "ML-KEM-1024",
+    "ml_kem_public_key_size": 1568,
+    "ml_kem_private_key_size": 3168,
+    "ml_kem_ciphertext_size": 1568,
+    "ml_kem_shared_secret_size": 32,
+    "aead_algorithm": "AES-256-GCM",
+    "key_size_bytes": 32,
+    "nonce_size": 12,
+    "tag_size": 16,
+    "ratchet_interval_frames": 100,
+    "frame_duration_ms": 20,
+    "sample_rate": 48000,
+    "samples_per_frame": 960,
+    "cbr_frame_size": 256
+  }
 }
