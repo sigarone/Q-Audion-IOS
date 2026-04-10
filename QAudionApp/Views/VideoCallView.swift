@@ -1,0 +1,232 @@
+import SwiftUI
+
+// MARK: - Video Call View
+
+/// Full-screen video call UI with encrypted video feed placeholders.
+/// Provides camera, mic, speaker, and flip controls over a dark canvas.
+/// Designed as a UI-ready scaffold; video capture is integrated at runtime.
+struct VideoCallView: View {
+    @EnvironmentObject var appState: AppState
+
+    @State private var isMuted = false
+    @State private var isCameraOn = true
+    @State private var isRearCamera = false
+    @State private var isSpeaker = true
+    @State private var showControls = true
+
+    var body: some View {
+        ZStack {
+            // Full-screen dark background (remote video placeholder)
+            Color.black.ignoresSafeArea()
+
+            // Remote video placeholder
+            remoteVideoPlaceholder
+
+            VStack {
+                // Top bar: contact info + security badge
+                if showControls {
+                    topBar
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                Spacer()
+
+                // Local camera preview (picture-in-picture)
+                if isCameraOn {
+                    localPreview
+                }
+
+                // Waveform overlay (if enabled during video call)
+                if appState.waveformEnabled {
+                    WaveformPanel()
+                        .padding(.bottom, 8)
+                }
+
+                // Bottom controls
+                if showControls {
+                    bottomControls
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(.bottom, 40)
+                }
+            }
+        }
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showControls.toggle()
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: showControls)
+        .statusBarHidden(!showControls)
+    }
+
+    // MARK: - Remote Video Placeholder
+
+    private var remoteVideoPlaceholder: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "video.fill")
+                .font(.system(size: 48))
+                .foregroundColor(.white.opacity(0.3))
+
+            Text("Encrypted Video")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.3))
+
+            Text("AES-256-GCM")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.green.opacity(0.5))
+        }
+    }
+
+    // MARK: - Top Bar
+
+    private var topBar: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(appState.callContactId ?? "Video Call")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(.green)
+
+                    Text("Encrypted \u{2022} H.264")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+            }
+
+            Spacer()
+
+            CallSecurityBadge()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    // MARK: - Local Camera Preview (PiP)
+
+    private var localPreview: some View {
+        HStack {
+            Spacer()
+
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(white: 0.15))
+                .frame(width: 120, height: 160)
+                .overlay(
+                    VStack(spacing: 6) {
+                        Image(systemName: "person.fill")
+                            .font(.title)
+                            .foregroundColor(.gray)
+                        Text("You")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
+                .padding(.trailing, 16)
+                .padding(.bottom, 8)
+        }
+    }
+
+    // MARK: - Bottom Controls
+
+    private var bottomControls: some View {
+        HStack(spacing: 24) {
+            videoButton(
+                icon: "camera.rotate.fill",
+                label: "Flip"
+            ) {
+                isRearCamera.toggle()
+            }
+
+            videoButton(
+                icon: isCameraOn ? "video.fill" : "video.slash.fill",
+                label: isCameraOn ? "Cam On" : "Cam Off",
+                isActive: !isCameraOn
+            ) {
+                isCameraOn.toggle()
+            }
+
+            videoButton(
+                icon: isMuted ? "mic.slash.fill" : "mic.fill",
+                label: isMuted ? "Unmute" : "Mute",
+                isActive: isMuted
+            ) {
+                isMuted.toggle()
+                appState.setMuted(isMuted)
+            }
+
+            videoButton(
+                icon: "phone.down.fill",
+                label: "End",
+                isEndCall: true
+            ) {
+                appState.endCall()
+            }
+
+            videoButton(
+                icon: isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
+                label: "Speaker",
+                isActive: isSpeaker
+            ) {
+                isSpeaker.toggle()
+                appState.setSpeaker(isSpeaker)
+            }
+        }
+    }
+
+    // MARK: - Video Control Button
+
+    private func videoButton(
+        icon: String,
+        label: String,
+        isActive: Bool = false,
+        isEndCall: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                    .frame(width: 50, height: 50)
+                    .background(
+                        isEndCall
+                            ? Color.red
+                            : (isActive ? Color.blue : Color.white.opacity(0.15))
+                    )
+                    .clipShape(Circle())
+                    .foregroundColor(.white)
+
+                Text(label)
+                    .font(.system(size: 9))
+                    .foregroundColor(.gray)
+            }
+        }
+    }
+}
+
+// MARK: - Previews
+
+#if DEBUG
+struct VideoCallView_Previews: PreviewProvider {
+    static var previews: some View {
+        VideoCallView()
+            .environmentObject(previewAppState())
+    }
+
+    static func previewAppState() -> AppState {
+        let state = AppState()
+        state.callContactId = "Alice"
+        state.callState = .encrypted
+        state.isVideoCall = true
+        state.isInCall = true
+        return state
+    }
+}
+#endif

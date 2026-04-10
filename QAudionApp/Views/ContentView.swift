@@ -6,7 +6,9 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if appState.isAuthenticated && appState.isInCall {
+            if appState.isInCall && appState.isVideoCall {
+                VideoCallView()
+            } else if appState.isInCall {
                 CallView()
             } else if appState.isAuthenticated {
                 HomeView()
@@ -18,5 +20,6 @@ struct ContentView: View {
         }
         .animation(.easeInOut, value: appState.isAuthenticated)
         .animation(.easeInOut, value: appState.isInCall)
+        .animation(.easeInOut, value: appState.isVideoCall)
     }
 }

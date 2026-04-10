@@ -29,6 +29,12 @@ struct CallView: View {
                 // MARK: - Center: Security Badge
                 CallSecurityBadge()
 
+                // MARK: - Waveform Visualization
+                if appState.waveformEnabled {
+                    WaveformPanel()
+                        .padding(.top, 8)
+                }
+
                 Spacer()
 
                 // MARK: - Deepfake Alert Banner
