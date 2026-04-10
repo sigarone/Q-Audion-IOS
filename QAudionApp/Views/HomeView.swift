@@ -12,7 +12,7 @@ struct HomeView: View {
             // MARK: - Calls Tab
             NavigationStack {
                 VStack(spacing: 0) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 8) {
                         TextField("Enter contact ID", text: $contactId)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
@@ -22,12 +22,24 @@ struct HomeView: View {
 
                         Button {
                             guard !contactId.isEmpty else { return }
-                            appState.startCall(contactId: contactId)
+                            Task { await appState.startCall(contactId: contactId, video: false) }
                         } label: {
-                            Label("Call", systemImage: "phone.fill")
-                                .fontWeight(.semibold)
+                            Image(systemName: "phone.fill")
+                                .font(.body)
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                        .disabled(contactId.isEmpty)
+
+                        Button {
+                            guard !contactId.isEmpty else { return }
+                            Task { await appState.startCall(contactId: contactId, video: true) }
+                        } label: {
+                            Image(systemName: "video.fill")
+                                .font(.body)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
                         .disabled(contactId.isEmpty)
                     }
                     .padding()
@@ -50,7 +62,25 @@ struct HomeView: View {
                                 }
                             } else {
                                 ForEach(appState.recentCalls, id: \.self) { call in
-                                    Label(call, systemImage: "phone.fill")
+                                    HStack {
+                                        Label(call, systemImage: "phone.fill")
+                                        Spacer()
+                                        Button {
+                                            Task { await appState.startCall(contactId: call, video: false) }
+                                        } label: {
+                                            Image(systemName: "phone.fill")
+                                                .foregroundStyle(.blue)
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        Button {
+                                            Task { await appState.startCall(contactId: call, video: true) }
+                                        } label: {
+                                            Image(systemName: "video.fill")
+                                                .foregroundStyle(.green)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
                                 }
                             }
                         }
