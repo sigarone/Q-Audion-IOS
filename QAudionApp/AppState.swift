@@ -46,6 +46,13 @@ final class AppState: ObservableObject {
     @Published var deepfakeAlert: Bool = false
     @Published var recentCalls: [String] = []
 
+    // MARK: - Video codec
+    /// HEVC (H.265) is primary, H.264 is fallback for older devices
+    @Published var videoCodec: String = "HEVC"  // "HEVC" or "H.264"
+    var videoCodecLabel: String {
+        videoCodec == "HEVC" ? "HEVC (H.265)" : "H.264 (fallback)"
+    }
+
     // MARK: - Waveform state (updated during call for visualization)
     @Published var txWaveformSamples: [Float] = []
     @Published var rxWaveformSamples: [Float] = []

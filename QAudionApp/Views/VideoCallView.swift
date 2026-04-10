@@ -71,7 +71,7 @@ struct VideoCallView: View {
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.3))
 
-            Text("AES-256-GCM")
+            Text("\(appState.videoCodec) + AES-256-GCM")
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(.green.opacity(0.5))
         }
@@ -91,7 +91,7 @@ struct VideoCallView: View {
                         .font(.system(size: 9))
                         .foregroundColor(.green)
 
-                    Text("Encrypted \u{2022} H.264")
+                    Text("Encrypted \u{2022} \(appState.videoCodecLabel)")
                         .font(.caption2)
                         .foregroundColor(.gray)
                 }
