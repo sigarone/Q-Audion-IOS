@@ -12,12 +12,20 @@ workflows:
       tag_patterns:
         - pattern: 'v*'
     scripts:
+      - name: Find iOS Simulator
+        script: |
+          SIM_ID=$(xcrun simctl list devices available -j | \
+            python3 -c "import json,sys; devs=json.load(sys.stdin)['devices']; \
+            ids=[d['udid'] for k,v in devs.items() if 'iOS' in k for d in v if 'iPhone' in d['name'] and d['isAvailable']]; \
+            print(ids[0] if ids else '')")
+          echo "Using simulator: $SIM_ID"
+          echo "SIM_DEST=platform=iOS Simulator,id=$SIM_ID" >> $CM_ENV
       - name: Build QAudionEngine (iOS Simulator)
         script: |
           cd QAudionEngine
           xcodebuild build \
             -scheme QAudionEngine \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination "$SIM_DEST" \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO
       - name: Run Engine Tests
@@ -25,7 +33,7 @@ workflows:
           cd QAudionEngine
           xcodebuild test \
             -scheme QAudionEngine \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination "$SIM_DEST" \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO
     artifacts:
@@ -45,12 +53,20 @@ workflows:
         - pattern: 'main'
         - pattern: 'develop'
     scripts:
+      - name: Find iOS Simulator
+        script: |
+          SIM_ID=$(xcrun simctl list devices available -j | \
+            python3 -c "import json,sys; devs=json.load(sys.stdin)['devices']; \
+            ids=[d['udid'] for k,v in devs.items() if 'iOS' in k for d in v if 'iPhone' in d['name'] and d['isAvailable']]; \
+            print(ids[0] if ids else '')")
+          echo "Using simulator: $SIM_ID"
+          echo "SIM_DEST=platform=iOS Simulator,id=$SIM_ID" >> $CM_ENV
       - name: Build & Test (iOS Simulator)
         script: |
           cd QAudionEngine
           xcodebuild test \
             -scheme QAudionEngine \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination "$SIM_DEST" \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee test_results.txt
