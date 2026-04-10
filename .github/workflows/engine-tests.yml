@@ -10,7 +10,12 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: cd QAudionEngine && swift build -c release
-      - name: Test
-        run: cd QAudionEngine && swift test --parallel
+      - name: Build & Test (iOS Simulator)
+        run: |
+          cd QAudionEngine
+          xcodebuild test \
+            -scheme QAudionEngine \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -50
