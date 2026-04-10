@@ -1,5 +1,5 @@
 import Foundation
-import onnxruntime
+import OnnxRuntimeBindings
 
 /// ONNX Runtime model manager for AASIST-raw deepfake detection.
 ///
