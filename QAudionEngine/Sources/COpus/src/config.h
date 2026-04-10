@@ -41,11 +41,14 @@
 // No fixed-point (using float)
 // #define FIXED_POINT 1
 
-// ARM NEON optimizations for Apple Silicon
-#if defined(__aarch64__) && defined(__APPLE__)
-#define OPUS_ARM_ASM 1
-#define OPUS_ARM_NEON_INTR 1
-#define OPUS_HAVE_RTCD 0
-#endif
+// ARM NEON intrinsics are disabled because vendored libopus does not
+// include the arm/ source directory. Generic C fallback is used instead.
+// To enable: vendor opus/celt/arm/ and opus/silk/arm/ directories and
+// uncomment the defines below.
+// #if defined(__aarch64__) && defined(__APPLE__)
+// #define OPUS_ARM_ASM 1
+// #define OPUS_ARM_NEON_INTR 1
+// #define OPUS_HAVE_RTCD 0
+// #endif
 
 #endif // OPUS_CONFIG_H
