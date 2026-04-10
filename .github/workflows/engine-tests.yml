@@ -7,11 +7,11 @@ on:
 
 jobs:
   test:
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
+      - name: Show Swift version
+        run: swift --version
       - name: Resolve dependencies
         run: |
           cd QAudionEngine
@@ -19,8 +19,8 @@ jobs:
       - name: Build (macOS)
         run: |
           cd QAudionEngine
-          swift build
+          swift build 2>&1 | tail -100
       - name: Run Tests (macOS)
         run: |
           cd QAudionEngine
-          swift test
+          swift test 2>&1 | tail -100

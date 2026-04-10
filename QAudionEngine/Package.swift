@@ -29,8 +29,8 @@ let package = Package(
                 .headerSearchPath("src/common/sha3"),
                 .headerSearchPath("src/common/sha3/xkcp_low/KeccakP-1600/plain-64bits"),
                 .headerSearchPath("src/common/pqclean_shims"),
-                .define("OQS_ENABLE_KEM_ml_kem_1024"),
-                .define("MLK_CONFIG_PARAMETER_SET", to: "1024"),
+                // OQS_ENABLE_KEM_ml_kem_1024 already in oqsconfig.h
+                // MLK_CONFIG_PARAMETER_SET already in mlkem_native_config.h
                 .define("MLK_CONFIG_FILE", to: "\"mlkem_native_config.h\""),
             ]
         ),
