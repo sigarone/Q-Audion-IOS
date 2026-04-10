@@ -1,29 +1,54 @@
 import Foundation
 import CryptoKit
 
-// ONNX Runtime is only available on real devices and macOS,
-// NOT on iOS Simulator (binary framework lacks simulator slices).
 #if !targetEnvironment(simulator)
 import OnnxRuntimeBindings
 #endif
 
-/// ONNX Runtime model manager for AASIST-raw deepfake detection.
+/// Adaptive ONNX Runtime model manager for AASIST-raw deepfake detection.
 ///
-/// Model: aasist_raw_base_int8.onnx (~755 KB)
-/// Input: [1, 1, 64600] raw waveform at 16kHz
-/// Output: [1, 1] binary logit (positive=bonafide, negative=spoof)
-/// EER: 2.83% on ASVspoof2019 dev set
+/// Automatically selects the best model based on device capabilities:
+/// - High-end devices (≥6 GB RAM): AASIST-raw-base (EER 2.83%, 755 KB)
+/// - Low-end devices (<6 GB RAM):  AASIST-raw-small-distill (EER 8.0%, 351 KB)
 ///
-/// Note: ONNX Runtime is not available on iOS Simulator. On simulator
-/// builds, the model manager returns stub results for testing.
+/// Both models accept raw waveform input at 16kHz.
 public final class ModelManager {
     public enum ModelState { case notLoaded; case loading; case loaded; case error(String) }
+
+    public enum ModelTier: String {
+        case base = "BASE"
+        case small = "SMALL"
+
+        var assetName: String {
+            switch self {
+            case .base:  return "aasist_raw_base_int8"
+            case .small: return "aasist_raw_small_distill_int8"
+            }
+        }
+        var eer: Float {
+            switch self {
+            case .base:  return 0.0283
+            case .small: return 0.080
+            }
+        }
+        var sizeKb: Int {
+            switch self {
+            case .base:  return 755
+            case .small: return 351
+            }
+        }
+    }
 
     public static let modelSampleRate: Int = 16000
     public static let modelInputLength: Int = 64600
 
-    private static let modelName = "aasist_raw_base_int8"
-    private static let trustedHash = "06f6d7d84e94ac40258419c440b0feda76daba63677ea098af1f88e647804ec4"
+    /// RAM threshold in bytes: ≥6 GB → base, otherwise → small
+    private static let highEndRamThreshold: UInt64 = 6 * 1024 * 1024 * 1024
+
+    private static let trustedHashes: [String: String] = [
+        "aasist_raw_base_int8": "06f6d7d84e94ac40258419c440b0feda76daba63677ea098af1f88e647804ec4",
+        "aasist_raw_small_distill_int8": "3a675ee542eccedaf1535e8298285986b99858ebafe46caa22aa3d23aae20a0b",
+    ]
 
     private var state: ModelState = .notLoaded
 
@@ -32,26 +57,33 @@ public final class ModelManager {
     private var session: ORTSession?
     #endif
 
+    public private(set) var activeTier: ModelTier?
     public private(set) var modelIntegrityVerified = false
 
     public init() {}
 
-    /// Load the ONNX model from the bundle.
+    /// Load the optimal model based on device capabilities.
     @discardableResult
     public func loadModel() -> Bool {
+        let tier = selectModelTier()
+        return loadModelTier(tier)
+    }
+
+    /// Force-load a specific model tier.
+    @discardableResult
+    public func loadModelTier(_ tier: ModelTier) -> Bool {
         guard case .notLoaded = state else { return isLoaded() }
         state = .loading
 
         #if !targetEnvironment(simulator)
         guard let modelURL = Bundle.module.url(
-            forResource: Self.modelName, withExtension: "onnx"
+            forResource: tier.assetName, withExtension: "onnx"
         ) else {
-            state = .error("Model file not found in bundle")
+            state = .error("Model file not found: \(tier.assetName).onnx")
             return false
         }
 
-        // Verify integrity
-        guard verifyIntegrity(at: modelURL) else {
+        guard verifyIntegrity(at: modelURL, name: tier.assetName) else {
             state = .error("Model integrity check failed")
             return false
         }
@@ -59,29 +91,40 @@ public final class ModelManager {
         do {
             ortEnv = try ORTEnv(loggingLevel: .warning)
             let options = try ORTSessionOptions()
-            try options.setIntraOpNumThreads(4)
+            try options.setIntraOpNumThreads(tier == .small ? 2 : 4)
             try options.setGraphOptimizationLevel(.all)
             session = try ORTSession(env: ortEnv!, modelPath: modelURL.path, sessionOptions: options)
+            activeTier = tier
             state = .loaded
             return true
         } catch {
+            // Fallback: if base fails, try small
+            if tier == .base {
+                state = .notLoaded
+                return loadModelTier(.small)
+            }
             state = .error(error.localizedDescription)
             return false
         }
         #else
-        // ONNX Runtime not available on iOS Simulator
         state = .error("ONNX Runtime not available on iOS Simulator")
         return false
         #endif
     }
 
+    /// Select model tier based on device RAM.
+    private func selectModelTier() -> ModelTier {
+        let totalRam = ProcessInfo.processInfo.physicalMemory
+        let tier: ModelTier = totalRam >= Self.highEndRamThreshold ? .base : .small
+        return tier
+    }
+
     /// Run inference on raw waveform.
-    /// - Parameter waveform: Float array normalized [-1, 1], length = modelInputLength
-    /// - Returns: Raw logit (positive = bonafide, negative = spoof)
     public func runInference(waveform: [Float]) throws -> Float {
         #if !targetEnvironment(simulator)
         guard let session = session, let env = ortEnv else {
-            throw NSError(domain: "ModelManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Model not loaded"])
+            throw NSError(domain: "ModelManager", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Model not loaded"])
         }
 
         let inputData = Data(bytes: waveform, count: waveform.count * MemoryLayout<Float>.size)
@@ -99,15 +142,15 @@ public final class ModelManager {
         )
 
         guard let outputTensor = outputs["output"] else {
-            throw NSError(domain: "ModelManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "No output tensor"])
+            throw NSError(domain: "ModelManager", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "No output tensor"])
         }
 
         let outputData = try outputTensor.tensorData() as Data
-        let logit = outputData.withUnsafeBytes { $0.load(as: Float.self) }
-        return logit
+        return outputData.withUnsafeBytes { $0.load(as: Float.self) }
         #else
         throw NSError(domain: "ModelManager", code: 3,
-                       userInfo: [NSLocalizedDescriptionKey: "ONNX Runtime not available on iOS Simulator"])
+                       userInfo: [NSLocalizedDescriptionKey: "ONNX Runtime not available on Simulator"])
         #endif
     }
 
@@ -120,14 +163,15 @@ public final class ModelManager {
         ortEnv = nil
         #endif
         state = .notLoaded
+        activeTier = nil
         modelIntegrityVerified = false
     }
 
-    /// Verify SHA-256 hash of model file.
-    private func verifyIntegrity(at url: URL) -> Bool {
+    private func verifyIntegrity(at url: URL, name: String) -> Bool {
+        guard let expectedHash = Self.trustedHashes[name] else { return false }
         guard let data = try? Data(contentsOf: url) else { return false }
         let hash = sha256(data)
-        modelIntegrityVerified = (hash == Self.trustedHash)
+        modelIntegrityVerified = (hash == expectedHash)
         return modelIntegrityVerified
     }
 
