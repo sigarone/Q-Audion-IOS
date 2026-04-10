@@ -30,6 +30,28 @@ public enum CryptoConstants {
     public static let hkdfInfoPskMix = Data("q-audion-psk-mix".utf8)
     public static let hkdfInfoNextChain = Data("q-audion-next-chain".utf8)
 
+    // MARK: - Certificate Pinning
+    /// SHA-256 hashes (base64) of pinned server certificate SPKI data.
+    /// Add production certificate hashes before release.
+    public static let pinnedCertHashes: [String] = []
+    public static let pinningEnabled = true
+
+    // MARK: - Forward Secrecy
+    /// Generate a new X25519 ephemeral key pair every N frames.
+    public static let ephemeralKeyRotationFrames = 50
+    /// Maximum lifetime of a single chain key before forced rotation.
+    public static let maxChainKeyAge: TimeInterval = 300  // 5 minutes
+    /// Delay before old key material is scrubbed from memory.
+    public static let keyErasureDelay: TimeInterval = 5
+
+    // MARK: - Threat Detection
+    /// Maximum acceptable inter-frame jitter before a timing alert fires.
+    public static let maxAcceptableJitter: TimeInterval = 0.5
+    /// Number of recent sequence numbers retained for replay detection.
+    public static let replayWindowSize: UInt32 = 256
+    /// Alert threshold for unexpected gaps in the sequence counter.
+    public static let maxSequenceGap: UInt32 = 1000
+
     /// Securely zeroize data to prevent memory leaks of sensitive material.
     public static func zeroize(_ data: inout Data) {
         data.withUnsafeMutableBytes { buffer in
