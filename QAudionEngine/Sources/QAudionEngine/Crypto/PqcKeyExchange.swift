@@ -123,7 +123,6 @@ public struct PqcKeyExchange {
         }
         return data
     }
-}
 
     // MARK: - Raw key interop (Android ASN.1 compatibility)
 
