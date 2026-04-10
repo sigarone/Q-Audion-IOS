@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800;900&amp;family=Space+Grotesk:wght@500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "inverse-on-surface": "#303030",
+                    "secondary-container": "#294b6f",
+                    "on-secondary": "#0a3254",
+                    "error-container": "#93000a",
+                    "primary-fixed-dim": "#00daf3",
+                    "on-primary-fixed-variant": "#004f58",
+                    "on-error": "#690005",
+                    "secondary": "#a8c9f3",
+                    "on-surface": "#e2e2e2",
+                    "surface-container-high": "#2a2a2a",
+                    "surface-container-low": "#1b1b1b",
+                    "on-primary": "#00363d",
+                    "tertiary": "#ffffff",
+                    "on-tertiary-fixed-variant": "#4100db",
+                    "on-surface-variant": "#b9cac9",
+                    "on-secondary-fixed": "#001d36",
+                    "surface-tint": "#00daf3",
+                    "surface-container-lowest": "#0e0e0e",
+                    "on-background": "#e2e2e2",
+                    "outline": "#839493",
+                    "error": "#ffb4ab",
+                    "on-error-container": "#ffdad6",
+                    "tertiary-container": "#e5deff",
+                    "on-primary-container": "#006f7c",
+                    "secondary-fixed-dim": "#a8c9f3",
+                    "surface-container-highest": "#353535",
+                    "primary-fixed": "#9cf0ff",
+                    "surface-bright": "#393939",
+                    "on-tertiary-container": "#603bff",
+                    "tertiary-fixed-dim": "#c8bfff",
+                    "surface": "#131313",
+                    "primary-container": "#9cf0ff",
+                    "tertiary-fixed": "#e5deff",
+                    "surface-container": "#1f1f1f",
+                    "on-tertiary-fixed": "#190064",
+                    "inverse-primary": "#006875",
+                    "inverse-surface": "#e2e2e2",
+                    "surface-dim": "#131313",
+                    "on-secondary-container": "#9abbe4",
+                    "secondary-fixed": "#d1e4ff",
+                    "background": "#131313",
+                    "surface-variant": "#353535",
+                    "on-tertiary": "#2c009e",
+                    "on-secondary-fixed-variant": "#27496c",
+                    "primary": "#ffffff",
+                    "on-primary-fixed": "#001f24",
+                    "outline-variant": "#3a4a49"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "fontFamily": {
+                    "headline": ["Inter"],
+                    "body": ["Inter"],
+                    "label": ["Space Grotesk"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body { background-color: #000000; }
+        .waveform-container { height: 40px; }
+        .glass-panel { backdrop-filter: blur(24px); }
+        .pulse-glow { box-shadow: 0 0 8px #00daf3; }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="text-on-surface font-body overflow-hidden">
+<!-- Top Navigation Anchor -->
+<header class="fixed top-0 w-full bg-[#131313] z-50 flex items-center justify-between px-6 h-16 shadow-[0_0_15px_rgba(0,218,243,0.08)]">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[#00daf3]" data-icon="shield_lock">shield_lock</span>
+<span class="text-lg font-black text-white font-headline tracking-tight">alice_bcrypto</span>
+</div>
+<div class="flex items-center">
+<button class="text-gray-500 hover:bg-[#2a2a2a] transition-colors p-2 rounded-lg active:scale-95 duration-200">
+<span class="material-symbols-outlined" data-icon="more_vert">more_vert</span>
+</button>
+</div>
+</header>
+<main class="flex flex-col items-center justify-start min-h-screen pt-24 pb-32 px-6">
+<!-- Call Header Section -->
+<div class="flex flex-col items-center mb-8">
+<div class="flex items-center gap-1 mb-6">
+<span class="material-symbols-outlined text-[#00daf3] text-sm" data-icon="lock" style="font-size: 14px;">lock</span>
+<span class="text-[#00daf3] font-label text-[10px] uppercase tracking-[0.2em] font-bold">Encrypted call</span>
+</div>
+<div class="relative mb-6">
+<div class="w-32 h-32 rounded-full bg-[#131313] border border-outline-variant/20 flex items-center justify-center relative overflow-hidden">
+<div class="absolute inset-0 bg-gradient-to-tr from-[#00daf3]/10 to-transparent opacity-50"></div>
+<span class="material-symbols-outlined text-[#00daf3] text-6xl" data-icon="shield" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<!-- Ambient Glow -->
+<div class="absolute inset-0 w-32 h-32 bg-[#00daf3] blur-3xl opacity-10 -z-10"></div>
+</div>
+<h1 class="text-white text-2xl font-bold font-headline mb-1">alice_bcrypto</h1>
+<span class="text-on-surface-variant font-label text-lg tracking-widest">04:17</span>
+</div>
+<!-- Security Badge Pill -->
+<div class="w-full flex justify-center mb-10">
+<div class="glass-panel bg-surface-variant/40 rounded-full px-4 py-2 flex items-center gap-3 border border-outline-variant/10 shadow-[0_0_20px_rgba(0,218,243,0.05)] cursor-pointer active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-[#00daf3] text-lg" data-icon="lock">lock</span>
+<div class="flex items-center gap-1.5">
+<div class="w-1.5 h-1.5 rounded-full bg-[#00daf3] pulse-glow"></div>
+<span class="text-[#00daf3] font-label text-xs font-bold tracking-tighter">PQC</span>
+</div>
+<div class="h-4 w-px bg-outline-variant/30"></div>
+<span class="bg-[#ffb4ab]/20 text-[#ffb4ab] font-label text-[10px] font-bold px-1.5 py-0.5 rounded-sm">PSK</span>
+</div>
+</div>
+<!-- Visualizers Section -->
+<div class="w-full glass-panel bg-surface-container-low/50 rounded-xl p-5 border border-outline-variant/10 mb-auto">
+<!-- TX OUT -->
+<div class="mb-4">
+<div class="flex justify-between items-center mb-1">
+<span class="text-[10px] font-label font-bold text-[#00daf3] tracking-wider">TX OUT</span>
+</div>
+<div class="waveform-container flex items-center justify-center gap-0.5">
+<div class="h-2 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-4 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-6 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-3 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-8 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-5 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-2 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-7 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-4 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-3 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-6 w-1 bg-[#00daf3] rounded-full"></div>
+<div class="h-4 w-1 bg-[#00daf3] rounded-full"></div>
+</div>
+</div>
+<!-- RX IN -->
+<div class="mb-4">
+<div class="flex justify-between items-center mb-1">
+<span class="text-[10px] font-label font-bold text-green-400 tracking-wider">RX IN</span>
+</div>
+<div class="waveform-container flex items-center justify-center gap-0.5">
+<div class="h-4 w-1 bg-green-400 rounded-full opacity-60"></div>
+<div class="h-2 w-1 bg-green-400 rounded-full opacity-60"></div>
+<div class="h-5 w-1 bg-green-400 rounded-full opacity-60"></div>
+<div class="h-3 w-1 bg-green-400 rounded-full opacity-60"></div>
+<div class="h-2 w-1 bg-green-400 rounded-full opacity-60"></div>
+<div class="h-6 w-1 bg-green-400 rounded-full opacity-60"></div>
+<div class="h-4 w-1 bg-green-400 rounded-full opacity-60"></div>
+<div class="h-5 w-1 bg-green-400 rounded-full opacity-60"></div>
+</div>
+</div>
+<!-- CIPHER -->
+<div class="mb-4">
+<div class="flex justify-between items-center mb-1">
+<span class="text-[10px] font-label font-bold text-orange-400 tracking-wider">CIPHER</span>
+</div>
+<div class="waveform-container flex items-center justify-center gap-0.5">
+<div class="h-2 w-1 bg-orange-400 rounded-full opacity-40"></div>
+<div class="h-2 w-1 bg-orange-400 rounded-full opacity-40"></div>
+<div class="h-2 w-1 bg-orange-400 rounded-full opacity-40"></div>
+<div class="h-2 w-1 bg-orange-400 rounded-full opacity-40"></div>
+<div class="h-2 w-1 bg-orange-400 rounded-full opacity-40"></div>
+</div>
+</div>
+<div class="flex justify-between mt-4 pt-4 border-t border-outline-variant/10">
+<span class="text-[10px] font-label text-on-surface-variant font-bold">1247 TX</span>
+<span class="text-[10px] font-label text-on-surface-variant font-bold">1243 RX</span>
+</div>
+</div>
+</main>
+<!-- Bottom Navigation Shell -->
+<nav class="fixed bottom-10 left-0 w-full z-50 flex justify-evenly items-center bg-transparent">
+<div class="flex flex-col items-center gap-2">
+<button class="bg-[#2a2a2a] text-white rounded-full p-4 hover:brightness-125 active:scale-90 transition-transform">
+<span class="material-symbols-outlined" data-icon="mic_off">mic_off</span>
+</button>
+<span class="font-label font-bold text-[10px] text-on-surface-variant">Mute</span>
+</div>
+<div class="flex flex-col items-center gap-2">
+<button class="bg-error text-on-error rounded-full p-5 shadow-[0_0_20px_rgba(255,180,171,0.4)] hover:brightness-125 active:scale-90 transition-transform">
+<span class="material-symbols-outlined" data-icon="call_end" style="font-variation-settings: 'FILL' 1;">call_end</span>
+</button>
+<span class="font-label font-bold text-[10px] text-on-surface-variant">End Call</span>
+</div>
+<div class="flex flex-col items-center gap-2">
+<button class="bg-[#2a2a2a] text-white rounded-full p-4 hover:brightness-125 active:scale-90 transition-transform">
+<span class="material-symbols-outlined" data-icon="volume_up">volume_up</span>
+</button>
+<span class="font-label font-bold text-[10px] text-on-surface-variant">Speaker</span>
+</div>
+</nav>
+<!-- Background Decoration Overlay -->
+<div class="fixed inset-0 pointer-events-none -z-20 bg-[radial-gradient(circle_at_50%_50%,_rgba(0,218,243,0.02)_0%,_transparent_70%)]"></div>
+</body></html>

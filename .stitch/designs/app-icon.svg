@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0A1628"/>
+      <stop offset="100%" stop-color="#000000"/>
+    </linearGradient>
+    <linearGradient id="shieldGrad" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#00E5FF"/>
+      <stop offset="50%" stop-color="#0A84FF"/>
+      <stop offset="100%" stop-color="#0A4FFF"/>
+    </linearGradient>
+    <linearGradient id="waveGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#00E5FF" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#0A84FF" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#00E5FF" stop-opacity="0.8"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="outerGlow">
+      <feGaussianBlur stdDeviation="20" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="iosClip">
+      <rect width="1024" height="1024" rx="224" ry="224"/>
+    </clipPath>
+  </defs>
+
+  <!-- iOS rounded square clip -->
+  <g clip-path="url(#iosClip)">
+    <!-- Background -->
+    <rect width="1024" height="1024" fill="url(#bgGrad)"/>
+
+    <!-- Subtle grid pattern -->
+    <g opacity="0.03" stroke="#00E5FF" stroke-width="1">
+      <line x1="0" y1="256" x2="1024" y2="256"/>
+      <line x1="0" y1="512" x2="1024" y2="512"/>
+      <line x1="0" y1="768" x2="1024" y2="768"/>
+      <line x1="256" y1="0" x2="256" y2="1024"/>
+      <line x1="512" y1="0" x2="512" y2="1024"/>
+      <line x1="768" y1="0" x2="768" y2="1024"/>
+    </g>
+
+    <!-- Quantum wave rings (background decoration) -->
+    <g filter="url(#outerGlow)" opacity="0.15">
+      <circle cx="512" cy="480" r="340" fill="none" stroke="#00E5FF" stroke-width="1.5"/>
+      <circle cx="512" cy="480" r="280" fill="none" stroke="#0A84FF" stroke-width="1"/>
+      <circle cx="512" cy="480" r="400" fill="none" stroke="#00E5FF" stroke-width="0.8"/>
+    </g>
+
+    <!-- Shield shape -->
+    <g filter="url(#glow)" transform="translate(512, 460)">
+      <path d="M0 -220 L180 -140 L180 60 C180 180 0 280 0 280 C0 280 -180 180 -180 60 L-180 -140 Z"
+            fill="none" stroke="url(#shieldGrad)" stroke-width="8" opacity="0.3"/>
+      <path d="M0 -200 L160 -125 L160 50 C160 160 0 250 0 250 C0 250 -160 160 -160 50 L-160 -125 Z"
+            fill="url(#shieldGrad)" opacity="0.15"/>
+      <path d="M0 -200 L160 -125 L160 50 C160 160 0 250 0 250 C0 250 -160 160 -160 50 L-160 -125 Z"
+            fill="none" stroke="url(#shieldGrad)" stroke-width="5"/>
+    </g>
+
+    <!-- Lock icon inside shield -->
+    <g transform="translate(512, 420)" fill="white" opacity="0.9">
+      <!-- Lock body -->
+      <rect x="-35" y="-10" width="70" height="55" rx="8" fill="white"/>
+      <!-- Lock shackle -->
+      <path d="M-22 -10 L-22 -35 C-22 -58 22 -58 22 -35 L22 -10" fill="none" stroke="white" stroke-width="8" stroke-linecap="round"/>
+      <!-- Keyhole -->
+      <circle cx="0" cy="15" r="8" fill="#0A1628"/>
+      <rect x="-3" y="18" width="6" height="14" rx="2" fill="#0A1628"/>
+    </g>
+
+    <!-- Quantum wave lines through shield -->
+    <g filter="url(#glow)">
+      <path d="M200 480 Q300 430 400 480 Q450 505 512 480 Q574 455 624 480 Q724 530 824 480"
+            fill="none" stroke="url(#waveGrad)" stroke-width="3" opacity="0.6"/>
+      <path d="M220 510 Q320 470 400 510 Q460 535 512 510 Q564 485 624 510 Q704 540 804 510"
+            fill="none" stroke="url(#waveGrad)" stroke-width="2" opacity="0.35"/>
+    </g>
+
+    <!-- "Q" letter accent -->
+    <g transform="translate(512, 780)" opacity="0.9">
+      <text font-family="SF Pro Rounded, -apple-system, Helvetica" font-size="72" font-weight="700"
+            fill="white" text-anchor="middle" dominant-baseline="central">Q-AUDION</text>
+    </g>
+
+    <!-- Small "PQC" badge -->
+    <g transform="translate(512, 850)">
+      <rect x="-45" y="-14" width="90" height="28" rx="14" fill="#30D158" opacity="0.2"/>
+      <rect x="-45" y="-14" width="90" height="28" rx="14" fill="none" stroke="#30D158" stroke-width="1.5" opacity="0.6"/>
+      <text font-family="SF Mono, monospace" font-size="14" font-weight="700"
+            fill="#30D158" text-anchor="middle" dominant-baseline="central">PQC</text>
+    </g>
+  </g>
+</svg>
