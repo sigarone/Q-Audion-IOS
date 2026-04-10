@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import OnnxRuntimeBindings
 
 /// ONNX Runtime model manager for AASIST-raw deepfake detection.
@@ -107,13 +108,7 @@ public final class ModelManager {
     }
 
     private func sha256(_ data: Data) -> String {
-        var hash = [UInt8](repeating: 0, count: 32)
-        data.withUnsafeBytes { buf in
-            _ = CC_SHA256(buf.baseAddress, CC_LONG(data.count), &hash)
-        }
-        return hash.map { String(format: "%02x", $0) }.joined()
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
-
-// CommonCrypto bridge
-import CommonCrypto
