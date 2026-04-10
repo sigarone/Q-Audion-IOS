@@ -1,36 +1,129 @@
 import Foundation
+#if canImport(CoreNFC)
+import CoreNFC
+#endif
 
-public final class NfcProtocol {
-    public enum NfcState { case idle; case reading; case complete; case error(String) }
+/// Handles NFC-based PSK (Pre-Shared Key) exchange.
+///
+/// On iOS the device can only **read** NDEF tags (no Host Card Emulation).
+/// The typical flow is: an Android device writes a PSK record to an NFC tag,
+/// and the iOS device reads it.  For iOS-to-iOS exchange the QR fallback is
+/// used instead (see ``generateQrPayload(name:key:)``).
+///
+/// All NFC session code is wrapped in `#if canImport(CoreNFC)` so the class
+/// compiles on macOS (used by CI / unit tests) where CoreNFC is unavailable.
+/// The data-parsing helpers (``parsePskPayload(_:)`` and
+/// ``generateQrPayload(name:key:)``) work on every platform.
+public final class NfcProtocol: NSObject {
 
-    private var state: NfcState = .idle
+    // MARK: - Public types
+
+    public enum NfcState: Equatable {
+        case idle
+        case reading
+        case complete
+        case error(String)
+
+        public static func == (lhs: NfcState, rhs: NfcState) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle), (.reading, .reading), (.complete, .complete):
+                return true
+            case let (.error(a), .error(b)):
+                return a == b
+            default:
+                return false
+            }
+        }
+    }
+
+    // MARK: - Public properties
+
+    /// Called when a valid PSK payload has been read from an NFC tag.
     public var onPskReceived: ((String, Data) -> Void)?
 
-    public init() {}
+    /// Called whenever ``state`` changes.
+    public var onStateChanged: ((NfcState) -> Void)?
 
-    /// Start NFC reading session. iOS can only READ NFC tags (no HCE).
-    /// For PSK exchange: Android writes tag, iOS reads.
-    #if canImport(CoreNFC)
-    public func startReading() {
-        state = .reading
-        // Real implementation uses NFCNDEFReaderSession
-        // Stub: immediately set to idle
-        state = .idle
+    // MARK: - Internal state
+
+    private(set) var state: NfcState = .idle {
+        didSet { onStateChanged?(state) }
     }
+
+    /// The MIME type used for PSK NDEF records written by Q-Audion Android.
+    static let pskMimeType = "application/x-qaudion-psk"
+
+    #if canImport(CoreNFC)
+    private var nfcSession: NFCNDEFReaderSession?
     #endif
 
-    /// Parse PSK data from NDEF record payload.
+    // MARK: - Init
+
+    public override init() {
+        super.init()
+    }
+
+    // MARK: - Session lifecycle
+
+    /// Start an NFC NDEF reader session.
+    ///
+    /// On platforms where CoreNFC is not available (macOS) this is a no-op
+    /// and ``state`` transitions directly to `.error`.
+    public func startReading() {
+        #if canImport(CoreNFC)
+        guard NFCNDEFReaderSession.readingAvailable else {
+            state = .error("NFC reading is not available on this device")
+            return
+        }
+
+        // Invalidate any previous session before starting a new one.
+        nfcSession?.invalidate()
+
+        nfcSession = NFCNDEFReaderSession(
+            delegate: self,
+            queue: nil,
+            invalidateAfterFirstRead: true
+        )
+        nfcSession?.alertMessage = "Hold your device near the Q-Audion NFC tag."
+        nfcSession?.begin()
+        state = .reading
+        #else
+        state = .error("NFC is not available on this platform")
+        #endif
+    }
+
+    /// Programmatically stop a running NFC session (if any).
+    public func stopReading() {
+        #if canImport(CoreNFC)
+        nfcSession?.invalidate()
+        nfcSession = nil
+        #endif
+        if state == .reading {
+            state = .idle
+        }
+    }
+
+    // MARK: - Payload helpers (platform-independent)
+
+    /// Parse PSK data from an NDEF record payload.
+    ///
+    /// Expected binary format: `[nameLen: UInt8][name: UTF-8 bytes][key: 32 bytes]`
+    ///
+    /// - Parameter data: Raw payload bytes.
+    /// - Returns: A tuple of `(name, key)` or `nil` when the data is malformed.
     public func parsePskPayload(_ data: Data) -> (name: String, key: Data)? {
-        // Expected format: [nameLen(1)][name(N)][key(32)]
-        guard data.count >= 34 else { return nil }  // 1 + 1 + 32 minimum
+        // 1 byte length + at least 1 byte name + 32 bytes key
+        guard data.count >= 34 else { return nil }
         let nameLen = Int(data[0])
         guard data.count >= 1 + nameLen + 32 else { return nil }
-        let name = String(data: data[1..<(1 + nameLen)], encoding: .utf8) ?? "unknown"
-        let key = data[(1 + nameLen)..<(1 + nameLen + 32)]
+        let name = String(data: data[1 ..< (1 + nameLen)], encoding: .utf8) ?? "unknown"
+        let key = data[(1 + nameLen) ..< (1 + nameLen + 32)]
         return (name, Data(key))
     }
 
-    /// Generate QR code content for PSK exchange (iOS-to-iOS fallback).
+    /// Generate a QR-code payload for iOS-to-iOS PSK exchange.
+    ///
+    /// The format mirrors ``parsePskPayload(_:)`` so either side can decode.
     public func generateQrPayload(name: String, key: Data) -> Data {
         var payload = Data()
         let nameData = Data(name.utf8)
@@ -40,5 +133,76 @@ public final class NfcProtocol {
         return payload
     }
 
+    /// Current NFC state accessor.
     public func getState() -> NfcState { state }
 }
+
+// MARK: - NFCNDEFReaderSessionDelegate
+
+#if canImport(CoreNFC)
+extension NfcProtocol: NFCNDEFReaderSessionDelegate {
+
+    public func readerSessionDidBecomeActive(_ session: NFCNDEFReaderSession) {
+        // Session is active; the system NFC sheet is visible.
+    }
+
+    public func readerSession(
+        _ session: NFCNDEFReaderSession,
+        didDetectNDEFs messages: [NFCNDEFMessage]
+    ) {
+        for message in messages {
+            for record in message.records {
+                guard
+                    record.typeNameFormat == .media,
+                    let mimeType = String(data: record.type, encoding: .utf8),
+                    mimeType == Self.pskMimeType
+                else {
+                    continue
+                }
+
+                if let parsed = parsePskPayload(record.payload) {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.state = .complete
+                        self?.onPskReceived?(parsed.name, parsed.key)
+                    }
+                    session.alertMessage = "Key received!"
+                    session.invalidate()
+                    return
+                }
+            }
+        }
+
+        // No matching record found in any message.
+        DispatchQueue.main.async { [weak self] in
+            self?.state = .error("No Q-Audion PSK record found on this tag")
+        }
+        session.invalidate(errorMessage: "No compatible record found.")
+    }
+
+    public func readerSession(
+        _ session: NFCNDEFReaderSession,
+        didInvalidateWithError error: Error
+    ) {
+        nfcSession = nil
+
+        let nfcError = error as? NFCReaderError
+
+        // User-cancelled is not a real error.
+        if nfcError?.code == .readerSessionInvalidationErrorUserCanceled {
+            DispatchQueue.main.async { [weak self] in
+                self?.state = .idle
+            }
+            return
+        }
+
+        // System timeout is informational when invalidateAfterFirstRead is true.
+        if nfcError?.code == .readerSessionInvalidationErrorFirstNDEFTagRead {
+            return
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.state = .error(error.localizedDescription)
+        }
+    }
+}
+#endif

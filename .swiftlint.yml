@@ -1,0 +1,17 @@
+included:
+  - QAudionEngine/Sources
+  - QAudionEngine/Tests
+
+excluded:
+  - QAudionEngine/Sources/CLiboqs
+  - QAudionEngine/Sources/COpus
+
+disabled_rules:
+  - line_length
+  - trailing_comma
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - force_unwrapping
+  - implicitly_unwrapped_optional

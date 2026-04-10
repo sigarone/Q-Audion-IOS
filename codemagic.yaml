@@ -20,14 +20,47 @@ workflows:
         script: |
           cd QAudionEngine
           swift package resolve
+      - name: Lint (SwiftLint)
+        script: |
+          if command -v swiftlint >/dev/null 2>&1; then
+            cd QAudionEngine
+            swiftlint lint --config ../.swiftlint.yml --reporter xcode 2>&1 | tee lint_results.txt || true
+          else
+            echo "SwiftLint not installed, skipping lint step" | tee QAudionEngine/lint_results.txt
+          fi
       - name: Build (macOS)
         script: |
           cd QAudionEngine
           swift build 2>&1 | tee build_results.txt
-      - name: Run Tests (macOS)
+      - name: Run Tests with Coverage (macOS)
         script: |
           cd QAudionEngine
-          swift test 2>&1 | tee test_results.txt
+          swift test --enable-code-coverage 2>&1 | tee test_results.txt
+      - name: Export Code Coverage
+        script: |
+          cd QAudionEngine
+          BIN_PATH=$(swift build --show-bin-path)
+          PROFDATA=$(find .build -name 'default.profdata' -print -quit)
+          XCTEST_BIN=$(find "${BIN_PATH}" -name '*.xctest' -print -quit 2>/dev/null || true)
+          # On macOS SPM the test binary lives next to the .xctest bundle
+          TEST_BIN="${BIN_PATH}/QAudionEnginePackageTests.xctest/Contents/MacOS/QAudionEnginePackageTests"
+          if [ ! -f "$TEST_BIN" ]; then
+            TEST_BIN=$(find "${BIN_PATH}" -type f -perm +111 -name '*PackageTests*' -print -quit 2>/dev/null || true)
+          fi
+          if [ -n "$PROFDATA" ] && [ -n "$TEST_BIN" ] && [ -f "$TEST_BIN" ]; then
+            xcrun llvm-cov export \
+              -format=lcov \
+              -instr-profile "$PROFDATA" \
+              "$TEST_BIN" \
+              > coverage.lcov
+            echo "Coverage report generated: coverage.lcov"
+          else
+            echo "Could not locate profdata or test binary; skipping coverage export."
+            echo "PROFDATA=${PROFDATA:-<not found>}"
+            echo "TEST_BIN=${TEST_BIN:-<not found>}"
+          fi
     artifacts:
       - QAudionEngine/build_results.txt
       - QAudionEngine/test_results.txt
+      - QAudionEngine/lint_results.txt
+      - QAudionEngine/coverage.lcov

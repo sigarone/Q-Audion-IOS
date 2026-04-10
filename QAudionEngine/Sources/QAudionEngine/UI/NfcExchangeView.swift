@@ -5,6 +5,9 @@ public struct NfcExchangeView: View {
     @State private var status = "Ready to scan"
     @State private var isScanning = false
     @State private var receivedKeyName: String?
+    @State private var errorMessage: String?
+
+    private let nfcProtocol = NfcProtocol()
 
     public init() {}
 
@@ -24,11 +27,30 @@ public struct NfcExchangeView: View {
                     .foregroundColor(.green)
             }
 
+            if let error = errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                    .font(.subheadline)
+            }
+
+            #if canImport(CoreNFC)
             Button(isScanning ? "Stop Scanning" : "Start NFC Scan") {
-                isScanning.toggle()
-                status = isScanning ? "Hold device near NFC tag..." : "Ready to scan"
+                if isScanning {
+                    stopScanning()
+                } else {
+                    startScanning()
+                }
             }
             .buttonStyle(.borderedProminent)
+            #else
+            Text("NFC not available")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.gray.opacity(0.15))
+                .cornerRadius(8)
+            #endif
 
             Spacer()
 
@@ -40,6 +62,53 @@ public struct NfcExchangeView: View {
         }
         .navigationTitle("NFC Key Exchange")
         .padding()
+        .onAppear {
+            configureCallbacks()
+        }
     }
+
+    // MARK: - Private helpers
+
+    private func configureCallbacks() {
+        nfcProtocol.onPskReceived = { name, _ in
+            receivedKeyName = name
+            status = "Key exchange complete"
+            isScanning = false
+            errorMessage = nil
+        }
+
+        nfcProtocol.onStateChanged = { newState in
+            switch newState {
+            case .idle:
+                isScanning = false
+                if receivedKeyName == nil {
+                    status = "Ready to scan"
+                }
+            case .reading:
+                isScanning = true
+                status = "Hold device near NFC tag..."
+                errorMessage = nil
+            case .complete:
+                isScanning = false
+                status = "Key exchange complete"
+                errorMessage = nil
+            case .error(let message):
+                isScanning = false
+                status = "Ready to scan"
+                errorMessage = message
+            }
+        }
+    }
+
+    #if canImport(CoreNFC)
+    private func startScanning() {
+        errorMessage = nil
+        nfcProtocol.startReading()
+    }
+
+    private func stopScanning() {
+        nfcProtocol.stopReading()
+    }
+    #endif
 }
 #endif
