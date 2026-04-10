@@ -44,6 +44,24 @@ public enum CryptoConstants {
     /// Delay before old key material is scrubbed from memory.
     public static let keyErasureDelay: TimeInterval = 5
 
+    // MARK: - Compliance & Hardware Crypto
+    /// Use Apple Secure Enclave (SEP) for P-256 identity keys and ECDH when available.
+    public static let useSecureEnclave = true
+    /// Enable hybrid PQC key exchange: ML-KEM-1024 + X25519 + Secure Enclave P-256.
+    public static let hybridPqcEnabled = true
+    /// Enforce FIPS 140-3 validated crypto primitives (Apple corecrypto #4701).
+    public static let fipsMode = true
+    /// Minimum NIST security level required (Level 5 = 256-bit quantum security).
+    public static let minimumSecurityLevel = 5
+
+    // MARK: - Hybrid KEM
+    /// HKDF salt for combining ML-KEM + X25519 + SEP shared secrets.
+    public static let hybridKdfSalt = "q-audion-hybrid-pqc-v1"
+    /// HKDF info string for hybrid session key derivation.
+    public static let hybridKdfInfo = "q-audion-session-key"
+    /// Keychain tag prefix for Secure Enclave identity keys.
+    public static let enclaveKeyTag = "com.qaudion.identity.sep"
+
     // MARK: - Threat Detection
     /// Maximum acceptable inter-frame jitter before a timing alert fires.
     public static let maxAcceptableJitter: TimeInterval = 0.5
