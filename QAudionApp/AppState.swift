@@ -289,10 +289,10 @@ final class AppState: ObservableObject {
             payload.append(encrypted.ciphertext)
             payload.append(encrypted.tag)
 
-            let config = BackendConfig(serverUrl: serverUrl, accessToken: authService.loadToken())
-            let ws = BCryptoWebSocketClient(config: config)
-            let api = BCryptoMessageApiImpl(ws: ws)
-            _ = try await api.sendMessage(recipientId: contactId, content: payload)
+            let backendConfig = BackendConfig(serverUrl: serverUrl, accessToken: authService.loadToken())
+            let provider = BCryptoBackendProvider(config: backendConfig)
+            try await provider.initialize()
+            _ = try await provider.messageApi.sendMessage(recipientId: contactId, content: payload)
         } catch {
             errorMessage = "Send failed: \(error.localizedDescription)"
         }

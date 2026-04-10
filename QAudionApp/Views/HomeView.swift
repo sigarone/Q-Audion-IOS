@@ -93,6 +93,15 @@ struct HomeView: View {
             }
             .tag(0)
 
+            // MARK: - Messages Tab
+            NavigationStack {
+                ConversationListView()
+            }
+            .tabItem {
+                Label("Messages", systemImage: "message.fill")
+            }
+            .tag(1)
+
             // MARK: - Keys Tab
             NavigationStack {
                 KeyManagementView()
@@ -100,7 +109,7 @@ struct HomeView: View {
             .tabItem {
                 Label("Keys", systemImage: "key.fill")
             }
-            .tag(1)
+            .tag(2)
 
             // MARK: - Settings Tab
             NavigationStack {
@@ -109,7 +118,7 @@ struct HomeView: View {
             .tabItem {
                 Label("Settings", systemImage: "gear")
             }
-            .tag(2)
+            .tag(3)
         }
     }
 }
