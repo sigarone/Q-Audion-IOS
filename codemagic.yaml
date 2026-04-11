@@ -42,7 +42,6 @@ workflows:
           BIN_PATH=$(swift build --show-bin-path)
           PROFDATA=$(find .build -name 'default.profdata' -print -quit)
           XCTEST_BIN=$(find "${BIN_PATH}" -name '*.xctest' -print -quit 2>/dev/null || true)
-          # On macOS SPM the test binary lives next to the .xctest bundle
           TEST_BIN="${BIN_PATH}/QAudionEnginePackageTests.xctest/Contents/MacOS/QAudionEnginePackageTests"
           if [ ! -f "$TEST_BIN" ]; then
             TEST_BIN=$(find "${BIN_PATH}" -type f -perm +111 -name '*PackageTests*' -print -quit 2>/dev/null || true)
@@ -56,8 +55,6 @@ workflows:
             echo "Coverage report generated: coverage.lcov"
           else
             echo "Could not locate profdata or test binary; skipping coverage export."
-            echo "PROFDATA=${PROFDATA:-<not found>}"
-            echo "TEST_BIN=${TEST_BIN:-<not found>}"
           fi
     artifacts:
       - QAudionEngine/build_results.txt
@@ -83,22 +80,36 @@ workflows:
         script: |
           cd QAudionApp
           xcodegen generate
-      - name: Find Simulator
-        script: |
-          SIM_ID=$(xcrun simctl list devices available -j | \
-            python3 -c "import json,sys; devs=json.load(sys.stdin)['devices']; \
-            ids=[d['udid'] for k,v in devs.items() if 'iOS' in k for d in v if 'iPhone' in d['name'] and d['isAvailable']]; \
-            print(ids[0] if ids else '')")
-          echo "SIM_DEST=platform=iOS Simulator,id=$SIM_ID" >> $CM_ENV
-      - name: Build App
+      - name: Build App for Device (unsigned IPA)
         script: |
           cd QAudionApp
+          # Build for generic iOS device (arm64, not simulator)
           xcodebuild build \
             -project QAudionApp.xcodeproj \
             -scheme QAudionApp \
-            -destination "$SIM_DEST" \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -derivedDataPath build \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY=- \
             2>&1 | tail -50
+      - name: Package IPA
+        script: |
+          cd QAudionApp
+          # Find the .app bundle
+          APP_PATH=$(find build -name "QAudionApp.app" -type d | head -1)
+          if [ -n "$APP_PATH" ]; then
+            # Create Payload directory and package as IPA
+            mkdir -p Payload
+            cp -r "$APP_PATH" Payload/
+            zip -r QAudionApp-v1.0.0-unsigned.ipa Payload/
+            rm -rf Payload
+            echo "IPA created: QAudionApp-v1.0.0-unsigned.ipa ($(du -h QAudionApp-v1.0.0-unsigned.ipa | cut -f1))"
+          else
+            echo "ERROR: .app bundle not found"
+            find build -name "*.app" -type d
+          fi
     artifacts:
+      - QAudionApp/QAudionApp-*.ipa
       - QAudionApp/build/Build/Products/**/*.app
