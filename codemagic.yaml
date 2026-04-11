@@ -76,54 +76,55 @@ workflows:
           xcodegen generate
           echo "Project generated successfully"
           ls -la QAudionApp.xcodeproj/
-      - name: Build App
+      - name: Build and Archive
         script: |
           cd QAudionApp
-          # Find an iOS Simulator
-          SIM_ID=$(xcrun simctl list devices available -j | \
-            python3 -c "import json,sys; devs=json.load(sys.stdin)['devices']; \
-            ids=[d['udid'] for k,v in devs.items() if 'iOS' in k for d in v if 'iPhone' in d['name'] and d['isAvailable']]; \
-            print(ids[0] if ids else '')")
-          echo "Building for simulator: $SIM_ID"
 
-          xcodebuild build \
+          # Build for iOS device (arm64) using archive
+          xcodebuild archive \
             -project QAudionApp.xcodeproj \
             -scheme QAudionApp \
-            -destination "platform=iOS Simulator,id=$SIM_ID" \
-            -configuration Release \
-            -derivedDataPath build \
+            -archivePath build/QAudionApp.xcarchive \
+            -destination 'generic/platform=iOS' \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO \
-            ONLY_ACTIVE_ARCH=NO \
-            2>&1 | tail -30
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tail -40
 
           echo ""
-          echo "=== Build products ==="
-          find build -name "*.app" -type d 2>/dev/null
+          echo "=== Archive contents ==="
+          find build/QAudionApp.xcarchive -name "*.app" -type d 2>/dev/null
+          APP_IN_ARCHIVE=$(find build/QAudionApp.xcarchive -name "QAudionApp.app" -type d | head -1)
+          if [ -n "$APP_IN_ARCHIVE" ]; then
+            echo "App found: $APP_IN_ARCHIVE"
+            echo "Size: $(du -sh "$APP_IN_ARCHIVE" | cut -f1)"
+            ls -la "$APP_IN_ARCHIVE/"
+          fi
       - name: Package IPA
         script: |
           cd QAudionApp
-          APP_PATH=$(find build -name "QAudionApp.app" -type d | head -1)
-          echo "Found app at: $APP_PATH"
+          APP_PATH=$(find build/QAudionApp.xcarchive -name "QAudionApp.app" -type d | head -1)
 
           if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
-            echo "App bundle size: $(du -sh "$APP_PATH" | cut -f1)"
-            echo "App contents:"
-            ls -la "$APP_PATH/"
+            # Check the binary exists
+            if [ -f "$APP_PATH/QAudionApp" ]; then
+              echo "Binary found: $(file "$APP_PATH/QAudionApp")"
+              echo "Binary size: $(du -h "$APP_PATH/QAudionApp" | cut -f1)"
+            fi
 
             mkdir -p Payload
             cp -r "$APP_PATH" Payload/
-            cd Payload && zip -r ../QAudionApp-v1.0.1-unsigned.ipa . && cd ..
+            zip -r QAudionApp-v1.0.2-unsigned.ipa Payload/
             rm -rf Payload
 
             echo ""
             echo "=== IPA created ==="
-            ls -lh QAudionApp-v1.0.1-unsigned.ipa
+            ls -lh QAudionApp-v1.0.2-unsigned.ipa
           else
-            echo "ERROR: .app bundle not found!"
-            echo "Looking in build directory:"
-            find build -type d -name "*.app" 2>/dev/null || echo "No .app found"
-            find build -type d -maxdepth 5 2>/dev/null | head -20
+            echo "ERROR: .app not found in archive"
+            find build -type f -name "QAudionApp" 2>/dev/null | head -5
+            find build -type d 2>/dev/null | head -30
           fi
     artifacts:
       - QAudionApp/QAudionApp-*.ipa
