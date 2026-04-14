@@ -50,27 +50,39 @@ workflows:
         script: |
           cd QAudionApp
           xcodegen generate
-      - name: Set up keychain and profiles
+          echo "=== Schemes ==="
+          xcodebuild -project QAudionApp.xcodeproj -list 2>&1 | head -20
+      - name: Set up signing
         script: |
           keychain initialize
           keychain add-certificates
           xcode-project use-profiles --project QAudionApp/QAudionApp.xcodeproj
-      - name: Build and Archive
-        script: |
-          cd QAudionApp
-          xcodebuild archive \
-            -project QAudionApp.xcodeproj \
-            -scheme QAudionApp \
-            -archivePath build/QAudionApp.xcarchive \
-            -destination 'generic/platform=iOS' \
-            -skipPackagePluginValidation \
-            2>&1 | tail -40
-      - name: Export IPA
+      - name: Build Archive and Export IPA
         script: |
           cd QAudionApp
 
-          # Create export options plist
-          cat > ExportOptions.plist <<EOF
+          # Step 1: Archive
+          echo "=== ARCHIVING ==="
+          xcodebuild archive \
+            -project QAudionApp.xcodeproj \
+            -scheme QAudionApp \
+            -archivePath "$CM_BUILD_DIR/QAudionApp.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            -skipPackagePluginValidation \
+            -allowProvisioningUpdates \
+            2>&1 | tail -30
+
+          echo ""
+          echo "=== ARCHIVE CHECK ==="
+          ls -la "$CM_BUILD_DIR/QAudionApp.xcarchive/" 2>/dev/null || echo "Archive NOT created"
+          find "$CM_BUILD_DIR/QAudionApp.xcarchive" -name "*.app" -type d 2>/dev/null || echo "No .app in archive"
+
+          # Step 2: Export IPA
+          if [ -d "$CM_BUILD_DIR/QAudionApp.xcarchive" ]; then
+            echo ""
+            echo "=== EXPORTING IPA ==="
+
+            cat > /tmp/ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -79,24 +91,26 @@ workflows:
             <string>development</string>
             <key>teamID</key>
             <string>5G22P9239N</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>com.qaudion.app</key>
-              <string>Q-Audion Development</string>
-            </dict>
           </dict>
           </plist>
-          EOF
+          PLIST
 
-          xcodebuild -exportArchive \
-            -archivePath build/QAudionApp.xcarchive \
-            -exportPath build/ipa \
-            -exportOptionsPlist ExportOptions.plist \
-            2>&1 | tail -20
+            xcodebuild -exportArchive \
+              -archivePath "$CM_BUILD_DIR/QAudionApp.xcarchive" \
+              -exportPath "$CM_BUILD_DIR/ipa" \
+              -exportOptionsPlist /tmp/ExportOptions.plist \
+              2>&1 | tail -20
 
-          echo "=== IPA files ==="
-          find build/ipa -name "*.ipa" -exec ls -lh {} \;
+            echo ""
+            echo "=== IPA RESULT ==="
+            find "$CM_BUILD_DIR/ipa" -name "*.ipa" -exec ls -lh {} \; 2>/dev/null || echo "No IPA found"
+          else
+            echo "ARCHIVE FAILED — cannot export IPA"
+            echo "Build dir contents:"
+            ls -la "$CM_BUILD_DIR/" | head -20
+          fi
     artifacts:
-      - QAudionApp/build/ipa/*.ipa
+      - "*.xcarchive"
+      - ipa/*.ipa
+      - $CM_BUILD_DIR/ipa/*.ipa
+      - $CM_BUILD_DIR/QAudionApp.xcarchive
