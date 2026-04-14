@@ -1,12 +1,29 @@
 import Foundation
 
-/// Capability exchange protocol matching Android binary format.
-/// Wire format: [MAGIC 4B "QUAD"][VERSION 1B][TYPE 1B][LENGTH 2B BE][PAYLOAD NB]
+/// Capability exchange protocol matching Android `QAudionCapabilityExchange.kt` binary format EXACTLY.
+///
+/// Android wire format (authoritative):
+///   [4B MAGIC "QUAD"][1B type][1B version][1B features][2B pubKeyLen BE][pubKey][2B kemLen BE][kemCiphertext][PSK fps]
+///
+/// PSK fingerprint section:
+///   [2B fpCount BE][for each: 2B fpLen BE + UTF-8 fingerprint bytes]
+///
+/// Header size: 4 (magic) + 1 (type) + 1 (version) + 1 (features) + 2 (pubKeyLen) + 2 (kemLen) = 11 bytes minimum.
 public enum QAudionCapabilityExchange {
 
     // MARK: - Constants (match Android exactly)
     private static let magic: [UInt8] = [0x51, 0x41, 0x55, 0x44]  // "QUAD"
     private static let protocolVersion: UInt8 = 0x01
+
+    // Feature flags (1 byte bitfield, matches Android)
+    public static let featurePQC: UInt8        = 0x01  // ML-KEM-1024 support (mandatory)
+    public static let featureOpusCBR: UInt8    = 0x02  // Opus CBR anti-traffic-analysis
+    public static let featureDeepfake: UInt8   = 0x04  // GuardianMode deepfake detection
+    public static let featurePSK: UInt8        = 0x08  // Pre-shared key available
+    public static let featureDualCurve: UInt8  = 0x10  // X25519 + X448 (RFC 7748)
+
+    /// Default features advertised by this iOS client.
+    public static let defaultFeatures: UInt8 = featurePQC | featureDeepfake | featurePSK
 
     public enum MessageType: UInt8 {
         case offer = 0x01
@@ -19,7 +36,7 @@ public enum QAudionCapabilityExchange {
     }
 
     public enum Message {
-        case offer(publicKey: Data, pskFingerprints: [String])
+        case offer(publicKey: Data, features: UInt8, pskFingerprints: [String])
         case accept(ciphertext: Data, pskFingerprint: String?)
         case audioData(frame: Data)
         case voiceAnalysis(data: Data)
@@ -28,37 +45,80 @@ public enum QAudionCapabilityExchange {
         case dcIce(candidate: String)
     }
 
-    // MARK: - Serialize (binary, matching Android)
+    // MARK: - Serialize (Android-compatible binary format)
 
-    public static func createOffer(publicKey: Data, pskFingerprints: [String]) -> Data {
-        // Payload: [pubKeyLen 2B BE][pubKey NB][fpCount 1B][fpLen 1B + fpData]...
-        var payload = Data()
-        appendUInt16BE(&payload, UInt16(publicKey.count))
-        payload.append(publicKey)
-        payload.append(UInt8(pskFingerprints.count))
-        for fp in pskFingerprints {
-            let fpData = Data(fp.utf8)
-            payload.append(UInt8(fpData.count))
-            payload.append(fpData)
+    /// Creates an OFFER message matching Android format exactly.
+    /// Header: [MAGIC][TYPE=0x01][VERSION=0x01][FEATURES][pubKeyLen BE][pubKey][kemLen=0 BE]
+    /// Followed by PSK fingerprints: [fpCount 2B BE][fpLen 2B BE + UTF-8 data]...
+    public static func createOffer(
+        publicKey: Data,
+        features: UInt8 = defaultFeatures,
+        kemCiphertext: Data? = nil,
+        pskFingerprints: [String] = []
+    ) -> Data {
+        var data = Data()
+
+        // Header (matches Android serialize() exactly)
+        data.append(contentsOf: magic)                              // 4B: "QUAD"
+        data.append(MessageType.offer.rawValue)                     // 1B: type
+        data.append(protocolVersion)                                // 1B: version
+        data.append(features)                                       // 1B: features
+
+        // Public key
+        appendUInt16BE(&data, UInt16(publicKey.count))              // 2B: pubKeyLen
+        data.append(publicKey)                                       // NB: pubKey
+
+        // KEM ciphertext (0 if absent)
+        let kemLen = kemCiphertext?.count ?? 0
+        appendUInt16BE(&data, UInt16(kemLen))                       // 2B: kemLen
+        if let kem = kemCiphertext {
+            data.append(kem)
         }
-        return wrapMessage(type: .offer, payload: payload)
+
+        // PSK fingerprints (appended after KEM, 2B count + 2B len per fp)
+        if !pskFingerprints.isEmpty {
+            appendUInt16BE(&data, UInt16(pskFingerprints.count))    // 2B: fpCount
+            for fp in pskFingerprints {
+                let fpData = Data(fp.utf8)
+                appendUInt16BE(&data, UInt16(fpData.count))         // 2B: fpLen
+                data.append(fpData)                                  // NB: fpData
+            }
+        }
+
+        return data
     }
 
-    public static func createAccept(ciphertext: Data, pskFingerprint: String?) -> Data {
-        var payload = Data()
-        appendUInt16BE(&payload, UInt16(ciphertext.count))
-        payload.append(ciphertext)
+    /// Creates an ACCEPT message.
+    public static func createAccept(
+        ciphertext: Data,
+        features: UInt8 = defaultFeatures,
+        pskFingerprint: String? = nil
+    ) -> Data {
+        var data = Data()
+        data.append(contentsOf: magic)
+        data.append(MessageType.accept.rawValue)
+        data.append(protocolVersion)
+        data.append(features)
+
+        // Public key slot (empty for ACCEPT — ciphertext goes here instead)
+        appendUInt16BE(&data, UInt16(0))
+
+        // KEM ciphertext
+        appendUInt16BE(&data, UInt16(ciphertext.count))
+        data.append(ciphertext)
+
+        // Selected PSK fingerprint
         if let fp = pskFingerprint {
             let fpData = Data(fp.utf8)
-            payload.append(UInt8(1))  // has fingerprint
-            payload.append(UInt8(fpData.count))
-            payload.append(fpData)
-        } else {
-            payload.append(UInt8(0))  // no fingerprint
+            appendUInt16BE(&data, UInt16(1))  // count = 1
+            appendUInt16BE(&data, UInt16(fpData.count))
+            data.append(fpData)
         }
-        return wrapMessage(type: .accept, payload: payload)
+
+        return data
     }
 
+    /// Creates an AUDIO_DATA message wrapping encrypted frames.
     public static func createAudioData(frames: [Data]) -> Data {
         var payload = Data()
         appendUInt16BE(&payload, UInt16(frames.count))
@@ -66,29 +126,30 @@ public enum QAudionCapabilityExchange {
             appendUInt16BE(&payload, UInt16(frame.count))
             payload.append(frame)
         }
-        return wrapMessage(type: .audioData, payload: payload)
+        return wrapSimpleMessage(type: .audioData, payload: payload)
     }
 
+    /// Creates a VOICE_ANALYSIS message (68-byte wire format).
     public static func createVoiceAnalysis(data: Data) -> Data {
-        return wrapMessage(type: .voiceAnalysis, payload: data)
+        return wrapSimpleMessage(type: .voiceAnalysis, payload: data)
     }
 
     public static func createDcSdpOffer(sdp: String) -> Data {
-        return wrapMessage(type: .dcSdpOffer, payload: Data(sdp.utf8))
+        return wrapSimpleMessage(type: .dcSdpOffer, payload: Data(sdp.utf8))
     }
 
     public static func createDcSdpAnswer(sdp: String) -> Data {
-        return wrapMessage(type: .dcSdpAnswer, payload: Data(sdp.utf8))
+        return wrapSimpleMessage(type: .dcSdpAnswer, payload: Data(sdp.utf8))
     }
 
     public static func createDcIce(candidate: String) -> Data {
-        return wrapMessage(type: .dcIce, payload: Data(candidate.utf8))
+        return wrapSimpleMessage(type: .dcIce, payload: Data(candidate.utf8))
     }
 
     // MARK: - Parse (supports both binary and JSON fallback)
 
     public static func parse(_ data: Data) -> Message? {
-        guard data.count >= 8 else { return parseJson(data) }
+        guard data.count >= 7 else { return parseJson(data) }
 
         // Check for MAGIC header
         if data[0] == magic[0] && data[1] == magic[1] && data[2] == magic[2] && data[3] == magic[3] {
@@ -99,83 +160,99 @@ public enum QAudionCapabilityExchange {
         return parseJson(data)
     }
 
-    // MARK: - Binary protocol
+    // MARK: - Binary protocol (Android-compatible)
 
-    private static func wrapMessage(type: MessageType, payload: Data) -> Data {
+    /// Wraps non-OFFER/ACCEPT messages in a simple format:
+    /// [MAGIC][TYPE][VERSION][FEATURES=0][payloadLen 2B BE][0 kemLen 2B][payload]
+    private static func wrapSimpleMessage(type: MessageType, payload: Data) -> Data {
         var data = Data()
-        data.append(contentsOf: magic)           // 4 bytes: "QUAD"
-        data.append(protocolVersion)              // 1 byte: version
-        data.append(type.rawValue)                // 1 byte: message type
-        appendUInt16BE(&data, UInt16(payload.count))  // 2 bytes: payload length
-        data.append(payload)                      // N bytes: payload
+        data.append(contentsOf: magic)
+        data.append(type.rawValue)
+        data.append(protocolVersion)
+        data.append(UInt8(0))  // features = 0 for data messages
+        appendUInt16BE(&data, UInt16(payload.count))  // pubKeyLen slot reused as payloadLen
+        data.append(payload)
+        appendUInt16BE(&data, UInt16(0))  // kemLen = 0
         return data
     }
 
     private static func parseBinary(_ data: Data) -> Message? {
-        guard data.count >= 8 else { return nil }
-        let version = data[4]
+        // Minimum header: MAGIC(4) + TYPE(1) + VERSION(1) + FEATURES(1) + pubKeyLen(2) + kemLen(2) = 11
+        guard data.count >= 11 else { return nil }
+
+        let typeRaw = data[4]
+        let version = data[5]
+        let features = data[6]
         guard version == protocolVersion else { return nil }
-        let typeRaw = data[5]
         guard let type = MessageType(rawValue: typeRaw) else { return nil }
-        let payloadLen = Int(readUInt16BE(data, offset: 6))
-        guard data.count >= 8 + payloadLen else { return nil }
-        let payload = data[8..<(8 + payloadLen)]
+
+        let pubKeyLen = Int(readUInt16BE(data, offset: 7))
+        guard data.count >= 9 + pubKeyLen + 2 else { return nil }
+
+        let pubKey = pubKeyLen > 0 ? data[9..<(9 + pubKeyLen)] : Data()
+        let kemLenOffset = 9 + pubKeyLen
+        let kemLen = Int(readUInt16BE(data, offset: kemLenOffset))
+        let kemStart = kemLenOffset + 2
+        guard data.count >= kemStart + kemLen else { return nil }
+
+        let kemData = kemLen > 0 ? data[kemStart..<(kemStart + kemLen)] : Data()
+        let pskOffset = kemStart + kemLen
 
         switch type {
         case .offer:
-            guard payload.count >= 3 else { return nil }
-            let pkLen = Int(readUInt16BE(Data(payload), offset: 0))
-            guard payload.count >= 2 + pkLen + 1 else { return nil }
-            let pk = payload[(payload.startIndex + 2)..<(payload.startIndex + 2 + pkLen)]
-            let fpCount = Int(payload[payload.startIndex + 2 + pkLen])
+            // Parse PSK fingerprints: [2B count][2B len + UTF-8]...
             var fps: [String] = []
-            var offset = payload.startIndex + 2 + pkLen + 1
-            for _ in 0..<fpCount {
-                guard offset < payload.endIndex else { break }
-                let fpLen = Int(payload[offset]); offset += 1
-                guard offset + fpLen <= payload.endIndex else { break }
-                if let fp = String(data: payload[offset..<(offset + fpLen)], encoding: .utf8) { fps.append(fp) }
-                offset += fpLen
-            }
-            return .offer(publicKey: Data(pk), pskFingerprints: fps)
-
-        case .accept:
-            guard payload.count >= 3 else { return nil }
-            let ctLen = Int(readUInt16BE(Data(payload), offset: 0))
-            guard payload.count >= 2 + ctLen + 1 else { return nil }
-            let ct = payload[(payload.startIndex + 2)..<(payload.startIndex + 2 + ctLen)]
-            let hasFp = payload[payload.startIndex + 2 + ctLen] != 0
-            var fp: String? = nil
-            if hasFp {
-                let fpLenOffset = payload.startIndex + 2 + ctLen + 1
-                guard fpLenOffset < payload.endIndex else { return .accept(ciphertext: Data(ct), pskFingerprint: nil) }
-                let fpLen = Int(payload[fpLenOffset])
-                let fpStart = fpLenOffset + 1
-                if fpStart + fpLen <= payload.endIndex {
-                    fp = String(data: payload[fpStart..<(fpStart + fpLen)], encoding: .utf8)
+            if pskOffset + 2 <= data.count {
+                let fpCount = Int(readUInt16BE(data, offset: pskOffset))
+                var offset = pskOffset + 2
+                for _ in 0..<fpCount {
+                    guard offset + 2 <= data.count else { break }
+                    let fpLen = Int(readUInt16BE(data, offset: offset))
+                    offset += 2
+                    guard offset + fpLen <= data.count else { break }
+                    if let fp = String(data: data[offset..<(offset + fpLen)], encoding: .utf8) {
+                        fps.append(fp)
+                    }
+                    offset += fpLen
                 }
             }
-            return .accept(ciphertext: Data(ct), pskFingerprint: fp)
+            return .offer(publicKey: Data(pubKey), features: features, pskFingerprints: fps)
+
+        case .accept:
+            // For ACCEPT, ciphertext is in the KEM slot
+            var selectedFp: String? = nil
+            if pskOffset + 2 <= data.count {
+                let fpCount = Int(readUInt16BE(data, offset: pskOffset))
+                if fpCount > 0 {
+                    let fpLenOffset = pskOffset + 2
+                    if fpLenOffset + 2 <= data.count {
+                        let fpLen = Int(readUInt16BE(data, offset: fpLenOffset))
+                        let fpStart = fpLenOffset + 2
+                        if fpStart + fpLen <= data.count {
+                            selectedFp = String(data: data[fpStart..<(fpStart + fpLen)], encoding: .utf8)
+                        }
+                    }
+                }
+            }
+            return .accept(ciphertext: Data(kemData), pskFingerprint: selectedFp)
 
         case .audioData:
-            guard payload.count >= 2 else { return nil }
-            // Just return the raw payload for audio frames
-            return .audioData(frame: Data(payload))
+            return .audioData(frame: Data(pubKey))
 
         case .voiceAnalysis:
-            return .voiceAnalysis(data: Data(payload))
+            return .voiceAnalysis(data: Data(pubKey))
 
         case .dcSdpOffer:
-            guard let sdp = String(data: payload, encoding: .utf8) else { return nil }
+            guard let sdp = String(data: pubKey, encoding: .utf8) else { return nil }
             return .dcSdpOffer(sdp: sdp)
 
         case .dcSdpAnswer:
-            guard let sdp = String(data: payload, encoding: .utf8) else { return nil }
+            guard let sdp = String(data: pubKey, encoding: .utf8) else { return nil }
             return .dcSdpAnswer(sdp: sdp)
 
         case .dcIce:
-            guard let candidate = String(data: payload, encoding: .utf8) else { return nil }
-            return .dcIce(candidate: candidate)
+            guard let c = String(data: pubKey, encoding: .utf8) else { return nil }
+            return .dcIce(candidate: c)
         }
     }
 
@@ -187,7 +264,7 @@ public enum QAudionCapabilityExchange {
         switch type {
         case "OFFER":
             guard let b64 = json["kemPublicKey"] as? String, let pk = Data(base64Encoded: b64) else { return nil }
-            return .offer(publicKey: pk, pskFingerprints: json["pskFingerprints"] as? [String] ?? [])
+            return .offer(publicKey: pk, features: defaultFeatures, pskFingerprints: json["pskFingerprints"] as? [String] ?? [])
         case "ACCEPT":
             guard let b64 = json["kemCiphertext"] as? String, let ct = Data(base64Encoded: b64) else { return nil }
             return .accept(ciphertext: ct, pskFingerprint: json["pskFingerprint"] as? String)

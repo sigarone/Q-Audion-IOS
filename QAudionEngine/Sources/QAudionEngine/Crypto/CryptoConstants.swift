@@ -34,10 +34,25 @@ public enum CryptoConstants {
     public static let hkdfInfoVideoChain = Data("q-audion-video-frame-key".utf8)
     public static let hkdfInfoVideoRoot = Data("q-audion-video-root-ratchet".utf8)
 
+    // MARK: - Opaque Envelope
+    /// HKDF salt for envelope key derivation (must match Android exactly).
+    public static let hkdfEnvelopeSalt = Data("qaudion-envelope-salt".utf8)
+    /// HKDF info for envelope key derivation.
+    public static let hkdfEnvelopeKeyInfo = Data("qaudion-envelope-key-v1".utf8)
+
+    // MARK: - NFC Collaborative PSK
+    /// HKDF info for NFC collaborative X25519-only PSK derivation (must match Android NfcProtocol.kt).
+    public static let hkdfNfcCollaborativePskInfo = Data("Q-Audion NFC Collaborative PSK v1".utf8)
+    /// HKDF info for NFC hybrid PQC PSK derivation (X25519 + ML-KEM-1024).
+    public static let hkdfNfcHybridPqcPskInfo = Data("Q-Audion NFC Hybrid PQC PSK v1".utf8)
+
     // MARK: - Certificate Pinning
     /// SHA-256 hashes (base64) of pinned server certificate SPKI data.
-    /// Add production certificate hashes before release.
-    public static let pinnedCertHashes: [String] = []
+    /// Matches Android CryptoConstants.kt PINNED_CERT_HASHES.
+    public static let pinnedCertHashes: [String] = [
+        "Pppf8dGdb+O28sc86adx4xsrJbB9QQ4+m8a+TxyOKNw=", // voip.bcrypto.com TLS cert (primary)
+        "7t5azCKj59xN8cxykT6V/YCoyEGaI0j4qswAokEx01Y=", // 217.160.65.35 TLS cert (direct IP)
+    ]
     public static let pinningEnabled = true
 
     // MARK: - Forward Secrecy

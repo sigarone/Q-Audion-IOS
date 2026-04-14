@@ -76,7 +76,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guard let message = QAudionCapabilityExchange.parse(data) else { return }
 
         switch message {
-        case .offer(let remotePublicKey, let pskFingerprints):
+        case .offer(let remotePublicKey, _, let pskFingerprints):
             let keyPair = pqc.generateKeyPair()
             let result = try pqc.encapsulate(remotePublicKey: remotePublicKey)
             try engine.initialize()
