@@ -9,25 +9,14 @@ workflows:
       events:
         - push
         - pull_request
-        - tag
       branch_patterns:
         - pattern: 'main'
         - pattern: 'develop'
-      tag_patterns:
-        - pattern: 'v*'
     scripts:
       - name: Resolve dependencies
         script: |
           cd QAudionEngine
           swift package resolve
-      - name: Lint (SwiftLint)
-        script: |
-          if command -v swiftlint >/dev/null 2>&1; then
-            cd QAudionEngine
-            swiftlint lint --config ../.swiftlint.yml --reporter xcode 2>&1 | tee lint_results.txt || true
-          else
-            echo "SwiftLint not installed, skipping lint step" | tee QAudionEngine/lint_results.txt
-          fi
       - name: Build (macOS)
         script: |
           cd QAudionEngine
@@ -36,25 +25,9 @@ workflows:
         script: |
           cd QAudionEngine
           swift test --enable-code-coverage 2>&1 | tee test_results.txt
-      - name: Export Code Coverage
-        script: |
-          cd QAudionEngine
-          BIN_PATH=$(swift build --show-bin-path)
-          PROFDATA=$(find .build -name 'default.profdata' -print -quit)
-          TEST_BIN="${BIN_PATH}/QAudionEnginePackageTests.xctest/Contents/MacOS/QAudionEnginePackageTests"
-          if [ ! -f "$TEST_BIN" ]; then
-            TEST_BIN=$(find "${BIN_PATH}" -type f -perm +111 -name '*PackageTests*' -print -quit 2>/dev/null || true)
-          fi
-          if [ -n "$PROFDATA" ] && [ -n "$TEST_BIN" ] && [ -f "$TEST_BIN" ]; then
-            xcrun llvm-cov export -format=lcov -instr-profile "$PROFDATA" "$TEST_BIN" > coverage.lcov
-          else
-            echo "Skipping coverage export"
-          fi
     artifacts:
       - QAudionEngine/build_results.txt
       - QAudionEngine/test_results.txt
-      - QAudionEngine/lint_results.txt
-      - QAudionEngine/coverage.lcov
 
   qaudion-app-build:
     name: Q-Audion App Build
@@ -62,11 +35,18 @@ workflows:
     instance_type: mac_mini_m2
     environment:
       xcode: 16.2
+      ios_signing:
+        distribution_type: development
+        bundle_identifier: com.qaudion.app
+      groups:
+        - appstore_credentials
     triggering:
       events:
         - tag
       tag_patterns:
         - pattern: 'v*'
+    integrations:
+      app_store_connect: Codemagic
     scripts:
       - name: Install XcodeGen
         script: brew install xcodegen
@@ -74,57 +54,44 @@ workflows:
         script: |
           cd QAudionApp
           xcodegen generate
-          echo "Project generated successfully"
-          ls -la QAudionApp.xcodeproj/
+      - name: Set up code signing
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "com.qaudion.app" \
+            --type IOS_APP_DEVELOPMENT \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles --project QAudionApp/QAudionApp.xcodeproj
       - name: Build and Archive
         script: |
           cd QAudionApp
-
-          # Build for iOS device (arm64) using archive
           xcodebuild archive \
             -project QAudionApp.xcodeproj \
             -scheme QAudionApp \
             -archivePath build/QAudionApp.xcarchive \
             -destination 'generic/platform=iOS' \
             -skipPackagePluginValidation \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
             2>&1 | tail -40
-
-          echo ""
-          echo "=== Archive contents ==="
-          find build/QAudionApp.xcarchive -name "*.app" -type d 2>/dev/null
-          APP_IN_ARCHIVE=$(find build/QAudionApp.xcarchive -name "QAudionApp.app" -type d | head -1)
-          if [ -n "$APP_IN_ARCHIVE" ]; then
-            echo "App found: $APP_IN_ARCHIVE"
-            echo "Size: $(du -sh "$APP_IN_ARCHIVE" | cut -f1)"
-            ls -la "$APP_IN_ARCHIVE/"
-          fi
-      - name: Package IPA
+      - name: Export IPA
         script: |
           cd QAudionApp
-          APP_PATH=$(find build/QAudionApp.xcarchive -name "QAudionApp.app" -type d | head -1)
+          xcode-project build-ipa \
+            --archive build/QAudionApp.xcarchive \
+            --export-options-plist /dev/stdin <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>teamID</key>
+            <string>5G22P9239N</string>
+          </dict>
+          </plist>
+          EOF
 
-          if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
-            # Check the binary exists
-            if [ -f "$APP_PATH/QAudionApp" ]; then
-              echo "Binary found: $(file "$APP_PATH/QAudionApp")"
-              echo "Binary size: $(du -h "$APP_PATH/QAudionApp" | cut -f1)"
-            fi
-
-            mkdir -p Payload
-            cp -r "$APP_PATH" Payload/
-            zip -r QAudionApp-v1.0.2-unsigned.ipa Payload/
-            rm -rf Payload
-
-            echo ""
-            echo "=== IPA created ==="
-            ls -lh QAudionApp-v1.0.2-unsigned.ipa
-          else
-            echo "ERROR: .app not found in archive"
-            find build -type f -name "QAudionApp" 2>/dev/null | head -5
-            find build -type d 2>/dev/null | head -30
-          fi
+          echo "=== IPA files ==="
+          find . -name "*.ipa" -exec ls -lh {} \;
     artifacts:
-      - QAudionApp/QAudionApp-*.ipa
+      - QAudionApp/**/*.ipa
+      - QAudionApp/build/QAudionApp.xcarchive
