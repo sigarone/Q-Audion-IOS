@@ -48,7 +48,7 @@ public struct ConversationListView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             Group {
                 if appState.conversations.isEmpty {
                     emptyState(icon: "message.fill", message: "Nessuna conversazione", hint: "Tocca + per iniziare una nuova chat")
@@ -130,7 +130,7 @@ public struct CallHistoryView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             Group {
                 if appState.callHistory.isEmpty {
                     emptyState(icon: "phone.fill", message: "Nessuna chiamata", hint: "Le tue chiamate appariranno qui")
@@ -181,7 +181,7 @@ public struct ContactsListView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             Group {
                 if appState.contacts.isEmpty {
                     emptyState(icon: "person.2.fill", message: "Nessun contatto", hint: "Aggiungi contatti tramite QR code o link")

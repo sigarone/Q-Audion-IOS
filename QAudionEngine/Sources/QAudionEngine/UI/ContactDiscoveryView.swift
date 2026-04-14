@@ -14,7 +14,7 @@ public struct ContactDiscoveryView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 Section("Scansione QR") {
                     Button(action: { showQrScanner = true }) {

@@ -90,7 +90,7 @@ public struct LoginView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             VStack(spacing: 24) {
                 Spacer()
 
@@ -178,7 +178,7 @@ public struct SovereignSetupView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             VStack(spacing: 24) {
                 Spacer()
 

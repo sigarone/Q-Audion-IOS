@@ -85,6 +85,12 @@ public final class BCryptoRestClient {
         return data
     }
 
+    /// The base server URL from the current configuration.
+    public var serverUrl: String { config.serverUrl }
+
+    /// The user ID from the current configuration, if authenticated.
+    public var userId: String? { config.userId }
+
     public func updateConfig(_ newConfig: BackendConfig) { config = newConfig }
 }
 

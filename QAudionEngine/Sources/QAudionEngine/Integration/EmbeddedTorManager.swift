@@ -16,7 +16,9 @@ public final class EmbeddedTorManager: @unchecked Sendable {
     private let lock = NSLock()
     private var _socksPort: Int = 0
     private var _isReady = false
+    #if os(macOS)
     private var torProcess: Process? // Only on macOS; iOS uses framework
+    #endif
 
     /// The SOCKS5 port Tor is listening on. 0 if not running.
     public var socksPort: Int { lock.lock(); defer { lock.unlock() }; return _socksPort }

@@ -35,9 +35,10 @@ public final class OpusCodec {
             Int32(AudioConstants.channels), OPUS_APPLICATION_VOIP, &error)
         if error == OPUS_OK, let enc = encoder {
             // Set CBR mode (constant bitrate for anti-traffic-analysis)
-            opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, Int32(0))
-            opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, Int32(config.bitrate))
-            opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, Int32(config.complexity))
+            // Use non-variadic C wrappers — Swift cannot call C variadic functions directly.
+            opus_helper_set_vbr(enc, Int32(0))
+            opus_helper_set_bitrate(enc, Int32(config.bitrate))
+            opus_helper_set_complexity(enc, Int32(config.complexity))
         }
 
         decoder = opus_decoder_create(Int32(AudioConstants.sampleRate),
@@ -109,8 +110,8 @@ public final class OpusCodec {
     public func reconfigure(_ newConfig: Config) {
         config = newConfig
         if let enc = encoder {
-            opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, Int32(newConfig.bitrate))
-            opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, Int32(newConfig.complexity))
+            opus_helper_set_bitrate(enc, Int32(newConfig.bitrate))
+            opus_helper_set_complexity(enc, Int32(newConfig.complexity))
         }
     }
 

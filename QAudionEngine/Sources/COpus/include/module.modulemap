@@ -3,5 +3,6 @@ module COpus {
     header "opus/opus_defines.h"
     header "opus/opus_types.h"
     header "opus/opus_multistream.h"
+    header "opus_helpers.h"
     export *
 }

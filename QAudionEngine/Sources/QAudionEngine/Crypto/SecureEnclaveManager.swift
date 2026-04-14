@@ -56,7 +56,8 @@ public final class SecureEnclaveManager {
 
         var error: Unmanaged<CFError>?
         guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
-            let osStatus = (error?.takeRetainedValue() as NSError?)?.code ?? -1
+            let cfError: CFError? = error?.takeRetainedValue()
+            let osStatus: Int = (cfError as NSError?)?.code ?? -1
             throw SecureEnclaveError.keyGenerationFailed(OSStatus(osStatus))
         }
 
@@ -101,7 +102,8 @@ public final class SecureEnclaveManager {
 
         var error: Unmanaged<CFError>?
         guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
-            let osStatus = (error?.takeRetainedValue() as NSError?)?.code ?? -1
+            let cfError: CFError? = error?.takeRetainedValue()
+            let osStatus: Int = (cfError as NSError?)?.code ?? -1
             throw SecureEnclaveError.keyGenerationFailed(OSStatus(osStatus))
         }
 

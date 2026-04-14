@@ -9,7 +9,7 @@ public struct SettingsView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 // Profile section
                 Section("Profilo") {
@@ -25,7 +25,7 @@ public struct SettingsView: View {
                         VStack(alignment: .leading) {
                             Text(appState.backend?.identifier ?? "BCrypto")
                                 .font(.headline)
-                            Text("User ID: \(appState.backend?.getRestClient().description ?? "N/A")")
+                            Text("User ID: \(appState.backend?.getRestClient().serverUrl ?? "N/A")")
                                 .font(.caption)
                                 .foregroundColor(QColors.textTertiary)
                         }
@@ -63,7 +63,7 @@ public struct SettingsView: View {
                     HStack {
                         Text("Server")
                         Spacer()
-                        Text(appState.backend?.getRestClient().description ?? "N/A")
+                        Text(appState.backend?.getRestClient().serverUrl ?? "N/A")
                             .foregroundColor(QColors.textSecondary)
                             .font(.caption)
                     }
