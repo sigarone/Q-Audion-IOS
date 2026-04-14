@@ -3,7 +3,7 @@ import CommonCrypto
 
 public final class BCryptoAccountApiImpl: AccountApi {
     private let rest: BCryptoRestClient
-    init(rest: BCryptoRestClient) { self.rest = rest }
+    public init(rest: BCryptoRestClient) { self.rest = rest }
 
     public func register(phoneNumber: String, inviteCode: String?) async throws -> String {
         var dict: [String: Any] = ["phone_number": phoneNumber]

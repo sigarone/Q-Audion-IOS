@@ -104,16 +104,18 @@ struct RegisterView: View {
         isLoading = true
         errorMessage = nil
         appState.serverUrl = serverUrl
-        appState.userId = userId
-        appState.credential = credential
-        appState.register { error in
-            isLoading = false
-            if let error {
+        Task {
+            do {
+                _ = try await appState.authService.register(
+                    phoneNumber: userId, inviteCode: credential, serverUrl: serverUrl
+                )
+                await appState.login(userId: userId, credential: credential)
+                if appState.isAuthenticated { dismiss() }
+            } catch {
                 errorMessage = error.localizedDescription
                 showError = true
-            } else {
-                appState.login { _ in dismiss() }
             }
+            isLoading = false
         }
     }
 }

@@ -155,11 +155,10 @@ final class AppState: ObservableObject {
 
         if let token = authService.loadToken() {
             let backendConfig = BackendConfig(serverUrl: defaultServerUrl, accessToken: token)
-            let rest = BCryptoRestClient(config: backendConfig)
-            let accountApi = BCryptoAccountApiImpl(rest: rest)
+            let provider = BCryptoBackendProvider(config: backendConfig)
             Task {
                 do {
-                    let profile = try await accountApi.getProfile()
+                    let profile = try await provider.accountApi.getProfile()
                     self.currentUserId = profile.userId
                     self.isAuthenticated = true
                 } catch {
@@ -172,11 +171,10 @@ final class AppState: ObservableObject {
 
     func login(userId: String, credential: String) async {
         do {
-            let token = try await authService.login(
-                userId: userId, credential: credential, serverUrl: defaultServerUrl
+            let creds = try await authService.login(
+                phoneNumber: userId, password: credential, serverUrl: defaultServerUrl
             )
-            authService.saveToken(token)
-            currentUserId = userId
+            currentUserId = creds.userId
             isAuthenticated = true
             errorMessage = nil
         } catch {

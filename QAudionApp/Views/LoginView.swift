@@ -89,12 +89,11 @@ struct LoginView: View {
         isLoading = true
         errorMessage = nil
         appState.serverUrl = serverUrl
-        appState.userId = userId
-        appState.credential = credential
-        appState.login { error in
+        Task {
+            await appState.login(userId: userId, credential: credential)
             isLoading = false
-            if let error {
-                errorMessage = error.localizedDescription
+            if let err = appState.errorMessage {
+                errorMessage = err
                 showError = true
             }
         }
