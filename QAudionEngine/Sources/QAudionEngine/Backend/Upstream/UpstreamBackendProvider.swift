@@ -33,6 +33,9 @@ public final class UpstreamBackendProvider: BackendProvider {
     public lazy var storageApi: StorageApi = UpstreamStorageApiImpl(
         rest: restClient
     )
+    public lazy var securityApi: SecurityApi = BCryptoSecurityApiImpl(
+        rest: restClient
+    )
     public lazy var persistentConnection: PersistentConnection = UpstreamPersistentConnectionImpl(
         ws: wsClient
     )

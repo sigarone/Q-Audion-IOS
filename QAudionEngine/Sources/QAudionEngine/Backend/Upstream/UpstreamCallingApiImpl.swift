@@ -71,6 +71,12 @@ public final class UpstreamCallingApiImpl: CallingApi {
         }
     }
 
+    public func getRelays() async throws -> [RelayServer] {
+        let data = try await rest.get("/v1/calling/relays")
+        let response = try JSONDecoder().decode(RelayResponse.self, from: data)
+        return response.relays
+    }
+
     // MARK: - Internal
 
     /// Route call signaling through WebSocket when authenticated, REST otherwise.

@@ -46,4 +46,23 @@ public final class UpstreamContactsApiImpl: ContactsApi {
         let data = try await rest.get("/v1/contacts")
         return try JSONDecoder().decode([DiscoveredContact].self, from: data)
     }
+
+    public func syncContacts(phoneHashes: [String]) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["phone_hashes": phoneHashes])
+        _ = try await rest.post("/v1/contacts/sync", body: body)
+    }
+
+    public func blockContact(userId: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["user_id": userId])
+        _ = try await rest.post("/v1/contacts/block", body: body)
+    }
+
+    public func unblockContact(userId: String) async throws {
+        _ = try await rest.delete("/v1/contacts/block/\(userId)")
+    }
+
+    public func getBlockedContacts() async throws -> [DiscoveredContact] {
+        let data = try await rest.get("/v1/contacts/blocked")
+        return try JSONDecoder().decode([DiscoveredContact].self, from: data)
+    }
 }

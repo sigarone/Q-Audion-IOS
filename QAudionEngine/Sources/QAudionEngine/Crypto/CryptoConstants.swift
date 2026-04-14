@@ -30,6 +30,10 @@ public enum CryptoConstants {
     public static let hkdfInfoPskMix = Data("q-audion-psk-mix".utf8)
     public static let hkdfInfoNextChain = Data("q-audion-next-chain".utf8)
 
+    // MARK: - Video Chain HKDF Info Strings (separate crypto chain for video)
+    public static let hkdfInfoVideoChain = Data("q-audion-video-frame-key".utf8)
+    public static let hkdfInfoVideoRoot = Data("q-audion-video-root-ratchet".utf8)
+
     // MARK: - Certificate Pinning
     /// SHA-256 hashes (base64) of pinned server certificate SPKI data.
     /// Add production certificate hashes before release.
@@ -61,6 +65,16 @@ public enum CryptoConstants {
     public static let hybridKdfInfo = "q-audion-session-key"
     /// Keychain tag prefix for Secure Enclave identity keys.
     public static let enclaveKeyTag = "com.qaudion.identity.sep"
+
+    // MARK: - Triple Hybrid KEM (ML-KEM + X25519 + X448 — matches Android)
+    /// HKDF salt for triple-hybrid: ML-KEM-1024 + X25519 + X448.
+    public static let tripleHybridKdfSalt = "qaudion-triple-hybrid-v1"
+    /// HKDF info for triple-hybrid session key derivation.
+    public static let tripleHybridKdfInfo = "session-key"
+    /// Enable dual-curve (X25519 + X448) key agreement when available.
+    public static let dualCurveEnabled = true
+    /// Triple-hybrid combined secret size: 64 bytes (512-bit).
+    public static let tripleHybridSecretSize = 64
 
     // MARK: - Threat Detection
     /// Maximum acceptable inter-frame jitter before a timing alert fires.

@@ -174,4 +174,111 @@ final class CrossPlatformTestVectors: XCTestCase {
         XCTAssertEqual(accept[4], 0x01) // version
         XCTAssertEqual(accept[5], 0x02) // type = ACCEPT
     }
+
+    // MARK: - Sovereign Identity Wire Format (must match Android)
+
+    func testSovereignIdentityLinkRoundTrip() {
+        let manager = SovereignIdentityManager()
+        let identity = manager.generateIdentity(serverUrl: "https://voip.bcrypto.com", displayName: "Test")
+
+        // Export and re-import
+        let link = manager.exportAsLink(identity)
+        XCTAssertTrue(link.hasPrefix("qaudion://id/"))
+
+        let parsed = manager.parseIdentityLink(link)
+        XCTAssertNotNil(parsed)
+        XCTAssertEqual(parsed?.encryptionPublic, identity.encryptionPublic)
+        XCTAssertEqual(parsed?.signingPublic, identity.signingPublic)
+        XCTAssertEqual(parsed?.serverUrl, "https://voip.bcrypto.com")
+        XCTAssertEqual(parsed?.displayName, "Test")
+    }
+
+    func testSovereignIdentityQrRoundTrip() {
+        let manager = SovereignIdentityManager()
+        let identity = manager.generateIdentity(serverUrl: "https://voip.bcrypto.com", displayName: nil)
+
+        let qrData = manager.exportAsQrData(identity)
+        // Wire format: [version:1][encPub:32][sigPub:32][serverUrlLen:2][serverUrl:N][nameLen:2][name:M]
+        XCTAssertEqual(qrData[0], 0x01) // version must match Android
+        XCTAssertGreaterThanOrEqual(qrData.count, 1 + 32 + 32 + 2)
+    }
+
+    func testSovereignIdentityKeychainPersistence() throws {
+        let manager = SovereignIdentityManager()
+        let identity = manager.generateIdentity(serverUrl: "https://voip.bcrypto.com", displayName: "Persist")
+        try manager.saveIdentity(identity)
+        let loaded = manager.loadIdentity()
+        XCTAssertNotNil(loaded)
+        XCTAssertEqual(loaded?.userId, identity.userId)
+        XCTAssertEqual(loaded?.serverUrl, identity.serverUrl)
+        XCTAssertEqual(loaded?.encryptionPublic, identity.encryptionPublic)
+        XCTAssertEqual(loaded?.signingPublic, identity.signingPublic)
+    }
+
+    func testSovereignChallengeSign() throws {
+        let manager = SovereignIdentityManager()
+        let identity = manager.generateIdentity(serverUrl: "https://voip.bcrypto.com", displayName: nil)
+        let challenge = Data(repeating: 0xAB, count: 32)
+        let signature = try manager.signChallenge(challenge, identity: identity)
+        XCTAssertEqual(signature.count, 64) // Ed25519 signature
+        XCTAssertTrue(manager.verifySignature(publicKey: identity.signingPublic, challenge: challenge, signature: signature))
+        // Wrong challenge must fail
+        XCTAssertFalse(manager.verifySignature(publicKey: identity.signingPublic, challenge: Data(repeating: 0x00, count: 32), signature: signature))
+    }
+
+    // MARK: - Opaque Mailbox (must match Android)
+
+    func testOpaqueMailboxIdDeterminism() {
+        let secret = Data(repeating: 0xDE, count: 32)
+        let id1 = OpaqueMailbox.deriveMailboxId(sharedSecret: secret)
+        let id2 = OpaqueMailbox.deriveMailboxId(sharedSecret: secret)
+        XCTAssertEqual(id1, id2, "Mailbox ID must be deterministic")
+        XCTAssertEqual(id1.count, 64, "Mailbox ID must be 64 hex chars (32 bytes)")
+    }
+
+    func testOpaqueCallMailboxIdDeterminism() {
+        let secret = Data(repeating: 0xAB, count: 32)
+        let callId = "test-call-123"
+        let id1 = OpaqueMailbox.deriveCallMailboxId(sharedSecret: secret, callId: callId)
+        let id2 = OpaqueMailbox.deriveCallMailboxId(sharedSecret: secret, callId: callId)
+        XCTAssertEqual(id1, id2, "Call mailbox ID must be deterministic")
+        // Different callId -> different mailbox
+        let id3 = OpaqueMailbox.deriveCallMailboxId(sharedSecret: secret, callId: "other-call")
+        XCTAssertNotEqual(id1, id3)
+    }
+
+    func testOpaqueEnvelopeRoundTrip() throws {
+        let sharedKey = Data(repeating: 0xCC, count: 32)
+        let encrypted = try OpaqueMailbox.encryptEnvelope(
+            sharedKey: sharedKey, senderId: "alice", recipientId: "bob",
+            msgType: "offer", payload: Data("hello".utf8)
+        )
+        let decrypted = OpaqueMailbox.decryptEnvelope(sharedKey: sharedKey, encryptedEnvelope: encrypted)
+        XCTAssertNotNil(decrypted)
+        XCTAssertEqual(decrypted?.senderId, "alice")
+        XCTAssertEqual(decrypted?.recipientId, "bob")
+        XCTAssertEqual(decrypted?.msgType, "offer")
+        XCTAssertEqual(String(data: decrypted!.payload, encoding: .utf8), "hello")
+    }
+
+    func testOpaqueEnvelopeWrongKey() throws {
+        let correctKey = Data(repeating: 0xCC, count: 32)
+        let wrongKey = Data(repeating: 0xDD, count: 32)
+        let encrypted = try OpaqueMailbox.encryptEnvelope(
+            sharedKey: correctKey, senderId: "alice", recipientId: "bob",
+            msgType: "offer", payload: Data("secret".utf8)
+        )
+        let decrypted = OpaqueMailbox.decryptEnvelope(sharedKey: wrongKey, encryptedEnvelope: encrypted)
+        XCTAssertNil(decrypted, "Wrong key must fail decryption")
+    }
+
+    // MARK: - HKDF Params Must Match Server
+
+    func testHkdfParamsMatchServer() {
+        // These MUST match the server's ComplianceInfoResponse.HkdfParams exactly
+        XCTAssertEqual(String(data: CryptoConstants.hkdfInfoChain, encoding: .utf8), "q-audion-frame-key")
+        XCTAssertEqual(String(data: CryptoConstants.hkdfInfoRoot, encoding: .utf8), "q-audion-root-ratchet")
+        XCTAssertEqual(String(data: CryptoConstants.hkdfInfoPskMix, encoding: .utf8), "q-audion-psk-mix")
+        XCTAssertEqual(String(data: CryptoConstants.hkdfInfoNextChain, encoding: .utf8), "q-audion-next-chain")
+    }
 }

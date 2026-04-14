@@ -11,5 +11,6 @@ public protocol BackendProvider {
     var accountApi: AccountApi { get }
     var contactsApi: ContactsApi { get }
     var storageApi: StorageApi { get }
+    var securityApi: SecurityApi { get }
     var persistentConnection: PersistentConnection { get }
 }

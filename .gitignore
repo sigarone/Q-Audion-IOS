@@ -9,3 +9,6 @@ DerivedData/
 
 # Signal-iOS fork (managed separately)
 Signal-iOS/
+
+# Claude Code
+.claude/
