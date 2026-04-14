@@ -32,6 +32,8 @@ let package = Package(
                 // OQS_ENABLE_KEM_ml_kem_1024 already in oqsconfig.h
                 // MLK_CONFIG_PARAMETER_SET already in mlkem_native_config.h
                 .define("MLK_CONFIG_FILE", to: "\"mlkem_native_config.h\""),
+                // Suppress warnings-as-errors for mlkem-native code in Release mode
+                .unsafeFlags(["-Wno-error=implicit-function-declaration", "-Wno-shorten-64-to-32"]),
             ]
         ),
         .target(
