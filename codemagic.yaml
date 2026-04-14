@@ -38,15 +38,11 @@ workflows:
       ios_signing:
         distribution_type: development
         bundle_identifier: com.qaudion.app
-      groups:
-        - appstore_credentials
     triggering:
       events:
         - tag
       tag_patterns:
         - pattern: 'v*'
-    integrations:
-      app_store_connect: Codemagic
     scripts:
       - name: Install XcodeGen
         script: brew install xcodegen
@@ -54,12 +50,9 @@ workflows:
         script: |
           cd QAudionApp
           xcodegen generate
-      - name: Set up code signing
+      - name: Set up keychain and profiles
         script: |
           keychain initialize
-          app-store-connect fetch-signing-files "com.qaudion.app" \
-            --type IOS_APP_DEVELOPMENT \
-            --create
           keychain add-certificates
           xcode-project use-profiles --project QAudionApp/QAudionApp.xcodeproj
       - name: Build and Archive
@@ -75,9 +68,9 @@ workflows:
       - name: Export IPA
         script: |
           cd QAudionApp
-          xcode-project build-ipa \
-            --archive build/QAudionApp.xcarchive \
-            --export-options-plist /dev/stdin <<EOF
+
+          # Create export options plist
+          cat > ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -86,12 +79,24 @@ workflows:
             <string>development</string>
             <key>teamID</key>
             <string>5G22P9239N</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.qaudion.app</key>
+              <string>Q-Audion Development</string>
+            </dict>
           </dict>
           </plist>
           EOF
 
+          xcodebuild -exportArchive \
+            -archivePath build/QAudionApp.xcarchive \
+            -exportPath build/ipa \
+            -exportOptionsPlist ExportOptions.plist \
+            2>&1 | tail -20
+
           echo "=== IPA files ==="
-          find . -name "*.ipa" -exec ls -lh {} \;
+          find build/ipa -name "*.ipa" -exec ls -lh {} \;
     artifacts:
-      - QAudionApp/**/*.ipa
-      - QAudionApp/build/QAudionApp.xcarchive
+      - QAudionApp/build/ipa/*.ipa
