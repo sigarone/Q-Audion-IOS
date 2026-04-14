@@ -11,7 +11,9 @@ public enum TransportConstants {
     public static let flagHasDeepfakeScore: UInt8 = 0x01
     public static let flagIsKeyRatchet: UInt8 = 0x02
     public static let flagIsComfortNoise: UInt8 = 0x04
-    public static let flagsValidMask: UInt8 = 0x07
+    public static let flagIsVideoFrame: UInt8 = 0x08    // Video frame (from Android)
+    public static let flagCodecAacEld: UInt8 = 0x10      // AAC-ELD codec (from Android)
+    public static let flagsValidMask: UInt8 = 0x1F       // 5 bits: matches Android FLAGS_VALID_MASK
     public static let comfortNoiseIntervalMs: Int64 = 20
     public static let maxOutOfOrderFrames = 50
     public static let statsWindowMs: Int64 = 5000
