@@ -31,5 +31,8 @@ targets:
         CODE_SIGN_STYLE: Automatic
     dependencies:
       - package: QAudionEngine
+      - framework: CoreAudio.framework
+      - framework: AudioToolbox.framework
+      - framework: Accelerate.framework
     resources:
       - path: Assets.xcassets

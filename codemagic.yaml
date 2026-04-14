@@ -70,7 +70,7 @@ workflows:
             -destination 'generic/platform=iOS' \
             -skipPackagePluginValidation \
             -allowProvisioningUpdates \
-            2>&1 | grep -E "error:|ARCHIVE SUCCEEDED|ARCHIVE FAILED|linker|undefined|ld:|Undefined symbols" | tail -50
+            2>&1 | grep -E "error:|ARCHIVE SUCCEEDED|ARCHIVE FAILED|ld:|Undefined symbols|referenced from|symbol" | tail -80
 
           echo ""
           echo "=== ARCHIVE CHECK ==="
