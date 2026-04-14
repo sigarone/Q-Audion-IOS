@@ -70,7 +70,7 @@ workflows:
             -destination 'generic/platform=iOS' \
             -skipPackagePluginValidation \
             -allowProvisioningUpdates \
-            2>&1 | tail -30
+            2>&1 | grep -E "error:|ARCHIVE SUCCEEDED|ARCHIVE FAILED|sampling\.c" | tail -50
 
           echo ""
           echo "=== ARCHIVE CHECK ==="
