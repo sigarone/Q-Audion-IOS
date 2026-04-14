@@ -5,7 +5,8 @@
 #ifndef MLK_FIPS202_GLUE_H
 #define MLK_FIPS202_GLUE_H
 
-#include "../common/pqclean_shims/fips202.h"
+// Use header search path (pqclean_shims is in headerSearchPath)
+#include "fips202.h"
 
 // Map mlkem-native FIPS-202 names to OQS pqclean shims
 #define mlk_shake128ctx shake128ctx

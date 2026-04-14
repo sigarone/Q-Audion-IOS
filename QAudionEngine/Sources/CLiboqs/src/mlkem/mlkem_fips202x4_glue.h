@@ -4,7 +4,8 @@
 #ifndef MLK_FIPS202X4_GLUE_H
 #define MLK_FIPS202X4_GLUE_H
 
-#include "../common/pqclean_shims/fips202x4.h"
+// Use header search path (pqclean_shims is in headerSearchPath)
+#include "fips202x4.h"
 
 #define mlk_shake128x4ctx shake128x4ctx
 #define mlk_shake128x4_absorb_once shake128x4_absorb_once
