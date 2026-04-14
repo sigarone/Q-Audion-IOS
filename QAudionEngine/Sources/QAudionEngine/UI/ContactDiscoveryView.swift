@@ -81,14 +81,11 @@ public struct ContactDiscoveryView: View {
         defer { Task { @MainActor in isScanning = false } }
 
         let store = CNContactStore()
-        let authorized: Bool
-        if #available(iOS 18.0, *) {
-            authorized = CNContactStore.authorizationStatus(for: .contacts) == .authorized
-        } else {
-            authorized = CNContactStore.authorizationStatus(for: .contacts) == .authorized
+        var isAuthorized = CNContactStore.authorizationStatus(for: .contacts) == .authorized
+        if !isAuthorized {
+            isAuthorized = (try? await store.requestAccess(for: .contacts)) ?? false
         }
-
-        guard authorized || (try? await store.requestAccess(for: .contacts)) == true else { return }
+        guard isAuthorized else { return }
 
         let request = CNContactFetchRequest(keysToFetch: [CNContactPhoneNumbersKey as CNKeyDescriptor])
         var phoneHashes: [String] = []
