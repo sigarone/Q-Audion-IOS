@@ -9,11 +9,12 @@
 #include "fips202.h"
 
 // Map mlkem-native FIPS-202 names to OQS pqclean shims
-#define mlk_shake128ctx shake128ctx
+// Note: pqclean uses "incctx" (incremental context) naming
+#define mlk_shake128ctx shake128incctx
 #define mlk_shake128_absorb_once shake128_absorb_once
 #define mlk_shake128_squeezeblocks shake128_squeezeblocks
-#define mlk_shake128_init shake128_init
-#define mlk_shake128_release shake128_release
+#define mlk_shake128_init shake128_inc_init
+#define mlk_shake128_release shake128_inc_ctx_release
 #define mlk_shake256 shake256
 #define mlk_sha3_256 sha3_256
 #define mlk_sha3_512 sha3_512
