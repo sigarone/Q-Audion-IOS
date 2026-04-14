@@ -28,9 +28,9 @@ final class CallService {
             guard let self else { return }
             let isAlert: Bool
             switch level {
-            case .high, .critical:
+            case .red:
                 isAlert = true
-            default:
+            case .yellow, .green:
                 isAlert = false
             }
             self.onDeepfakeAlert?(isAlert)

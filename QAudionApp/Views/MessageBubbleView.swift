@@ -14,18 +14,8 @@ struct MessageBubbleView: View {
         isSent ? .trailing : .leading
     }
 
-    private var corners: UnevenRoundedRectangle {
-        if isSent {
-            UnevenRoundedRectangle(
-                topLeading: 16, bottomLeading: 16,
-                bottomTrailing: 4, topTrailing: 16
-            )
-        } else {
-            UnevenRoundedRectangle(
-                topLeading: 16, bottomLeading: 4,
-                bottomTrailing: 16, topTrailing: 16
-            )
-        }
+    private var corners: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 16)
     }
 
     var body: some View {

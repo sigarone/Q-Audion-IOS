@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import QAudionEngine
 
 final class AuthService {

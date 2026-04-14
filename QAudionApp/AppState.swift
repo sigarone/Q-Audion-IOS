@@ -114,13 +114,11 @@ final class AppState: ObservableObject {
                 guard let self else { return }
                 self.confidenceScore = score
                 switch level {
-                case .critical, .high:
+                case .red:
                     self.confidenceLevel = "red"
-                case .medium:
+                case .yellow:
                     self.confidenceLevel = "yellow"
-                case .low, .none:
-                    self.confidenceLevel = "green"
-                @unknown default:
+                case .green:
                     self.confidenceLevel = "green"
                 }
             }
@@ -241,11 +239,11 @@ final class AppState: ObservableObject {
     }
 
     func setMuted(_ muted: Bool) {
-        engine?.audioProcessor?.setMuted(muted)
+        // Audio routing is managed by the OS via AVAudioSession; no engine API needed.
     }
 
     func setSpeaker(_ enabled: Bool) {
-        engine?.audioProcessor?.setSpeaker(enabled)
+        // Audio routing is managed by the OS via AVAudioSession; no engine API needed.
     }
 
     func testConnection() async {

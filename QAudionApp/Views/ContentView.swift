@@ -13,9 +13,10 @@ struct ContentView: View {
             } else if appState.isAuthenticated {
                 HomeView()
             } else {
-                NavigationStack {
+                NavigationView {
                     LoginView()
                 }
+                .navigationViewStyle(.stack)
             }
         }
         .animation(.easeInOut, value: appState.isAuthenticated)

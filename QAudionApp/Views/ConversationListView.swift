@@ -41,8 +41,7 @@ struct ConversationListView: View {
                 showCompose = true
             } label: {
                 Image(systemName: "square.and.pencil")
-                    .font(.title3)
-                    .fontWeight(.semibold)
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 56, height: 56)
                     .background(
@@ -84,8 +83,7 @@ struct ConversationListView: View {
                     .fill(avatarColor(for: conversation.contactName))
                     .frame(width: 48, height: 48)
                 Text(String(conversation.contactName.prefix(1)).uppercased())
-                    .font(.title3)
-                    .fontWeight(.semibold)
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(.white)
             }
 
@@ -93,8 +91,7 @@ struct ConversationListView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(conversation.contactName)
-                        .font(.body)
-                        .fontWeight(.semibold)
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.white)
                     if conversation.isEncrypted {
                         Image(systemName: "lock.fill")
@@ -114,8 +111,7 @@ struct ConversationListView: View {
                     Spacer()
                     if conversation.unreadCount > 0 {
                         Text("\(conversation.unreadCount)")
-                            .font(.caption2)
-                            .fontWeight(.bold)
+                            .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)

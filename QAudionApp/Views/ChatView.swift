@@ -31,7 +31,7 @@ struct ChatView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
-                .onChange(of: appState.currentMessages.count) { _, _ in
+                .onChange(of: appState.currentMessages.count) { _ in
                     scrollToLastMessage(proxy: proxy)
                 }
                 .onAppear {
@@ -45,7 +45,7 @@ struct ChatView: View {
         .background(Color(white: 0.06))
         .navigationTitle(contactName)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
+        .toolbar(content: {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 6) {
                     Image(systemName: "lock.fill")
@@ -56,7 +56,7 @@ struct ChatView: View {
                         .foregroundStyle(.white)
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     Task { await appState.startCall(contactId: conversationId, video: false) }
                 } label: {
@@ -64,7 +64,7 @@ struct ChatView: View {
                         .foregroundStyle(.cyan)
                 }
             }
-        }
+        })
         .task {
             await appState.loadMessages(for: conversationId)
         }
@@ -90,14 +90,14 @@ struct ChatView: View {
 
     private var inputBar: some View {
         HStack(spacing: 10) {
-            TextField("Message", text: $messageText, axis: .vertical)
+            TextField("Message", text: $messageText)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color(white: 0.14))
                 .cornerRadius(20)
                 .foregroundStyle(.white)
-                .lineLimit(1...5)
+                .lineLimit(5)
 
             Button {
                 sendMessage()

@@ -10,7 +10,7 @@ struct HomeView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             // MARK: - Calls Tab
-            NavigationStack {
+            NavigationView {
                 VStack(spacing: 0) {
                     HStack(spacing: 8) {
                         TextField("Enter contact ID", text: $contactId)
@@ -88,33 +88,37 @@ struct HomeView: View {
                 }
                 .navigationTitle("Calls")
             }
+            .navigationViewStyle(.stack)
             .tabItem {
                 Label("Calls", systemImage: "phone.fill")
             }
             .tag(0)
 
             // MARK: - Messages Tab
-            NavigationStack {
+            NavigationView {
                 ConversationListView()
             }
+            .navigationViewStyle(.stack)
             .tabItem {
                 Label("Messages", systemImage: "message.fill")
             }
             .tag(1)
 
             // MARK: - Keys Tab
-            NavigationStack {
+            NavigationView {
                 KeyManagementView()
             }
+            .navigationViewStyle(.stack)
             .tabItem {
                 Label("Keys", systemImage: "key.fill")
             }
             .tag(2)
 
             // MARK: - Settings Tab
-            NavigationStack {
+            NavigationView {
                 SettingsView()
             }
+            .navigationViewStyle(.stack)
             .tabItem {
                 Label("Settings", systemImage: "gear")
             }
