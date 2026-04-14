@@ -21,13 +21,13 @@ public final class ModelManager {
 
         var assetName: String {
             switch self {
-            case .base:  return "aasist_raw_base_int8"
+            case .base:  return "aasist_raw_base_maxdata_int8"
             case .small: return "aasist_raw_small_distill_int8"
             }
         }
         var eer: Float {
             switch self {
-            case .base:  return 0.0283
+            case .base:  return 0.0815
             case .small: return 0.080
             }
         }
@@ -46,7 +46,7 @@ public final class ModelManager {
     private static let highEndRamThreshold: UInt64 = 6 * 1024 * 1024 * 1024
 
     private static let trustedHashes: [String: String] = [
-        "aasist_raw_base_int8": "06f6d7d84e94ac40258419c440b0feda76daba63677ea098af1f88e647804ec4",
+        "aasist_raw_base_maxdata_int8": "f2c95d8fbb949fb4b5b7629d21a97b6c22b6d9bb9537f5c4f31624ae7f5ea8b0",
         "aasist_raw_small_distill_int8": "3a675ee542eccedaf1535e8298285986b99858ebafe46caa22aa3d23aae20a0b",
     ]
 

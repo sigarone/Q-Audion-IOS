@@ -60,7 +60,7 @@ let package = Package(
             ],
             path: "Sources/QAudionEngine",
             resources: [
-                .copy("Resources/aasist_raw_base_int8.onnx"),
+                .copy("Resources/aasist_raw_base_maxdata_int8.onnx"),
                 .copy("Resources/aasist_raw_small_distill_int8.onnx")
             ]
         ),
