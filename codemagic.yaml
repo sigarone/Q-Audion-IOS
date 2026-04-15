@@ -106,6 +106,60 @@ workflows:
           xcode-project build-ipa \
             --project QAudionApp.xcodeproj \
             --scheme QAudionApp
+      - name: Patch onnxruntime.framework MinimumOSVersion + re-sign
+        script: |
+          set -e
+          IPA_PATH=$(find QAudionApp/build/ios/ipa -name "*.ipa" | head -1)
+          if [ -z "$IPA_PATH" ]; then
+            echo "IPA not found"; exit 1
+          fi
+          echo "Patching $IPA_PATH"
+
+          WORK=$(mktemp -d)
+          cd "$WORK"
+          unzip -q "$OLDPWD/$IPA_PATH"
+
+          FW="Payload/QAudionApp.app/Frameworks/onnxruntime.framework"
+          if [ ! -d "$FW" ]; then
+            echo "onnxruntime.framework not in IPA — nothing to patch"
+            ls -la Payload/QAudionApp.app/Frameworks/ || true
+            exit 0
+          fi
+
+          echo "--- Before patch ---"
+          plutil -p "$FW/Info.plist" | grep -E "MinimumOS|CFBundleVersion|CFBundleShortVersionString" || true
+
+          # Write a sensible MinimumOSVersion. The onnxruntime 1.17.0
+          # XCFramework is actually compiled against iOS 13 headers but the
+          # Info.plist was packaged empty.
+          plutil -replace MinimumOSVersion -string "13.0" "$FW/Info.plist"
+
+          echo "--- After patch ---"
+          plutil -p "$FW/Info.plist" | grep -E "MinimumOS" || true
+
+          # Re-sign the framework and the app with the Distribution identity
+          # fetched by the earlier 'Set up signing' step.
+          IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+                     | awk -F'"' '/Apple Distribution|iPhone Distribution/ {print $2; exit}')
+          if [ -z "$IDENTITY" ]; then
+            echo "No Distribution signing identity found in keychain!"
+            security find-identity -v -p codesigning
+            exit 1
+          fi
+          echo "Using identity: $IDENTITY"
+
+          codesign --force --sign "$IDENTITY" "$FW"
+          codesign --force --sign "$IDENTITY" \
+                   --entitlements <(codesign -d --entitlements :- "Payload/QAudionApp.app" 2>/dev/null) \
+                   "Payload/QAudionApp.app"
+
+          # Repackage IPA in-place
+          rm -f "$OLDPWD/$IPA_PATH"
+          zip -qr "$OLDPWD/$IPA_PATH" Payload
+          echo "Repackaged IPA: $(ls -lh "$OLDPWD/$IPA_PATH")"
+
+          # Verify signature
+          codesign --verify --deep --strict --verbose=2 "Payload/QAudionApp.app" 2>&1 | head -10 || true
       - name: Debug onnxruntime.framework MinimumOSVersion
         script: |
           echo "=== Searching for iOS-device onnxruntime framework ==="
