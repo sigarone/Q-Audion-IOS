@@ -25,14 +25,21 @@ public enum QAudionCapabilityExchange {
     /// Default features advertised by this iOS client.
     public static let defaultFeatures: UInt8 = featurePQC | featureDeepfake | featurePSK
 
+    /// Opcodes aligned with Q-Audion Desktop / Android wire protocol.
+    /// Note: 0x03/0x04/0x05 were renumbered on iOS to match Desktop; AUDIO_DATA moved
+    /// from 0x03 → 0x06 and VOICE_ANALYSIS moved from 0x04 → 0x07. See
+    /// qaudion-desktop/docs/IOS_INTEROP_GAP.md.
     public enum MessageType: UInt8 {
         case offer = 0x01
         case accept = 0x02
-        case audioData = 0x03
-        case voiceAnalysis = 0x04
-        case dcSdpOffer = 0x05
-        case dcSdpAnswer = 0x06
-        case dcIce = 0x07
+        case dcSdpOffer = 0x03          // was audioData on iOS
+        case dcSdpAnswer = 0x04         // was voiceAnalysis on iOS
+        case dcIce = 0x05               // was dcSdpOffer on iOS
+        case audioData = 0x06           // moved from 0x03
+        case voiceAnalysis = 0x07       // moved from 0x04
+        case callHangup = 0x08          // new
+        case keyExchangeOffer = 0x09    // new (no handler yet — enum stub for Desktop/Android interop)
+        case keyExchangeAccept = 0x0a   // new (no handler yet — enum stub for Desktop/Android interop)
     }
 
     public enum Message {
@@ -43,6 +50,9 @@ public enum QAudionCapabilityExchange {
         case dcSdpOffer(sdp: String)
         case dcSdpAnswer(sdp: String)
         case dcIce(candidate: String)
+        case callHangup(reason: String)
+        case keyExchangeOffer(payload: Data)
+        case keyExchangeAccept(payload: Data)
     }
 
     // MARK: - Serialize (Android-compatible binary format)
@@ -253,7 +263,33 @@ public enum QAudionCapabilityExchange {
         case .dcIce:
             guard let c = String(data: pubKey, encoding: .utf8) else { return nil }
             return .dcIce(candidate: c)
+
+        case .callHangup:
+            let reason = String(data: pubKey, encoding: .utf8) ?? ""
+            return .callHangup(reason: reason)
+
+        case .keyExchangeOffer:
+            // TODO(desktop-interop): wire into hybrid PQC handshake path
+            return .keyExchangeOffer(payload: Data(pubKey))
+
+        case .keyExchangeAccept:
+            // TODO(desktop-interop): wire into hybrid PQC handshake path
+            return .keyExchangeAccept(payload: Data(pubKey))
         }
+    }
+
+    // MARK: - New message builders for Desktop/Android interop
+
+    public static func createCallHangup(reason: String = "") -> Data {
+        return wrapSimpleMessage(type: .callHangup, payload: Data(reason.utf8))
+    }
+
+    public static func createKeyExchangeOffer(payload: Data) -> Data {
+        return wrapSimpleMessage(type: .keyExchangeOffer, payload: payload)
+    }
+
+    public static func createKeyExchangeAccept(payload: Data) -> Data {
+        return wrapSimpleMessage(type: .keyExchangeAccept, payload: payload)
     }
 
     // MARK: - JSON fallback (backwards compat)

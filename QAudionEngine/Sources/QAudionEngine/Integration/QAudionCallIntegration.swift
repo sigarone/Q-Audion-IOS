@@ -93,7 +93,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             lock.lock(); state = .active; lock.unlock()
             onStateChanged?(.active)
 
-        case .audioData, .voiceAnalysis, .dcSdpOffer, .dcSdpAnswer, .dcIce: break
+        case .audioData, .voiceAnalysis, .dcSdpOffer, .dcSdpAnswer, .dcIce,
+             .callHangup, .keyExchangeOffer, .keyExchangeAccept:
+            // TODO(desktop-interop): route callHangup / keyExchange* to appropriate handlers
+            break
         }
     }
 

@@ -34,6 +34,13 @@ public enum CryptoConstants {
     public static let hkdfInfoVideoChain = Data("q-audion-video-frame-key".utf8)
     public static let hkdfInfoVideoRoot = Data("q-audion-video-root-ratchet".utf8)
 
+    // MARK: - Desktop/Android Interop HKDF Labels
+    // Match qaudion-desktop/src/main/crypto/MessageCrypto.ts and pairwise PSK derivation.
+    public static let HKDF_INFO_MSG_KEY = "q-audion-msg-key".data(using: .utf8)!
+    public static let HKDF_INFO_FILE_KEY = "q-audion-file-key".data(using: .utf8)!
+    public static let HKDF_SALT_PAIRWISE = "qaudion-pairwise-v1".data(using: .utf8)!
+    public static let HKDF_INFO_PAIRWISE = "psk-first-contact".data(using: .utf8)!
+
     // MARK: - Opaque Envelope
     /// HKDF salt for envelope key derivation (must match Android exactly).
     public static let hkdfEnvelopeSalt = Data("qaudion-envelope-salt".utf8)
