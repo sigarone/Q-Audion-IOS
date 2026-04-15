@@ -107,6 +107,7 @@ workflows:
             --project QAudionApp.xcodeproj \
             --scheme QAudionApp
     artifacts:
+      - QAudionApp/build/ios/ipa/*.ipa
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app.dSYM
