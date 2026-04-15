@@ -37,9 +37,10 @@ workflows:
       app_store_connect: QAudion ASC API Key
     environment:
       xcode: 16.2
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.qaudion.app
+      vars:
+        BUNDLE_ID: "com.qaudion.app"
+        XCODE_PROJECT: "QAudionApp.xcodeproj"
+        XCODE_SCHEME: "QAudionApp"
     triggering:
       events:
         - tag
@@ -61,14 +62,33 @@ workflows:
           NEW_BUILD_NUMBER=$(($LATEST_BUILD_NUMBER + 1))
           echo "New build number: $NEW_BUILD_NUMBER"
           agvtool new-version -all $NEW_BUILD_NUMBER
-      - name: Set up signing
+      - name: Set up signing (fetch or create Distribution cert + App Store profile)
         script: |
+          set -e
+          echo "=== Initialize keychain ==="
           keychain initialize
-          app-store-connect fetch-signing-files "com.qaudion.app" \
+
+          echo ""
+          echo "=== Fetch or create App Store signing assets for $BUNDLE_ID ==="
+          # --create: auto-create Distribution cert + provisioning profile if missing
+          # --certificate-key-path: stores the private key locally so Codemagic can reuse it
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
-            --create
+            --create \
+            --platform IOS \
+            --strict-match-identifier
+
+          echo ""
+          echo "=== Add certificates to keychain ==="
           keychain add-certificates
-          xcode-project use-profiles --project QAudionApp/QAudionApp.xcodeproj
+
+          echo ""
+          echo "=== Configure Xcode project to use the fetched profiles ==="
+          xcode-project use-profiles --project QAudionApp/$XCODE_PROJECT
+
+          echo ""
+          echo "=== Profiles summary ==="
+          ls -la ~/Library/MobileDevice/Provisioning\ Profiles/ 2>/dev/null || echo "no profiles dir"
       - name: Build IPA
         script: |
           cd QAudionApp
