@@ -2,7 +2,7 @@ name: QAudionApp
 options:
   bundleIdPrefix: com.qaudion
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
   xcodeVersion: "16.2"
 
 packages:

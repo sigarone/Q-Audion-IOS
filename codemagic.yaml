@@ -106,6 +106,18 @@ workflows:
           xcode-project build-ipa \
             --project QAudionApp.xcodeproj \
             --scheme QAudionApp
+      - name: Debug onnxruntime.framework MinimumOSVersion
+        script: |
+          echo "=== Searching for onnxruntime framework in build output ==="
+          find "$HOME/Library/Developer/Xcode/DerivedData" -name "onnxruntime.framework" -type d 2>/dev/null | head -5
+          echo ""
+          echo "=== Info.plist of first match (Min/Supported OS keys) ==="
+          FW=$(find "$HOME/Library/Developer/Xcode/DerivedData" -name "onnxruntime.framework" -type d 2>/dev/null | head -1)
+          if [ -n "$FW" ] && [ -f "$FW/Info.plist" ]; then
+            plutil -p "$FW/Info.plist" | grep -E "MinimumOS|Platform|Supported|DTSDKName|DTPlatformName" || true
+          else
+            echo "No onnxruntime.framework found"
+          fi
     artifacts:
       - QAudionApp/build/ios/ipa/*.ipa
       - build/ios/ipa/*.ipa
