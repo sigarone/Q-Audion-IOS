@@ -70,13 +70,23 @@ workflows:
           keychain initialize
 
           echo ""
+          echo "=== Write Distribution cert private key to file ==="
+          # CERTIFICATE_PRIVATE_KEY env var holds the PEM (RSA 2048) that was used
+          # (or will be used) to create the Apple Distribution certificate.
+          # First build: CSR signed with this key is sent to Apple -> cert created.
+          # Subsequent builds: same key lets us re-fetch the existing cert.
+          CERT_KEY_PATH="/tmp/dist_cert_key.pem"
+          printf '%s' "$CERTIFICATE_PRIVATE_KEY" > "$CERT_KEY_PATH"
+          chmod 600 "$CERT_KEY_PATH"
+          openssl rsa -in "$CERT_KEY_PATH" -noout -check && echo "private key OK"
+
+          echo ""
           echo "=== Fetch or create App Store signing assets for $BUNDLE_ID ==="
-          # --create: auto-create Distribution cert + provisioning profile if missing
-          # --certificate-key-path: stores the private key locally so Codemagic can reuse it
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \
             --platform IOS \
+            --certificate-key-path "$CERT_KEY_PATH" \
             --strict-match-identifier
 
           echo ""
