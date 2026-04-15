@@ -86,7 +86,7 @@ workflows:
             --type IOS_APP_STORE \
             --create \
             --platform IOS \
-            --certificate-key-path "$CERT_KEY_PATH" \
+            --certificate-key "@file:$CERT_KEY_PATH" \
             --strict-match-identifier
 
           echo ""
