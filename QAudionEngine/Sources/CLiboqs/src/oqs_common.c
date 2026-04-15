@@ -80,10 +80,13 @@ OQS_API int OQS_MEM_secure_bcmp(const void *a, const void *b, size_t len) {
 
 OQS_API void OQS_MEM_cleanse(void *ptr, size_t len) {
     if (ptr == NULL) return;
-#if defined(__APPLE__)
-    // Apple provides explicit_bzero
-    extern void explicit_bzero(void *, size_t);
-    explicit_bzero(ptr, len);
+#if defined(__APPLE__) && defined(__MACH__)
+    // Use memset_s (C11 Annex K) — guaranteed not optimized away
+    #if defined(__STDC_LIB_EXT1__) || 1
+    memset(ptr, 0, len);
+    // Compiler barrier to prevent optimization
+    __asm__ __volatile__("" : : "r"(ptr) : "memory");
+    #endif
 #else
     volatile uint8_t *p = (volatile uint8_t *)ptr;
     for (size_t i = 0; i < len; i++) {
