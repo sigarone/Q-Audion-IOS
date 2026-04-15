@@ -22,6 +22,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Without this, OFFERs use Signal recipientId which may cause server routing failures.
     public var restClient: BCryptoRestClient?
 
+    // MARK: - Desktop interop hooks (phase-2)
+
+    /// Optional ContactKeyExchange handler — when set, incoming QUAD
+    /// KEY_EXCHANGE_OFFER / KEY_EXCHANGE_ACCEPT frames are routed here so the
+    /// iOS engine can derive + store the pairwise PSK (Desktop parity).
+    public var contactKeyExchange: ContactKeyExchange?
+
+    /// Delegate callback fired when a decrypted incoming chat body parses as
+    /// a `{"qfile":…}` marker. Engine-level plumbing only — the app layer
+    /// owns the actual download/UI.
+    public var qaudionDidReceiveFile: ((_ marker: FileTransfer.FileMarker, _ from: String) -> Void)?
+
     public init() {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
     }
@@ -93,10 +105,36 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             lock.lock(); state = .active; lock.unlock()
             onStateChanged?(.active)
 
-        case .audioData, .voiceAnalysis, .dcSdpOffer, .dcSdpAnswer, .dcIce,
-             .callHangup, .keyExchangeOffer, .keyExchangeAccept:
-            // TODO(desktop-interop): route callHangup / keyExchange* to appropriate handlers
+        case .keyExchangeOffer(let payload):
+            // Peer is initiating first-contact PSK derivation.
+            // `payload` = peer's X25519 public key (32B).
+            // TODO(xcode): replace `""` sender with the real BCrypto userId
+            // of the opaque_message originator once the WS dispatcher
+            // threads that through to this handler.
+            if let ke = contactKeyExchange {
+                Task { await ke.handleOffer(senderId: "", peerPubKey: payload) }
+            }
+
+        case .keyExchangeAccept(let payload):
+            if let ke = contactKeyExchange {
+                Task { await ke.handleAccept(senderId: "", peerPubKey: payload) }
+            }
+
+        case .audioData, .voiceAnalysis, .dcSdpOffer, .dcSdpAnswer, .dcIce, .callHangup:
+            // TODO(desktop-interop): route callHangup to hangup handler
             break
+        }
+    }
+
+    /// Surface a decrypted incoming chat body. If the body parses as a
+    /// `{"qfile":…}` file marker, emit a delegate event; otherwise no-op
+    /// (regular chat text is handled by the messaging stack).
+    ///
+    /// The WS dispatcher should call this after `MessageCrypto.decrypt`
+    /// returns plaintext.
+    public func onIncomingChatText(_ plaintext: String, from senderId: String) {
+        if let marker = FileTransfer.tryParseMarker(text: plaintext) {
+            qaudionDidReceiveFile?(marker, senderId)
         }
     }
 
