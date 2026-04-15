@@ -149,8 +149,21 @@ workflows:
           echo "Using identity: $IDENTITY"
 
           codesign --force --sign "$IDENTITY" "$FW"
+
+          # Extract app entitlements to a real file (process substitution
+          # via /dev/fd/63 doesn't survive codesign's stat check). Use the
+          # --xml form so the output is a clean plist without the cms wrapper.
+          ENT_FILE="$WORK/app.entitlements.plist"
+          codesign -d --entitlements :- --xml "Payload/QAudionApp.app" > "$ENT_FILE" 2>/dev/null || true
+          if [ ! -s "$ENT_FILE" ]; then
+            # Fallback: dump without --xml
+            codesign -d --entitlements :- "Payload/QAudionApp.app" > "$ENT_FILE" 2>/dev/null || true
+          fi
+          echo "--- Entitlements extracted ($(wc -c < "$ENT_FILE") bytes) ---"
+          head -20 "$ENT_FILE" || true
+
           codesign --force --sign "$IDENTITY" \
-                   --entitlements <(codesign -d --entitlements :- "Payload/QAudionApp.app" 2>/dev/null) \
+                   --entitlements "$ENT_FILE" \
                    "Payload/QAudionApp.app"
 
           # Repackage IPA in-place
