@@ -126,16 +126,29 @@ workflows:
             exit 0
           fi
 
-          echo "--- Before patch ---"
+          echo "--- Info.plist before ---"
           plutil -p "$FW/Info.plist" | grep -E "MinimumOS|CFBundleVersion|CFBundleShortVersionString" || true
 
-          # Write a sensible MinimumOSVersion. The onnxruntime 1.17.0
-          # XCFramework is actually compiled against iOS 13 headers but the
-          # Info.plist was packaged empty.
+          # 1) Patch the bundle Info.plist MinimumOSVersion
           plutil -replace MinimumOSVersion -string "13.0" "$FW/Info.plist"
 
-          echo "--- After patch ---"
+          echo "--- Info.plist after ---"
           plutil -p "$FW/Info.plist" | grep -E "MinimumOS" || true
+
+          # 2) Inspect + patch the Mach-O LC_BUILD_VERSION load command.
+          # Apple's validator checks the binary's baked-in minOS, not just
+          # the Info.plist. onnxruntime 1.17.0 ships a Mach-O with a broken
+          # LC_BUILD_VERSION that also needs to be rewritten.
+          BIN="$FW/onnxruntime"
+          echo "--- Mach-O build version before ---"
+          otool -l "$BIN" | grep -A 4 "LC_BUILD_VERSION\|LC_VERSION_MIN_IPHONEOS" | head -30 || true
+          echo ""
+          # Set platform=iOS, minos=13.0, sdk=18.2 (Xcode 16.2 SDK we're
+          # building against). -replace rewrites an existing load command.
+          vtool -set-build-version iphoneos 13.0 18.2 -replace -output "$BIN.fixed" "$BIN"
+          mv "$BIN.fixed" "$BIN"
+          echo "--- Mach-O build version after ---"
+          otool -l "$BIN" | grep -A 4 "LC_BUILD_VERSION" | head -10 || true
 
           # Re-sign the framework and the app with the Distribution identity
           # fetched by the earlier 'Set up signing' step.
