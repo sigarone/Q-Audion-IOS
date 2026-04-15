@@ -117,5 +117,5 @@ workflows:
         issuer_id: $APP_STORE_CONNECT_ISSUER_ID
         submit_to_testflight: true
         beta_groups:
-          - Internal Testers
+          - Q-Audion testers
         expire_build_submitted_for_review: true
