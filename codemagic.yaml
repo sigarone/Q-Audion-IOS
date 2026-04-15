@@ -108,15 +108,22 @@ workflows:
             --scheme QAudionApp
       - name: Debug onnxruntime.framework MinimumOSVersion
         script: |
-          echo "=== Searching for onnxruntime framework in build output ==="
-          find "$HOME/Library/Developer/Xcode/DerivedData" -name "onnxruntime.framework" -type d 2>/dev/null | head -5
+          echo "=== Searching for iOS-device onnxruntime framework ==="
+          # Prefer the ios-arm64 device slice of the xcframework, fall back to
+          # the embedded framework that actually ships in the IPA
+          FW=$(find "$HOME/Library/Developer/Xcode/DerivedData" \
+                 -path "*/ios-arm64/onnxruntime.framework" -type d 2>/dev/null | head -1)
+          if [ -z "$FW" ]; then
+            FW=$(find "$HOME/Library/Developer/Xcode/DerivedData" \
+                   -path "*/Release-iphoneos/onnxruntime.framework" -type d 2>/dev/null | head -1)
+          fi
+          echo "Using: $FW"
           echo ""
-          echo "=== Info.plist of first match (Min/Supported OS keys) ==="
-          FW=$(find "$HOME/Library/Developer/Xcode/DerivedData" -name "onnxruntime.framework" -type d 2>/dev/null | head -1)
+          echo "=== Info.plist Min/Supported OS keys ==="
           if [ -n "$FW" ] && [ -f "$FW/Info.plist" ]; then
-            plutil -p "$FW/Info.plist" | grep -E "MinimumOS|Platform|Supported|DTSDKName|DTPlatformName" || true
+            plutil -p "$FW/Info.plist" | grep -E "MinimumOS|Platform|Supported|DTSDKName|DTPlatformName" || echo "(keys not found)"
           else
-            echo "No onnxruntime.framework found"
+            echo "No Info.plist at $FW"
           fi
     artifacts:
       - QAudionApp/build/ios/ipa/*.ipa

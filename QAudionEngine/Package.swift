@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "QAudionEngine",
     platforms: [
-        .iOS("18.0"),
+        .iOS(.v16),
         .macOS(.v13)
     ],
     products: [
@@ -14,7 +14,10 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", from: "1.17.0"),
+        // Pinned to 1.17.0 (not 'from:') because newer onnxruntime XCFrameworks
+        // ship with a MinimumOSVersion >= iOS 18.1 which triggers ITMS-90208.
+        // 1.17.0 supports iOS 13+.
+        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.17.0"),
     ],
     targets: [
         .target(
