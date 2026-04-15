@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "QAudionEngine",
     platforms: [
-        .iOS(.v18),
+        .iOS("18.0"),
         .macOS(.v13)
     ],
     products: [
