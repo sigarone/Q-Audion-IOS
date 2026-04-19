@@ -11,7 +11,17 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     private var stateListeners: [(ConnectionState) -> Void] = []
     private var reconnectAttempt = 0
     private let maxReconnectAttempts = 20
-    private var pingTimer: Timer?
+    private var pingTimer: DispatchSourceTimer?
+    /// Timestamp (monotonic seconds) of the most recent inbound frame (pong or any
+    /// server-sent message). Used to detect stale connections even if OS keepalive
+    /// hasn't tripped the URLSessionWebSocketTask yet.
+    private var lastInboundAt: TimeInterval = 0
+    /// Interval between outbound ping keepalives. Server-side idle timeout is
+    /// usually 60s; 30s gives us one retry window before the server drops us.
+    private let pingIntervalSec: TimeInterval = 30
+    /// If no inbound traffic arrives within this window after a ping, treat the
+    /// connection as dead and tear it down so the reconnect loop picks it up.
+    private let pongTimeoutSec: TimeInterval = 25
 
     public init(config: BackendConfig) { self.config = config }
 
@@ -49,13 +59,22 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         webSocketTask = nil
         _state = .disconnected
         reconnectAttempt = 0
+        pingTimer?.cancel()
+        pingTimer = nil
         let listeners = stateListeners
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
     }
 
+    /// Send a JSON envelope matching the server's `Envelope { type, data, id }` schema
+    /// (internal/signaling/messages.go). `id` is a UUID used for request/response
+    /// correlation (e.g. pairing a server `pong` with the triggering `ping`).
     public func send(type: String, data: [String: Any]) {
-        let message: [String: Any] = ["type": type, "data": data]
+        let message: [String: Any] = [
+            "type": type,
+            "data": data,
+            "id": UUID().uuidString
+        ]
         guard let jsonData = try? JSONSerialization.data(withJSONObject: message),
               let jsonString = String(data: jsonData, encoding: .utf8) else { return }
         webSocketTask?.send(.string(jsonString)) { _ in }
@@ -103,6 +122,12 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     }
 
     private func handleMessage(_ text: String) {
+        // Any inbound frame, including pong/heartbeat_ack, keeps the connection
+        // fresh for the staleness detector.
+        lock.lock()
+        lastInboundAt = Date().timeIntervalSinceReferenceDate
+        lock.unlock()
+
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else { return }
@@ -114,8 +139,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             let listeners = stateListeners
             lock.unlock()
             listeners.forEach { $0(.authenticated) }
+            startPingTimer()
             return
         }
+
+        // `pong` and `heartbeat_ack` are server responses to our ping. No listener
+        // handler is needed — just refreshing `lastInboundAt` above is enough.
+        if type == "pong" || type == "heartbeat_ack" { return }
 
         lock.lock()
         let handler = messageHandlers[type]
@@ -124,11 +154,51 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         handler?(type, messageData)
     }
 
+    // MARK: - Keepalive
+
+    /// Start the keepalive timer that sends a `ping` envelope every
+    /// `pingIntervalSec` and tears the connection down if no inbound frame
+    /// arrives within `pongTimeoutSec` of the last ping. Must be called
+    /// after the server has accepted our `authenticate` message.
+    private func startPingTimer() {
+        lock.lock()
+        pingTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + pingIntervalSec, repeating: pingIntervalSec)
+        timer.setEventHandler { [weak self] in self?.tickKeepalive() }
+        pingTimer = timer
+        lastInboundAt = Date().timeIntervalSinceReferenceDate
+        lock.unlock()
+        timer.resume()
+    }
+
+    private func tickKeepalive() {
+        lock.lock()
+        let lastInbound = lastInboundAt
+        let isAuthenticated = _state == .authenticated
+        lock.unlock()
+
+        guard isAuthenticated else { return }
+
+        let age = Date().timeIntervalSinceReferenceDate - lastInbound
+        // If a full ping cycle has passed without any inbound traffic, treat the
+        // socket as dead and force a reconnect.
+        if age > pingIntervalSec + pongTimeoutSec {
+            webSocketTask?.cancel(with: .abnormalClosure, reason: nil)
+            handleDisconnect()
+            return
+        }
+
+        send(type: "ping", data: [:])
+    }
+
     private func handleDisconnect() {
         lock.lock()
         _state = .disconnected
         reconnectAttempt += 1
         let attempt = reconnectAttempt
+        pingTimer?.cancel()
+        pingTimer = nil
         let listeners = stateListeners
         lock.unlock()
         listeners.forEach { $0(.disconnected) }

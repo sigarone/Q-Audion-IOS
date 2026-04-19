@@ -3,7 +3,7 @@ import Foundation
 public final class BCryptoBackendProvider: BackendProvider {
     public let identifier = "bcrypto"
     public let displayName = "BCrypto"
-    private let config: BackendConfig
+    private var config: BackendConfig
     private let wsClient: BCryptoWebSocketClient
     private let restClient: BCryptoRestClient
 
@@ -27,6 +27,30 @@ public final class BCryptoBackendProvider: BackendProvider {
         self.config = config
         self.wsClient = BCryptoWebSocketClient(config: config)
         self.restClient = BCryptoRestClient(config: config)
+
+        // Wire the REST client so it can auto-refresh the JWT access token on
+        // HTTP 401 and transparently retry the original request once. Any REST
+        // or WebSocket component reading tokens from `self.config` will see the
+        // new pair immediately because `updateConfig` is broadcast to both
+        // clients here.
+        self.restClient.setTokenRefresher { [weak self] in
+            guard let self else { throw BCryptoError.unauthorized }
+            guard let refresh = self.config.refreshToken else { throw BCryptoError.unauthorized }
+            let pair = try await (self.accountApi as! BCryptoAccountApiImpl).refreshToken(refresh)
+            self.applyTokenPair(access: pair.accessToken, refresh: pair.refreshToken)
+            return (accessToken: pair.accessToken, refreshToken: pair.refreshToken)
+        }
+    }
+
+    /// Propagate a refreshed (access, refresh) pair to the internal clients so
+    /// subsequent requests and WebSocket reconnects authenticate with the new
+    /// credentials. Called by the REST client's auto-refresh flow and by
+    /// external code that performed a manual refresh (e.g. AuthService).
+    public func applyTokenPair(access: String, refresh: String?) {
+        config.accessToken = access
+        if let r = refresh { config.refreshToken = r }
+        wsClient.updateConfig(config)
+        restClient.updateConfig(config)
     }
 
     public func initialize() async throws { wsClient.connect() }

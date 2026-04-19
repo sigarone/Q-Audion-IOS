@@ -2,8 +2,21 @@ import Foundation
 import CommonCrypto
 
 public final class BCryptoRestClient {
+    /// Callback invoked when a protected request returns HTTP 401.
+    /// Implementations should call POST /api/v1/auth/refresh with the current
+    /// refresh token and return the new (accessToken, refreshToken) pair so
+    /// the client can update its config and retry the original request. If
+    /// refresh fails the callback should throw — the original request will
+    /// then bubble up the 401 as BCryptoError.unauthorized.
+    public typealias TokenRefresher = @Sendable () async throws -> (accessToken: String, refreshToken: String?)
+
     private var config: BackendConfig
     private let session: URLSession
+    private var tokenRefresher: TokenRefresher?
+    /// Serialises concurrent refresh attempts so we don't fire N /auth/refresh
+    /// calls when many in-flight requests simultaneously hit 401.
+    private let refreshLock = NSLock()
+    private var refreshInFlight: Task<Bool, Error>?
 
     public init(config: BackendConfig) {
         self.config = config
@@ -14,6 +27,13 @@ public final class BCryptoRestClient {
         } else {
             self.session = URLSession.shared
         }
+    }
+
+    /// Install the callback that knows how to perform a token refresh. The
+    /// owning `BCryptoBackendProvider` wires this to `BCryptoAccountApiImpl.refreshToken`
+    /// after construction to avoid a circular init-time dependency.
+    public func setTokenRefresher(_ refresher: @escaping TokenRefresher) {
+        self.tokenRefresher = refresher
     }
 
     public func get(_ path: String, headers: [String: String] = [:]) async throws -> Data {
@@ -66,6 +86,37 @@ public final class BCryptoRestClient {
     }
 
     private func request(_ method: String, path: String, body: Data?, headers: [String: String]) async throws -> Data {
+        // First attempt with the currently cached access token.
+        let (data, status) = try await performRequest(method, path: path, body: body, headers: headers)
+        if (200...299).contains(status) {
+            return data
+        }
+
+        // On 401, try a single refresh-and-retry cycle (if a refresher is installed
+        // and we have a refresh token to hand to it). This masks the common case
+        // of the 15-minute access token expiring during a long-lived session.
+        if status == 401,
+           tokenRefresher != nil,
+           config.refreshToken != nil,
+           // Don't loop on the refresh endpoint itself.
+           !path.hasSuffix("/auth/refresh") {
+            let refreshed = try await tryRefreshToken()
+            if refreshed {
+                let (retryData, retryStatus) = try await performRequest(method, path: path, body: body, headers: headers)
+                if (200...299).contains(retryStatus) {
+                    return retryData
+                }
+                if retryStatus == 401 { throw BCryptoError.unauthorized }
+                throw BCryptoError.httpError(retryStatus)
+            }
+            throw BCryptoError.unauthorized
+        }
+
+        if status == 401 { throw BCryptoError.unauthorized }
+        throw BCryptoError.httpError(status)
+    }
+
+    private func performRequest(_ method: String, path: String, body: Data?, headers: [String: String]) async throws -> (Data, Int) {
         guard let url = URL(string: config.serverUrl + path) else { throw BCryptoError.invalidUrl }
         var req = URLRequest(url: url)
         req.httpMethod = method
@@ -74,15 +125,36 @@ public final class BCryptoRestClient {
         if let token = config.accessToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         for (key, value) in headers { req.setValue(value, forHTTPHeaderField: key) }
         let (data, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse else {
-            throw BCryptoError.httpError(0)
+        guard let http = response as? HTTPURLResponse else { throw BCryptoError.httpError(0) }
+        return (data, http.statusCode)
+    }
+
+    /// Invoke the installed token refresher at most once per batch of concurrent
+    /// 401-affected requests. Returns `true` if the refresh succeeded and
+    /// `config.accessToken` was updated; `false` if there was no refresher.
+    private func tryRefreshToken() async throws -> Bool {
+        guard let refresher = tokenRefresher else { return false }
+
+        refreshLock.lock()
+        if let existing = refreshInFlight {
+            refreshLock.unlock()
+            return try await existing.value
         }
-        // Handle 401 -> unauthorized
-        if http.statusCode == 401 { throw BCryptoError.unauthorized }
-        guard (200...299).contains(http.statusCode) else {
-            throw BCryptoError.httpError(http.statusCode)
+        let task = Task<Bool, Error> {
+            let pair = try await refresher()
+            config.accessToken = pair.accessToken
+            if let newRefresh = pair.refreshToken { config.refreshToken = newRefresh }
+            return true
         }
-        return data
+        refreshInFlight = task
+        refreshLock.unlock()
+
+        defer {
+            refreshLock.lock()
+            refreshInFlight = nil
+            refreshLock.unlock()
+        }
+        return try await task.value
     }
 
     /// The base server URL from the current configuration.
