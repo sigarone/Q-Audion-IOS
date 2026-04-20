@@ -7,7 +7,7 @@
 **Plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
-**Phase 1 — Wire protocol alignment** (Task 1.3 + 1.2 audit + 1.4-a auth + 1.4-b1 contacts schema landed; Task 1.1 still blocked by USER's WT; remaining Task 1.4-b schema fixes §5.3–§5.8 still open)
+**Phase 1 — Wire protocol alignment** (Task 1.3 + 1.2 audit + 1.4-a auth + 1.4-b1 contacts + 1.4-b2 KMS landed; Task 1.1 still blocked by USER's WT; remaining Task 1.4-b schema fixes §3.3 profile + §3.6–§3.8 backup + §3.11–§3.15 security + missing endpoints still open)
 
 ## Ultima task completata (audit)
 **Task 1.2 — ✅ DONE (audit)** — `docs/progress/PHASE1_REST_AUDIT.md`.

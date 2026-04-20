@@ -197,17 +197,17 @@ Android streams raw bytes. iOS parses JSON `{ data: <base64> }` and base64-decod
 Android: `{ backups: [BackupEntryDto{backup_id, size_bytes, created_at?, key_hint?}] }`.
 iOS: decodes `{ keys: [String] }` — wrong wire key, loses structured metadata.
 
-### 3.9 ⚠️ `device/publickey` payload
+### 3.9 ⚠️ `device/publickey` payload *(RESOLVED — see Task 1.4-b2 commit)*
 
 Android: `{ public_key, key_type="x25519" }`.
-iOS: `{ device_id, public_key, key_type="P-256" }` — extra `device_id`, different algorithm default.
+iOS: ~~`{ device_id, public_key, key_type="P-256" }`~~ now `{ public_key, key_type }` with default `"x25519"` — matches Android.
 
 **Impact:** Server may reject unknown field or ignore; key_type=P-256 vs x25519 means iOS and Android register **different curves** by default — incompatible if server uses key_type to route handshake.
 
-### 3.10 ⚠️ `kms/pending` response envelope
+### 3.10 ⚠️ `kms/pending` response envelope *(RESOLVED — see Task 1.4-b2 commit)*
 
 Android: `{ keys: [KmsKeyDto{key_id, key_name, fingerprint, status, encrypted_package, ephemeral_pubkey, nonce, created_at?}] }`.
-iOS: decodes **bare array** `[PendingKey{key_id, encrypted_key, algorithm, created_at}]`.
+iOS: ~~decodes **bare array** `[PendingKey{key_id, encrypted_key, algorithm, created_at}]`~~ now decodes `{keys:[PendingKey]}` with the full `KmsKeyDto`-matching struct.
 
 Double drift: envelope missing (`keys:` wrapper) + DTO schema entirely different (`encrypted_key` vs `encrypted_package` + missing `fingerprint`/`ephemeral_pubkey`/`nonce`).
 
