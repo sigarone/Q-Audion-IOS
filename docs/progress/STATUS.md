@@ -7,7 +7,16 @@
 **Plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
-**Phase 1 — Wire protocol alignment** (Task 1.3 landed; Task 1.1/1.2 still blocked by USER's WT)
+**Phase 1 — Wire protocol alignment** (Task 1.3 landed + Task 1.2 audit complete; Task 1.1 still blocked by USER's WT; a new Task 1.4 emerged for REST schema fixes)
+
+## Ultima task completata (audit)
+**Task 1.2 — ✅ DONE (audit)** — `docs/progress/PHASE1_REST_AUDIT.md`.
+- 35 Android endpoints catalogued; iOS covers 24; 11 missing; 12 payload drifts; 10 iOS-only extras.
+- 2 D-CRITICAL findings: `auth/login` sends `phone_hash` key (server expects `phone_number`) + `register` sends raw phone & misses `password`/`display_name` → cross-platform auth currently broken.
+- 5 security endpoints (zk-register, zk-auth, pqc-relay, threat-report, wipe-confirm) have completely different schemas from Android.
+- `backup/*` transport/format wrong (JSON+base64 vs multipart+streaming).
+- Android working tree untouched by the audit (verified via `git status` in Android repo).
+- Fix plan (8 steps, §5 of audit doc) deferred to new Task 1.4 — none blocked by USER WT.
 
 ## Ultima task completata (code)
 **Task 1.3 — ✅ DONE** — commit `65c5ea4`.
@@ -25,18 +34,19 @@ Tutti i 4 task di Phase 0 (0.1 manual + 0.2 + 0.3 + 0.4 tag verify) passati + fi
 - Xcode 16.2 + onnxruntime 1.17 patch → ancora stabili ✅
 
 ## Prossima task (next, unblocked)
-- **Task 1.2** — REST endpoint audit vs Android `BCryptoApi.kt` (read-only, safe to run).
+- **Task 1.4 (new)** — REST schema fixes per `PHASE1_REST_AUDIT.md` §5 (auth D-CRITICAL first). Unblocked (files outside USER WT).
 - **Phase 2 task 2.1** — FastSetup QR login (new file, no collision). Ready to start.
 - Eventual **Task 1.1 WS code fixes** — still blocked on USER's WT (BCryptoCallingApiImpl etc.). Fixes documented in PHASE1_AUDIT.md.
 
 ## Prossima verification tag
-`v1.0.24-ph1` dopo chiusura Phase 1 completa (1.1 + 1.2 + 1.3).
+`v1.0.24-ph1` dopo chiusura Phase 1 completa (1.1 + 1.2 + 1.3 + **1.4 new**).
 
 ## Task dependencies blocked
 | Task | Blocker | Owner |
 |------|---------|-------|
 | 1.1 (WS code fix) | User WT must land first | USER → then parity agents rerun audit |
-| 1.2 (REST endpoint audit) | Same WT overlap risk; can run as read-only audit | — |
+| 1.2 (REST audit) | DONE 2026-04-20 — see PHASE1_REST_AUDIT.md | — |
+| 1.4 (REST schema fixes) | Unblocked — files outside USER WT. Ready to start | parity agents |
 
 ## Task 0.1 completamento
 ✅ 2026-04-20 — USER ha confermato (screenshot portale) capability Push Notifications abilitata su `com.qaudion.app`.
