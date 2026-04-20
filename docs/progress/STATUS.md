@@ -10,10 +10,26 @@
 **Phase 0 — Baseline preparation (Codemagic-safe enablers)**
 
 ## Ultima task completata (code)
-**Task 0.4 — IN PROGRESS** — Codemagic verification tag `v1.0.24-ph0` pushed at commit `b1e6ef9`. Build in corso su Codemagic.
-- Branch `feature/ios-android-parity` pushed to origin (9 commits from `main`)
-- Tag `v1.0.24-ph0` pushed → triggers `qaudion-app-build` workflow
-- Expected outcome: TestFlight build 2 @ version 1.0.0 delivered to "Q-Audion testers" group
+**Task 0.4 — ✅ DONE (effectively)** — Codemagic build #40 (tag `v1.0.24-ph0`, commit `b1e6ef9`).
+- **Build steps**: TUTTI verdi ✅ (Signing 4s, Build IPA 39s, onnxruntime patch, Publishing upload 54s)
+- **IPA prodotto**: 7.74 MB + dSYM 4.07 MB — UUID `43328e71-44c2-4376-96cd-9c2dd2420424`
+- **App Store Connect processing**: ✅ FINITO, build VALIDO (nessun ITMS rejection)
+- **TestFlight**: build è LIVE per i tester interni (gruppo `Q-Audion testers`) — auto-assigned
+- **Failure post-processing**: era un falso positivo di `codemagic.yaml` — tentava di assegnare un gruppo INTERNO via API (API rifiuta perché Apple auto-assigna i gruppi interni).
+
+## Fix applicato (commit da fare)
+Rimosso `beta_groups: [Q-Audion testers]` da `codemagic.yaml` — `submit_to_testflight: true` basta, Apple auto-assegna i gruppi interni. Aggiornato CODEMAGIC_GUARD I-11 + DECISIONS D-11.
+
+## Phase 0 = COMPLETE ✅
+Tutti i 4 task di Phase 0 (0.1 manual + 0.2 + 0.3 + 0.4 tag verify) passati. Phase 0 invariants validated:
+- `aps-environment=production` entitlement ↔ portale capability → firmato ✅
+- 6 nuovi SDK linkati (CallKit/PushKit/AVFoundation/CoreNFC/Contacts/ContactsUI) → build verde ✅
+- `UIBackgroundModes=[voip,audio]` → nessun warning ITMS ✅
+- Xcode 16.2 + onnxruntime 1.17 patch → ancora stabili ✅
+
+## Prossima task
+**Phase 1.3** — Canonical `PhoneHash` helper (no user-WT collision).
+Prossima verification tag: `v1.0.24-ph1` dopo chiusura Phase 1.
 
 ## Prossima task (next, unblocked)
 - **Attesa esito Codemagic** — se ❌ diagnosticare (probabile suspect: onnxruntime patch, signing, nuovi SDK link).

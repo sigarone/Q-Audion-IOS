@@ -49,6 +49,12 @@ Locked in `QAudionEngine/Package.swift` as `exact: "1.17.0"`. Post-build Info.pl
 **Why:** `framework:` makes XcodeGen look for a local path → "No such file" error. Documented in `CLAUDE.md` §5.
 **How to apply:** Task 0.3 (and any later framework additions) must use `sdk:` style.
 
+## 2026-04-20 / D-11 — Remove `beta_groups: [Q-Audion testers]` from codemagic.yaml
+After Phase 0 verification build (tag `v1.0.24-ph0`, build #40), the core build was green but post-processing "App Store distribution" failed: *"Failed to add build to 'Q-Audion testers' beta group. Cannot add internal group to a build."* `Q-Audion testers` is an **internal** group — ASC auto-assigns internal groups; the API rejects explicit add calls.
+**Why this decision:** The build validates successfully and is automatically available to internal testers (us). Keeping `beta_groups` with an internal name causes every Codemagic run to report a false "finished with post-processing failed" even though the binary is live on TestFlight. This masks real failures in future runs.
+**How to apply:** `beta_groups` in `codemagic.yaml` is now OMITTED. `submit_to_testflight: true` alone handles TestFlight distribution. Only re-add `beta_groups` if an EXTERNAL group is created in ASC (which then requires Apple beta review).
+**Reference:** Commit with the fix is the first post-v1.0.24-ph0 Phase 0 cleanup. Supersedes implicit previous assumption that `beta_groups` could carry internal names.
+
 ## 2026-04-20 / D-10 — Knowledge base lives in `docs/progress/`
 This folder is the canonical handoff surface between agents/sessions. 5 files (STATUS, TASK_LOG, DECISIONS, ANDROID_REFERENCE, CODEMAGIC_GUARD) + README (index).
 **Why:** USER explicit directive: "aggiorna continuamente nella cartella il lavoro che fai con la memmory knolwdge, in mod che chiunque possa continuare il lavoro in corso".

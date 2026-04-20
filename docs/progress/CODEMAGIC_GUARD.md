@@ -86,8 +86,11 @@ dependencies:
 ### I-10 · IPA artifact path
 Artifact glob must be `QAudionApp/build/ios/ipa/*.ipa`. `xcode-project build-ipa` runs with `cd QAudionApp` and writes that relative path.
 
-### I-11 · TestFlight beta group name
-`Q-Audion testers` (lowercase `t`, hyphen in `Q-Audion`). `publishing.app_store_connect.beta_groups` must match character-for-character.
+### I-11 · TestFlight beta groups = EXTERNAL only
+`Q-Audion testers` is an **INTERNAL** group. Internal groups are auto-assigned by ASC to every processed build — the API rejects explicit `beta_groups: [Q-Audion testers]` entries with *"Cannot add internal group to a build"*.
+- ✅ Leave `submit_to_testflight: true` and **omit** `beta_groups` unless you have explicit external groups.
+- ❌ DO NOT re-add `- Q-Audion testers` without first converting it to an external group in ASC.
+- If `beta_groups:` is re-introduced, every listed name must: (a) exist in ASC, (b) be marked External, (c) match char-for-char including spaces/hyphens.
 
 ### I-12 · Required Info.plist keys (don't remove)
 - `NSMicrophoneUsageDescription`

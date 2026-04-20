@@ -207,6 +207,10 @@ workflows:
         key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
         issuer_id: $APP_STORE_CONNECT_ISSUER_ID
         submit_to_testflight: true
-        beta_groups:
-          - Q-Audion testers
+        # Do NOT list "Q-Audion testers" here: it's an INTERNAL group and
+        # ASC auto-assigns every processed build to internal groups. The
+        # App Store Connect API rejects explicit adds of internal groups
+        # ("Cannot add internal group to a build"), which fails the
+        # post-processing step even when the build itself is valid.
+        # Re-add beta_groups ONLY for EXTERNAL groups.
         expire_build_submitted_for_review: true
