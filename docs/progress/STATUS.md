@@ -29,9 +29,9 @@
 - `127` — empty 0-byte file appeared during Task 0.3 work (likely accidental shell redirect). Not deleted by the agent pending user confirmation; harmless.
 
 ## Blocker aperti
-| ID | Owner | Descrizione | Sblocca |
-|----|-------|-------------|---------|
-| 0.1 | **USER (manual)** | Enable **Push Notifications** capability on `com.qaudion.app` in developer.apple.com portal. See `SESSION_LOG.md`. | Task 0.4 |
+_(nessuno — Task 0.1 completato 2026-04-20 ✅)_
+
+~~Task 0.1~~ — Push Notifications capability on `com.qaudion.app` → **DONE** by USER, confirmed via portale screenshot.
 
 ## Working-tree hygiene (DO NOT COMMIT FROM PARITY EFFORT)
 Pre-existing user BCrypto workstream (uncommitted):

@@ -6,13 +6,18 @@ Plan: `docs/superpowers/plans/2026-04-20-ios-android-parity.md` (13 phases).
 Branch: `feature/ios-android-parity` (off `main` @ 4516e01).
 Last shipped tag: `v1.0.23`. Next verification tag: `v1.0.24-ph0` (after Phase 0).
 
-### Task 0.1 — Apple Developer portal capability (BLOCKER, manual)
-Owner: **USER** (cannot be automated).
-Required **before** Task 0.4 (Codemagic verification tag push):
-1. Log in to https://developer.apple.com/account
-2. Identifiers → `com.qaudion.app` → enable **Push Notifications** → Save
-3. Confirm the identifier lists "Push Notifications" under capabilities
-4. Log the completion date back into this file
+### Task 0.1 — Apple Developer portal capability (BLOCKER, manual) ✅ DONE 2026-04-20
+Owner: **USER** (cannot be automated). **Completed 2026-04-20** — screenshot
+confirmed Push Notifications capability enabled on `com.qaudion.app` (NFC
+Tag Reading also still enabled, unchanged). No APNs certificate created
+— Codemagic generates the provisioning profile via ASC API, which now
+includes `aps-environment` since the capability is set.
+
+Original checklist:
+1. Log in to https://developer.apple.com/account ✅
+2. Identifiers → `com.qaudion.app` → enable **Push Notifications** → Save ✅
+3. Confirm the identifier lists "Push Notifications" under capabilities ✅
+4. Log the completion date back into this file ✅ (this line)
 
 Reason: `app-store-connect fetch-signing-files --create` (codemagic.yaml)
 will only include `aps-environment` in the provisioning profile if the
