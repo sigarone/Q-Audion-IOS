@@ -23,10 +23,15 @@ final class AuthService {
         return creds
     }
 
-    func register(phoneNumber: String, inviteCode: String?, serverUrl: String) async throws -> String {
+    func register(phoneNumber: String, password: String, inviteCode: String?, serverUrl: String) async throws -> String {
         let backendConfig = BackendConfig(serverUrl: serverUrl)
         let provider = BCryptoBackendProvider(config: backendConfig)
-        let userId = try await provider.accountApi.register(phoneNumber: phoneNumber, inviteCode: inviteCode)
+        let userId = try await provider.accountApi.register(
+            phoneNumber: phoneNumber,
+            password: password,
+            inviteCode: inviteCode,
+            displayName: nil
+        )
         return userId
     }
 

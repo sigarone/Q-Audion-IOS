@@ -4,9 +4,14 @@ public final class BCryptoAccountApiImpl: AccountApi {
     private let rest: BCryptoRestClient
     public init(rest: BCryptoRestClient) { self.rest = rest }
 
-    public func register(phoneNumber: String, inviteCode: String?) async throws -> String {
-        var dict: [String: Any] = ["phone_number": phoneNumber]
-        if let code = inviteCode { dict["invite_code"] = code }
+    public func register(phoneNumber: String, password: String, inviteCode: String?, displayName: String?) async throws -> String {
+        let phoneHash = try PhoneHash.hash(phoneNumber)
+        var dict: [String: Any] = [
+            "phone_number": phoneHash,
+            "password": password,
+        ]
+        if let code = inviteCode, !code.isEmpty { dict["invite_code"] = code }
+        if let name = displayName, !name.isEmpty { dict["display_name"] = name }
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/register", body: body)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -15,7 +20,7 @@ public final class BCryptoAccountApiImpl: AccountApi {
     }
 
     public func login(phoneHash: String, password: String, deviceName: String) async throws -> AuthCredentials {
-        let dict: [String: Any] = ["phone_hash": phoneHash, "password": password, "device_name": deviceName]
+        let dict: [String: Any] = ["phone_number": phoneHash, "password": password, "device_name": deviceName]
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/login", body: body)
         return try JSONDecoder().decode(AuthCredentials.self, from: data)

@@ -51,14 +51,19 @@ public final class QAudionAppState: ObservableObject {
         }
     }
 
-    /// Register with phone number.
-    public func register(phoneNumber: String, inviteCode: String?) async {
+    /// Register with phone number + password.
+    public func register(phoneNumber: String, password: String, inviteCode: String? = nil, displayName: String? = nil) async {
         do {
             let tempBackend = BCryptoBackendProvider(config: config)
-            let userId = try await tempBackend.accountApi.register(phoneNumber: phoneNumber, inviteCode: inviteCode)
+            let userId = try await tempBackend.accountApi.register(
+                phoneNumber: phoneNumber,
+                password: password,
+                inviteCode: inviteCode,
+                displayName: displayName
+            )
             let phoneHash = try PhoneHash.hash(phoneNumber)
             // Auto-login after registration
-            let creds = try await tempBackend.accountApi.login(phoneHash: phoneHash, password: inviteCode ?? "", deviceName: deviceName())
+            let creds = try await tempBackend.accountApi.login(phoneHash: phoneHash, password: password, deviceName: deviceName())
             saveCredentials(creds)
             config.accessToken = creds.accessToken
             config.refreshToken = creds.refreshToken

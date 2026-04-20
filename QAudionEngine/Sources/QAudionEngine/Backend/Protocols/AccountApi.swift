@@ -1,9 +1,14 @@
 import Foundation
 
 public protocol AccountApi {
-    /// Register with phone number + optional invite code. Server returns userId.
-    func register(phoneNumber: String, inviteCode: String?) async throws -> String
+    /// Register with E.164 phone number + password.
+    /// Phone is normalised + SHA-256-hashed and sent on the wire under the
+    /// `phone_number` key (Android contract: server treats the hash as an
+    /// opaque identifier). Server returns userId.
+    func register(phoneNumber: String, password: String, inviteCode: String?, displayName: String?) async throws -> String
     /// Login with phone hash + password + device name. Returns auth credentials.
+    /// The hash value travels on the wire under the `phone_number` key to match
+    /// the Android/server contract (`LoginRequest`).
     func login(phoneHash: String, password: String, deviceName: String) async throws -> AuthCredentials
     /// Refresh access token.
     func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair

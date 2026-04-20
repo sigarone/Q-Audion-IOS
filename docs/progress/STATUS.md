@@ -7,7 +7,7 @@
 **Plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
-**Phase 1 — Wire protocol alignment** (Task 1.3 landed + Task 1.2 audit complete; Task 1.1 still blocked by USER's WT; a new Task 1.4 emerged for REST schema fixes)
+**Phase 1 — Wire protocol alignment** (Task 1.3 landed + Task 1.2 audit complete + Task 1.4-a D-CRITICAL auth fixes landed; Task 1.1 still blocked by USER's WT; remaining Task 1.4 schema fixes §5.2–§5.8 still open)
 
 ## Ultima task completata (audit)
 **Task 1.2 — ✅ DONE (audit)** — `docs/progress/PHASE1_REST_AUDIT.md`.
@@ -34,7 +34,7 @@ Tutti i 4 task di Phase 0 (0.1 manual + 0.2 + 0.3 + 0.4 tag verify) passati + fi
 - Xcode 16.2 + onnxruntime 1.17 patch → ancora stabili ✅
 
 ## Prossima task (next, unblocked)
-- **Task 1.4 (new)** — REST schema fixes per `PHASE1_REST_AUDIT.md` §5 (auth D-CRITICAL first). Unblocked (files outside USER WT).
+- **Task 1.4-b** — remaining REST schema fixes per `PHASE1_REST_AUDIT.md` §5 items 2–8 (contacts/sync schema, security schemas, backup transport, KMS envelope, missing endpoints). Unblocked.
 - **Phase 2 task 2.1** — FastSetup QR login (new file, no collision). Ready to start.
 - Eventual **Task 1.1 WS code fixes** — still blocked on USER's WT (BCryptoCallingApiImpl etc.). Fixes documented in PHASE1_AUDIT.md.
 

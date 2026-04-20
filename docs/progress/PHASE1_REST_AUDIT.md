@@ -139,7 +139,7 @@ Legend: ✅ matches · ⚠️ path matches / payload drifts · ❌ missing on iO
 
 ## 3. Drift details
 
-### 3.1 ⚠️ D-CRITICAL — `register` payload
+### 3.1 ⚠️ D-CRITICAL — `register` payload *(RESOLVED — see Task 1.4-a commit)*
 
 **Android `RegisterRequest`** (wire): `{ phone_number: <SHA-256 hex hash>, password, invite_code?, display_name? }`
 Note: Kotlin property `phoneHash` is annotated `@SerialName("phone_number")` — the server key is `phone_number`, but the VALUE sent is the hash.
@@ -152,7 +152,7 @@ Note: Kotlin property `phoneHash` is annotated `@SerialName("phone_number")` —
 
 **Impact:** Silent cross-platform account incompatibility. iOS users created via this path cannot be discovered by Android contact-discovery (which hashes), and vice-versa.
 
-### 3.2 ⚠️ D-CRITICAL — `auth/login` payload
+### 3.2 ⚠️ D-CRITICAL — `auth/login` payload *(RESOLVED — see Task 1.4-a commit)*
 
 **Android `LoginRequest`** (wire): `{ phone_number: <SHA-256 hash>, password, device_name }`
 **iOS `BCryptoAccountApiImpl.login:17-18`** (wire): `{ phone_hash: <hash>, password, device_name }`

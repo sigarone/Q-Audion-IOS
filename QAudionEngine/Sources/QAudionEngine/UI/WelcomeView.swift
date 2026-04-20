@@ -125,7 +125,11 @@ public struct LoginView: View {
                     isLoading = true
                     Task {
                         if isRegistering {
-                            await appState.register(phoneNumber: phoneNumber, inviteCode: inviteCode.isEmpty ? nil : inviteCode)
+                            // LoginView has a single "Codice invito" field that the UX reuses as
+                            // the account password on auto-login. Pass it as `password:` so the
+                            // wire matches Android's RegisterRequest; leave `inviteCode` empty
+                            // (the server-side invite gate isn't surfaced in this minimal form).
+                            await appState.register(phoneNumber: phoneNumber, password: inviteCode, inviteCode: nil)
                         } else {
                             await appState.login(phoneNumber: phoneNumber, password: inviteCode)
                         }

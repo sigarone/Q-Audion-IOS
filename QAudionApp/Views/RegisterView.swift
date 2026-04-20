@@ -107,7 +107,7 @@ struct RegisterView: View {
         Task {
             do {
                 _ = try await appState.authService.register(
-                    phoneNumber: userId, inviteCode: credential, serverUrl: serverUrl
+                    phoneNumber: userId, password: credential, inviteCode: nil, serverUrl: serverUrl
                 )
                 await appState.login(userId: userId, credential: credential)
                 if appState.isAuthenticated { dismiss() }
