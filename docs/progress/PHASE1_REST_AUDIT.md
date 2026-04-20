@@ -211,40 +211,40 @@ iOS: ~~decodes **bare array** `[PendingKey{key_id, encrypted_key, algorithm, cre
 
 Double drift: envelope missing (`keys:` wrapper) + DTO schema entirely different (`encrypted_key` vs `encrypted_package` + missing `fingerprint`/`ephemeral_pubkey`/`nonce`).
 
-### 3.11 ⚠️ `security/zk-register` schema
+### 3.11 ⚠️ `security/zk-register` schema  *(TODO in code — pending server-team clarification)*
 
 Android: `{ zk_commitment, public_params? }`.
 iOS: `{ salt, verifier_v, public_blind }`.
 
-No overlap. This is cargo-culted from a different ZK protocol (looks like SRP-style `verifier_v`).
+No overlap. This is cargo-culted from a different ZK protocol (looks like SRP-style `verifier_v`). Task 1.4-b5 added a TODO(parity) in `BCryptoSecurityApiImpl.zkRegister` explicitly warning NOT to auto-rewrite to the Android shape without a server-contract decision: neither shape is self-evidently correct.
 
-### 3.12 ⚠️ `security/zk-auth` schema
+### 3.12 ⚠️ `security/zk-auth` schema  *(TODO in code — pending server-team clarification)*
 
 Android: `{ challenge, proof }`.
 iOS: `{ client_public, proof, nonce }`.
 
-`proof` is the only shared field.
+`proof` is the only shared field. Task 1.4-b5 added a TODO(parity) in `BCryptoSecurityApiImpl.zkAuth`.
 
-### 3.13 ⚠️ `security/pqc-relay` schema
+### 3.13 ⚠️ `security/pqc-relay` schema  *(TODO in code — pending server-team clarification)*
 
 Android: `{ recipient_id, ciphertext, algorithm="ml-kem-768" }`.
 iOS: `{ target_user_id, pqc_ciphertext, x25519_public_key, message_type, enclave_public_key? }`.
 
-Field names differ (`recipient_id` vs `target_user_id`, `ciphertext` vs `pqc_ciphertext`), iOS bundles the x25519 pubkey into the relay envelope (Android splits into separate channels), iOS default algorithm unspecified (Android `ml-kem-768`; project target is `ml-kem-1024`).
+Field names differ (`recipient_id` vs `target_user_id`, `ciphertext` vs `pqc_ciphertext`), iOS bundles the x25519 pubkey into the relay envelope (Android splits into separate channels), iOS default algorithm unspecified (Android `ml-kem-768`; project target is `ml-kem-1024`). Task 1.4-b5 added a TODO(parity) in `BCryptoSecurityApiImpl.sendPqcKeyExchange` — the server team must confirm whether the hybrid-handshake metadata is expected in-band or negotiated out-of-band.
 
-### 3.14 ⚠️ `security/threat-report` field names
+### 3.14 ⚠️ `security/threat-report` field names  *(TODO in code — pending server-team clarification)*
 
 Android: `{ category, details, severity }`.
 iOS: `{ threat_kind, severity, detail, timestamp, session_id? }`.
 
-`category`↔`threat_kind`, `details`↔`detail`. Extra iOS fields likely ignored.
+`category`↔`threat_kind`, `details`↔`detail`. Extra iOS fields likely ignored. Task 1.4-b5 added a TODO(parity) in `BCryptoSecurityApiImpl.reportThreat` — `detail`/`details` + `threat_kind`/`category` are safe renames once the server team confirms; iOS-extra `timestamp`/`session_id` may need dropping or server-side adoption.
 
-### 3.15 ⚠️ `security/wipe-confirm` schema
+### 3.15 ⚠️ `security/wipe-confirm` schema  *(TODO in code — pending server-team clarification)*
 
 Android: `{ wipe_id, confirmed }` — client ACKs a server-initiated wipe by echoing the `wipe_id`.
 iOS: `{ device_id }` — client tells server which device was wiped (reverse direction).
 
-Completely different semantic contract; requires clarification with server team before fixing.
+Completely different semantic contract; requires clarification with server team before fixing. Task 1.4-b5 added a TODO(parity) in `BCryptoSecurityApiImpl.confirmWipe` noting that the Android `wipe_id` suggests a nonce/challenge issued by a prior request — iOS may be missing that round-trip entirely.
 
 ---
 
