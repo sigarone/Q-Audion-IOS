@@ -34,5 +34,11 @@ targets:
       - sdk: CoreAudio.framework
       - sdk: AudioToolbox.framework
       - sdk: Accelerate.framework
+      - sdk: CallKit.framework
+      - sdk: PushKit.framework
+      - sdk: AVFoundation.framework
+      - sdk: CoreNFC.framework
+      - sdk: Contacts.framework
+      - sdk: ContactsUI.framework
     resources:
       - path: Assets.xcassets
