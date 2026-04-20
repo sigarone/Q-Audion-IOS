@@ -26,8 +26,8 @@ public final class BCryptoContactsApiImpl: ContactsApi {
         return response.contacts
     }
 
-    public func syncContacts(phoneHashes: [String]) async throws {
-        let body = try JSONSerialization.data(withJSONObject: ["phone_hashes": phoneHashes])
+    public func syncContacts(entries: [SyncContactEntry]) async throws {
+        let body = try JSONEncoder().encode(SyncContactsRequest(contacts: entries))
         _ = try await rest.post("/api/v1/contacts/sync", body: body)
     }
 
@@ -40,13 +40,21 @@ public final class BCryptoContactsApiImpl: ContactsApi {
         _ = try await rest.delete("/api/v1/contacts/block/\(userId)")
     }
 
-    public func getBlockedContacts() async throws -> [DiscoveredContact] {
+    public func getBlockedContacts() async throws -> [BlockedContact] {
         let data = try await rest.get("/api/v1/contacts/blocked")
-        let response = try JSONDecoder().decode(DiscoverResponse.self, from: data)
-        return response.contacts
+        let response = try JSONDecoder().decode(BlockedContactsResponse.self, from: data)
+        return response.blocked
     }
 }
 
 private struct DiscoverResponse: Codable {
     let contacts: [DiscoveredContact]
+}
+
+private struct SyncContactsRequest: Codable {
+    let contacts: [SyncContactEntry]
+}
+
+private struct BlockedContactsResponse: Codable {
+    let blocked: [BlockedContact]
 }

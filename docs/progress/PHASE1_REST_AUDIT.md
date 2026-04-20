@@ -172,16 +172,16 @@ Note: Kotlin property `phoneHash` is annotated `@SerialName("phone_number")` —
 
 **Impact:** Avatar upload path is non-functional. Profile PUT works for name/status only.
 
-### 3.4 ⚠️ D-CRITICAL — `contacts/sync` schema
+### 3.4 ⚠️ D-CRITICAL — `contacts/sync` schema *(RESOLVED — see Task 1.4-b1 commit)*
 
 **Android `SyncContactsRequest`**: `{ contacts: [{ contact_user_id, display_name?, local_alias? }] }`
-**iOS**: `{ phone_hashes: [String] }`
+**iOS**: ~~`{ phone_hashes: [String] }`~~ → `{ contacts: [SyncContactEntry] }` matching Android.
 
 Completely different intent — Android sync uploads user_ids + labels; iOS uploads hash batch (which is what `contacts/discover` does). The iOS impl is either duplicating discover or broken.
 
-### 3.5 ⚠️ `contacts/blocked` response decode
+### 3.5 ⚠️ `contacts/blocked` response decode *(RESOLVED — see Task 1.4-b1 commit)*
 
-Android returns `{ blocked: [BlockedEntryDto{user_id, blocked_at}] }`. iOS decodes as `{ contacts: [DiscoveredContact] }` → JSON key mismatch + wrong shape.
+Android returns `{ blocked: [BlockedEntryDto{user_id, blocked_at}] }`. iOS ~~decodes as `{ contacts: [DiscoveredContact] }`~~ now decodes `{ blocked: [BlockedContact] }` matching Android.
 
 ### 3.6 ⚠️ `backup/upload` transport
 

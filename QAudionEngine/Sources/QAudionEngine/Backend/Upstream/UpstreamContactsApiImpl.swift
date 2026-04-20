@@ -47,8 +47,8 @@ public final class UpstreamContactsApiImpl: ContactsApi {
         return try JSONDecoder().decode([DiscoveredContact].self, from: data)
     }
 
-    public func syncContacts(phoneHashes: [String]) async throws {
-        let body = try JSONSerialization.data(withJSONObject: ["phone_hashes": phoneHashes])
+    public func syncContacts(entries: [SyncContactEntry]) async throws {
+        let body = try JSONEncoder().encode(UpstreamSyncContactsRequest(contacts: entries))
         _ = try await rest.post("/v1/contacts/sync", body: body)
     }
 
@@ -61,8 +61,12 @@ public final class UpstreamContactsApiImpl: ContactsApi {
         _ = try await rest.delete("/v1/contacts/block/\(userId)")
     }
 
-    public func getBlockedContacts() async throws -> [DiscoveredContact] {
+    public func getBlockedContacts() async throws -> [BlockedContact] {
         let data = try await rest.get("/v1/contacts/blocked")
-        return try JSONDecoder().decode([DiscoveredContact].self, from: data)
+        return try JSONDecoder().decode([BlockedContact].self, from: data)
     }
+}
+
+private struct UpstreamSyncContactsRequest: Codable {
+    let contacts: [SyncContactEntry]
 }
