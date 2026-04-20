@@ -11,7 +11,7 @@ final class AuthService {
     func login(phoneNumber: String, password: String, serverUrl: String) async throws -> AuthCredentials {
         let backendConfig = BackendConfig(serverUrl: serverUrl)
         let provider = BCryptoBackendProvider(config: backendConfig)
-        let phoneHash = BCryptoAccountApiImpl.hashPhone(phoneNumber)
+        let phoneHash = try PhoneHash.hash(phoneNumber)
         let deviceName: String
         #if canImport(UIKit)
         deviceName = await UIDevice.current.name

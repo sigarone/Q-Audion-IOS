@@ -56,7 +56,7 @@ public final class QAudionAppState: ObservableObject {
         do {
             let tempBackend = BCryptoBackendProvider(config: config)
             let userId = try await tempBackend.accountApi.register(phoneNumber: phoneNumber, inviteCode: inviteCode)
-            let phoneHash = BCryptoAccountApiImpl.hashPhone(phoneNumber)
+            let phoneHash = try PhoneHash.hash(phoneNumber)
             // Auto-login after registration
             let creds = try await tempBackend.accountApi.login(phoneHash: phoneHash, password: inviteCode ?? "", deviceName: deviceName())
             saveCredentials(creds)
@@ -75,7 +75,7 @@ public final class QAudionAppState: ObservableObject {
     public func login(phoneNumber: String, password: String) async {
         do {
             let tempBackend = BCryptoBackendProvider(config: config)
-            let phoneHash = BCryptoAccountApiImpl.hashPhone(phoneNumber)
+            let phoneHash = try PhoneHash.hash(phoneNumber)
             let creds = try await tempBackend.accountApi.login(phoneHash: phoneHash, password: password, deviceName: deviceName())
             saveCredentials(creds)
             config.accessToken = creds.accessToken

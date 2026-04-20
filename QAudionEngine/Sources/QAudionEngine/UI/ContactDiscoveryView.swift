@@ -92,9 +92,9 @@ public struct ContactDiscoveryView: View {
 
         try? store.enumerateContacts(with: request) { contact, _ in
             for phone in contact.phoneNumbers {
-                let number = phone.value.stringValue.replacingOccurrences(of: "[^0-9+]", with: "", options: .regularExpression)
-                if !number.isEmpty {
-                    phoneHashes.append(BCryptoAccountApiImpl.hashPhone(number))
+                let raw = phone.value.stringValue
+                if let hash = PhoneHash.hashOrNil(raw) {
+                    phoneHashes.append(hash)
                 }
             }
         }

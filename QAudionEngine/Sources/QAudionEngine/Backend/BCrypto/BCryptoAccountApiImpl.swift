@@ -1,5 +1,4 @@
 import Foundation
-import CommonCrypto
 
 public final class BCryptoAccountApiImpl: AccountApi {
     private let rest: BCryptoRestClient
@@ -56,11 +55,11 @@ public final class BCryptoAccountApiImpl: AccountApi {
         _ = try await rest.post("/api/v1/account/fcm-token", body: body)
     }
 
-    /// SHA-256 hash of phone number (matches server's hashPhone).
+    @available(*, deprecated, message: "Use PhoneHash.hash(_:) — matches Android PhoneHashHelper byte-for-byte. This forwarder is kept only to avoid breaking callers in the in-progress BCrypto workstream.")
     public static func hashPhone(_ phone: String) -> String {
-        let data = Data(phone.utf8)
-        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        data.withUnsafeBytes { _ = CC_SHA256($0.baseAddress, CC_LONG(data.count), &hash) }
-        return hash.map { String(format: "%02x", $0) }.joined()
+        // Forward to the canonical helper. Falls back to raw-hex only if
+        // normalization fails (legacy callers sometimes pass already-E.164
+        // input where invalidE164 would be spurious — callers should migrate).
+        return PhoneHash.hashOrNil(phone) ?? PhoneHash.sha256Hex(phone)
     }
 }

@@ -77,6 +77,48 @@
       "comment": "ACCEPT carries ML-KEM-1024 ciphertext (1568 bytes)"
     }
   ],
+  "phone_hash_vectors": [
+    {
+      "description": "E.164 already-canonical number (US)",
+      "input": "+14155552671",
+      "default_country": "+39",
+      "normalized_e164": "+14155552671",
+      "expected_hash_hex": "cb6880e416769253645cb9c6b8989154bf66a56a77fc14c81fb1019663cbb928",
+      "comment": "Must match Android PhoneHashHelper.hashPhone('+14155552671')"
+    },
+    {
+      "description": "Formatted US number stripped to E.164",
+      "input": "+1 (415) 555-2671",
+      "default_country": "+39",
+      "normalized_e164": "+14155552671",
+      "expected_hash_hex": "cb6880e416769253645cb9c6b8989154bf66a56a77fc14c81fb1019663cbb928",
+      "comment": "Spaces, parens, dashes must be stripped. Result identical to canonical form"
+    },
+    {
+      "description": "Italian number with leading 00 (international trunk)",
+      "input": "003902 1234-5678",
+      "default_country": "+39",
+      "normalized_e164": "+390212345678",
+      "expected_hash_hex": "cd53ded8dc564b9d1743105e4533289635fe59304336f1ed1aaf04b484ab1a18",
+      "comment": "Leading 00 becomes + (matches Android ^00 → + rule)"
+    },
+    {
+      "description": "Italian national number, default_country fallback",
+      "input": "0212345678",
+      "default_country": "+39",
+      "normalized_e164": "+39212345678",
+      "expected_hash_hex": "3527fda1981c83fc2506ff39f2b4efe1318c6181945300a030c16cd0f7fa6ec1",
+      "comment": "No + and no 00 → prepend default_country, strip leading 0s"
+    },
+    {
+      "description": "Invalid input too short for E.164",
+      "input": "+12",
+      "default_country": "+39",
+      "normalized_e164": null,
+      "expected_hash_hex": null,
+      "comment": "E.164 requires country digit 1-9 plus 7..14 more digits — must throw"
+    }
+  ],
   "crypto_constants": {
     "ml_kem_algorithm": "ML-KEM-1024",
     "ml_kem_public_key_size": 1568,
