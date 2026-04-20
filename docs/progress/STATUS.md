@@ -7,7 +7,10 @@
 **Plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
-**Phase 1 — Wire protocol alignment** (Task 1.3 + 1.2 audit + 1.4-a auth + 1.4-b1 contacts + 1.4-b2 KMS landed; Task 1.1 still blocked by USER's WT; remaining Task 1.4-b schema fixes §3.3 profile + §3.6–§3.8 backup + §3.11–§3.15 security + missing endpoints still open)
+**Phase 1 — Wire protocol alignment — CODE-COMPLETE pending server-team input** (Task 1.3 + 1.2 audit + 1.4-a auth + 1.4-b1 contacts + 1.4-b2 KMS + 1.4-b3 profile + 1.4-b4 missing endpoints + 1.4-b5 security-TODO landed). Remaining scope:
+- Task 1.1 WS code fixes — **BLOCKED** by USER WT (`BCryptoCallingApiImpl` etc.).
+- Audit §3.6–§3.8 backup transport (multipart upload / streaming download / `BackupEntryDto`) — deferred within 1.4-b scope; user to choose: land before `v1.0.24-ph1` or defer to Phase 2.
+- Audit §3.11–§3.15 security endpoints — code-flagged as TODO in 1.4-b5; blocked pending server-team schema clarification (DO NOT auto-rewrite).
 
 ## Ultima task completata (audit)
 **Task 1.2 — ✅ DONE (audit)** — `docs/progress/PHASE1_REST_AUDIT.md`.
@@ -19,12 +22,22 @@
 - Fix plan (8 steps, §5 of audit doc) deferred to new Task 1.4 — none blocked by USER WT.
 
 ## Ultima task completata (code)
-**Task 1.3 — ✅ DONE** — commit `65c5ea4`.
-- New canonical helper `QAudionEngine/Sources/QAudionEngine/Utils/PhoneHash.swift` matches Android `PhoneHashHelper.kt` byte-for-byte.
-- 5 cross-platform vectors appended to `QAudionEngine/Tests/Resources/cross_platform_vectors.json` (US canonical, US formatted, Italian `00`-prefix, default-country fallback, invalid too-short).
-- `PhoneHashTests.swift` covers all vectors + normalization edge cases + throwing behavior.
-- Callers migrated: `AuthService.swift`, `QAudionAppState.swift` (login/register), `ContactDiscoveryView.swift` (via `hashOrNil`).
-- `BCryptoAccountApiImpl.hashPhone` kept as `@deprecated` forwarder to avoid breaking USER WT `ContactSyncService.swift` (D-05 hygiene).
+**Task 1.4-b5 — ✅ DONE** — commit `a0a70ed`.
+- `BCryptoSecurityApiImpl.swift`: all 5 security endpoints (`zkRegister`, `zkAuth`, `sendPqcKeyExchange`, `reportThreat`, `confirmWipe`) annotated with `TODO(parity, §3.11..§3.15)` flagging wire-schema divergence from Android. **No wire-behavior change** — `zkRegister` TODO explicitly instructs future agents NOT to auto-rewrite without server-contract confirmation.
+- `getCertInfo` / `getComplianceInfo` tagged iOS-only (no Android counterpart).
+- `PHASE1_REST_AUDIT.md` §3.11–§3.15 marked "*(TODO in code — pending server-team clarification)*".
+
+**Task 1.4-b4 — ✅ DONE** — commit `c0c8026`. AccountApi gained `recoverySetup/recoveryVerify/getPublicUser`; new `BCryptoSystemClient` (`version/health/directory-by-extension`) surfaced via `BCryptoBackendProvider+System.swift` extension file.
+
+**Task 1.4-b3 — ✅ DONE** — commit `04f706b`. `AccountApi.updateProfile` now `(displayName?, statusMessage?, avatarUrl?)` JSON-only matching Android `UpdateProfileRequest`.
+
+**Task 1.4-b2 — ✅ DONE** — commit `c6e605e`. KMS `registerPublicKey` + `getPendingKeys` envelope aligned with Android `DevicePublicKeyRequest` / `KmsKeyDto`.
+
+**Task 1.4-b1 — ✅ DONE** — commit `baf314d`. Contacts `syncContacts` + `getBlockedContacts` aligned with Android `SyncContactsRequest` / `BlockedContactsResponse`.
+
+**Task 1.4-a — ✅ DONE** — commit `2e78912`. D-CRITICAL auth fixes (`register` hashes phone + sends password; `login` uses `phone_number` key).
+
+**Task 1.3 — ✅ DONE** — commit `65c5ea4`. Canonical `PhoneHash` helper + cross-platform vectors.
 
 ## Phase 0 = COMPLETE ✅
 Tutti i 4 task di Phase 0 (0.1 manual + 0.2 + 0.3 + 0.4 tag verify) passati + fix `beta_groups` rimosso (`b470ed8`). Phase 0 invariants validated:
@@ -34,9 +47,11 @@ Tutti i 4 task di Phase 0 (0.1 manual + 0.2 + 0.3 + 0.4 tag verify) passati + fi
 - Xcode 16.2 + onnxruntime 1.17 patch → ancora stabili ✅
 
 ## Prossima task (next, unblocked)
-- **Task 1.4-b2+** — remaining REST schema fixes per `PHASE1_REST_AUDIT.md` §5 items 3–8 (KMS envelope, Profile updateProfile multipart, device/publickey, backup transport, missing endpoints, security schemas). Unblocked.
+- **User decision** on audit §3.6–§3.8 (backup transport: multipart upload / streaming download / `BackupEntryDto`) — land before `v1.0.24-ph1` tag or defer to Phase 2. Currently unblocked.
+- **Tag `v1.0.24-ph1`** — push to Codemagic after §3.6–§3.8 decision; verifies Phase 1 REST alignment end-to-end.
 - **Phase 2 task 2.1** — FastSetup QR login (new file, no collision). Ready to start.
-- Eventual **Task 1.1 WS code fixes** — still blocked on USER's WT (BCryptoCallingApiImpl etc.). Fixes documented in PHASE1_AUDIT.md.
+- Eventual **Task 1.1 WS code fixes** — still blocked on USER's WT (`BCryptoCallingApiImpl` etc.). Fixes documented in `PHASE1_AUDIT.md`.
+- §3.11–§3.15 security endpoints — **blocked on server-team clarification** (TODO'd in `BCryptoSecurityApiImpl`). Will not be progressed by parity agents.
 
 ## Prossima verification tag
 `v1.0.24-ph1` dopo chiusura Phase 1 completa (1.1 + 1.2 + 1.3 + **1.4 new**).
@@ -52,7 +67,7 @@ Tutti i 4 task di Phase 0 (0.1 manual + 0.2 + 0.3 + 0.4 tag verify) passati + fi
 ✅ 2026-04-20 — USER ha confermato (screenshot portale) capability Push Notifications abilitata su `com.qaudion.app`.
 
 ## Stray files in working tree (not ours, flagged)
-- `127`, `'`, `[DiscoveredContact]`, `.allocate(capacity`, `2`, `AuthCredentials`, `Bool` — empty 0-byte files, accidental shell redirects from USER or IDE sessions. Not deleted by the agent pending user confirmation; harmless.
+- `127`, `'`, `[DiscoveredContact]`, `.allocate(capacity`, `2`, `AuthCredentials`, `Bool`, `0`, `ComplianceInfo`, `PublicUser,`, `String`, `Void)` — empty 0-byte files, accidental shell redirects from USER or IDE sessions. Not deleted by the agent pending user confirmation; harmless.
 
 ## Blocker aperti
 _(nessuno — Task 0.1 completato 2026-04-20 ✅)_
@@ -84,3 +99,16 @@ These belong to the USER and must remain out of parity-effort commits.
 9. `7509ae8 docs(progress): Task 0.4 — tag v1.0.24-ph0 pushed to Codemagic`
 10. `b470ed8 fix(ci): remove internal beta_groups from codemagic publishing`
 11. `65c5ea4 feat(engine): canonical PhoneHash helper matching Android PhoneHashHelper` ← **Task 1.3**
+12. `74da7cd docs(progress): Task 1.3 DONE — canonical PhoneHash helper landed`
+13. `82cb970 docs(progress): Task 1.2 — REST endpoint audit vs Android BCryptoApi.kt`
+14. `2e78912 feat(auth): align register+login wire format with Android (D-CRITICAL)` ← **Task 1.4-a**
+15. `5b4f32c docs(progress): record Task 1.4-a commit sha in TASK_LOG`
+16. `baf314d fix(engine): align Contacts sync + blocked REST schema with Android` ← **Task 1.4-b1**
+17. `cd0cc3c docs(progress): record Task 1.4-b1 commit sha (baf314d)`
+18. `c6e605e fix(engine): align KMS device/publickey + kms/pending with Android` ← **Task 1.4-b2**
+19. `716e044 docs(progress): record Task 1.4-b2 commit sha (c6e605e)`
+20. `04f706b fix(engine): align Profile updateProfile with Android UpdateProfileRequest` ← **Task 1.4-b3**
+21. `b9a91b6 docs(progress): record Task 1.4-b3 commit sha (04f706b)`
+22. `c0c8026 feat(engine): add missing Android REST endpoints (recovery + users + system)` ← **Task 1.4-b4**
+23. `b44a1d7 docs(progress): record Task 1.4-b4 commit sha (c0c8026)`
+24. `a0a70ed docs(parity,security): flag §3.11-§3.15 security REST schema drift as TODO` ← **Task 1.4-b5**
