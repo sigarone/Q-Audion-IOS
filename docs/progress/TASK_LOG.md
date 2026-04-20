@@ -8,6 +8,7 @@ Status codes: `DONE` · `PARTIAL` · `BLOCKED` · `SKIPPED` · `REVERTED`
 
 ---
 
+- 2026-04-20 | 1.1 | WS command audit vs Android WsCommand.kt | (kb only) | PARTIAL | 6 drifts found in 1:1 call signalling + 2 group-call schema splits; fixes blocked on USER's WT. See PHASE1_AUDIT.md
 - 2026-04-20 | 0.3 | Link CallKit/PushKit/CoreNFC/Contacts SDK frameworks | 4e230ab | DONE | Spec ✅ + Quality ✅; xcodegen/xcodebuild verification deferred to Codemagic
 - 2026-04-20 | kb | Initialize docs/progress/ knowledge base | 3a313e6 | DONE | 6 files: README, STATUS, TASK_LOG, DECISIONS, ANDROID_REFERENCE, CODEMAGIC_GUARD
 - 2026-04-20 | 0.2 | Declare VoIP background mode + aps-environment | 51b0404 | DONE | Spec ✅ + Quality ✅ (both reviews passed)

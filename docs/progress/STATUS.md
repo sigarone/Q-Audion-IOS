@@ -10,15 +10,20 @@
 **Phase 0 — Baseline preparation (Codemagic-safe enablers)**
 
 ## Ultima task completata
-**Task 0.3** — Link CallKit/PushKit/CoreNFC/Contacts SDK frameworks via XcodeGen. ✅
-- Commit: `4e230ab build(ios): link CallKit/PushKit/CoreNFC/Contacts SDK frameworks`
-- Touched: `QAudionApp/project.yml` (+6 lines in `dependencies:`)
-- Status: **DONE** (spec review ✅, code-quality review ✅).
-- Note: `xcodegen generate` + `xcodebuild` smoke tests deferred to Codemagic (Windows host cannot run them).
+**Task 1.1 (audit)** — Wire protocol WS command audit vs Android `WsCommand.kt`. PARTIAL.
+- Commit: docs only (no code; findings in `docs/progress/PHASE1_AUDIT.md`)
+- Findings: **6 drifts** on 1:1 call signalling (`recipientId` camelCase, missing `call_id` / `call_type` / `has_video` / `sdp_mid` / `sdp_mline_index` / hangup `reason`) + 2 group-call schema splits needing server-truth reconciliation.
+- Code fixes BLOCKED: the affected files (`BCryptoCallingApiImpl.swift`, `CallingApi.swift`, `QAudionCallIntegration.swift`) are in the USER's uncommitted working tree — parity agents must not stage/commit them.
 
-## Prossima task
-**Task 0.4** — Push Codemagic verification tag `v1.0.24-ph0`.
-**⚠ BLOCKED** until the USER completes Task 0.1 (Apple Developer Portal → enable Push Notifications on `com.qaudion.app`). Without that, `fetch-signing-files --create` will produce a profile without `aps-environment` and signing will fail.
+## Prossima task (unblocked)
+**Task 1.3** — Create canonical `PhoneHash` helper at `QAudionEngine/Sources/QAudionEngine/Utils/PhoneHash.swift` + cross-platform KAT test. New file — no user-WT collision.
+
+## Task dependencies blocked
+| Task | Blocker | Owner |
+|------|---------|-------|
+| 0.4 (Codemagic tag v1.0.24-ph0) | Task 0.1 Apple Dev Portal manual action | USER |
+| 1.1 (WS code fix) | User WT must land first | USER → then parity agents rerun audit |
+| 1.2 (REST endpoint audit) | Same WT overlap risk; can run as read-only audit | — |
 
 ## Stray files in working tree (not ours, flagged)
 - `127` — empty 0-byte file appeared during Task 0.3 work (likely accidental shell redirect). Not deleted by the agent pending user confirmation; harmless.

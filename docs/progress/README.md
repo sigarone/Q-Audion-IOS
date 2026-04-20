@@ -10,6 +10,7 @@ Chiunque (umano o agente) può riprendere il lavoro leggendo questi 5 file.
 3. **[DECISIONS.md](DECISIONS.md)** — decisioni architetturali e di processo con il perché. Append-only.
 4. **[ANDROID_REFERENCE.md](ANDROID_REFERENCE.md)** — fatti estratti dal repo Android di riferimento (protocolli, costanti crypto, layout QR, AID NFC). Source of truth cached.
 5. **[CODEMAGIC_GUARD.md](CODEMAGIC_GUARD.md)** — lista di invariant che la pipeline Codemagic si aspetta. Prima di cambiare `codemagic.yaml`, `project.yml`, entitlements o `Package.swift` — rileggere questo file.
+6. **[PHASE1_AUDIT.md](PHASE1_AUDIT.md)** — (Phase 1) risultato dell'audit wire protocol. Drift identificate ma non ancora patchate (blocker: file della USER in working tree).
 
 ## Il piano completo
 
