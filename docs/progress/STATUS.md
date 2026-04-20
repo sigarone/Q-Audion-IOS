@@ -10,14 +10,18 @@
 **Phase 0 — Baseline preparation (Codemagic-safe enablers)**
 
 ## Ultima task completata
-**Task 0.2** — Declare VoIP background mode + `aps-environment` entitlement. ✅
-- Commit: `51b0404 feat(ios): declare voip background mode + aps-environment`
-- Touched: `QAudionApp/Info.plist`, `QAudionApp/QAudion.entitlements`
+**Task 0.3** — Link CallKit/PushKit/CoreNFC/Contacts SDK frameworks via XcodeGen. ✅
+- Commit: `4e230ab build(ios): link CallKit/PushKit/CoreNFC/Contacts SDK frameworks`
+- Touched: `QAudionApp/project.yml` (+6 lines in `dependencies:`)
 - Status: **DONE** (spec review ✅, code-quality review ✅).
+- Note: `xcodegen generate` + `xcodebuild` smoke tests deferred to Codemagic (Windows host cannot run them).
 
 ## Prossima task
-**Task 0.3** — `QAudionApp/project.yml`: link `CallKit`, `PushKit`, `AVFoundation`, `CoreNFC`, `Contacts`, `ContactsUI` via `sdk:` style.
-Then: **Task 0.4** — Codemagic verification tag `v1.0.24-ph0` (pushed ONLY after Task 0.1 done by USER).
+**Task 0.4** — Push Codemagic verification tag `v1.0.24-ph0`.
+**⚠ BLOCKED** until the USER completes Task 0.1 (Apple Developer Portal → enable Push Notifications on `com.qaudion.app`). Without that, `fetch-signing-files --create` will produce a profile without `aps-environment` and signing will fail.
+
+## Stray files in working tree (not ours, flagged)
+- `127` — empty 0-byte file appeared during Task 0.3 work (likely accidental shell redirect). Not deleted by the agent pending user confirmation; harmless.
 
 ## Blocker aperti
 | ID | Owner | Descrizione | Sblocca |
