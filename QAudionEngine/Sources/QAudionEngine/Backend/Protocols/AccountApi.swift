@@ -28,6 +28,41 @@ public protocol AccountApi {
     func updateProfile(displayName: String?, statusMessage: String?, avatarUrl: String?) async throws
     /// Register APNS push token.
     func registerPushToken(_ token: String, platform: String) async throws
+    /// Enroll a seed-phrase-derived recovery hash while authenticated so the
+    /// account can later be re-provisioned on a fresh install without losing
+    /// contacts/keys. Returns `enrolled` flag from the server.
+    /// Matches Android `POST /api/v1/auth/recovery-setup`.
+    func recoverySetup(recoveryHash: String) async throws -> Bool
+    /// Re-provision a device from a recovery secret on a fresh install (no
+    /// active session). Returns a new credentials pair.
+    /// Matches Android `POST /api/v1/auth/recovery-verify`.
+    func recoveryVerify(identifier: String, recoverySecret: String, deviceName: String) async throws -> AuthCredentials
+    /// Look up a peer user's public profile by user_id.
+    /// Matches Android `GET /api/v1/users/{user_id}`.
+    func getPublicUser(userId: String) async throws -> PublicUser
+}
+
+/// Public-profile projection returned by `GET /api/v1/users/{user_id}`.
+/// Matches Android `PublicUserResponse`.
+public struct PublicUser: Codable, Hashable {
+    public var userId: String
+    public var displayName: String?
+    public var avatarUrl: String?
+    public var statusMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case displayName = "display_name"
+        case avatarUrl = "avatar_url"
+        case statusMessage = "status_message"
+    }
+
+    public init(userId: String, displayName: String? = nil, avatarUrl: String? = nil, statusMessage: String? = nil) {
+        self.userId = userId
+        self.displayName = displayName
+        self.avatarUrl = avatarUrl
+        self.statusMessage = statusMessage
+    }
 }
 
 public struct AuthCredentials: Codable {

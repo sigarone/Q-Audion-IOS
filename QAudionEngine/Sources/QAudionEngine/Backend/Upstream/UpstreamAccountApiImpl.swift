@@ -5,11 +5,14 @@ public final class UpstreamAccountApiImpl: AccountApi {
     private let rest: BCryptoRestClient
     init(rest: BCryptoRestClient) { self.rest = rest }
 
-    public func register(phoneNumber: String, inviteCode: String?) async throws -> String {
-        let body = try JSONSerialization.data(withJSONObject: ["phone_number": phoneNumber])
+    public func register(phoneNumber: String, password: String, inviteCode: String?, displayName: String?) async throws -> String {
+        var dict: [String: Any] = ["phone_number": phoneNumber, "password": password]
+        if let code = inviteCode, !code.isEmpty { dict["invite_code"] = code }
+        if let name = displayName, !name.isEmpty { dict["display_name"] = name }
+        let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/v1/accounts/register", body: body)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let userId = json["user_id"] as? String ?? json["uuid"] as? String else { throw BCryptoError.decodingError }
+              let userId = (json["user_id"] as? String) ?? (json["uuid"] as? String) else { throw BCryptoError.decodingError }
         return userId
     }
 
@@ -48,5 +51,21 @@ public final class UpstreamAccountApiImpl: AccountApi {
     public func registerPushToken(_ token: String, platform: String) async throws {
         let body = try JSONSerialization.data(withJSONObject: ["token": token, "platform": platform])
         _ = try await rest.post("/v1/accounts/push-token", body: body)
+    }
+
+    /// The upstream (Signal-style) backend does not expose the bcrypto
+    /// recovery/setup-verify or users-by-id endpoints. These stubs exist only
+    /// so the class conforms to `AccountApi`; they throw a `notFound` to make
+    /// it obvious if the runtime accidentally routes one of these calls here.
+    public func recoverySetup(recoveryHash: String) async throws -> Bool {
+        throw BCryptoError.notFound
+    }
+
+    public func recoveryVerify(identifier: String, recoverySecret: String, deviceName: String) async throws -> AuthCredentials {
+        throw BCryptoError.notFound
+    }
+
+    public func getPublicUser(userId: String) async throws -> PublicUser {
+        throw BCryptoError.notFound
     }
 }

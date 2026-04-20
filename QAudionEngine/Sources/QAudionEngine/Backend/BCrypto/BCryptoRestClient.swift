@@ -173,6 +173,9 @@ public enum BCryptoError: Error {
     case unauthorized
     case notFound
     case certPinningFailed
+    /// Server responded 200 but payload signalled a domain error via a
+    /// string field (e.g. recovery-setup `{enrolled:false, error:"..."}`).
+    case server(String)
 }
 
 // MARK: - Certificate Pinning Delegate

@@ -269,6 +269,23 @@ Completely different semantic contract; requires clarification with server team 
 
 ---
 
+### 3.16 ⚠️ Missing Android endpoints *(RESOLVED — see Task 1.4-b4 commit)*
+
+Android exposes these endpoints that iOS had no impl for until Task 1.4-b4:
+- `POST /api/v1/auth/recovery-setup` — `AccountApi.recoverySetup`
+- `POST /api/v1/auth/recovery-verify` — `AccountApi.recoveryVerify`
+- `GET /api/v1/users/{user_id}` — `AccountApi.getPublicUser`
+- `GET /api/v1/version` — `BCryptoSystemClient.getVersion`
+- `GET /api/v1/health` — `BCryptoSystemClient.getHealth`
+- `GET /api/v1/directory/by-extension/{n}` — `BCryptoSystemClient.lookupByExtension`
+
+`BCryptoSystemClient` is a BCrypto-only client surfaced via a
+`BCryptoBackendProvider+System.swift` extension (kept off the main
+`BCryptoBackendProvider.swift` file because that file is in USER's active
+workstream — D-05 hygiene). Upstream provider stubs the new `AccountApi`
+methods with `throw BCryptoError.notFound` because the Signal-style
+backend has no equivalent.
+
 ## 5. Recommended fix ordering (for a follow-up task 1.2-fix)
 
 1. **D-CRITICAL auth fixes** (login key rename + register add password/hash) — single small commit, unblocks cross-platform login.

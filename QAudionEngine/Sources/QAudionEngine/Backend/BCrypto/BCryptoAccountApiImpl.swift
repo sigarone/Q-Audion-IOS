@@ -57,6 +57,30 @@ public final class BCryptoAccountApiImpl: AccountApi {
         _ = try await rest.post("/api/v1/account/fcm-token", body: body)
     }
 
+    public func recoverySetup(recoveryHash: String) async throws -> Bool {
+        let body = try JSONSerialization.data(withJSONObject: ["recovery_hash": recoveryHash])
+        let data = try await rest.post("/api/v1/auth/recovery-setup", body: body)
+        let response = try JSONDecoder().decode(RecoverySetupResponse.self, from: data)
+        if let error = response.error { throw BCryptoError.server(error) }
+        return response.enrolled
+    }
+
+    public func recoveryVerify(identifier: String, recoverySecret: String, deviceName: String) async throws -> AuthCredentials {
+        let dict: [String: Any] = [
+            "identifier": identifier,
+            "recovery_secret": recoverySecret,
+            "device_name": deviceName,
+        ]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let data = try await rest.post("/api/v1/auth/recovery-verify", body: body)
+        return try JSONDecoder().decode(AuthCredentials.self, from: data)
+    }
+
+    public func getPublicUser(userId: String) async throws -> PublicUser {
+        let data = try await rest.get("/api/v1/users/\(userId)")
+        return try JSONDecoder().decode(PublicUser.self, from: data)
+    }
+
     @available(*, deprecated, message: "Use PhoneHash.hash(_:) — matches Android PhoneHashHelper byte-for-byte. This forwarder is kept only to avoid breaking callers in the in-progress BCrypto workstream.")
     public static func hashPhone(_ phone: String) -> String {
         // Forward to the canonical helper. Falls back to raw-hex only if
@@ -64,4 +88,9 @@ public final class BCryptoAccountApiImpl: AccountApi {
         // input where invalidE164 would be spurious — callers should migrate).
         return PhoneHash.hashOrNil(phone) ?? PhoneHash.sha256Hex(phone)
     }
+}
+
+private struct RecoverySetupResponse: Codable {
+    let enrolled: Bool
+    let error: String?
 }
