@@ -42,16 +42,13 @@ public final class BCryptoAccountApiImpl: AccountApi {
         return try JSONDecoder().decode(UserProfile.self, from: data)
     }
 
-    public func updateProfile(displayName: String, statusMessage: String, avatarData: Data?) async throws {
-        if let avatar = avatarData {
-            _ = try await rest.postMultipart("/api/v1/profile",
-                                             fields: ["display_name": displayName, "status_message": statusMessage],
-                                             fileField: "avatar", fileData: avatar)
-        } else {
-            let dict: [String: Any] = ["display_name": displayName, "status_message": statusMessage]
-            let body = try JSONSerialization.data(withJSONObject: dict)
-            _ = try await rest.put("/api/v1/profile", body: body)
-        }
+    public func updateProfile(displayName: String?, statusMessage: String?, avatarUrl: String?) async throws {
+        var dict: [String: Any] = [:]
+        if let displayName { dict["display_name"] = displayName }
+        if let statusMessage { dict["status_message"] = statusMessage }
+        if let avatarUrl { dict["avatar_url"] = avatarUrl }
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        _ = try await rest.put("/api/v1/profile", body: body)
     }
 
     public func registerPushToken(_ token: String, platform: String = "ios") async throws {

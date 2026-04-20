@@ -163,12 +163,12 @@ Note: Kotlin property `phoneHash` is annotated `@SerialName("phone_number")` —
 
 **Impact:** iOS login **broken** against any server that follows the Android contract. Fix is trivial (rename key) but belongs to the next fix task — this audit is read-only.
 
-### 3.3 ⚠️ `PUT profile` drift
+### 3.3 ⚠️ `PUT profile` drift *(RESOLVED — see Task 1.4-b3 commit)*
 
 **Android `UpdateProfileRequest`**: `{ display_name?, status_message?, avatar_url? }` — all optional.
-**iOS `BCryptoAccountApiImpl.updateProfile`**:
-- JSON branch: `{ display_name, status_message }` — both non-null, missing `avatar_url`.
-- Multipart branch: `POST /profile` with `display_name`, `status_message`, `avatar` file part → **Android has no such endpoint/verb**. Will 404 or 405.
+**iOS `BCryptoAccountApiImpl.updateProfile`** now:
+- Signature `(displayName: String?, statusMessage: String?, avatarUrl: String?)` — all optional, JSON-only.
+- ~~Multipart branch dropped~~ — Android has no multipart `POST /profile` endpoint; avatars must be uploaded via the dedicated storage endpoint first, then the resulting URL is sent via this endpoint.
 
 **Impact:** Avatar upload path is non-functional. Profile PUT works for name/status only.
 

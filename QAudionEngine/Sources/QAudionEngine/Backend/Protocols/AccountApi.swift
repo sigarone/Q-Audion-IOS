@@ -16,8 +16,16 @@ public protocol AccountApi {
     func logout() async throws
     /// Get current user's profile.
     func getProfile() async throws -> UserProfile
-    /// Update profile (display name, status, optional avatar).
-    func updateProfile(displayName: String, statusMessage: String, avatarData: Data?) async throws
+    /// Update profile. All three fields are independently optional and only
+    /// included in the wire payload when non-nil — matches Android
+    /// `UpdateProfileRequest` (see `ProfileDto.kt`).
+    ///
+    /// Note: `avatarUrl` is a **URL string**, not binary data. The avatar
+    /// must be uploaded via the dedicated storage endpoint first; the
+    /// profile endpoint only persists the resulting URL. The previous
+    /// multipart branch targeted an endpoint the server does not expose
+    /// and would 404/405.
+    func updateProfile(displayName: String?, statusMessage: String?, avatarUrl: String?) async throws
     /// Register APNS push token.
     func registerPushToken(_ token: String, platform: String) async throws
 }
