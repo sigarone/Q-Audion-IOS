@@ -7,33 +7,30 @@
 **Plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
-**Phase 0 — Baseline preparation (Codemagic-safe enablers)**
+**Phase 1 — Wire protocol alignment** (Task 1.3 landed; Task 1.1/1.2 still blocked by USER's WT)
 
 ## Ultima task completata (code)
-**Task 0.4 — ✅ DONE (effectively)** — Codemagic build #40 (tag `v1.0.24-ph0`, commit `b1e6ef9`).
-- **Build steps**: TUTTI verdi ✅ (Signing 4s, Build IPA 39s, onnxruntime patch, Publishing upload 54s)
-- **IPA prodotto**: 7.74 MB + dSYM 4.07 MB — UUID `43328e71-44c2-4376-96cd-9c2dd2420424`
-- **App Store Connect processing**: ✅ FINITO, build VALIDO (nessun ITMS rejection)
-- **TestFlight**: build è LIVE per i tester interni (gruppo `Q-Audion testers`) — auto-assigned
-- **Failure post-processing**: era un falso positivo di `codemagic.yaml` — tentava di assegnare un gruppo INTERNO via API (API rifiuta perché Apple auto-assigna i gruppi interni).
-
-## Fix applicato (commit da fare)
-Rimosso `beta_groups: [Q-Audion testers]` da `codemagic.yaml` — `submit_to_testflight: true` basta, Apple auto-assegna i gruppi interni. Aggiornato CODEMAGIC_GUARD I-11 + DECISIONS D-11.
+**Task 1.3 — ✅ DONE** — commit `65c5ea4`.
+- New canonical helper `QAudionEngine/Sources/QAudionEngine/Utils/PhoneHash.swift` matches Android `PhoneHashHelper.kt` byte-for-byte.
+- 5 cross-platform vectors appended to `QAudionEngine/Tests/Resources/cross_platform_vectors.json` (US canonical, US formatted, Italian `00`-prefix, default-country fallback, invalid too-short).
+- `PhoneHashTests.swift` covers all vectors + normalization edge cases + throwing behavior.
+- Callers migrated: `AuthService.swift`, `QAudionAppState.swift` (login/register), `ContactDiscoveryView.swift` (via `hashOrNil`).
+- `BCryptoAccountApiImpl.hashPhone` kept as `@deprecated` forwarder to avoid breaking USER WT `ContactSyncService.swift` (D-05 hygiene).
 
 ## Phase 0 = COMPLETE ✅
-Tutti i 4 task di Phase 0 (0.1 manual + 0.2 + 0.3 + 0.4 tag verify) passati. Phase 0 invariants validated:
+Tutti i 4 task di Phase 0 (0.1 manual + 0.2 + 0.3 + 0.4 tag verify) passati + fix `beta_groups` rimosso (`b470ed8`). Phase 0 invariants validated:
 - `aps-environment=production` entitlement ↔ portale capability → firmato ✅
 - 6 nuovi SDK linkati (CallKit/PushKit/AVFoundation/CoreNFC/Contacts/ContactsUI) → build verde ✅
 - `UIBackgroundModes=[voip,audio]` → nessun warning ITMS ✅
 - Xcode 16.2 + onnxruntime 1.17 patch → ancora stabili ✅
 
-## Prossima task
-**Phase 1.3** — Canonical `PhoneHash` helper (no user-WT collision).
-Prossima verification tag: `v1.0.24-ph1` dopo chiusura Phase 1.
-
 ## Prossima task (next, unblocked)
-- **Attesa esito Codemagic** — se ❌ diagnosticare (probabile suspect: onnxruntime patch, signing, nuovi SDK link).
-- **Task 1.3** — Canonical `PhoneHash` helper (new file, no user-WT collision).
+- **Task 1.2** — REST endpoint audit vs Android `BCryptoApi.kt` (read-only, safe to run).
+- **Phase 2 task 2.1** — FastSetup QR login (new file, no collision). Ready to start.
+- Eventual **Task 1.1 WS code fixes** — still blocked on USER's WT (BCryptoCallingApiImpl etc.). Fixes documented in PHASE1_AUDIT.md.
+
+## Prossima verification tag
+`v1.0.24-ph1` dopo chiusura Phase 1 completa (1.1 + 1.2 + 1.3).
 
 ## Task dependencies blocked
 | Task | Blocker | Owner |
@@ -69,3 +66,11 @@ These belong to the USER and must remain out of parity-effort commits.
 1. `668f4b8 docs: implementation plan for iOS↔Android full parity`
 2. `413c9e9 docs(session): log Phase 0 kickoff + Apple Dev portal blocker (Task 0.1)`
 3. `51b0404 feat(ios): declare voip background mode + aps-environment`
+4. `4e230ab chore(ios): link CallKit/PushKit/CoreNFC/Contacts SDK frameworks`
+5. `3a313e6 docs(progress): initialize knowledge base`
+6. `d915d9b docs(progress): Task 0.3 complete (SDK frameworks linked)`
+7. `1c113ac docs(progress): Phase 1.1 WS command audit findings`
+8. `b1e6ef9 docs(session): Task 0.1 complete — Push Notifications capability enabled`
+9. `7509ae8 docs(progress): Task 0.4 — tag v1.0.24-ph0 pushed to Codemagic`
+10. `b470ed8 fix(ci): remove internal beta_groups from codemagic publishing`
+11. `65c5ea4 feat(engine): canonical PhoneHash helper matching Android PhoneHashHelper` ← **Task 1.3**
