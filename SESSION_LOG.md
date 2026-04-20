@@ -1,6 +1,28 @@
-# Q-Audion iOS — Session Log (2026-04-10/11)
+# Q-Audion iOS — Session Log
 
-## Sessione completa: da CI rotto a app funzionante su 2 telefoni
+## 2026-04-20 — iOS ↔ Android full-parity effort (Phase 0 kickoff)
+
+Plan: `docs/superpowers/plans/2026-04-20-ios-android-parity.md` (13 phases).
+Branch: `feature/ios-android-parity` (off `main` @ 4516e01).
+Last shipped tag: `v1.0.23`. Next verification tag: `v1.0.24-ph0` (after Phase 0).
+
+### Task 0.1 — Apple Developer portal capability (BLOCKER, manual)
+Owner: **USER** (cannot be automated).
+Required **before** Task 0.4 (Codemagic verification tag push):
+1. Log in to https://developer.apple.com/account
+2. Identifiers → `com.qaudion.app` → enable **Push Notifications** → Save
+3. Confirm the identifier lists "Push Notifications" under capabilities
+4. Log the completion date back into this file
+
+Reason: `app-store-connect fetch-signing-files --create` (codemagic.yaml)
+will only include `aps-environment` in the provisioning profile if the
+identifier has Push Notifications enabled. Without it, Task 0.2's
+`aps-environment=production` entitlement becomes a signing mismatch
+and the build fails at the "Set up signing" step.
+
+---
+
+## 2026-04-10/11 — Sessione completa: da CI rotto a app funzionante su 2 telefoni
 
 ### Fase 1: Fix CI Codemagic (da rotto a green)
 - Fix Xcode 26.2 beta → pinnato a 16.2 stabile
