@@ -212,13 +212,10 @@ public final class HybridPqcKeyExchange {
     /// Derive the combined session key using HKDF-SHA-256 (NIST SP 800-56C).
     /// Salt and info strings are fixed protocol constants to ensure domain separation.
     private func deriveHybridSecret(ikm: Data) -> Data {
-        let salt = Data(CryptoConstants.hybridKdfSalt.utf8)
-        let info = Data(CryptoConstants.hybridKdfInfo.utf8)
-
         let derived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: ikm),
-            salt: salt,
-            info: info,
+            salt: CryptoConstants.hybridKdfSalt,
+            info: CryptoConstants.hybridKdfInfo,
             outputByteCount: CryptoConstants.keySizeBytes
         )
 

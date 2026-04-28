@@ -3,7 +3,7 @@ import CryptoKit
 
 public enum NfcPskDerivation {
     public enum Error: Swift.Error { case sharedSecretFailed }
-    public static let hkdfInfo: Data = "Q-Audion NFC Collaborative PSK v1".data(using: .utf8)!
+    public static let hkdfInfo: Data = HkdfLabels.nfcCollaborativePsk
 
     public static func derivePsk(
         myPriv: Curve25519.KeyAgreement.PrivateKey,

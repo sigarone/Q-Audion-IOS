@@ -25,19 +25,19 @@ public enum CryptoConstants {
     public static let samplesPerFrame = (sampleRate * frameDurationMs) / 1000
 
     // MARK: - HKDF Info Strings (UTF-8, byte-identical to Android)
-    public static let hkdfInfoChain = Data("q-audion-frame-key".utf8)
+    public static let hkdfInfoChain: Data = HkdfLabels.frameChainAudio
     public static let hkdfInfoRoot = Data("q-audion-root-ratchet".utf8)
     public static let hkdfInfoPskMix = Data("q-audion-psk-mix".utf8)
     public static let hkdfInfoNextChain = Data("q-audion-next-chain".utf8)
 
     // MARK: - Video Chain HKDF Info Strings (separate crypto chain for video)
-    public static let hkdfInfoVideoChain = Data("q-audion-video-frame-key".utf8)
+    public static let hkdfInfoVideoChain: Data = HkdfLabels.frameChainVideo
     public static let hkdfInfoVideoRoot = Data("q-audion-video-root-ratchet".utf8)
 
     // MARK: - Desktop/Android Interop HKDF Labels
     // Match qaudion-desktop/src/main/crypto/MessageCrypto.ts and pairwise PSK derivation.
-    public static let HKDF_INFO_MSG_KEY = "q-audion-msg-key".data(using: .utf8)!
-    public static let HKDF_INFO_FILE_KEY = "q-audion-file-key".data(using: .utf8)!
+    public static let HKDF_INFO_MSG_KEY: Data = HkdfLabels.messageKey
+    public static let HKDF_INFO_FILE_KEY: Data = HkdfLabels.fileKey
     public static let HKDF_SALT_PAIRWISE = "qaudion-pairwise-v1".data(using: .utf8)!
     public static let HKDF_INFO_PAIRWISE = "psk-first-contact".data(using: .utf8)!
 
@@ -49,7 +49,7 @@ public enum CryptoConstants {
 
     // MARK: - NFC Collaborative PSK
     /// HKDF info for NFC collaborative X25519-only PSK derivation (must match Android NfcProtocol.kt).
-    public static let hkdfNfcCollaborativePskInfo = Data("Q-Audion NFC Collaborative PSK v1".utf8)
+    public static let hkdfNfcCollaborativePskInfo: Data = HkdfLabels.nfcCollaborativePsk
     /// HKDF info for NFC hybrid PQC PSK derivation (X25519 + ML-KEM-1024).
     public static let hkdfNfcHybridPqcPskInfo = Data("Q-Audion NFC Hybrid PQC PSK v1".utf8)
 
@@ -82,9 +82,9 @@ public enum CryptoConstants {
 
     // MARK: - Hybrid KEM
     /// HKDF salt for combining ML-KEM + X25519 + SEP shared secrets.
-    public static let hybridKdfSalt = "q-audion-hybrid-pqc-v1"
-    /// HKDF info string for hybrid session key derivation.
-    public static let hybridKdfInfo = "q-audion-session-key"
+    public static let hybridKdfSalt: Data = HkdfLabels.hybridPqcSaltV1
+    /// HKDF info for hybrid session key derivation.
+    public static let hybridKdfInfo: Data = HkdfLabels.hybridPqcSessionKey
     /// Keychain tag prefix for Secure Enclave identity keys.
     public static let enclaveKeyTag = "com.qaudion.identity.sep"
 
