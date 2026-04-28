@@ -4,8 +4,8 @@ import QAudionEngine
 struct PhonebookImportView: View {
     @StateObject private var container: PhonebookImportContainer
 
-    init() {
-        _container = StateObject(wrappedValue: PhonebookImportContainer())
+    init(appState: AppState) {
+        _container = StateObject(wrappedValue: PhonebookImportContainer(appState: appState))
     }
 
     var body: some View {
@@ -35,7 +35,7 @@ struct PhonebookImportView: View {
             Text("Find Q-Audion users in your phonebook").font(.title2.bold())
             Text("We'll hash each phone number locally with a server-issued pepper, then ask the server which hashes correspond to known users. Your phonebook never leaves the device in plaintext.").font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Button("Start") {
-                Task { await container.startImport() }
+                container.startImport()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
