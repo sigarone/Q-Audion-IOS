@@ -114,16 +114,18 @@ struct OnboardingFlow: View {
     }
 
     private var recoverySetupView: some View {
-        VStack(spacing: 0) {
-            // Replace this with the W14.C RecoverySeedContainerView once it can
-            // signal completion — for now show a wrap with a Skip toolbar.
-            Text("Recovery setup placeholder — wire to RecoverySeedContainerView in a follow-up")
-                .padding()
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Button("Continue") { container.transition(to: .voiceEnrollment) }
-                .buttonStyle(.borderedProminent)
-        }
+        // Wire to W9.B RecoverySeedContainerView. The host struct below owns
+        // the RecoverySeedContainer as @StateObject so its state survives
+        // OnboardingFlow's body re-runs (a plain inline init would create a
+        // fresh container on every render and lose the user's mnemonic
+        // setup progress). The container's onDismiss closure fires once
+        // recoverySetup() returns success — at which point we advance the
+        // onboarding flow to voice enrollment. Skip toolbar still bypasses
+        // the whole step for users who decline.
+        OnboardingRecoverySeedHost(
+            appState: appState,
+            onContinue: { container.transition(to: .voiceEnrollment) }
+        )
         .toolbar {
             if container.viewModel.canSkipRecovery {
                 ToolbarItem(placement: .primaryAction) {
@@ -135,15 +137,15 @@ struct OnboardingFlow: View {
     }
 
     private var voiceEnrollmentView: some View {
-        VStack(spacing: 0) {
-            // Wire to W17.A's VoiceEnrollmentContainerView once available.
-            Text("Voice enrollment placeholder — wire to VoiceEnrollmentContainerView (W17.A)")
-                .padding()
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Button("Continue") { container.transition(to: .done) }
-                .buttonStyle(.borderedProminent)
-        }
+        // Wire to W11.D VoiceEnrollmentContainerView. The onComplete closure
+        // fires when the 5-prompt enrollment finishes successfully, carrying
+        // the enrollment id (currently unused by OnboardingFlow but available
+        // for future backend round-trips). onCancel falls through to the Skip
+        // toolbar path.
+        VoiceEnrollmentContainerView(
+            onComplete: { _ in container.transition(to: .done) },
+            onCancel: { container.skipVoice() }
+        )
         .toolbar {
             if container.viewModel.canSkipVoice {
                 ToolbarItem(placement: .primaryAction) {
@@ -203,6 +205,31 @@ struct OnboardingFlow: View {
     }
 }
 
+// MARK: - Onboarding RecoverySeed host
+
+/// Owns a `RecoverySeedContainer` as `@StateObject` so its mnemonic /
+/// verification state survives the parent `OnboardingFlow`'s body re-runs.
+/// Without this wrapper, instantiating `RecoverySeedContainer(...)` inline
+/// inside `OnboardingFlow.recoverySetupView` would create a fresh container
+/// every time the parent view re-rendered, throwing away the displayed
+/// mnemonic and the in-progress confirmation entry.
+private struct OnboardingRecoverySeedHost: View {
+    @StateObject var container: RecoverySeedContainer
+
+    init(appState: AppState, onContinue: @escaping () -> Void) {
+        _container = StateObject(wrappedValue: RecoverySeedContainer(
+            mode: .setup,
+            appState: appState,
+            onDismiss: onContinue
+        ))
+    }
+
+    var body: some View {
+        RecoverySeedContainerView(container: container)
+    }
+}
+
 #Preview {
     OnboardingFlow(onFinish: { })
+        .environmentObject(AppState())
 }
