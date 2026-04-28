@@ -82,11 +82,19 @@
 - ✅ §10.2 security endpoints — iOS rewritten to `{zk_commitment, public_params}`/`{challenge, proof}`/`{recipient_id, ciphertext, algorithm}`/`{category, details, severity}`/`{wipe_id, confirmed}` per Android (`b86f39c`). All TODO(parity) blocks removed.
 - ✅ §3 fingerprint display — iOS `Fingerprint.format()` produces canonical `xxxx.xxxx.xxxx.xxxx` (`77786a6`). Desktop should adopt the same.
 
-**Still open (server / cross-team):**
-- §10.1 — APNs VoIP push: server team to pick option α/β/γ/δ. iOS-side scaffolding ready (PushKit token registration ships hex with platform="ios-apns").
-- §10.3 — GroupChat UX decision (Android-folded vs Desktop-separate). iOS currently has no GroupChat view; following Android-folded by default until decision lands.
-- §10.4 — Phonebook import scope decision.
+**RESOLVED in Wave 13** (cross-repo work, 2026-04-28):
+- ✅ §10.1 APNs VoIP push — option α IMPLEMENTED. `bcrypto-server` commit `3ff8e47` adds APNs HTTP/2 client + Dispatcher routing on platform="ios-apns" + DB migration 014 + 5 security endpoints accept Android shapes (backwards-compat preserved). Activation: set BCRYPTO_APNS_KEY_PATH/KEY_ID/TEAM_ID/BUNDLE_ID env vars.
+- ✅ §10.3 GroupChat UX — iOS adopts Android-folded. `qaudion-ios` commit `e3e7ce4` extends ChatView for groups (Conversation.Kind enum + Participant struct + senderName above incoming bubbles + member-count subtitle).
+- ✅ §10.4 Phonebook import — full sync iOS Contacts → discover-v2 chosen. `qaudion-ios` commit `698fc92` adds PhonebookSyncCoordinator (CNContactStore + PepperedPhoneHash + ContactsDiscoverV2Client) + 6-state PhonebookImportViewModel + UI.
+
+**Cross-repo work in Wave 13 (commits LANDED on local branches; user pushes when ready):**
+- `qaudion-desktop` `5fd3ac7` (main) — QAUD backup format + scrypt N=2^17 + 16B salt + LegacyQabkBackupService for migration + canonical Fingerprint formatter + 10 tests passing.
+- `bcrypto-server` `3ff8e47` (main) — APNs + Dispatcher + security endpoints aligned + DB migration 014.
+
+**Still open:**
 - USER WT BCryptoCallingApiImpl/BCryptoWebSocketClient/etc.: required for Phase 1.1 WS code fixes + DeviceListClient + real chat send/receive wire flow. iOS code waits.
+- iOS smoke tests on physical devices (NFC pairing, CallKit, APNs incoming-call)
+- Codemagic build verification of v1.0.25-trackA tag + future v1.0.26-trackA after Wave 13
 
 ## Cross-platform implications of Wave 12 adoption (for Desktop/Server team)
 
