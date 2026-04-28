@@ -9,10 +9,12 @@ final class AboutSettingsContainer: ObservableObject {
 
 struct AboutSettingsScreen: View {
     @ObservedObject var container: AboutSettingsContainer
+    @StateObject private var updateChecker: AppUpdateChecker
 
     init(state: AppState) {
         let c = AboutSettingsContainer()
         self._container = ObservedObject(wrappedValue: c)
+        _updateChecker = StateObject(wrappedValue: AppUpdateChecker(appState: state))
     }
 
     var body: some View {
@@ -55,6 +57,56 @@ struct AboutSettingsScreen: View {
                         .font(.body.monospaced())
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("Updates") {
+                if let result = updateChecker.lastResult {
+                    switch result {
+                    case .noUpdate:
+                        Label("You're up to date", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    case .updateAvailable(let info):
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Update available: v\(info.availableVersion)", systemImage: "arrow.down.circle.fill")
+                                .foregroundStyle(.blue)
+                            if !info.releaseNotes.isEmpty {
+                                Text(info.releaseNotes)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if info.downloadUrl != nil {
+                                Button("Open App Store") {
+                                    updateChecker.openAppStoreLink(for: info)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            }
+                        }
+                    case .error(let msg):
+                        Label(msg, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                    }
+                }
+
+                if let last = updateChecker.lastChecked {
+                    LabeledContent("Last checked") {
+                        Text(last, style: .relative)
+                    }
+                    .font(.caption)
+                }
+
+                Button(action: { Task { await updateChecker.checkForUpdates() } }) {
+                    HStack {
+                        Image(systemName: "arrow.clockwise.circle")
+                        Text("Check for updates")
+                        if updateChecker.isChecking {
+                            Spacer()
+                            ProgressView().scaleEffect(0.8)
+                        }
+                    }
+                }
+                .disabled(updateChecker.isChecking)
             }
         }
         .navigationTitle("About")
