@@ -119,6 +119,19 @@
       "comment": "E.164 requires country digit 1-9 plus 7..14 more digits — must throw"
     }
   ],
+  "nfc_psk_v1": {
+    "description": "NFC Collaborative PSK derivation via HKDF-SHA256 with sorted-concat salt",
+    "algorithm": "X25519 + HKDF-SHA256",
+    "hkdf_info_string": "Q-Audion NFC Collaborative PSK v1",
+    "hkdf_info_encoding": "UTF-8",
+    "hkdf_output_bytes": 32,
+    "salt_construction": "SHA256(sorted_concat(pubA, pubB)) where sorted by lexicographic byte order",
+    "a_priv_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "b_priv_hex": "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40",
+    "b_pub_hex": null,
+    "expected_psk_hex": null,
+    "comment": "b_pub and expected_psk are pending Android cross-validation. Android should derive b_pub = X25519(b_priv), then derive PSK from both sides and confirm symmetry. Update both fields and remove this comment once confirmed."
+  },
   "crypto_constants": {
     "ml_kem_algorithm": "ML-KEM-1024",
     "ml_kem_public_key_size": 1568,
