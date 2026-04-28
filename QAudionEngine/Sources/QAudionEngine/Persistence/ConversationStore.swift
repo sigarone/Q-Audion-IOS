@@ -90,7 +90,8 @@ public final class ConversationStore {
             plaintext: old.plaintext, sentAt: old.sentAt,
             deliveredAt: deliveredAt ?? old.deliveredAt,
             readAt: readAt ?? old.readAt,
-            status: newStatus
+            status: newStatus,
+            senderUserId: old.senderUserId
         )
         guard let data = try? encoder.encode(list) else { return }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))

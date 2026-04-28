@@ -51,17 +51,34 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) {
-                    Image(systemName: "lock.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
-                    Text(container.viewModel.conversation.peerDisplayName)
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    if container.viewModel.isPeerOnline {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 7, height: 7)
+                if container.viewModel.conversation.kind == .group,
+                   let participants = container.viewModel.participants {
+                    VStack(spacing: 1) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.green)
+                            Text(container.viewModel.conversation.peerDisplayName)
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                        }
+                        Text("\(participants.count) members")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                        Text(container.viewModel.conversation.peerDisplayName)
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        if container.viewModel.isPeerOnline {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 7, height: 7)
+                        }
                     }
                 }
             }
@@ -93,12 +110,18 @@ struct ChatView: View {
     }
 
     private var messagesList: some View {
-        ScrollViewReader { proxy in
+        let isGroup = container.viewModel.conversation.kind == .group
+        let participants = container.viewModel.participants
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(container.viewModel.messages) { msg in
-                        MessageBubbleView(message: msg)
-                            .id(msg.id)
+                        MessageBubbleView(
+                            message: msg,
+                            isGroup: isGroup,
+                            senderName: participants?.first(where: { $0.userId == msg.senderUserId })?.displayName
+                        )
+                        .id(msg.id)
                     }
                     if container.viewModel.isPeerTyping {
                         typingIndicator

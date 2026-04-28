@@ -2,21 +2,42 @@ import Foundation
 
 public struct ChatViewModel: ViewModelProtocol {
 
+    // MARK: - Participant
+
+    public struct Participant: Equatable, Sendable, Hashable {
+        public let userId: String
+        public let displayName: String
+        public let isAdmin: Bool
+
+        public init(userId: String, displayName: String, isAdmin: Bool) {
+            self.userId = userId
+            self.displayName = displayName
+            self.isAdmin = isAdmin
+        }
+    }
+
+    // MARK: - Properties
+
     public let conversation: Conversation
     public let messages: [Message]
     public let composerText: String
     public let isPeerTyping: Bool
     public let isPeerOnline: Bool
+    /// Non-nil for group conversations; nil for 1:1.
+    public let participants: [Participant]?
 
     public init(conversation: Conversation, messages: [Message],
                 composerText: String = "", isPeerTyping: Bool = false,
-                isPeerOnline: Bool = false) {
+                isPeerOnline: Bool = false, participants: [Participant]? = nil) {
         self.conversation = conversation
         self.messages = messages
         self.composerText = composerText
         self.isPeerTyping = isPeerTyping
         self.isPeerOnline = isPeerOnline
+        self.participants = participants
     }
+
+    // MARK: - Mocks
 
     public static let mock = ChatViewModel(
         conversation: Conversation(
@@ -51,5 +72,39 @@ public struct ChatViewModel: ViewModelProtocol {
         composerText: "",
         isPeerTyping: false,
         isPeerOnline: true
+    )
+
+    public static let mockGroup = ChatViewModel(
+        conversation: Conversation(
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            peerUserId: "group-design-team",
+            peerDisplayName: "Design team",
+            lastMessagePreview: "See you on Friday",
+            lastActivity: Date(timeIntervalSince1970: 1_745_001_000),
+            unreadCount: 2,
+            pinned: true,
+            kind: .group
+        ),
+        messages: [
+            Message(id: UUID(), conversationId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+                    direction: .incoming, plaintext: "Anyone reviewed the wireframes?",
+                    sentAt: Date(timeIntervalSince1970: 1_745_000_500),
+                    deliveredAt: Date(timeIntervalSince1970: 1_745_000_510),
+                    readAt: nil, status: .delivered, senderUserId: "user-bob"),
+            Message(id: UUID(), conversationId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+                    direction: .incoming, plaintext: "Looks good. Ship it.",
+                    sentAt: Date(timeIntervalSince1970: 1_745_000_700),
+                    deliveredAt: Date(timeIntervalSince1970: 1_745_000_710),
+                    readAt: nil, status: .delivered, senderUserId: "user-charlie")
+        ],
+        composerText: "",
+        isPeerTyping: false,
+        isPeerOnline: true,
+        participants: [
+            Participant(userId: "user-self", displayName: "You", isAdmin: true),
+            Participant(userId: "user-alice", displayName: "Alice", isAdmin: false),
+            Participant(userId: "user-bob", displayName: "Bob", isAdmin: false),
+            Participant(userId: "user-charlie", displayName: "Charlie", isAdmin: false)
+        ]
     )
 }

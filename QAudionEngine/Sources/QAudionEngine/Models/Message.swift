@@ -23,10 +23,11 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     public let deliveredAt: Date?
     public let readAt: Date?
     public let status: Status
+    public let senderUserId: String?       // non-nil for incoming group messages
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
-                readAt: Date?, status: Status) {
+                readAt: Date?, status: Status, senderUserId: String? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -35,5 +36,6 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.deliveredAt = deliveredAt
         self.readAt = readAt
         self.status = status
+        self.senderUserId = senderUserId
     }
 }

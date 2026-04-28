@@ -29,4 +29,18 @@ final class ChatViewModelTests: XCTestCase {
     func test_mockNoTypingIndicator() {
         XCTAssertFalse(ChatViewModel.mock.isPeerTyping)
     }
+
+    // MARK: - Group mock tests (§10.3)
+
+    func test_mockGroupHasParticipants() {
+        XCTAssertEqual(ChatViewModel.mockGroup.participants?.count, 4)
+    }
+
+    func test_mockGroupConversationIsGroupKind() {
+        XCTAssertEqual(ChatViewModel.mockGroup.conversation.kind, .group)
+    }
+
+    func test_oneToOneMockHasNilParticipants() {
+        XCTAssertNil(ChatViewModel.mock.participants)
+    }
 }
