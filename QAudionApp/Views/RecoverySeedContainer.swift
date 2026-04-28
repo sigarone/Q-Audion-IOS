@@ -14,7 +14,10 @@ final class RecoverySeedContainer: ObservableObject {
 
     let mode: Mode
     private let appState: AppState
-    private weak var hostingDismisser: (() -> Void)?
+    /// Closures are value types (not class-bound) so `weak` doesn't apply.
+    /// We accept the strong-retain — if the host view goes away, the closure
+    /// just won't fire (caller responsibility).
+    private var hostingDismisser: (() -> Void)?
 
     init(mode: Mode, appState: AppState, onDismiss: (() -> Void)? = nil) {
         self.mode = mode

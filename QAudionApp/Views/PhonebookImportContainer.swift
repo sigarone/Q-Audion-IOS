@@ -33,7 +33,6 @@ final class PhonebookImportContainer: ObservableObject {
                 guard granted else {
                     viewModel.transition(to: .error(
                         message: PhonebookSyncCoordinator.Error.permissionDenied.localizedDescription
-                            ?? "Contacts permission denied"
                     ))
                     return
                 }

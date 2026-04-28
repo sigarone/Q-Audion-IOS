@@ -239,7 +239,8 @@ struct VoiceEnrollmentContainerView: View {
                 onCancel?()
             }
         )
-        .onChange(of: container.viewModel.step) { _, newStep in
+        .onChange(of: container.viewModel.step) { newStep in
+            // Single-param form for iOS 16 compat.
             if case .complete(let id) = newStep {
                 onComplete?(id)
             }

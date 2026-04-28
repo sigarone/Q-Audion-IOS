@@ -25,7 +25,10 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
 
     private let center = UNUserNotificationCenter.current()
     /// Handler for notification taps; caller wires to navigation.
-    var onNotificationTap: ((Category, [AnyHashable: Any]) -> Void)?
+    /// Notification-tap handler. Receives the notification category + the
+    /// userInfo flattened to a Sendable `[String: String]` dictionary
+    /// (string-coerced from the original `[AnyHashable: Any]`).
+    var onNotificationTap: ((Category, [String: String]) -> Void)?
 
     /// Latest known authorization state (refreshed via `refreshAuthorizationState()`).
     @Published private(set) var authorization: AuthorizationState = .notDetermined
@@ -169,10 +172,22 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         didReceive response: UNNotificationResponse
     ) async {
         let category = Category(rawValue: response.notification.request.content.categoryIdentifier)
-        let userInfo = response.notification.request.content.userInfo
+        // Convert userInfo to a Sendable [String: String] dictionary by JSON-stringifying
+        // each value. Loses fidelity for non-string types but satisfies Sendable contract
+        // for Swift 6 strict concurrency. Callers that need the raw dictionary can
+        // re-fetch from UNUserNotificationCenter.
+        let raw = response.notification.request.content.userInfo
+        var sendableInfo: [String: String] = [:]
+        for (key, value) in raw {
+            if let k = key as? String {
+                sendableInfo[k] = "\(value)"
+            }
+        }
+        let categoryFinal = category
+        let infoFinal = sendableInfo
         await MainActor.run {
-            if let cat = category {
-                self.onNotificationTap?(cat, userInfo)
+            if let cat = categoryFinal {
+                self.onNotificationTap?(cat, infoFinal)
             }
         }
     }
