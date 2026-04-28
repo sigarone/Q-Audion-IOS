@@ -126,8 +126,10 @@ final class ContactsListContainer: ObservableObject {
 
 struct ContactsListView: View {
     @StateObject private var container: ContactsListContainer
+    @EnvironmentObject private var appState: AppState
     @State private var searchText: String = ""
     @State private var showingQrScanner: Bool = false
+    @State private var showingMyIdentity: Bool = false
     @State private var lastScanResult: ScanResultBanner?
 
     init() {
@@ -163,6 +165,9 @@ struct ContactsListView: View {
                     Button("Scan QR", systemImage: "qrcode.viewfinder") {
                         showingQrScanner = true
                     }
+                    Button("Show my identity", systemImage: "qrcode") {
+                        showingMyIdentity = true
+                    }
                     Button("Add via NFC", systemImage: "wave.3.right") { }
                     Button("Add by phone", systemImage: "phone.badge.plus") { }
                 } label: {
@@ -177,6 +182,9 @@ struct ContactsListView: View {
             } else if let banner = lastScanResult {
                 scanResultBannerView(banner)
             }
+        }
+        .sheet(isPresented: $showingMyIdentity) {
+            MyIdentityQrSheet(appState: appState)
         }
         .sheet(isPresented: $showingQrScanner) {
             QrScannerSheet(onAccepted: { decoded in
@@ -336,5 +344,8 @@ struct ContactsListView: View {
 }
 
 #Preview {
+    // Preview needs an AppState in the environment because the "+" menu
+    // presents MyIdentityQrSheet which requires it.
     NavigationStack { ContactsListView() }
+        .environmentObject(AppState())
 }
