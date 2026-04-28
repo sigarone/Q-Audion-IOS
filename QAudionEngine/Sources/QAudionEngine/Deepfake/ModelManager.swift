@@ -122,7 +122,7 @@ public final class ModelManager {
     /// Run inference on raw waveform.
     public func runInference(waveform: [Float]) throws -> Float {
         #if !targetEnvironment(simulator)
-        guard let session = session, let env = ortEnv else {
+        guard let session = session, ortEnv != nil else {
             throw NSError(domain: "ModelManager", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Model not loaded"])
         }

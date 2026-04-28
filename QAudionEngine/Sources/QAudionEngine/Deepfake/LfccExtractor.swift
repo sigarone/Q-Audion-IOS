@@ -25,7 +25,7 @@ public final class LfccExtractor {
         guard samples.count >= LfccExtractor.frameSize else { return [] }
 
         // Pre-emphasis
-        var emphasized = preEmphasize(samples)
+        let emphasized = preEmphasize(samples)
 
         // Frame into overlapping windows
         let numFrames = max(1, (emphasized.count - LfccExtractor.frameSize) / LfccExtractor.hopSize + 1)
@@ -103,12 +103,16 @@ public final class LfccExtractor {
         if realPart.count < n/2 { realPart.append(contentsOf: [Float](repeating: 0, count: n/2 - realPart.count)) }
         if imagPart.count < n/2 { imagPart.append(contentsOf: [Float](repeating: 0, count: n/2 - imagPart.count)) }
 
-        var splitComplex = DSPSplitComplex(realp: &realPart, imagp: &imagPart)
-        vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Forward))
-
-        // Power spectrum
+        // Use withUnsafeMutableBufferPointer so the raw pointers stored inside
+        // DSPSplitComplex are guaranteed to remain valid for the entire vDSP call chain.
         var magnitudes = [Float](repeating: 0, count: n / 2)
-        vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(n / 2))
+        realPart.withUnsafeMutableBufferPointer { realBuf in
+            imagPart.withUnsafeMutableBufferPointer { imagBuf in
+                var splitComplex = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
+                vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Forward))
+                vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(n / 2))
+            }
+        }
         return magnitudes
     }
 

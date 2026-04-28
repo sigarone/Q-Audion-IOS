@@ -32,12 +32,6 @@ public final class TorObfsTransport: @unchecked Sendable {
         guard !onionAddress.isEmpty else { return false }
 
         // Configure URLSession with SOCKS5 proxy
-        let proxyConfig: [AnyHashable: Any] = [
-            kCFStreamPropertySOCKSVersion: kCFStreamSocketSOCKSVersion5,
-            kCFStreamPropertySOCKSProxyHost: "127.0.0.1",
-            kCFStreamPropertySOCKSProxyPort: socksPort
-        ]
-
         let sessionConfig = URLSessionConfiguration.default
         sessionConfig.connectionProxyDictionary = [
             "SOCKSEnable": true,
