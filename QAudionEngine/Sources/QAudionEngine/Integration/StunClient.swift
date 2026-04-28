@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 /// Lightweight STUN client (RFC 5389) to discover the device's public IP and port
 /// behind a NAT. Used by `IceAgent` to generate server-reflexive candidates for
@@ -178,15 +179,17 @@ public final class StunClient: @unchecked Sendable {
             )
             let connection = NWConnection(to: endpoint, using: .udp)
 
-            var completed = false
-            let lock = NSLock()
+            final class Box<T>: @unchecked Sendable { var value: T; init(_ v: T) { value = v } }
+            let completedBox = Box(false)
+            let lock = OSAllocatedUnfairLock<Void>(initialState: ())
 
             // Timeout
             DispatchQueue.global().asyncAfter(deadline: .now() + Self.timeoutSeconds) {
-                lock.lock()
-                guard !completed else { lock.unlock(); return }
-                completed = true
-                lock.unlock()
+                var didComplete = false
+                lock.withLock {
+                    if !completedBox.value { completedBox.value = true; didComplete = true }
+                }
+                guard didComplete else { return }
                 connection.cancel()
                 continuation.resume(throwing: StunError.timeout)
             }
@@ -196,19 +199,21 @@ public final class StunClient: @unchecked Sendable {
                 case .ready:
                     connection.send(content: data, completion: .contentProcessed { error in
                         if let error = error {
-                            lock.lock()
-                            guard !completed else { lock.unlock(); return }
-                            completed = true
-                            lock.unlock()
+                            var didComplete = false
+                            lock.withLock {
+                                if !completedBox.value { completedBox.value = true; didComplete = true }
+                            }
+                            guard didComplete else { return }
                             connection.cancel()
                             continuation.resume(throwing: error)
                             return
                         }
                         connection.receiveMessage { content, _, _, recvError in
-                            lock.lock()
-                            guard !completed else { lock.unlock(); return }
-                            completed = true
-                            lock.unlock()
+                            var didComplete = false
+                            lock.withLock {
+                                if !completedBox.value { completedBox.value = true; didComplete = true }
+                            }
+                            guard didComplete else { return }
                             connection.cancel()
                             if let content = content {
                                 continuation.resume(returning: content)
@@ -218,10 +223,11 @@ public final class StunClient: @unchecked Sendable {
                         }
                     })
                 case .failed(let error):
-                    lock.lock()
-                    guard !completed else { lock.unlock(); return }
-                    completed = true
-                    lock.unlock()
+                    var didComplete = false
+                    lock.withLock {
+                        if !completedBox.value { completedBox.value = true; didComplete = true }
+                    }
+                    guard didComplete else { return }
                     connection.cancel()
                     continuation.resume(throwing: error)
                 default:

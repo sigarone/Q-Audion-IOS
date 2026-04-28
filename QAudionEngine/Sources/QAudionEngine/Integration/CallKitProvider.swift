@@ -1,9 +1,9 @@
 import Foundation
 #if canImport(CallKit) && os(iOS)
-import CallKit
+@preconcurrency import CallKit
 import AVFoundation
 
-public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegate {
+public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegate, @unchecked Sendable {
 
     private let provider: CXProvider
     private let controller: CXCallController

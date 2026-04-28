@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 /// ICE-lite agent for P2P connection establishment.
 ///
@@ -41,7 +42,7 @@ public final class IceAgent: @unchecked Sendable {
     // MARK: - Properties
 
     private let stunClient = StunClient()
-    private let lock = NSLock()
+    private let lock = OSAllocatedUnfairLock<Void>(initialState: ())
     private var _state: IceState = .new
     private var localCandidates: [IceCandidate] = []
 
@@ -49,8 +50,7 @@ public final class IceAgent: @unchecked Sendable {
     private let localPort: UInt16
 
     public var state: IceState {
-        lock.lock(); defer { lock.unlock() }
-        return _state
+        lock.withLock { _state }
     }
 
     public init(localPort: UInt16 = 0) {
@@ -93,17 +93,14 @@ public final class IceAgent: @unchecked Sendable {
         // Sort by priority descending (host > srflx > relay)
         candidates.sort { $0.priority > $1.priority }
 
-        lock.lock()
-        localCandidates = candidates
-        lock.unlock()
+        lock.withLock { localCandidates = candidates }
 
         return candidates
     }
 
     /// Return the previously gathered local candidates.
     public func getLocalCandidates() -> [IceCandidate] {
-        lock.lock(); defer { lock.unlock() }
-        return localCandidates
+        lock.withLock { localCandidates }
     }
 
     // MARK: - Connectivity checks
@@ -176,15 +173,17 @@ public final class IceAgent: @unchecked Sendable {
             )
             let connection = NWConnection(to: endpoint, using: .udp)
 
-            var resolved = false
-            let probeLock = NSLock()
+            final class Box<T>: @unchecked Sendable { var value: T; init(_ v: T) { value = v } }
+            let resolvedBox = Box(false)
+            let probeLock = OSAllocatedUnfairLock<Void>(initialState: ())
 
             // 2-second timeout per candidate
             DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
-                probeLock.lock()
-                guard !resolved else { probeLock.unlock(); return }
-                resolved = true
-                probeLock.unlock()
+                var didResolve = false
+                probeLock.withLock {
+                    if !resolvedBox.value { resolvedBox.value = true; didResolve = true }
+                }
+                guard didResolve else { return }
                 connection.cancel()
                 continuation.resume(returning: false)
             }
@@ -195,31 +194,40 @@ public final class IceAgent: @unchecked Sendable {
                     // Send a 4-byte probe ("QICE")
                     let probe = Data("QICE".utf8)
                     connection.send(content: probe, completion: .contentProcessed { error in
-                        probeLock.lock()
-                        guard !resolved else { probeLock.unlock(); return }
+                        var alreadyResolved = false
+                        probeLock.withLock {
+                            alreadyResolved = resolvedBox.value
+                            if !alreadyResolved && error != nil { resolvedBox.value = true }
+                        }
+                        guard !alreadyResolved else { return }
                         if error != nil {
-                            resolved = true
-                            probeLock.unlock()
                             connection.cancel()
                             continuation.resume(returning: false)
                             return
                         }
-                        probeLock.unlock()
                         // Wait for any response
                         connection.receiveMessage { content, _, _, _ in
-                            probeLock.lock()
-                            guard !resolved else { probeLock.unlock(); return }
-                            resolved = true
-                            probeLock.unlock()
+                            var didResolve = false
+                            probeLock.withLock {
+                                if !resolvedBox.value {
+                                    resolvedBox.value = true
+                                    didResolve = true
+                                }
+                            }
+                            guard didResolve else { return }
                             connection.cancel()
                             continuation.resume(returning: content != nil)
                         }
                     })
                 case .failed:
-                    probeLock.lock()
-                    guard !resolved else { probeLock.unlock(); return }
-                    resolved = true
-                    probeLock.unlock()
+                    var didResolve = false
+                    probeLock.withLock {
+                        if !resolvedBox.value {
+                            resolvedBox.value = true
+                            didResolve = true
+                        }
+                    }
+                    guard didResolve else { return }
                     connection.cancel()
                     continuation.resume(returning: false)
                 default:
@@ -247,6 +255,6 @@ public final class IceAgent: @unchecked Sendable {
     }
 
     private func setState(_ newState: IceState) {
-        lock.lock(); _state = newState; lock.unlock()
+        lock.withLock { _state = newState }
     }
 }

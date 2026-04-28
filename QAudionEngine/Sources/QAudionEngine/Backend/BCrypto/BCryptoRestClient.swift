@@ -1,5 +1,6 @@
 import Foundation
 import CommonCrypto
+import os
 
 public final class BCryptoRestClient {
     /// Callback invoked when a protected request returns HTTP 401.
@@ -15,7 +16,7 @@ public final class BCryptoRestClient {
     private var tokenRefresher: TokenRefresher?
     /// Serialises concurrent refresh attempts so we don't fire N /auth/refresh
     /// calls when many in-flight requests simultaneously hit 401.
-    private let refreshLock = NSLock()
+    private let refreshLock = OSAllocatedUnfairLock<Void>(initialState: ())
     private var refreshInFlight: Task<Bool, Error>?
 
     public init(config: BackendConfig) {
@@ -135,24 +136,22 @@ public final class BCryptoRestClient {
     private func tryRefreshToken() async throws -> Bool {
         guard let refresher = tokenRefresher else { return false }
 
-        refreshLock.lock()
-        if let existing = refreshInFlight {
-            refreshLock.unlock()
-            return try await existing.value
+        // Read or create the in-flight task under the lock (non-async closure,
+        // so OSAllocatedUnfairLock.withLock is safe here).
+        let task: Task<Bool, Error> = refreshLock.withLock {
+            if let existing = refreshInFlight { return existing }
+            let newTask = Task<Bool, Error> {
+                let pair = try await refresher()
+                self.config.accessToken = pair.accessToken
+                if let newRefresh = pair.refreshToken { self.config.refreshToken = newRefresh }
+                return true
+            }
+            refreshInFlight = newTask
+            return newTask
         }
-        let task = Task<Bool, Error> {
-            let pair = try await refresher()
-            config.accessToken = pair.accessToken
-            if let newRefresh = pair.refreshToken { config.refreshToken = newRefresh }
-            return true
-        }
-        refreshInFlight = task
-        refreshLock.unlock()
 
         defer {
-            refreshLock.lock()
-            refreshInFlight = nil
-            refreshLock.unlock()
+            refreshLock.withLock { refreshInFlight = nil }
         }
         return try await task.value
     }
