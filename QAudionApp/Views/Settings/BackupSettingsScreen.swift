@@ -1,18 +1,139 @@
 import SwiftUI
 import QAudionEngine
 
+// MARK: - Container
+
 @MainActor
 final class BackupSettingsContainer: ObservableObject {
+
+    // MARK: Published
+
     @Published var viewModel: BackupSettingsViewModel
-    init(initial: BackupSettingsViewModel = .mock) { self.viewModel = initial }
+
+    // Coordinator drives actual encrypt/decrypt work.
+    @Published var coordinator: BackupCoordinator
+
+    // Sheet presentation
+    @Published var showingBackupPasswordSheet = false
+    @Published var showingRestorePasswordSheet = false
+
+    // MARK: Init
+
+    init(appState: AppState) {
+        let coordinator = BackupCoordinator(
+            conversationStore: ConversationStore(),
+            contactsStore: ContactsStore()
+        )
+        self.coordinator = coordinator
+        // Seed ViewModel from any existing backup on disk.
+        self.viewModel = BackupSettingsViewModel(
+            lastBackupAt: coordinator.lastBackupAt,
+            lastBackupSizeBytes: coordinator.lastBackupSizeBytes,
+            localEncryptionOnly: true,
+            cloudBackupEnabled: false,
+            restoreInProgress: false
+        )
+    }
+
+    // MARK: Actions
+
+    func backupNow(password: String) async {
+        do {
+            try await coordinator.backupNow(password: password)
+            viewModel = BackupSettingsViewModel(
+                lastBackupAt: coordinator.lastBackupAt,
+                lastBackupSizeBytes: coordinator.lastBackupSizeBytes,
+                localEncryptionOnly: true,
+                cloudBackupEnabled: false,
+                restoreInProgress: false
+            )
+        } catch {
+            coordinator.errorMessage = error.localizedDescription
+        }
+    }
+
+    func restore(password: String) async {
+        do {
+            _ = try await coordinator.restore(password: password)
+        } catch {
+            coordinator.errorMessage = error.localizedDescription
+        }
+    }
 }
+
+// MARK: - Password Entry Sheet
+
+private struct PasswordSheet: View {
+    let title: String
+    let subtitle: String
+    let actionLabel: String
+    let onCommit: (String) -> Void
+    let onCancel: () -> Void
+
+    @State private var password = ""
+    @State private var confirm = ""
+    @FocusState private var focused: Bool
+
+    var isConfirmMode: Bool { actionLabel == "Create Backup" }
+
+    var isValid: Bool {
+        if isConfirmMode {
+            return password.count >= 6 && password == confirm
+        }
+        return password.count >= 1
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Password") {
+                    SecureField("Enter password", text: $password)
+                        .textContentType(.password)
+                        .focused($focused)
+                    if isConfirmMode {
+                        SecureField("Confirm password", text: $confirm)
+                            .textContentType(.newPassword)
+                    }
+                }
+
+                if isConfirmMode && !confirm.isEmpty && password != confirm {
+                    Section {
+                        Label("Passwords do not match", systemImage: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(actionLabel) {
+                        onCommit(password)
+                    }
+                    .disabled(!isValid)
+                }
+            }
+            .onAppear { focused = true }
+        }
+    }
+}
+
+// MARK: - Screen
 
 struct BackupSettingsScreen: View {
     @ObservedObject var container: BackupSettingsContainer
 
     init(state: AppState) {
-        let c = BackupSettingsContainer()
-        self._container = ObservedObject(wrappedValue: c)
+        self._container = ObservedObject(wrappedValue: BackupSettingsContainer(appState: state))
     }
 
     private var lastBackupText: String {
@@ -29,51 +150,115 @@ struct BackupSettingsScreen: View {
     }
 
     var body: some View {
-        Form {
-            if !container.viewModel.cloudBackupEnabled {
+        ZStack {
+            Form {
+                // MARK: Info banner (demoted from BLOCKED to informational)
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("Cloud Backup Unavailable", systemImage: "exclamationmark.triangle.fill")
+                        Label("Local Backups Available", systemImage: "checkmark.shield.fill")
                             .font(.headline)
-                            .foregroundStyle(.orange)
-                        Text("Cloud backup pending cross-platform .qabk container alignment (Discrepancy §10)")
+                            .foregroundStyle(.green)
+                        Text("Local encrypted backups are now enabled (QAUD container, scrypt N=2^17 + AES-256-GCM, Android format parity).")
                             .font(.subheadline)
                             .foregroundStyle(.primary)
-                        Text("Desktop uses QABK magic + 32B salt + scrypt N=2^15; Android uses QAUD + 16B salt + scrypt N=2^17. Upload and download are disabled until all platforms converge on a single container layout.")
+                        Text("Cross-platform interop with Desktop .qabk files is coming via the Migration utility (W13.C). Server upload deferred per audit §3.6.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
                 }
-                .listRowBackground(Color.yellow.opacity(0.2))
+                .listRowBackground(Color.green.opacity(0.12))
+
+                // MARK: Last Backup
+                Section("Last Backup") {
+                    LabeledContent("Date") {
+                        Text(lastBackupText)
+                            .foregroundStyle(.secondary)
+                    }
+                    LabeledContent("Size") {
+                        Text(lastBackupSizeText)
+                            .foregroundStyle(.secondary)
+                    }
+                    LabeledContent("Encryption") {
+                        Text("Local only (QAUD/AES-256-GCM)")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                // MARK: Actions
+                Section("Backup & Restore") {
+                    Button {
+                        container.showingBackupPasswordSheet = true
+                    } label: {
+                        Label("Backup Now", systemImage: "arrow.up.doc.fill")
+                    }
+
+                    Button {
+                        container.showingRestorePasswordSheet = true
+                    } label: {
+                        Label("Restore from Backup", systemImage: "arrow.down.doc.fill")
+                    }
+                    .disabled(!container.coordinator.localBackupExists)
+                }
+
+                // MARK: Error feedback
+                if let msg = container.coordinator.errorMessage {
+                    Section {
+                        Label(msg, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .font(.subheadline)
+                    }
+                }
             }
 
-            Section("Last Backup") {
-                LabeledContent("Date") {
-                    Text(lastBackupText)
-                        .foregroundStyle(.secondary)
+            // MARK: Processing overlay
+            if container.coordinator.isProcessing {
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .tint(.white)
+                    Text("Processing…")
+                        .font(.callout)
+                        .foregroundStyle(.white)
                 }
-                LabeledContent("Size") {
-                    Text(lastBackupSizeText)
-                        .foregroundStyle(.secondary)
-                }
-                LabeledContent("Encryption") {
-                    Text(container.viewModel.localEncryptionOnly ? "Local only" : "Cloud-synced")
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Cloud Backup") {
-                LabeledContent("Status") {
-                    Text(container.viewModel.cloudBackupEnabled ? "Enabled" : "Disabled")
-                        .foregroundStyle(container.viewModel.cloudBackupEnabled ? .green : .orange)
-                }
-                Button("Backup Now") { }
-                    .disabled(!container.viewModel.cloudBackupEnabled)
-                Button("Restore from Backup") { }
-                    .disabled(!container.viewModel.cloudBackupEnabled || container.viewModel.restoreInProgress)
+                .padding(32)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
         .navigationTitle("Backup")
+        // MARK: Backup password sheet
+        .sheet(isPresented: $container.showingBackupPasswordSheet) {
+            PasswordSheet(
+                title: "Backup Now",
+                subtitle: "Create a password to protect your backup. You will need it to restore.",
+                actionLabel: "Create Backup",
+                onCommit: { pwd in
+                    container.showingBackupPasswordSheet = false
+                    container.coordinator.errorMessage = nil
+                    Task { await container.backupNow(password: pwd) }
+                },
+                onCancel: {
+                    container.showingBackupPasswordSheet = false
+                }
+            )
+        }
+        // MARK: Restore password sheet
+        .sheet(isPresented: $container.showingRestorePasswordSheet) {
+            PasswordSheet(
+                title: "Restore Backup",
+                subtitle: "Enter the password you used when creating the backup.",
+                actionLabel: "Restore",
+                onCommit: { pwd in
+                    container.showingRestorePasswordSheet = false
+                    container.coordinator.errorMessage = nil
+                    Task { await container.restore(password: pwd) }
+                },
+                onCancel: {
+                    container.showingRestorePasswordSheet = false
+                }
+            )
+        }
     }
 }
