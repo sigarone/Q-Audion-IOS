@@ -15,7 +15,8 @@ struct ConversationListView: View {
             }
         }
         .searchable(text: $searchText, prompt: "Search conversations")
-        .onChange(of: searchText) { _, newValue in
+        .onChange(of: searchText) { newValue in
+            // Single-param form for iOS 16 compat.
             container.setSearchQuery(newValue)
         }
         .navigationTitle("Chats")

@@ -58,7 +58,9 @@ final class ConversationListContainer: ObservableObject {
         var convs = store.loadConversations()
         guard let idx = convs.firstIndex(where: { $0.id == conversationId }) else { return }
         let old = convs[idx]
-        convs[idx] = Conversation(
+        // Disambiguate from AppState.Conversation (legacy local struct with
+        // String id + lastMessageTime: Date) — we want the engine model.
+        convs[idx] = QAudionEngine.Conversation(
             id: old.id,
             peerUserId: old.peerUserId,
             peerDisplayName: old.peerDisplayName,

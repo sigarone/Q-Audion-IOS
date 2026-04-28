@@ -39,8 +39,9 @@ struct HomeView: View {
         .fullScreenCover(isPresented: $presentingInCall) {
             inCallCoverView
         }
-        .onChange(of: appState.isInCall) { _, isInCall in
-            // Auto-dismiss the cover when the call ends.
+        .onChange(of: appState.isInCall) { isInCall in
+            // Single-param form for iOS 16 compat. Auto-dismiss the cover
+            // when the call ends.
             if !isInCall {
                 presentingInCall = false
             }

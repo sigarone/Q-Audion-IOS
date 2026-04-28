@@ -130,7 +130,8 @@ struct ChatView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
-            .onChange(of: container.viewModel.messages.count) { _, _ in
+            .onChange(of: container.viewModel.messages.count) { _ in
+                // Single-param form for iOS 16 compat.
                 if let last = container.viewModel.messages.last {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(last.id, anchor: .bottom)

@@ -143,7 +143,8 @@ struct AccountSettingsScreen: View {
                     }
                 }
             }
-            .onChange(of: selectedItem) { _, newItem in
+            .onChange(of: selectedItem) { newItem in
+                // Single-param form for iOS 16 compat.
                 Task {
                     guard let item = newItem,
                           let data = try? await item.loadTransferable(type: Data.self),
