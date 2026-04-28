@@ -14,15 +14,24 @@ public final class ContactsStore {
         public let avatarUrl: URL?
         public let lastSeen: Date?
         public let isVerified: Bool
+        /// Long-term identity public key, when known. Populated by the QR-scan
+        /// pairing flow (IdentityQrCode / DeviceLinkBinaryQR carry the pubkey
+        /// alongside the userId) and by future discover-v2 results that
+        /// include published pubkeys. nil for legacy rows persisted before
+        /// this field was added — old JSON decodes with pubkey=nil because
+        /// Optional fields are absent-tolerant in Codable synthesis.
+        public let pubkey: Data?
 
         public init(userId: String, displayName: String, phoneHash: String,
-                    avatarUrl: URL?, lastSeen: Date?, isVerified: Bool) {
+                    avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
+                    pubkey: Data? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
             self.avatarUrl = avatarUrl
             self.lastSeen = lastSeen
             self.isVerified = isVerified
+            self.pubkey = pubkey
         }
     }
 
@@ -61,5 +70,13 @@ public final class ContactsStore {
 
     public func wipeAll() {
         defaults.removeObject(forKey: key)
+    }
+
+    /// Convenience: look up a stored contact's pubkey by userId. Returns nil
+    /// if the contact is unknown or was persisted before pubkey was tracked.
+    /// Used by the contact-detail surface to render the canonical fingerprint
+    /// without requiring callers to walk the full contact list themselves.
+    public func findPubkey(userId: String) -> Data? {
+        load().first(where: { $0.userId == userId })?.pubkey
     }
 }

@@ -41,6 +41,14 @@ final class ContactsListContainer: ObservableObject {
         viewModel = ContactsListViewModel(items: viewModel.items, searchQuery: query)
     }
 
+    /// Returns the 32B X25519 pubkey for a stored contact, or nil if unknown.
+    /// Forwarded straight to ContactsStore so the caller (e.g. detail view)
+    /// can compute a canonical fingerprint without depending on the engine
+    /// store directly.
+    func lookupPubkey(userId: String) -> Data? {
+        store.findPubkey(userId: userId)
+    }
+
     /// Persists a QR-scanned payload as a verified local contact. Identity
     /// and device-link payloads both carry a userId + pubkey so we can render
     /// them in the contacts list immediately; fast-setup is onboarding-time
@@ -50,13 +58,16 @@ final class ContactsListContainer: ObservableObject {
     func addScannedContact(_ decoded: QrPayloadRouter.Decoded) -> Bool {
         let userId: String
         let displayName: String
+        let pubkey: Data
         switch decoded {
         case .identity(let id):
             userId = id.userId
             displayName = id.userId
+            pubkey = id.pubkey
         case .deviceLink(let dl):
             userId = dl.userId
             displayName = dl.userId
+            pubkey = dl.pubkey
         case .fastSetup, .invalid, .unknown:
             return false
         }
@@ -66,7 +77,8 @@ final class ContactsListContainer: ObservableObject {
             phoneHash: "",         // phone not present in QR payloads
             avatarUrl: nil,
             lastSeen: nil,
-            isVerified: true        // in-person scan ⇒ verified
+            isVerified: true,       // in-person scan ⇒ verified
+            pubkey: pubkey          // 32B X25519, source of canonical fingerprint
         )
         store.upsert(contact)
         // Refresh the in-memory view-model from the store so the new row
@@ -286,11 +298,19 @@ struct ContactsListView: View {
     @ViewBuilder
     private func detailView(for item: ContactsListViewModel.Item) -> some View {
         // Map ContactsListViewModel.Item → ContactDetailViewModel for the detail view.
+        // Resolve fingerprint from the stored pubkey (populated by W14 QR-scan
+        // pairing flow); legacy rows persisted before pubkey was tracked
+        // fall back to the unknown-fingerprint placeholder.
+        let pubkey = container.lookupPubkey(userId: item.userId)
+        let fingerprint: String = {
+            guard let pk = pubkey else { return "????.????.????.????" }
+            return (try? Fingerprint.format(pubkey: pk)) ?? "????.????.????.????"
+        }()
         let detail = ContactDetailViewModel(
             userId: item.userId,
             displayName: item.displayName,
             phoneHash: item.phoneHash,
-            fingerprint: "????.????.????.????",  // TODO: lookup from key vault
+            fingerprint: fingerprint,
             avatarUrl: item.avatarUrl,
             trustLevel: item.isVerified ? .sasVerified : .unverified,
             isBlocked: false,
