@@ -26,10 +26,27 @@
 - A.3.B.1 ✅ CallKitProvider concrete iOS-only impl (`16dc987`)
 - A.3.C.1 ✅ AppState wiring with closure bridges (`98b3dfa` — combined with A.5.B.1)
 
-**Track A.4 In-call UI** — partial
+**Track A.4 In-call UI** — ✅ scope complete (UI scaffolding)
 - A.4 InCallContainer + InCallView + CallView body replacement ✅ (`1e5ce28`)
 - A.4 SasVerificationView refactor to consume SasVerificationViewModel ✅ (`b0bc521`)
-- A.4 SasVerificationContainer (full Combine binding) — pending (current view-model-backed view is sufficient for A.4 scope; container can be added when wiring real call session events)
+
+**Track A extras (Wave 7-10)** — UI/utility surface complete
+- W7.A NfcCollaborativeExchange CoreNFC APDU exchange ✅ (`e278425`)
+- W7.B DeviceLinkBinaryQR codec + 9 tests ✅ (`9ec87b7`)
+- W7.C ContactDetailViewModel + ContactDetailView refactor ✅ (`560c542`)
+- W7.D SettingsStore UserDefaults persistence + 15 tests ✅ (`422c790`)
+- W8.A HomeView 4-tab restructure ✅ (`b84965d`)
+- W8.B BackupCipher AES-GCM half + scrypt stub ✅ (`f68c626`)
+- W8.C OpaqueMessageEnvelope codec + 7 tests ✅ (`c4b2b0d`)
+- W9.A SettingsStore wired into 5 Settings sub-screens ✅ (`ca1b980`)
+- W9.B RecoverySeedViewModel + RecoverySeedView (BIP-39 mnemonic) ✅ (`a0293b6`)
+- W9.C 4 chat envelope codecs (msg_send/delivered/read/typing) + 13 tests ✅ (`b56bce6`)
+- W9.D PepperedPhoneHash + ContactsDiscoverV2Client + 12 tests ✅ (`bcadf5c`)
+- W10.A FastSetupQrCode v1 codec + 8 tests ✅ (`acd0e1a`)
+- W10.B HkdfLabels canonical helper + 14 tests ✅ (`3b04a23`)
+- W10.C BCryptoOtaModelClient (Ed25519 manifest) + 5 tests ✅ (`9a0bfe0`)
+- W10.D ContactsListViewModel + ContactsListView + 7 tests ✅ (`ed1a084`)
+- HomeView Contacts tab → ContactsListView ✅ (`7ac031a`)
 
 **Track A.5 PushKit** — partial
 - A.5.A.1 ✅ PushKitProvider + payload decoder + 5 tests (`49393b7` — landed in same commit as A.3.A.1 due to parallel-collision; content correct)
