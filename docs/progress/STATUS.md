@@ -75,12 +75,25 @@
 - `docs/superpowers/plans/2026-04-28-track-a5-pushkit.md` — PushKitProvider scaffolding (delivery SERVER-BLOCKED §10.1)
 - `docs/superpowers/plans/2026-04-28-track-a6-settings.md` — SettingsHubView + 11 sub-screens + 9 new VMs + reuse F1.2/F1.3
 
-## Open server-team / cross-team questions (carried from spec §10 + INVARIANTS_VERIFIED.md)
-- §10.1 — APNs VoIP push: server team to pick option α/β/γ/δ
-- §10.2 — security endpoints (zk-register/zk-auth/pqc-relay/threat-report/wipe-confirm) schema decision
-- §10.3 — GroupChat — iOS UX decision (Android-folded vs Desktop-separate)
-- §10.4 — Phonebook import scope decision
-- 10 INVARIANTS_VERIFIED.md "Open discrepancies" — cross-team sign-off requested before any wire-touching work resumes (most critical: `.qabk` Desktop↔Android container incompatibility, fingerprint display format iOS/Desktop drift)
+## Open / Resolved cross-team items (post Wave 12 — adoption-by-Android)
+
+**RESOLVED by iOS adoption of Android shape** (per user directive 2026-04-28):
+- ✅ §10 `.qabk` container — iOS now produces/consumes Android QAUD format (`8cae58e`). Desktop's QABK format will need Desktop-side migration to converge.
+- ✅ §10.2 security endpoints — iOS rewritten to `{zk_commitment, public_params}`/`{challenge, proof}`/`{recipient_id, ciphertext, algorithm}`/`{category, details, severity}`/`{wipe_id, confirmed}` per Android (`b86f39c`). All TODO(parity) blocks removed.
+- ✅ §3 fingerprint display — iOS `Fingerprint.format()` produces canonical `xxxx.xxxx.xxxx.xxxx` (`77786a6`). Desktop should adopt the same.
+
+**Still open (server / cross-team):**
+- §10.1 — APNs VoIP push: server team to pick option α/β/γ/δ. iOS-side scaffolding ready (PushKit token registration ships hex with platform="ios-apns").
+- §10.3 — GroupChat UX decision (Android-folded vs Desktop-separate). iOS currently has no GroupChat view; following Android-folded by default until decision lands.
+- §10.4 — Phonebook import scope decision.
+- USER WT BCryptoCallingApiImpl/BCryptoWebSocketClient/etc.: required for Phase 1.1 WS code fixes + DeviceListClient + real chat send/receive wire flow. iOS code waits.
+
+## Cross-platform implications of Wave 12 adoption (for Desktop/Server team)
+
+iOS adopted Android as the reference. Implications for the other platforms:
+- **Desktop** still emits `QABK` magic + 32B salt + scrypt N=2^15 backups. To remain interoperable, Desktop needs to migrate to `QAUD` magic + 16B salt + scrypt N=2^17. Migration script: read old QABK files, decrypt with old params, re-encrypt with new params on first launch post-migration.
+- **Desktop** uses raw 64-hex fingerprint display. To match iOS+Android, adopt `xxxx.xxxx.xxxx.xxxx` format. Trivial UI change.
+- **Server** security endpoint contract is now SET to Android shape; no schema decision needed. Server team should confirm endpoints accept the Android-shape requests iOS now sends.
 
 ## Predecessor phases — ✅ DONE (do not redo)
 **Phase 0** (capability + pipeline baseline) — `b470ed8`, `4e230ab`, `51b0404`, `b1e6ef9`. All 4 tasks landed. TestFlight `v1.0.24-ph0` green.
