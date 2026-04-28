@@ -6,6 +6,7 @@ final class ContactsListContainer: ObservableObject {
     @Published var viewModel: ContactsListViewModel
     @Published private(set) var isRefreshing: Bool = false
     @Published var errorMessage: String?
+    @Published var scanProgress: PhonebookSyncCoordinator.ScanProgress?
 
     private let appState: AppState?
     private let store: ContactsStore
@@ -43,11 +44,15 @@ final class ContactsListContainer: ObservableObject {
     func refresh() {
         guard let svc = service else { return }
         Task {
-            await MainActor.run { self.isRefreshing = true; self.errorMessage = nil }
+            await MainActor.run {
+                self.isRefreshing = true
+                self.errorMessage = nil
+                self.scanProgress = nil
+            }
             do {
-                // Phonebook integration deferred — pass empty until integrated.
-                _ = try await svc.refresh(phonesToCheck: [])
-                let stored = self.store.load()
+                let stored = try await svc.refreshFromPhonebook { progress in
+                    Task { @MainActor in self.scanProgress = progress }
+                }
                 await MainActor.run {
                     self.viewModel = ContactsListViewModel(
                         items: stored.map { sc in
@@ -106,6 +111,24 @@ struct ContactsListView: View {
             }
         }
         .refreshable { container.refresh() }
+        .overlay(alignment: .top) {
+            if let progress = container.scanProgress, container.isRefreshing {
+                scanProgressBanner(progress)
+            }
+        }
+    }
+
+    private func scanProgressBanner(_ p: PhonebookSyncCoordinator.ScanProgress) -> some View {
+        HStack {
+            ProgressView().scaleEffect(0.7)
+            Text("Scanning phonebook: \(p.processedContacts) / \(p.totalContacts) — found \(p.resolvedUserCount) Q-Audion users")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .background(Color(.systemBackground).opacity(0.9))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.top, 8)
     }
 
     @ViewBuilder

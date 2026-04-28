@@ -11,15 +11,27 @@ final class ContactsRefreshService {
 
     let appState: AppState
     let store: ContactsStore
+    private let coordinator: PhonebookSyncCoordinator
 
     init(appState: AppState, store: ContactsStore = ContactsStore()) {
         self.appState = appState
         self.store = store
+        self.coordinator = PhonebookSyncCoordinator(appState: appState, contactsStore: store)
     }
 
-    /// Refresh contacts: fetches global pepper, hashes the user's phonebook,
-    /// submits to discover-v2, persists the resolved contacts.
-    /// Caller supplies the list of E.164 phones (typically from Contacts framework).
+    /// Refresh by scanning the user's phonebook. Requires Contacts permission.
+    /// Returns the resolved StoredContacts.
+    func refreshFromPhonebook(
+        onProgress: @escaping (PhonebookSyncCoordinator.ScanProgress) -> Void = { _ in }
+    ) async throws -> [ContactsStore.StoredContact] {
+        let granted = try await coordinator.requestPermission()
+        guard granted else { throw PhonebookSyncCoordinator.Error.permissionDenied }
+        _ = try await coordinator.scanAndDiscover(onProgress: onProgress)
+        return store.load()
+    }
+
+    /// Low-level refresh for callers that already have a phone list.
+    /// Caller supplies the list of E.164 phones (typically pre-enumerated).
     func refresh(phonesToCheck: [String]) async throws -> [ContactsStore.StoredContact] {
         guard let token = appState.authService.loadToken(), !token.isEmpty else {
             throw Error.notAuthenticated
