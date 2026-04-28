@@ -1,48 +1,97 @@
 import SwiftUI
+import QAudionEngine
 
 struct MessageBubbleView: View {
-    let isSent: Bool
-    let text: String
-    let timestamp: Date
-    let isEncrypted: Bool
+    let message: Message
 
-    private var bubbleColor: Color {
-        isSent ? .blue : Color(white: 0.18)
+    // MARK: - Back-compat init for callers that don't yet use the Message model.
+
+    init(isSent: Bool, text: String, timestamp: Date, isEncrypted: Bool = true) {
+        self.message = Message(
+            id: UUID(),
+            conversationId: UUID(),
+            direction: isSent ? .outgoing : .incoming,
+            plaintext: text,
+            sentAt: timestamp,
+            deliveredAt: isSent ? timestamp : nil,
+            readAt: nil,
+            status: isSent ? .sent : .delivered
+        )
     }
 
-    private var alignment: HorizontalAlignment {
-        isSent ? .trailing : .leading
+    /// Primary init: full Message model (W11.A path).
+    init(message: Message) {
+        self.message = message
     }
 
-    private var corners: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 16)
-    }
+    // MARK: - Body
 
     var body: some View {
         HStack {
-            if isSent { Spacer(minLength: 48) }
+            if message.direction == .outgoing { Spacer(minLength: 48) }
+            bubbleContent
+            if message.direction == .incoming { Spacer(minLength: 48) }
+        }
+    }
 
-            VStack(alignment: isSent ? .trailing : .leading, spacing: 4) {
-                Text(text)
-                    .font(.body)
-                    .foregroundStyle(.white)
+    private var bubbleContent: some View {
+        VStack(alignment: message.direction == .outgoing ? .trailing : .leading, spacing: 4) {
+            Text(message.plaintext)
+                .font(.body)
+                .foregroundStyle(textColor)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(bubbleColor)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
 
-                HStack(spacing: 4) {
-                    if isEncrypted {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 9))
-                    }
-                    Text(timestamp, style: .time)
-                        .font(.caption2)
+            HStack(spacing: 4) {
+                // Encrypted-lock indicator (always shown — this app is e2e encrypted).
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.5))
+
+                Text(message.sentAt, style: .time)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.5))
+
+                if message.direction == .outgoing {
+                    statusIcon
                 }
-                .foregroundStyle(.white.opacity(0.5))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(bubbleColor)
-            .clipShape(corners)
+        }
+    }
 
-            if !isSent { Spacer(minLength: 48) }
+    private var bubbleColor: Color {
+        message.direction == .outgoing ? .blue : Color(white: 0.18)
+    }
+
+    private var textColor: Color {
+        .white
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch message.status {
+        case .sending:
+            Image(systemName: "clock")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
+        case .sent:
+            Image(systemName: "checkmark")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
+        case .delivered:
+            Image(systemName: "checkmark.circle")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
+        case .read:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.caption2)
+                .foregroundStyle(.cyan)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(.red)
         }
     }
 }
