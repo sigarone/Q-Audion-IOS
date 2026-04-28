@@ -130,6 +130,8 @@ struct ContactsListView: View {
     @State private var searchText: String = ""
     @State private var showingQrScanner: Bool = false
     @State private var showingMyIdentity: Bool = false
+    @State private var showingNfcPair: Bool = false
+    @State private var showingPhonebookImport: Bool = false
     @State private var lastScanResult: ScanResultBanner?
 
     init() {
@@ -168,8 +170,12 @@ struct ContactsListView: View {
                     Button("Show my identity", systemImage: "qrcode") {
                         showingMyIdentity = true
                     }
-                    Button("Add via NFC", systemImage: "wave.3.right") { }
-                    Button("Add by phone", systemImage: "phone.badge.plus") { }
+                    Button("Add via NFC", systemImage: "wave.3.right") {
+                        showingNfcPair = true
+                    }
+                    Button("Import from phone", systemImage: "phone.badge.plus") {
+                        showingPhonebookImport = true
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -185,6 +191,28 @@ struct ContactsListView: View {
         }
         .sheet(isPresented: $showingMyIdentity) {
             MyIdentityQrSheet(appState: appState)
+        }
+        .sheet(isPresented: $showingNfcPair) {
+            NavigationStack {
+                NfcExchangeView()
+                    .navigationTitle("Pair via NFC")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showingNfcPair = false }
+                        }
+                    }
+            }
+        }
+        .sheet(isPresented: $showingPhonebookImport) {
+            NavigationStack {
+                PhonebookImportView(appState: appState)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showingPhonebookImport = false }
+                        }
+                    }
+            }
         }
         .sheet(isPresented: $showingQrScanner) {
             QrScannerSheet(onAccepted: { decoded in
