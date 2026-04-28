@@ -9,11 +9,41 @@
 **Predecessor plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
-**Track A Foundation Sprint — ✅ DONE** (`docs/superpowers/plans/2026-04-28-track-a-foundation.md`).
-- F0 (Invariants verification) ✅ — `docs/progress/INVARIANTS_VERIFIED.md` + 10 open discrepancies
-- F1 (UI ViewModels: KeyMgmt + DeviceMgmt + NfcExchange + InCall + SasVerification) ✅ — 6 commits; ~26 unit tests
-- F2 (Platform scaffolding) ✅ — F2.1 ChatView analysis (`892acba`), F2.2 stray-files refresh (`a0fc8a9`), F2.3 ANDROID_REFERENCE WS-envelope fold-in (already corrected during F0.4 commit `62932ae`)
-- F3 (Closeout) ✅
+**Track A.2 / A.3 / A.5 / A.6 — IN PROGRESS** — Code work landed in 4 parallel waves on 2026-04-28.
+
+**Foundation Sprint** (`docs/superpowers/plans/2026-04-28-track-a-foundation.md`) — ✅ DONE
+- F0 (Invariants) ✅ · F1 (6 ViewModels, ~26 tests) ✅ · F2 (hygiene) ✅ · F3 (closeout) ✅
+
+**Track A.2 NFC + Key mgmt** — partial
+- A.2.A.1 ✅ NfcPskDerivation + structural KAT (`422f8c8`)
+- A.2.B.1 ✅ NfcCollaborativeExchange skeleton + state-machine tests (`a4fd17b`)
+- A.2.B.2 — pending (CoreNFC APDU exchange, requires physical iPhone+Android-HCE smoke test)
+- A.2.C.1 — BLOCKED on USER WT WS public surface
+- A.2.D.x — pending (KeyManagementView / DeviceManagementView / NfcExchangeView refactors)
+
+**Track A.3 CallKit** — partial
+- A.3.A.1 ✅ CallKitManaging protocol + MockCallKitManager + 6 tests (`49393b7`)
+- A.3.B.1 ✅ CallKitProvider concrete iOS-only impl (`16dc987`)
+- A.3.C.1 ✅ AppState wiring with closure bridges (`98b3dfa` — combined with A.5.B.1)
+
+**Track A.4 In-call UI** — pending Wave 5
+
+**Track A.5 PushKit** — partial
+- A.5.A.1 ✅ PushKitProvider + payload decoder + 5 tests (`49393b7` — landed in same commit as A.3.A.1 due to parallel-collision; content correct)
+- A.5.B.1 ✅ AppState wiring with token registration + incoming-push → CallKit handoff (`98b3dfa`)
+- DELIVERY still SERVER-BLOCKED per spec §10.1 (server team must pick option α/β/γ/δ)
+
+**Track A.6 Settings 11-section restructure** — partial
+- A.6.A.1 ✅ AccountSettingsViewModel (`2f5af13`)
+- A.6.A.2 ✅ SecurityDashboardViewModel (`a803341`)
+- A.6.A.3 ✅ PrivacySettingsViewModel (`25bb186`)
+- A.6.A.4 ✅ CallsSettingsViewModel (`3d6bbf2`)
+- A.6.A.5 ✅ ChatSettingsViewModel (`0862ba0`)
+- A.6.A.6 ✅ NotificationsSettingsViewModel (`9333eb0`)
+- A.6.A.7 ✅ AboutSettingsViewModel (`163f75b`)
+- A.6.A.8 ✅ TransportSettingsViewModel (`f19a28b`)
+- A.6.A.9 ✅ BackupSettingsViewModel (`13bc292` — UI scaffolds, upload/restore BLOCKED per Open Discrepancy §10)
+- A.6.B (SettingsHubView + 11 sub-screens) — pending Wave 5
 
 ## Next phase
 **Track A.2-A.6 — feature plans LANDED, ready to execute.** Suggested execution order based on dependency analysis: **A.3 → A.5 → A.4 → A.2 → A.6** (CallKit before PushKit before InCall UI; NFC and Settings independent of call stack).
