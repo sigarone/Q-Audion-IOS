@@ -45,8 +45,8 @@ final class BackupCoordinator: ObservableObject {
     struct BackupPayload: Codable {
         let version: Int
         let createdAt: Date
-        let conversations: [QAudionEngine.Conversation]
-        let messages: [QAudionEngine.Message]
+        let conversations: [Conversation]
+        let messages: [Message]
         let contacts: [ContactsStore.StoredContact]
         // Settings (UserDefaults) NOT included — OS handles those independently.
     }
@@ -91,7 +91,7 @@ final class BackupCoordinator: ObservableObject {
 
         // Gather data from local stores.
         let conversations = conversationStore.loadConversations()
-        var allMessages: [QAudionEngine.Message] = []
+        var allMessages: [Message] = []
         for c in conversations {
             allMessages.append(contentsOf: conversationStore.loadMessages(conversationId: c.id))
         }
