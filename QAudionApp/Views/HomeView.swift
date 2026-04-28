@@ -3,126 +3,207 @@ import QAudionEngine
 
 struct HomeView: View {
     @EnvironmentObject var appState: AppState
+    @State private var selectedTab: Tab = .chats
 
-    @State private var selectedTab = 0
-    @State private var contactId = ""
+    enum Tab: Hashable {
+        case chats
+        case contacts
+        case calls
+        case settings
+    }
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            // MARK: - Calls Tab
-            NavigationView {
-                VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        TextField("Enter contact ID", text: $contactId)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .padding(10)
-                            .background(Color(.secondarySystemBackground))
-                            .cornerRadius(8)
+            chatsTab
+                .tabItem { Label("Chats", systemImage: "bubble.left.and.bubble.right.fill") }
+                .tag(Tab.chats)
 
-                        Button {
-                            guard !contactId.isEmpty else { return }
-                            Task { await appState.startCall(contactId: contactId, video: false) }
-                        } label: {
-                            Image(systemName: "phone.fill")
-                                .font(.body)
+            contactsTab
+                .tabItem { Label("Contacts", systemImage: "person.2.fill") }
+                .tag(Tab.contacts)
+
+            callsTab
+                .tabItem { Label("Calls", systemImage: "phone.fill") }
+                .tag(Tab.calls)
+
+            settingsTab
+                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tag(Tab.settings)
+        }
+        .overlay(alignment: .top) {
+            if appState.isInCall {
+                inCallBanner
+            }
+        }
+    }
+
+    // MARK: - Tabs
+
+    private var chatsTab: some View {
+        NavigationStack {
+            ConversationListView()
+                .navigationTitle("Chats")
+        }
+    }
+
+    private var contactsTab: some View {
+        NavigationStack {
+            ContactsTabPlaceholder()
+                .navigationTitle("Contacts")
+        }
+    }
+
+    /// Calls tab: quick-dial + recent calls list, matching the old HomeView's Calls tab content.
+    private var callsTab: some View {
+        NavigationStack {
+            CallsTabView()
+                .navigationTitle("Calls")
+        }
+    }
+
+    /// Settings already owns its own NavigationStack — no extra wrapping needed.
+    private var settingsTab: some View {
+        SettingsView()
+    }
+
+    // MARK: - Active call banner
+
+    private var inCallBanner: some View {
+        Button(action: {
+            // Tapping the banner navigates to the in-call view via the existing
+            // InCallContainer / CallView navigation stack.
+            selectedTab = .calls
+        }) {
+            HStack {
+                Image(systemName: "phone.fill")
+                Text(appState.callContactId.map { "Active call with \($0)" } ?? "Active call")
+                Spacer()
+                Text("Tap to return")
+            }
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(Color.green)
+            .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Calls tab content (preserved from original HomeView)
+
+private struct CallsTabView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var contactId = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Quick-dial bar
+            HStack(spacing: 8) {
+                TextField("Enter contact ID", text: $contactId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .padding(10)
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(8)
+
+                Button {
+                    guard !contactId.isEmpty else { return }
+                    Task { await appState.startCall(contactId: contactId, video: false) }
+                } label: {
+                    Image(systemName: "phone.fill")
+                        .font(.body)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+                .disabled(contactId.isEmpty)
+
+                Button {
+                    guard !contactId.isEmpty else { return }
+                    Task { await appState.startCall(contactId: contactId, video: true) }
+                } label: {
+                    Image(systemName: "video.fill")
+                        .font(.body)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .disabled(contactId.isEmpty)
+            }
+            .padding()
+
+            List {
+                Section("Recent Calls") {
+                    if appState.recentCalls.isEmpty {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 8) {
+                                Image(systemName: "phone.badge.checkmark")
+                                    .font(.title)
+                                    .foregroundStyle(.secondary)
+                                Text("No recent calls")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                Text("Call history will appear here after your first call.")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .padding(.vertical, 24)
+                            Spacer()
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.blue)
-                        .disabled(contactId.isEmpty)
-
-                        Button {
-                            guard !contactId.isEmpty else { return }
-                            Task { await appState.startCall(contactId: contactId, video: true) }
-                        } label: {
-                            Image(systemName: "video.fill")
-                                .font(.body)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
-                        .disabled(contactId.isEmpty)
-                    }
-                    .padding()
-
-                    List {
-                        Section("Recent Calls") {
-                            if appState.recentCalls.isEmpty {
-                                HStack {
-                                    Spacer()
-                                    VStack(spacing: 8) {
-                                        Image(systemName: "phone.badge.clock")
-                                            .font(.title)
-                                            .foregroundStyle(.secondary)
-                                        Text("No recent calls")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .padding(.vertical, 24)
-                                    Spacer()
+                    } else {
+                        ForEach(appState.recentCalls, id: \.self) { call in
+                            HStack {
+                                Label(call, systemImage: "phone.fill")
+                                Spacer()
+                                Button {
+                                    Task { await appState.startCall(contactId: call, video: false) }
+                                } label: {
+                                    Image(systemName: "phone.fill")
+                                        .foregroundStyle(.blue)
                                 }
-                            } else {
-                                ForEach(appState.recentCalls, id: \.self) { call in
-                                    HStack {
-                                        Label(call, systemImage: "phone.fill")
-                                        Spacer()
-                                        Button {
-                                            Task { await appState.startCall(contactId: call, video: false) }
-                                        } label: {
-                                            Image(systemName: "phone.fill")
-                                                .foregroundStyle(.blue)
-                                        }
-                                        .buttonStyle(.plain)
+                                .buttonStyle(.plain)
 
-                                        Button {
-                                            Task { await appState.startCall(contactId: call, video: true) }
-                                        } label: {
-                                            Image(systemName: "video.fill")
-                                                .foregroundStyle(.green)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
+                                Button {
+                                    Task { await appState.startCall(contactId: call, video: true) }
+                                } label: {
+                                    Image(systemName: "video.fill")
+                                        .foregroundStyle(.green)
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
                 }
-                .navigationTitle("Calls")
             }
-            .navigationViewStyle(.stack)
-            .tabItem {
-                Label("Calls", systemImage: "phone.fill")
-            }
-            .tag(0)
+        }
+    }
+}
 
-            // MARK: - Messages Tab
-            NavigationView {
-                ConversationListView()
-            }
-            .navigationViewStyle(.stack)
-            .tabItem {
-                Label("Messages", systemImage: "message.fill")
-            }
-            .tag(1)
+// MARK: - Contacts tab placeholder
 
-            // MARK: - Keys Tab
-            NavigationView {
-                KeyManagementView()
+private struct ContactsTabPlaceholder: View {
+    var body: some View {
+        if #available(iOS 17.0, *) {
+            ContentUnavailableView {
+                Label("Contacts", systemImage: "person.2.fill")
+            } description: {
+                Text("Add a contact via NFC pairing or QR code in Settings → Key Management.")
             }
-            .navigationViewStyle(.stack)
-            .tabItem {
-                Label("Keys", systemImage: "key.fill")
+        } else {
+            VStack(spacing: 16) {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.secondary)
+                Text("Contacts")
+                    .font(.title2.weight(.semibold))
+                Text("Add a contact via NFC pairing or QR code in Settings → Key Management.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
             }
-            .tag(2)
-
-            // MARK: - Settings Tab
-            NavigationView {
-                SettingsView()
-            }
-            .navigationViewStyle(.stack)
-            .tabItem {
-                Label("Settings", systemImage: "gear")
-            }
-            .tag(3)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
