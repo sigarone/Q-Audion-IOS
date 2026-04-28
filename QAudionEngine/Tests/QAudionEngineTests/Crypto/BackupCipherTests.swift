@@ -60,17 +60,12 @@ final class BackupCipherTests: XCTestCase {
         )
     }
 
-    func test_scryptDeriveKey_throwsTodoForNow() {
-        // The scrypt half is intentionally unimplemented pending cross-platform
-        // §10 .qabk container format alignment. Verify the API throws the
-        // documented TODO error rather than silently returning bad bytes.
-        XCTAssertThrowsError(
-            try BackupCipher.deriveKey(password: "test", salt: Data((0..<16).map { _ in UInt8(0) }))
-        ) { err in
-            guard case BackupCipher.Error.scryptNotImplemented = err else {
-                XCTFail("Expected .scryptNotImplemented, got \(err)")
-                return
-            }
-        }
+    func test_scryptDeriveKey_succeedsAfterUnblock() throws {
+        // scrypt is now implemented (§10 unblocked 2026-04-28).
+        // N=131072 is slow; skip in fast-CI mode.
+        try XCTSkipIf(ProcessInfo.processInfo.environment["FAST_TESTS"] != nil,
+                      "Skip scrypt-heavy test in fast mode")
+        let key = try BackupCipher.deriveKey(password: "test", salt: Data((0..<16).map { _ in UInt8(0) }))
+        XCTAssertEqual(key.bitCount, 256)
     }
 }

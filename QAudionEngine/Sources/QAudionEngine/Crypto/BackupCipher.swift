@@ -4,16 +4,13 @@ import CryptoKit
 /// Backup file cipher primitives per spec §5.10.
 ///
 /// Two halves:
-/// 1. **Key derivation:** scrypt(password, salt, N=2^15, r=8, p=1) → 32B
-///    — currently STUBBED pending cross-platform §10 .qabk container
-///    format alignment. CryptoKit does not include scrypt; we'll either
-///    implement RFC 7914 minimally or pull in a vetted dependency once
-///    Desktop QABK and Android QAUD converge.
+/// 1. **Key derivation:** scrypt(password, salt, N=2^17, r=8, p=1) → 32B
+///    — implemented via Scrypt.swift (RFC 7914 clean-room, unblocked 2026-04-28
+///    per §10 .qabk container format alignment with Android QAUD format).
 /// 2. **AEAD:** AES-256-GCM (12B nonce, 16B tag) — fully implemented.
 ///
-/// The container layout (`QABK` magic, version byte, metadata, payload)
-/// is BLOCKED at §10 in INVARIANTS_VERIFIED.md. This module ships the
-/// cipher so the container layer can plug into it once unblocked.
+/// For the complete .qabk container (QAUD magic + salt + nonce + ciphertext +
+/// tag), see BackupContainer.swift.
 public enum BackupCipher {
 
     public struct SealedBox: Equatable {
@@ -30,7 +27,8 @@ public enum BackupCipher {
 
     public enum Error: Swift.Error, LocalizedError {
         case wrongNonceSize(Int)
-        case scryptNotImplemented   // see file docstring
+        case scryptNotImplemented   // retained for back-compat; no longer thrown
+        case scryptFailed(String)
         case aeadFailed(String)
 
         public var errorDescription: String? {
@@ -38,7 +36,9 @@ public enum BackupCipher {
             case .wrongNonceSize(let n):
                 return "AES-GCM nonce must be 12B, got \(n)"
             case .scryptNotImplemented:
-                return "scrypt not yet implemented — blocked by Open Discrepancy §10 (.qabk container format alignment)"
+                return "scrypt not yet implemented (legacy case — should not be reached)"
+            case .scryptFailed(let m):
+                return "scrypt key derivation failed: \(m)"
             case .aeadFailed(let m):
                 return "AEAD operation failed: \(m)"
             }
@@ -94,20 +94,21 @@ public enum BackupCipher {
         }
     }
 
-    // MARK: - Key derivation (STUBBED)
+    // MARK: - Key derivation (RFC 7914 scrypt — UNBLOCKED §10)
 
     /// Derives a 32-byte symmetric key from password+salt via scrypt.
     ///
-    /// **NOT YET IMPLEMENTED.** CryptoKit doesn't ship scrypt. Implementation
-    /// is gated on Open Discrepancy §10 — once Desktop and Android agree on
-    /// the .qabk container layout, this method will be filled in (RFC 7914
-    /// scrypt with N=32768, r=8, p=1, len=32).
+    /// Uses RFC 7914 scrypt (N=131072, r=8, p=1, dkLen=32) — Android QAUD
+    /// parameters adopted by iOS per user directive 2026-04-28 (§10 unblock).
     public static func deriveKey(password: String, salt: Data) throws -> SymmetricKey {
-        throw Error.scryptNotImplemented
+        do {
+            let bytes = try Scrypt.deriveKey(
+                password: Data(password.utf8), salt: salt,
+                n: 131_072, r: 8, p: 1, dkLen: 32
+            )
+            return SymmetricKey(data: bytes)
+        } catch {
+            throw Error.scryptFailed(String(describing: error))
+        }
     }
-
-    /// Once scrypt is implemented, the high-level convenience API will be
-    /// `seal(plaintext:password:salt:nonce:aad:)` returning a complete
-    /// `(salt, nonce, ciphertext, tag)` tuple ready for the container layer.
-    /// Documented here as a roadmap marker.
 }
