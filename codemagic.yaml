@@ -273,4 +273,11 @@ workflows:
         # ("Cannot add internal group to a build"), which fails the
         # post-processing step even when the build itself is valid.
         # Re-add beta_groups ONLY for EXTERNAL groups.
-        expire_build_submitted_for_review: true
+        #
+        # NOTE: `expire_build_submitted_for_review: true` was here, but
+        # Codemagic's YAML schema rejects it when `submit_to_testflight`
+        # is false ("TestFlight submission is required for
+        # expire_build_submitted_for_review"). It's only meaningful in
+        # the external-review flow anyway, so it's removed for now.
+        # Re-add it together with submit_to_testflight=true the day we
+        # turn external testing on.
