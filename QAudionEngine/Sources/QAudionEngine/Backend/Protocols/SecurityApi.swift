@@ -6,46 +6,46 @@ import Foundation
 /// - Threat reporting
 /// - Cert pinning info
 /// - Compliance info
+/// - Remote wipe confirmation
 public protocol SecurityApi {
     // MARK: - Zero-Knowledge Auth
-    func zkRegister(salt: Data, verifierV: Data, publicBlind: Data) async throws
-    func zkAuth(clientPublic: Data, proof: Data, nonce: Data) async throws -> ZKAuthResult
+
+    /// §3.11 — POST /api/v1/security/zk-register
+    /// Body: {zk_commitment, public_params?}
+    func zkRegister(zkCommitment: Data, publicParams: Data?) async throws
+
+    /// §3.12 — POST /api/v1/security/zk-auth
+    /// Body: {challenge, proof}
+    /// Returns bearer/session token bytes.
+    func zkAuth(challenge: Data, proof: Data) async throws -> Data
 
     // MARK: - Hybrid PQC Relay
-    func sendPqcKeyExchange(targetUserId: String, pqcCiphertext: Data, x25519PublicKey: Data,
-                            enclavePublicKey: Data?, messageType: String) async throws
+
+    /// §3.13 — POST /api/v1/security/pqc-relay
+    /// Body: {recipient_id, ciphertext (base64), algorithm}
+    /// Default algorithm is "ml-kem-1024" (project target; Android default 768
+    /// is wrong for this deployment).
+    func sendPqcKeyExchange(recipientId: String, ciphertext: Data,
+                            algorithm: String) async throws
 
     // MARK: - Threat Reporting
-    func reportThreat(kind: ThreatKind, severity: ThreatSeverity, detail: String, sessionId: String?) async throws
 
-    // MARK: - Server Info
+    /// §3.14 — POST /api/v1/security/threat-report
+    /// Body: {category, details, severity}
+    func reportThreat(category: String, details: String, severity: String) async throws
+
+    // MARK: - Server Info (iOS-only, no Android counterpart)
+
     func getCertInfo() async throws -> CertPinningInfo
     func getComplianceInfo() async throws -> ComplianceInfo
 
     // MARK: - Remote Wipe
-    func confirmWipe(deviceId: String) async throws
-}
 
-public struct ZKAuthResult: Codable {
-    public let verified: Bool
-    public let sessionId: String?
-    enum CodingKeys: String, CodingKey {
-        case verified
-        case sessionId = "session_id"
-    }
-}
-
-public enum ThreatKind: String, Codable {
-    case replayAttack = "replay_attack"
-    case outOfOrderInjection = "out_of_order_injection"
-    case timingAnomaly = "timing_anomaly"
-    case keyReuse = "key_reuse"
-    case frameRateAnomaly = "frame_rate_anomaly"
-    case sequenceGap = "sequence_gap"
-}
-
-public enum ThreatSeverity: String, Codable {
-    case info, warning, critical
+    /// §3.15 — POST /api/v1/security/wipe-confirm
+    /// Body: {wipe_id, confirmed}
+    /// Caller MUST supply the wipe_id received from a prior server push.
+    /// PushKit handler integration is a follow-on task.
+    func confirmWipe(wipeId: String, confirmed: Bool) async throws
 }
 
 public struct CertPinningInfo: Codable {

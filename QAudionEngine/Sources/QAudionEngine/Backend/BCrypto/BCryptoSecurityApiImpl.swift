@@ -6,86 +6,66 @@ public final class BCryptoSecurityApiImpl: SecurityApi {
 
     // MARK: - Zero-Knowledge Auth
 
-    /// TODO(parity, PHASE1_REST_AUDIT §3.11): wire schema disagrees with
-    /// Android `ZkRegisterRequest { zk_commitment, public_params? }`. iOS
-    /// currently sends `{salt, verifier_v, public_blind}` (an SRP-style
-    /// verifier). Neither shape is self-evidently correct — the server
-    /// team must confirm the intended ZK protocol before this is
-    /// normalised. DO NOT auto-rewrite to match Android without a server
-    /// contract confirmation.
-    public func zkRegister(salt: Data, verifierV: Data, publicBlind: Data) async throws {
-        let dict: [String: Any] = [
-            "salt": salt.base64EncodedString(),
-            "verifier_v": verifierV.base64EncodedString(),
-            "public_blind": publicBlind.base64EncodedString()
+    /// §3.11 — POST /api/v1/security/zk-register
+    /// Android wire shape: {zk_commitment, public_params?}
+    public func zkRegister(zkCommitment: Data, publicParams: Data?) async throws {
+        var dict: [String: Any] = [
+            "zk_commitment": zkCommitment.base64EncodedString()
         ]
-        let body = try JSONSerialization.data(withJSONObject: dict)
+        if let params = publicParams {
+            dict["public_params"] = params.base64EncodedString()
+        }
+        let body = try JSONSerialization.data(withJSONObject: dict, options: .sortedKeys)
         _ = try await rest.post("/api/v1/security/zk-register", body: body)
     }
 
-    /// TODO(parity, PHASE1_REST_AUDIT §3.12): wire schema disagrees with
-    /// Android `ZkAuthRequest { challenge, proof }`. iOS sends
-    /// `{client_public, proof, nonce}`. Pending server-team
-    /// clarification.
-    public func zkAuth(clientPublic: Data, proof: Data, nonce: Data) async throws -> ZKAuthResult {
+    /// §3.12 — POST /api/v1/security/zk-auth
+    /// Android wire shape: {challenge, proof}
+    /// Returns bearer/session token bytes from the response body.
+    public func zkAuth(challenge: Data, proof: Data) async throws -> Data {
         let dict: [String: Any] = [
-            "client_public": clientPublic.base64EncodedString(),
-            "proof": proof.base64EncodedString(),
-            "nonce": nonce.base64EncodedString()
+            "challenge": challenge.base64EncodedString(),
+            "proof": proof.base64EncodedString()
         ]
-        let body = try JSONSerialization.data(withJSONObject: dict)
-        let data = try await rest.post("/api/v1/security/zk-auth", body: body)
-        return try JSONDecoder().decode(ZKAuthResult.self, from: data)
+        let body = try JSONSerialization.data(withJSONObject: dict, options: .sortedKeys)
+        return try await rest.post("/api/v1/security/zk-auth", body: body)
     }
 
     // MARK: - Hybrid PQC Relay
 
-    /// TODO(parity, PHASE1_REST_AUDIT §3.13): wire schema disagrees with
-    /// Android `PqcRelayRequest { recipient_id, ciphertext, algorithm }`.
-    /// iOS sends a more structured hybrid-handshake payload
-    /// (`target_user_id`, `pqc_ciphertext`, `x25519_public_key`,
-    /// `enclave_public_key?`, `message_type`). The Android shape is a
-    /// thin opaque relay envelope — the server team should confirm
-    /// whether the hybrid-handshake metadata is expected in-band or
-    /// negotiated out-of-band.
-    public func sendPqcKeyExchange(targetUserId: String, pqcCiphertext: Data,
-                                    x25519PublicKey: Data, enclavePublicKey: Data?,
-                                    messageType: String) async throws {
-        var dict: [String: Any] = [
-            "target_user_id": targetUserId,
-            "pqc_ciphertext": pqcCiphertext.base64EncodedString(),
-            "x25519_public_key": x25519PublicKey.base64EncodedString(),
-            "message_type": messageType
+    /// §3.13 — POST /api/v1/security/pqc-relay
+    /// Android wire shape: {recipient_id, ciphertext, algorithm}
+    /// Default algorithm is "ml-kem-1024" (project target; Android default
+    /// "ml-kem-768" is wrong for this deployment).
+    public func sendPqcKeyExchange(recipientId: String, ciphertext: Data,
+                                    algorithm: String = "ml-kem-1024") async throws {
+        let dict: [String: Any] = [
+            "recipient_id": recipientId,
+            "ciphertext": ciphertext.base64EncodedString(),
+            "algorithm": algorithm
         ]
-        if let enclave = enclavePublicKey {
-            dict["enclave_public_key"] = enclave.base64EncodedString()
-        }
-        let body = try JSONSerialization.data(withJSONObject: dict)
+        let body = try JSONSerialization.data(withJSONObject: dict, options: .sortedKeys)
         _ = try await rest.post("/api/v1/security/pqc-relay", body: body)
     }
 
     // MARK: - Threat Reporting
 
-    /// TODO(parity, PHASE1_REST_AUDIT §3.14): wire schema disagrees with
-    /// Android `ThreatReportRequest { category, details, severity }`.
-    /// iOS sends `{threat_kind, severity, detail, timestamp, session_id?}`.
-    /// `detail` vs `details` and `threat_kind` vs `category` are safe
-    /// renames once the server team confirms; `timestamp`/`session_id`
-    /// on iOS may need to be dropped or added server-side.
-    public func reportThreat(kind: ThreatKind, severity: ThreatSeverity,
-                              detail: String, sessionId: String?) async throws {
-        var dict: [String: Any] = [
-            "threat_kind": kind.rawValue,
-            "severity": severity.rawValue,
-            "detail": detail,
-            "timestamp": ISO8601DateFormatter().string(from: Date())
+    /// §3.14 — POST /api/v1/security/threat-report
+    /// Android wire shape: {category, details, severity}
+    /// category: snake_case threat kind string (e.g. "replay_attack")
+    /// details: human-readable description
+    /// severity: "info" | "warning" | "critical"
+    public func reportThreat(category: String, details: String, severity: String) async throws {
+        let dict: [String: Any] = [
+            "category": category,
+            "details": details,
+            "severity": severity
         ]
-        if let sid = sessionId { dict["session_id"] = sid }
-        let body = try JSONSerialization.data(withJSONObject: dict)
+        let body = try JSONSerialization.data(withJSONObject: dict, options: .sortedKeys)
         _ = try await rest.post("/api/v1/security/threat-report", body: body)
     }
 
-    // MARK: - Server Info
+    // MARK: - Server Info (iOS-only, no Android counterpart)
 
     /// iOS-only (no Android counterpart). See audit §2 iOS-only table.
     public func getCertInfo() async throws -> CertPinningInfo {
@@ -101,14 +81,16 @@ public final class BCryptoSecurityApiImpl: SecurityApi {
 
     // MARK: - Remote Wipe
 
-    /// TODO(parity, PHASE1_REST_AUDIT §3.15): wire schema disagrees with
-    /// Android `WipeConfirmRequest { wipe_id, confirmed }`. iOS sends
-    /// `{device_id}`. Pending server-team clarification — the Android
-    /// `wipe_id` suggests a nonce/challenge issued by a prior request;
-    /// iOS may be missing that round-trip entirely.
-    public func confirmWipe(deviceId: String) async throws {
-        let dict = ["device_id": deviceId]
-        let body = try JSONSerialization.data(withJSONObject: dict)
+    /// §3.15 — POST /api/v1/security/wipe-confirm
+    /// Android wire shape: {wipe_id, confirmed}
+    /// Caller MUST supply the wipe_id received from a prior server push.
+    /// PushKit handler integration is a follow-on task.
+    public func confirmWipe(wipeId: String, confirmed: Bool) async throws {
+        let dict: [String: Any] = [
+            "wipe_id": wipeId,
+            "confirmed": confirmed
+        ]
+        let body = try JSONSerialization.data(withJSONObject: dict, options: .sortedKeys)
         _ = try await rest.post("/api/v1/security/wipe-confirm", body: body)
     }
 }
