@@ -9,11 +9,26 @@
 **Predecessor plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
-**Track A Foundation Sprint — IN PROGRESS** (`docs/superpowers/plans/2026-04-28-track-a-foundation.md`).
-- F0 (Invariants verification) — ✅ DONE — see `docs/progress/INVARIANTS_VERIFIED.md` (10 open discrepancies catalogued)
-- F1 (UI ViewModels: KeyMgmt + DeviceMgmt + NfcExchange + InCall + SasVerification) — ✅ DONE — 6 commits (`19fd9dd`, `fbffe3d`, `ecb8a5f`, `c3c9b31`, `cae30d3`, `d59bbd3`); ~26 unit tests across 6 ViewModels (`swift test` deferred to GitHub Actions `engine-tests.yml` since `swift` not on Windows)
-- F2 (Platform scaffolding: ChatView consolidation + stray-files + ANDROID_REFERENCE WS-envelope correction) — IN PROGRESS
-- F3 (Closeout) — pending
+**Track A Foundation Sprint — ✅ DONE** (`docs/superpowers/plans/2026-04-28-track-a-foundation.md`).
+- F0 (Invariants verification) ✅ — `docs/progress/INVARIANTS_VERIFIED.md` + 10 open discrepancies
+- F1 (UI ViewModels: KeyMgmt + DeviceMgmt + NfcExchange + InCall + SasVerification) ✅ — 6 commits; ~26 unit tests
+- F2 (Platform scaffolding) ✅ — F2.1 ChatView analysis (`892acba`), F2.2 stray-files refresh (`a0fc8a9`), F2.3 ANDROID_REFERENCE WS-envelope fold-in (already corrected during F0.4 commit `62932ae`)
+- F3 (Closeout) ✅
+
+## Next phase
+**Track A.2-A.6 — feature plans pending.** Next plan to write (user picks priority):
+- `docs/superpowers/plans/2026-XX-XX-track-a2-nfc-keymgmt.md` — Phase 4 NFC + key management
+- `docs/superpowers/plans/2026-XX-XX-track-a3-callkit.md` — Phase 5 CallKit integration
+- `docs/superpowers/plans/2026-XX-XX-track-a6-settings.md` — Phase 11 Settings 11-section restructure
+- `docs/superpowers/plans/2026-XX-XX-track-a4-incall-ui.md` — Phase 7 In-call UI (consumes F1 ViewModels)
+- `docs/superpowers/plans/2026-XX-XX-track-a5-pushkit.md` — Phase 6-prep PushKit scaffolding (delivery server-blocked per §10.1)
+
+## Open server-team / cross-team questions (carried from spec §10 + INVARIANTS_VERIFIED.md)
+- §10.1 — APNs VoIP push: server team to pick option α/β/γ/δ
+- §10.2 — security endpoints (zk-register/zk-auth/pqc-relay/threat-report/wipe-confirm) schema decision
+- §10.3 — GroupChat — iOS UX decision (Android-folded vs Desktop-separate)
+- §10.4 — Phonebook import scope decision
+- 10 INVARIANTS_VERIFIED.md "Open discrepancies" — cross-team sign-off requested before any wire-touching work resumes (most critical: `.qabk` Desktop↔Android container incompatibility, fingerprint display format iOS/Desktop drift)
 
 ## Predecessor phases — ✅ DONE (do not redo)
 **Phase 0** (capability + pipeline baseline) — `b470ed8`, `4e230ab`, `51b0404`, `b1e6ef9`. All 4 tasks landed. TestFlight `v1.0.24-ph0` green.
