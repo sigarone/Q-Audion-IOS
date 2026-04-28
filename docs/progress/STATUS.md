@@ -11,8 +11,8 @@
 ## Fase attiva
 **Track A Foundation Sprint — IN PROGRESS** (`docs/superpowers/plans/2026-04-28-track-a-foundation.md`).
 - F0 (Invariants verification) — ✅ DONE — see `docs/progress/INVARIANTS_VERIFIED.md` (10 open discrepancies catalogued)
-- F1 (UI ViewModels: KeyMgmt + DeviceMgmt + NfcExchange + InCall + SasVerification) — IN PROGRESS
-- F2 (Platform scaffolding: ChatView consolidation + stray-files + ANDROID_REFERENCE WS-envelope correction) — pending
+- F1 (UI ViewModels: KeyMgmt + DeviceMgmt + NfcExchange + InCall + SasVerification) — ✅ DONE — 6 commits (`19fd9dd`, `fbffe3d`, `ecb8a5f`, `c3c9b31`, `cae30d3`, `d59bbd3`); ~26 unit tests across 6 ViewModels (`swift test` deferred to GitHub Actions `engine-tests.yml` since `swift` not on Windows)
+- F2 (Platform scaffolding: ChatView consolidation + stray-files + ANDROID_REFERENCE WS-envelope correction) — IN PROGRESS
 - F3 (Closeout) — pending
 
 ## Predecessor phases — ✅ DONE (do not redo)
