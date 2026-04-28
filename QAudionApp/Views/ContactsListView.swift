@@ -8,9 +8,9 @@ final class ContactsListContainer: ObservableObject {
     @Published var errorMessage: String?
     @Published var scanProgress: PhonebookSyncCoordinator.ScanProgress?
 
-    private let appState: AppState?
+    private var appState: AppState?
     private let store: ContactsStore
-    private let service: ContactsRefreshService?
+    private var service: ContactsRefreshService?
 
     init(appState: AppState? = nil, store: ContactsStore = ContactsStore()) {
         self.appState = appState
@@ -47,6 +47,17 @@ final class ContactsListContainer: ObservableObject {
     /// store directly.
     func lookupPubkey(userId: String) -> Data? {
         store.findPubkey(userId: userId)
+    }
+
+    /// Late-binds an AppState into the container after construction so the
+    /// view can pull AppState from `@EnvironmentObject` and pass it down
+    /// without forcing every call site (sheet presenters, previews) to
+    /// inject one upfront. Idempotent: calling with the same AppState is
+    /// a no-op; calling with a different AppState rebuilds the service.
+    func attach(appState: AppState) {
+        if self.appState === appState { return }
+        self.appState = appState
+        self.service = ContactsRefreshService(appState: appState, store: store)
     }
 
     /// Persists a QR-scanned payload as a verified local contact. Identity
@@ -194,6 +205,13 @@ struct ContactsListView: View {
             }
         }
         .refreshable { container.refresh() }
+        .onAppear {
+            // Late-bind AppState into the container so pull-to-refresh
+            // can call ContactsRefreshService (which needs the auth-bearing
+            // backend provider). Without this, init() builds a service-less
+            // container and refresh() silently no-ops.
+            container.attach(appState: appState)
+        }
         .overlay(alignment: .top) {
             if let progress = container.scanProgress, container.isRefreshing {
                 scanProgressBanner(progress)
