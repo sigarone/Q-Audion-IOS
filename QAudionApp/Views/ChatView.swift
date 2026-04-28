@@ -4,6 +4,7 @@ import QAudionEngine
 struct ChatView: View {
 
     @StateObject private var container: ChatContainer
+    @EnvironmentObject private var appState: AppState
 
     // MARK: - Inits
 
@@ -84,11 +85,22 @@ struct ChatView: View {
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    // Voice call — hoisted to parent via AppState (TODO: bridge to BCryptoWebSocketClient)
+                    // Initiate a voice call to the conversation peer. Group
+                    // conversations skip this entry: group calling lives on
+                    // a separate header surface (GroupCallView).
+                    let peer = container.viewModel.conversation
+                    guard peer.kind != .group else { return }
+                    Task {
+                        await appState.startCall(
+                            contactId: peer.peerUserId,
+                            video: false
+                        )
+                    }
                 } label: {
                     Image(systemName: "phone.fill")
                         .foregroundStyle(.cyan)
                 }
+                .disabled(container.viewModel.conversation.kind == .group)
             }
         }
     }
@@ -215,5 +227,8 @@ struct ChatView: View {
 }
 
 #Preview {
+    // Preview needs an AppState in the environment because the toolbar
+    // phone button calls appState.startCall.
     NavigationStack { ChatView() }
+        .environmentObject(AppState())
 }
