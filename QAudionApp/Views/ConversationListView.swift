@@ -2,154 +2,162 @@ import SwiftUI
 import QAudionEngine
 
 struct ConversationListView: View {
-    @EnvironmentObject var appState: AppState
-    @State private var searchText = ""
-    @State private var showCompose = false
-    @State private var newContactId = ""
-
-    private var filteredConversations: [Conversation] {
-        if searchText.isEmpty { return appState.conversations }
-        return appState.conversations.filter {
-            $0.contactName.localizedCaseInsensitiveContains(searchText)
-        }
-    }
+    @StateObject private var container = ConversationListContainer()
+    @State private var searchText: String = ""
+    @State private var showingNewConversation = false
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            List {
-                if filteredConversations.isEmpty {
-                    emptyState
-                } else {
-                    ForEach(filteredConversations) { conversation in
-                        NavigationLink {
-                            ChatView(
-                                conversationId: conversation.id,
-                                contactName: conversation.contactName
-                            )
-                        } label: {
-                            conversationRow(conversation)
-                        }
-                        .listRowBackground(Color(white: 0.10))
-                    }
+        Group {
+            if container.viewModel.items.isEmpty && container.searchText.isEmpty {
+                emptyState
+            } else {
+                conversationList
+            }
+        }
+        .searchable(text: $searchText, prompt: "Search conversations")
+        .onChange(of: searchText) { _, newValue in
+            container.setSearchQuery(newValue)
+        }
+        .navigationTitle("Chats")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: { showingNewConversation = true }) {
+                    Image(systemName: "square.and.pencil")
                 }
             }
-            .searchable(text: $searchText, prompt: "Search conversations")
-            .listStyle(.plain)
-
-            // MARK: - Compose Button
-            Button {
-                showCompose = true
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 56, height: 56)
-                    .background(
-                        LinearGradient(
-                            colors: [.cyan, .blue],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .clipShape(Circle())
-                    .shadow(color: .cyan.opacity(0.3), radius: 8, y: 4)
-            }
-            .padding(.trailing, 20)
-            .padding(.bottom, 20)
         }
-        .navigationTitle("Messages")
-        .alert("New Message", isPresented: $showCompose) {
-            TextField("Contact ID", text: $newContactId)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            Button("Cancel", role: .cancel) { newContactId = "" }
-            Button("Start Chat") {
-                guard !newContactId.isEmpty else { return }
-                appState.createConversation(contactId: newContactId)
-                newContactId = ""
+        .refreshable { container.loadFromStore() }
+        .sheet(isPresented: $showingNewConversation) {
+            NavigationStack {
+                ContactsListView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { showingNewConversation = false }
+                        }
+                    }
             }
-        } message: {
-            Text("Enter the contact ID to start an encrypted conversation.")
         }
     }
 
-    // MARK: - Conversation Row
-
-    private func conversationRow(_ conversation: Conversation) -> some View {
-        HStack(spacing: 12) {
-            // Avatar
-            ZStack {
-                Circle()
-                    .fill(avatarColor(for: conversation.contactName))
-                    .frame(width: 48, height: 48)
-                Text(String(conversation.contactName.prefix(1)).uppercased())
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
+    private var conversationList: some View {
+        List {
+            ForEach(container.viewModel.filteredItems, id: \.conversationId) { item in
+                NavigationLink(destination: chatDestination(for: item)) {
+                    conversationRow(item)
+                }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        container.deleteConversation(conversationId: item.conversationId)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    Button {
+                        container.togglePinned(conversationId: item.conversationId)
+                    } label: {
+                        Label(item.pinned ? "Unpin" : "Pin", systemImage: item.pinned ? "pin.slash" : "pin")
+                    }
+                    .tint(.orange)
+                }
             }
+        }
+    }
 
-            // Content
+    @ViewBuilder
+    private func chatDestination(for item: ConversationListViewModel.Item) -> some View {
+        ChatView(
+            conversationId: item.conversationId,
+            peerUserId: item.peerUserId,
+            peerDisplayName: item.peerDisplayName
+        )
+    }
+
+    private func conversationRow(_ item: ConversationListViewModel.Item) -> some View {
+        HStack(spacing: 12) {
+            avatar(for: item)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(conversation.contactName)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
-                    if conversation.isEncrypted {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.green)
+                    if item.pinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                    Text(item.peerDisplayName)
+                        .font(.body.weight(.semibold))
+                    if item.kind == .group {
+                        Image(systemName: "person.3.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(conversation.lastMessageTime, style: .relative)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.4))
+                    Text(item.lastActivity, style: .time)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                HStack {
-                    Text(conversation.lastMessage)
+                if let preview = item.lastMessagePreview {
+                    Text(preview)
                         .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .lineLimit(1)
-                    Spacer()
-                    if conversation.unreadCount > 0 {
-                        Text("\(conversation.unreadCount)")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(.cyan))
-                    }
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
+            }
+            if item.unreadCount > 0 {
+                Text("\(item.unreadCount)")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.blue)
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
             }
         }
         .padding(.vertical, 4)
     }
 
-    // MARK: - Empty State
+    private func avatar(for item: ConversationListViewModel.Item) -> some View {
+        let gradient: LinearGradient = {
+            if item.kind == .group {
+                return LinearGradient(colors: [.purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing)
+            } else {
+                return LinearGradient(colors: [.blue, .cyan], startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+        }()
+        return Circle()
+            .fill(gradient)
+            .frame(width: 44, height: 44)
+            .overlay(
+                Group {
+                    if item.kind == .group {
+                        Image(systemName: "person.3.fill")
+                            .foregroundStyle(.white)
+                    } else {
+                        Text(initials(item.peerDisplayName))
+                            .font(.body.bold())
+                            .foregroundStyle(.white)
+                    }
+                }
+            )
+    }
+
+    private func initials(_ name: String) -> String {
+        let words = name.split(separator: " ")
+        return String(words.prefix(2).compactMap { $0.first }).uppercased()
+    }
 
     private var emptyState: some View {
-        HStack {
-            Spacer()
-            VStack(spacing: 10) {
-                Image(systemName: "message.badge.filled.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.secondary)
-                Text("No conversations")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Text("Tap the compose button to start chatting")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.vertical, 40)
-            Spacer()
+        VStack(spacing: 16) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 64))
+                .foregroundStyle(.secondary)
+            Text("No conversations yet")
+                .font(.title3.bold())
+            Text("Tap the compose button in the top-right to start a chat with a contact.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
         }
-        .listRowBackground(Color.clear)
     }
+}
 
-    // MARK: - Helpers
-
-    private func avatarColor(for name: String) -> Color {
-        let colors: [Color] = [.blue, .cyan, .purple, .orange, .pink, .green, .indigo, .teal]
-        let hash = abs(name.hashValue)
-        return colors[hash % colors.count]
-    }
+#Preview {
+    NavigationStack { ConversationListView() }
 }
