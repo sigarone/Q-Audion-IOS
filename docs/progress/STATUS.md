@@ -16,12 +16,13 @@
 - F3 (Closeout) ✅
 
 ## Next phase
-**Track A.2-A.6 — feature plans pending.** Next plan to write (user picks priority):
-- `docs/superpowers/plans/2026-XX-XX-track-a2-nfc-keymgmt.md` — Phase 4 NFC + key management
-- `docs/superpowers/plans/2026-XX-XX-track-a3-callkit.md` — Phase 5 CallKit integration
-- `docs/superpowers/plans/2026-XX-XX-track-a6-settings.md` — Phase 11 Settings 11-section restructure
-- `docs/superpowers/plans/2026-XX-XX-track-a4-incall-ui.md` — Phase 7 In-call UI (consumes F1 ViewModels)
-- `docs/superpowers/plans/2026-XX-XX-track-a5-pushkit.md` — Phase 6-prep PushKit scaffolding (delivery server-blocked per §10.1)
+**Track A.2-A.6 — feature plans LANDED, ready to execute.** Suggested execution order based on dependency analysis: **A.3 → A.5 → A.4 → A.2 → A.6** (CallKit before PushKit before InCall UI; NFC and Settings independent of call stack).
+
+- `docs/superpowers/plans/2026-04-28-track-a2-nfc-keymgmt.md` — NFC iOS-reader pairing + Key/Device mgmt views (PSK §5.5 + KAT vectors)
+- `docs/superpowers/plans/2026-04-28-track-a3-callkit.md` — CallKitManaging protocol + iOS-only provider + AppState wiring
+- `docs/superpowers/plans/2026-04-28-track-a4-incall-ui.md` — 7-element in-call UI consuming F1.5/F1.6 VMs
+- `docs/superpowers/plans/2026-04-28-track-a5-pushkit.md` — PushKitProvider scaffolding (delivery SERVER-BLOCKED §10.1)
+- `docs/superpowers/plans/2026-04-28-track-a6-settings.md` — SettingsHubView + 11 sub-screens + 9 new VMs + reuse F1.2/F1.3
 
 ## Open server-team / cross-team questions (carried from spec §10 + INVARIANTS_VERIFIED.md)
 - §10.1 — APNs VoIP push: server team to pick option α/β/γ/δ
