@@ -8,10 +8,12 @@ final class InCallContainer: ObservableObject {
     @Published private(set) var viewModel: InCallViewModel = .mock
 
     private weak var appState: AppState?
+    private let contactsStore: ContactsStore
     private var cancellables: Set<AnyCancellable> = []
 
-    init(appState: AppState) {
+    init(appState: AppState, contactsStore: ContactsStore = ContactsStore()) {
         self.appState = appState
+        self.contactsStore = contactsStore
         rebuild()
         bindAppState()
         bindCallService()
@@ -47,17 +49,27 @@ final class InCallContainer: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Peer info from callContactId.
+        // Peer info from callContactId. Resolves displayName / avatarUrl /
+        // fingerprint from the local ContactsStore when the userId matches a
+        // QR-paired or phonebook-discovered contact; falls back to userId
+        // and the unknown-fingerprint placeholder otherwise.
         appState.$callContactId
             .receive(on: RunLoop.main)
             .sink { [weak self] cid in
-                guard let cid = cid else { return }
-                self?.update {
+                guard let self, let cid = cid else { return }
+                let stored = self.contactsStore.load().first(where: { $0.userId == cid })
+                let displayName = stored?.displayName ?? cid
+                let avatarUrl = stored?.avatarUrl
+                let fingerprint: String = {
+                    guard let pk = stored?.pubkey else { return "????.????.????.????" }
+                    return (try? Fingerprint.format(pubkey: pk)) ?? "????.????.????.????"
+                }()
+                self.update {
                     $0.peer = InCallViewModel.PeerInfo(
                         userId: cid,
-                        displayName: cid,  // TODO: lookup display name from contacts
-                        avatarUrl: nil,
-                        fingerprint: "????.????.????.????"  // TODO: from CallService session key
+                        displayName: displayName,
+                        avatarUrl: avatarUrl,
+                        fingerprint: fingerprint
                     )
                 }
             }
