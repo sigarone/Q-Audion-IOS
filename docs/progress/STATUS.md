@@ -9,7 +9,7 @@
 **Predecessor plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
-**Track A — feature-build phase (Wave 14)** — TestFlight pipeline iterating on `v1.0.34-trackA` (build fix) and `v1.0.35-trackA` (W14 QR-scan flow).
+**Track A — feature-build phase (Wave 14 + Wave 15 + pipeline hardening)** — TestFlight pipeline iterating from `v1.0.34-trackA` (build fix) through `v1.0.47-trackA` (privacy manifest). The chain landed across two distinct streams on 2026-04-28: feature work (W14 + W15) AND build-pipeline / Apple-compliance hardening (`v1.0.43..47-trackA`).
 
 **Wave 14 — In-app pairing surface** — landed 2026-04-28 (`v1.0.34-trackA` … `v1.0.40-trackA`)
 - W14.A+C ✅ `QrPayloadRouter` + `QrScannerView` + `QrScannerSheet` + ContactsListView "Scan QR" wire (`bd92bd6`). AVCaptureSession-backed camera surface, payload-typed result detail, scan→add verified StoredContact in one tap.
@@ -20,7 +20,29 @@
 - W14.H ✅ `ContactsListContainer.attach(appState:)` pattern (`8b51663`) — fixes a defect where pull-to-refresh silently no-op'd because the zero-arg `ContactsListView.init()` built a service-less container.
 - W14.B — deferred: peer-side `FastSetupQrCodeScreen` requires a server-issued mint endpoint per the codec docstring; blocked on backend route definition. The `DeviceLinkBinaryQR` display variant (in-person two-iOS pairing) is candidate replacement scope, pending product call.
 
+**Wave 15 — Onboarding + Chat polish** — landed 2026-04-28 (`v1.0.41-trackA` … `v1.0.42-trackA`)
+- W15.A ✅ Onboarding placeholders → real RecoverySeed + VoiceEnrollment views (`009cbfe`). RecoverySetup wires W9.B `RecoverySeedContainerView` via private `OnboardingRecoverySeedHost` (state survives re-runs); VoiceEnrollment drops in W11.D `VoiceEnrollmentContainerView` directly. End-to-end onboarding now real for new users.
+- W15.B ✅ ChatView toolbar phone button → `AppState.startCall` (`82f2316`). 1:1 conversations get the live button; group conversations gated off (group calling lives on `GroupCallView`). Once active, HomeView's e8921ed in-call banner + fullScreenCover takes over.
+
+**Build-pipeline hardening** — landed 2026-04-28 (`v1.0.43-trackA` … `v1.0.47-trackA`)
+- `v1.0.43-trackA` ✅ `BackupCoordinator` drop `QAudionEngine.Type` qualifiers (`7ac3548`) — unblocks compile post-W15.B.
+- `v1.0.44-trackA` ✅ TestFlight `submit_to_testflight=false` (`5678b37`) — internal-only delivery. Skips the External-review submission gate (export-compliance for ML-KEM-1024 still flagged per CLAUDE.md §11; only "Q-Audion testers" internal group is in scope today).
+- `v1.0.45-trackA` ✅ Versioning fix from `CM_TAG` (`9f4f4e1`) — Codemagic now derives both `CFBundleShortVersionString` (marketing) and `CFBundleVersion` (build number) from the pushed `CM_TAG` env var. Fixes the silent "v1.0.45 marketing string still says 1.0.0" drift caused by relying solely on `APP_APPLE_ID` lookup; the marketing version now matches the tag's `vMAJOR.MINOR.PATCH` literally and the build number monotonically increments.
+- `v1.0.46-trackA` ✅ Drop `expire_build_submitted_for_review` from `codemagic.yaml` (`c50cba1`) — pairs with `submit_to_testflight=false`; the expire-old-build flag is meaningless when no submission happens.
+- `v1.0.47-trackA` ✅ Apple PrivacyInfo.xcprivacy manifest added (`88ba7a1`) — silences ITMS-91061 ("Missing privacy manifest") informational warning. Declares the app's NSPrivacyAccessedAPITypes (UserDefaults, FileTimestamp, SystemBootTime, etc.) and required-reason categories per Apple's 2024 mandate. Not strictly required today but the warning was noisy in every upload mail and Apple's enforcement deadline is mid-2026.
+
 **Build-pipeline fix** (`v1.0.34-trackA`, `f4ddc8c`) — renamed legacy `AppState.Conversation` → `LegacyConversation` so the unqualified `Conversation` symbol resolves unambiguously to `QAudionEngine.Conversation` across all view-layer call sites. Resolves the 4 ConversationListContainer compile errors that blocked v1.0.33.
+
+## Build pipeline state
+
+The TestFlight pipeline as of `v1.0.47-trackA` exhibits the following operational shape — capture it here so future agents do not retrace the debugging path:
+
+- **Versioning is now CM_TAG-driven** (`9f4f4e1`). Both marketing version (`CFBundleShortVersionString`, e.g. `1.0.47`) and build number (`CFBundleVersion`) are derived from the pushed git tag inside the Codemagic script step. Prior to this commit the pipeline relied on `APP_APPLE_ID` + auto-increment from App Store Connect, which silently kept the marketing string at `1.0.0` across 40+ uploads. The tag is now the single source of truth: push `vX.Y.Z-trackA` → that exact `X.Y.Z` lands in the IPA's Info.plist.
+- **Internal-only delivery** (`5678b37` + `c50cba1`). `publishing.app_store_connect.submit_to_testflight: false` — Codemagic uploads to App Store Connect but does NOT auto-submit for External-tester review. Build is processed by Apple, lands in the "Q-Audion testers" internal group, installable on enrolled testers' devices within ~5 min of upload-success email. External tester rollout is gated on export-compliance review (CLAUDE.md §11; ML-KEM-1024 not standard "mass market" cryptography). The companion flag `expire_build_submitted_for_review` was dropped because it only applies to review-bound builds.
+- **ITMS-91061 silenced** (`88ba7a1`). Apple's "Missing privacy manifest" informational email no longer fires on upload — the bundle now ships `QAudionApp/PrivacyInfo.xcprivacy`. The manifest declares ONLY the API categories our binary actually calls (verified by grep on QAudionApp + QAudionEngine sources): `NSPrivacyAccessedAPICategoryUserDefaults` (CA92.1) and `NSPrivacyAccessedAPICategoryFileTimestamp` (C617.1, hit by `FileManager.fileExists` in `BackupCoordinator`). SystemBootTime / DiskSpace / ActiveKeyboards are NOT declared because we don't use them (Apple's TN3183 discipline: declare what your code uses). Tracking is `false`, no tracking domains, collected data types limited to PhoneNumber (peppered hash) + UserID + Name + EmailsOrTextMessages + AudioData, all `Linked=true / Tracking=false / AppFunctionality`.
+- **ITMS-90725 silenced**: `codemagic.yaml` has `xcode: latest` since `4d41de4`; build logs confirm Codemagic resolves to `Xcode-26.4.app` on `mac_mini_m2`, satisfying Apple's iOS 26 SDK deadline.
+- **Codemagic env-var dependency** unchanged from CLAUDE.md: `APP_STORE_CONNECT_KEY_IDENTIFIER`, `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_PRIVATE_KEY`, `CERTIFICATE_PRIVATE_KEY` (all in `asc_credentials` group, all secure). ASC API key role: Admin (`REDACTED_KEY_ID`).
+- **ONNX patch step** still required and intact (CLAUDE.md §4 — onnxruntime 1.17.0 ships empty `MinimumOSVersion`; post-build patch rewrites it to 16.0 + re-signs).
 
 **Track A.2 / A.3 / A.5 / A.6 — IN PROGRESS** — Code work landed in 4 parallel waves on 2026-04-28.
 
