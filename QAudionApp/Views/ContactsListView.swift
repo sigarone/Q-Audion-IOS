@@ -4,9 +4,36 @@ import QAudionEngine
 @MainActor
 final class ContactsListContainer: ObservableObject {
     @Published var viewModel: ContactsListViewModel
+    @Published private(set) var isRefreshing: Bool = false
+    @Published var errorMessage: String?
 
-    init(initial: ContactsListViewModel = .mock) {
-        self.viewModel = initial
+    private let appState: AppState?
+    private let store: ContactsStore
+    private let service: ContactsRefreshService?
+
+    init(appState: AppState? = nil, store: ContactsStore = ContactsStore()) {
+        self.appState = appState
+        self.store = store
+        if let s = appState {
+            self.service = ContactsRefreshService(appState: s, store: store)
+        } else {
+            self.service = nil
+        }
+        // Load from local store first; fall back to mock if empty.
+        let stored = store.load()
+        if stored.isEmpty {
+            self.viewModel = .mock
+        } else {
+            self.viewModel = ContactsListViewModel(items: stored.map { sc in
+                ContactsListViewModel.Item(
+                    userId: sc.userId, displayName: sc.displayName,
+                    phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
+                    isOnline: false,
+                    unreadMessageCount: 0,
+                    isVerified: sc.isVerified
+                )
+            })
+        }
     }
 
     func setSearchQuery(_ query: String) {
@@ -14,7 +41,35 @@ final class ContactsListContainer: ObservableObject {
     }
 
     func refresh() {
-        // Future: fetch from server. For now, no-op (uses mock).
+        guard let svc = service else { return }
+        Task {
+            await MainActor.run { self.isRefreshing = true; self.errorMessage = nil }
+            do {
+                // Phonebook integration deferred — pass empty until integrated.
+                _ = try await svc.refresh(phonesToCheck: [])
+                let stored = self.store.load()
+                await MainActor.run {
+                    self.viewModel = ContactsListViewModel(
+                        items: stored.map { sc in
+                            ContactsListViewModel.Item(
+                                userId: sc.userId, displayName: sc.displayName,
+                                phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
+                                isOnline: false,
+                                unreadMessageCount: 0,
+                                isVerified: sc.isVerified
+                            )
+                        },
+                        searchQuery: self.viewModel.searchQuery
+                    )
+                    self.isRefreshing = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isRefreshing = false
+                }
+            }
+        }
     }
 }
 
