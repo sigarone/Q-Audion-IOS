@@ -90,6 +90,23 @@ final class AppState: ObservableObject {
     let callService = CallService()
     let messageCrypto = MessageCrypto()
 
+    // MARK: - CallKit / PushKit
+
+    #if canImport(CallKit) && os(iOS)
+    /// CallKit adapter. Nil only when CallKit is unavailable (macOS Catalyst, Simulator quirks).
+    private(set) var callKit: CallKitManaging? = CallKitProvider()
+    #else
+    private(set) var callKit: CallKitManaging? = nil
+    #endif
+
+    #if canImport(PushKit) && os(iOS)
+    /// PushKit VoIP push adapter. Initialized in initialize().
+    private(set) var pushKit: PushKitProvider?
+    #endif
+
+    /// Currently-active CallKit call UUID (one at a time).
+    private(set) var activeCallKitId: UUID?
+
     private var defaultServerUrl: String { serverUrl }
 
     func initialize() {
@@ -150,6 +167,62 @@ final class AppState: ObservableObject {
                 self.cipherWaveform = Self.downsampleForDisplay(samples, count: 128)
             }
         }
+
+        // MARK: Bridge CallKit system actions back to CallService / AppState
+
+        #if canImport(CallKit) && os(iOS)
+        if let provider = callKit as? CallKitProvider {
+            provider.onAnswerCall = { [weak self] uuid in
+                guard let self = self else { return }
+                await MainActor.run {
+                    // User accepted incoming call from lock screen.
+                    // Signal "user accepted" so the call transitions from ringing to active.
+                    // Actual signalling (offer/answer) stays inside QAudionCallIntegration (USER WT).
+                    self.isInCall = true
+                    self.activeCallKitId = uuid
+                }
+            }
+            provider.onEndCall = { [weak self] uuid in
+                guard let self = self else { return }
+                await MainActor.run {
+                    self.endCall()
+                }
+            }
+            provider.onMutedChanged = { [weak self] uuid, muted in
+                guard let self = self else { return }
+                await MainActor.run {
+                    // Route through AppState.setMuted which forwards to CallService.
+                    self.setMuted(muted)
+                }
+            }
+        }
+
+        // MARK: PushKit VoIP push registration
+        // Registers for tokens so the day server picks option α/β/γ/δ, iOS is ready.
+        self.pushKit = PushKitProvider(
+            onTokenUpdate: { [weak self] token in
+                let hex = token.map { String(format: "%02hhx", $0) }.joined()
+                // Stub: log token prefix. Actual server registration deferred until
+                // spec §10.1 APNs option (α/β/γ/δ) is finalised.
+                await MainActor.run {
+                    print("[Q-Audion] PushKit VoIP token: \(hex.prefix(16))...")
+                }
+            },
+            onIncomingCall: { [weak self] payload in
+                guard let self = self else { return }
+                await self.callKit?.reportIncomingCall(
+                    uuid: payload.callId,
+                    callerName: payload.callerName,
+                    hasVideo: payload.hasVideo
+                )
+                await MainActor.run {
+                    self.activeCallKitId = payload.callId
+                    self.callContactId = payload.callerId
+                    self.isVideoCall = payload.hasVideo
+                }
+            }
+        )
+        #endif
 
         if let token = authService.loadToken() {
             let backendConfig = BackendConfig(serverUrl: defaultServerUrl, accessToken: token)
@@ -230,6 +303,7 @@ final class AppState: ObservableObject {
         isVideoCall = false
         deepfakeAlert = false
         callContactId = nil
+        activeCallKitId = nil
         txWaveformSamples = []
         rxWaveformSamples = []
         cipherWaveformSamples = []
@@ -239,7 +313,8 @@ final class AppState: ObservableObject {
     }
 
     func setMuted(_ muted: Bool) {
-        // Audio routing is managed by the OS via AVAudioSession; no engine API needed.
+        // Forward to CallService which gates outgoing PCM before encryption.
+        callService.setMuted(muted)
     }
 
     func setSpeaker(_ enabled: Bool) {

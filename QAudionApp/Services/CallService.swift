@@ -9,6 +9,52 @@ final class CallService {
     var onRxWaveformUpdate: (([Float]) -> Void)?
     var onCipherWaveformUpdate: (([Float]) -> Void)?
 
+    // MARK: - Mute / Hold
+
+    /// When true, processOutgoingAudio returns silent (zero-padded) ciphertext.
+    /// Drives the user-facing mute toggle. CallKit's CXSetMutedCallAction
+    /// flips this via AppState bridge.
+    public private(set) var isMuted: Bool = false
+
+    /// Set/cleared by the CallKit mute bridge. Must be called on the main thread.
+    public func setMuted(_ muted: Bool) {
+        self.isMuted = muted
+    }
+
+    /// When true, audio is paused. For now, hold == mute both directions plus
+    /// pausing the duration timer (QAudionCallIntegration hold API is USER WT).
+    public private(set) var isOnHold: Bool = false
+
+    public func setOnHold(_ onHold: Bool) {
+        self.isOnHold = onHold
+        if onHold { stopDurationTimer() } else { startDurationTimer() }
+    }
+
+    // MARK: - Call duration tracking
+
+    /// Wall-clock seconds since `startCall(...)` succeeded.
+    public private(set) var callDurationSeconds: TimeInterval = 0
+    public var onDurationTick: ((TimeInterval) -> Void)?
+
+    private var durationTimer: Timer?
+    private var callStartedAt: Date?
+
+    private func startDurationTimer() {
+        callStartedAt = callStartedAt ?? Date()
+        durationTimer?.invalidate()
+        durationTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self, let started = self.callStartedAt else { return }
+            let dur = Date().timeIntervalSince(started)
+            self.callDurationSeconds = dur
+            self.onDurationTick?(dur)
+        }
+    }
+
+    private func stopDurationTimer() {
+        durationTimer?.invalidate()
+        durationTimer = nil
+    }
+
     func startCall(engine: QAudionEngine, contactId: String) throws {
         let integration = QAudionCallIntegration()
 
@@ -43,19 +89,28 @@ final class CallService {
         }
 
         self.callIntegration = integration
+        startDurationTimer()
     }
 
     func endCall() {
         callIntegration?.onCallEnded()
         callIntegration = nil
         onDeepfakeAlert?(false)
+        stopDurationTimer()
+        callStartedAt = nil
+        callDurationSeconds = 0
+        isMuted = false
+        isOnHold = false
     }
 
     func processOutgoingAudio(pcmFrame: Data) throws -> Data {
         guard let integration = callIntegration else {
             throw CallServiceError.noActiveCall
         }
-        let encrypted = try integration.processOutgoingAudio(pcmFrame: pcmFrame)
+        // When muted, replace PCM plaintext with silence before encryption.
+        // The AEAD ciphertext still flows to the remote peer; the plaintext is zeroed.
+        let frameToEncrypt = isMuted ? Data(repeating: 0, count: pcmFrame.count) : pcmFrame
+        let encrypted = try integration.processOutgoingAudio(pcmFrame: frameToEncrypt)
 
         // Update TX waveform from raw PCM
         let txSamples = updateWaveformSamples(from: pcmFrame)
