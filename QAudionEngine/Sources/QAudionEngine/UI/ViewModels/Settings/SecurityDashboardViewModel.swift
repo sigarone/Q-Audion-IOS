@@ -24,7 +24,7 @@ public struct SecurityDashboardViewModel: ViewModelProtocol {
     }
 
     public static let mock = SecurityDashboardViewModel(
-        identityFingerprint: "a3f7.c291.8b4e.d012",
+        identityFingerprint: Fingerprint.format(pubkey: Data(repeating: 0x46, count: 32)),
         keyHealth: .healthy,
         lastKeyRotation: Date(timeIntervalSince1970: 1_744_000_000),
         pqcAlgorithm: "ML-KEM-1024",

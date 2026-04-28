@@ -70,7 +70,7 @@ public struct InCallViewModel: ViewModelProtocol {
             userId: "user-aabbccdd-1122-3344-5566-778899aabbcc",
             displayName: "Alice (Pixel 7)",
             avatarUrl: nil,
-            fingerprint: "a3f7.c291.8b4e.d012"
+            fingerprint: Fingerprint.format(pubkey: Data(repeating: 0x43, count: 32))
         ),
         security: .secure,
         callDuration: 47.3,

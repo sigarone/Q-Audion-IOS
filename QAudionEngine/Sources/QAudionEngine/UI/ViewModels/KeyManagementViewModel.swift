@@ -32,7 +32,7 @@ public struct KeyManagementViewModel: ViewModelProtocol, Equatable, Sendable {
 
     public static let mock = KeyManagementViewModel(
         userId: "user-aabbccdd-1122-3344-5566-778899aabbcc",
-        fingerprint: "a3f7.c291.8b4e.d012",
+        fingerprint: Fingerprint.format(pubkey: Data(repeating: 0x42, count: 32)),
         linkedDevices: [
             LinkedDevice(
                 deviceId: "device-iphone-13-pavel",
