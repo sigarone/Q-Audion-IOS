@@ -42,6 +42,13 @@ workflows:
         BUNDLE_ID: "com.qaudion.app"
         XCODE_PROJECT: "QAudionApp.xcodeproj"
         XCODE_SCHEME: "QAudionApp"
+        # App Store Connect numeric "App Apple ID" — required by
+        # `app-store-connect get-latest-testflight-build-number` to fetch
+        # the current build number from TestFlight. Without it, the
+        # increment script silently fell back to `echo "0"` (because of
+        # `2>/dev/null`), leaving CFBundleVersion stuck at 1 across every
+        # tagged release. Source of truth: CLAUDE.md "Project snapshot".
+        APP_APPLE_ID: "REDACTED_APP_ID"
     triggering:
       events:
         - tag
@@ -56,12 +63,48 @@ workflows:
           xcodegen generate
           echo "=== Schemes ==="
           xcodebuild -project QAudionApp.xcodeproj -list 2>&1 | head -20
-      - name: Increment build number from TestFlight
+      - name: Bump marketing version + build number
         script: |
+          set -e
           cd QAudionApp
-          LATEST_BUILD_NUMBER=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID" 2>/dev/null || echo "0")
+
+          # ----------------------------------------------------------------
+          # Marketing version (CFBundleShortVersionString) from the git tag.
+          # Codemagic exposes the triggering tag in CM_TAG. Tags follow
+          # `vX.Y.Z[-suffix]` (e.g. `v1.0.45-trackA`); strip the leading `v`
+          # and any trailing `-suffix` so the user-visible version on
+          # TestFlight tracks the tag instead of being stuck at 1.0.0.
+          # ----------------------------------------------------------------
+          if [ -n "$CM_TAG" ]; then
+            MARKETING_VERSION=$(echo "$CM_TAG" | sed -E 's/^v//; s/-[A-Za-z].*$//')
+          else
+            MARKETING_VERSION="1.0.0"
+          fi
+          echo "CM_TAG = $CM_TAG"
+          echo "Marketing version = $MARKETING_VERSION"
+          agvtool new-marketing-version "$MARKETING_VERSION"
+
+          # ----------------------------------------------------------------
+          # Build number (CFBundleVersion) is one higher than the latest
+          # build TestFlight has seen for this app. The previous YAML used
+          # `2>/dev/null || echo "0"` which silently masked the failure
+          # mode where APP_APPLE_ID was empty — the value is now declared
+          # in `vars:` above. Keep `set +e` around the call so we don't
+          # nuke the build if TestFlight is briefly unreachable, but log
+          # the raw output and the chosen number.
+          # ----------------------------------------------------------------
+          echo "APP_APPLE_ID = $APP_APPLE_ID"
+          set +e
+          LATEST_BUILD_NUMBER=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID")
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] || [ -z "$LATEST_BUILD_NUMBER" ]; then
+            echo "WARN: get-latest-testflight-build-number returned rc=$rc; falling back to 0"
+            LATEST_BUILD_NUMBER=0
+          fi
+          echo "Latest TestFlight build number = $LATEST_BUILD_NUMBER"
           NEW_BUILD_NUMBER=$(($LATEST_BUILD_NUMBER + 1))
-          echo "New build number: $NEW_BUILD_NUMBER"
+          echo "New build number = $NEW_BUILD_NUMBER"
           agvtool new-version -all $NEW_BUILD_NUMBER
       - name: Set up signing (fetch or create Distribution cert + App Store profile)
         script: |
