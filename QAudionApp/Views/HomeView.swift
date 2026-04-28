@@ -4,6 +4,7 @@ import QAudionEngine
 struct HomeView: View {
     @EnvironmentObject var appState: AppState
     @State private var selectedTab: Tab = .chats
+    @State private var presentingInCall: Bool = false
 
     enum Tab: Hashable {
         case chats
@@ -31,8 +32,17 @@ struct HomeView: View {
                 .tag(Tab.settings)
         }
         .overlay(alignment: .top) {
-            if appState.isInCall {
+            if appState.isInCall && !presentingInCall {
                 inCallBanner
+            }
+        }
+        .fullScreenCover(isPresented: $presentingInCall) {
+            inCallCoverView
+        }
+        .onChange(of: appState.isInCall) { _, isInCall in
+            // Auto-dismiss the cover when the call ends.
+            if !isInCall {
+                presentingInCall = false
             }
         }
     }
@@ -68,11 +78,7 @@ struct HomeView: View {
     // MARK: - Active call banner
 
     private var inCallBanner: some View {
-        Button(action: {
-            // Tapping the banner navigates to the in-call view via the existing
-            // InCallContainer / CallView navigation stack.
-            selectedTab = .calls
-        }) {
+        Button(action: { presentingInCall = true }) {
             HStack {
                 Image(systemName: "phone.fill")
                 Text(appState.callContactId.map { "Active call with \($0)" } ?? "Active call")
@@ -86,6 +92,37 @@ struct HomeView: View {
             .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Full-screen in-call cover
+
+    @ViewBuilder
+    private var inCallCoverView: some View {
+        if appState.activeCallKitId != nil {
+            // Present the W12.D CallView (which internally creates InCallContainer
+            // and delegates to InCallView). Interactive dismiss is disabled so the
+            // user cannot accidentally swipe away mid-call; they must use the
+            // in-call hang-up button, after which isInCall → false triggers the
+            // onChange above and dismisses the cover.
+            NavigationStack {
+                CallView()
+            }
+            .environmentObject(appState)
+            .interactiveDismissDisabled(true)
+        } else {
+            // Fallback: activeCallKitId not yet populated (race during call setup).
+            // Show a minimal state and let the user dismiss manually.
+            VStack(spacing: 24) {
+                Image(systemName: "phone.down.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.secondary)
+                Text("No active call")
+                    .font(.title2.weight(.semibold))
+                Button("Dismiss") { presentingInCall = false }
+                    .buttonStyle(.borderedProminent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
