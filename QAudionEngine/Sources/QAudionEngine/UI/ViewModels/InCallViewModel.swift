@@ -9,7 +9,7 @@ public struct InCallViewModel: ViewModelProtocol {
     }
 
     public struct Controls: Equatable, Sendable {
-        public enum EndCallStyle: Sendable { case red, neutral }
+        public enum EndCallStyle: Equatable, Sendable { case red, neutral }
 
         public let isMuted: Bool
         public let isSpeakerOn: Bool
