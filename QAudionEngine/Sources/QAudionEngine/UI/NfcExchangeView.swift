@@ -2,113 +2,125 @@
 import SwiftUI
 
 public struct NfcExchangeView: View {
-    @State private var status = "Ready to scan"
-    @State private var isScanning = false
-    @State private var receivedKeyName: String?
-    @State private var errorMessage: String?
-
-    private let nfcProtocol = NfcProtocol()
+    @StateObject private var driver = NfcExchangeDriver()
 
     public init() {}
 
     public var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 28) {
             Spacer()
-
-            Image(systemName: isScanning ? "wave.3.right.circle.fill" : "wave.3.right.circle")
-                .font(.system(size: 80))
-                .foregroundColor(isScanning ? .blue : .gray)
-
-            Text(status)
-                .font(.headline)
-
-            if let name = receivedKeyName {
-                Label("Key received: \(name)", systemImage: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-            }
-
-            if let error = errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundColor(.red)
-                    .font(.subheadline)
-            }
-
-            #if canImport(CoreNFC)
-            Button(isScanning ? "Stop Scanning" : "Start NFC Scan") {
-                if isScanning {
-                    stopScanning()
-                } else {
-                    startScanning()
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            #else
-            Text("NFC not available")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Color.gray.opacity(0.15))
-                .cornerRadius(8)
-            #endif
-
+            stateIcon
+            stateLabel
+            stateHelp
             Spacer()
-
-            Text("iOS can read NFC tags written by Q-Audion Android.\nFor iOS-to-iOS exchange, use QR code instead.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
+            actionButton
+            Spacer().frame(height: 32)
         }
-        .navigationTitle("NFC Key Exchange")
         .padding()
-        .onAppear {
-            configureCallbacks()
+        .navigationTitle("NFC Pairing")
+    }
+
+    private var stateIcon: some View {
+        Group {
+            switch driver.state {
+            case .idle:        Image(systemName: "wave.3.right.circle")
+            case .waiting:     Image(systemName: "antenna.radiowaves.left.and.right")
+            case .exchanging:  Image(systemName: "arrow.triangle.2.circlepath")
+            case .success:     Image(systemName: "checkmark.shield.fill")
+            case .error:       Image(systemName: "exclamationmark.triangle.fill")
+            }
+        }
+        .font(.system(size: 64))
+        .foregroundStyle(stateColor)
+    }
+
+    private var stateColor: Color {
+        switch driver.state {
+        case .idle: return .secondary
+        case .waiting, .exchanging: return .blue
+        case .success: return .green
+        case .error: return .red
         }
     }
 
-    // MARK: - Private helpers
+    private var stateLabel: some View {
+        Text(stateLabelText).font(.title3.weight(.semibold))
+    }
 
-    private func configureCallbacks() {
-        nfcProtocol.onPskReceived = { name, _ in
-            receivedKeyName = name
-            status = "Key exchange complete"
-            isScanning = false
-            errorMessage = nil
+    private var stateLabelText: String {
+        switch driver.state {
+        case .idle: return "Ready to pair"
+        case .waiting: return "Hold your iPhone near the Android device"
+        case .exchanging: return "Exchanging keys\u{2026}"
+        case .success(let peer): return "Paired with \(peer)"
+        case .error(let msg): return "Error: \(msg)"
         }
+    }
 
-        nfcProtocol.onStateChanged = { newState in
-            switch newState {
-            case .idle:
-                isScanning = false
-                if receivedKeyName == nil {
-                    status = "Ready to scan"
-                }
-            case .reading:
-                isScanning = true
-                status = "Hold device near NFC tag..."
-                errorMessage = nil
-            case .complete:
-                isScanning = false
-                status = "Key exchange complete"
-                errorMessage = nil
-            case .error(let message):
-                isScanning = false
-                status = "Ready to scan"
-                errorMessage = message
+    private var stateHelp: some View {
+        Text("iPhone acts as the NFC reader. Android device must have Q-Audion\u{2019}s HCE service enabled.")
+            .font(.caption)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        switch driver.state {
+        case .idle, .error:
+            Button(action: driver.start) {
+                Label("Start pairing", systemImage: "play.fill")
+                    .font(.title3).padding()
+                    .frame(maxWidth: 240)
+                    .background(.blue).foregroundStyle(.white).clipShape(Capsule())
+            }
+        case .waiting, .exchanging:
+            Button(action: driver.cancel) {
+                Label("Cancel", systemImage: "xmark")
+                    .font(.title3).padding()
+                    .frame(maxWidth: 240)
+                    .background(.gray).foregroundStyle(.white).clipShape(Capsule())
+            }
+        case .success:
+            Button(action: driver.reset) {
+                Label("Done", systemImage: "checkmark")
+                    .font(.title3).padding()
+                    .frame(maxWidth: 240)
+                    .background(.green).foregroundStyle(.white).clipShape(Capsule())
             }
         }
     }
+}
 
-    #if canImport(CoreNFC)
-    private func startScanning() {
-        errorMessage = nil
-        nfcProtocol.startReading()
+@MainActor
+private final class NfcExchangeDriver: ObservableObject {
+    private let service = NfcCollaborativeExchange()
+    @Published private(set) var state: NfcExchangeViewModel.State = .idle
+
+    func start() {
+        service.start()
+        sync()
     }
 
-    private func stopScanning() {
-        nfcProtocol.stopReading()
+    func cancel() {
+        service.cancel()
+        sync()
     }
-    #endif
+
+    func reset() {
+        // Drive state machine from .success back to .idle.
+        // (.success → .idle is an allowed transition in NfcExchangeViewModel.)
+        service.cancel()
+        sync()
+    }
+
+    private func sync() {
+        state = service.viewModel.state
+    }
+}
+
+#Preview {
+    NavigationStack { NfcExchangeView() }
 }
 #endif

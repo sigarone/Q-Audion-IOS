@@ -2,42 +2,54 @@
 import SwiftUI
 
 public struct KeyManagementView: View {
-    @State private var keys: [(name: String, fingerprint: String)] = [
-        ("Home Key", "a1b2c3d4..."),
-        ("Office Key", "e5f6g7h8...")
-    ]
-    @State private var showingImport = false
+    public let viewModel: KeyManagementViewModel
 
-    public init() {}
+    public init(viewModel: KeyManagementViewModel = .mock) {
+        self.viewModel = viewModel
+    }
 
     public var body: some View {
-        List {
-            Section("Pre-Shared Keys") {
-                ForEach(keys, id: \.name) { key in
-                    VStack(alignment: .leading) {
-                        Text(key.name).font(.headline)
-                        Text(key.fingerprint)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+        Form {
+            Section("Identity") {
+                LabeledContent("User ID") {
+                    Text(viewModel.userId).font(.caption.monospaced()).lineLimit(1)
+                }
+                LabeledContent("Fingerprint") {
+                    Text(viewModel.fingerprint).font(.body.monospaced())
+                }
+                if let lastRot = viewModel.lastKeyRotation {
+                    LabeledContent("Last rotation") {
+                        Text(lastRot, style: .relative).foregroundStyle(.secondary)
                     }
                 }
-                .onDelete { indices in keys.remove(atOffsets: indices) }
             }
-
-            Section {
-                Button(action: { showingImport = true }) {
-                    Label("Import Key via QR", systemImage: "qrcode.viewfinder")
+            Section("Linked devices") {
+                ForEach(viewModel.linkedDevices, id: \.deviceId) { d in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(d.deviceName)
+                            Text(d.deviceId).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if d.isCurrentDevice {
+                            Text("This device").font(.caption).foregroundStyle(.green)
+                        }
+                    }
                 }
+            }
+            Section("Actions") {
                 NavigationLink(destination: NfcExchangeView()) {
                     Label("Import Key via NFC", systemImage: "wave.3.right")
                 }
-                Button(action: {}) {
-                    Label("Generate New Key", systemImage: "key.fill")
-                }
+                Button("Show Identity QR") { /* TODO: A.2 D.x QR push */ }
+                Button("Rotate key", role: .destructive) { /* TODO: rotation flow */ }
             }
         }
         .navigationTitle("Key Management")
-        .sheet(isPresented: $showingImport) { QrScanView() }
     }
+}
+
+#Preview {
+    NavigationStack { KeyManagementView() }
 }
 #endif
