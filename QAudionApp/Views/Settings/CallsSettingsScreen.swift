@@ -4,24 +4,55 @@ import QAudionEngine
 @MainActor
 final class CallsSettingsContainer: ObservableObject {
     @Published var viewModel: CallsSettingsViewModel
-    init(initial: CallsSettingsViewModel = .mock) { self.viewModel = initial }
+    private let store: SettingsStore
+
+    init(store: SettingsStore = SettingsStore()) {
+        self.store = store
+        self.viewModel = store.loadCalls()
+    }
+
+    func toggleAec(_ enabled: Bool) {
+        viewModel = makeUpdated(aec: enabled)
+        store.saveCalls(viewModel)
+    }
+
+    func toggleNs(_ enabled: Bool) {
+        viewModel = makeUpdated(ns: enabled)
+        store.saveCalls(viewModel)
+    }
+
+    func toggleAgc(_ enabled: Bool) {
+        viewModel = makeUpdated(agc: enabled)
+        store.saveCalls(viewModel)
+    }
+
+    func setCallQuality(_ quality: CallsSettingsViewModel.CallQuality) {
+        viewModel = makeUpdated(quality: quality)
+        store.saveCalls(viewModel)
+    }
+
+    private func makeUpdated(
+        aec: Bool? = nil,
+        ns: Bool? = nil,
+        agc: Bool? = nil,
+        quality: CallsSettingsViewModel.CallQuality? = nil
+    ) -> CallsSettingsViewModel {
+        CallsSettingsViewModel(
+            codecPreference: viewModel.codecPreference,
+            isAecEnabled: aec ?? viewModel.isAecEnabled,
+            isNsEnabled: ns ?? viewModel.isNsEnabled,
+            isAgcEnabled: agc ?? viewModel.isAgcEnabled,
+            isVoipBackgroundModeActive: viewModel.isVoipBackgroundModeActive,
+            preferredCallQuality: quality ?? viewModel.preferredCallQuality
+        )
+    }
 }
 
 struct CallsSettingsScreen: View {
-    @ObservedObject var container: CallsSettingsContainer
-
-    @State private var aecEnabled: Bool
-    @State private var nsEnabled: Bool
-    @State private var agcEnabled: Bool
-    @State private var callQuality: CallsSettingsViewModel.CallQuality
+    @StateObject private var container: CallsSettingsContainer
 
     init(state: AppState) {
-        let c = CallsSettingsContainer()
-        self._container = ObservedObject(wrappedValue: c)
-        self._aecEnabled = State(initialValue: c.viewModel.isAecEnabled)
-        self._nsEnabled = State(initialValue: c.viewModel.isNsEnabled)
-        self._agcEnabled = State(initialValue: c.viewModel.isAgcEnabled)
-        self._callQuality = State(initialValue: c.viewModel.preferredCallQuality)
+        _container = StateObject(wrappedValue: CallsSettingsContainer())
     }
 
     var body: some View {
@@ -34,7 +65,10 @@ struct CallsSettingsScreen: View {
             }
 
             Section("Call Quality") {
-                Picker("Quality", selection: $callQuality) {
+                Picker("Quality", selection: Binding(
+                    get: { container.viewModel.preferredCallQuality },
+                    set: { container.setCallQuality($0) }
+                )) {
                     ForEach(CallsSettingsViewModel.CallQuality.allCases, id: \.self) { quality in
                         Text(quality.rawValue.capitalized).tag(quality)
                     }
@@ -43,10 +77,19 @@ struct CallsSettingsScreen: View {
             }
 
             Section("Audio Processing") {
-                Toggle("Echo Cancellation (AEC)", isOn: $aecEnabled)
-                Toggle("Noise Suppression (NS)", isOn: $nsEnabled)
-                Toggle("Auto Gain Control (AGC)", isOn: $agcEnabled)
-                if !aecEnabled || !nsEnabled || !agcEnabled {
+                Toggle("Echo Cancellation (AEC)", isOn: Binding(
+                    get: { container.viewModel.isAecEnabled },
+                    set: { container.toggleAec($0) }
+                ))
+                Toggle("Noise Suppression (NS)", isOn: Binding(
+                    get: { container.viewModel.isNsEnabled },
+                    set: { container.toggleNs($0) }
+                ))
+                Toggle("Auto Gain Control (AGC)", isOn: Binding(
+                    get: { container.viewModel.isAgcEnabled },
+                    set: { container.toggleAgc($0) }
+                ))
+                if !container.viewModel.isAecEnabled || !container.viewModel.isNsEnabled || !container.viewModel.isAgcEnabled {
                     Text("Disabling audio processing degrades call quality.")
                         .font(.caption)
                         .foregroundStyle(.orange)

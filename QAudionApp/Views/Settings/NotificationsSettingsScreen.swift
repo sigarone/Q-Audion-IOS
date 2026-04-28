@@ -4,26 +4,67 @@ import QAudionEngine
 @MainActor
 final class NotificationsSettingsContainer: ObservableObject {
     @Published var viewModel: NotificationsSettingsViewModel
-    init(initial: NotificationsSettingsViewModel = .mock) { self.viewModel = initial }
+    private let store: SettingsStore
+
+    init(store: SettingsStore = SettingsStore()) {
+        self.store = store
+        self.viewModel = store.loadNotifications()
+    }
+
+    func setRingtone(_ id: String) {
+        viewModel = makeUpdated(ringtoneId: id)
+        store.saveNotifications(viewModel)
+    }
+
+    func toggleInAppSound(_ enabled: Bool) {
+        viewModel = makeUpdated(inAppSound: enabled)
+        store.saveNotifications(viewModel)
+    }
+
+    func toggleVibration(_ enabled: Bool) {
+        viewModel = makeUpdated(vibration: enabled)
+        store.saveNotifications(viewModel)
+    }
+
+    func setQuietHours(_ quietHours: NotificationsSettingsViewModel.QuietHours) {
+        viewModel = makeUpdated(quietHours: quietHours)
+        store.saveNotifications(viewModel)
+    }
+
+    func toggleQuietHours(_ enabled: Bool) {
+        let updated = NotificationsSettingsViewModel.QuietHours(
+            startHour: viewModel.quietHours.startHour,
+            startMinute: viewModel.quietHours.startMinute,
+            endHour: viewModel.quietHours.endHour,
+            endMinute: viewModel.quietHours.endMinute,
+            enabled: enabled
+        )
+        setQuietHours(updated)
+    }
+
+    private func makeUpdated(
+        ringtoneId: String? = nil,
+        inAppSound: Bool? = nil,
+        vibration: Bool? = nil,
+        quietHours: NotificationsSettingsViewModel.QuietHours? = nil
+    ) -> NotificationsSettingsViewModel {
+        NotificationsSettingsViewModel(
+            ringtoneId: ringtoneId ?? viewModel.ringtoneId,
+            inAppSoundEnabled: inAppSound ?? viewModel.inAppSoundEnabled,
+            vibrationEnabled: vibration ?? viewModel.vibrationEnabled,
+            quietHours: quietHours ?? viewModel.quietHours,
+            mutedContactsCount: viewModel.mutedContactsCount
+        )
+    }
 }
 
 struct NotificationsSettingsScreen: View {
-    @ObservedObject var container: NotificationsSettingsContainer
-
-    @State private var ringtoneId: String
-    @State private var inAppSound: Bool
-    @State private var vibration: Bool
-    @State private var quietHoursEnabled: Bool
+    @StateObject private var container: NotificationsSettingsContainer
 
     private let availableRingtones = ["qaudion-default", "classic", "pulse", "silent"]
 
     init(state: AppState) {
-        let c = NotificationsSettingsContainer()
-        self._container = ObservedObject(wrappedValue: c)
-        self._ringtoneId = State(initialValue: c.viewModel.ringtoneId)
-        self._inAppSound = State(initialValue: c.viewModel.inAppSoundEnabled)
-        self._vibration = State(initialValue: c.viewModel.vibrationEnabled)
-        self._quietHoursEnabled = State(initialValue: c.viewModel.quietHours.enabled)
+        _container = StateObject(wrappedValue: NotificationsSettingsContainer())
     }
 
     private var quietHoursRange: String {
@@ -35,18 +76,30 @@ struct NotificationsSettingsScreen: View {
     var body: some View {
         Form {
             Section("Sounds") {
-                Picker("Ringtone", selection: $ringtoneId) {
+                Picker("Ringtone", selection: Binding(
+                    get: { container.viewModel.ringtoneId },
+                    set: { container.setRingtone($0) }
+                )) {
                     ForEach(availableRingtones, id: \.self) { tone in
                         Text(tone).tag(tone)
                     }
                 }
-                Toggle("In-App Sound", isOn: $inAppSound)
-                Toggle("Vibration", isOn: $vibration)
+                Toggle("In-App Sound", isOn: Binding(
+                    get: { container.viewModel.inAppSoundEnabled },
+                    set: { container.toggleInAppSound($0) }
+                ))
+                Toggle("Vibration", isOn: Binding(
+                    get: { container.viewModel.vibrationEnabled },
+                    set: { container.toggleVibration($0) }
+                ))
             }
 
             Section("Quiet Hours") {
-                Toggle("Enable Quiet Hours", isOn: $quietHoursEnabled)
-                if quietHoursEnabled {
+                Toggle("Enable Quiet Hours", isOn: Binding(
+                    get: { container.viewModel.quietHours.enabled },
+                    set: { container.toggleQuietHours($0) }
+                ))
+                if container.viewModel.quietHours.enabled {
                     LabeledContent("Window") {
                         Text(quietHoursRange)
                             .foregroundStyle(.secondary)
