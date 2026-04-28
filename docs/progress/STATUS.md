@@ -78,7 +78,15 @@ Tutti i 4 task di Phase 0 (0.1 manual + 0.2 + 0.3 + 0.4 tag verify) passati + fi
 ✅ 2026-04-20 — USER ha confermato (screenshot portale) capability Push Notifications abilitata su `com.qaudion.app`.
 
 ## Stray files in working tree (not ours, flagged)
-- `127`, `'`, `[DiscoveredContact]`, `.allocate(capacity`, `2`, `AuthCredentials`, `Bool`, `0`, `ComplianceInfo`, `PublicUser,`, `String`, `Void)` — empty 0-byte files, accidental shell redirects from USER or IDE sessions. Not deleted by the agent pending user confirmation; harmless.
+
+**Verified empty (0-byte) at 2026-04-28 — accidental shell redirects from prior sessions:**
+- `.allocate(capacity` (also flagged 04-20)
+- `120`
+- `Note`
+
+(The 2026-04-20 inventory listed `127`, `'`, `[DiscoveredContact]`, `2`, `AuthCredentials`, `Bool`, `0`, `ComplianceInfo`, `PublicUser,`, `String`, `Void)` — those have been cleaned up; only the three above remain as of 2026-04-28.)
+
+These are harmless and DO NOT impact build. Parity agents will not auto-delete them (some look like USER's accidental keypresses); the user should `rm` them at their convenience.
 
 ## Blocker aperti
 _(nessuno — Task 0.1 completato 2026-04-20 ✅)_
