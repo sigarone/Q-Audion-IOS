@@ -9,6 +9,14 @@
 **Predecessor plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
+**Track A — feature-build phase (Wave 14)** — TestFlight pipeline iterating on `v1.0.34-trackA` (build fix) and `v1.0.35-trackA` (W14 QR-scan flow).
+
+**Wave 14 — In-app QR scanner** — landed 2026-04-28
+- W14.A+C ✅ `QrPayloadRouter` + `QrScannerView` + `QrScannerSheet` + ContactsListView "Scan QR" wire (`bd92bd6`). AVCaptureSession-backed camera surface, payload-typed result detail, scan→add verified StoredContact in one tap.
+- W14.B — deferred: peer-side `FastSetupQrCodeScreen` requires a server-issued mint endpoint per the codec docstring; blocked on backend route definition. The DeviceLinkBinaryQR display variant (in-person two-iOS pairing) is candidate replacement scope, pending product call.
+
+**Build-pipeline fix** (`v1.0.34-trackA`, `f4ddc8c`) — renamed legacy `AppState.Conversation` → `LegacyConversation` so the unqualified `Conversation` symbol resolves unambiguously to `QAudionEngine.Conversation` across all view-layer call sites. Resolves the 4 ConversationListContainer compile errors that blocked v1.0.33.
+
 **Track A.2 / A.3 / A.5 / A.6 — IN PROGRESS** — Code work landed in 4 parallel waves on 2026-04-28.
 
 **Foundation Sprint** (`docs/superpowers/plans/2026-04-28-track-a-foundation.md`) — ✅ DONE
