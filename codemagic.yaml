@@ -4,7 +4,7 @@ workflows:
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
-      xcode: 16.2
+      xcode: latest
     triggering:
       events:
         - push
@@ -34,7 +34,7 @@ workflows:
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
-      xcode: 16.2
+      xcode: latest
       groups:
         - asc_credentials   # must contain APP_STORE_CONNECT_KEY_IDENTIFIER,
                             # APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_PRIVATE_KEY
