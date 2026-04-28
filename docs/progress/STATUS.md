@@ -26,7 +26,10 @@
 - A.3.B.1 ✅ CallKitProvider concrete iOS-only impl (`16dc987`)
 - A.3.C.1 ✅ AppState wiring with closure bridges (`98b3dfa` — combined with A.5.B.1)
 
-**Track A.4 In-call UI** — pending Wave 5
+**Track A.4 In-call UI** — partial
+- A.4 InCallContainer + InCallView + CallView body replacement ✅ (`1e5ce28`)
+- A.4 SasVerificationView refactor to consume SasVerificationViewModel ✅ (`b0bc521`)
+- A.4 SasVerificationContainer (full Combine binding) — pending (current view-model-backed view is sufficient for A.4 scope; container can be added when wiring real call session events)
 
 **Track A.5 PushKit** — partial
 - A.5.A.1 ✅ PushKitProvider + payload decoder + 5 tests (`49393b7` — landed in same commit as A.3.A.1 due to parallel-collision; content correct)
@@ -43,7 +46,8 @@
 - A.6.A.7 ✅ AboutSettingsViewModel (`163f75b`)
 - A.6.A.8 ✅ TransportSettingsViewModel (`f19a28b`)
 - A.6.A.9 ✅ BackupSettingsViewModel (`13bc292` — UI scaffolds, upload/restore BLOCKED per Open Discrepancy §10)
-- A.6.B (SettingsHubView + 11 sub-screens) — pending Wave 5
+- A.6.B SettingsHubView + 11 sub-screens ✅ (`3c1df8d` — SettingsView body replaced + 11 new files in `QAudionApp/Views/Settings/`)
+- A.2.D engine view refactors (KeyManagementView + DeviceManagementView + NfcExchangeView consume their VMs) ✅ (`a4c2c96`)
 
 ## Next phase
 **Track A.2-A.6 — feature plans LANDED, ready to execute.** Suggested execution order based on dependency analysis: **A.3 → A.5 → A.4 → A.2 → A.6** (CallKit before PushKit before InCall UI; NFC and Settings independent of call stack).
