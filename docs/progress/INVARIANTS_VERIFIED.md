@@ -56,22 +56,24 @@
 
 | Item | Spec value | iOS | Android | Desktop | Server | Status |
 |---|---|---|---|---|---|---|
-| AEAD | AES-256-GCM, 12B nonce, 16B tag | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
-| Hash | SHA-256 everywhere | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
-| HKDF | HKDF-SHA256, 32B output | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
+| AEAD | AES-256-GCM, 12B nonce, 16B tag | `AES.GCM` (CryptoKit); `nonceSize=12`, `tagSize=16` — `CryptoConstants.swift:15–16`, enforced in `AeadCipher.swift:36,43` | `"AES/GCM/NoPadding"`; `GCMParameterSpec(128, nonce)`, `NONCE_SIZE=12`, `TAG_SIZE=16` — `CryptoConstants.kt:15,25–29`, `AeadCipher.kt:110–113` | `AES_KEY_SIZE_BYTES=32`, `GCM_NONCE_SIZE_BYTES=12`, `GCM_TAG_SIZE_BYTES=16` — `src/shared/protocol/constants.ts:14–16` | `NonceSize=12`, `cipher.NewGCM` via `crypto/aes`+`crypto/cipher` — `internal/kms/kms.go:18,104` | ✅ identical |
+| Hash | SHA-256 everywhere | `SHA256` (CryptoKit) — used in `MessageCrypto.swift:124`, `SessionManager.swift:89`, `HybridPqcKeyExchange.swift:218`, `ContactKeyExchange.swift:134` | `HmacSHA256` for HKDF (`CryptoConstants.kt:41`), `MessageDigest("SHA-256")` for digests — `CertificatePinning.kt:144`, `RecoveryCrypto.kt:87–88` | Web Crypto `SubtleCrypto.digest('SHA-256')` + `hkdf` with `hash:'SHA-256'` — used in `PqcKeyExchange.ts`, `MessageCrypto.ts` | `crypto/sha256` stdlib — `internal/kms/kms.go:8,44,52` | ✅ identical |
+| HKDF | HKDF-SHA256, 32B output | `HKDF<SHA256>.deriveKey(…, outputByteCount: 32)` (CryptoKit) — `MessageCrypto.swift:124`, `SessionManager.swift:89`, `HybridPqcKeyExchange.swift:218` | `HKDFBytesGenerator(SHA256Digest())` (Bouncy Castle) → 32B — `DeviceLinkingProtocol.kt:171`, `HybridPqcKeyExchange.kt:11`, `RecoveryCrypto.kt:86–90` | `crypto.subtle.deriveBits({name:'HKDF', hash:'SHA-256', …}, key, 256)` — `PqcKeyExchange.ts`, `PqcHandshake.ts:47–50` | `hkdf.New(sha256.New, …)` via `golang.org/x/crypto/hkdf` → 32B — `internal/kms/kms.go:13,92–94` | ✅ identical |
 
 ## §5.3 — HKDF labels
 
+> Note on spec column for rows 6–8: the spec table used constant *names* (`FRAME_CHAIN_AUDIO`, `FRAME_CHAIN_VIDEO`, `FILE_KEY`) as placeholders. The canonical wire bytes are defined in Desktop `src/shared/protocol/constants.ts` and reproduced below.
+
 | Purpose | Spec salt | Spec info | iOS source | Android source | Desktop source | Status |
 |---|---|---|---|---|---|---|
-| Message conversation key | per-pair | `"q-audion-msg-key"` | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
-| Device-link PSK | `"qaudion-link-salt"` | `"qaudion-device-link-v1"` | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
-| NFC collaborative PSK | `sha256(sorted(pubA, pubB))` | `"Q-Audion NFC Collaborative PSK v1"` | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
-| Hybrid PQC session key | `HYBRID_PQC_SALT_V1` | `HYBRID_PQC_INFO` | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
-| Recovery seed → secret | `"recovery-auth-v1"` | (BIP-39 mnemonic) | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
-| Frame chain (audio) | chainKey | `"FRAME_CHAIN_AUDIO"` | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
-| Frame chain (video) | chainKey | `"FRAME_CHAIN_VIDEO"` | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
-| Attachment | contactPSK | `"FILE_KEY"` | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ | _(F0.3)_ |
+| Message conversation key | per-pair (random 32B) | `"q-audion-msg-key"` | `CryptoConstants.HKDF_INFO_MSG_KEY = "q-audion-msg-key"` — `CryptoConstants.swift:39`; used in `MessageCrypto.swift:46,94` | `HKDF_INFO = "q-audion-msg-key"` — `MessageCrypto.kt:95`; used at line 229 | `HKDF_LABELS.MSG_KEY = 'q-audion-msg-key'` — `constants.ts:22`; used in `MessageCrypto.ts:20` | ✅ identical |
+| Device-link PSK | `"qaudion-link-salt"` | `"qaudion-device-link-v1"` | ❌ not implemented — no `DeviceLinkingProtocol` or these label strings found anywhere in `QAudionEngine/Sources`. Phase B.6 gap. | `HKDF_INFO = "qaudion-device-link-v1"` (companion object) + `"qaudion-link-salt".toByteArray()` at call site — `DeviceLinkingProtocol.kt:42,174` | ❌ not implemented — no device-link HKDF or `qaudion-link-salt` found in `src/`. Desktop has no multi-device linking flow. | ⚠️ Android only — see "Open discrepancies" §4 |
+| NFC collaborative PSK | `sha256(sorted(pubA, pubB))` | `"Q-Audion NFC Collaborative PSK v1"` | `CryptoConstants.hkdfNfcCollaborativePskInfo = "Q-Audion NFC Collaborative PSK v1"` — `CryptoConstants.swift:52` | `HKDF_INFO_COLLAB = "Q-Audion NFC Collaborative PSK v1"` — `NfcProtocol.kt:135` | ❌ not implemented — NFC pairing not present in Desktop (`src/`). | ⚠️ iOS+Android match; Desktop N/A — see "Open discrepancies" §5 |
+| Hybrid PQC session key | `HYBRID_PQC_SALT_V1` = `"q-audion-hybrid-pqc-v1"` | `HYBRID_PQC_INFO` = `"q-audion-session-key"` | `hybridKdfSalt = "q-audion-hybrid-pqc-v1"`, `hybridKdfInfo = "q-audion-session-key"` — `CryptoConstants.swift:85,87`; consumed in `HybridPqcKeyExchange.swift:215–216` | `HYBRID_KDF_SALT = "q-audion-hybrid-pqc-v1"`, `HYBRID_KDF_INFO = "q-audion-session-key"` — `CryptoConstants.kt:124,127`; used in `HybridPqcKeyExchange.kt:42` | `HYBRID_PQC_SALT_V1: 'q-audion-hybrid-pqc-v1'`, `HYBRID_PQC_INFO: 'q-audion-session-key'` — `constants.ts:38,40`; consumed in `PqcHandshake.ts:48,50` and `PqcKeyExchange.ts:227–228` | ✅ identical |
+| Recovery seed → secret | `"recovery-auth-v1"` (spec) | BIP-39 mnemonic (spec) | ❌ not implemented — iOS sends `recoverySecret` as an opaque string via `BCryptoAccountApiImpl.swift:71` but no local HKDF derivation with `"recovery-auth-v1"` exists in `QAudionEngine/Sources`. Phase B.8 gap. | `info = "recovery-auth-v1"`, `salt = "bcrypto-recov-v1"`, `ikm = entropy` — `RecoveryCrypto.kt:70–71`. Note: actual salt is `"bcrypto-recov-v1"`, not `"recovery-auth-v1"` as the spec salt column states — see "Open discrepancies" §6. | ❌ not implemented — no recovery HKDF in `src/`. Desktop has no seed-phrase recovery flow. | ⚠️ Android only; spec salt/info description inaccurate — see "Open discrepancies" §6 |
+| Frame chain (audio) | chainKey | `"q-audion-frame-key"` (spec column used constant name `FRAME_CHAIN_AUDIO`; canonical bytes from Desktop) | `hkdfInfoChain = "q-audion-frame-key"` — `CryptoConstants.swift:28`; used in `SessionManager.swift:41,72` | `HKDF_INFO_CHAIN = "q-audion-frame-key"` — `CryptoConstants.kt:54` | `FRAME_CHAIN_AUDIO: 'q-audion-frame-key'` — `constants.ts:24` | ✅ identical |
+| Frame chain (video) | chainKey | `"q-audion-video-frame-key"` (spec column used constant name `FRAME_CHAIN_VIDEO`) | `hkdfInfoVideoChain = "q-audion-video-frame-key"` — `CryptoConstants.swift:34` | `HKDF_INFO_VIDEO_CHAIN = "q-audion-video-frame-key"` — `CryptoConstants.kt:67` | `FRAME_CHAIN_VIDEO: 'q-audion-video-frame-key'` — `constants.ts:26` | ✅ identical |
+| Attachment | contactPSK | `"q-audion-file-key"` (spec column used constant name `FILE_KEY`) | `HKDF_INFO_FILE_KEY = "q-audion-file-key"` — `CryptoConstants.swift:40`; consumed in `FileTransfer.swift:26` | `HKDF_INFO = "q-audion-file-key"` — `FileCrypto.kt:38` | `FILE_KEY: 'q-audion-file-key'` — `constants.ts:34`; referenced in `FileTransfer.ts:34–35` | ✅ identical |
 
 ## §5.4 — Asymmetric crypto
 
@@ -125,3 +127,15 @@ All platforms derive `sha256(psk_bytes)` for the fingerprint, but the display st
 - **Desktop**: first 28 chars of full 64-char hex + `"…"` (UI truncation, no grouping)
 
 The spec calls for `xxxx.xxxx.xxxx.xxxx` from `sha256(pubkey)[:8]` (4 hex groups × 4 chars = 16 hex chars = 8 bytes). Android matches the spec format exactly. iOS and Desktop need to adopt the same `formatDisplayFingerprint` logic for cross-platform out-of-band verification to work. Wire-level PSK negotiation already uses full hex on all platforms; this is a display-only discrepancy.
+
+### §4 — Device-link PSK: iOS and Desktop not implemented (F0.3)
+
+Android's `DeviceLinkingProtocol.kt` derives the sync key via `HKDF-SHA256(X25519_shared, salt="qaudion-link-salt", info="qaudion-device-link-v1", 32B)`. iOS has no `DeviceLinkingProtocol` or these label constants anywhere in `QAudionEngine/Sources`. Desktop has no multi-device linking flow. Until iOS implements the same protocol with byte-identical labels, cross-platform device linking (Android ↔ iOS) cannot function. Tracking: Phase B.6.
+
+### §5 — NFC collaborative PSK: Desktop not implemented (F0.3)
+
+iOS (`CryptoConstants.hkdfNfcCollaborativePskInfo = "Q-Audion NFC Collaborative PSK v1"`) and Android (`NfcProtocol.kt:135`, same literal) agree exactly on the NFC PSK info string and salt construction (`sha256(sorted(pubA, pubB))`). Desktop has no NFC pairing code at all — this is expected given hardware constraints, but means NFC-paired PSKs established on mobile cannot be bootstrapped from a Desktop session.
+
+### §6 — Recovery HKDF: spec description inaccurate; iOS and Desktop not implemented (F0.3)
+
+The spec table lists salt=`"recovery-auth-v1"` / info=BIP-39 mnemonic. The actual Android implementation (`RecoveryCrypto.kt:70–71`) uses: `ikm=entropy`, `salt="bcrypto-recov-v1"`, `info="recovery-auth-v1"`, `length=32`. The spec's salt and info are transposed relative to the code — the server comment in `cmd/bcrypto-lite/main.go:1769` matches the Android code (not the spec table). The spec table needs to be corrected: actual values are `salt="bcrypto-recov-v1"`, `info="recovery-auth-v1"`. Separately, iOS and Desktop have no local HKDF derivation for recovery at all (iOS merely passes an opaque `recoverySecret` string up to the API — caller must derive it externally). Tracking: Phase B.8.
