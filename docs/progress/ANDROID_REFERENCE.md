@@ -12,10 +12,15 @@
 
 ### WebSocket envelope
 ```json
-{"type": "<string>", "data": {...}, "id": "<uuid|nullable>"}
+{"type": "<string>", "data": {...}, "id": "<uuid|optional>"}
 ```
-- `id` is the correlation/request id for response matching. Present on both directions.
 - `type` is snake_case on the wire (e.g. `auth_request`, `call_offer`, `presence_update`).
+- `id` is an **optional** correlation id. The server **never** sets it on emitted messages and **does not consult it** on inbound; clients may send it but cannot rely on it being echoed back. Per-client behavior (verified F0.4, commit `62932ae`):
+  - **Android** (`WsCodec.kt:43`): emits `id` only when `command.correlationId != null`. Most commands have `null`, so `id` is usually absent on the wire.
+  - **Desktop** (`BCryptoSocket.ts`): never emits `id`.
+  - **Server** (`internal/signaling/messages.go:266–275`, `NewEnvelope`): never sets `id`; field is `omitempty` and serialized at zero-value.
+  - **iOS** (`BCryptoWebSocketClient.swift:153–155`): always emits a fresh UUID `id`, but the server ignores it — so it is informational only.
+  - Implication: do **not** implement request/response correlation by waiting for a matching `id`. Match by `type` + payload semantics instead.
 
 ### Auth/register flow
 - Register: `POST /api/v1/auth/register` with `{phone_hash, public_key, device_id, platform}`.
@@ -70,10 +75,10 @@ NOTE (iOS-specific): iPhones cannot act as NFC HCE tags → no iOS-to-iOS NFC pa
   - `sorted(pubA, pubB)` = lexicographic byte-order sort of the two 32-byte public keys, concatenated.
 
 ## VoIP Push Notification Payload
-Cross-platform FCM (Android) / APNs VoIP (iOS):
+Cross-platform FCM (Android) / APNs VoIP (iOS). The Android FCM `type` constant is **`call_incoming`** (see `FcmService.kt:327` — `const val TYPE_CALL_INCOMING = "call_incoming"`). iOS must match this string exactly when routing CallKit reports:
 ```json
 {
-  "type": "incoming_call",
+  "type": "call_incoming",
   "call_id": "<uuid>",
   "caller_id": "<user_id>",
   "caller_name": "<display name>",
