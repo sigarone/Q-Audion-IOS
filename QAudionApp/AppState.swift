@@ -14,7 +14,12 @@ enum CallState: String {
 
 // MARK: - Messaging Models
 
-struct Conversation: Identifiable {
+/// Legacy conversation row used by AppState's in-memory `conversations` array
+/// before the W11.A ConversationStore. Renamed from `Conversation` so that
+/// callers in views (ChatContainer, ConversationListContainer) resolve the
+/// unqualified symbol `Conversation` to `QAudionEngine.Conversation` (UUID-keyed).
+/// Do NOT rename this back without also retiring the legacy preview list path.
+struct LegacyConversation: Identifiable {
     let id: String
     let contactName: String
     var lastMessage: String
@@ -65,7 +70,10 @@ final class AppState: ObservableObject {
     @Published var waveformEnabled: Bool = false
 
     // MARK: - Messaging state
-    @Published var conversations: [Conversation] = []
+    /// Legacy preview rows. The W11.A path uses `ConversationStore` + the engine
+    /// `Conversation` (UUID-keyed); this array survives only for the deprecated
+    /// `sendMessage(to:text:)` and `createConversation(contactId:)` helpers below.
+    @Published var conversations: [LegacyConversation] = []
     @Published var currentMessages: [ChatMessage] = []
 
     // MARK: - Security badge state (updated during call)
@@ -394,7 +402,7 @@ final class AppState: ObservableObject {
 
     func createConversation(contactId: String) {
         guard !conversations.contains(where: { $0.id == contactId }) else { return }
-        let conversation = Conversation(
+        let conversation = LegacyConversation(
             id: contactId,
             contactName: contactId,
             lastMessage: "Tap to start chatting",

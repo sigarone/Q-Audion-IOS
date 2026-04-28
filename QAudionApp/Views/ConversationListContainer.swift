@@ -58,9 +58,9 @@ final class ConversationListContainer: ObservableObject {
         var convs = store.loadConversations()
         guard let idx = convs.firstIndex(where: { $0.id == conversationId }) else { return }
         let old = convs[idx]
-        // Disambiguate from AppState.Conversation (legacy local struct with
-        // String id + lastMessageTime: Date) — we want the engine model.
-        convs[idx] = QAudionEngine.Conversation(
+        // `Conversation` resolves unambiguously to the engine model now that
+        // AppState's legacy struct was renamed to `LegacyConversation`.
+        convs[idx] = Conversation(
             id: old.id,
             peerUserId: old.peerUserId,
             peerDisplayName: old.peerDisplayName,
