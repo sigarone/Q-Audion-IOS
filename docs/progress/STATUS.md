@@ -2,15 +2,26 @@
 
 > **Sovrascritta a ogni task.** Snapshot di DOVE siamo ADESSO.
 
-**Last updated:** 2026-04-20
+**Last updated:** 2026-04-28
 **Branch:** `feature/ios-android-parity` (off `main` @ 4516e01)
-**Plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
+**Spec:** `docs/superpowers/specs/2026-04-28-cross-platform-alignment-design.md`
+**Active plan:** `docs/superpowers/plans/2026-04-28-track-a-foundation.md`
+**Predecessor plan:** `docs/superpowers/plans/2026-04-20-ios-android-parity.md`
 
 ## Fase attiva
-**Phase 1 — Wire protocol alignment — CODE-COMPLETE pending server-team input** (Task 1.3 + 1.2 audit + 1.4-a auth + 1.4-b1 contacts + 1.4-b2 KMS + 1.4-b3 profile + 1.4-b4 missing endpoints + 1.4-b5 security-TODO landed). Remaining scope:
+**Track A Foundation Sprint — IN PROGRESS** (`docs/superpowers/plans/2026-04-28-track-a-foundation.md`).
+- F0 (Invariants verification) — ✅ DONE — see `docs/progress/INVARIANTS_VERIFIED.md` (10 open discrepancies catalogued)
+- F1 (UI ViewModels: KeyMgmt + DeviceMgmt + NfcExchange + InCall + SasVerification) — IN PROGRESS
+- F2 (Platform scaffolding: ChatView consolidation + stray-files + ANDROID_REFERENCE WS-envelope correction) — pending
+- F3 (Closeout) — pending
+
+## Predecessor phases — ✅ DONE (do not redo)
+**Phase 0** (capability + pipeline baseline) — `b470ed8`, `4e230ab`, `51b0404`, `b1e6ef9`. All 4 tasks landed. TestFlight `v1.0.24-ph0` green.
+
+**Phase 1** (REST wire alignment) — CODE-COMPLETE except:
 - Task 1.1 WS code fixes — **BLOCKED** by USER WT (`BCryptoCallingApiImpl` etc.).
-- Audit §3.6–§3.8 backup transport (multipart upload / streaming download / `BackupEntryDto`) — deferred within 1.4-b scope; user to choose: land before `v1.0.24-ph1` or defer to Phase 2.
-- Audit §3.11–§3.15 security endpoints — code-flagged as TODO in 1.4-b5; blocked pending server-team schema clarification (DO NOT auto-rewrite).
+- Audit §3.6–§3.8 backup transport — deferred to Track B (`.qabk` format now flagged as Desktop↔Android incompatible — Open discrepancy §10).
+- Audit §3.11–§3.15 security endpoints — TODO in `BCryptoSecurityApiImpl`; server-team clarification needed (Open discrepancy from spec §10.2).
 
 ## Ultima task completata (audit)
 **Task 1.2 — ✅ DONE (audit)** — `docs/progress/PHASE1_REST_AUDIT.md`.
