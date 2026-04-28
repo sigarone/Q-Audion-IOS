@@ -206,7 +206,24 @@ workflows:
         api_key: $APP_STORE_CONNECT_PRIVATE_KEY
         key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
         issuer_id: $APP_STORE_CONNECT_ISSUER_ID
-        submit_to_testflight: true
+        # submit_to_testflight=false on purpose. With it true Codemagic
+        # invokes the App Store Connect API "Submit for beta review"
+        # endpoint, which is the gate for EXTERNAL TestFlight testing.
+        # Apple rejects that submission unless `Test Information` is
+        # filled (Feedback Email + Beta App Review Information: First
+        # Name, Last Name, Phone Number, Email — only configurable from
+        # the App Store Connect web UI at
+        # https://appstoreconnect.apple.com/apps/$APP_APPLE_ID/testflight/test-info).
+        # We don't ship to external testers (yet — see CLAUDE.md §7
+        # "Export compliance"). With submit_to_testflight=false the IPA
+        # upload + Apple processing still happens; Apple then auto-
+        # distributes the processed build to INTERNAL groups (incl.
+        # "Q-Audion testers") on its own. So our internal pipeline is
+        # unaffected, and we no longer red-build on the unrelated
+        # external-review gate. Flip back to true ONLY after the
+        # external Test Information form is filled out and we add
+        # external groups to beta_groups below.
+        submit_to_testflight: false
         # Do NOT list "Q-Audion testers" here: it's an INTERNAL group and
         # ASC auto-assigns every processed build to internal groups. The
         # App Store Connect API rejects explicit adds of internal groups
