@@ -11,9 +11,14 @@
 ## Fase attiva
 **Track A — feature-build phase (Wave 14)** — TestFlight pipeline iterating on `v1.0.34-trackA` (build fix) and `v1.0.35-trackA` (W14 QR-scan flow).
 
-**Wave 14 — In-app QR scanner** — landed 2026-04-28
+**Wave 14 — In-app pairing surface** — landed 2026-04-28 (`v1.0.34-trackA` … `v1.0.40-trackA`)
 - W14.A+C ✅ `QrPayloadRouter` + `QrScannerView` + `QrScannerSheet` + ContactsListView "Scan QR" wire (`bd92bd6`). AVCaptureSession-backed camera surface, payload-typed result detail, scan→add verified StoredContact in one tap.
-- W14.B — deferred: peer-side `FastSetupQrCodeScreen` requires a server-issued mint endpoint per the codec docstring; blocked on backend route definition. The DeviceLinkBinaryQR display variant (in-person two-iOS pairing) is candidate replacement scope, pending product call.
+- W14.D ✅ `MyIdentityQrSheet` (`b46ebb0`) — symmetric show-side QR. ContactsListView "+ → Show my identity" presents the user's `IdentityQrCode` + canonical fingerprint, completing the in-person pairing loop.
+- W14.E ✅ Wire stub `+ menu` actions (`a650361`) — "Add via NFC" → `NfcExchangeView`, "Import from phone" → `PhonebookImportView`. Both presented as full-screen modal sheets with Done.
+- W14.F ✅ `ContactsStore.StoredContact.pubkey` + `findPubkey(userId:)` (`5f7757d`) — pairing flow now persists the 32B X25519 pubkey from QR payloads; ContactsListView's detail mapping resolves the canonical fingerprint via `Fingerprint.format(pubkey:)` instead of the `????.????.????.????` placeholder. Forward-compat verified by hand-crafted legacy-JSON test.
+- W14.G ✅ `InCallContainer` fingerprint+displayName+avatarUrl resolve via `ContactsStore` (`729081d`) — eliminates the second `????` TODO. SAS UI and in-call header are now byte-for-byte consistent. +6 new ContactsStoreTests pinning the pubkey field.
+- W14.H ✅ `ContactsListContainer.attach(appState:)` pattern (`8b51663`) — fixes a defect where pull-to-refresh silently no-op'd because the zero-arg `ContactsListView.init()` built a service-less container.
+- W14.B — deferred: peer-side `FastSetupQrCodeScreen` requires a server-issued mint endpoint per the codec docstring; blocked on backend route definition. The `DeviceLinkBinaryQR` display variant (in-person two-iOS pairing) is candidate replacement scope, pending product call.
 
 **Build-pipeline fix** (`v1.0.34-trackA`, `f4ddc8c`) — renamed legacy `AppState.Conversation` → `LegacyConversation` so the unqualified `Conversation` symbol resolves unambiguously to `QAudionEngine.Conversation` across all view-layer call sites. Resolves the 4 ConversationListContainer compile errors that blocked v1.0.33.
 
