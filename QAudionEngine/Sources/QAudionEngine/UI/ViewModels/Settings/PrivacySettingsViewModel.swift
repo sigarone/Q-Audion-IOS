@@ -1,6 +1,6 @@
 import Foundation
 
-public struct PrivacySettingsViewModel: ViewModelProtocol {
+public struct PrivacySettingsViewModel: ViewModelProtocol, Codable {
     public let readReceiptsEnabled: Bool
     public let typingIndicatorEnabled: Bool
     public let presenceVisibleToContacts: Bool

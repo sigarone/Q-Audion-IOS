@@ -133,24 +133,8 @@ public final class SettingsStore {
 }
 
 // MARK: - Codable conformance for the ViewModels
-
-// `PrivacySettingsViewModel`, `ChatSettingsViewModel`, etc. are public
-// pure-Swift structs with public init. They need explicit Codable
-// synthesis for SettingsStore to round-trip them.
 //
-// We add the conformances here (in the persistence layer) instead of on
-// the view-model definitions themselves so the persistence concern stays
-// out of the view-model's public surface.
-
-extension PrivacySettingsViewModel: Codable {}
-extension ChatSettingsViewModel: Codable {}
-extension CallsSettingsViewModel: Codable {}
-// CallsSettingsViewModel.Codec and CallsSettingsViewModel.CallQuality are
-// String-backed enums — they gain Codable synthesis automatically once the
-// parent struct conforms. Redundant explicit conformances are omitted to
-// avoid "redundant conformance" compiler errors.
-extension NotificationsSettingsViewModel: Codable {}
-extension NotificationsSettingsViewModel.QuietHours: Codable {}
-extension TransportSettingsViewModel: Codable {}
-// TransportSettingsViewModel.Mode is a String-backed enum — Codable is
-// synthesized automatically through the parent's conformance.
+// `Codable` conformance is declared in each ViewModel's source file
+// (because Swift can only auto-synthesize Codable when the conformance
+// is in the same file as the type's primary declaration). This persistence
+// layer relies on those conformances being in place upstream.

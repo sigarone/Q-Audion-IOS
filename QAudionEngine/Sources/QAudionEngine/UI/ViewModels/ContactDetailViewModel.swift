@@ -40,7 +40,7 @@ public struct ContactDetailViewModel: ViewModelProtocol {
         userId: "user-aabbccdd-1122-3344-5566-778899aabbcc",
         displayName: "Alice (Pixel 7)",
         phoneHash: String(repeating: "ab", count: 32),
-        fingerprint: Fingerprint.format(pubkey: Data(repeating: 0x44, count: 32)),
+        fingerprint: (try? Fingerprint.format(pubkey: Data(repeating: 0x44, count: 32))) ?? "????.????.????.????",
         avatarUrl: nil,
         trustLevel: .sasVerified,
         isBlocked: false,

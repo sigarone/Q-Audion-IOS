@@ -6,10 +6,10 @@ import Foundation
 /// optional preferred TURN server URL, and last-measured round-trip times for
 /// the general connection and the TURN relay.  The mock disables Tor and uses
 /// `mode: .auto` to reflect the safe default for most users.
-public struct TransportSettingsViewModel: ViewModelProtocol {
+public struct TransportSettingsViewModel: ViewModelProtocol, Codable {
 
     /// Connection routing mode.
-    public enum Mode: String, Sendable, CaseIterable {
+    public enum Mode: String, Sendable, CaseIterable, Codable {
         case auto, p2p, turn, relay
     }
 

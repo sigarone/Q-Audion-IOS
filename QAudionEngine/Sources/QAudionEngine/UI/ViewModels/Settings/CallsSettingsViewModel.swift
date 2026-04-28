@@ -6,10 +6,10 @@ import Foundation
 /// background-mode state, and preferred call quality.  All three audio
 /// processing flags default to enabled — disabling them is an advanced
 /// power-user action that degrades call quality.
-public struct CallsSettingsViewModel: ViewModelProtocol {
+public struct CallsSettingsViewModel: ViewModelProtocol, Codable {
 
-    public enum Codec: String, Sendable { case opus }
-    public enum CallQuality: String, Sendable, CaseIterable { case low, medium, high }
+    public enum Codec: String, Sendable, Codable { case opus }
+    public enum CallQuality: String, Sendable, CaseIterable, Codable { case low, medium, high }
 
     public let codecPreference: Codec
     public let isAecEnabled: Bool

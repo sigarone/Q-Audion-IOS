@@ -29,7 +29,7 @@ public struct SasVerificationViewModel: ViewModelProtocol {
 
     public static let mock = SasVerificationViewModel(
         peerDisplayName: "Alice (Pixel 7)",
-        peerFingerprint: Fingerprint.format(pubkey: Data(repeating: 0x45, count: 32)),
+        peerFingerprint: (try? Fingerprint.format(pubkey: Data(repeating: 0x45, count: 32))) ?? "????.????.????.????",
         sasWords: ["abandon", "ability", "able", "about"],  // PGP word-list samples
         userVerdict: .pending
     )

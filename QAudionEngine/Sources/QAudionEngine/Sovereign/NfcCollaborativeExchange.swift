@@ -55,6 +55,13 @@ public final class NfcCollaborativeExchange {
         viewModel.transition(to: .error(message: message))
     }
 
+    /// Internal seam used by the iOS CoreNFC delegate to drive state from
+    /// outside the class (the `private(set)` viewModel can't be mutated by
+    /// the inner `TagReaderDelegate` directly).
+    internal func transition(to state: NfcExchangeViewModel.State) {
+        viewModel.transition(to: state)
+    }
+
     // MARK: - CoreNFC integration (iOS-only)
 
     #if canImport(CoreNFC) && os(iOS)
@@ -177,7 +184,7 @@ private final class TagReaderDelegate: NSObject, NFCTagReaderSessionDelegate {
                 try await session.connect(to: tag)
                 let peerName = try await owner?.runApduExchange(over: iso, session: session) ?? "(unknown)"
                 await MainActor.run {
-                    owner?.viewModel.transition(to: .success(peerDeviceName: peerName))
+                    owner?.transition(to: .success(peerDeviceName: peerName))
                 }
                 session.alertMessage = "Paired with \(peerName)"
                 session.invalidate()

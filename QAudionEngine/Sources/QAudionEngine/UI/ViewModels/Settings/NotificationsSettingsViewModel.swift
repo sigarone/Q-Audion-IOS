@@ -6,10 +6,10 @@ import Foundation
 /// window (nested value type), and a count of muted contacts.  Quiet hours
 /// default to 22:00–08:00 but are disabled in the mock, letting the UI show
 /// the controls without silently muting a first-run tester's device.
-public struct NotificationsSettingsViewModel: ViewModelProtocol {
+public struct NotificationsSettingsViewModel: ViewModelProtocol, Codable {
 
     /// A time window during which incoming-call and message sounds are muted.
-    public struct QuietHours: Equatable, Sendable {
+    public struct QuietHours: Equatable, Sendable, Codable {
         public let startHour: Int      // 0...23
         public let startMinute: Int    // 0...59
         public let endHour: Int

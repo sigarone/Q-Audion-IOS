@@ -7,7 +7,7 @@ import Foundation
 /// previews to reflect a security-conscious default: the app targets users
 /// who care about metadata leakage, so showing message content on the lock
 /// screen is off by default.
-public struct ChatSettingsViewModel: ViewModelProtocol {
+public struct ChatSettingsViewModel: ViewModelProtocol, Codable {
     public let readReceiptsEnabled: Bool
     public let typingIndicatorsEnabled: Bool
     public let messagePreviewInNotifications: Bool
