@@ -8,7 +8,7 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section("Account") {
-                    NavigationLink("Profile") { AccountSettingsScreen(state: appState) }
+                    NavigationLink("Profile") { AccountSettingsScreen(appState: appState) }
                     NavigationLink("Security") { SecurityDashboardScreen(state: appState) }
                     NavigationLink("Devices") { DeviceManagementScreen(state: appState) }
                 }

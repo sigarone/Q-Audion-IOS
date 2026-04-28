@@ -113,7 +113,9 @@ struct ThreatReportContainerView: View {
                 }
             }
         }
-        .onChange(of: container.didSubmitSuccessfully) { _, success in
+        .onChange(of: container.didSubmitSuccessfully) { success in
+            // Single-param form works on iOS 16+ (the iOS 17+ two-param form
+            // would fail under our deployment target).
             if success {
                 Task {
                     try? await Task.sleep(nanoseconds: 800_000_000)
