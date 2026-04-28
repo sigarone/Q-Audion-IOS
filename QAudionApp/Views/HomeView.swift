@@ -48,8 +48,7 @@ struct HomeView: View {
 
     private var contactsTab: some View {
         NavigationStack {
-            ContactsTabPlaceholder()
-                .navigationTitle("Contacts")
+            ContactsListView()
         }
     }
 
