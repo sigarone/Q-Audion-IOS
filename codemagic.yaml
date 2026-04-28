@@ -63,18 +63,33 @@ workflows:
           xcodegen generate
           echo "=== Schemes ==="
           xcodebuild -project QAudionApp.xcodeproj -list 2>&1 | head -20
-      - name: Bump marketing version + build number
+      - name: Bump marketing version + build number (Info.plist direct via plutil)
         script: |
           set -e
           cd QAudionApp
 
           # ----------------------------------------------------------------
-          # Marketing version (CFBundleShortVersionString) from the git tag.
-          # Codemagic exposes the triggering tag in CM_TAG. Tags follow
-          # `vX.Y.Z[-suffix]` (e.g. `v1.0.45-trackA`); strip the leading `v`
-          # and any trailing `-suffix` so the user-visible version on
-          # TestFlight tracks the tag instead of being stuck at 1.0.0.
+          # Why we DON'T rely on agvtool alone:
+          #
+          # `agvtool new-marketing-version` only writes the new value into
+          # the Xcode project's MARKETING_VERSION build setting AND into
+          # any Info.plist that uses the literal `$(MARKETING_VERSION)`
+          # substitution. Our QAudionApp/Info.plist hard-codes the values
+          # ("1.0.0" and "1") rather than referencing the build settings,
+          # so agvtool's update never reached the bundle. Apple read the
+          # literal "1.0.0 (1)" pair out of Info.plist on every upload,
+          # silently overwrote the previous build under the same TestFlight
+          # entry, and the user saw a stuck `1.0.0 (1)` for the entire
+          # v1.0.34..v1.0.47 chain.
+          #
+          # Fix: write Info.plist directly via plutil, which guarantees
+          # the literal values land in the IPA. We still call agvtool
+          # afterwards (best-effort) so the .pbxproj's build settings stay
+          # in sync for any local developer build that DOES use $(VAR)
+          # substitution. agvtool failures are non-fatal here.
           # ----------------------------------------------------------------
+
+          # 1) Marketing version from the git tag.
           if [ -n "$CM_TAG" ]; then
             MARKETING_VERSION=$(echo "$CM_TAG" | sed -E 's/^v//; s/-[A-Za-z].*$//')
           else
@@ -82,17 +97,8 @@ workflows:
           fi
           echo "CM_TAG = $CM_TAG"
           echo "Marketing version = $MARKETING_VERSION"
-          agvtool new-marketing-version "$MARKETING_VERSION"
 
-          # ----------------------------------------------------------------
-          # Build number (CFBundleVersion) is one higher than the latest
-          # build TestFlight has seen for this app. The previous YAML used
-          # `2>/dev/null || echo "0"` which silently masked the failure
-          # mode where APP_APPLE_ID was empty — the value is now declared
-          # in `vars:` above. Keep `set +e` around the call so we don't
-          # nuke the build if TestFlight is briefly unreachable, but log
-          # the raw output and the chosen number.
-          # ----------------------------------------------------------------
+          # 2) Build number from TestFlight + 1.
           echo "APP_APPLE_ID = $APP_APPLE_ID"
           set +e
           LATEST_BUILD_NUMBER=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID")
@@ -105,7 +111,32 @@ workflows:
           echo "Latest TestFlight build number = $LATEST_BUILD_NUMBER"
           NEW_BUILD_NUMBER=$(($LATEST_BUILD_NUMBER + 1))
           echo "New build number = $NEW_BUILD_NUMBER"
-          agvtool new-version -all $NEW_BUILD_NUMBER
+
+          # 3) Show Info.plist BEFORE the modification so the build log
+          #    is unambiguous if the values land back at "1.0.0/1" again.
+          echo ""
+          echo "=== Info.plist BEFORE plutil ==="
+          plutil -extract CFBundleShortVersionString raw -o - Info.plist || true
+          plutil -extract CFBundleVersion             raw -o - Info.plist || true
+
+          # 4) Write directly. -replace creates the key if missing, sets
+          #    its value if present. Both keys exist in our Info.plist.
+          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" Info.plist
+          plutil -replace CFBundleVersion            -string "$NEW_BUILD_NUMBER"  Info.plist
+
+          # 5) Verify after.
+          echo ""
+          echo "=== Info.plist AFTER plutil ==="
+          plutil -extract CFBundleShortVersionString raw -o - Info.plist
+          plutil -extract CFBundleVersion             raw -o - Info.plist
+
+          # 6) Best-effort sync into the .pbxproj build settings via
+          #    agvtool. Failures are non-fatal — Info.plist is already
+          #    correct and the build will use those values regardless.
+          agvtool new-marketing-version "$MARKETING_VERSION" || \
+            echo "WARN: agvtool new-marketing-version failed (non-fatal; Info.plist already updated via plutil)"
+          agvtool new-version -all "$NEW_BUILD_NUMBER" || \
+            echo "WARN: agvtool new-version failed (non-fatal; Info.plist already updated via plutil)"
       - name: Set up signing (fetch or create Distribution cert + App Store profile)
         script: |
           set -e
@@ -161,6 +192,28 @@ workflows:
           WORK=$(mktemp -d)
           cd "$WORK"
           unzip -q "$OLDPWD/$IPA_PATH"
+
+          # Belt-and-braces: print the actual version values that landed
+          # in the IPA's Info.plist. If we ever see "1.0.0 / 1" again here
+          # despite the plutil writes earlier, something is overwriting
+          # Info.plist mid-build (xcodebuild process-plist phase, etc.).
+          echo ""
+          echo "=== IPA Info.plist version sanity check ==="
+          APP_PLIST="Payload/QAudionApp.app/Info.plist"
+          if [ -f "$APP_PLIST" ]; then
+            BUNDLE_VERSION=$(plutil -extract CFBundleShortVersionString raw -o - "$APP_PLIST" 2>/dev/null || echo "<unset>")
+            BUILD_NUMBER=$(plutil -extract CFBundleVersion raw -o - "$APP_PLIST" 2>/dev/null || echo "<unset>")
+            echo "CFBundleShortVersionString = $BUNDLE_VERSION"
+            echo "CFBundleVersion            = $BUILD_NUMBER"
+            if [ "$BUNDLE_VERSION" = "1.0.0" ] && [ "$BUILD_NUMBER" = "1" ]; then
+              echo "ERROR: IPA shipped with stale (1.0.0, 1) version pair."
+              echo "       Apple will silently substitute the previous build under"
+              echo "       the same TestFlight entry. Failing the build to surface."
+              exit 1
+            fi
+          else
+            echo "WARN: $APP_PLIST not found in unzipped IPA"
+          fi
 
           FW="Payload/QAudionApp.app/Frameworks/onnxruntime.framework"
           if [ ! -d "$FW" ]; then
