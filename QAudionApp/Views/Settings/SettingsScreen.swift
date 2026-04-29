@@ -273,6 +273,19 @@ struct SettingsScreen: View {
                             subtitle: "Catalogo firmato · Ed25519 · canali")
             }
             .buttonStyle(.plain)
+
+            // W49: Cosa c'è di nuovo — changelog viewer per i tester.
+            // Lista hardcoded delle release con bullet di feature, così
+            // un tester sa cosa testare in ogni nuova versione.
+            NavigationLink {
+                WhatsNewScreen()
+            } label: {
+                SettingsRow(icon: "sparkles",
+                            iconColor: scheme.primary,
+                            title: "Cosa c'è di nuovo",
+                            subtitle: "Changelog · novità per release")
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }
