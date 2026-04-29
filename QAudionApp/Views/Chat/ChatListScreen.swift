@@ -152,25 +152,19 @@ struct ChatListScreen: View {
             }
         }
         .sheet(isPresented: $showingNewGroup) {
-            // Placeholder: full group-creation flow lands in a later wave.
-            // The sheet at least prevents a "FAB does nothing" dead-end.
-            VStack(spacing: 16) {
-                Image(systemName: "person.3.fill")
-                    .font(.system(size: 48))
-                    .foregroundStyle(scheme.primary)
-                Text("Nuovo gruppo")
-                    .qaudionStyle(type.titleLarge)
-                    .foregroundStyle(scheme.onSurface)
-                Text("La creazione di gruppi sarà disponibile a breve.")
-                    .qaudionStyle(type.bodyMedium)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-                Button("Chiudi") { showingNewGroup = false }
-                    .padding(.top, 8)
+            // W40.A: full group-creation flow. ContactPicker +
+            // name field + Crea(N) button → callback `onGroupCreated`.
+            // Engine wiring pending (real GroupChatRepository), per ora
+            // stub UUID + snackbar feedback.
+            NavigationStack {
+                CreateGroupScreen { _ in
+                    showingNewGroup = false
+                    // Future: navigate al GroupChatScreen(groupId)
+                    // appena W40.C lo wires.
+                }
+                .navigationBarBackButtonHidden(true)
+                .toolbar(.hidden, for: .navigationBar)
             }
-            .padding()
-            .presentationDetents([.medium])
         }
     }
 

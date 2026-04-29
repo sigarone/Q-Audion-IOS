@@ -1,0 +1,118 @@
+import Foundation
+
+/// Modelli condivisi per il trio Group Chat (W40). 1:1 port di
+/// `qaudion-android-new/feature/feature-chat/.../group/*UiState`.
+///
+/// Engine wiring pending: nessun `GroupChatRepository` iOS-side oggi —
+/// queste struct sono il contratto-API che l'engine implementerà
+/// quando lands la pipeline group messaging cross-platform.
+
+// MARK: - Create Group
+
+public struct ContactPickerRowUi: Identifiable, Equatable {
+    public let id: String          // = userId (univoco per peer)
+    public let userId: String
+    public let displayName: String
+    public let avatarUrl: URL?
+
+    public init(userId: String, displayName: String, avatarUrl: URL? = nil) {
+        self.id = userId
+        self.userId = userId
+        self.displayName = displayName
+        self.avatarUrl = avatarUrl
+    }
+}
+
+public struct CreateGroupUiState: Equatable {
+    public var name: String
+    public var query: String
+    public var contacts: [ContactPickerRowUi]      // raw lista da contacts store
+    public var selectedMemberIds: Set<String>      // userId selezionati
+    public var error: String?
+    public var creating: Bool
+
+    public init(name: String = "",
+                query: String = "",
+                contacts: [ContactPickerRowUi] = [],
+                selectedMemberIds: Set<String> = [],
+                error: String? = nil,
+                creating: Bool = false) {
+        self.name = name
+        self.query = query
+        self.contacts = contacts
+        self.selectedMemberIds = selectedMemberIds
+        self.error = error
+        self.creating = creating
+    }
+
+    /// Lista filtrata per `query` (case-insensitive su displayName).
+    public var filteredContacts: [ContactPickerRowUi] {
+        guard !query.isEmpty else { return contacts }
+        let q = query.lowercased()
+        return contacts.filter { $0.displayName.lowercased().contains(q) }
+    }
+}
+
+// MARK: - Group Chat
+
+public struct GroupMessageRowUi: Identifiable, Equatable {
+    public let id: String
+    public let text: String
+    public let senderLabel: String   // displayName breve, "Tu" se mine
+    public let timestamp: String      // pre-formattato HH:mm
+    public let mine: Bool
+
+    public init(id: String, text: String, senderLabel: String,
+                timestamp: String, mine: Bool) {
+        self.id = id; self.text = text; self.senderLabel = senderLabel
+        self.timestamp = timestamp; self.mine = mine
+    }
+}
+
+public struct GroupChatUiState: Equatable {
+    public var name: String
+    public var memberCount: Int
+    public var composerText: String
+    public var messages: [GroupMessageRowUi]
+    public var error: String?
+
+    public init(name: String = "", memberCount: Int = 0,
+                composerText: String = "",
+                messages: [GroupMessageRowUi] = [],
+                error: String? = nil) {
+        self.name = name; self.memberCount = memberCount
+        self.composerText = composerText; self.messages = messages
+        self.error = error
+    }
+}
+
+// MARK: - Group Info
+
+public struct GroupMemberRowUi: Identifiable, Equatable {
+    public let id: String           // = userId
+    public let userId: String
+    public let displayName: String
+    public let avatarUrl: URL?
+    public let isAdmin: Bool
+    public let isSelf: Bool
+
+    public init(userId: String, displayName: String, avatarUrl: URL? = nil,
+                isAdmin: Bool = false, isSelf: Bool = false) {
+        self.id = userId
+        self.userId = userId; self.displayName = displayName
+        self.avatarUrl = avatarUrl; self.isAdmin = isAdmin; self.isSelf = isSelf
+    }
+}
+
+public struct GroupInfoUiState: Equatable {
+    public var name: String
+    public var epoch: Int
+    public var members: [GroupMemberRowUi]
+    public var error: String?
+
+    public init(name: String = "", epoch: Int = 0,
+                members: [GroupMemberRowUi] = [], error: String? = nil) {
+        self.name = name; self.epoch = epoch
+        self.members = members; self.error = error
+    }
+}
