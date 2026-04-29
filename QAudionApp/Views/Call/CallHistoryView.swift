@@ -92,6 +92,21 @@ final class CallHistoryStore: ObservableObject {
         }
     }
 
+    /// Delete a single entry from the history. Engine wiring pending —
+    /// today this only mutates the in-memory store; when the real
+    /// `CallHistoryRepository` lands iOS-side, this method should also
+    /// fire `repository.delete(entryId:)` so the deletion persists
+    /// across app launches.
+    func deleteEntry(_ entryId: String) {
+        entries.removeAll { $0.id == entryId }
+    }
+
+    /// Wipe the entire call history. Same caveat as `deleteEntry` —
+    /// engine repo deletion to be wired when surfaced.
+    func clearAll() {
+        entries.removeAll()
+    }
+
     static let mockData: [CallHistoryEntry] = [
         .init(id: "h1", peerUserId: "user-mario", peerDisplay: "Mario Rossi",
               direction: .incoming,
@@ -127,6 +142,7 @@ struct CallHistoryView: View {
 
     @State private var showingDialPad = false
     @State private var showingGroupComposer = false
+    @State private var showingClearAllConfirm = false
 
     var body: some View {
         ZStack {
@@ -163,6 +179,16 @@ struct CallHistoryView: View {
                 })
             }
         }
+        // W47: alert di conferma per clear-all dello storico.
+        .alert("Cancella tutto lo storico?",
+               isPresented: $showingClearAllConfirm) {
+            Button("Annulla", role: .cancel) {}
+            Button("Cancella", role: .destructive) {
+                store.clearAll()
+            }
+        } message: {
+            Text("Verranno rimosse \(store.entries.count) chiamate dallo storico locale. L'azione non si può annullare.")
+        }
     }
 
     // MARK: - Top bar
@@ -173,6 +199,22 @@ struct CallHistoryView: View {
                 .qaudionStyle(type.titleLarge)
                 .foregroundStyle(scheme.onSurface)
             Spacer()
+            // W47: overflow menu — "Cancella tutto" sullo storico.
+            // Disabled quando la lista è già vuota.
+            Menu {
+                Button(role: .destructive) {
+                    showingClearAllConfirm = true
+                } label: {
+                    Label("Cancella storico", systemImage: "trash")
+                }
+                .disabled(store.entries.isEmpty)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(scheme.onSurface)
+                    .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Altro")
             Button(action: { showingGroupComposer = true }) {
                 Image(systemName: "person.2.fill")
                     .font(.system(size: 18, weight: .semibold))
@@ -218,6 +260,16 @@ struct CallHistoryView: View {
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16,
                                           bottom: 4, trailing: 16))
+                // W47: swipe-to-delete sulla singola entry. Engine wire
+                // (real `CallHistoryRepository.delete`) deferred — oggi
+                // muta solo lo store in-memoria.
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        store.deleteEntry(entry.id)
+                    } label: {
+                        Label("Elimina", systemImage: "trash")
+                    }
+                }
             }
         }
         .listStyle(.plain)
