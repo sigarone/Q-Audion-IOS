@@ -54,7 +54,7 @@ struct InCallView: View {
         }
         // (7) SAS verification — placeholder sheet (full wiring deferred to follow-on task).
         .sheet(isPresented: .constant(vm.shouldShowSasPrompt)) {
-            Text("SAS Verification")
+            Text("Verifica SAS")
                 .font(.headline)
                 .padding()
                 .presentationDetents([.medium])
@@ -139,7 +139,7 @@ struct InCallView: View {
                         .frame(width: 60, height: 60)
                         .background(.red)
                         .clipShape(Circle())
-                    Text("End")
+                    Text("Termina")
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.7))
                 }

@@ -67,7 +67,7 @@ struct VideoCallView: View {
                 .font(.system(size: 48))
                 .foregroundColor(.white.opacity(0.3))
 
-            Text("Encrypted Video")
+            Text("Video cifrato")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.3))
 
@@ -82,7 +82,7 @@ struct VideoCallView: View {
     private var topBar: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(appState.callContactId ?? "Video Call")
+                Text(appState.callContactId ?? "Videochiamata")
                     .font(.headline)
                     .foregroundColor(.white)
 
@@ -91,7 +91,7 @@ struct VideoCallView: View {
                         .font(.system(size: 9))
                         .foregroundColor(.green)
 
-                    Text("Encrypted \u{2022} \(appState.videoCodecLabel)")
+                    Text("Cifrato \u{2022} \(appState.videoCodecLabel)")
                         .font(.caption2)
                         .foregroundColor(.gray)
                 }
@@ -119,7 +119,7 @@ struct VideoCallView: View {
                         Image(systemName: "person.fill")
                             .font(.title)
                             .foregroundColor(.gray)
-                        Text("You")
+                        Text("Tu")
                             .font(.caption2)
                             .foregroundColor(.gray)
                     }
@@ -140,14 +140,14 @@ struct VideoCallView: View {
         HStack(spacing: 24) {
             videoButton(
                 icon: "camera.rotate.fill",
-                label: "Flip"
+                label: "Inverti"
             ) {
                 isRearCamera.toggle()
             }
 
             videoButton(
                 icon: isCameraOn ? "video.fill" : "video.slash.fill",
-                label: isCameraOn ? "Cam On" : "Cam Off",
+                label: isCameraOn ? "Cam ON" : "Cam OFF",
                 isActive: !isCameraOn
             ) {
                 isCameraOn.toggle()
@@ -155,7 +155,7 @@ struct VideoCallView: View {
 
             videoButton(
                 icon: isMuted ? "mic.slash.fill" : "mic.fill",
-                label: isMuted ? "Unmute" : "Mute",
+                label: isMuted ? "Riattiva" : "Muto",
                 isActive: isMuted
             ) {
                 isMuted.toggle()
@@ -164,7 +164,7 @@ struct VideoCallView: View {
 
             videoButton(
                 icon: "phone.down.fill",
-                label: "End",
+                label: "Termina",
                 isEndCall: true
             ) {
                 appState.endCall()
@@ -172,7 +172,7 @@ struct VideoCallView: View {
 
             videoButton(
                 icon: isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
-                label: "Speaker",
+                label: "Altoparlante",
                 isActive: isSpeaker
             ) {
                 isSpeaker.toggle()

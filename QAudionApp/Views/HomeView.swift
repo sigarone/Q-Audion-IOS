@@ -16,19 +16,19 @@ struct HomeView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             chatsTab
-                .tabItem { Label("Chats", systemImage: "bubble.left.and.bubble.right.fill") }
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
                 .tag(Tab.chats)
 
             contactsTab
-                .tabItem { Label("Contacts", systemImage: "person.2.fill") }
+                .tabItem { Label("Contatti", systemImage: "person.2.fill") }
                 .tag(Tab.contacts)
 
             callsTab
-                .tabItem { Label("Calls", systemImage: "phone.fill") }
+                .tabItem { Label("Chiamate", systemImage: "phone.fill") }
                 .tag(Tab.calls)
 
             settingsTab
-                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tabItem { Label("Impostazioni", systemImage: "gearshape.fill") }
                 .tag(Tab.settings)
         }
         .overlay(alignment: .top) {
@@ -80,7 +80,7 @@ struct HomeView: View {
     private var callsTab: some View {
         NavigationStack {
             CallsTabView()
-                .navigationTitle("Calls")
+                .navigationTitle("Chiamate")
         }
     }
 
@@ -104,9 +104,9 @@ struct HomeView: View {
         Button(action: { presentingInCall = true }) {
             HStack {
                 Image(systemName: "phone.fill")
-                Text(appState.callContactId.map { "Active call with \($0)" } ?? "Active call")
+                Text(appState.callContactId.map { "Chiamata attiva con \($0)" } ?? "Chiamata attiva")
                 Spacer()
-                Text("Tap to return")
+                Text("Tocca per rientrare")
             }
             .font(.caption.weight(.semibold))
             .padding(.horizontal, 16).padding(.vertical, 8)
@@ -139,9 +139,9 @@ struct HomeView: View {
                 Image(systemName: "phone.down.fill")
                     .font(.system(size: 48))
                     .foregroundStyle(.secondary)
-                Text("No active call")
+                Text("Nessuna chiamata attiva")
                     .font(.title2.weight(.semibold))
-                Button("Dismiss") { presentingInCall = false }
+                Button("Chiudi") { presentingInCall = false }
                     .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -159,7 +159,7 @@ private struct CallsTabView: View {
         VStack(spacing: 0) {
             // Quick-dial bar
             HStack(spacing: 8) {
-                TextField("Enter contact ID", text: $contactId)
+                TextField("Inserisci ID contatto", text: $contactId)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .padding(10)
@@ -191,7 +191,7 @@ private struct CallsTabView: View {
             .padding()
 
             List {
-                Section("Recent Calls") {
+                Section("Chiamate recenti") {
                     if appState.recentCalls.isEmpty {
                         HStack {
                             Spacer()
@@ -199,10 +199,10 @@ private struct CallsTabView: View {
                                 Image(systemName: "phone.badge.checkmark")
                                     .font(.title)
                                     .foregroundStyle(.secondary)
-                                Text("No recent calls")
+                                Text("Nessuna chiamata recente")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
-                                Text("Call history will appear here after your first call.")
+                                Text("Lo storico apparirà qui dopo la prima chiamata.")
                                     .font(.caption)
                                     .foregroundStyle(.tertiary)
                                     .multilineTextAlignment(.center)
