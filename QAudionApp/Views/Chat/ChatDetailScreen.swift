@@ -30,6 +30,7 @@ struct ChatDetailScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.qaudionSnackbar) private var snackbar
 
     // MARK: - Local UI state (until engine exposes these fields)
 
@@ -85,6 +86,22 @@ struct ChatDetailScreen: View {
         .background(scheme.background)
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        // W38: send-failure feedback. Quando il container marca un
+        // messaggio fallito (engine pipeline wires `markFailed` su
+        // crypto/network error), pushiamo una snackbar error con bottone
+        // "Riprova" che chiama back nel container per ri-eseguire la
+        // pipeline. La copy è derivata dal reason code (1:1 mapping
+        // con Android `SendMessageUseCase.Outcome.Failed`).
+        .onChange(of: container.failedMessageId) { newId in
+            guard newId != nil, let reason = container.failureReason else { return }
+            snackbar?.show(.init(
+                text: "Messaggio non inviato — \(reason.localizedDescription)",
+                severity: .error,
+                actionLabel: "Riprova",
+                onAction: { container.retryFailedMessage() },
+                durationSeconds: 6
+            ))
+        }
         .sheet(item: actionSheetBinding) { msgIdWrapper in
             BubbleActionSheet(
                 isOwn: messageIsOwn(msgIdWrapper.id),

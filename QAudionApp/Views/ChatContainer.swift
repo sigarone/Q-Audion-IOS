@@ -4,8 +4,43 @@ import QAudionEngine
 @MainActor
 final class ChatContainer: ObservableObject {
 
+    /// Reason codes 1:1 con Android `SendMessageUseCase.Outcome.Failed`
+    /// (vedi `qaudion-android-new/feature/feature-chat/.../SendMessageUseCase.kt`).
+    /// Mappato a stringhe Italian per UI feedback via QAudionSnackbar.
+    enum SendFailureReason: String, Equatable {
+        case pskMissing      = "psk_missing"
+        case cryptoFailure   = "crypto_failure"
+        case networkError    = "network_error"
+        case notAuthenticated = "not_authenticated"
+        case uploadFailure   = "upload_failure"
+        case generic         = "send_error"
+
+        var localizedDescription: String {
+            switch self {
+            case .pskMissing:
+                return "Errore di cifratura. Contatto non verificato."
+            case .cryptoFailure:
+                return "Errore crittografico. Riprova."
+            case .networkError:
+                return "Errore di rete. Controlla la connessione."
+            case .notAuthenticated:
+                return "Sessione scaduta. Effettua di nuovo l'accesso."
+            case .uploadFailure:
+                return "Caricamento allegato fallito. Riprova."
+            case .generic:
+                return "Invio fallito. Riprova più tardi."
+            }
+        }
+    }
+
     @Published private(set) var viewModel: ChatViewModel
     @Published var composerText: String = ""
+
+    /// Id dell'ultimo messaggio fallito. nil quando nessun fallimento
+    /// pending. Wired su QAudionSnackbar dalla `ChatDetailScreen`.
+    @Published private(set) var failedMessageId: UUID? = nil
+    /// Reason del fallimento corrente. nil se nessun fallimento.
+    @Published private(set) var failureReason: SendFailureReason? = nil
 
     private let store: ConversationStore
     private let conversationId: UUID
@@ -88,6 +123,62 @@ final class ChatContainer: ObservableObject {
                 self.refreshFromStore()
             }
         }
+    }
+
+    /// Marca un messaggio come fallito e pubblica i flag che la
+    /// `ChatDetailScreen` legge per mostrare la snackbar di retry.
+    /// Chiamabile dall'engine wiring quando la send pipeline lancia
+    /// (network down, PSK missing, crypto failure). Per ora il chiamante
+    /// è una test fixture in `simulateFailure(messageId:reason:)` finché
+    /// la real send pipeline non è wired.
+    func markFailed(messageId: UUID, reason: SendFailureReason) {
+        store.updateMessageStatus(
+            id: messageId, conversationId: conversationId,
+            newStatus: .failed
+        )
+        failedMessageId = messageId
+        failureReason = reason
+        refreshFromStore()
+    }
+
+    /// Resetta i flag di failure e ri-tenta la send pipeline. Il composer
+    /// viene ripopolato col plaintext del messaggio fallito così l'utente
+    /// può modificarlo prima del retry o premere direttamente "Invia".
+    func retryFailedMessage() {
+        guard let id = failedMessageId,
+              let msg = store.loadMessages(conversationId: conversationId)
+                  .first(where: { $0.id == id })
+        else { return }
+        composerText = msg.plaintext
+        failedMessageId = nil
+        failureReason = nil
+        // Marca il vecchio messaggio come "sending" così la UI mostra
+        // di nuovo l'icona clock invece dell'errore.
+        store.updateMessageStatus(
+            id: id, conversationId: conversationId, newStatus: .sending
+        )
+        refreshFromStore()
+        // sendMessage è il punto canonico — quando l'engine wires
+        // crypto/WS, retry passerà per gli stessi catch handler.
+        sendMessage()
+    }
+
+    /// Test/dev hook per simulare un fallimento di invio. Da rimuovere
+    /// quando la real send pipeline (engine) chiama `markFailed`
+    /// direttamente in caso di errore. Esposto come `internal` per
+    /// poter essere testato dall'App layer.
+    #if DEBUG
+    func simulateFailure(reason: SendFailureReason = .networkError) {
+        guard let last = viewModel.messages.last else { return }
+        markFailed(messageId: last.id, reason: reason)
+    }
+    #endif
+
+    /// Chiama questo dopo aver mostrato il feedback all'utente per
+    /// eliminare la snackbar pending.
+    func clearFailureFlag() {
+        failedMessageId = nil
+        failureReason = nil
     }
 
     func refreshFromStore() {
