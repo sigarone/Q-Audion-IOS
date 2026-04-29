@@ -348,7 +348,10 @@ struct ContactDetailScreen: View {
     private var stubSafetyNumber: TrustSafetyNumber {
         let seed = item.userId
         var groups: [String] = []
-        for offset in 0..<12 {
+        // Use the cross-platform constant (W36 component) so this stub
+        // tracks future changes to the canonical group count without
+        // a manual update here.
+        for offset in 0..<TrustSafetyNumber.groupCount {
             // SDBM-style 32-bit hash sul prefisso seed+offset → 5-digit
             // deterministic numero. Stesso seed → sempre stessi gruppi.
             var h: UInt32 = 5381

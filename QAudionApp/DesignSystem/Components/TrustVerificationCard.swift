@@ -17,6 +17,15 @@ public enum TrustSafetyNumberState: Equatable {
 /// Risultato della derivazione safety number (HKDF-SHA256 cross-platform).
 /// 12 gruppi da 5 cifre = 60 cifre totali, mostrate in griglia 4 colonne × 3 righe.
 public struct TrustSafetyNumber: Equatable {
+
+    /// Numero canonico di gruppi in un safety number Q-Audion. Cross-
+    /// platform constant (Android `SafetyNumber.GROUP_COUNT`).
+    public static let groupCount: Int = 12
+    /// Cifre per gruppo (zero-padded). Total digits = `groupCount * digitsPerGroup` = 60.
+    public static let digitsPerGroup: Int = 5
+    /// Colonne della griglia di display. `groupCount / gridColumns` = 3 righe.
+    public static let gridColumns: Int = 4
+
     public let groups: [String]   // 12 elementi, ognuno 5 cifre zero-padded
     public let fingerprintHex: String  // 60 hex chars (output 30-byte HKDF)
 
@@ -197,18 +206,24 @@ public struct TrustVerificationCard: View {
                 .qaudionStyle(type.labelLarge)
                 .foregroundStyle(scheme.onSurface)
 
-            LazyVGrid(columns: [
-                GridItem(.flexible(), spacing: 6),
-                GridItem(.flexible(), spacing: 6),
-                GridItem(.flexible(), spacing: 6),
-                GridItem(.flexible(), spacing: 6),
-            ], spacing: 6) {
-                ForEach(0..<min(12, safetyNumber.groups.count), id: \.self) { idx in
+            // NVIDIA review on v1.0.80 flagged the bare `12` / `4`
+            // literals as magic numbers. Promoted to constants on
+            // TrustSafetyNumber so any future change (es. groupCount = 8
+            // for a shorter format) propagates uniformly.
+            let groupCount  = TrustSafetyNumber.groupCount
+            let gridColumns = TrustSafetyNumber.gridColumns
+
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 6),
+                               count: gridColumns),
+                spacing: 6
+            ) {
+                ForEach(0..<min(groupCount, safetyNumber.groups.count), id: \.self) { idx in
                     digitCell(safetyNumber.groups[idx], index: idx)
                 }
-                // Padding rows se groups < 12 — manteniamo la griglia
-                // sempre 4×3.
-                let missing = max(0, 12 - safetyNumber.groups.count)
+                // Padding rows se groups < groupCount — manteniamo la
+                // griglia sempre 4×3.
+                let missing = max(0, groupCount - safetyNumber.groups.count)
                 if missing > 0 {
                     ForEach(0..<missing, id: \.self) { _ in
                         digitCell("·····", index: -1)
