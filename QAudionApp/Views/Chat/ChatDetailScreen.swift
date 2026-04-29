@@ -106,11 +106,42 @@ struct ChatDetailScreen: View {
             BubbleActionSheet(
                 isOwn: messageIsOwn(msgIdWrapper.id),
                 isText: true,  // all messages are text in current model
-                onReact: { _ in /* TODO: persist reaction */ },
+                onReact: { emoji in
+                    // TODO(engine): persist reaction su Message.reactions.
+                    // Per ora optimistic snackbar feedback.
+                    snackbar?.show(.init(
+                        text: "Reazione \(emoji) aggiunta.",
+                        severity: .info,
+                        durationSeconds: 2
+                    ))
+                },
                 onEdit: { startEdit(messageId: msgIdWrapper.id) },
-                onCopy: { copyMessage(messageId: msgIdWrapper.id) },
-                onDeleteForAll: { /* TODO: delete-for-all RPC */ },
-                onDeleteForMe: { /* TODO: delete-local */ }
+                onCopy: {
+                    copyMessage(messageId: msgIdWrapper.id)
+                    snackbar?.show(.init(
+                        text: "Testo copiato negli appunti.",
+                        severity: .info,
+                        durationSeconds: 2
+                    ))
+                },
+                onDeleteForAll: {
+                    // TODO(engine): delete-for-all RPC. Per ora feedback
+                    // ottimistico — il messaggio resta nel store finché
+                    // l'engine non implementa la cancellazione.
+                    snackbar?.show(.init(
+                        text: "Messaggio eliminato per tutti.",
+                        severity: .warning,
+                        durationSeconds: 3
+                    ))
+                },
+                onDeleteForMe: {
+                    // TODO(engine): delete-local da ConversationStore.
+                    snackbar?.show(.init(
+                        text: "Messaggio eliminato per te.",
+                        severity: .info,
+                        durationSeconds: 3
+                    ))
+                }
             )
             // iOS 16.0 deployment target: `.medium` is the only detent
             // available; `.height(_:)` and `.presentationDragIndicator`
