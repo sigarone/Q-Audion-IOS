@@ -89,6 +89,7 @@ struct HomeView: View {
     private var callsTab: some View {
         NavigationStack {
             CallHistoryView()
+        }
     }
 
     /// W24: Settings tab usa il nuovo `SettingsScreen` (1:1 visual port di

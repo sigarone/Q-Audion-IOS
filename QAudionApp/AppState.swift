@@ -269,6 +269,27 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Login with a PRE-COMPUTED `phone_hash` (lowercase hex SHA-256).
+    /// Used exclusively by the fast-setup flow (`FastSetupAuth.run`),
+    /// where the hash is derived from the opaque `phone_id` embedded in
+    /// the QR — NOT from an E.164 phone number — and therefore must
+    /// bypass `PhoneHash.hash` normalization.
+    ///
+    /// 1:1 parity with Android `LoginUseCase.invoke(phoneHash, ...)`,
+    /// which the Android `FastSetupUseCase` calls directly.
+    func loginWithPhoneHash(phoneHash: String, credential: String) async {
+        do {
+            let creds = try await authService.loginWithPhoneHash(
+                phoneHash: phoneHash, password: credential, serverUrl: defaultServerUrl
+            )
+            currentUserId = creds.userId
+            isAuthenticated = true
+            errorMessage = nil
+        } catch {
+            errorMessage = "Login failed: \(error.localizedDescription)"
+        }
+    }
+
     func logout() {
         authService.clearToken()
         engine?.destroySession()

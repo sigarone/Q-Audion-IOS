@@ -49,14 +49,17 @@ final class FastSetupAuth {
         // E.164 normaliser).
         let phoneHash = PhoneHashHelper.sha256Hex(payload.phoneId)
 
-        // Reuse the existing AppState.login pipeline — it already
-        // calls authService.login + sets currentUserId + flips
-        // isAuthenticated + clears errorMessage on success / sets
-        // errorMessage on failure. Keeping a single login site means
-        // any future hook (analytics, audit log, post-auth bootstrap)
-        // applies to fast-setup automatically.
+        // Use the dedicated `loginWithPhoneHash` path so the already-
+        // computed SHA-256 flows straight to the wire. The legacy
+        // `appState.login(userId:credential:)` would re-feed the hash
+        // through `PhoneHash.hash`, which prepends `+39` and runs the
+        // E.164 regex — guaranteed failure on a hex string. This is
+        // the bug that caused TestFlight v1.0.88 to fail with
+        // "Login failed: Not a valid E.164 phone: '+39<hash>'".
+        // 1:1 parity with Android's `FastSetupUseCase` which calls
+        // `loginUseCase(phoneHash = phoneHash, ...)` directly.
         appState.errorMessage = nil
-        await appState.login(userId: phoneHash, credential: payload.password)
+        await appState.loginWithPhoneHash(phoneHash: phoneHash, credential: payload.password)
         if let err = appState.errorMessage {
             return err
         }
