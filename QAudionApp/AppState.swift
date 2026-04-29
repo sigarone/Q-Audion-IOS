@@ -89,7 +89,15 @@ final class AppState: ObservableObject {
     @Published var latencyMs: Int = 0
 
     // MARK: - Server connection state
-    @Published var serverUrl: String = "https://api.qaudion.com"
+    /// Pinned to `PinnedServerHost.url` (`https://voip.bcrypto.com`).
+    /// We keep it as `@Published var` (not `let`) only because the
+    /// fast-setup login path explicitly re-asserts the value via
+    /// `appState.serverUrl = PinnedServerHost.url` — a no-op today, but
+    /// it survives any future code path that tries to override the host
+    /// (e.g. a debug-flavor Settings field). The previous default
+    /// `https://api.qaudion.com` was a placeholder that broke real
+    /// logins; it's been wiped.
+    @Published var serverUrl: String = PinnedServerHost.url
     @Published var connectionStatus: String = "not_configured"  // "connected", "connecting", "error", "not_configured"
     @Published var backendMode: String = "dual"  // "signal_only", "dual", "bcrypto_only"
 
