@@ -3,6 +3,7 @@ import QAudionEngine
 
 struct HomeView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.qaudionScheme) private var scheme
     @State private var selectedTab: Tab = .chats
     @State private var presentingInCall: Bool = false
 
@@ -31,6 +32,10 @@ struct HomeView: View {
                 .tabItem { Label("Impostazioni", systemImage: "gearshape.fill") }
                 .tag(Tab.settings)
         }
+        // W32: tint del tab bar (icona + label selezionati) sul primary
+        // del design system Q-Audion. La tab non-selezionata mantiene
+        // il default UIKit (grigio iOS) per leggibilità.
+        .tint(scheme.primary)
         .overlay(alignment: .top) {
             if appState.isInCall && !presentingInCall {
                 inCallBanner

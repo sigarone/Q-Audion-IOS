@@ -26,15 +26,15 @@ struct PhonebookImportView: View {
             }
         }
         .padding()
-        .navigationTitle("Import Contacts")
+        .navigationTitle("Importa contatti")
     }
 
     private var introContent: some View {
         VStack(spacing: 16) {
             Image(systemName: "person.crop.rectangle.stack").font(.system(size: 64)).foregroundStyle(.blue)
-            Text("Find Q-Audion users in your phonebook").font(.title2.bold())
-            Text("We'll hash each phone number locally with a server-issued pepper, then ask the server which hashes correspond to known users. Your phonebook never leaves the device in plaintext.").font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button("Start") {
+            Text("Trova utenti Q-Audion nella tua rubrica").font(.title2.bold())
+            Text("Calcoliamo l'hash di ogni numero localmente con un pepper fornito dal server, poi chiediamo al server quali hash corrispondono a utenti noti. La tua rubrica non lascia mai il dispositivo in chiaro.").font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Button("Inizia") {
                 container.startImport()
             }
             .buttonStyle(.borderedProminent)
@@ -45,8 +45,8 @@ struct PhonebookImportView: View {
     private func resultsContent(matched: [PhonebookImportViewModel.Match], unmatched: Int) -> some View {
         VStack {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 64)).foregroundStyle(.green)
-            Text("\(matched.count) Q-Audion users found").font(.title2.bold())
-            Text("\(unmatched) of your contacts aren't on Q-Audion yet.").font(.body).foregroundStyle(.secondary)
+            Text("\(matched.count) utenti Q-Audion trovati").font(.title2.bold())
+            Text("\(unmatched) dei tuoi contatti non sono ancora su Q-Audion.").font(.body).foregroundStyle(.secondary)
             List(matched, id: \.userId) { m in
                 VStack(alignment: .leading) {
                     Text(m.localName).font(.body)
@@ -59,7 +59,7 @@ struct PhonebookImportView: View {
     private func errorContent(_ msg: String) -> some View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 64)).foregroundStyle(.red)
-            Text("Import error").font(.title.bold())
+            Text("Errore di importazione").font(.title.bold())
             Text(msg).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
     }

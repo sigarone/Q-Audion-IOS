@@ -39,32 +39,32 @@ struct MyIdentityQrSheet: View {
                 }
 
                 if let qrString = coordinator.currentIdentityQr {
-                    Section("Show My Identity") {
+                    Section("Mostra la tua identità") {
                         qrCodeImage(for: qrString)
                             .frame(height: 240)
                             .frame(maxWidth: .infinity)
-                        Button("Show as text") { showingText = true }
-                        Button("Copy to clipboard") {
+                        Button("Mostra come testo") { showingText = true }
+                        Button("Copia negli appunti") {
                             UIPasteboard.general.string = qrString
                         }
                     }
                     Section {
-                        Text("Have your contact tap **+ → Scan QR** in their Contacts tab and aim their camera at this code. Once they confirm, you'll appear in each other's verified contact list.")
+                        Text("Chiedi al tuo contatto di toccare **+ → Scansiona QR** nella tab Contatti e di puntare la fotocamera su questo codice. Dopo la conferma, sarete entrambi nella lista dei contatti verificati.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
                 } else {
                     Section {
-                        Label("Identity QR not yet available — sign in first.", systemImage: "exclamationmark.triangle.fill")
+                        Label("QR identità non ancora disponibile — accedi prima.", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                     }
                 }
             }
-            .navigationTitle("My Identity")
+            .navigationTitle("La mia identità")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Fatto") { dismiss() }
                 }
             }
             .sheet(isPresented: $showingText) {
@@ -76,11 +76,11 @@ struct MyIdentityQrSheet: View {
                                 .padding()
                                 .textSelection(.enabled)
                         }
-                        .navigationTitle("Identity Text")
+                        .navigationTitle("Testo identità")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showingText = false }
+                                Button("Fatto") { showingText = false }
                             }
                         }
                     }
@@ -97,7 +97,7 @@ struct MyIdentityQrSheet: View {
                 .resizable()
                 .scaledToFit()
         } else {
-            Text("QR generation failed").foregroundStyle(.red)
+            Text("Generazione QR fallita").foregroundStyle(.red)
         }
     }
 

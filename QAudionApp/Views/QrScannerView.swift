@@ -53,7 +53,7 @@ struct QrScannerView: View {
                 .ignoresSafeArea()
                 .overlay { reticleOverlay }
                 #else
-                Text("Camera scanning is iOS-only.")
+                Text("La scansione fotocamera è disponibile solo su iOS.")
                     .foregroundStyle(.white)
                 #endif
             case .denied:
@@ -76,7 +76,7 @@ struct QrScannerView: View {
                 .padding()
                 Spacer()
                 if permissionState == .granted {
-                    Text("Point your camera at a Q-Audion QR code")
+                    Text("Punta la fotocamera su un QR Q-Audion")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.white)
                         .padding()
@@ -125,10 +125,10 @@ struct QrScannerView: View {
             Image(systemName: "camera.slash.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.red)
-            Text("Camera access denied")
+            Text("Accesso fotocamera negato")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
-            Text("Q-Audion needs the camera to scan QR codes for contact pairing and device linking.")
+            Text("Q-Audion ha bisogno della fotocamera per scansionare i QR per accoppiare contatti e collegare dispositivi.")
                 .font(.body)
                 .foregroundStyle(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
@@ -139,7 +139,7 @@ struct QrScannerView: View {
                     UIApplication.shared.open(url)
                 }
             } label: {
-                Text("Open Settings")
+                Text("Apri Impostazioni")
             }
             .buttonStyle(.borderedProminent)
             #endif
@@ -151,10 +151,10 @@ struct QrScannerView: View {
             Image(systemName: "camera.fill.badge.ellipsis")
                 .font(.system(size: 48))
                 .foregroundStyle(.orange)
-            Text("Camera unavailable")
+            Text("Fotocamera non disponibile")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
-            Text("Camera access is restricted on this device (parental controls or MDM).")
+            Text("L'accesso alla fotocamera è limitato su questo dispositivo (parental control o MDM).")
                 .font(.body)
                 .foregroundStyle(.white.opacity(0.8))
                 .multilineTextAlignment(.center)

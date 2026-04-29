@@ -178,25 +178,25 @@ struct ContactsListView: View {
                 }
             }
         }
-        .searchable(text: $searchText, prompt: "Search contacts")
+        .searchable(text: $searchText, prompt: "Cerca contatti")
         .onChange(of: searchText) { newValue in
             // Single-param form for iOS 16 compat.
             container.setSearchQuery(newValue)
         }
-        .navigationTitle("Contacts")
+        .navigationTitle("Contatti")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    Button("Scan QR", systemImage: "qrcode.viewfinder") {
+                    Button("Scansiona QR", systemImage: "qrcode.viewfinder") {
                         showingQrScanner = true
                     }
-                    Button("Show my identity", systemImage: "qrcode") {
+                    Button("Mostra la mia identità", systemImage: "qrcode") {
                         showingMyIdentity = true
                     }
-                    Button("Add via NFC", systemImage: "wave.3.right") {
+                    Button("Aggiungi via NFC", systemImage: "wave.3.right") {
                         showingNfcPair = true
                     }
-                    Button("Import from phone", systemImage: "phone.badge.plus") {
+                    Button("Importa dal telefono", systemImage: "phone.badge.plus") {
                         showingPhonebookImport = true
                     }
                 } label: {
@@ -229,7 +229,7 @@ struct ContactsListView: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { showingNfcPair = false }
+                            Button("Fatto") { showingNfcPair = false }
                         }
                     }
             }
@@ -239,7 +239,7 @@ struct ContactsListView: View {
                 PhonebookImportView(appState: appState)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { showingPhonebookImport = false }
+                            Button("Fatto") { showingPhonebookImport = false }
                         }
                     }
             }
@@ -303,7 +303,7 @@ struct ContactsListView: View {
     private func scanProgressBanner(_ p: PhonebookSyncCoordinator.ScanProgress) -> some View {
         HStack {
             ProgressView().scaleEffect(0.7)
-            Text("Scanning phonebook: \(p.processedContacts) / \(p.totalContacts) — found \(p.resolvedUserCount) Q-Audion users")
+            Text("Scansione rubrica: \(p.processedContacts) / \(p.totalContacts) — trovati \(p.resolvedUserCount) utenti Q-Audion")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

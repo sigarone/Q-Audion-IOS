@@ -74,18 +74,18 @@ private struct DecodedDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { onCancel() }
+                Button("Annulla") { onCancel() }
             }
         }
     }
 
     private var title: String {
         switch decoded {
-        case .identity: return "Contact Identity"
-        case .deviceLink: return "Device Pairing"
-        case .fastSetup: return "Fast Setup"
-        case .invalid: return "Invalid Code"
-        case .unknown: return "Unknown Code"
+        case .identity:   return "Identità contatto"
+        case .deviceLink: return "Accoppiamento dispositivo"
+        case .fastSetup:  return "Configurazione rapida"
+        case .invalid:    return "Codice non valido"
+        case .unknown:    return "Codice sconosciuto"
         }
     }
 
@@ -124,18 +124,18 @@ private struct DecodedDetailView: View {
         case .identity(let id): return id.userId
         case .deviceLink(let dl): return dl.userId
         case .fastSetup(let fs): return fs.userId
-        case .invalid(let kind, _): return "Invalid \(kind.rawValue) code"
-        case .unknown: return "Unrecognised QR code"
+        case .invalid(let kind, _): return "Codice \(kind.rawValue) non valido"
+        case .unknown: return "QR non riconosciuto"
         }
     }
 
     private var headerSubtitle: String {
         switch decoded {
-        case .identity: return "Identity QR (printable)"
-        case .deviceLink: return "Device-linking pairing code"
-        case .fastSetup: return "Server-issued onboarding code"
+        case .identity: return "QR identità (stampabile)"
+        case .deviceLink: return "Codice di accoppiamento dispositivo"
+        case .fastSetup: return "Codice di onboarding emesso dal server"
         case .invalid(_, let reason): return reason
-        case .unknown(let prefix): return "Prefix: \"\(prefix)…\""
+        case .unknown(let prefix): return "Prefisso: \"\(prefix)…\""
         }
     }
 
@@ -143,14 +143,14 @@ private struct DecodedDetailView: View {
     private var detailSection: some View {
         switch decoded {
         case .identity(let identity):
-            Section("Identity") {
+            Section("Identità") {
                 LabeledContent("User ID") {
                     Text(identity.userId)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                LabeledContent("Public key") {
+                LabeledContent("Chiave pubblica") {
                     Text(identity.pubkey.map { String(format: "%02x", $0) }.joined()
                             .prefix(32) + "…")
                         .font(.caption.monospaced())
@@ -164,14 +164,14 @@ private struct DecodedDetailView: View {
                 }
             }
         case .deviceLink(let dl):
-            Section("Device") {
+            Section("Dispositivo") {
                 LabeledContent("User ID") {
                     Text(dl.userId)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                LabeledContent("Public key") {
+                LabeledContent("Chiave pubblica") {
                     Text(dl.pubkey.map { String(format: "%02x", $0) }.joined()
                             .prefix(32) + "…")
                         .font(.caption.monospaced())
@@ -184,7 +184,7 @@ private struct DecodedDetailView: View {
                 }
             }
         case .fastSetup(let fs):
-            Section("Setup") {
+            Section("Configurazione") {
                 LabeledContent("User ID") {
                     Text(fs.userId)
                         .font(.caption.monospaced())
@@ -192,7 +192,7 @@ private struct DecodedDetailView: View {
                         .textSelection(.enabled)
                 }
                 if let ext = fs.dialExtension {
-                    LabeledContent("Extension") {
+                    LabeledContent("Interno") {
                         Text(ext)
                             .font(.body.monospaced())
                             .foregroundStyle(.secondary)
@@ -206,21 +206,21 @@ private struct DecodedDetailView: View {
                         .truncationMode(.middle)
                 }
                 let expiresIn = expiresInDescription(fs.expiresAtUnixMs)
-                LabeledContent("Expires") {
+                LabeledContent("Scadenza") {
                     Text(expiresIn)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
         case .invalid(_, let reason):
-            Section("Reason") {
+            Section("Motivo") {
                 Text(reason)
                     .font(.callout)
                     .foregroundStyle(.red)
             }
         case .unknown:
             Section {
-                Text("This QR code does not match any Q-Audion format. Make sure you're scanning a code generated by Q-Audion (identity, device-link, or fast setup).")
+                Text("Questo QR non corrisponde a nessun formato Q-Audion. Assicurati di scansionare un codice generato da Q-Audion (identità, device-link o configurazione rapida).")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -244,17 +244,17 @@ private struct DecodedDetailView: View {
             Button {
                 onScanAgain()
             } label: {
-                Label("Scan another", systemImage: "qrcode.viewfinder")
+                Label("Scansiona un altro", systemImage: "qrcode.viewfinder")
             }
         }
     }
 
     private var acceptLabel: String {
         switch decoded {
-        case .identity: return "Add as contact"
-        case .deviceLink: return "Pair this device"
-        case .fastSetup: return "Use this setup code"
-        default: return "Confirm"
+        case .identity:   return "Aggiungi come contatto"
+        case .deviceLink: return "Accoppia questo dispositivo"
+        case .fastSetup:  return "Usa questo codice di setup"
+        default:          return "Conferma"
         }
     }
 
@@ -264,10 +264,10 @@ private struct DecodedDetailView: View {
     private func expiresInDescription(_ expiresAtUnixMs: Int64) -> String {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let deltaSec = (expiresAtUnixMs - nowMs) / 1000
-        if deltaSec < 0 { return "expired" }
-        if deltaSec < 60 { return "in \(deltaSec)s" }
-        if deltaSec < 3600 { return "in \(deltaSec / 60)m" }
-        if deltaSec < 86400 { return "in \(deltaSec / 3600)h" }
-        return "in \(deltaSec / 86400)d"
+        if deltaSec < 0 { return "scaduto" }
+        if deltaSec < 60 { return "tra \(deltaSec)s" }
+        if deltaSec < 3600 { return "tra \(deltaSec / 60)m" }
+        if deltaSec < 86400 { return "tra \(deltaSec / 3600)h" }
+        return "tra \(deltaSec / 86400)g"
     }
 }

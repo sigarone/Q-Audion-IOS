@@ -131,7 +131,7 @@ struct ChatListScreen: View {
                 .padding(.trailing, 16)
                 .padding(.bottom, 16)
         }
-        .navigationTitle("Chats")
+        .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Cerca conversazioni")
         .onChange(of: searchText) { newValue in
