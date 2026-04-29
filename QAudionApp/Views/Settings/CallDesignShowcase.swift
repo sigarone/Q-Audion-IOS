@@ -111,6 +111,12 @@ struct CallDesignShowcase: View {
                 }
             }
 
+            Section("Live data preview") {
+                NavigationLink("LiveInCallScreen · binding live AppState") {
+                    LiveInCallScreen()
+                }
+            }
+
             Section("Group") {
                 NavigationLink("Group call · 5 participants") {
                     GroupCallScreen(
