@@ -80,6 +80,18 @@ final class CallHistoryStore: ObservableObject {
         loading = false
     }
 
+    /// Seed the store with mock entries if empty. Used by the view's
+    /// onAppear to provide a friendly first-run / TestFlight QA state
+    /// when the engine repository hasn't wired in yet. Encapsulated as
+    /// a method so callers don't poke the `private(set)` `entries`
+    /// directly — preserves the invariant that all writes go through
+    /// the store.
+    func seedWithMockIfEmpty() {
+        if entries.isEmpty {
+            entries = Self.mockData
+        }
+    }
+
     static let mockData: [CallHistoryEntry] = [
         .init(id: "h1", peerUserId: "user-mario", peerDisplay: "Mario Rossi",
               direction: .incoming,
@@ -128,10 +140,9 @@ struct CallHistoryView: View {
         .onAppear {
             store.refresh(from: appState)
             // Pre-popola con mock se nessuna recentCalls esiste — UX
-            // ergonomica per nuovi utenti / TestFlight QA.
-            if store.entries.isEmpty {
-                store.entries = CallHistoryStore.mockData
-            }
+            // ergonomica per nuovi utenti / TestFlight QA. La logica
+            // sta dentro lo store (rispetta `private(set) entries`).
+            store.seedWithMockIfEmpty()
         }
         .sheet(isPresented: $showingDialPad) {
             DialPadSheet(onCall: { dialed in
