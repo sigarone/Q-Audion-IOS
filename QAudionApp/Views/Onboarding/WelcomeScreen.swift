@@ -28,81 +28,71 @@ struct WelcomeScreen: View {
     let onStartRegister: () -> Void
     let onStartLogin: () -> Void
 
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
+    @Environment(\.qaudionType) private var type
+
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            scheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
 
-                    // Top meta strap (letter-spaced uppercase label)
                     Text("Q-AUDION · SECURE COMMUNICATIONS")
-                        .font(.caption.weight(.medium))
+                        .qaudionStyle(type.labelSmall)
                         .tracking(2.5)
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.top, 8)
 
                     Spacer().frame(height: 56)
 
-                    // Headline
                     Text("Benvenuto a Q-Audion.")
                         .font(.system(size: 42, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(scheme.onBackground)
                         .lineLimit(2)
 
                     Spacer().frame(height: 12)
 
                     Text("La voce è la tua chiave.")
-                        .font(.system(size: 18))
-                        .foregroundStyle(.white.opacity(0.65))
+                        .qaudionStyle(type.titleMedium)
+                        .foregroundStyle(scheme.onSurfaceVariant)
 
                     Spacer().frame(height: 32)
 
-                    // Feature pills (PQC accent color)
+                    // Feature pills (PQC accent token from extras)
                     HStack(spacing: 8) {
-                        FeaturePill(label: "ML-KEM 1024")
-                        FeaturePill(label: "Voice-as-Key")
-                        FeaturePill(label: "Deepfake Guard")
+                        FeaturePill(label: "ML-KEM 1024", accent: extras.pqcAccent)
+                        FeaturePill(label: "Voice-as-Key", accent: extras.pqcAccent)
+                        FeaturePill(label: "Deepfake Guard", accent: extras.pqcAccent)
                     }
 
                     Spacer().frame(height: 32)
 
-                    // CTAs
+                    // CTAs — using the QAudionButton design-system component
                     VStack(spacing: 12) {
-                        Button(action: onStartFastSetup) {
-                            Text("Configurazione rapida (QR)")
-                                .font(.body.weight(.semibold))
-                                .frame(maxWidth: .infinity, minHeight: 56)
-                                .foregroundStyle(.black)
-                                .background(Color.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 14))
-                        }
-
-                        Button(action: onStartRegister) {
-                            Text("Inizia con un codice invito")
-                                .font(.body.weight(.medium))
-                                .frame(maxWidth: .infinity, minHeight: 56)
-                                .foregroundStyle(.white)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 14)
-                                        .stroke(.white.opacity(0.4), lineWidth: 1.2)
-                                )
-                        }
-
-                        Button(action: onStartLogin) {
-                            Text("Accedi con un account esistente")
-                                .font(.body.weight(.medium))
-                                .frame(maxWidth: .infinity, minHeight: 56)
-                                .foregroundStyle(.white.opacity(0.85))
-                        }
+                        QAudionButton(
+                            action: onStartFastSetup,
+                            label: "Configurazione rapida (QR)",
+                            variant: .primary
+                        )
+                        QAudionButton(
+                            action: onStartRegister,
+                            label: "Inizia con un codice invito",
+                            variant: .secondary
+                        )
+                        QAudionButton(
+                            action: onStartLogin,
+                            label: "Accedi con un account esistente",
+                            variant: .text
+                        )
                     }
 
                     Spacer().frame(height: 24)
 
-                    // Footer
                     Text("Hybrid PQC · Voice-first · Deepfake Guard")
-                        .font(.caption2.weight(.medium))
+                        .qaudionStyle(type.labelSmall)
                         .tracking(1.5)
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(scheme.onSurfaceVariant)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     Spacer().frame(height: 8)
@@ -114,22 +104,22 @@ struct WelcomeScreen: View {
     }
 }
 
+/// Feature pill rendered with the design-system `pqcAccent` color (no
+/// more hardcoded `Color(red: 0.40, green: 0.80, blue: 1.0)`). 12% fill
+/// + full-color label matches Android's `extras.pqcAccent.copy(alpha=0.12f)`.
 private struct FeaturePill: View {
+    @Environment(\.qaudionType) private var type
     let label: String
-
-    /// PQC accent — cyan/blue tint matching Android's `extras.pqcAccent`.
-    private let pqcAccent = Color(red: 0.40, green: 0.80, blue: 1.0)
+    let accent: Color
 
     var body: some View {
         Text(label)
-            .font(.caption2.weight(.medium))
+            .qaudionStyle(type.labelSmall)
             .tracking(1.0)
-            .foregroundStyle(pqcAccent)
+            .foregroundStyle(accent)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(
-                Capsule().fill(pqcAccent.opacity(0.12))
-            )
+            .background(Capsule().fill(accent.opacity(0.12)))
     }
 }
 
