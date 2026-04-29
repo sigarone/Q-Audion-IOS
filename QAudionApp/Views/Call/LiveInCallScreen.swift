@@ -44,30 +44,50 @@ struct LiveInCallScreen: View {
     @State private var speakerOn: Bool = false
     @State private var voiceEnhancement: Bool = false
 
+    /// Cached peer display name. Resolved once on appear / on
+    /// callContactId change so the contacts-store lookup doesn't run
+    /// on every TimelineView tick (OpenRouter review on v1.0.75 flagged
+    /// the disk I/O on the main thread). Fallback to "Sconosciuto"
+    /// when no peer is bound (e.g. between calls).
+    @State private var cachedPeerDisplayName: String = "Sconosciuto"
+
+    /// Reference timestamp (UNIX epoch seconds) used to derive a
+    /// counting-down rekey clock until the engine surfaces a real
+    /// rekey timer. We anchor it on `.onAppear` and decrement it as
+    /// the TimelineView ticks; resets every `rekeyTotalSeconds`.
+    private static let rekeyTotalSeconds = 300
+    @State private var rekeyAnchorEpoch: TimeInterval = Date().timeIntervalSince1970
+
     var body: some View {
         // TimelineView refreshes the body once per second so the
         // duration label + sparkline tick without forcing CallService
         // to push @Published updates.
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             InCallScreen(
-                peerDisplayName: peerDisplayName,
+                peerDisplayName: cachedPeerDisplayName,
                 avatarUrl: nil,
                 durationSeconds: Int(appState.callService.callDurationSeconds),
                 confidence: Double(appState.confidenceScore),
                 recentSamples: liveSamples,
-                rekeyInSeconds: 252,
-                rekeyTotalSeconds: 300,
+                rekeyInSeconds: liveRekeyInSeconds,
+                rekeyTotalSeconds: Self.rekeyTotalSeconds,
                 pqcActive: appState.backendType == "PQC",
                 sasWords: [],
                 sasVerified: false,
                 keyInfo: nil,
                 transportMode: liveTransportMode,
-                muted: muted,
+                muted: liveMuted,
                 speakerOn: speakerOn,
                 voiceEnhancement: voiceEnhancement,
                 onToggleMute: {
-                    muted.toggle()
-                    appState.setMuted(muted)
+                    // Source of truth = CallService.isMuted. We flip it
+                    // via AppState.setMuted then re-read; the @State
+                    // mirror updates on the next tick anyway, but
+                    // toggling locally first avoids one frame of
+                    // visual lag.
+                    let next = !appState.callService.isMuted
+                    muted = next
+                    appState.setMuted(next)
                 },
                 onToggleSpeaker: {
                     speakerOn.toggle()
@@ -89,22 +109,50 @@ struct LiveInCallScreen: View {
             )
         }
         .onAppear {
-            // Sync local mute mirror to whatever CallService thinks.
-            muted = appState.callService.isMuted
+            resolvePeerDisplayName()
+            rekeyAnchorEpoch = Date().timeIntervalSince1970
+        }
+        .onChange(of: appState.callContactId) { _ in
+            // Re-resolve when the call peer changes (e.g. switching
+            // between successive calls on the same showcase entry).
+            resolvePeerDisplayName()
         }
     }
 
     // MARK: - Derived state
 
-    private var peerDisplayName: String {
-        guard let id = appState.callContactId else { return "Sconosciuto" }
-        // Try a friendly display name from the local contacts store.
+    /// Always re-reads `CallService.isMuted` so external mute changes
+    /// (Bluetooth headset, programmatic) propagate to the UI on each
+    /// TimelineView tick. The local `@State muted` mirror is still
+    /// updated on tap to avoid a one-frame flicker.
+    private var liveMuted: Bool {
+        appState.callService.isMuted
+    }
+
+    private func resolvePeerDisplayName() {
+        guard let id = appState.callContactId else {
+            cachedPeerDisplayName = "Sconosciuto"
+            return
+        }
         let stored = contactsStore.load()
         if let match = stored.first(where: { $0.userId == id }) {
-            return match.displayName
+            cachedPeerDisplayName = match.displayName
+        } else {
+            // Fallback: trim "user-" prefix if present.
+            cachedPeerDisplayName = id.hasPrefix("user-")
+                ? String(id.dropFirst(5)).capitalized
+                : id
         }
-        // Fallback: trim "user-" prefix if present.
-        return id.hasPrefix("user-") ? String(id.dropFirst(5)).capitalized : id
+    }
+
+    /// Stub rekey countdown derived from a local anchor. Counts down
+    /// 300→0 then loops back to 300 — purely visual until the engine
+    /// exposes the real next-rekey timer (see W29 GAP analysis).
+    private var liveRekeyInSeconds: Int {
+        let elapsed = Int(Date().timeIntervalSince1970 - rekeyAnchorEpoch)
+        let inWindow = ((elapsed % Self.rekeyTotalSeconds) + Self.rekeyTotalSeconds)
+            % Self.rekeyTotalSeconds
+        return Self.rekeyTotalSeconds - inWindow
     }
 
     /// Live samples for the SessionStatusStrip mini-spark inside InCallScreen.
