@@ -47,6 +47,7 @@ struct ContactDetailScreen: View {
                     trustBadgesRow
                     actionRow.padding(.horizontal, 16).padding(.top, 4)
                     trustVerificationCard.padding(.horizontal, 16)
+                    safetyNumberSection.padding(.horizontal, 16)
                     metadataCard.padding(.horizontal, 16)
                     securityLogCard.padding(.horizontal, 16)
                     Spacer().frame(height: 32)
@@ -303,6 +304,63 @@ struct ContactDetailScreen: View {
             }
             Spacer(minLength: 0)
         }
+    }
+
+    // MARK: - Safety number section (W36)
+
+    /// Sezione "NUMERO DI SICUREZZA" con la nuova `TrustVerificationCard`
+    /// (1:1 port di Android core-ui). Source of truth per la verifica
+    /// fingerprint cross-platform. Per ora i 60 digit + lo stato sono
+    /// stub derivati da `item.isVerified`; il vero `TrustSafetyNumber`
+    /// arriverà quando l'engine espone la deriv. HKDF-SHA256 lato iOS.
+    private var safetyNumberSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("NUMERO DI SICUREZZA")
+                .qaudionStyle(type.labelSmall)
+                .tracking(1.2)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            TrustVerificationCard(
+                state: item.isVerified ? .userVerified : .identityPinnedTofu,
+                safetyNumber: stubSafetyNumber,
+                verifiedAt: item.isVerified ? Date().addingTimeInterval(-3600) : nil,
+                verificationMethod: item.isVerified ? .voice : nil,
+                onMarkVerified: { method in
+                    print("[ContactDetail] mark verified via \(method.localized)")
+                    snackbar?.show(.init(
+                        text: "Identità di \(item.displayName) marcata verificata via \(method.localized).",
+                        severity: .info
+                    ))
+                },
+                onAcceptNewFingerprint: {
+                    print("[ContactDetail] accepted new fingerprint")
+                    snackbar?.show(.init(
+                        text: "Nuova identità accettata.",
+                        severity: .warning
+                    ))
+                }
+            )
+        }
+    }
+
+    /// Stub deterministico: deriviamo 12 gruppi numerici dal `userId`
+    /// così che lo stesso contatto mostri sempre lo stesso safety number
+    /// nelle preview, anche se il vero HKDF non è ancora wired iOS-side.
+    private var stubSafetyNumber: TrustSafetyNumber {
+        let seed = item.userId
+        var groups: [String] = []
+        for offset in 0..<12 {
+            // SDBM-style 32-bit hash sul prefisso seed+offset → 5-digit
+            // deterministic numero. Stesso seed → sempre stessi gruppi.
+            var h: UInt32 = 5381
+            for byte in (seed + String(offset)).utf8 {
+                h = (h &* 33) &+ UInt32(byte)
+            }
+            groups.append(String(format: "%05d", h % 100_000))
+        }
+        return TrustSafetyNumber(
+            groups: groups,
+            fingerprintHex: String(item.phoneHash.prefix(60))
+        )
     }
 
     // MARK: - Metadata card
