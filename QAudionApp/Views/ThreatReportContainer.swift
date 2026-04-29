@@ -10,10 +10,18 @@ final class ThreatReportContainer: ObservableObject {
     @Published var didSubmitSuccessfully: Bool = false
 
     private let appState: AppState
+    /// W16.B: persists each successfully-submitted report locally so the
+    /// user can revisit historic submissions in `ThreatReportListView`.
+    /// Server-side history endpoint is still TODO (audit §3.14); this is
+    /// the App-layer-only stop-gap.
+    private let logStore: ThreatReportLogStore
 
-    init(appState: AppState, initial: ThreatReportViewModel = .mock) {
+    init(appState: AppState,
+         initial: ThreatReportViewModel = .mock,
+         logStore: ThreatReportLogStore = ThreatReportLogStore()) {
         self.appState = appState
         self.viewModel = initial
+        self.logStore = logStore
     }
 
     // MARK: - Submit
@@ -52,7 +60,12 @@ final class ThreatReportContainer: ObservableObject {
                     details: details,
                     severity: severity
                 )
+                // Server returned 2xx → record it in the local history log
+                // so the user can revisit the submission from
+                // Settings → Security → Active Threats.
+                let entry = ThreatReportLogStore.Entry.from(submitted: submitted)
                 await MainActor.run {
+                    self.logStore.append(entry)
                     self.didSubmitSuccessfully = true
                     self.isSubmitting = false
                 }

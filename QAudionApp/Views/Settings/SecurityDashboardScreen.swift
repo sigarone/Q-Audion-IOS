@@ -9,7 +9,11 @@ final class SecurityDashboardContainer: ObservableObject {
     @Published private(set) var viewModel: SecurityDashboardViewModel
     @Published var errorMessage: String?
 
-    private let appState: AppState
+    /// Internal-scope so sibling views in the Settings stack (W16.B
+    /// `ThreatReportListView`) can re-use the same AppState reference
+    /// without forcing the caller to pass it down twice. The container
+    /// already owns the AppState so re-exposing it adds no new authority.
+    let appState: AppState
 
     init(appState: AppState, initial: SecurityDashboardViewModel = .mock) {
         self.appState = appState
@@ -135,8 +139,13 @@ struct SecurityDashboardScreen: View {
                 }
 
                 NavigationLink {
-                    // Placeholder: threat report list not yet wired to server.
-                    ThreatReportPlaceholderView(count: container.viewModel.activeThreatReports)
+                    // W16.B: real list view of historic threat reports +
+                    // empty state + "+" toolbar to file a new one. Reads
+                    // local UserDefaults via ThreatReportLogStore.
+                    // The `activeThreatReports` count below still comes
+                    // from the SecurityDashboardViewModel mock — server-
+                    // side incoming-threat fan-out is separate work.
+                    ThreatReportListView(appState: container.appState)
                 } label: {
                     LabeledContent("Active Threats") {
                         Text("\(container.viewModel.activeThreatReports)")
@@ -173,24 +182,11 @@ struct SecurityDashboardScreen: View {
     }
 }
 
-// MARK: - Threat Report Placeholder
-
-private struct ThreatReportPlaceholderView: View {
-    let count: Int
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: count > 0 ? "shield.slash.fill" : "checkmark.shield.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(count > 0 ? Color.red : Color.green)
-            Text(count > 0 ? "\(count) active threat report(s)" : "No active threats")
-                .font(.headline)
-            Text("Full threat report list requires server-side wiring.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding()
-        .navigationTitle("Active Threats")
-    }
-}
+// MARK: - Threat Report Placeholder (removed in W16.B)
+// The previous private `ThreatReportPlaceholderView` has been replaced by
+// the real `ThreatReportListView` (App-layer, file `ThreatReportListView.swift`)
+// which consumes `ThreatReportLogStore` and supports filing new reports
+// via a "+" toolbar. The placeholder was a yellow stop-gap noting that
+// the full list "requires server-side wiring"; that wiring is still
+// pending for *incoming* server-side threat events but the local
+// submitted-report history is now functional.
