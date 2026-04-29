@@ -227,7 +227,7 @@ struct BackupSettingsScreen: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
-        .navigationTitle("Backup")
+        .navigationTitle("Backup cifrato")
         // MARK: Backup password sheet
         .sheet(isPresented: $container.showingBackupPasswordSheet) {
             PasswordSheet(

@@ -63,7 +63,7 @@ struct ThreatReportListView: View {
                 }
             }
         }
-        .navigationTitle("Active Threats")
+        .navigationTitle("Minacce attive")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -236,7 +236,7 @@ private struct ThreatReportDetailView: View {
                     .font(.caption2)
             }
         }
-        .navigationTitle("Threat Report")
+        .navigationTitle("Rapporto minacce")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Delete this report from history?", isPresented: $showingDeleteConfirm) {
             Button("Cancel", role: .cancel) { }

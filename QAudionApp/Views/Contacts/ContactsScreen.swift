@@ -73,13 +73,19 @@ struct ContactsScreen: View {
             container.setSearchQuery(newValue)
         }
         .sheet(isPresented: $showingNewContact) {
+            // W23.E: full ContactEditor in Add mode. Pure local form for
+            // now (the persist hook prints + dismisses); will be wired
+            // to ContactsStore + bcrypto directory when the engine
+            // surfaces the resolve-by-extension API.
             NavigationStack {
-                NewContactPlaceholder()
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Chiudi") { showingNewContact = false }
-                        }
+                ContactEditorScreen(
+                    mode: .add,
+                    onSave: { draft in
+                        print("[ContactEditor] new contact draft: \(draft)")
                     }
+                )
+                .navigationBarBackButtonHidden(true)
+                .toolbar(.hidden, for: .navigationBar)
             }
         }
     }

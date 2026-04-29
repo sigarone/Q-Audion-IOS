@@ -199,7 +199,7 @@ struct AccountSettingsScreen: View {
                 .disabled(container.isLoading || container.isDraftUnchanged)
             }
         }
-        .navigationTitle("Account")
+        .navigationTitle("Profilo")
         .onAppear {
             container.loadFromServer()
         }

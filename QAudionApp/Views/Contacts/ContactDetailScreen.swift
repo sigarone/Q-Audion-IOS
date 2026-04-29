@@ -32,6 +32,7 @@ struct ContactDetailScreen: View {
 
     @State private var showingDeleteConfirm = false
     @State private var showingSasSheet = false
+    @State private var showingEditor = false
 
     var body: some View {
         ZStack {
@@ -65,6 +66,26 @@ struct ContactDetailScreen: View {
             SasVerifySheet(peerName: item.displayName)
                 .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showingEditor) {
+            // W23.E: edit mode pre-fills displayName + extension from
+            // the engine row. statusMessage / alias aren't on
+            // ContactsListViewModel.Item yet — they'd be loaded from
+            // ContactsStore in a future wiring pass.
+            NavigationStack {
+                ContactEditorScreen(
+                    mode: .edit,
+                    initialDisplayName: item.displayName,
+                    initialAlias: "",
+                    initialStatusMessage: "",
+                    initialExtension: "",
+                    onSave: { draft in
+                        print("[ContactEditor] edited contact draft: \(draft)")
+                    }
+                )
+                .navigationBarBackButtonHidden(true)
+                .toolbar(.hidden, for: .navigationBar)
+            }
+        }
     }
 
     // MARK: - Top bar
@@ -86,7 +107,7 @@ struct ContactDetailScreen: View {
             Spacer(minLength: 8)
 
             Button {
-                // TODO: open ContactEditorScreen in edit mode
+                showingEditor = true
             } label: {
                 Image(systemName: "pencil")
                     .font(.system(size: 17))

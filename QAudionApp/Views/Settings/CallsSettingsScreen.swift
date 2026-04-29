@@ -111,6 +111,6 @@ struct CallsSettingsScreen: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Calls")
+        .navigationTitle("Chiamate")
     }
 }

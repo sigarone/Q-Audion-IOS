@@ -72,7 +72,7 @@ struct KeyManagementScreen: View {
                 }
             }
         }
-        .navigationTitle("Key Management")
+        .navigationTitle("Gestione chiavi")
         .alert("Rotate Keys?", isPresented: $showingRotateConfirm) {
             Button("Cancel", role: .cancel) { }
             Button("Rotate", role: .destructive) {

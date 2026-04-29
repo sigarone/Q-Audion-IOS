@@ -183,6 +183,6 @@ struct TransportSettingsScreen: View {
                 .fontWeight(.semibold)
             }
         }
-        .navigationTitle("Transport")
+        .navigationTitle("Trasporto")
     }
 }

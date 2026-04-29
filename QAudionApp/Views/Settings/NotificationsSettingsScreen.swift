@@ -119,6 +119,6 @@ struct NotificationsSettingsScreen: View {
                 }
             }
         }
-        .navigationTitle("Notifications")
+        .navigationTitle("Notifiche")
     }
 }

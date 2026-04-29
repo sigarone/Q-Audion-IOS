@@ -27,7 +27,7 @@ struct DeviceManagementScreen: View {
                 container.revoke(deviceId: device.deviceId)
             }
         }
-        .navigationTitle("Devices")
+        .navigationTitle("Dispositivi")
     }
 }
 

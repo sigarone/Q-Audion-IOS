@@ -161,7 +161,7 @@ struct SecurityDashboardScreen: View {
                 }
             }
         }
-        .navigationTitle("Security")
+        .navigationTitle("Sicurezza")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {

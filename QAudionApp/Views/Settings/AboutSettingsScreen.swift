@@ -109,6 +109,6 @@ struct AboutSettingsScreen: View {
                 .disabled(updateChecker.isChecking)
             }
         }
-        .navigationTitle("About")
+        .navigationTitle("Informazioni")
     }
 }
