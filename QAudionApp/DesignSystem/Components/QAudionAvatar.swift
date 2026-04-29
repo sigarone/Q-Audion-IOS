@@ -8,8 +8,10 @@ import SwiftUI
 ///   2. otherwise → solid gradient circle with up-to-2-letter initials.
 ///   3. group conversation → 3 stacked person silhouettes (system icon).
 ///
-/// Sizes are configurable but capped at 80pt — anything bigger should be
-/// a proper profile-screen header, not this component.
+/// Sizes are configurable in the [20, 240] pt range. The upper bound
+/// covers call-screen usage (160-200pt hero avatars in
+/// `OutgoingCallScreen` / `IncomingCallScreen`); anything bigger should
+/// be a proper profile-screen header, not this component.
 ///
 /// Color: deterministic per-name gradient picked from
 /// `presenceGradient(for:)` — same string always maps to the same colors,
@@ -38,7 +40,7 @@ struct QAudionAvatar: View {
         self.displayName = displayName
         self.imageURL = imageURL
         self.kind = kind
-        self.size = min(80, max(20, size))
+        self.size = min(240, max(20, size))
         self.presenceDot = presenceDot
     }
 
