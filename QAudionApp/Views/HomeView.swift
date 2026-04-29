@@ -64,8 +64,15 @@ struct HomeView: View {
     }
 
     private var contactsTab: some View {
+        // W23: Tab Contatti ora usa il nuovo `ContactsScreen` (1:1 visual
+        // port di Android `feature-contacts/.../ContactsScreen.kt`) con
+        // tab TUTTI / SCOPRI / BLOCCATI, ricerca capsule, FAB
+        // person.badge.plus, ContactDetailScreen con TrustVerificationCard
+        // / MetadataCard / SecurityLog. Il legacy `ContactsListView`
+        // resta ancora montato per i flow di scan/import (sheets) finché
+        // non li portiamo alla nuova UI.
         NavigationStack {
-            ContactsListView()
+            ContactsScreen()
         }
     }
 
