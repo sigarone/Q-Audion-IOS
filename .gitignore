@@ -12,3 +12,7 @@ Signal-iOS/
 
 # Claude Code
 .claude/
+
+# Local Stitch reference screenshots (not committed)
+.stitch_*.png
+.stitch_*.html
