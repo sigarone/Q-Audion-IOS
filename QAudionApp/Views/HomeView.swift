@@ -84,9 +84,18 @@ struct HomeView: View {
         }
     }
 
-    /// Settings already owns its own NavigationStack — no extra wrapping needed.
+    /// W24: Settings tab usa il nuovo `SettingsScreen` (1:1 visual port di
+    /// Android `feature-settings/.../SettingsScreen.kt`) con
+    /// ProfileHeroCard + SecurityChipsRow + sezioni ACCOUNT / SICUREZZA /
+    /// PRIVACY / DATI / INFO / SVILUPPATORE. Le 11 sub-screen esistenti
+    /// (AccountSettings / Privacy / Calls / Chat / Notifications / Backup
+    /// / KeyManagement / Transport / About / Security / DeviceManagement)
+    /// restano invariate — sono raggiunte via NavigationLink dal nuovo
+    /// root. Toggle interni (DeepfakeGuard, ReadReceipts, etc.) restano
+    /// nelle rispettive sub-screen finché l'engine non espone una
+    /// SettingsUiState unificata.
     private var settingsTab: some View {
-        SettingsView()
+        SettingsScreen()
     }
 
     // MARK: - Active call banner
