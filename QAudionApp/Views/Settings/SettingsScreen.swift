@@ -148,6 +148,16 @@ struct SettingsScreen: View {
             .buttonStyle(.plain)
 
             NavigationLink {
+                VoiceEnrollmentScreen()
+            } label: {
+                SettingsRow(icon: "waveform.badge.mic",
+                            iconColor: extras.pqcAccent,
+                            title: "Voice-as-Key",
+                            subtitle: "Registra voiceprint · 5 campioni")
+            }
+            .buttonStyle(.plain)
+
+            NavigationLink {
                 TransportSettingsScreen(state: appState)
             } label: {
                 SettingsRow(icon: "arrow.left.arrow.right",
