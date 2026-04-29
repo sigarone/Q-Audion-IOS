@@ -57,6 +57,32 @@ public final class BCryptoAccountApiImpl: AccountApi {
         _ = try await rest.post("/api/v1/account/fcm-token", body: body)
     }
 
+    /// Registers an APNs VoIP push token (PushKit) with the bcrypto-server.
+    /// Wave 2B-3 / WIRE_SPEC §3.8.1.
+    ///
+    /// Use this in preference to ``registerPushToken(_:platform:)`` for iOS
+    /// devices that integrate `PushKit` for incoming-call wakeup. The
+    /// server stores the token in its `push_tokens` bucket alongside any
+    /// existing FCM token; the dispatcher will route call_offer events to
+    /// APNs HTTP/2 instead of FCM when this is present (commit `3ceccf4`
+    /// `FanOutCallOffer`).
+    ///
+    /// - Parameters:
+    ///   - voipTokenHex: 64-character hex string of the 32-byte device
+    ///     token returned by `PushKit` (`PKPushCredentials.token` ->
+    ///     `map { String(format: "%02x", $0) }.joined()`).
+    ///   - bundleId: typically `com.bcrypto.qaudion.voip` — must match the
+    ///     server's `BCRYPTO_APNS_BUNDLE_ID` env var when configured.
+    public func registerApnsVoipToken(_ voipTokenHex: String, bundleId: String) async throws {
+        precondition(voipTokenHex.count == 64, "voip token must be 64 hex chars (32 bytes)")
+        let dict: [String: Any] = [
+            "voip_token": voipTokenHex,
+            "bundle_id": bundleId,
+        ]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        _ = try await rest.post("/api/v1/account/apns-voip-token", body: body)
+    }
+
     public func recoverySetup(recoveryHash: String) async throws -> Bool {
         let body = try JSONSerialization.data(withJSONObject: ["recovery_hash": recoveryHash])
         let data = try await rest.post("/api/v1/auth/recovery-setup", body: body)
