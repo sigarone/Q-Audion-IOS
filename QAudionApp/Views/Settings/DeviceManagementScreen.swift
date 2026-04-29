@@ -1,27 +1,135 @@
 import SwiftUI
 import QAudionEngine
 
+/// Modello UI-only enrichito vs il `DeviceManagementViewModel.Device` engine.
+/// Aggiunge `kind` (5 type granulari), `trustLevel` (4 livelli sicurezza)
+/// e `platformTag` (OS version detail) finché l'engine non li espone
+/// dal lato server. 1:1 mapping con Android `DeviceItemUi`.
+public struct EnhancedDeviceItem: Identifiable, Equatable {
+    public enum Kind: Equatable {
+        case phonePrimary, phoneSecondary, desktop, tablet, watch
+    }
+
+    public enum TrustLevel: String, Equatable {
+        case unverified   = "UNVERIFIED"
+        case voiceMatched = "VOICE MATCHED"
+        case sas          = "SAS"
+        case enterprise   = "ENTERPRISE"
+    }
+
+    public let id: String                // = deviceId
+    public let deviceId: String
+    public let displayName: String
+    public let kind: Kind
+    public let isCurrentDevice: Bool
+    public let trustLevel: TrustLevel
+    public let lastSeenLabel: String     // "ora", "2h fa", "in chiamata", …
+    public let platformTag: String       // "iOS 18.3", "Android 15 · One UI 7.0"
+    public let canRevoke: Bool
+
+    /// Mapping dall'engine `DeviceManagementViewModel.Device`.
+    /// `kind` derivato da `platform`; `trustLevel` placeholder a
+    /// `.voiceMatched` (fino a engine surface). `platformTag` passa il
+    /// platform.rawValue capitalizzato.
+    public init(from raw: DeviceManagementViewModel.Device,
+                trustOverride: TrustLevel? = nil) {
+        self.id = raw.deviceId
+        self.deviceId = raw.deviceId
+        self.displayName = raw.deviceName
+        self.kind = Self.deriveKind(platform: raw.platform,
+                                    deviceName: raw.deviceName)
+        self.isCurrentDevice = raw.isCurrentDevice
+        self.trustLevel = trustOverride
+            ?? (raw.isCurrentDevice ? .enterprise : .voiceMatched)
+        self.lastSeenLabel = Self.formatLastSeen(raw.lastSeen)
+        self.platformTag = Self.platformTag(for: raw.platform,
+                                            deviceName: raw.deviceName)
+        self.canRevoke = raw.canRevoke
+    }
+
+    /// Init manuale per preview / mock.
+    public init(deviceId: String, displayName: String, kind: Kind,
+                isCurrentDevice: Bool, trustLevel: TrustLevel,
+                lastSeenLabel: String, platformTag: String,
+                canRevoke: Bool) {
+        self.id = deviceId
+        self.deviceId = deviceId
+        self.displayName = displayName
+        self.kind = kind
+        self.isCurrentDevice = isCurrentDevice
+        self.trustLevel = trustLevel
+        self.lastSeenLabel = lastSeenLabel
+        self.platformTag = platformTag
+        self.canRevoke = canRevoke
+    }
+
+    private static func deriveKind(platform: DeviceManagementViewModel.Device.Platform,
+                                   deviceName: String) -> Kind {
+        let name = deviceName.lowercased()
+        if name.contains("watch") { return .watch }
+        if name.contains("ipad") || name.contains("tablet") { return .tablet }
+        switch platform {
+        case .iOS, .android: return .phonePrimary
+        case .desktop:       return .desktop
+        case .unknown:       return .phoneSecondary
+        }
+    }
+
+    private static func platformTag(for platform: DeviceManagementViewModel.Device.Platform,
+                                    deviceName: String) -> String {
+        switch platform {
+        case .iOS:      return "iOS"
+        case .android:  return "Android"
+        case .desktop:  return "macOS"
+        case .unknown:  return "—"
+        }
+    }
+
+    private static func formatLastSeen(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.unitsStyle = .abbreviated
+        return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
 @MainActor
 final class DeviceManagementContainer: ObservableObject {
     @Published var viewModel: DeviceManagementViewModel
+    @Published private(set) var enhanced: [EnhancedDeviceItem] = []
 
-    init(initial: DeviceManagementViewModel = .mock) { self.viewModel = initial }
+    init(initial: DeviceManagementViewModel = .mock) {
+        self.viewModel = initial
+        self.enhanced = initial.devices.map { EnhancedDeviceItem(from: $0) }
+    }
 
     func revoke(deviceId: String) {
         // Stub: real revocation wired to backend in follow-on task
         print("[DeviceManagementContainer] revoke(deviceId: \(deviceId)) — stubbed")
+        // Optimistic remove dalla lista enhanced
+        enhanced.removeAll { $0.deviceId == deviceId }
+    }
+
+    func refresh() {
+        // Stub: future hook su POST /auth/devices
+        enhanced = viewModel.devices.map { EnhancedDeviceItem(from: $0) }
     }
 }
 
-/// Device management sub-screen. W31 design-token refactor.
-/// Replaces stock `List` with a sectioned ScrollView using the new
-/// design vocabulary.
+/// Device management sub-screen. W41.A enhanced port di Android
+/// `DeviceManagerScreen.kt` — aggiunge trust badges + device kind icons +
+/// header hint + CTA "COLLEGA NUOVO DISPOSITIVO" + Italian copy
+/// uppercase + revoke confirm dialog.
 struct DeviceManagementScreen: View {
     @ObservedObject var container: DeviceManagementContainer
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    @Environment(\.qaudionSnackbar) private var snackbar
+
+    @State private var showingRevokeConfirm: String? = nil  // deviceId pending
+    @State private var showingLinkNew: Bool = false
 
     init(state: AppState) {
         let c = DeviceManagementContainer()
@@ -33,102 +141,191 @@ struct DeviceManagementScreen: View {
             scheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    headerHint
+                    linkNewButton.padding(.top, 12)
+
                     SettingsSectionHeader("DISPOSITIVI COLLEGATI")
                     VStack(spacing: 8) {
-                        ForEach(container.viewModel.devices, id: \.deviceId) { device in
+                        ForEach(container.enhanced) { device in
                             DeviceRow(device: device) {
-                                container.revoke(deviceId: device.deviceId)
+                                showingRevokeConfirm = device.deviceId
                             }
                         }
                     }
-                    if container.viewModel.devices.isEmpty {
+                    if container.enhanced.isEmpty {
                         Text("Nessun dispositivo collegato.")
                             .qaudionStyle(type.bodySmall)
                             .foregroundStyle(scheme.onSurfaceVariant)
                             .padding(.horizontal, 14).padding(.top, 12)
                     }
-                    Spacer().frame(height: 16)
-                    Text("Revocare un dispositivo lo disconnetterà immediatamente. Le chiavi di sessione di quel dispositivo saranno invalidate.")
-                        .qaudionStyle(type.labelSmall)
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                        .padding(.horizontal, 14)
+
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
             }
         }
         .navigationTitle("Dispositivi")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    container.refresh()
+                    snackbar?.show(.init(text: "Lista aggiornata.", severity: .info,
+                                         durationSeconds: 2))
+                } label: {
+                    Text("AGGIORNA")
+                        .qaudionStyle(type.labelSmall)
+                        .tracking(1.2)
+                        .foregroundStyle(scheme.primary)
+                }
+            }
+        }
+        .alert("Revocare dispositivo?",
+               isPresented: revokeAlertBinding) {
+            Button("Annulla", role: .cancel) { showingRevokeConfirm = nil }
+            Button("Revoca", role: .destructive) {
+                if let id = showingRevokeConfirm {
+                    container.revoke(deviceId: id)
+                    snackbar?.show(.init(
+                        text: "Dispositivo revocato.",
+                        severity: .info
+                    ))
+                }
+                showingRevokeConfirm = nil
+            }
+        } message: {
+            Text("Una volta revocato, il dispositivo non potrà accedere all'account. Le chiavi di sessione verranno invalidate.")
+        }
+        .sheet(isPresented: $showingLinkNew) {
+            NavigationStack {
+                LinkNewDeviceScreen { newDeviceId in
+                    showingLinkNew = false
+                    snackbar?.show(.init(
+                        text: "Dispositivo collegato.",
+                        severity: .info
+                    ))
+                    print("[DeviceMgmt] linked device \(newDeviceId)")
+                    container.refresh()
+                }
+            }
+        }
+    }
+
+    // MARK: - Header hint
+
+    private var headerHint: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("DISPOSITIVI ATTIVI · \(container.enhanced.count)")
+                .qaudionStyle(type.labelSmall)
+                .tracking(1.5)
+                .foregroundStyle(scheme.primary)
+            Text("Ogni dispositivo linkato mantiene un keypair X25519 attestato. La revoca invalida il keypair lato server e triggera un remote wipe.")
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(scheme.surfaceVariant.opacity(0.6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(scheme.outline.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Link new device button
+
+    private var linkNewButton: some View {
+        Button { showingLinkNew = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "qrcode")
+                    .font(.system(size: 16, weight: .semibold))
+                Text("COLLEGA NUOVO DISPOSITIVO")
+                    .qaudionStyle(type.labelLarge)
+                    .tracking(1.1)
+            }
+            .foregroundStyle(scheme.onPrimary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(scheme.primary)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Helpers
+
+    private var revokeAlertBinding: Binding<Bool> {
+        Binding(
+            get: { showingRevokeConfirm != nil },
+            set: { newValue in if !newValue { showingRevokeConfirm = nil } }
+        )
     }
 }
 
-// MARK: - Device row
+// MARK: - Device row (enhanced)
 
 private struct DeviceRow: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
-    let device: DeviceManagementViewModel.Device
+    let device: EnhancedDeviceItem
     let onRevoke: () -> Void
-
-    private var platformIcon: String {
-        switch device.platform {
-        case .iOS:     return "iphone"
-        case .android: return "phone.connection"
-        case .desktop: return "laptopcomputer"
-        case .unknown: return "questionmark.circle"
-        }
-    }
-
-    private var lastSeenText: String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "it_IT")
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: device.lastSeen, relativeTo: Date())
-    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            Image(systemName: platformIcon)
-                .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(scheme.primary)
-                .frame(width: 28)
+            ZStack {
+                Circle()
+                    .fill(scheme.surfaceVariant.opacity(0.6))
+                    .frame(width: 40, height: 40)
+                Image(systemName: kindIcon)
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(scheme.onSurface)
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(device.deviceName)
+                    Text(device.displayName)
                         .qaudionStyle(type.titleSmall)
                         .foregroundStyle(scheme.onSurface)
                         .lineLimit(1)
                     if device.isCurrentDevice {
-                        Text("ATTUALE")
+                        Text("QUESTO DISPOSITIVO")
                             .qaudionStyle(type.labelSmall)
-                            .tracking(1.0)
-                            .foregroundStyle(scheme.onPrimary)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Capsule().fill(scheme.primary))
+                            .tracking(1.2)
+                            .foregroundStyle(extras.success)
                     }
                 }
-                Text("Visto \(lastSeenText)")
+                Text(device.platformTag)
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
-                Text(device.platform.rawValue)
-                    .qaudionStyle(type.labelSmall)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                    .modifier(MonoIfNeededD(mono: true))
+                    .modifier(MonoSmall())
+                HStack(spacing: 6) {
+                    Text(device.trustLevel.rawValue)
+                        .qaudionStyle(type.labelSmall)
+                        .tracking(1.1)
+                        .foregroundStyle(trustColor)
+                    Text("·")
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                    Text(device.lastSeenLabel)
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .modifier(MonoSmall())
+                }
             }
 
             Spacer(minLength: 8)
 
             if device.canRevoke {
                 Button(action: onRevoke) {
-                    Text("Revoca")
+                    Text("REVOCA")
                         .qaudionStyle(type.labelMedium)
+                        .tracking(1.0)
                         .foregroundStyle(extras.riskHigh)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .overlay(
-                            Capsule().stroke(extras.riskHigh.opacity(0.55), lineWidth: 1)
-                        )
                 }
                 .buttonStyle(.plain)
             }
@@ -138,16 +335,36 @@ private struct DeviceRow: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(scheme.surfaceVariant.opacity(0.4))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(device.isCurrentDevice
+                        ? extras.success.opacity(0.6)
+                        : scheme.outline.opacity(0.35),
+                        lineWidth: 1)
+        )
+    }
+
+    private var kindIcon: String {
+        switch device.kind {
+        case .phonePrimary, .phoneSecondary: return "iphone"
+        case .desktop:                       return "laptopcomputer"
+        case .tablet:                        return "ipad"
+        case .watch:                         return "applewatch"
+        }
+    }
+
+    private var trustColor: Color {
+        switch device.trustLevel {
+        case .unverified:   return extras.warning
+        case .voiceMatched: return extras.success
+        case .sas:          return scheme.primary
+        case .enterprise:   return extras.success
+        }
     }
 }
 
-private struct MonoIfNeededD: ViewModifier {
-    let mono: Bool
+private struct MonoSmall: ViewModifier {
     func body(content: Content) -> some View {
-        if mono {
-            content.font(.system(.caption, design: .monospaced))
-        } else {
-            content
-        }
+        content.font(.system(.caption, design: .monospaced))
     }
 }
