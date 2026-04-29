@@ -25,6 +25,16 @@ struct SettingsView: View {
                 Section("System") {
                     NavigationLink("Transport") { TransportSettingsScreen(state: appState) }
                     NavigationLink("About") { AboutSettingsScreen(state: appState) }
+                    // W22.C: TestFlight-visible entry into the W21+W22
+                    // call-screen showcase. Lets the team QA the new
+                    // IncomingCall / OutgoingCall / InCall / GroupCall
+                    // screens against the Android source + Stitch desktop
+                    // ref without touching the production call lifecycle.
+                    // Will be removed once the engine exposes sasWords /
+                    // keyInfo / transportMode and ContentView routes
+                    // active calls through the new InCallScreen instead
+                    // of the legacy CallView.
+                    NavigationLink("Call Design Showcase") { CallDesignShowcase() }
                 }
             }
             .navigationTitle("Settings")
