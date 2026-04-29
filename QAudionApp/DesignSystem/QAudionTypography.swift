@@ -103,10 +103,25 @@ public extension EnvironmentValues {
 
 public extension Text {
     /// Apply a Material typography role (font + tracking) to this Text.
-    /// Caller must additionally use `.lineSpacing(style.lineSpacing)` on
-    /// the parent if multi-line layout requires the exact Material
-    /// line-height.
+    /// Returns Text so further Text-only modifiers (like .italic(),
+    /// .strikethrough()) can be chained. Caller must additionally use
+    /// `.lineSpacing(style.lineSpacing)` on the parent if multi-line
+    /// layout requires the exact Material line-height.
     func qaudionStyle(_ style: QAudionTypography.Style) -> Text {
+        self.font(style.font).tracking(style.tracking)
+    }
+}
+
+// MARK: - View style helper (catches non-Text containers)
+
+public extension View {
+    /// Apply a Material typography role (font + tracking) to ANY view.
+    /// Used when chaining qaudionStyle on a `TextField`, `Button`, or
+    /// any other container whose return type from earlier modifiers is
+    /// `some View` rather than `Text`. The Text-only overload above is
+    /// preferred (it preserves Text return type) and Swift's overload
+    /// resolution picks it automatically when the receiver is Text.
+    func qaudionStyle(_ style: QAudionTypography.Style) -> some View {
         self.font(style.font).tracking(style.tracking)
     }
 }

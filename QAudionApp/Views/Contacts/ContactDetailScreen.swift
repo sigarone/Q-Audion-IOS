@@ -382,7 +382,7 @@ private struct SasVerifySheet: View {
                 .foregroundStyle(scheme.onSurface)
             TextField("", text: $input,
                       prompt: Text("es. TYPHOON · BALLAD · SLIPSTREAM · …")
-                          .foregroundStyle(scheme.onSurfaceVariant),
+                          .foregroundColor(scheme.onSurfaceVariant),
                       axis: .vertical)
                 .lineLimit(2...4)
                 .padding(12)

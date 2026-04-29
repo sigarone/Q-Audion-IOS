@@ -113,7 +113,7 @@ struct ContactsScreen: View {
                 .foregroundStyle(scheme.onSurfaceVariant)
             TextField("", text: $searchText,
                       prompt: Text("Cerca contatti o scopri tramite hash…")
-                          .foregroundStyle(scheme.onSurfaceVariant))
+                          .foregroundColor(scheme.onSurfaceVariant))
                 .qaudionStyle(type.bodyMedium)
                 .foregroundStyle(scheme.onSurface)
                 .tint(scheme.primary)

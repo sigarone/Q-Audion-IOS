@@ -176,9 +176,13 @@ struct MessageComposer: View {
     }
 
     private var placeholder: Text {
+        // `.foregroundColor(_:)` (iOS 13+) returns Text — required for
+        // the property's `Text` return type. `.foregroundStyle(_:)` on
+        // Text returns `some View` until iOS 17, which would break the
+        // explicit return-type contract.
         Text("Messaggio cifrato…")
             .italic()
-            .foregroundStyle(scheme.onSurfaceVariant)
+            .foregroundColor(scheme.onSurfaceVariant)
     }
 
     @ViewBuilder
