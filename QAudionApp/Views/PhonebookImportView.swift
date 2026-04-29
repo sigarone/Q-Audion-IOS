@@ -14,11 +14,14 @@ struct PhonebookImportView: View {
             case .introduction:
                 introContent
             case .requestingPermission:
-                ProgressView("Requesting Contacts permission…")
+                // W35: design-token loading placeholder (vs stock
+                // ProgressView). Stesso pattern dei restanti screen di
+                // attesa server.
+                QAudionLoadingState(message: "Richiesta permesso Contatti in corso…")
             case .scanning(let p):
-                ProgressView("Scanning phonebook…", value: p, total: 1.0)
+                progressBlock(label: "Scansione rubrica…", value: p)
             case .discovering(let p):
-                ProgressView("Discovering Q-Audion users…", value: p, total: 1.0)
+                progressBlock(label: "Ricerca utenti Q-Audion…", value: p)
             case .results(let matched, let unmatched):
                 resultsContent(matched: matched, unmatched: unmatched)
             case .error(let msg):
@@ -27,6 +30,20 @@ struct PhonebookImportView: View {
         }
         .padding()
         .navigationTitle("Importa contatti")
+    }
+
+    /// Indeterminate-or-determinate progress block. Wraps a labeled
+    /// linear ProgressView so scanning / discovering steps share the
+    /// same shell.
+    private func progressBlock(label: String, value: Double) -> some View {
+        VStack(spacing: 12) {
+            Text(label)
+                .font(.body)
+                .foregroundStyle(.secondary)
+            ProgressView(value: value, total: 1.0)
+                .progressViewStyle(.linear)
+                .frame(maxWidth: 320)
+        }
     }
 
     private var introContent: some View {

@@ -170,16 +170,30 @@ struct ContactDetailScreen: View {
     // MARK: - Trust badges row
 
     private var trustBadgesRow: some View {
-        HStack(spacing: 8) {
-            TrustChip("PQC", accent: extras.pqcAccent)
-            if item.isVerified {
-                TrustChip("VOICE", accent: extras.success)
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                TrustChip("PQC", accent: extras.pqcAccent)
+                if item.isVerified {
+                    TrustChip("VOICE", accent: extras.success)
+                }
+                if item.isVerified {
+                    TrustChip("SAS VERIFICATO", accent: extras.success)
+                } else {
+                    TrustChip("SAS DA VERIFICARE", accent: extras.warning)
+                }
+                // W35: il livello di rischio del contatto è derivato
+                // dallo stato di verifica engine-side. Senza un campo
+                // engine reale (deepfake history / blocked / SAS-fail
+                // rate) approssimiamo: verified == low, !verified ==
+                // medium. Il campo engine arriverà con lo stesso
+                // surface usato dalla TrustVerificationCard (W36).
+                RiskPill(item.isVerified ? .low : .medium)
             }
-            if item.isVerified {
-                TrustChip("SAS VERIFICATO", accent: extras.success)
-            } else {
-                TrustChip("SAS DA VERIFICARE", accent: extras.warning)
-            }
+            // W35: VoiceTrustIndicator inline. Per ora il confidence
+            // è un proxy di isVerified (1.0 / 0.55). Quando l'engine
+            // espone il voice-match score storico, sostituisco il
+            // proxy con il valore reale.
+            VoiceTrustIndicator(index: item.isVerified ? 0.92 : 0.55)
         }
     }
 
