@@ -58,8 +58,16 @@ final class NotificationsSettingsContainer: ObservableObject {
     }
 }
 
+/// Notifications settings sub-screen. W26 design-token refactor —
+/// migrates from stock SwiftUI `Form` to the new design vocabulary
+/// (`SettingsSectionHeader` + `SettingsToggleRow` + custom picker
+/// row with surfaceVariant background).
 struct NotificationsSettingsScreen: View {
     @StateObject private var container: NotificationsSettingsContainer
+
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
+    @Environment(\.qaudionType) private var type
 
     private let availableRingtones = ["qaudion-default", "classic", "pulse", "silent"]
 
@@ -74,51 +82,130 @@ struct NotificationsSettingsScreen: View {
     }
 
     var body: some View {
-        Form {
-            Section("Sounds") {
-                Picker("Ringtone", selection: Binding(
-                    get: { container.viewModel.ringtoneId },
-                    set: { container.setRingtone($0) }
-                )) {
-                    ForEach(availableRingtones, id: \.self) { tone in
-                        Text(tone).tag(tone)
+        ZStack {
+            scheme.background.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingsSectionHeader("SUONI")
+                    VStack(spacing: 8) {
+                        ringtonePickerRow
+                        SettingsToggleRow(
+                            title: "Suoni in-app",
+                            subtitle: "Effetti sonori dentro l'app",
+                            isOn: Binding(
+                                get: { container.viewModel.inAppSoundEnabled },
+                                set: { container.toggleInAppSound($0) }
+                            )
+                        )
+                        SettingsToggleRow(
+                            title: "Vibrazione",
+                            subtitle: "Vibra alla ricezione di chiamate / messaggi",
+                            isOn: Binding(
+                                get: { container.viewModel.vibrationEnabled },
+                                set: { container.toggleVibration($0) }
+                            )
+                        )
                     }
-                }
-                Toggle("In-App Sound", isOn: Binding(
-                    get: { container.viewModel.inAppSoundEnabled },
-                    set: { container.toggleInAppSound($0) }
-                ))
-                Toggle("Vibration", isOn: Binding(
-                    get: { container.viewModel.vibrationEnabled },
-                    set: { container.toggleVibration($0) }
-                ))
-            }
 
-            Section("Quiet Hours") {
-                Toggle("Enable Quiet Hours", isOn: Binding(
-                    get: { container.viewModel.quietHours.enabled },
-                    set: { container.toggleQuietHours($0) }
-                ))
-                if container.viewModel.quietHours.enabled {
-                    LabeledContent("Window") {
-                        Text(quietHoursRange)
-                            .foregroundStyle(.secondary)
+                    SettingsSectionHeader("MODALITÀ NON DISTURBARE")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Attiva non disturbare",
+                            subtitle: "Silenzia notifiche in fascia oraria",
+                            isOn: Binding(
+                                get: { container.viewModel.quietHours.enabled },
+                                set: { container.toggleQuietHours($0) }
+                            )
+                        )
+                        if container.viewModel.quietHours.enabled {
+                            kvRow(label: "Fascia oraria",
+                                  value: quietHoursRange,
+                                  mono: true)
+                            Text("Le chiamate in entrata e i messaggi sono silenziati durante questa fascia.")
+                                .qaudionStyle(type.labelSmall)
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                                .padding(.horizontal, 14)
+                        }
                     }
-                    Text("Incoming call and message sounds are muted during this window.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
 
-            if container.viewModel.mutedContactsCount > 0 {
-                Section("Muted") {
-                    LabeledContent("Muted Contacts") {
-                        Text("\(container.viewModel.mutedContactsCount)")
-                            .foregroundStyle(.secondary)
+                    if container.viewModel.mutedContactsCount > 0 {
+                        SettingsSectionHeader("CONTATTI SILENZIATI")
+                        kvRow(label: "Contatti silenziati",
+                              value: "\(container.viewModel.mutedContactsCount)",
+                              mono: false)
                     }
+
+                    Spacer().frame(height: 24)
                 }
+                .padding(.horizontal, 16)
             }
         }
         .navigationTitle("Notifiche")
+    }
+
+    // MARK: - Ringtone picker row
+
+    private var ringtonePickerRow: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "speaker.wave.2.fill")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .frame(width: 22)
+
+            Text("Suoneria")
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+
+            Spacer(minLength: 6)
+
+            Picker("Suoneria", selection: Binding(
+                get: { container.viewModel.ringtoneId },
+                set: { container.setRingtone($0) }
+            )) {
+                ForEach(availableRingtones, id: \.self) { tone in
+                    Text(tone.capitalized).tag(tone)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(scheme.primary)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+
+    // MARK: - kvRow helper
+
+    private func kvRow(label: String, value: String, mono: Bool) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Text(value)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .modifier(MonoIfNeededN(mono: mono))
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+}
+
+private struct MonoIfNeededN: ViewModifier {
+    let mono: Bool
+    func body(content: Content) -> some View {
+        if mono {
+            content.font(.system(.caption, design: .monospaced))
+        } else {
+            content
+        }
     }
 }

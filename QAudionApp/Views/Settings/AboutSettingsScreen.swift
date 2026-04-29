@@ -7,9 +7,19 @@ final class AboutSettingsContainer: ObservableObject {
     init(initial: AboutSettingsViewModel = .mock) { self.viewModel = initial }
 }
 
+/// Read-only "Informazioni" screen. W26 design-token refactor: replaces
+/// the iOS-native `Form { Section }` shell with the same dark editorial
+/// vocabulary used in `SettingsScreen` (sectioned `surfaceVariant`-tinted
+/// rows, `SettingsSectionHeader` titles, `extras.success`/`extras.riskHigh`
+/// status colors). Functionally unchanged: same fields, same update
+/// checker plumbing.
 struct AboutSettingsScreen: View {
     @ObservedObject var container: AboutSettingsContainer
     @StateObject private var updateChecker: AppUpdateChecker
+
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
+    @Environment(\.qaudionType) private var type
 
     init(state: AppState) {
         let c = AboutSettingsContainer()
@@ -18,97 +28,197 @@ struct AboutSettingsScreen: View {
     }
 
     var body: some View {
-        Form {
-            Section("Version") {
-                LabeledContent("App Version") {
-                    Text(container.viewModel.appVersion)
-                        .foregroundStyle(.secondary)
-                }
-                LabeledContent("Build Number") {
-                    Text(container.viewModel.buildNumber)
-                        .foregroundStyle(.secondary)
-                }
-                LabeledContent("Git Commit") {
-                    Text(container.viewModel.gitCommitShort)
-                        .font(.body.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Platform") {
-                LabeledContent("iOS Deployment Target") {
-                    Text("iOS \(container.viewModel.iosDeploymentTarget)+")
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Security") {
-                LabeledContent("ML-KEM-1024 (PQC)") {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(container.viewModel.mlKem1024Enabled ? Color.green : Color.red)
-                            .frame(width: 8, height: 8)
-                        Text(container.viewModel.mlKem1024Enabled ? "Enabled" : "Disabled")
-                            .foregroundStyle(container.viewModel.mlKem1024Enabled ? .green : .red)
+        ZStack {
+            scheme.background.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    section("VERSIONE") {
+                        kvRow("App", container.viewModel.appVersion, mono: false)
+                        kvRow("Build", container.viewModel.buildNumber, mono: true)
+                        kvRow("Commit", container.viewModel.gitCommitShort, mono: true)
                     }
-                }
-                LabeledContent("ONNX Runtime") {
-                    Text(container.viewModel.onnxruntimeVersion)
-                        .font(.body.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Updates") {
-                if let result = updateChecker.lastResult {
-                    switch result {
-                    case .noUpdate:
-                        Label("You're up to date", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    case .updateAvailable(let info):
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("Update available: v\(info.availableVersion)", systemImage: "arrow.down.circle.fill")
-                                .foregroundStyle(.blue)
-                            if !info.releaseNotes.isEmpty {
-                                Text(info.releaseNotes)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if info.downloadUrl != nil {
-                                Button("Open App Store") {
-                                    updateChecker.openAppStoreLink(for: info)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                            }
-                        }
-                    case .error(let msg):
-                        Label(msg, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .font(.caption)
+                    section("PIATTAFORMA") {
+                        kvRow("Target iOS", "iOS \(container.viewModel.iosDeploymentTarget)+", mono: true)
                     }
-                }
-
-                if let last = updateChecker.lastChecked {
-                    LabeledContent("Last checked") {
-                        Text(last, style: .relative)
+                    section("SICUREZZA") {
+                        statusRow("ML-KEM-1024 (PQC)",
+                                  enabled: container.viewModel.mlKem1024Enabled)
+                        kvRow("ONNX Runtime", container.viewModel.onnxruntimeVersion, mono: true)
                     }
-                    .font(.caption)
-                }
-
-                Button(action: { Task { await updateChecker.checkForUpdates() } }) {
-                    HStack {
-                        Image(systemName: "arrow.clockwise.circle")
-                        Text("Check for updates")
-                        if updateChecker.isChecking {
-                            Spacer()
-                            ProgressView().scaleEffect(0.8)
-                        }
+                    section("AGGIORNAMENTI") {
+                        updateBlock
                     }
+                    Spacer().frame(height: 24)
                 }
-                .disabled(updateChecker.isChecking)
+                .padding(.horizontal, 16)
             }
         }
         .navigationTitle("Informazioni")
+    }
+
+    // MARK: - Section wrapper
+
+    @ViewBuilder
+    private func section<Content: View>(_ title: String,
+                                        @ViewBuilder content: () -> Content) -> some View {
+        SettingsSectionHeader(title)
+        VStack(spacing: 8) {
+            content()
+        }
+    }
+
+    // MARK: - Rows
+
+    private func kvRow(_ label: String, _ value: String, mono: Bool) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Text(value)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .modifier(MonoIfNeeded(mono: mono))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+
+    private func statusRow(_ label: String, enabled: Bool) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(enabled ? extras.success : extras.riskHigh)
+                    .frame(width: 8, height: 8)
+                Text(enabled ? "Attivo" : "Disattivo")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(enabled ? extras.success : extras.riskHigh)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+
+    // MARK: - Updates block
+
+    @ViewBuilder
+    private var updateBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let result = updateChecker.lastResult {
+                switch result {
+                case .noUpdate:
+                    iconRow(icon: "checkmark.circle.fill",
+                            tint: extras.success,
+                            title: "Sei aggiornato all'ultima versione",
+                            subtitle: nil)
+                case .updateAvailable(let info):
+                    VStack(alignment: .leading, spacing: 8) {
+                        iconRow(icon: "arrow.down.circle.fill",
+                                tint: scheme.primary,
+                                title: "Aggiornamento disponibile: v\(info.availableVersion)",
+                                subtitle: info.releaseNotes.isEmpty ? nil : info.releaseNotes)
+                        if info.downloadUrl != nil {
+                            Button { updateChecker.openAppStoreLink(for: info) } label: {
+                                Text("Apri App Store")
+                                    .qaudionStyle(type.labelLarge)
+                                    .foregroundStyle(scheme.onPrimary)
+                                    .padding(.horizontal, 16).padding(.vertical, 8)
+                                    .background(Capsule().fill(scheme.primary))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                case .error(let msg):
+                    iconRow(icon: "exclamationmark.triangle.fill",
+                            tint: extras.warning,
+                            title: msg,
+                            subtitle: nil)
+                }
+            }
+
+            if let last = updateChecker.lastChecked {
+                Text("Ultimo controllo \(last.formatted(.relative(presentation: .named)))")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+
+            Button {
+                Task { await updateChecker.checkForUpdates() }
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.clockwise.circle")
+                    Text("Controlla aggiornamenti")
+                        .qaudionStyle(type.labelLarge)
+                    if updateChecker.isChecking {
+                        Spacer()
+                        ProgressView().scaleEffect(0.8).tint(scheme.onSurface)
+                    }
+                }
+                .foregroundStyle(scheme.onSurface)
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(scheme.surfaceVariant.opacity(0.4))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(updateChecker.isChecking)
+        }
+    }
+
+    private func iconRow(icon: String,
+                         tint: Color,
+                         title: String,
+                         subtitle: String?) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tint)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(scheme.onSurface)
+                if let subtitle {
+                    Text(subtitle)
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .lineLimit(3)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+}
+
+private struct MonoIfNeeded: ViewModifier {
+    let mono: Bool
+    func body(content: Content) -> some View {
+        if mono {
+            content.font(.system(.caption, design: .monospaced))
+        } else {
+            content
+        }
     }
 }

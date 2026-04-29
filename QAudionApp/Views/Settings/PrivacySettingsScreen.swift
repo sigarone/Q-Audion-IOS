@@ -54,71 +54,157 @@ final class PrivacySettingsContainer: ObservableObject {
     }
 }
 
+/// Privacy settings sub-screen. W26 design-token refactor — replaces
+/// stock SwiftUI `Form` with the new design vocabulary.
 struct PrivacySettingsScreen: View {
     @StateObject private var container: PrivacySettingsContainer
+
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
+    @Environment(\.qaudionType) private var type
 
     init(state: AppState) {
         _container = StateObject(wrappedValue: PrivacySettingsContainer())
     }
 
     private let durationOptions: [(label: String, value: TimeInterval)] = [
-        ("Off", 0),
-        ("1 minute", 60),
-        ("1 hour", 3600),
-        ("1 day", 86400),
-        ("7 days", 604800)
+        ("Off",       0),
+        ("1 minuto",  60),
+        ("1 ora",     3600),
+        ("1 giorno",  86400),
+        ("7 giorni",  604800)
     ]
 
     var body: some View {
-        Form {
-            Section("Messaging") {
-                Toggle("Read Receipts", isOn: Binding(
-                    get: { container.viewModel.readReceiptsEnabled },
-                    set: { container.toggleReadReceipts($0) }
-                ))
-                Toggle("Typing Indicators", isOn: Binding(
-                    get: { container.viewModel.typingIndicatorEnabled },
-                    set: { container.toggleTypingIndicator($0) }
-                ))
-                Toggle("Show Presence to Contacts", isOn: Binding(
-                    get: { container.viewModel.presenceVisibleToContacts },
-                    set: { container.togglePresence($0) }
-                ))
-            }
-
-            Section("Disappearing Messages") {
-                Picker("Duration", selection: Binding(
-                    get: { container.viewModel.disappearingMessagesDuration },
-                    set: { container.setDisappearingDuration($0) }
-                )) {
-                    ForEach(durationOptions, id: \.value) { option in
-                        Text(option.label).tag(option.value)
+        ZStack {
+            scheme.background.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingsSectionHeader("MESSAGGI")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Conferme di lettura",
+                            subtitle: "Notifica al mittente quando hai letto",
+                            isOn: Binding(
+                                get: { container.viewModel.readReceiptsEnabled },
+                                set: { container.toggleReadReceipts($0) }
+                            )
+                        )
+                        SettingsToggleRow(
+                            title: "Indicatore di scrittura",
+                            subtitle: "Mostra quando stai scrivendo",
+                            isOn: Binding(
+                                get: { container.viewModel.typingIndicatorEnabled },
+                                set: { container.toggleTypingIndicator($0) }
+                            )
+                        )
+                        SettingsToggleRow(
+                            title: "Presenza visibile",
+                            subtitle: "Mostra ai contatti quando sei online",
+                            isOn: Binding(
+                                get: { container.viewModel.presenceVisibleToContacts },
+                                set: { container.togglePresence($0) }
+                            )
+                        )
                     }
-                }
-                .pickerStyle(.menu)
-            }
 
-            Section("Network Anonymisation") {
-                Toggle("Route via Tor", isOn: Binding(
-                    get: { container.viewModel.torEnabled },
-                    set: { container.toggleTor($0) }
-                ))
-                if container.viewModel.torEnabled {
-                    Text("All traffic routed through Tor. Calls may experience higher latency.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+                    SettingsSectionHeader("MESSAGGI A SCADENZA")
+                    durationPickerRow
 
-            if !container.viewModel.blockedUserIds.isEmpty {
-                Section("Blocked Users") {
-                    LabeledContent("Blocked") {
-                        Text("\(container.viewModel.blockedUserIds.count) user(s)")
-                            .foregroundStyle(.secondary)
+                    SettingsSectionHeader("ANONIMIZZAZIONE RETE")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Instrada via Tor",
+                            subtitle: "Tutte le connessioni passano per la rete Tor",
+                            isOn: Binding(
+                                get: { container.viewModel.torEnabled },
+                                set: { container.toggleTor($0) }
+                            )
+                        )
+                        if container.viewModel.torEnabled {
+                            Text("Tutto il traffico è instradato via Tor. Le chiamate potrebbero avere latenza maggiore.")
+                                .qaudionStyle(type.labelSmall)
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                                .padding(.horizontal, 14)
+                        }
                     }
+
+                    if !container.viewModel.blockedUserIds.isEmpty {
+                        SettingsSectionHeader("UTENTI BLOCCATI")
+                        kvRow(label: "Bloccati",
+                              value: "\(container.viewModel.blockedUserIds.count) utente/i",
+                              mono: false)
+                    }
+
+                    Spacer().frame(height: 24)
                 }
+                .padding(.horizontal, 16)
             }
         }
         .navigationTitle("Privacy")
+    }
+
+    // MARK: - Duration picker
+
+    private var durationPickerRow: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "timer")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .frame(width: 22)
+
+            Text("Scadenza")
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+
+            Spacer(minLength: 6)
+
+            Picker("Scadenza", selection: Binding(
+                get: { container.viewModel.disappearingMessagesDuration },
+                set: { container.setDisappearingDuration($0) }
+            )) {
+                ForEach(durationOptions, id: \.value) { option in
+                    Text(option.label).tag(option.value)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(scheme.primary)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+
+    private func kvRow(label: String, value: String, mono: Bool) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Text(value)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .modifier(MonoIfNeededP(mono: mono))
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+}
+
+private struct MonoIfNeededP: ViewModifier {
+    let mono: Bool
+    func body(content: Content) -> some View {
+        if mono {
+            content.font(.system(.caption, design: .monospaced))
+        } else {
+            content
+        }
     }
 }
