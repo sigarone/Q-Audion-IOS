@@ -37,6 +37,16 @@ struct ChatListScreen: View {
     @State private var showingNewConversation = false
     @State private var showingNewGroup = false
     @State private var adminBannerDismissed = false
+    /// W40: gruppo creato (non-nil → presenta GroupChatScreen full-screen).
+    @State private var openedGroup: OpenedGroup? = nil
+
+    /// Sentinel Identifiable per `.fullScreenCover(item:)` con il
+    /// groupId + name appena creati.
+    private struct OpenedGroup: Identifiable, Equatable {
+        let id: UUID
+        let name: String
+        let memberCount: Int
+    }
 
     /// Optional admin banner content. Wired from AppState in a future
     /// pass; nil hides the section. Hard-coding nil today keeps the
@@ -157,13 +167,32 @@ struct ChatListScreen: View {
             // Engine wiring pending (real GroupChatRepository), per ora
             // stub UUID + snackbar feedback.
             NavigationStack {
-                CreateGroupScreen { _ in
+                CreateGroupScreen { newGroupId in
+                    // W40.C: dopo create, presentiamo full-screen
+                    // il GroupChatScreen del nuovo gruppo. Il nome è
+                    // un placeholder finché l'engine non espone i
+                    // metadati del gruppo (membership / admins).
                     showingNewGroup = false
-                    // Future: navigate al GroupChatScreen(groupId)
-                    // appena W40.C lo wires.
+                    openedGroup = OpenedGroup(
+                        id: newGroupId,
+                        name: "Nuovo gruppo",
+                        memberCount: 1   // placeholder: solo "Tu"
+                    )
                 }
                 .navigationBarBackButtonHidden(true)
                 .toolbar(.hidden, for: .navigationBar)
+            }
+        }
+        .fullScreenCover(item: $openedGroup) { group in
+            NavigationStack {
+                GroupChatScreen(
+                    groupId: group.id,
+                    initial: GroupChatUiState(
+                        name: group.name,
+                        memberCount: group.memberCount,
+                        messages: []
+                    )
+                )
             }
         }
     }
