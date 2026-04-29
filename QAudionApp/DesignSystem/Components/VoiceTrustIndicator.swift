@@ -63,9 +63,7 @@ struct VoiceTrustIndicator: View {
     }
 
     private var toneCategory: Int {
-        if clampedIndex >= 0.80 { return 0 }
-        if clampedIndex >= 0.50 { return 1 }
-        return 2
+        ConfidenceThresholds.category(of: clampedIndex)
     }
 
     private var toneColor: Color {

@@ -84,9 +84,11 @@ struct SessionStatusStrip: View {
     // MARK: - Helpers
 
     private var toneColor: Color {
-        if confidence >= 0.80 { return extras.success }
-        if confidence >= 0.50 { return extras.warning }
-        return extras.riskHigh
+        switch ConfidenceThresholds.category(of: confidence) {
+        case 0:  return extras.success
+        case 1:  return extras.warning
+        default: return extras.riskHigh
+        }
     }
 
     private func formatMmSs(_ seconds: Int) -> String {
