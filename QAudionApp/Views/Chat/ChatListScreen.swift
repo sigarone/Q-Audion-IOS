@@ -342,12 +342,11 @@ struct ChatListScreen: View {
 
     @ViewBuilder
     private func chatDestination(for item: ConversationListViewModel.Item) -> some View {
-        // W20: navigate to the new `ChatDetailScreen` (1:1 visual port of
-        // Android `feature-chat/.../ChatDetailScreen.kt`) instead of the
-        // legacy `ChatView`. Data layer (`ChatContainer` + engine) is
-        // unchanged. The legacy `ChatView` is still wired from the
-        // older `ConversationListView` entry point — that file will be
-        // removed once nothing references it.
+        // Navigates to the new `ChatDetailScreen` (1:1 visual port of
+        // Android `feature-chat/.../ChatDetailScreen.kt`). Data layer
+        // (`ChatContainer` + engine) is unchanged. The legacy
+        // `ChatView` and `ConversationListView` files have been removed
+        // in W26 cleanup — this is the only chat entry point now.
         ChatDetailScreen(
             conversationId: item.conversationId,
             peerUserId: item.peerUserId,
