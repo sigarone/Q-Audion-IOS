@@ -121,6 +121,21 @@ struct SettingsScreen: View {
                             subtitle: "Gestisci i dispositivi attivi")
             }
             .buttonStyle(.plain)
+
+            // W44: I miei numeri (multi-phone management) — 1:1 port del
+            // blocco "I MIEI NUMERI" di Android `ProfileScreen.kt`. Permette
+            // di registrare multipli E.164 sull'account così i peer ti
+            // raggiungono via uno qualsiasi (engine wiring per
+            // POST /contacts/phones pending).
+            NavigationLink {
+                MyPhonesScreen()
+            } label: {
+                SettingsRow(icon: "phone.badge.plus",
+                            iconColor: scheme.primary,
+                            title: "I miei numeri",
+                            subtitle: "Interno · numeri di telefono")
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }
