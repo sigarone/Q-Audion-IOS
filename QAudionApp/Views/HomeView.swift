@@ -51,9 +51,15 @@ struct HomeView: View {
     // MARK: - Tabs
 
     private var chatsTab: some View {
+        // W19.G: replaced the bare `ConversationListView()` with the
+        // sectioned `ChatListScreen` — admin banner / Gruppi / Fissate /
+        // Conversazioni + 2 FABs, 1:1 visual port of Android
+        // `qaudion-android-new/feature/feature-chat/.../ChatListScreen.kt`.
+        // Data layer (`ConversationListContainer`) is unchanged: only the
+        // presentation layer flipped, so the existing chat / search /
+        // pin / delete / new-conversation flows keep working.
         NavigationStack {
-            ConversationListView()
-                .navigationTitle("Chats")
+            ChatListScreen()
         }
     }
 
