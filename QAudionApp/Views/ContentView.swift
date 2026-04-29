@@ -30,6 +30,28 @@ struct ContentView: View {
         .animation(.easeInOut, value: appState.isInCall)
         .animation(.easeInOut, value: appState.isVideoCall)
         .animation(.easeInOut, value: splashResolved)
+        // W37: bridge globale del deepfake detector. Quando AppState
+        // alza il flag (DeepfakeMonitor → confidenceLevel == "red"
+        // sustained), pushiamo una snackbar error visibile su qualsiasi
+        // schermo. Il pattern Android è "color-only inline durante la
+        // chiamata" — ma l'iOS ha l'esigenza extra di notificare anche
+        // se l'utente ha messo l'app in background o aperto un altro
+        // tab. La snackbar svanisce dopo 6s; il detector continua a
+        // pulsare l'avatar halo via confidenceColor in parallelo.
+        .onChange(of: appState.deepfakeAlert) { isAlert in
+            guard isAlert else { return }
+            // Mostra l'opzione "Termina chiamata" solo se siamo
+            // effettivamente in chiamata; altrimenti il bottone non
+            // avrebbe senso.
+            let inCall = appState.isInCall
+            snackbarHost.show(.init(
+                text: "Voce sospetta rilevata. Controlla l'identità del peer.",
+                severity: .error,
+                actionLabel: inCall ? "Termina chiamata" : nil,
+                onAction: inCall ? { appState.endCall() } : nil,
+                durationSeconds: 6
+            ))
+        }
     }
 
     @ViewBuilder

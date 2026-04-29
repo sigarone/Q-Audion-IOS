@@ -16,6 +16,7 @@ struct KeyManagementScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    @Environment(\.qaudionSnackbar) private var snackbar
 
     init(state: AppState) {
         self.appState = state
@@ -94,6 +95,11 @@ struct KeyManagementScreen: View {
             Button("Annulla", role: .cancel) { }
             Button("Ruota", role: .destructive) {
                 coordinator.rotate()
+                snackbar?.show(.init(
+                    text: "Rotazione chiavi avviata.",
+                    severity: .warning,
+                    durationSeconds: 5
+                ))
             }
         } message: {
             Text("Verranno generate nuove chiavi. Tutti i contatti dovranno ri-verificare la tua identità. Continuare?")

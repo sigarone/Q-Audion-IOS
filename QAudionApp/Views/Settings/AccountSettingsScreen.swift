@@ -115,6 +115,7 @@ struct AccountSettingsScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    @Environment(\.qaudionSnackbar) private var snackbar
 
     init(appState: AppState) {
         self._container = ObservedObject(
@@ -324,7 +325,17 @@ struct AccountSettingsScreen: View {
     // MARK: - Save button
 
     private var saveButton: some View {
-        Button { container.saveProfile() } label: {
+        Button {
+            container.saveProfile()
+            // Optimistic feedback. Il container chiama loadFromServer()
+            // dopo updateProfile e setta errorMessage in caso di
+            // failure. Per ora mostriamo solo il success ottimista
+            // e lasciamo il banner riskHigh esistente per gli errori.
+            snackbar?.show(.init(
+                text: "Profilo aggiornato.",
+                severity: .info
+            ))
+        } label: {
             HStack {
                 if container.isLoading {
                     ProgressView()

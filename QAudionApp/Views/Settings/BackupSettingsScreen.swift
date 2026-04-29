@@ -161,6 +161,7 @@ struct BackupSettingsScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    @Environment(\.qaudionSnackbar) private var snackbar
 
     init(state: AppState) {
         self._container = ObservedObject(wrappedValue: BackupSettingsContainer(appState: state))
@@ -251,7 +252,17 @@ struct BackupSettingsScreen: View {
                 onCommit: { pwd in
                     container.showingBackupPasswordSheet = false
                     container.coordinator.errorMessage = nil
-                    Task { await container.backupNow(password: pwd) }
+                    Task {
+                        await container.backupNow(password: pwd)
+                        // Push feedback dopo il completamento (success
+                        // se errorMessage è nil, altrimenti il banner
+                        // riskHigh esistente fa il proprio lavoro).
+                        if container.coordinator.errorMessage == nil {
+                            snackbar?.show(.init(
+                                text: "Backup cifrato completato.",
+                                severity: .info))
+                        }
+                    }
                 },
                 onCancel: { container.showingBackupPasswordSheet = false }
             )
@@ -265,7 +276,14 @@ struct BackupSettingsScreen: View {
                 onCommit: { pwd in
                     container.showingRestorePasswordSheet = false
                     container.coordinator.errorMessage = nil
-                    Task { await container.restore(password: pwd) }
+                    Task {
+                        await container.restore(password: pwd)
+                        if container.coordinator.errorMessage == nil {
+                            snackbar?.show(.init(
+                                text: "Backup ripristinato.",
+                                severity: .info))
+                        }
+                    }
                 },
                 onCancel: { container.showingRestorePasswordSheet = false }
             )

@@ -10,11 +10,20 @@ public enum QAudionSnackbarSeverity {
 }
 
 /// Modello del messaggio: ciò che l'host renderizza.
-public struct QAudionSnackbarMessage: Equatable, Identifiable {
+///
+/// Note su `Equatable`: la closure `onAction` non è equatable. Per
+/// matchare la promessa di `Identifiable`+`Equatable` confrontiamo solo
+/// gli `id` (le UUID sono uniche). Due messaggi con stesso testo ma
+/// `id` diversa restano distinti.
+public struct QAudionSnackbarMessage: Identifiable {
     public let id: UUID
     public let text: String
     public let severity: QAudionSnackbarSeverity
     public let actionLabel: String?
+    /// Callback opzionale eseguito quando l'utente preme `actionLabel`.
+    /// Se `actionLabel == nil` viene ignorato. La snackbar si dismissa
+    /// automaticamente dopo aver invocato l'azione.
+    public let onAction: (() -> Void)?
     /// Durata in secondi prima dell'auto-dismiss. nil = permanente
     /// (richiede tap esplicito o azione caller).
     public let durationSeconds: Double?
@@ -22,12 +31,21 @@ public struct QAudionSnackbarMessage: Equatable, Identifiable {
     public init(text: String,
                 severity: QAudionSnackbarSeverity = .info,
                 actionLabel: String? = nil,
+                onAction: (() -> Void)? = nil,
                 durationSeconds: Double? = 4.0) {
         self.id = UUID()
         self.text = text
         self.severity = severity
         self.actionLabel = actionLabel
+        self.onAction = onAction
         self.durationSeconds = durationSeconds
+    }
+}
+
+extension QAudionSnackbarMessage: Equatable {
+    public static func == (lhs: QAudionSnackbarMessage,
+                           rhs: QAudionSnackbarMessage) -> Bool {
+        lhs.id == rhs.id
     }
 }
 
@@ -108,10 +126,13 @@ public struct QAudionSnackbarHost: View {
             Spacer(minLength: 8)
 
             if let label = msg.actionLabel {
-                Button(label) { state.dismiss() }
-                    .qaudionStyle(type.labelLarge)
-                    .foregroundStyle(accent)
-                    .buttonStyle(.plain)
+                Button(label) {
+                    msg.onAction?()
+                    state.dismiss()
+                }
+                .qaudionStyle(type.labelLarge)
+                .foregroundStyle(accent)
+                .buttonStyle(.plain)
             } else {
                 Button {
                     state.dismiss()
