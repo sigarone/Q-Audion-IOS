@@ -1,0 +1,140 @@
+import SwiftUI
+
+/// Long-press action sheet for a chat bubble. 1:1 port of Android
+/// `qaudion-android-new/feature/feature-chat/.../components/BubbleActionSheet.kt`.
+///
+/// Layout (top → bottom):
+///   - 6 fixed reaction emojis "👍 ❤️ 😂 😮 😢 🙏" + a disabled "+" stub
+///     (the "more" emoji picker lands in a later wave per Android Phase 32).
+///   - Action rows, conditionally shown:
+///       • "Modifica"             — only if the message is own AND text-only
+///       • "Copia testo"          — only if text-only
+///       • "Elimina per tutti"    — only if own (danger tint)
+///       • "Elimina solo per me"  — always (danger tint)
+///
+/// Designed to be embedded inside a `.sheet` with `.presentationDetents([.height(...)])`
+/// so the sheet sizes itself to its content. The "+" emoji button is
+/// rendered disabled (50% opacity, no callback) — not removed, so the
+/// row layout matches the Android layout pixel-for-pixel.
+struct BubbleActionSheet: View {
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionType) private var type
+    @Environment(\.dismiss) private var dismiss
+
+    let isOwn: Bool
+    let isText: Bool
+    let onReact: (String) -> Void
+    let onEdit: () -> Void
+    let onCopy: () -> Void
+    let onDeleteForAll: () -> Void
+    let onDeleteForMe: () -> Void
+
+    private let emojis = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            reactionRow
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+
+            Divider().background(scheme.outline.opacity(0.4))
+
+            VStack(spacing: 0) {
+                if isOwn && isText {
+                    actionRow(label: "Modifica",
+                              icon: "pencil",
+                              danger: false,
+                              action: { onEdit(); dismiss() })
+                }
+                if isText {
+                    actionRow(label: "Copia testo",
+                              icon: "doc.on.doc",
+                              danger: false,
+                              action: { onCopy(); dismiss() })
+                }
+                if isOwn {
+                    actionRow(label: "Elimina per tutti",
+                              icon: "trash",
+                              danger: true,
+                              action: { onDeleteForAll(); dismiss() })
+                }
+                actionRow(label: "Elimina solo per me",
+                          icon: "trash",
+                          danger: true,
+                          action: { onDeleteForMe(); dismiss() })
+            }
+            .padding(.bottom, 8)
+        }
+        .background(scheme.surface)
+    }
+
+    // MARK: - Reaction row
+
+    private var reactionRow: some View {
+        HStack(spacing: 4) {
+            ForEach(emojis, id: \.self) { emoji in
+                Button {
+                    onReact(emoji)
+                    dismiss()
+                } label: {
+                    Text(emoji)
+                        .font(.system(size: 26))
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(scheme.surfaceVariant.opacity(0.45)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Reagisci con \(emoji)")
+            }
+            // Disabled "+" stub — lands in a future wave with a full picker.
+            ZStack {
+                Circle().fill(scheme.surfaceVariant.opacity(0.45))
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .frame(width: 40, height: 40)
+            .opacity(0.5)
+            .accessibilityHidden(true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - Action row
+
+    private func actionRow(label: String,
+                           icon: String,
+                           danger: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(danger ? scheme.error : scheme.onSurface)
+                    .frame(width: 22)
+                Text(label)
+                    .qaudionStyle(type.bodyLarge)
+                    .foregroundStyle(danger ? scheme.error : scheme.onSurface)
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+#Preview {
+    Color.gray.opacity(0.2)
+        .sheet(isPresented: .constant(true)) {
+            BubbleActionSheet(
+                isOwn: true,
+                isText: true,
+                onReact: { _ in }, onEdit: {}, onCopy: {},
+                onDeleteForAll: {}, onDeleteForMe: {}
+            )
+            .presentationDetents([.medium])
+            .qAudionTheme(dark: true)
+        }
+}

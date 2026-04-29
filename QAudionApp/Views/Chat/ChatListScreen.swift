@@ -342,7 +342,13 @@ struct ChatListScreen: View {
 
     @ViewBuilder
     private func chatDestination(for item: ConversationListViewModel.Item) -> some View {
-        ChatView(
+        // W20: navigate to the new `ChatDetailScreen` (1:1 visual port of
+        // Android `feature-chat/.../ChatDetailScreen.kt`) instead of the
+        // legacy `ChatView`. Data layer (`ChatContainer` + engine) is
+        // unchanged. The legacy `ChatView` is still wired from the
+        // older `ConversationListView` entry point — that file will be
+        // removed once nothing references it.
+        ChatDetailScreen(
             conversationId: item.conversationId,
             peerUserId: item.peerUserId,
             peerDisplayName: item.peerDisplayName
