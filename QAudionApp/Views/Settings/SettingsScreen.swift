@@ -274,6 +274,19 @@ struct SettingsScreen: View {
                             subtitle: "Anteprima Incoming · Outgoing · InCall · Group")
             }
             .buttonStyle(.plain)
+
+            // W43: dev-only network simulator. UI-only stub today; will
+            // wire to engine `NetworkConditionSimulator` when surfaced
+            // on iOS. 1:1 port of Android `NetworkSimulatorScreen.kt`.
+            NavigationLink {
+                NetworkSimulatorScreen()
+            } label: {
+                SettingsRow(icon: "antenna.radiowaves.left.and.right",
+                            iconColor: .orange,
+                            title: "Simulatore rete (dev)",
+                            subtitle: "Latenza · perdita · offline · presets")
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }
