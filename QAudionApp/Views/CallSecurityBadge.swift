@@ -90,10 +90,10 @@ struct CallSecurityBadge: View {
                 )
             }
 
-            detailRow(label: "Re-key", value: "\(appState.rekeyCount) rotations")
-            detailRow(label: "Encryption", value: appState.encryptionAlgo)
-            detailRow(label: "Transport", value: appState.transportType)
-            detailRow(label: "Latency", value: "\(appState.latencyMs) ms", valueColor: latencyColor)
+            detailRow(label: "Re-key", value: "\(appState.rekeyCount) rotazioni")
+            detailRow(label: "Cifratura", value: appState.encryptionAlgo)
+            detailRow(label: "Trasporto", value: appState.transportType)
+            detailRow(label: "Latenza", value: "\(appState.latencyMs) ms", valueColor: latencyColor)
         }
         .padding(16)
         .background(.ultraThinMaterial)
@@ -145,9 +145,9 @@ struct CallSecurityBadge: View {
 
     private var statusLabel: String {
         switch appState.confidenceLevel {
-        case "yellow": return "Caution"
-        case "red": return "Alert"
-        default: return "Secure"
+        case "yellow": return "Attenzione"
+        case "red":    return "Allarme"
+        default:       return "Sicuro"
         }
     }
 
