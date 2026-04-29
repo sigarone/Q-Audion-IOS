@@ -81,12 +81,14 @@ struct HomeView: View {
         }
     }
 
-    /// Calls tab: quick-dial + recent calls list, matching the old HomeView's Calls tab content.
+    /// W39: Calls tab ora usa il nuovo `CallHistoryView` (1:1 visual port
+    /// di Android `feature-call/.../CallHistoryScreen.kt`) con call-history
+    /// list (avatar 48 + name + direction icon + timestamp + duration +
+    /// audio/video CTAs). Il legacy `CallsTabView` resta come private
+    /// struct nel file ma non è più routed.
     private var callsTab: some View {
         NavigationStack {
-            CallsTabView()
-                .navigationTitle("Chiamate")
-        }
+            CallHistoryView()
     }
 
     /// W24: Settings tab usa il nuovo `SettingsScreen` (1:1 visual port di
