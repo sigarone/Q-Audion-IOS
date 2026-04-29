@@ -302,6 +302,19 @@ struct SettingsScreen: View {
                             subtitle: "Latenza · perdita · offline · presets")
             }
             .buttonStyle(.plain)
+
+            // W46: Reset dati locali (UserDefaults wipe non-credenziale).
+            // Utile per QA TestFlight per ripartire pulito senza
+            // reinstallare l'app o forzare logout.
+            NavigationLink {
+                DevResetScreen()
+            } label: {
+                SettingsRow(icon: "trash.slash.fill",
+                            iconColor: .orange,
+                            title: "Reset dati locali",
+                            subtitle: "UserDefaults wipe · auth preservata")
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }
