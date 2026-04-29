@@ -315,6 +315,19 @@ struct SettingsScreen: View {
                             subtitle: "UserDefaults wipe · auth preservata")
             }
             .buttonStyle(.plain)
+
+            // W48: Esporta diagnostica — text dump shareable per
+            // bug-report. Sister di W46 DevReset; insieme formano la
+            // QA toolkit. Nessun token / private-key nel report.
+            NavigationLink {
+                DiagnosticsExportScreen()
+            } label: {
+                SettingsRow(icon: "doc.text.magnifyingglass",
+                            iconColor: .orange,
+                            title: "Esporta diagnostica",
+                            subtitle: "Build · device · stato · share")
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }
