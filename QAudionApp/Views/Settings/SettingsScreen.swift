@@ -107,8 +107,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "person",
                             iconColor: scheme.primary,
                             title: "Profilo",
-                            subtitle: profileDisplayName,
-                            action: {})
+                            subtitle: profileDisplayName)
             }
             .buttonStyle(.plain)
 
@@ -118,8 +117,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "iphone",
                             iconColor: scheme.primary,
                             title: "Dispositivi collegati",
-                            subtitle: "Gestisci i dispositivi attivi",
-                            action: {})
+                            subtitle: "Gestisci i dispositivi attivi")
             }
             .buttonStyle(.plain)
         }
@@ -135,8 +133,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "shield.lefthalf.filled",
                             iconColor: scheme.primary,
                             title: "Security Dashboard",
-                            subtitle: "Confidence · trust · eventi",
-                            action: {})
+                            subtitle: "Confidence · trust · eventi")
             }
             .buttonStyle(.plain)
 
@@ -146,8 +143,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "key.fill",
                             iconColor: extras.pqcAccent,
                             title: "Gestione chiavi",
-                            subtitle: "PSK · PQC · rotazione",
-                            action: {})
+                            subtitle: "PSK · PQC · rotazione")
             }
             .buttonStyle(.plain)
 
@@ -157,8 +153,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "arrow.left.arrow.right",
                             iconColor: scheme.primary,
                             title: "Protocollo di trasporto",
-                            subtitle: "P2P · TURN · Relay",
-                            action: {})
+                            subtitle: "P2P · TURN · Relay")
             }
             .buttonStyle(.plain)
         }
@@ -174,8 +169,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "hand.raised.fill",
                             iconColor: scheme.primary,
                             title: "Controlli privacy",
-                            subtitle: "Conferme · ultimo accesso · scopribilità",
-                            action: {})
+                            subtitle: "Conferme · ultimo accesso · scopribilità")
             }
             .buttonStyle(.plain)
 
@@ -185,8 +179,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "phone.fill",
                             iconColor: scheme.primary,
                             title: "Chiamate",
-                            subtitle: "Codec · qualità · echo cancellation",
-                            action: {})
+                            subtitle: "Codec · qualità · echo cancellation")
             }
             .buttonStyle(.plain)
 
@@ -196,8 +189,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "bubble.right",
                             iconColor: scheme.primary,
                             title: "Chat",
-                            subtitle: "Cifratura · scadenza messaggi",
-                            action: {})
+                            subtitle: "Cifratura · scadenza messaggi")
             }
             .buttonStyle(.plain)
 
@@ -207,8 +199,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "bell.fill",
                             iconColor: scheme.primary,
                             title: "Notifiche",
-                            subtitle: "VoIP push · banner · suoni",
-                            action: {})
+                            subtitle: "VoIP push · banner · suoni")
             }
             .buttonStyle(.plain)
         }
@@ -224,8 +215,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "externaldrive.fill",
                             iconColor: scheme.primary,
                             title: "Backup cifrato",
-                            subtitle: "SCRYPT(N=2¹⁷) · AES-256-GCM",
-                            action: {})
+                            subtitle: "SCRYPT(N=2¹⁷) · AES-256-GCM")
             }
             .buttonStyle(.plain)
         }
@@ -241,8 +231,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "info.circle",
                             iconColor: scheme.primary,
                             title: "Informazioni",
-                            subtitle: "Versione · protocollo · OSS",
-                            action: {})
+                            subtitle: "Versione · protocollo · OSS")
             }
             .buttonStyle(.plain)
         }
@@ -258,8 +247,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "paintbrush.fill",
                             iconColor: .orange,
                             title: "Call Design Showcase",
-                            subtitle: "Anteprima Incoming · Outgoing · InCall · Group",
-                            action: {})
+                            subtitle: "Anteprima Incoming · Outgoing · InCall · Group")
             }
             .buttonStyle(.plain)
         }
@@ -277,7 +265,10 @@ struct SettingsScreen: View {
             appState.logout()
         } label: {
             HStack {
-                Image(systemName: "eye.slash.fill")
+                // SF Symbol that semantically reads as "log out" rather
+                // than "hide". OpenRouter review on v1.0.65 flagged
+                // `eye.slash.fill` as misleading for sign-out.
+                Image(systemName: "rectangle.portrait.and.arrow.right")
                     .font(.system(size: 16, weight: .regular))
                 Text("Esci")
                     .qaudionStyle(type.bodyMedium)
