@@ -13,12 +13,21 @@ import QAudionEngine
 /// but `Codable` synthesis tolerates older JSON missing fields if any get
 /// added later (Optional types only).
 ///
-/// Concurrency: pinned to `@MainActor` because every caller (the
-/// `ThreatReportContainer` submit pipeline + the `ThreatReportListView`
-/// model) already runs on the main actor. The read-modify-write inside
-/// `append` / `remove` would otherwise be a TOCTOU race on UserDefaults
-/// (which is thread-safe per call but not across the read+write pair).
-@MainActor
+/// Concurrency: NOT actor-isolated. UserDefaults is thread-safe per call
+/// (Apple guarantees atomic reads/writes), but the read-modify-write inside
+/// `append` / `remove` is technically TOCTOU. We tolerate that:
+/// 1. all real call sites today run on MainActor (`ThreatReportContainer`
+///    + `ThreatReportListView`'s @MainActor model), so concurrent mutation
+///    cannot happen in practice;
+/// 2. this is a best-effort history log, not a crypto / financial ledger —
+///    in the worst case (concurrent appends from two threads) one entry
+///    gets dropped; the user simply re-files. No data corruption is
+///    possible because UserDefaults atomically replaces the value blob;
+/// 3. an earlier draft of this class was `@MainActor` but that broke the
+///    `ThreatReportContainer` default-arg pattern (default args are
+///    evaluated in nonisolated context, so calling a MainActor init from
+///    a default value is an error). Reverting to non-isolated keeps the
+///    callers ergonomic without losing safety in our actual usage.
 public final class ThreatReportLogStore {
 
     /// One row in the local log. Mirrors the shape submitted to
