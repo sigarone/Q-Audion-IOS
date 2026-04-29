@@ -37,6 +37,7 @@ struct SettingsScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    @Environment(\.qaudionSnackbar) private var snackbar
 
     var body: some View {
         NavigationStack {
@@ -271,7 +272,12 @@ struct SettingsScreen: View {
             // AppState.logout() is sync (clears token + flips
             // isAuthenticated to false). ContentView's reactive Group
             // routing handles re-presenting the OnboardingRoot once
-            // isAuthenticated == false.
+            // isAuthenticated == false. We push a snackbar BEFORE
+            // logout so the host (still mounted on ContentView) gets
+            // the message before isAuthenticated flips and the entire
+            // SettingsScreen is torn down.
+            snackbar?.show(.init(text: "Sessione chiusa.", severity: .info,
+                                 durationSeconds: 3))
             appState.logout()
         } label: {
             HStack {

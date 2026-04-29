@@ -32,6 +32,8 @@ struct ContactsScreen: View {
     @State private var selectedTab: Tab = .all
     @State private var showingNewContact: Bool = false
 
+    @Environment(\.qaudionSnackbar) private var snackbar
+
     enum Tab: Hashable, CaseIterable {
         case all, discover, blocked
 
@@ -82,6 +84,15 @@ struct ContactsScreen: View {
                     mode: .add,
                     onSave: { draft in
                         print("[ContactEditor] new contact draft: \(draft)")
+                        // W34: feedback transitorio via snackbar globale.
+                        // Il messaggio scompare in 4s di default; il
+                        // wiring persistente verso ContactsStore arriva
+                        // quando l'engine espone l'API resolve-by-extension
+                        // del bcrypto directory.
+                        snackbar?.show(.init(
+                            text: "Contatto \(draft.displayName) salvato in rubrica.",
+                            severity: .info
+                        ))
                     }
                 )
                 .navigationBarBackButtonHidden(true)

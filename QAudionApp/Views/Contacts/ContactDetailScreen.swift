@@ -34,6 +34,8 @@ struct ContactDetailScreen: View {
     @State private var showingSasSheet = false
     @State private var showingEditor = false
 
+    @Environment(\.qaudionSnackbar) private var snackbar
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -57,7 +59,18 @@ struct ContactDetailScreen: View {
             Button("Annulla", role: .cancel) {}
             Button("Elimina", role: .destructive) {
                 // TODO: wire ContactsStore.delete(userId:)
+                let removedName = item.displayName
                 dismiss()
+                // Push the feedback AFTER dismiss so the snackbar
+                // is rendered on the parent screen, not on a view
+                // that's sliding away.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    snackbar?.show(.init(
+                        text: "\(removedName) rimosso dalla rubrica.",
+                        severity: .info
+                    ))
+                }
             }
         } message: {
             Text("\(item.displayName) sarà rimosso dalla rubrica locale.")
