@@ -6,18 +6,10 @@ import QAudionEngine
 @MainActor
 final class BackupSettingsContainer: ObservableObject {
 
-    // MARK: Published
-
     @Published var viewModel: BackupSettingsViewModel
-
-    // Coordinator drives actual encrypt/decrypt work.
     @Published var coordinator: BackupCoordinator
-
-    // Sheet presentation
     @Published var showingBackupPasswordSheet = false
     @Published var showingRestorePasswordSheet = false
-
-    // MARK: Init
 
     init(appState: AppState) {
         let coordinator = BackupCoordinator(
@@ -25,7 +17,6 @@ final class BackupSettingsContainer: ObservableObject {
             contactsStore: ContactsStore()
         )
         self.coordinator = coordinator
-        // Seed ViewModel from any existing backup on disk.
         self.viewModel = BackupSettingsViewModel(
             lastBackupAt: coordinator.lastBackupAt,
             lastBackupSizeBytes: coordinator.lastBackupSizeBytes,
@@ -34,8 +25,6 @@ final class BackupSettingsContainer: ObservableObject {
             restoreInProgress: false
         )
     }
-
-    // MARK: Actions
 
     func backupNow(password: String) async {
         do {
@@ -64,9 +53,14 @@ final class BackupSettingsContainer: ObservableObject {
 // MARK: - Password Entry Sheet
 
 private struct PasswordSheet: View {
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
+    @Environment(\.qaudionType) private var type
+
     let title: String
     let subtitle: String
     let actionLabel: String
+    let isConfirmMode: Bool
     let onCommit: (String) -> Void
     let onCancel: () -> Void
 
@@ -74,71 +68,108 @@ private struct PasswordSheet: View {
     @State private var confirm = ""
     @FocusState private var focused: Bool
 
-    var isConfirmMode: Bool { actionLabel == "Create Backup" }
-
     var isValid: Bool {
         if isConfirmMode {
             return password.count >= 6 && password == confirm
         }
-        return password.count >= 1
+        return !password.isEmpty
     }
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+            ZStack {
+                scheme.background.ignoresSafeArea()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(subtitle)
+                            .qaudionStyle(type.bodyMedium)
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .padding(.top, 16)
 
-                Section("Password") {
-                    SecureField("Enter password", text: $password)
-                        .textContentType(.password)
-                        .focused($focused)
-                    if isConfirmMode {
-                        SecureField("Confirm password", text: $confirm)
-                            .textContentType(.newPassword)
+                        secureField(label: "Password",
+                                    text: $password,
+                                    contentType: .password)
+                            .focused($focused)
+                        if isConfirmMode {
+                            secureField(label: "Conferma password",
+                                        text: $confirm,
+                                        contentType: .newPassword)
+                            if !confirm.isEmpty && password != confirm {
+                                Label("Le password non coincidono",
+                                      systemImage: "xmark.circle.fill")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(extras.riskHigh)
+                            } else if password.count > 0 && password.count < 6 {
+                                Label("Almeno 6 caratteri",
+                                      systemImage: "info.circle")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(extras.warning)
+                            }
+                        }
+                        Spacer()
                     }
-                }
-
-                if isConfirmMode && !confirm.isEmpty && password != confirm {
-                    Section {
-                        Label("Passwords do not match", systemImage: "xmark.circle.fill")
-                            .foregroundStyle(.red)
-                    }
+                    .padding(.horizontal, 24)
                 }
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
+                    Button("Annulla", action: onCancel)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(actionLabel) {
-                        onCommit(password)
-                    }
-                    .disabled(!isValid)
+                    Button(actionLabel) { onCommit(password) }
+                        .disabled(!isValid)
                 }
             }
             .onAppear { focused = true }
+        }
+    }
+
+    private func secureField(label: String,
+                             text: Binding<String>,
+                             contentType: UITextContentType) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .qaudionStyle(type.labelSmall)
+                .tracking(1.0)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            SecureField("", text: text)
+                .textContentType(contentType)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundColor(scheme.onSurface)
+                .tint(scheme.primary)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(scheme.surfaceVariant.opacity(0.45))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
+                )
         }
     }
 }
 
 // MARK: - Screen
 
+/// Backup settings sub-screen. W31 design-token refactor.
 struct BackupSettingsScreen: View {
     @ObservedObject var container: BackupSettingsContainer
+
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
+    @Environment(\.qaudionType) private var type
 
     init(state: AppState) {
         self._container = ObservedObject(wrappedValue: BackupSettingsContainer(appState: state))
     }
 
     private var lastBackupText: String {
-        guard let date = container.viewModel.lastBackupAt else { return "Never" }
+        guard let date = container.viewModel.lastBackupAt else { return "Mai" }
         let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "it_IT")
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
     }
@@ -151,76 +182,59 @@ struct BackupSettingsScreen: View {
 
     var body: some View {
         ZStack {
-            Form {
-                // MARK: Info banner (demoted from BLOCKED to informational)
-                Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label("Local Backups Available", systemImage: "checkmark.shield.fill")
-                            .font(.headline)
-                            .foregroundStyle(.green)
-                        Text("Local encrypted backups are now enabled (QAUD container, scrypt N=2^17 + AES-256-GCM, Android format parity).")
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
-                        Text("Cross-platform interop with Desktop .qabk files is coming via the Migration utility (W13.C). Server upload deferred per audit §3.6.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                }
-                .listRowBackground(Color.green.opacity(0.12))
+            scheme.background.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    infoBanner
 
-                // MARK: Last Backup
-                Section("Last Backup") {
-                    LabeledContent("Date") {
-                        Text(lastBackupText)
-                            .foregroundStyle(.secondary)
-                    }
-                    LabeledContent("Size") {
-                        Text(lastBackupSizeText)
-                            .foregroundStyle(.secondary)
-                    }
-                    LabeledContent("Encryption") {
-                        Text("Local only (QAUD/AES-256-GCM)")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                // MARK: Actions
-                Section("Backup & Restore") {
-                    Button {
-                        container.showingBackupPasswordSheet = true
-                    } label: {
-                        Label("Backup Now", systemImage: "arrow.up.doc.fill")
+                    SettingsSectionHeader("ULTIMO BACKUP")
+                    VStack(spacing: 8) {
+                        kvRow(label: "Data", value: lastBackupText, mono: false)
+                        kvRow(label: "Dimensione", value: lastBackupSizeText, mono: true)
+                        kvRow(label: "Cifratura",
+                              value: "Locale (QAUD/AES-256-GCM)",
+                              mono: true)
                     }
 
-                    Button {
-                        container.showingRestorePasswordSheet = true
-                    } label: {
-                        Label("Restore from Backup", systemImage: "arrow.down.doc.fill")
+                    SettingsSectionHeader("AZIONI")
+                    VStack(spacing: 8) {
+                        actionButton(icon: "arrow.up.doc.fill",
+                                     title: "Backup adesso",
+                                     subtitle: "Cifra il backup locale con la tua password",
+                                     tint: scheme.primary,
+                                     enabled: !container.coordinator.isProcessing) {
+                            container.showingBackupPasswordSheet = true
+                        }
+                        actionButton(icon: "arrow.down.doc.fill",
+                                     title: "Ripristina da backup",
+                                     subtitle: container.coordinator.localBackupExists
+                                        ? "Decifra l'ultimo backup locale"
+                                        : "Nessun backup disponibile",
+                                     tint: scheme.primary,
+                                     enabled: container.coordinator.localBackupExists
+                                            && !container.coordinator.isProcessing) {
+                            container.showingRestorePasswordSheet = true
+                        }
                     }
-                    .disabled(!container.coordinator.localBackupExists)
-                }
 
-                // MARK: Error feedback
-                if let msg = container.coordinator.errorMessage {
-                    Section {
-                        Label(msg, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                            .font(.subheadline)
+                    if let msg = container.coordinator.errorMessage {
+                        errorBanner(msg).padding(.top, 16)
                     }
+
+                    Spacer().frame(height: 24)
                 }
+                .padding(.horizontal, 16)
             }
 
-            // MARK: Processing overlay
             if container.coordinator.isProcessing {
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
+                Color.black.opacity(0.35).ignoresSafeArea()
                 VStack(spacing: 16) {
                     ProgressView()
+                        .progressViewStyle(.circular)
                         .scaleEffect(1.5)
                         .tint(.white)
-                    Text("Processing…")
-                        .font(.callout)
+                    Text("Elaborazione…")
+                        .qaudionStyle(type.bodyMedium)
                         .foregroundStyle(.white)
                 }
                 .padding(32)
@@ -228,37 +242,155 @@ struct BackupSettingsScreen: View {
             }
         }
         .navigationTitle("Backup cifrato")
-        // MARK: Backup password sheet
         .sheet(isPresented: $container.showingBackupPasswordSheet) {
             PasswordSheet(
-                title: "Backup Now",
-                subtitle: "Create a password to protect your backup. You will need it to restore.",
-                actionLabel: "Create Backup",
+                title: "Backup adesso",
+                subtitle: "Crea una password per proteggere il backup. Ti servirà per ripristinarlo.",
+                actionLabel: "Crea backup",
+                isConfirmMode: true,
                 onCommit: { pwd in
                     container.showingBackupPasswordSheet = false
                     container.coordinator.errorMessage = nil
                     Task { await container.backupNow(password: pwd) }
                 },
-                onCancel: {
-                    container.showingBackupPasswordSheet = false
-                }
+                onCancel: { container.showingBackupPasswordSheet = false }
             )
         }
-        // MARK: Restore password sheet
         .sheet(isPresented: $container.showingRestorePasswordSheet) {
             PasswordSheet(
-                title: "Restore Backup",
-                subtitle: "Enter the password you used when creating the backup.",
-                actionLabel: "Restore",
+                title: "Ripristina backup",
+                subtitle: "Inserisci la password che hai usato per creare il backup.",
+                actionLabel: "Ripristina",
+                isConfirmMode: false,
                 onCommit: { pwd in
                     container.showingRestorePasswordSheet = false
                     container.coordinator.errorMessage = nil
                     Task { await container.restore(password: pwd) }
                 },
-                onCancel: {
-                    container.showingRestorePasswordSheet = false
-                }
+                onCancel: { container.showingRestorePasswordSheet = false }
             )
+        }
+    }
+
+    // MARK: - Info banner
+
+    private var infoBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "checkmark.shield.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(extras.success)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Backup locale attivo")
+                    .qaudionStyle(type.titleSmall)
+                    .foregroundStyle(extras.success)
+                Text("Container QAUD · scrypt N=2¹⁷ + AES-256-GCM. Parità formato con Android.")
+                    .qaudionStyle(type.bodySmall)
+                    .foregroundStyle(scheme.onSurface)
+                Text("Interop cross-platform con Desktop .qabk via utility Migration. Upload server differito.")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(extras.success.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(extras.success.opacity(0.45), lineWidth: 1)
+        )
+        .padding(.top, 8)
+    }
+
+    // MARK: - Rows + helpers
+
+    private func kvRow(label: String, value: String, mono: Bool) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Text(value)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .modifier(MonoIfNeededB(mono: mono))
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+
+    private func actionButton(icon: String,
+                              title: String,
+                              subtitle: String,
+                              tint: Color,
+                              enabled: Bool,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .qaudionStyle(type.bodyMedium)
+                        .foregroundStyle(scheme.onSurface)
+                    Text(subtitle)
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 60)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(scheme.surfaceVariant.opacity(0.4))
+            )
+            .opacity(enabled ? 1.0 : 0.5)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    private func errorBanner(_ msg: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(extras.riskHigh)
+                .padding(.top, 1)
+            Text(msg)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(extras.riskHigh)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(extras.riskHigh.opacity(0.12))
+        )
+    }
+}
+
+private struct MonoIfNeededB: ViewModifier {
+    let mono: Bool
+    func body(content: Content) -> some View {
+        if mono {
+            content.font(.system(.caption, design: .monospaced))
+        } else {
+            content
         }
     }
 }

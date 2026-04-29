@@ -30,159 +30,289 @@ final class TransportSettingsContainer: ObservableObject {
     }
 }
 
-// MARK: - Status badge helper
+// MARK: - Status helpers
 
 private extension TransportDiagnostics.ConnectionStatus {
-    var color: Color {
+    func tone(extras: QAudionColorsExtra) -> Color {
         switch self {
-        case .unknown:            return .secondary
-        case .healthy:            return .green
-        case .degraded:           return .yellow
-        case .unreachable:        return .red
+        case .unknown:     return Color.gray
+        case .healthy:     return extras.success
+        case .degraded:    return extras.warning
+        case .unreachable: return extras.riskHigh
         }
     }
 
     var label: String {
         switch self {
-        case .unknown:                    return "Unknown"
-        case .healthy(let ms):            return "Healthy (\(ms) ms)"
-        case .degraded(let ms):           return "Degraded (\(ms) ms)"
-        case .unreachable:                return "Unreachable"
+        case .unknown:                    return "Sconosciuto"
+        case .healthy(let ms):            return "Operativo (\(ms) ms)"
+        case .degraded(let ms):           return "Degradato (\(ms) ms)"
+        case .unreachable:                return "Non raggiungibile"
+        }
+    }
+}
+
+private extension TransportSettingsViewModel.Mode {
+    var localizedLabel: String {
+        switch self {
+        case .auto:  return "Auto"
+        case .p2p:   return "P2P"
+        case .turn:  return "TURN"
+        case .relay: return "Relay"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .auto:
+            return "Sceglie automaticamente la rotta migliore (P2P preferito, relay fallback)."
+        case .p2p:
+            return "Connessione diretta peer-to-peer. Entrambi gli endpoint devono essere raggiungibili."
+        case .turn:
+            return "Instrada via TURN relay. Aumenta la latenza ma migliora il NAT traversal."
+        case .relay:
+            return "Forza il relay via server BCrypto. Nasconde gli IP a costo di latenza maggiore."
         }
     }
 }
 
 // MARK: - Screen
 
+/// Transport settings sub-screen. W31 design-token refactor.
+/// Replaces stock `Form` with the new design vocabulary.
 struct TransportSettingsScreen: View {
     @StateObject private var container: TransportSettingsContainer
+
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
+    @Environment(\.qaudionType) private var type
 
     init(state: AppState) {
         _container = StateObject(wrappedValue: TransportSettingsContainer(state: state))
     }
 
     var body: some View {
-        Form {
-            // MARK: Connection Mode
-            Section("Connection Mode") {
-                Picker("Mode", selection: $container.draftMode) {
-                    ForEach(TransportSettingsViewModel.Mode.allCases, id: \.self) { mode in
-                        Text(mode.rawValue.capitalized).tag(mode)
+        ZStack {
+            scheme.background.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingsSectionHeader("MODALITÀ DI CONNESSIONE")
+                    modePicker
+                    Text(container.draftMode.explanation)
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 6)
+
+                    SettingsSectionHeader("ANONIMIZZAZIONE")
+                    SettingsToggleRow(
+                        title: "Instrada via Tor",
+                        subtitle: "Tutto il segnale e media via rete Tor",
+                        isOn: $container.draftTorEnabled
+                    )
+                    if container.draftTorEnabled {
+                        Text("Tutto il traffico di segnalazione e media è instradato via Tor. Aspettati latenza maggiore.")
+                            .qaudionStyle(type.labelSmall)
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .padding(.horizontal, 14).padding(.top, 6)
                     }
-                }
-                .pickerStyle(.segmented)
 
-                switch container.draftMode {
-                case .auto:
-                    Text("Automatically choose the best path (P2P preferred, relay fallback).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                case .p2p:
-                    Text("Direct peer-to-peer connection. Both endpoints must be reachable.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                case .turn:
-                    Text("Route media through a TURN relay. Increases latency but improves NAT traversal.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                case .relay:
-                    Text("Force relay through BCrypto server. Hides peer IPs at the cost of higher latency.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+                    SettingsSectionHeader("SERVER TURN")
+                    turnInputRow
+                    Text("Lascia vuoto per usare il pool di relay predefinito.")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .padding(.horizontal, 14).padding(.top, 6)
 
-            // MARK: Anonymisation
-            Section("Anonymisation") {
-                Toggle("Route via Tor", isOn: $container.draftTorEnabled)
-                if container.draftTorEnabled {
-                    Text("All signalling and media traffic is routed through the Tor network. Expect higher latency.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            // MARK: TURN Server
-            Section("TURN Server") {
-                TextField("turn:hostname:3478", text: $container.draftPreferredUrlString)
-                    .textContentType(.URL)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                Text("Leave empty to use the default relay pool.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // MARK: Diagnostics
-            Section("Diagnostics") {
-                // Server status badge
-                LabeledContent("Server Status") {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(container.diagnostics.serverStatus.color)
-                            .frame(width: 8, height: 8)
-                        Text(container.diagnostics.serverStatus.label)
-                            .font(.body.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                // TURN RTT (from last fetch)
-                LabeledContent("Last TURN RTT") {
-                    Text("\(container.diagnostics.lastTurnRoundTripMs) ms")
-                        .font(.body.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-
-                // Stored TURN RTT from SettingsStore
-                LabeledContent("Stored TURN RTT") {
-                    Text("\(container.viewModel.lastTurnRoundTripMs) ms")
-                        .font(.body.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-
-                // Last checked timestamp
-                if let lastChecked = container.diagnostics.lastChecked {
-                    LabeledContent("Last Checked") {
-                        Text(lastChecked, style: .time)
-                            .font(.body.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                // Error message (if any)
-                if let errMsg = container.diagnostics.errorMessage {
-                    Text(errMsg)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-
-                // Run check button
-                Button {
-                    Task { await container.runDiagnostics() }
-                } label: {
-                    HStack {
-                        if container.diagnostics.isChecking {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                                .padding(.trailing, 4)
+                    SettingsSectionHeader("DIAGNOSTICA")
+                    VStack(spacing: 8) {
+                        statusRow(label: "Stato server",
+                                  value: container.diagnostics.serverStatus.label,
+                                  tone: container.diagnostics.serverStatus.tone(extras: extras))
+                        kvRow(label: "Ultimo TURN RTT",
+                              value: "\(container.diagnostics.lastTurnRoundTripMs) ms",
+                              mono: true)
+                        kvRow(label: "TURN RTT salvato",
+                              value: "\(container.viewModel.lastTurnRoundTripMs) ms",
+                              mono: true)
+                        if let lastChecked = container.diagnostics.lastChecked {
+                            kvRow(label: "Ultimo controllo",
+                                  value: lastChecked.formatted(date: .omitted, time: .standard),
+                                  mono: true)
                         }
-                        Text(container.diagnostics.isChecking ? "Checking…" : "Run Check")
+                        if let errMsg = container.diagnostics.errorMessage {
+                            errorBanner(errMsg)
+                        }
+                        runCheckButton
                     }
-                }
-                .disabled(container.diagnostics.isChecking)
-            }
 
-            // MARK: Save
-            Section {
-                Button("Save") {
-                    container.save()
+                    Spacer().frame(height: 16)
+                    saveButton
+                    Spacer().frame(height: 24)
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .fontWeight(.semibold)
+                .padding(.horizontal, 16)
             }
         }
         .navigationTitle("Trasporto")
+    }
+
+    // MARK: - Mode picker
+
+    private var modePicker: some View {
+        Picker("", selection: $container.draftMode) {
+            ForEach(TransportSettingsViewModel.Mode.allCases, id: \.self) { mode in
+                Text(mode.localizedLabel).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+
+    // MARK: - TURN URL input
+
+    private var turnInputRow: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "antenna.radiowaves.left.and.right")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .frame(width: 22)
+
+            TextField("", text: $container.draftPreferredUrlString,
+                      prompt: Text("turn:hostname:3478")
+                          .foregroundColor(scheme.onSurfaceVariant))
+                .qaudionStyle(type.bodyMedium)
+                .foregroundColor(scheme.onSurface)
+                .tint(scheme.primary)
+                .textContentType(.URL)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+
+    // MARK: - Diagnostic rows
+
+    private func statusRow(label: String, value: String, tone: Color) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            HStack(spacing: 6) {
+                Circle().fill(tone).frame(width: 8, height: 8)
+                Text(value)
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(tone)
+                    .modifier(MonoIfNeededT(mono: true))
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+
+    private func kvRow(label: String, value: String, mono: Bool) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Text(value)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .modifier(MonoIfNeededT(mono: mono))
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+    }
+
+    private func errorBanner(_ msg: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(extras.riskHigh)
+                .padding(.top, 1)
+            Text(msg)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(extras.riskHigh)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(extras.riskHigh.opacity(0.12))
+        )
+    }
+
+    // MARK: - Buttons
+
+    private var runCheckButton: some View {
+        Button {
+            Task { await container.runDiagnostics() }
+        } label: {
+            HStack {
+                if container.diagnostics.isChecking {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .scaleEffect(0.8)
+                        .tint(scheme.onSurface)
+                }
+                Text(container.diagnostics.isChecking ? "Verifica in corso…" : "Esegui controllo")
+                    .qaudionStyle(type.labelLarge)
+                    .foregroundStyle(scheme.onSurface)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(scheme.surfaceVariant.opacity(0.4))
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(container.diagnostics.isChecking)
+    }
+
+    private var saveButton: some View {
+        Button { container.save() } label: {
+            Text("Salva")
+                .qaudionStyle(type.labelLarge)
+                .tracking(0.8)
+                .foregroundStyle(scheme.onPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 24)
+                        .fill(scheme.primary)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct MonoIfNeededT: ViewModifier {
+    let mono: Bool
+    func body(content: Content) -> some View {
+        if mono {
+            content.font(.system(.caption, design: .monospaced))
+        } else {
+            content
+        }
     }
 }
