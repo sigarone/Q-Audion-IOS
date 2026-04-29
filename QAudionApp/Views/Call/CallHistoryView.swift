@@ -151,7 +151,17 @@ struct CallHistoryView: View {
             })
         }
         .sheet(isPresented: $showingGroupComposer) {
-            GroupComposerPlaceholderSheet()
+            // W45: sostituito GroupComposerPlaceholderSheet (stale) con il
+            // vero CreateGroupScreen. W40 è già live in v1.0.86+, quindi
+            // il placeholder "in arrivo" era obsoleto. onGroupCreated
+            // chiude il sheet e mostra snackbar; in futuro, una volta
+            // wired startGroupCall, può anche aprire direttamente la
+            // chiamata di gruppo invece della chat.
+            NavigationStack {
+                CreateGroupScreen(onGroupCreated: { _ in
+                    showingGroupComposer = false
+                })
+            }
         }
     }
 
@@ -353,8 +363,11 @@ private struct MonoCaption: ViewModifier {
     }
 }
 
-// MARK: - DialPad sheet (placeholder)
+// MARK: - DialPad sheet
 
+/// Sheet "Componi numero" — input libero ID/numero + bottone "Chiama".
+/// Functional surface (non placeholder): l'input flusce direttamente in
+/// `appState.startCall(contactId:video:)` via il callback `onCall`.
 private struct DialPadSheet: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -426,33 +439,9 @@ private struct DialPadSheet: View {
 
 // MARK: - Group composer placeholder
 
-private struct GroupComposerPlaceholderSheet: View {
-    @Environment(\.qaudionScheme) private var scheme
-    @Environment(\.qaudionType) private var type
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "person.2.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(scheme.primary)
-            Text("Nuova chiamata di gruppo")
-                .qaudionStyle(type.titleLarge)
-                .foregroundStyle(scheme.onSurface)
-            Text("La creazione di chiamate di gruppo arriverà nella prossima ondata (W40 GroupChat trio).")
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-            Button("Chiudi") { dismiss() }
-                .padding(.top, 8)
-            Spacer()
-        }
-        .padding(.top, 48)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(scheme.background)
-    }
-}
+// W45: GroupComposerPlaceholderSheet removed. The "Nuovo gruppo" sheet
+// now routes to the real CreateGroupScreen (W40), which is already
+// live since v1.0.86 — the placeholder explanatory copy was stale.
 
 #Preview {
     CallHistoryView()
