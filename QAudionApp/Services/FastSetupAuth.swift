@@ -18,18 +18,24 @@ import QAudionEngine
 /// pinned host, so we keep using the canonical `voip.bcrypto.com` for the
 /// actual network calls (avoids cert-pinning surprises).
 @MainActor
-public final class FastSetupAuth {
+final class FastSetupAuth {
+
+    // App-layer only consumer. Cannot be `public` because the dependency
+    // `AppState` is `internal` (no `public` modifier) — Swift refuses to
+    // expose a `public init` whose parameter type isn't itself public.
+    // The class is used inside the same module (`QAudionApp` target), so
+    // `internal` (the default) is the correct visibility.
 
     private let appState: AppState
 
-    public init(appState: AppState) {
+    init(appState: AppState) {
         self.appState = appState
     }
 
     /// Perform fast-setup login with the freshly-scanned QR payload.
     /// Returns nil on success, an error message on failure.
     @discardableResult
-    public func run(_ payload: FastSetupPayload) async -> String? {
+    func run(_ payload: FastSetupPayload) async -> String? {
         // Pin the server URL on AppState so every subsequent backend
         // call uses the canonical host. We do this even though the
         // value is the same as the default — keeps the contract
@@ -70,7 +76,12 @@ public final class FastSetupAuth {
                 )
             } catch {
                 // Mirror Android's `runCatching { ... }` swallow.
-                // Profile push failure does NOT block onboarding.
+                // Profile push failure does NOT block onboarding —
+                // local login is already complete. We log the error
+                // (OpenRouter review flagged the silent swallow); the
+                // user can re-trigger the display-name push later via
+                // Settings → Account.
+                print("[FastSetupAuth] profile push failed (non-fatal): \(error)")
             }
         }
 
