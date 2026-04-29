@@ -245,6 +245,19 @@ struct SettingsScreen: View {
                             subtitle: "Versione · protocollo · OSS")
             }
             .buttonStyle(.plain)
+
+            // W42: Aggiornamento firmato OTA. Stub UI con mock catalog —
+            // l'engine wirerà il vero fetch + Ed25519 verify quando lands.
+            // 1:1 visual port di Android `OtaUpdateScreen.kt`.
+            NavigationLink {
+                OtaUpdateScreen()
+            } label: {
+                SettingsRow(icon: "arrow.triangle.2.circlepath.icloud",
+                            iconColor: extras.pqcAccent,
+                            title: "Aggiornamento OTA",
+                            subtitle: "Catalogo firmato · Ed25519 · canali")
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }
