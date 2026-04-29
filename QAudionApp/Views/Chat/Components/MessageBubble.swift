@@ -71,20 +71,24 @@ struct MessageBubble<Body: View>: View {
     let delivery: MessageDelivery?
     let replyQuote: MessageReplyQuote?
     let reactions: [MessageReaction]
-    let body: () -> Body
+    /// Stored as `content` (NOT `body`) to avoid colliding with the
+    /// `View` protocol's required `var body: some View`. Both members
+    /// would otherwise share the same name in the same type, which the
+    /// compiler rejects. Trailing-closure callsites are unchanged.
+    let content: () -> Body
 
     init(variant: MessageBubbleVariant,
          timeLabel: String? = nil,
          delivery: MessageDelivery? = nil,
          replyQuote: MessageReplyQuote? = nil,
          reactions: [MessageReaction] = [],
-         @ViewBuilder body: @escaping () -> Body) {
+         @ViewBuilder content: @escaping () -> Body) {
         self.variant = variant
         self.timeLabel = timeLabel
         self.delivery = delivery
         self.replyQuote = replyQuote
         self.reactions = reactions
-        self.body = body
+        self.content = content
     }
 
     var body: some View {
@@ -108,7 +112,7 @@ struct MessageBubble<Body: View>: View {
                 if let quote = replyQuote {
                     replyQuoteView(quote)
                 }
-                body()
+                content()
                 if let timeLabel {
                     footer(timeLabel: timeLabel)
                 }
@@ -250,7 +254,7 @@ struct MessageBubble<Body: View>: View {
         // delivery and reactions — the Android variant doesn't render
         // them either.
         HStack {
-            body()
+            content()
                 .font(type.labelSmall.font)
                 .foregroundStyle(scheme.onSurfaceVariant)
         }
