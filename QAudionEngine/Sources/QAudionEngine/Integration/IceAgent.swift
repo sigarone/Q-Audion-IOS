@@ -179,9 +179,9 @@ public final class IceAgent: @unchecked Sendable {
 
             // 2-second timeout per candidate
             DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
-                var didResolve = false
-                probeLock.withLock {
-                    if !resolvedBox.value { resolvedBox.value = true; didResolve = true }
+                let didResolve: Bool = probeLock.withLock {
+                    if !resolvedBox.value { resolvedBox.value = true; return true }
+                    return false
                 }
                 guard didResolve else { return }
                 connection.cancel()
@@ -194,10 +194,10 @@ public final class IceAgent: @unchecked Sendable {
                     // Send a 4-byte probe ("QICE")
                     let probe = Data("QICE".utf8)
                     connection.send(content: probe, completion: .contentProcessed { error in
-                        var alreadyResolved = false
-                        probeLock.withLock {
-                            alreadyResolved = resolvedBox.value
-                            if !alreadyResolved && error != nil { resolvedBox.value = true }
+                        let alreadyResolved: Bool = probeLock.withLock {
+                            let was = resolvedBox.value
+                            if !was && error != nil { resolvedBox.value = true }
+                            return was
                         }
                         guard !alreadyResolved else { return }
                         if error != nil {
@@ -207,12 +207,12 @@ public final class IceAgent: @unchecked Sendable {
                         }
                         // Wait for any response
                         connection.receiveMessage { content, _, _, _ in
-                            var didResolve = false
-                            probeLock.withLock {
+                            let didResolve: Bool = probeLock.withLock {
                                 if !resolvedBox.value {
                                     resolvedBox.value = true
-                                    didResolve = true
+                                    return true
                                 }
+                                return false
                             }
                             guard didResolve else { return }
                             connection.cancel()
@@ -220,12 +220,12 @@ public final class IceAgent: @unchecked Sendable {
                         }
                     })
                 case .failed:
-                    var didResolve = false
-                    probeLock.withLock {
+                    let didResolve: Bool = probeLock.withLock {
                         if !resolvedBox.value {
                             resolvedBox.value = true
-                            didResolve = true
+                            return true
                         }
+                        return false
                     }
                     guard didResolve else { return }
                     connection.cancel()
