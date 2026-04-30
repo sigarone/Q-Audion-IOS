@@ -102,18 +102,35 @@ struct HomeView: View {
     /// `NavigationSplitView` (iOS 16+, già nel deployment target).
     private var splitLayout: some View {
         NavigationSplitView(columnVisibility: $splitVisibility) {
-            // NB: `List(data, selection:)` initializer NON è disponibile
-            // sul plain iOS (è macOS / iPadOS specific via @available);
-            // il pattern compatibile è `List(selection:) { ForEach(...) }`
-            // con `.tag()` sulle row così la selection lega all'enum case.
-            List(selection: $selectedTab) {
+            // NB: BOTH `List(data, selection:)` AND `List(selection:, content:)`
+            // sono iOS-unavailable (sono macOS/iPadOS specific). Pattern
+            // compatibile su plain iOS: `List { ForEach { Button } }` con
+            // selection manuale via `selectedTab = tab` + highlight via
+            // `.background(...)` condizionale.
+            List {
                 ForEach(Tab.allCases) { tab in
-                    Label(tab.label, systemImage: tab.systemImage)
-                        .tag(tab)
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        HStack(spacing: 12) {
+                            Label(tab.label, systemImage: tab.systemImage)
+                                .foregroundStyle(selectedTab == tab
+                                                 ? scheme.primary
+                                                 : scheme.onSurface)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        selectedTab == tab
+                            ? scheme.primary.opacity(0.15)
+                            : Color.clear
+                    )
                 }
             }
             .navigationTitle("Q-Audion")
-            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } detail: {
             // Il detail renderizza la stessa view della tab attiva.
             // SwiftUI ricostruisce la view ad ogni cambio di selectedTab,
