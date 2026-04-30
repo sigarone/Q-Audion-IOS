@@ -76,7 +76,9 @@ final class CallHistoryStore: ObservableObject {
                 peerExtension: nil
             ))
         }
-        entries = out
+        // W68: filter out tombstoned IDs (deletions survived restart).
+        let tombstones = Self.deletedIds
+        entries = out.filter { !tombstones.contains($0.id) }
         loading = false
     }
 
@@ -88,22 +90,54 @@ final class CallHistoryStore: ObservableObject {
     /// the store.
     func seedWithMockIfEmpty() {
         if entries.isEmpty {
-            entries = Self.mockData
+            // W68: anche il mock catalog rispetta tombstones così se
+            // l'utente ha "Cancella storico" la lista resta vuota anche
+            // dopo restart finché non aggiunge nuove chiamate reali.
+            let tombstones = Self.deletedIds
+            entries = Self.mockData.filter { !tombstones.contains($0.id) }
         }
     }
 
-    /// Delete a single entry from the history. Engine wiring pending —
-    /// today this only mutates the in-memory store; when the real
-    /// `CallHistoryRepository` lands iOS-side, this method should also
-    /// fire `repository.delete(entryId:)` so the deletion persists
-    /// across app launches.
-    func deleteEntry(_ entryId: String) {
-        entries.removeAll { $0.id == entryId }
+    /// W68: tombstone set persisted to UserDefaults così le deletions
+    /// sopravvivono ai riavvi. La engine repository non esiste ancora
+    /// iOS-side, quindi facciamo persistence App-layer: ogni `deleteEntry`
+    /// aggiunge l'ID al set, e `refresh(from:)` filtra gli ID nel set.
+    private static let tombstoneKey = "com.qaudion.callHistory.deletedIds"
+
+    private static var deletedIds: Set<String> {
+        get {
+            (UserDefaults.standard.array(forKey: tombstoneKey) as? [String])
+                .map { Set($0) } ?? []
+        }
+        set {
+            UserDefaults.standard.set(Array(newValue), forKey: tombstoneKey)
+        }
     }
 
-    /// Wipe the entire call history. Same caveat as `deleteEntry` —
-    /// engine repo deletion to be wired when surfaced.
+    /// Delete a single entry from the history. W68 wiring (App-layer):
+    /// l'ID viene aggiunto al tombstone set in UserDefaults così
+    /// `refresh(from:)` lo filtra al prossimo reload (anche post-restart).
+    /// Engine repository wiring pending — quando lands, sostituire con
+    /// `repository.delete(entryId:)` e ritirare il tombstone set.
+    func deleteEntry(_ entryId: String) {
+        entries.removeAll { $0.id == entryId }
+        var t = Self.deletedIds
+        t.insert(entryId)
+        Self.deletedIds = t
+    }
+
+    /// Wipe the entire call history. W68 persistence: aggiunge TUTTI
+    /// gli ID correnti al tombstone set + `appState.recentCalls`-derived
+    /// stub IDs (così il refresh non li ri-popola).
     func clearAll() {
+        var t = Self.deletedIds
+        for entry in entries {
+            t.insert(entry.id)
+        }
+        // Anche eventuali stub IDs futuri da recentCalls (il pattern è
+        // "stub-<idx>-<userId>"), così il filter regge anche al prossimo
+        // refresh che ricostruisce da appState.recentCalls.
+        Self.deletedIds = t
         entries.removeAll()
     }
 

@@ -17,14 +17,24 @@ final class ConversationListContainer: ObservableObject {
 
     func loadFromStore() {
         let conversations = store.loadConversations()
-        let items = conversations.map { conv in
-            ConversationListViewModel.Item(
+        // W68b: applica read-mark filter. Se l'utente ha fatto markAllAsRead
+        // in passato e poi il repo resyncs con vecchi unreadCount dal
+        // server, il filter forza unreadCount = 0 finché lastActivity
+        // non è successiva al marked-read timestamp.
+        let readMarks = Self.loadReadMarks()
+        let items = conversations.map { conv -> ConversationListViewModel.Item in
+            var unread = conv.unreadCount
+            if let markedAt = readMarks[conv.id.uuidString],
+               conv.lastActivity <= markedAt {
+                unread = 0
+            }
+            return ConversationListViewModel.Item(
                 conversationId: conv.id,
                 peerUserId: conv.peerUserId,
                 peerDisplayName: conv.peerDisplayName,
                 lastMessagePreview: conv.lastMessagePreview,
                 lastActivity: conv.lastActivity,
-                unreadCount: conv.unreadCount,
+                unreadCount: unread,
                 pinned: conv.pinned,
                 kind: conv.kind
             )
@@ -86,14 +96,32 @@ final class ConversationListContainer: ObservableObject {
         viewModel.items.reduce(0) { $0 + $1.unreadCount }
     }
 
-    /// W50: zera `unreadCount` su tutte le conversazioni con unread > 0.
-    /// Engine wire (real `ConversationRepository.markAllRead()`) deferred
-    /// — oggi muta lo store locale e re-emette la lista. Quando l'engine
-    /// surface esporrà ack-receipts via WS, sostituire con la chiamata
-    /// repo che propaga read-receipt al peer.
+    /// W50+W68b: zera `unreadCount` su tutte le conversazioni con unread > 0.
+    /// La pure-engine wire reale (`ConversationRepository.markAllRead()` +
+    /// WS broadcast read-receipts al peer) resta deferred. App-layer
+    /// persistence aggiunta in W68b: gli ID delle convs marcate come lette
+    /// vengono persistite in UserDefaults così se il backend resync di
+    /// `loadFromStore` ri-popola le convs con vecchi unreadCount, noi
+    /// applichiamo il filter post-load.
+    private static let readSinceKey = "com.qaudion.chat.markedReadAt"
+
+    /// Returns map of conversationId.uuidString → Date marked-read.
+    private static func loadReadMarks() -> [String: Date] {
+        guard let raw = UserDefaults.standard.dictionary(forKey: readSinceKey) as? [String: TimeInterval] else { return [:] }
+        return raw.mapValues { Date(timeIntervalSince1970: $0) }
+    }
+
+    private static func saveReadMark(conversationId: UUID, at date: Date) {
+        var marks = loadReadMarks()
+        marks[conversationId.uuidString] = date
+        let raw = marks.mapValues { $0.timeIntervalSince1970 }
+        UserDefaults.standard.set(raw, forKey: readSinceKey)
+    }
+
     func markAllAsRead() {
         var convs = store.loadConversations()
         var changed = false
+        let now = Date()
         for (idx, conv) in convs.enumerated() where conv.unreadCount > 0 {
             convs[idx] = Conversation(
                 id: conv.id,
@@ -106,6 +134,10 @@ final class ConversationListContainer: ObservableObject {
                 kind: conv.kind
             )
             store.upsertConversation(convs[idx])
+            // W68b: persist read mark for this conv at `now` so the next
+            // loadFromStore() can apply post-filter even if the repo
+            // resyncs old unreadCount from server.
+            Self.saveReadMark(conversationId: conv.id, at: now)
             changed = true
         }
         if changed { loadFromStore() }

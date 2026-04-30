@@ -35,7 +35,15 @@ final class DevResetContainer: ObservableObject {
         // Recent calls history (legacy mock fallback)
         "com.qaudion.calls.recent",
         // Voice enrollment skip flag
-        "com.qaudion.voice.enrollmentSkipped"
+        "com.qaudion.voice.enrollmentSkipped",
+        // W58 Contacts sort mode
+        "com.qaudion.contacts.sortMode",
+        // W68a CallHistory deletion tombstones
+        "com.qaudion.callHistory.deletedIds",
+        // W68b ChatList read-mark per conversation
+        "com.qaudion.chat.markedReadAt",
+        // W68c Pending group-invite replay queue
+        "com.qaudion.groupInvite.pending"
     ]
 
     /// Auth-related keys that we DO NOT touch in this reset. Listed

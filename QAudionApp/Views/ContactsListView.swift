@@ -79,9 +79,17 @@ final class ContactsListContainer: ObservableObject {
             userId = dl.userId
             displayName = dl.userId
             pubkey = dl.pubkey
-        case .fastSetup, .groupInvite, .invalid, .unknown:
-            // W53: groupInvite QR è gestito dal flusso group-join,
-            // NON dalla rubrica contatti. fastSetup è onboarding-time.
+        case .groupInvite(let invite):
+            // W68c: invece di no-op, persistiamo la pending invite in
+            // UserDefaults via `PendingGroupInviteStore`. Quando il
+            // backend esporrà `POST /groups/:id/join`, l'app può
+            // replay-are tutte le pending. Per ora il side-effect
+            // visibile per l'utente è l'incremento del counter
+            // (visibile in Diagnostica W48 quando wirato).
+            PendingGroupInviteStore.append(from: invite)
+            return false  // non aggiunto come contatto — è un gruppo
+        case .fastSetup, .invalid, .unknown:
+            // fastSetup è onboarding-time, gestito da OnboardingFlow.
             return false
         }
         let contact = ContactsStore.StoredContact(
