@@ -49,6 +49,17 @@ final class AppState: ObservableObject {
     /// so SwiftUI can `@EnvironmentObject` it without a guard.
     @Published var presenceService: PresenceService = PresenceService()
 
+    /// W74: long-lived backend provider whose WebSocket stays open as
+    /// long as the user is authenticated. Server marks the user as
+    /// `online` for as long as this WS is connected (see
+    /// `bcrypto-server/internal/signaling/hub.go addClient`). Without
+    /// this the iOS app only opens ad-hoc WSs during calls / message
+    /// sends and the server reports `online_users: 0` for the rest of
+    /// the time, which broke the presence dot end-to-end. Recreated on
+    /// logout so the next session starts fresh.
+    @Published private(set) var wsConnectionState: ConnectionState = .disconnected
+    private var liveProvider: BCryptoBackendProvider?
+
     // MARK: - Call state
     @Published var isInCall: Bool = false
     @Published var isVideoCall: Bool = false
@@ -259,6 +270,10 @@ final class AppState: ObservableObject {
                     self.currentUserId = profile.userId
                     self.isAuthenticated = true
                     self.replayPendingTrackB()
+                    // W74: open the long-lived WS so the server flips
+                    // the user to `online`. Presence binding piggybacks
+                    // on the same provider once the socket is up.
+                    self.connectPersistentSocket()
                     self.bindPresenceAfterAuth()
                 } catch {
                     authService.clearToken()
@@ -277,6 +292,8 @@ final class AppState: ObservableObject {
             isAuthenticated = true
             errorMessage = nil
             replayPendingTrackB()
+            // W74: open the long-lived WS so the server marks us online.
+            connectPersistentSocket()
             bindPresenceAfterAuth()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
@@ -300,6 +317,8 @@ final class AppState: ObservableObject {
             isAuthenticated = true
             errorMessage = nil
             replayPendingTrackB()
+            // W74: open the long-lived WS so the server marks us online.
+            connectPersistentSocket()
             bindPresenceAfterAuth()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
@@ -314,6 +333,52 @@ final class AppState: ObservableObject {
         Task { _ = await sync.replayPendingGroupInvites() }
     }
 
+    /// W74: open and KEEP a persistent WebSocket connection so the
+    /// server keeps the user marked as `online`. Idempotent — repeated
+    /// calls with a live connection are a no-op. After the WS settles
+    /// (`.connected` or `.authenticated`), `bindPresenceAfterAuth` is
+    /// re-run so the presence subscriptions land on the live transport.
+    ///
+    /// Server side: `Hub.addClient` flips the user to "online" the
+    /// moment the WS handshake completes; `Hub.removeClient` flips
+    /// back to "offline" on disconnect. So the lifetime of `wsClient`
+    /// IS the lifetime of the user's online status.
+    private func connectPersistentSocket() {
+        guard let token = authService.loadToken(), !token.isEmpty else { return }
+        // Reuse the live provider when its WS is already connecting /
+        // connected. Recreate when previously torn down or token rotated.
+        if let existing = liveProvider {
+            let s = existing.persistentConnection.state
+            if s == .connecting || s == .connected || s == .authenticated {
+                return
+            }
+        }
+        let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
+        let provider = BCryptoBackendProvider(config: config)
+        self.liveProvider = provider
+        // Subscribe state listener so the UI can show "Connecting → Online".
+        provider.persistentConnection.addStateListener { [weak self] state in
+            DispatchQueue.main.async {
+                self?.wsConnectionState = state
+                if state == .connected || state == .authenticated {
+                    // (re-)bind presence now that the transport is live —
+                    // the previous provider may have been torn down on
+                    // app suspend / token rotate, leaving subscribers
+                    // stale.
+                    self?.bindPresenceAfterAuth()
+                }
+            }
+        }
+        Task {
+            do {
+                try await provider.initialize()
+                print("[AppState] persistent WS opened (online presence active)")
+            } catch {
+                print("[AppState] persistent WS open failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// W72: bind the presence service to the live WS transport and
     /// subscribe the union of contacts + conversation peers so the UI
     /// can render online/offline dots reactively. Idempotent — calling
@@ -321,9 +386,18 @@ final class AppState: ObservableObject {
     /// to the same provider). Best-effort: failures are logged but don't
     /// block the auth flow.
     private func bindPresenceAfterAuth() {
-        guard let token = authService.loadToken(), !token.isEmpty else { return }
-        let backendConfig = BackendConfig(serverUrl: serverUrl, accessToken: token)
-        let provider = BCryptoBackendProvider(config: backendConfig)
+        // W74: prefer the long-lived provider when present so the
+        // presence subscriptions ride the SAME WS that keeps the user
+        // marked online. Falls back to a fresh provider only when the
+        // persistent socket failed to open.
+        let provider: BCryptoBackendProvider
+        if let live = liveProvider {
+            provider = live
+        } else {
+            guard let token = authService.loadToken(), !token.isEmpty else { return }
+            let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
+            provider = BCryptoBackendProvider(config: config)
+        }
         presenceService.attach(provider: provider)
         // Initial subscription set: known contact userIds + recent calls.
         // Views that load additional userIds (chat list with full
@@ -342,6 +416,12 @@ final class AppState: ObservableObject {
         engine?.destroySession()
         engine?.release()
         engine = nil
+        // W74: tear down the persistent WS so the server flips us back
+        // to `offline` immediately. Otherwise the connection lingers
+        // until the next service restart and "online" flickers wrong.
+        liveProvider?.persistentConnection.disconnect()
+        liveProvider = nil
+        wsConnectionState = .disconnected
         // W72: drop presence subscriptions + cached statuses so the next
         // login starts with a clean slate.
         presenceService.reset()
