@@ -93,6 +93,43 @@ final class ChatContainer: ObservableObject {
     /// Views pass this in via `.environmentObject` once mounted.
     func attach(appState: AppState) {
         self.sendService = ChatMessageSendService(appState: appState)
+        // W76: listen for chat envelope events (msg_receive, typing,
+        // delivery / read receipts) relayed from AppState's WS
+        // dispatcher. Refresh the local view-model when something
+        // landed for THIS conversation's peer.
+        let center = NotificationCenter.default
+        let peerId = self.peerUserId
+        center.addObserver(forName: AppState.chatRefreshNotification,
+                           object: nil, queue: .main) { [weak self] note in
+            guard let self = self else { return }
+            // Refresh always — store changes may have arrived via any
+            // peer (incoming msg_receive may have created a new
+            // conversation row before the user opened the chat).
+            if let info = note.userInfo as? [String: Any],
+               let from = info["peerUserId"] as? String,
+               from != peerId {
+                // Message for a different peer; ignore.
+                return
+            }
+            self.refreshFromStore()
+        }
+        center.addObserver(forName: AppState.chatTypingNotification,
+                           object: nil, queue: .main) { [weak self] note in
+            guard let self = self,
+                  let info = note.userInfo as? [String: Any],
+                  let from = info["senderId"] as? String,
+                  from == peerId,
+                  let isTyping = info["isTyping"] as? Bool else { return }
+            // Patch isPeerTyping into the view-model without rebuilding
+            // the whole list — keeps the chat scroll stable.
+            self.viewModel = ChatViewModel(
+                conversation: self.viewModel.conversation,
+                messages: self.viewModel.messages,
+                composerText: self.composerText,
+                isPeerTyping: isTyping,
+                isPeerOnline: self.viewModel.isPeerOnline
+            )
+        }
     }
 
     func sendMessage() {

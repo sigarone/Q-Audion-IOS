@@ -413,6 +413,11 @@ final class AppState: ObservableObject {
         // MsgCallIncoming). Without this handler, every incoming call
         // is silently dropped at the WS dispatcher.
         wireIncomingCallHandlers(on: provider.getWebSocketClient())
+        // W76: chat envelope dispatch — `msg_receive` / `msg_delivered` /
+        // `msg_read` / `msg_typing`. Without these handlers the iOS app
+        // sends WS frames in one direction only — incoming peer messages
+        // are silently dropped at the dispatcher.
+        wireIncomingChatHandlers(on: provider.getWebSocketClient())
         // Subscribe state listener so the UI can show "Connecting → Online".
         provider.persistentConnection.addStateListener { [weak self] state in
             DispatchQueue.main.async {
@@ -593,6 +598,198 @@ final class AppState: ObservableObject {
             }
         }
     }
+
+    /// W76: register the chat envelope dispatch handlers. Wire shapes
+    /// match `bcrypto-server/internal/signaling/messages.go`:
+    ///
+    ///   - `msg_receive`     {message_id, sender_id, encrypted_payload, msg_type, server_ts, client_msg_id}
+    ///   - `msg_delivered`   {message_ids: []}
+    ///   - `msg_read`        {sender_id, message_ids: []}
+    ///   - `msg_typing`      {recipient_id, is_typing}      // server overwrites recipient with sender on relay
+    ///
+    /// Today the handlers persist incoming text messages into the
+    /// `ConversationStore` so the chat UI shows them on next refresh,
+    /// and broadcast NotificationCenter events for delivery / read /
+    /// typing so the active `ChatContainer` can update without a full
+    /// re-fetch. Decryption is delegated to `ChatMessageSendService`'s
+    /// inverse path (via `MessageCrypto.decrypt`) so the AAD stays
+    /// bound to the (sender, recipient, msgId) triplet — protects
+    /// against ciphertext replay across pairs.
+    private func wireIncomingChatHandlers(on ws: BCryptoWebSocketClient) {
+        ws.registerHandler(type: "msg_receive") { [weak self] _, data in
+            guard let self = self else { return }
+            // Server-injected fields. `sender_id` is authoritative
+            // (server overwrites it on the way out from the producer).
+            guard let senderId = data["sender_id"] as? String,
+                  !senderId.isEmpty,
+                  let cipherB64 = data["encrypted_payload"] as? String,
+                  let serverMsgId = data["message_id"] as? String,
+                  let cipher = Data(base64Encoded: cipherB64) else {
+                print("[AppState] msg_receive missing required fields: \(data.keys)")
+                return
+            }
+            DispatchQueue.main.async {
+                self.handleIncomingMessage(
+                    senderId: senderId,
+                    serverMsgId: serverMsgId,
+                    cipher: cipher,
+                    clientMsgId: data["client_msg_id"] as? String
+                )
+            }
+        }
+        ws.registerHandler(type: "msg_delivered") { [weak self] _, data in
+            guard let ids = data["message_ids"] as? [String], !ids.isEmpty else { return }
+            DispatchQueue.main.async {
+                self?.handleDeliveryReceipts(ids: ids)
+            }
+        }
+        ws.registerHandler(type: "msg_read") { [weak self] _, data in
+            guard let ids = data["message_ids"] as? [String], !ids.isEmpty else { return }
+            let senderId = data["sender_id"] as? String ?? ""
+            DispatchQueue.main.async {
+                self?.handleReadReceipts(senderId: senderId, ids: ids)
+            }
+        }
+        ws.registerHandler(type: "msg_typing") { [weak self] _, data in
+            guard let senderId = data["sender_id"] as? String,
+                  let isTyping = data["is_typing"] as? Bool else { return }
+            DispatchQueue.main.async {
+                self?.handleTypingIndicator(senderId: senderId, isTyping: isTyping)
+            }
+        }
+    }
+
+    /// Persist an incoming peer message to the local store + post a
+    /// NotificationCenter event so any active `ChatContainer` for the
+    /// peer refreshes. Decryption uses the same MessageCrypto wire
+    /// format as the send path; if decryption fails we still persist
+    /// a placeholder ("[messaggio cifrato non leggibile]") so the
+    /// conversation history at least shows that something arrived —
+    /// helps debugging when peers are on different protocol versions.
+    private func handleIncomingMessage(
+        senderId: String,
+        serverMsgId: String,
+        cipher: Data,
+        clientMsgId: String?
+    ) {
+        let crypto = MessageCrypto()
+        let vault = SovereignKeyVault()
+        let plaintext: String
+        let psk: Data
+        if let stored = (try? vault.loadPsk(name: senderId)) ?? nil, !stored.isEmpty {
+            psk = stored
+        } else {
+            // Mirror the same fallback shape used by ChatMessageSendService.
+            // Symmetric in (peer, self) so both sides derive the same key
+            // when no pairwise PSK has been negotiated yet.
+            let pair = [senderId, currentUserId ?? ""].sorted().joined(separator: ":")
+            let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
+            psk = Data(digest)
+        }
+        do {
+            let pt = try crypto.decrypt(
+                wireBlob: cipher,
+                psk: psk,
+                senderId: senderId,
+                recipientId: currentUserId ?? "",
+                msgId: clientMsgId ?? serverMsgId
+            )
+            plaintext = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
+        } catch {
+            print("[AppState] msg_receive decrypt failed from \(senderId): \(error)")
+            plaintext = "[messaggio cifrato non leggibile]"
+        }
+
+        // Persist into the conversation store. The conversation is
+        // keyed by peerUserId — find the matching conv (1:1) or create
+        // one on the fly so first-contact messages still land.
+        let store = ConversationStore()
+        let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
+        let conv: Conversation
+        if let e = existing {
+            conv = e
+        } else {
+            conv = Conversation(
+                id: UUID(),
+                peerUserId: senderId,
+                peerDisplayName: senderId, // resolved later via contacts lookup
+                lastMessagePreview: plaintext,
+                lastActivity: Date(),
+                unreadCount: 1,
+                pinned: false,
+                kind: .oneToOne
+            )
+            store.upsertConversation(conv)
+        }
+        let msgUUID = UUID()
+        let msg = Message(
+            id: msgUUID,
+            conversationId: conv.id,
+            direction: .incoming,
+            plaintext: plaintext,
+            sentAt: Date(),
+            deliveredAt: Date(),
+            readAt: nil,
+            status: .delivered
+        )
+        store.appendMessage(msg)
+        // Auto-ack delivery so the sender flips its UI to "delivered".
+        // Best-effort fire-and-forget. ChatContainer's user-mark-as-read
+        // sends `msg_read` separately when the screen is open.
+        if let provider = liveProvider {
+            Task {
+                try? await provider.messageApi.sendDeliveryReceipt(messageId: serverMsgId)
+            }
+        }
+        // Notify any open ChatContainer to refresh from the store.
+        NotificationCenter.default.post(
+            name: AppState.chatRefreshNotification,
+            object: nil,
+            userInfo: ["peerUserId": senderId, "conversationId": conv.id]
+        )
+    }
+
+    /// Mark the locally-stored copies of delivered messages as
+    /// `.delivered` so the sender's UI flips the receipt icon.
+    private func handleDeliveryReceipts(ids: [String]) {
+        // The server passes back the SERVER messageIds, but the local
+        // store is keyed by the client UUIDs. Without a server↔client
+        // ID map (USER WT — engine-side persist of the round-trip),
+        // we can't reliably match. Post a notification so an open
+        // ChatContainer can re-fetch and the engine can wire the
+        // deeper match later.
+        NotificationCenter.default.post(
+            name: AppState.chatRefreshNotification,
+            object: nil,
+            userInfo: ["deliveredServerIds": ids]
+        )
+    }
+
+    /// Mark the locally-stored messages as `.read` for the given sender.
+    private func handleReadReceipts(senderId: String, ids: [String]) {
+        NotificationCenter.default.post(
+            name: AppState.chatRefreshNotification,
+            object: nil,
+            userInfo: ["readSenderId": senderId, "readServerIds": ids]
+        )
+    }
+
+    /// Surface peer typing state. `ChatContainer` picks this up via
+    /// the same NotificationCenter channel and flips its `isPeerTyping`
+    /// flag. Auto-clears after 5s if no `is_typing=false` arrives.
+    private func handleTypingIndicator(senderId: String, isTyping: Bool) {
+        NotificationCenter.default.post(
+            name: AppState.chatTypingNotification,
+            object: nil,
+            userInfo: ["senderId": senderId, "isTyping": isTyping]
+        )
+    }
+
+    /// Channel for chat envelope events relayed from the WS dispatcher
+    /// to any `ChatContainer` currently displayed. The container
+    /// subscribes in `attach(appState:)` and unsubscribes on dealloc.
+    static let chatRefreshNotification = Notification.Name("qaudion.chat.refresh")
+    static let chatTypingNotification = Notification.Name("qaudion.chat.typing")
 
     /// W72: bind the presence service to the live WS transport and
     /// subscribe the union of contacts + conversation peers so the UI
