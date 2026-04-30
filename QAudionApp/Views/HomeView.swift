@@ -4,37 +4,59 @@ import QAudionEngine
 struct HomeView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.qaudionScheme) private var scheme
+    /// W55: switch tra `TabView` (compact, iPhone) e `NavigationSplitView`
+    /// (regular, iPad / iPhone Plus landscape) via size class. Apple
+    /// flagga full-screen-only apps in App Review come "non multitasking
+    /// ready"; questo soddisfa il requisito senza duplicare logica.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedTab: Tab = .chats
     @State private var presentingInCall: Bool = false
+    /// W55: visibility del sidebar su iPad. Default `.automatic` lascia
+    /// SwiftUI decidere; l'utente può collapse/expand col bottone toolbar.
+    @State private var splitVisibility: NavigationSplitViewVisibility = .automatic
 
-    enum Tab: Hashable {
+    enum Tab: Hashable, CaseIterable, Identifiable {
         case chats
         case contacts
         case calls
         case settings
+
+        var id: Self { self }
+
+        var label: String {
+            switch self {
+            case .chats:    return "Chat"
+            case .contacts: return "Contatti"
+            case .calls:    return "Chiamate"
+            case .settings: return "Impostazioni"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .chats:    return "bubble.left.and.bubble.right.fill"
+            case .contacts: return "person.2.fill"
+            case .calls:    return "phone.fill"
+            case .settings: return "gearshape.fill"
+            }
+        }
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            chatsTab
-                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
-                .tag(Tab.chats)
-
-            contactsTab
-                .tabItem { Label("Contatti", systemImage: "person.2.fill") }
-                .tag(Tab.contacts)
-
-            callsTab
-                .tabItem { Label("Chiamate", systemImage: "phone.fill") }
-                .tag(Tab.calls)
-
-            settingsTab
-                .tabItem { Label("Impostazioni", systemImage: "gearshape.fill") }
-                .tag(Tab.settings)
+        Group {
+            if horizontalSizeClass == .regular {
+                // W55: iPad / regular size class — sidebar + detail.
+                splitLayout
+            } else {
+                // iPhone / compact size class — preservato il TabView
+                // pre-W55 per parità completa con la UX iPhone esistente.
+                tabLayout
+            }
         }
         // W32: tint del tab bar (icona + label selezionati) sul primary
         // del design system Q-Audion. La tab non-selezionata mantiene
-        // il default UIKit (grigio iOS) per leggibilità.
+        // il default UIKit (grigio iOS) per leggibilità. Si applica
+        // anche al sidebar selection highlight su iPad.
         .tint(scheme.primary)
         .overlay(alignment: .top) {
             if appState.isInCall && !presentingInCall {
@@ -51,6 +73,57 @@ struct HomeView: View {
                 presentingInCall = false
             }
         }
+    }
+
+    // MARK: - W55 layouts
+
+    private var tabLayout: some View {
+        TabView(selection: $selectedTab) {
+            chatsTab
+                .tabItem { Label(Tab.chats.label, systemImage: Tab.chats.systemImage) }
+                .tag(Tab.chats)
+
+            contactsTab
+                .tabItem { Label(Tab.contacts.label, systemImage: Tab.contacts.systemImage) }
+                .tag(Tab.contacts)
+
+            callsTab
+                .tabItem { Label(Tab.calls.label, systemImage: Tab.calls.systemImage) }
+                .tag(Tab.calls)
+
+            settingsTab
+                .tabItem { Label(Tab.settings.label, systemImage: Tab.settings.systemImage) }
+                .tag(Tab.settings)
+        }
+    }
+
+    /// iPad / regular layout — sidebar list con la stessa enum `Tab` del
+    /// TabView, detail panel che renderizza la stessa sub-view. Usa
+    /// `NavigationSplitView` (iOS 16+, già nel deployment target).
+    private var splitLayout: some View {
+        NavigationSplitView(columnVisibility: $splitVisibility) {
+            // NB: il `List(selection:)` gestisce direttamente il tap-to-
+            // select sulle row Identifiable; NON serve un `NavigationLink`
+            // wrap, che creerebbe doppia push e selection conflict
+            // (caught dalla NVIDIA review).
+            List(Tab.allCases, selection: $selectedTab) { tab in
+                Label(tab.label, systemImage: tab.systemImage)
+                    .tag(tab)
+            }
+            .navigationTitle("Q-Audion")
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
+        } detail: {
+            // Il detail renderizza la stessa view della tab attiva.
+            // SwiftUI ricostruisce la view ad ogni cambio di selectedTab,
+            // come farebbe il TabView su iPhone.
+            switch selectedTab {
+            case .chats:    chatsTab
+            case .contacts: contactsTab
+            case .calls:    callsTab
+            case .settings: settingsTab
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
     }
 
     // MARK: - Tabs
