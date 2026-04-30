@@ -180,11 +180,15 @@ private final class TagReaderDelegate: NSObject, NFCTagReaderSessionDelegate {
             return
         }
         Task { [weak owner] in
+            // Swift 6: re-bind weak capture to an immutable let so the
+            // closure passed to MainActor.run captures an immutable, not
+            // the mutable `var` introduced by `[weak owner]`.
+            let ownerRef = owner
             do {
                 try await session.connect(to: tag)
-                let peerName = try await owner?.runApduExchange(over: iso, session: session) ?? "(unknown)"
-                await MainActor.run {
-                    owner?.transition(to: .success(peerDeviceName: peerName))
+                let peerName = try await ownerRef?.runApduExchange(over: iso, session: session) ?? "(unknown)"
+                await MainActor.run { [ownerRef] in
+                    ownerRef?.transition(to: .success(peerDeviceName: peerName))
                 }
                 session.alertMessage = "Paired with \(peerName)"
                 session.invalidate()

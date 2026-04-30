@@ -185,9 +185,9 @@ public final class StunClient: @unchecked Sendable {
 
             // Timeout
             DispatchQueue.global().asyncAfter(deadline: .now() + Self.timeoutSeconds) {
-                var didComplete = false
-                lock.withLock {
-                    if !completedBox.value { completedBox.value = true; didComplete = true }
+                let didComplete: Bool = lock.withLock {
+                    if !completedBox.value { completedBox.value = true; return true }
+                    return false
                 }
                 guard didComplete else { return }
                 connection.cancel()
@@ -199,9 +199,9 @@ public final class StunClient: @unchecked Sendable {
                 case .ready:
                     connection.send(content: data, completion: .contentProcessed { error in
                         if let error = error {
-                            var didComplete = false
-                            lock.withLock {
-                                if !completedBox.value { completedBox.value = true; didComplete = true }
+                            let didComplete: Bool = lock.withLock {
+                                if !completedBox.value { completedBox.value = true; return true }
+                                return false
                             }
                             guard didComplete else { return }
                             connection.cancel()
@@ -209,9 +209,9 @@ public final class StunClient: @unchecked Sendable {
                             return
                         }
                         connection.receiveMessage { content, _, _, recvError in
-                            var didComplete = false
-                            lock.withLock {
-                                if !completedBox.value { completedBox.value = true; didComplete = true }
+                            let didComplete: Bool = lock.withLock {
+                                if !completedBox.value { completedBox.value = true; return true }
+                                return false
                             }
                             guard didComplete else { return }
                             connection.cancel()
@@ -223,9 +223,9 @@ public final class StunClient: @unchecked Sendable {
                         }
                     })
                 case .failed(let error):
-                    var didComplete = false
-                    lock.withLock {
-                        if !completedBox.value { completedBox.value = true; didComplete = true }
+                    let didComplete: Bool = lock.withLock {
+                        if !completedBox.value { completedBox.value = true; return true }
+                        return false
                     }
                     guard didComplete else { return }
                     connection.cancel()
