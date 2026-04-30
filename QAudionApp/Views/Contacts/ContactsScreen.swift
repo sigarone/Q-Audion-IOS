@@ -317,6 +317,25 @@ struct ContactsScreen: View {
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
+
+            // W61: CTA inline per ergonomia. Ridirige al ContactEditor
+            // (stesso flow del bottone "+" in topBar). Quando l'engine
+            // wirerà il vero peppered-discover via /api/v1/contacts/
+            // discover-v2, sostituire la action con quella.
+            Button {
+                showingNewContact = true
+            } label: {
+                Label("Aggiungi contatto", systemImage: "person.badge.plus")
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onPrimary)
+                    .padding(.horizontal, 18).padding(.vertical, 10)
+                    .background(
+                        Capsule().fill(scheme.primary)
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+
             Spacer()
         }
         .padding(.top, 48)
@@ -348,11 +367,29 @@ struct ContactsScreen: View {
             Text("Nessun contatto")
                 .qaudionStyle(type.titleMedium)
                 .foregroundStyle(scheme.onSurface)
-            Text("Aggiungi un contatto via QR o NFC dal pulsante in alto a destra.")
+            Text("Aggiungi il primo contatto per iniziare a chattare e chiamare in modo sicuro.")
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
+
+            // W61: CTA primario nello stato vuoto. Stesso flow del
+            // bottone "+" del topBar — qui rende esplicito il next
+            // step per first-launch users.
+            Button {
+                showingNewContact = true
+            } label: {
+                Label("Aggiungi contatto", systemImage: "person.badge.plus")
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onPrimary)
+                    .padding(.horizontal, 18).padding(.vertical, 10)
+                    .background(
+                        Capsule().fill(scheme.primary)
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+
             Spacer().frame(height: 8)
         }
         .frame(maxWidth: .infinity)
