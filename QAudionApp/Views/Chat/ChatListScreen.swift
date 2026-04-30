@@ -49,22 +49,77 @@ struct ChatListScreen: View {
         let memberCount: Int
     }
 
-    /// Optional admin banner content. Wired from AppState in a future
-    /// pass; nil hides the section. Hard-coding nil today keeps the
-    /// screen behaviour identical to the previous list while we wait
-    /// for the Android-side AdminMessage feed to be exposed iOS-side.
+    /// W57 (Track B engine wire #3): admin banner content. Priorità
+    /// (high → low):
+    ///
+    ///   1. **Recent security alert** — se `ThreatReportLogStore` ha
+    ///      una entry con severity ≥ "warning" nelle ultime 24h, mostra
+    ///      quella come banner. Equivalente Android di
+    ///      `ObserveConversationsUseCase` che aggrega le righe
+    ///      `securityEventDao.observeRecentAlerts(sinceTs = now - 24h)`.
+    ///   2. **First-launch hint** — fallback friendly se la rubrica è
+    ///      vuota e nessun threat report recente.
+    ///   3. **nil** — nessun banner.
+    ///
+    /// Engine wiring per `SecurityEventDao` lato iOS resta deferred —
+    /// oggi `ThreatReportLogStore` è populated dai POST `/security/
+    /// threat-report` che l'utente fa esplicitamente da
+    /// `ThreatReportContainer`. Quando l'engine surface esporrà eventi
+    /// passive (peer key changed, new device detected, etc.), aggiungere
+    /// quella sorgente con priorità superiore.
     private var adminBanner: AdminBannerData? {
-        // TODO(W19.H): wire to a real AdminMessage feed from the engine.
-        // For now, surface a friendly first-launch hint when the user
-        // has zero conversations and no banner has been dismissed yet.
-        guard !adminBannerDismissed,
-              container.viewModel.items.isEmpty,
-              container.searchText.isEmpty else { return nil }
+        guard !adminBannerDismissed else { return nil }
+
+        // 1. Recent security alert (≤ 24h, severity warning/alert).
+        if let recentAlert = recentSecurityAlertBanner() {
+            return recentAlert
+        }
+
+        // 2. First-launch hint.
+        if container.viewModel.items.isEmpty && container.searchText.isEmpty {
+            return AdminBannerData(
+                title: "Q-Audion attivo",
+                message: "Le tue chiamate e i tuoi messaggi sono protetti con ML-KEM 1024 + Voice-as-Key.",
+                ctaLabel: nil
+            )
+        }
+
+        return nil
+    }
+
+    /// W57: surface alert dalle ultime 24h come banner. Threat reports
+    /// con severity == "alert" o "warning" hanno precedenza su
+    /// "info"/"low". Restituisce nil se nessuna alert recente.
+    private func recentSecurityAlertBanner() -> AdminBannerData? {
+        let store = ThreatReportLogStore()
+        let entries = store.load()
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        let recent = entries
+            .filter { $0.submittedAt >= cutoff }
+            .filter { $0.severity == "alert" || $0.severity == "warning" }
+        guard let latest = recent.first else { return nil }
+
+        // Format: "Categoria · X minuti fa". `category` è snake_case
+        // raw, prettify per il banner UI.
+        let pretty = latest.category
+            .replacingOccurrences(of: "_", with: " ")
+            .capitalized
+        let when = formatRelative(latest.submittedAt)
         return AdminBannerData(
-            title: "Q-Audion attivo",
-            message: "Le tue chiamate e i tuoi messaggi sono protetti con ML-KEM 1024 + Voice-as-Key.",
-            ctaLabel: nil
+            title: "Allerta sicurezza · \(pretty)",
+            message: "\(latest.details.prefix(160))\(latest.details.count > 160 ? "…" : "") · segnalata \(when)",
+            ctaLabel: "Vedi dettagli"
         )
+    }
+
+    /// Compact "X min/h fa" formatter — evita di trascinare in
+    /// dependency aggiuntive solo per questa label.
+    private func formatRelative(_ date: Date) -> String {
+        let delta = Int(Date().timeIntervalSince(date))
+        if delta < 60 { return "ora" }
+        if delta < 3600 { return "\(delta / 60) min fa" }
+        if delta < 86400 { return "\(delta / 3600) h fa" }
+        return "\(delta / 86400) g fa"
     }
 
     var body: some View {
