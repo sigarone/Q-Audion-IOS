@@ -12,19 +12,19 @@ import QAudionEngine
 /// Endpoint live in produzione (VPS 217.160.65.35) dal commit
 /// `f99e00c feat(track-b)` su `bcrypto-server`.
 @MainActor
-public final class TrackBSyncService {
+final class TrackBSyncService {
 
     private let baseURL: URL?
     private let token: String?
 
-    public init(serverUrl: String, accessToken: String?) {
+    init(serverUrl: String, accessToken: String?) {
         self.baseURL = URL(string: serverUrl)
         self.token = accessToken
     }
 
     /// Convenience init che pesca da AppState. Restituisce nil se non
     /// autenticato (caller deve trattare come no-op silenzioso).
-    public static func from(_ appState: AppState) -> TrackBSyncService? {
+    static func from(_ appState: AppState) -> TrackBSyncService? {
         guard let token = appState.authService.loadToken(), !token.isEmpty else {
             return nil
         }
@@ -35,7 +35,7 @@ public final class TrackBSyncService {
 
     /// DELETE /api/v1/calls/history/:id — soft-delete server-side.
     /// Best-effort: 401/404/5xx → swallow + log, local tombstone resta.
-    public func deleteCallHistoryEntry(_ entryId: String) async {
+    func deleteCallHistoryEntry(_ entryId: String) async {
         guard let url = endpoint("/api/v1/calls/history/\(entryId)") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
@@ -45,7 +45,7 @@ public final class TrackBSyncService {
 
     /// DELETE /api/v1/calls/history (no id) — bulk wipe per l'utente.
     /// Server replies 200 + count, ma noi ignoriamo il body.
-    public func deleteAllCallHistory() async {
+    func deleteAllCallHistory() async {
         guard let url = endpoint("/api/v1/calls/history") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
@@ -56,7 +56,7 @@ public final class TrackBSyncService {
     // MARK: - 2. Conversation read marks
 
     /// POST /api/v1/conversations/:id/read — mark single conversation as read.
-    public func markConversationRead(convId: String, lastReadMessageId: String? = nil) async {
+    func markConversationRead(convId: String, lastReadMessageId: String? = nil) async {
         guard let url = endpoint("/api/v1/conversations/\(convId)/read") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -72,7 +72,7 @@ public final class TrackBSyncService {
     }
 
     /// POST /api/v1/conversations/read-all — bulk mark.
-    public func markAllConversationsRead(asOfMs: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) async {
+    func markAllConversationsRead(asOfMs: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) async {
         guard let url = endpoint("/api/v1/conversations/read-all") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -88,7 +88,7 @@ public final class TrackBSyncService {
     /// POST /api/v1/groups/:id/join — submit join request. Returns true
     /// se l'HTTP è 2xx (così il replay loop può rimuovere la pending
     /// dal local store), false altrimenti (lascia l'entry per retry).
-    public func requestGroupJoin(groupId: String,
+    func requestGroupJoin(groupId: String,
                                   inviteSource: String = "qr",
                                   inviterUserId: String? = nil) async -> Bool {
         guard let url = endpoint("/api/v1/groups/\(groupId)/join") else { return false }
@@ -109,7 +109,7 @@ public final class TrackBSyncService {
     /// store; quelle che falliscono restano per il prossimo replay.
     /// Returns count delle pending replayed con success.
     @discardableResult
-    public func replayPendingGroupInvites() async -> Int {
+    func replayPendingGroupInvites() async -> Int {
         let pending = PendingGroupInviteStore.load()
         guard !pending.isEmpty else { return 0 }
         var ok = 0
