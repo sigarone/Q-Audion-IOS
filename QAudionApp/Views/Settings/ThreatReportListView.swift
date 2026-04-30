@@ -56,7 +56,7 @@ struct ThreatReportListView: View {
                             }
                         }
                     } footer: {
-                        Text("Threat reports are filed locally and POSTed to the server. The list above is your local history; older rows beyond the cap roll off automatically.")
+                        Text("Le segnalazioni vengono salvate localmente e inviate al server. La lista qui sopra è la tua cronologia locale; le righe più vecchie del limite vengono rimosse automaticamente.")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -69,7 +69,7 @@ struct ThreatReportListView: View {
                 Button {
                     showingNewReport = true
                 } label: {
-                    Label("File new report", systemImage: "plus.circle.fill")
+                    Label("Nuova segnalazione", systemImage: "plus.circle.fill")
                 }
             }
         }
@@ -85,7 +85,7 @@ struct ThreatReportListView: View {
                 )
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { showingNewReport = false }
+                        Button("Annulla") { showingNewReport = false }
                     }
                 }
             }
@@ -96,13 +96,19 @@ struct ThreatReportListView: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
+        // W63: traduzione IT + allineamento al pattern empty-state CTA
+        // di W61/W62. Il bottone "Nuovo report" usa lo stesso state
+        // `showingNewReport` del bottone "+" in toolbar (single source
+        // of truth). Native SwiftUI .borderedProminent style preserved
+        // per consistenza con il toolbar-button parent (questa view è
+        // dentro un List + Form context, non Q-Audion design system).
         VStack(spacing: 16) {
             Image(systemName: "checkmark.shield.fill")
                 .font(.system(size: 64))
                 .foregroundStyle(.green)
-            Text("No threats reported")
+            Text("Nessuna segnalazione")
                 .font(.title3.weight(.semibold))
-            Text("File a new report from the toolbar if you spot a deepfake, voice mismatch, key tampering or any suspicious behaviour.")
+            Text("Apri una nuova segnalazione dal pulsante in alto se rilevi un deepfake, una mismatch vocale, un'alterazione di chiavi o un comportamento sospetto.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -110,7 +116,7 @@ struct ThreatReportListView: View {
             Button {
                 showingNewReport = true
             } label: {
-                Label("File new report", systemImage: "plus.circle.fill")
+                Label("Nuova segnalazione", systemImage: "plus.circle.fill")
                     .padding(.vertical, 4)
                     .frame(maxWidth: 240)
             }
@@ -229,23 +235,23 @@ private struct ThreatReportDetailView: View {
                 Button(role: .destructive) {
                     showingDeleteConfirm = true
                 } label: {
-                    Label("Delete this entry", systemImage: "trash")
+                    Label("Elimina questa voce", systemImage: "trash")
                 }
             } footer: {
-                Text("Removes the row from your local history only. The server-side report stays.")
+                Text("Rimuove la riga solo dalla tua cronologia locale. La segnalazione lato server resta intatta.")
                     .font(.caption2)
             }
         }
         .navigationTitle("Rapporto minacce")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Delete this report from history?", isPresented: $showingDeleteConfirm) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
+        .alert("Eliminare questa segnalazione dalla cronologia?", isPresented: $showingDeleteConfirm) {
+            Button("Annulla", role: .cancel) { }
+            Button("Elimina", role: .destructive) {
                 onDelete()
                 dismiss()
             }
         } message: {
-            Text("This won't notify the server. Use Settings → Security to file a wipe request if needed.")
+            Text("Non notificherà il server. Usa Impostazioni → Sicurezza per una richiesta di wipe se serve.")
         }
     }
 }
