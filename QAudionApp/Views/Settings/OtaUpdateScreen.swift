@@ -79,13 +79,54 @@ final class OtaUpdateContainer: ObservableObject {
         _ = channelKey  // future engine API call
     }
 
-    func check() async {
+    /// W56 (Track B engine wire #2): chiama il vero `AppUpdateChecker
+    /// .checkForUpdates()` (`GET /api/v1/updates/check`) e fonde il
+    /// risultato server con il mock catalog. Se il server espone un
+    /// update, lo prepend al `visibleReleases` come VerifiedRelease
+    /// nuovo entry — la firma Ed25519 NON è ancora verificata
+    /// client-side (signatureValid = false con badge "FIRMA NON
+    /// VERIFICATA"), il payload viene mostrato all'utente che può
+    /// decidere di tap "Installa" → apertura App Store via downloadUrl.
+    /// Engine wiring per la verifica Ed25519 + catalog multi-release
+    /// resta deferred.
+    func check(appState: AppState) async {
         checking = true
         error = nil
-        try? await Task.sleep(nanoseconds: 700_000_000)
-        // Stub: ricarica la stessa lista. L'engine farà il fetch reale.
-        load()
-        checking = false
+        defer { checking = false }
+
+        let checker = AppUpdateChecker(appState: appState)
+        await checker.checkForUpdates()
+
+        switch checker.lastResult {
+        case .none:
+            error = "Nessuna risposta dal server."
+        case .noUpdate:
+            // Mantieni la catalog list esistente; nessun nuovo entry.
+            // Reload mock per coerenza con UX precedente.
+            load()
+        case .updateAvailable(let info):
+            // Inietta l'entry nel catalog. La firma NON è ancora
+            // verificata client-side (deferred — richiede pubkey
+            // Ed25519 hardcoded + signature attached al payload server).
+            let serverEntry = VerifiedRelease(
+                id: "server-\(info.availableVersion)",
+                versionCode: 0,
+                versionName: info.availableVersion,
+                sha256Hex: "",
+                fileSizeBytes: 0,
+                releaseNotes: info.releaseNotes,
+                channel: "stable",
+                isForced: info.isMandatory,
+                createdAt: Date(),
+                signatureValid: false,  // Ed25519 verify deferred
+                isInstalled: false
+            )
+            // Carica il mock catalog poi prepend l'entry server (sopra).
+            allReleases = [serverEntry] + Self.mockCatalog()
+            applyChannel()
+        case .error(let msg):
+            error = "Verifica fallita: \(msg)"
+        }
     }
 
     func install() async {
@@ -145,6 +186,7 @@ final class OtaUpdateContainer: ObservableObject {
 /// `qaudion-android-new/feature/feature-settings/.../OtaUpdateScreen.kt`.
 struct OtaUpdateScreen: View {
     @StateObject private var container = OtaUpdateContainer()
+    @EnvironmentObject private var appState: AppState
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
@@ -462,7 +504,7 @@ struct OtaUpdateScreen: View {
     private var actionButtons: some View {
         HStack(spacing: 10) {
             Button {
-                Task { await container.check() }
+                Task { await container.check(appState: appState) }
                 snackbar?.show(.init(text: "Verifica avviata.",
                                      severity: .info,
                                      durationSeconds: 2))
@@ -573,6 +615,7 @@ private struct MonoSmall: ViewModifier {
 #Preview {
     NavigationStack {
         OtaUpdateScreen()
+            .environmentObject(AppState())
     }
     .qAudionTheme(dark: true)
 }
