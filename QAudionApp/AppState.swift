@@ -216,7 +216,11 @@ final class AppState: ObservableObject {
         // MARK: PushKit VoIP push registration
         // Registers for tokens so the day server picks option α/β/γ/δ, iOS is ready.
         self.pushKit = PushKitProvider(
-            onTokenUpdate: { [weak self] token in
+            // W60: rimosso `[weak self]` non usato — il body del closure
+            // logga solo il token, no riferimenti a self. Eliminava il
+            // warning compile "variable 'self' was written to, but never
+            // read" che spam-ava ogni Codemagic build.
+            onTokenUpdate: { token in
                 let hex = token.map { String(format: "%02hhx", $0) }.joined()
                 // Stub: log token prefix. Actual server registration deferred until
                 // spec §10.1 APNs option (α/β/γ/δ) is finalised.
