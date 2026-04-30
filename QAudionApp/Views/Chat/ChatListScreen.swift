@@ -32,6 +32,7 @@ struct ChatListScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    @Environment(\.qaudionSnackbar) private var snackbar
 
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
@@ -143,6 +144,32 @@ struct ChatListScreen: View {
         }
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
+        // W50: overflow menu — "Segna tutti come letti" gated dal
+        // count totale di unread. Disabilitato quando la lista è
+        // tutta letta. Snackbar feedback con il count azzerato.
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button {
+                        let n = container.totalUnread
+                        container.markAllAsRead()
+                        snackbar?.show(.init(
+                            text: n > 0
+                                ? "Segnate \(n) conversazioni come lette."
+                                : "Nessuna conversazione non letta.",
+                            severity: .info))
+                    } label: {
+                        Label("Segna tutti come letti",
+                              systemImage: "checkmark.circle")
+                    }
+                    .disabled(container.totalUnread == 0)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(scheme.onSurface)
+                }
+                .accessibilityLabel("Altro")
+            }
+        }
         .searchable(text: $searchText, prompt: "Cerca conversazioni")
         .onChange(of: searchText) { newValue in
             // iOS 16 single-param form (the iOS 17 onChange takes

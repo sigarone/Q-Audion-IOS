@@ -78,4 +78,36 @@ final class ConversationListContainer: ObservableObject {
         store.deleteConversation(id: conversationId)
         loadFromStore()
     }
+
+    /// Total unread count across all conversations. Used by the
+    /// ChatListScreen overflow menu to gate the "Segna tutti come letti"
+    /// action — disabled when zero.
+    var totalUnread: Int {
+        viewModel.items.reduce(0) { $0 + $1.unreadCount }
+    }
+
+    /// W50: zera `unreadCount` su tutte le conversazioni con unread > 0.
+    /// Engine wire (real `ConversationRepository.markAllRead()`) deferred
+    /// — oggi muta lo store locale e re-emette la lista. Quando l'engine
+    /// surface esporrà ack-receipts via WS, sostituire con la chiamata
+    /// repo che propaga read-receipt al peer.
+    func markAllAsRead() {
+        var convs = store.loadConversations()
+        var changed = false
+        for (idx, conv) in convs.enumerated() where conv.unreadCount > 0 {
+            convs[idx] = Conversation(
+                id: conv.id,
+                peerUserId: conv.peerUserId,
+                peerDisplayName: conv.peerDisplayName,
+                lastMessagePreview: conv.lastMessagePreview,
+                lastActivity: conv.lastActivity,
+                unreadCount: 0,
+                pinned: conv.pinned,
+                kind: conv.kind
+            )
+            store.upsertConversation(convs[idx])
+            changed = true
+        }
+        if changed { loadFromStore() }
+    }
 }
