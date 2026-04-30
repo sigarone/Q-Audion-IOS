@@ -31,6 +31,9 @@ struct ContactsScreen: View {
     @State private var searchText: String = ""
     @State private var selectedTab: Tab = .all
     @State private var showingNewContact: Bool = false
+    /// W58: ordinamento corrente della lista TUTTI. Persisted in
+    /// UserDefaults così la scelta sopravvive ai riavvi.
+    @State private var sortMode: SortMode = SortMode.loadFromDefaults()
 
     @Environment(\.qaudionSnackbar) private var snackbar
 
@@ -43,6 +46,44 @@ struct ContactsScreen: View {
             case .discover: return "SCOPRI"
             case .blocked:  return "BLOCCATI"
             }
+        }
+    }
+
+    /// W58: opzioni di ordinamento della lista TUTTI. Etichette e icone
+    /// sono pensate per l'overflow menu nel topBar.
+    enum SortMode: String, CaseIterable, Identifiable {
+        case nameAsc      // alphabetical A→Z (default)
+        case onlineFirst  // online prima, poi alphabetical
+        case verifiedFirst // verificati prima, poi alphabetical
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .nameAsc:        return "Nome (A→Z)"
+            case .onlineFirst:    return "Online prima"
+            case .verifiedFirst:  return "Verificati prima"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .nameAsc:        return "textformat.abc"
+            case .onlineFirst:    return "circle.fill"
+            case .verifiedFirst:  return "checkmark.seal.fill"
+            }
+        }
+
+        private static let defaultsKey = "com.qaudion.contacts.sortMode"
+
+        static func loadFromDefaults() -> SortMode {
+            if let raw = UserDefaults.standard.string(forKey: defaultsKey),
+               let m = SortMode(rawValue: raw) { return m }
+            return .nameAsc
+        }
+
+        func saveToDefaults() {
+            UserDefaults.standard.set(rawValue, forKey: Self.defaultsKey)
         }
     }
 
@@ -109,6 +150,29 @@ struct ContactsScreen: View {
                 .qaudionStyle(type.titleLarge)
                 .foregroundStyle(scheme.onSurface)
             Spacer()
+            // W58: sort menu — Nome / Online / Verificati. La scelta
+            // viene persistita in UserDefaults così sopravvive a riavvi.
+            // Visibile solo sulla tab TUTTI (irrilevante su SCOPRI /
+            // BLOCCATI che non hanno una lista ordinabile reale).
+            if selectedTab == .all {
+                Menu {
+                    Picker("Ordina per", selection: $sortMode) {
+                        ForEach(SortMode.allCases) { mode in
+                            Label(mode.label, systemImage: mode.systemImage)
+                                .tag(mode)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down.circle")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(scheme.onSurface)
+                        .frame(width: 36, height: 36)
+                }
+                .accessibilityLabel("Ordina contatti")
+                .onChange(of: sortMode) { newValue in
+                    newValue.saveToDefaults()
+                }
+            }
             Button(action: { showingNewContact = true }) {
                 Image(systemName: "person.badge.plus")
                     .font(.system(size: 18, weight: .semibold))
@@ -184,7 +248,28 @@ struct ContactsScreen: View {
     // MARK: - Lists
 
     private var allList: some View {
-        let items = container.viewModel.filteredItems
+        let unsorted = container.viewModel.filteredItems
+        // W58: applica il sort prescelto. Locale-aware comparison sul
+        // displayName — `localizedCaseInsensitiveCompare` rispetta
+        // l'ordinamento italiano (es. é < f, à < b).
+        let items: [ContactsListViewModel.Item] = {
+            switch sortMode {
+            case .nameAsc:
+                return unsorted.sorted {
+                    $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+                }
+            case .onlineFirst:
+                return unsorted.sorted { a, b in
+                    if a.isOnline != b.isOnline { return a.isOnline && !b.isOnline }
+                    return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+                }
+            case .verifiedFirst:
+                return unsorted.sorted { a, b in
+                    if a.isVerified != b.isVerified { return a.isVerified && !b.isVerified }
+                    return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+                }
+            }
+        }()
         let onlineCount = items.filter { $0.isOnline }.count
         let totalCount  = items.count
 
