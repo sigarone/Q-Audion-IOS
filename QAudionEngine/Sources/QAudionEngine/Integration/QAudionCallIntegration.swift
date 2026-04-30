@@ -145,7 +145,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guard let message = QAudionCapabilityExchange.parse(data) else { return }
 
         switch message {
-        case .offer(let remotePublicKey, _, let pskFingerprints):
+        case .offer(let remotePublicKey, _, _):
             // Responder path — flag and grab stashed pre-negotiation IDs.
             lock.lock()
             isCaller = false
@@ -160,7 +160,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 sendCallProcessing?(cid, from)
             }
 
-            let keyPair = pqc.generateKeyPair()
+            // Note: keyPair is generated implicitly inside encapsulate via
+            // the embedded PQC stack — we don't need a local copy. (Was an
+            // unused init from a refactor leftover.)
             let result = try pqc.encapsulate(remotePublicKey: remotePublicKey)
             try engine.initialize()
             try engine.initSession(sharedSecret: result.sharedSecret)
@@ -175,7 +177,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 sendCallReady?(cid, from)
             }
 
-        case .accept(let ciphertext, let pskFingerprint):
+        case .accept(let ciphertext, _):
             guard let kp = localKeyPair else { return }
             let sharedSecret = try pqc.decapsulate(ciphertext: ciphertext, privateKey: kp.privateKey)
             try engine.initSession(sharedSecret: sharedSecret)

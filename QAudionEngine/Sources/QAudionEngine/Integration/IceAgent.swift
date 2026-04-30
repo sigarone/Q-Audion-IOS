@@ -93,7 +93,10 @@ public final class IceAgent: @unchecked Sendable {
         // Sort by priority descending (host > srflx > relay)
         candidates.sort { $0.priority > $1.priority }
 
-        lock.withLock { localCandidates = candidates }
+        // Swift 6: copy to immutable `let` so the @Sendable withLock
+        // closure captures an immutable binding, not the local `var`.
+        let finalCandidates = candidates
+        lock.withLock { localCandidates = finalCandidates }
 
         return candidates
     }
