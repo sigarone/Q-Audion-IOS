@@ -102,7 +102,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     }
 
     public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth])
+        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP])
         try? audioSession.setActive(true)
     }
 

@@ -79,7 +79,7 @@ public final class AudioProcessingPipeline {
             mode: .voiceChat,
             options: [
                 .defaultToSpeaker,
-                .allowBluetooth,
+                .allowBluetoothHFP,
                 .allowBluetoothA2DP,
                 .interruptSpokenAudioAndMixWithOthers
             ]

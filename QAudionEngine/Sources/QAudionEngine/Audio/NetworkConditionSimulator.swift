@@ -88,8 +88,18 @@ public final class NetworkConditionSimulator: @unchecked Sendable {
         offline: true
     )
 
+    // Le 6 preset sono `static let` sulla classe wrapper, NON case di
+    // un enum. Devono essere referenziate con il qualifier completo
+    // `NetworkConditionSimulator.X`, perché lo shorthand `.X` cerca
+    // i member su `Profile` (struct interna) e non sull'outer class.
+    // In particolare `.offline` farebbe match con `Profile.offline:Bool`.
     public static let availableProfiles: [Profile] = [
-        .off, .highLatency, .lossy, .veryLossy, .satellite, .offline
+        NetworkConditionSimulator.off,
+        NetworkConditionSimulator.highLatency,
+        NetworkConditionSimulator.lossy,
+        NetworkConditionSimulator.veryLossy,
+        NetworkConditionSimulator.satellite,
+        NetworkConditionSimulator.offline
     ]
 
     /// Process-wide singleton. Lo expose-iamo come static let così
