@@ -109,6 +109,13 @@ final class ContactsListContainer: ObservableObject {
             pubkey: pubkey          // 32B X25519, source of canonical fingerprint
         )
         store.upsert(contact)
+        // W77: kick off the pairwise PSK handshake so future chats with
+        // this contact use a real shared secret instead of the
+        // deterministic fallback. Fire-and-forget; the response (ACCEPT)
+        // arrives via WS opaque_message and lands in the keychain.
+        if let appState = self.appState {
+            appState.triggerKeyExchange(with: userId, force: false)
+        }
         // Refresh the in-memory view-model from the store so the new row
         // shows up immediately in the list.
         let stored = store.load()

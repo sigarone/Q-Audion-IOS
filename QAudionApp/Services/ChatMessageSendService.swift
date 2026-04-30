@@ -77,7 +77,17 @@ final class ChatMessageSendService {
         let psk: Data
         let pskFallback: Bool
         do {
-            if let stored = try vault.loadPsk(name: peerUserId), !stored.isEmpty {
+            // W77: ContactKeyExchange persists pairwise PSKs under the
+            // `auto:<peerIdPrefix>:<peerId>` name (see
+            // `ContactKeyExchange.keyName(for:)`). Check that first,
+            // then the bare peerId (legacy / manually-bound), then
+            // fall back to the deterministic insecure derivation.
+            let prefix = peerUserId.count > 8 ? String(peerUserId.prefix(8)) : peerUserId
+            let autoName = "auto:\(prefix):\(peerUserId)"
+            if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
+                psk = stored
+                pskFallback = false
+            } else if let stored = try vault.loadPsk(name: peerUserId), !stored.isEmpty {
                 psk = stored
                 pskFallback = false
             } else {

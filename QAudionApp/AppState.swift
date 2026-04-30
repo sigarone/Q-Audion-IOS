@@ -60,6 +60,17 @@ final class AppState: ObservableObject {
     @Published private(set) var wsConnectionState: ConnectionState = .disconnected
     private var liveProvider: BCryptoBackendProvider?
 
+    /// W77: pairwise PSK first-contact handshake. Built in
+    /// `connectPersistentSocket()` once the WS is up so `sendOpaque`
+    /// rides the live transport. The closure stored in
+    /// `ContactKeyExchange` calls `wsClient.sendOpaqueMessage(...)`
+    /// directly — no per-call provider rebuild.
+    private var contactKeyExchange: ContactKeyExchange?
+    /// One-shot identity used for ECDH. Persisted across launches so
+    /// peers see a stable `encryption_public` over QR / NFC. Only
+    /// rebuilt by an explicit "Rotate key" action.
+    private lazy var sovereignIdentity = SovereignIdentityManager()
+
     /// W75: cached PushKit VoIP token. PushKit emits this on first
     /// launch BEFORE the user is authenticated — we stash it here and
     /// retry the server POST after every auth-success transition. Once
@@ -418,6 +429,29 @@ final class AppState: ObservableObject {
         // sends WS frames in one direction only — incoming peer messages
         // are silently dropped at the dispatcher.
         wireIncomingChatHandlers(on: provider.getWebSocketClient())
+        // W77: build the ContactKeyExchange now that we have a live WS.
+        // Its `sendOpaque` closure rides the SAME transport so the QUAD
+        // KEY_EXCHANGE_OFFER / ACCEPT frames land via `opaque_message`.
+        // The handler for inbound `opaque_message` envelopes is wired
+        // separately (`wireOpaqueMessageHandler`) and routes the parsed
+        // QUAD frame back to ContactKeyExchange when it carries a key
+        // exchange payload.
+        let ws = provider.getWebSocketClient()
+        let cke = ContactKeyExchange(
+            identity: sovereignIdentity,
+            vault: SovereignKeyVault(),
+            sendOpaque: { recipientId, wire in
+                ws.sendOpaqueMessage(recipientId: recipientId, payload: wire)
+            }
+        )
+        cke.onKeyExchanged = { contactId, _, fingerprint in
+            print("[AppState] Pairwise PSK derived for \(contactId.prefix(8))… fp=\(fingerprint.prefix(8))…")
+        }
+        cke.onError = { contactId, error in
+            print("[AppState] PSK exchange error for \(contactId.prefix(8))…: \(error)")
+        }
+        self.contactKeyExchange = cke
+        wireOpaqueMessageHandler(on: ws, cke: cke)
         // Subscribe state listener so the UI can show "Connecting → Online".
         provider.persistentConnection.addStateListener { [weak self] state in
             DispatchQueue.main.async {
@@ -558,6 +592,16 @@ final class AppState: ObservableObject {
             let senderId = data["sender_id"] as? String ?? "Sconosciuto"
             let callType = data["call_type"] as? String ?? "audio"
             let callUUID = UUID(uuidString: callIdStr) ?? UUID()
+            // W77: bind the inbound call_id on the calling impl so the
+            // subsequent `sendCallAnswer` / `sendCallHangup` envelopes
+            // use the SAME id the server registered for this call.
+            // Without this, answer/hangup would mint a brand-new UUID
+            // and the server's call state machine would drop them.
+            if !callIdStr.isEmpty,
+               let provider = self.liveProvider,
+               let calling = provider.callingApi as? BCryptoCallingApiImpl {
+                calling.bindIncomingCallId(callIdStr)
+            }
             // CallKit must run from MainActor — its CXProvider state
             // machine refuses cross-thread mutations.
             DispatchQueue.main.async {
@@ -675,8 +719,16 @@ final class AppState: ObservableObject {
         let crypto = MessageCrypto()
         let vault = SovereignKeyVault()
         let plaintext: String
+        // W77: prefer the pairwise PSK stored under the
+        // `auto:<prefix>:<peerId>` name by ContactKeyExchange. Falls
+        // back to the bare peerId (legacy) and finally to the
+        // deterministic shared-secret fallback.
         let psk: Data
-        if let stored = (try? vault.loadPsk(name: senderId)) ?? nil, !stored.isEmpty {
+        let prefix = senderId.count > 8 ? String(senderId.prefix(8)) : senderId
+        let autoName = "auto:\(prefix):\(senderId)"
+        if let stored = (try? vault.loadPsk(name: autoName)) ?? nil, !stored.isEmpty {
+            psk = stored
+        } else if let stored = (try? vault.loadPsk(name: senderId)) ?? nil, !stored.isEmpty {
             psk = stored
         } else {
             // Mirror the same fallback shape used by ChatMessageSendService.
@@ -790,6 +842,61 @@ final class AppState: ObservableObject {
     /// subscribes in `attach(appState:)` and unsubscribes on dealloc.
     static let chatRefreshNotification = Notification.Name("qaudion.chat.refresh")
     static let chatTypingNotification = Notification.Name("qaudion.chat.typing")
+
+    /// W77: dispatch inbound `opaque_message` envelopes. The QUAD frame
+    /// inside the payload carries either:
+    ///   - KEY_EXCHANGE_OFFER  → derive PSK + reply with ACCEPT
+    ///   - KEY_EXCHANGE_ACCEPT → derive PSK only (no reply)
+    ///   - other capability frames (already handled elsewhere)
+    /// Routes to `ContactKeyExchange.handleOffer/handleAccept` so the
+    /// pairwise PSK handshake completes without explicit UI action.
+    private func wireOpaqueMessageHandler(on ws: BCryptoWebSocketClient, cke: ContactKeyExchange) {
+        ws.registerHandler(type: "opaque_message") { _, data in
+            guard let senderId = data["sender_id"] as? String,
+                  !senderId.isEmpty,
+                  let blobB64 = data["data"] as? String,
+                  let blob = Data(base64Encoded: blobB64) else {
+                return
+            }
+            // Parse the QUAD frame using the engine's capability decoder.
+            guard let decoded = QAudionCapabilityExchange.parse(blob) else {
+                print("[AppState] opaque_message from \(senderId.prefix(8))… not a valid QUAD frame")
+                return
+            }
+            switch decoded {
+            case .keyExchangeOffer(let pub):
+                Task { await cke.handleOffer(senderId: senderId, peerPubKey: pub) }
+            case .keyExchangeAccept(let pub):
+                Task { await cke.handleAccept(senderId: senderId, peerPubKey: pub) }
+            default:
+                // Other capability frames (offer/accept/audio/etc.) are
+                // routed by the call/audio path elsewhere — ignore here
+                // unless the engine adds first-class support.
+                break
+            }
+        }
+    }
+
+    /// W77: public hook to trigger the first-contact PSK handshake with a
+    /// peer. Called from contact-add flows after a QR/NFC payload has
+    /// been successfully decoded — the resulting OFFER carries this
+    /// device's X25519 public key; the peer's response (ACCEPT) is
+    /// handled automatically by `wireOpaqueMessageHandler`.
+    /// Fire-and-forget — failure is logged, never surfaced to the UI.
+    func triggerKeyExchange(with contactId: String, force: Bool = false) {
+        guard let cke = contactKeyExchange else {
+            print("[AppState] triggerKeyExchange called before WS up — pending")
+            return
+        }
+        Task {
+            do {
+                _ = try await cke.initiate(contactId: contactId, force: force)
+                print("[AppState] KEY_EXCHANGE_OFFER sent to \(contactId.prefix(8))…")
+            } catch {
+                print("[AppState] triggerKeyExchange failed: \(error)")
+            }
+        }
+    }
 
     /// W72: bind the presence service to the live WS transport and
     /// subscribe the union of contacts + conversation peers so the UI
