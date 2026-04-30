@@ -81,11 +81,12 @@ private struct DecodedDetailView: View {
 
     private var title: String {
         switch decoded {
-        case .identity:   return "Identità contatto"
-        case .deviceLink: return "Accoppiamento dispositivo"
-        case .fastSetup:  return "Configurazione rapida"
-        case .invalid:    return "Codice non valido"
-        case .unknown:    return "Codice sconosciuto"
+        case .identity:    return "Identità contatto"
+        case .deviceLink:  return "Accoppiamento dispositivo"
+        case .fastSetup:   return "Configurazione rapida"
+        case .groupInvite: return "Invito al gruppo"
+        case .invalid:     return "Codice non valido"
+        case .unknown:     return "Codice sconosciuto"
         }
     }
 
@@ -109,6 +110,7 @@ private struct DecodedDetailView: View {
             case .identity: return ("person.text.rectangle.fill", .blue)
             case .deviceLink: return ("ipad.and.iphone", .purple)
             case .fastSetup: return ("bolt.shield.fill", .orange)
+            case .groupInvite: return ("person.3.fill", .green)
             case .invalid: return ("exclamationmark.triangle.fill", .red)
             case .unknown: return ("questionmark.diamond.fill", .gray)
             }
@@ -124,6 +126,8 @@ private struct DecodedDetailView: View {
         case .identity(let id): return id.userId
         case .deviceLink(let dl): return dl.userId
         case .fastSetup(let fs): return fs.userId
+        case .groupInvite(let gi):
+            return gi.groupName.isEmpty ? "Gruppo" : gi.groupName
         case .invalid(let kind, _): return "Codice \(kind.rawValue) non valido"
         case .unknown: return "QR non riconosciuto"
         }
@@ -134,6 +138,7 @@ private struct DecodedDetailView: View {
         case .identity: return "QR identità (stampabile)"
         case .deviceLink: return "Codice di accoppiamento dispositivo"
         case .fastSetup: return "Codice di onboarding emesso dal server"
+        case .groupInvite: return "Invito client-generated a un gruppo"
         case .invalid(_, let reason): return reason
         case .unknown(let prefix): return "Prefisso: \"\(prefix)…\""
         }
@@ -212,6 +217,34 @@ private struct DecodedDetailView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        case .groupInvite(let gi):
+            Section("Gruppo") {
+                LabeledContent("ID gruppo") {
+                    Text(gi.groupId.uuidString)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if !gi.groupName.isEmpty {
+                    LabeledContent("Nome") {
+                        Text(gi.groupName)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                LabeledContent("Versione payload") {
+                    Text("v\(gi.version)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Section {
+                Text("Tocca \"Conferma\" per richiedere l'ingresso al gruppo. L'admin del gruppo dovrà approvare la richiesta server-side.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         case .invalid(_, let reason):
             Section("Motivo") {
                 Text(reason)
@@ -220,7 +253,7 @@ private struct DecodedDetailView: View {
             }
         case .unknown:
             Section {
-                Text("Questo QR non corrisponde a nessun formato Q-Audion. Assicurati di scansionare un codice generato da Q-Audion (identità, device-link o configurazione rapida).")
+                Text("Questo QR non corrisponde a nessun formato Q-Audion. Assicurati di scansionare un codice generato da Q-Audion (identità, device-link, configurazione rapida o invito gruppo).")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -231,7 +264,7 @@ private struct DecodedDetailView: View {
     private var actionSection: some View {
         Section {
             switch decoded {
-            case .identity, .deviceLink, .fastSetup:
+            case .identity, .deviceLink, .fastSetup, .groupInvite:
                 Button {
                     onAccept()
                 } label: {
@@ -251,10 +284,11 @@ private struct DecodedDetailView: View {
 
     private var acceptLabel: String {
         switch decoded {
-        case .identity:   return "Aggiungi come contatto"
-        case .deviceLink: return "Accoppia questo dispositivo"
-        case .fastSetup:  return "Usa questo codice di setup"
-        default:          return "Conferma"
+        case .identity:    return "Aggiungi come contatto"
+        case .deviceLink:  return "Accoppia questo dispositivo"
+        case .fastSetup:   return "Usa questo codice di setup"
+        case .groupInvite: return "Richiedi ingresso al gruppo"
+        default:           return "Conferma"
         }
     }
 

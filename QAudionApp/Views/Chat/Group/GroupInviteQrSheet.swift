@@ -158,22 +158,13 @@ struct GroupInviteQrSheet: View {
     // MARK: - QR generation
 
     private func generate() {
-        let json: [String: Any] = [
-            "v": 1,
-            "kind": "qaudion-group-invite",
-            "groupId": groupId.uuidString,
-            "groupName": groupName
-        ]
-        if let data = try? JSONSerialization.data(withJSONObject: json),
-           let s = String(data: data, encoding: .utf8) {
-            payload = s
-            qrImage = renderQr(content: s)
-        } else {
-            // Fallback unlikely; JSONSerialization on `[String: Any]` with
-            // primitive values shouldn't fail. Defensive only.
-            payload = "qaudion-group-invite:\(groupId.uuidString)"
-            qrImage = renderQr(content: payload)
-        }
+        // W53: encode via GroupInviteQrCode → URL `qaudion://group-invite/<base64-json>`.
+        // Schema URL consistente con DeviceLinkBinaryQR / FastSetupQrCode,
+        // così il QrPayloadRouter dispatcha il payload via host-match.
+        let url = GroupInviteQrCode.encode(.init(groupId: groupId,
+                                                 groupName: groupName))
+        payload = url.absoluteString
+        qrImage = renderQr(content: payload)
     }
 
     private func renderQr(content: String) -> UIImage? {

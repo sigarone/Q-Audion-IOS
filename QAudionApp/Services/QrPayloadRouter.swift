@@ -1,9 +1,9 @@
 import Foundation
 import QAudionEngine
 
-/// Routes a scanned QR-code string to one of the three §5/§6 payload codecs.
+/// Routes a scanned QR-code string to one of the §5/§6/W53 payload codecs.
 ///
-/// Q-Audion has three distinct QR shapes that the in-app scanner has to
+/// Q-Audion has FOUR distinct QR shapes that the in-app scanner has to
 /// distinguish purely from text content:
 ///
 /// - **Identity** (`QAUDION:1:<userId>:<pubkey-b64>:<checksum-b64>`) — printable
@@ -12,6 +12,8 @@ import QAudionEngine
 ///   QR (`DeviceLinkBinaryQR`).
 /// - **Fast setup** (`qaudion://setup/<base64url>`) — server-issued onboarding
 ///   bypass (`FastSetupQrCode`).
+/// - **Group invite (W53)** (`qaudion://group-invite/<base64url-json>`) —
+///   client-generated invito a un gruppo (`GroupInviteQrCode`).
 ///
 /// The router cheaply discriminates by prefix before paying the (slightly)
 /// more expensive base64 + JSON / binary parses inside the codecs themselves.
@@ -26,13 +28,16 @@ public enum QrPayloadRouter {
         case identity(IdentityQrCode.Identity)
         case deviceLink(DeviceLinkBinaryQR.Decoded)
         case fastSetup(FastSetupQrCode.Payload)
+        /// W53: invito a un gruppo (groupId + groupName). Engine wire
+        /// pending per `POST /groups/:id/join` server-side.
+        case groupInvite(GroupInviteQrCode.Payload)
         /// Recognised prefix but inner decode failed (with reason).
         case invalid(kind: Kind, reason: String)
         /// Prefix didn't match any known shape.
         case unknown(prefix: String)
 
         public enum Kind: String, Equatable {
-            case identity, deviceLink, fastSetup
+            case identity, deviceLink, fastSetup, groupInvite
         }
 
         public static func == (lhs: Decoded, rhs: Decoded) -> Bool {
@@ -40,6 +45,7 @@ public enum QrPayloadRouter {
             case (.identity(let a), .identity(let b)): return a == b
             case (.deviceLink(let a), .deviceLink(let b)): return a == b
             case (.fastSetup(let a), .fastSetup(let b)): return a == b
+            case (.groupInvite(let a), .groupInvite(let b)): return a == b
             case (.invalid(let ka, let ra), .invalid(let kb, let rb)): return ka == kb && ra == rb
             case (.unknown(let a), .unknown(let b)): return a == b
             default: return false
@@ -81,6 +87,14 @@ public enum QrPayloadRouter {
                     return .fastSetup(dec)
                 } catch {
                     return .invalid(kind: .fastSetup, reason: error.localizedDescription)
+                }
+            case GroupInviteQrCode.urlHost:
+                // W53: invito a un gruppo, JSON shape sotto base64url path.
+                do {
+                    let dec = try GroupInviteQrCode.decode(url: url)
+                    return .groupInvite(dec)
+                } catch {
+                    return .invalid(kind: .groupInvite, reason: error.localizedDescription)
                 }
             default:
                 return .unknown(prefix: "qaudion://\(url.host ?? "")")
