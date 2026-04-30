@@ -9,6 +9,28 @@ final class CallService {
     var onRxWaveformUpdate: (([Float]) -> Void)?
     var onCipherWaveformUpdate: (([Float]) -> Void)?
 
+    /// W65: Audio processing pipeline che attiva HW AEC + AGC + NS via
+    /// Apple Voice Processing I/O unit. Configurato all'inizio di ogni
+    /// chiamata, deactivato all'`endCall()`. Pre-W65 le chiamate VoIP
+    /// suonavano "eco-y, rumorose, volumi inconsistenti" perché
+    /// AVAudioSession era in mode default (`.solo`) — ora `.voiceChat`
+    /// trigger l'intero stack DSP hardware.
+    ///
+    /// NOTA: `AudioProcessingPipeline` espone anche `AudioCapture` /
+    /// `AudioPlayback` con installTap/playerNode wiring completo, ma
+    /// quelli rimangono dormienti perché il network transport
+    /// (sendAudioFrame WS → processIncomingAudio loop) non è ancora
+    /// wired a livello CallService — è ENGINE WT
+    /// (`QAudionCallIntegration.processOutgoingAudio` returns encrypted
+    /// bytes che vanno consegnati al `BCryptoWebSocketClient
+    /// .sendAudioFrame(recipientId:frame:)`, scope engine team).
+    ///
+    /// Anche solo il `configureForVoIP()` (che NON cattura il mic ma
+    /// sets system-wide AVAudioSession) garantisce HW AEC/NS/AGC su
+    /// QUALSIASI altro path che catturi il mic durante la chiamata —
+    /// inclusi C-level capture nel core engine.
+    private var audioPipeline: AudioProcessingPipeline?
+
     // MARK: - Mute / Hold
 
     /// When true, processOutgoingAudio returns silent (zero-padded) ciphertext.
@@ -56,6 +78,34 @@ final class CallService {
     }
 
     func startCall(engine: QAudionEngine, contactId: String) throws {
+        // W65: defensive cleanup se startCall è chiamato 2x senza endCall
+        // (caso che NON dovrebbe succedere ma proteggiamo da leak della
+        // session). NVIDIA review punto #2.
+        if let oldPipeline = audioPipeline {
+            oldPipeline.deactivateSession()
+            audioPipeline = nil
+        }
+
+        // W65: PRIMA cosa — configura AVAudioSession in `.voiceChat` mode
+        // per attivare lo stack HW DSP di Apple (Voice Processing I/O):
+        //   - Echo cancellation (AEC)         — cancella il feedback dello speaker
+        //   - Noise suppression (NS)          — riduce rumore ambientale
+        //   - Automatic gain control (AGC)    — normalizza volume voce
+        //   - Voice Isolation (iOS 17+)       — isolamento neural-net del parlato
+        //   - Bluetooth A2DP/HFP routing      — auricolari wireless supportati
+        //   - 5ms IO buffer                   — bassa latenza real-time
+        //
+        // Best-effort: se la pipeline fallisce (sim / permission denied) la
+        // chiamata continua comunque — meglio audio sub-ottimale che chiamata
+        // bloccata. Errore silenziato in console per diagnosi.
+        let pipeline = AudioProcessingPipeline()
+        do {
+            try pipeline.configureForVoIP()
+            self.audioPipeline = pipeline
+        } catch {
+            print("[CallService] AVAudioSession.voiceChat config failed: \(error.localizedDescription) — fallback a session default")
+        }
+
         let integration = QAudionCallIntegration()
 
         integration.onStateChanged = { [weak self] state in
@@ -101,6 +151,14 @@ final class CallService {
         callDurationSeconds = 0
         isMuted = false
         isOnHold = false
+
+        // W65: rilascia la AVAudioSession voiceChat mode così il sistema
+        // può tornare a una session generica (es. media playback in
+        // background) senza tenere il VP IO unit attivo inutilmente.
+        // `notifyOthersOnDeactivation` riattiva eventuali altre app
+        // che erano state interrotte da `interruptSpokenAudioAndMixWithOthers`.
+        audioPipeline?.deactivateSession()
+        audioPipeline = nil
     }
 
     func processOutgoingAudio(pcmFrame: Data) throws -> Data {
