@@ -456,21 +456,34 @@ final class AppState: ObservableObject {
     /// so a transient registration failure recovers automatically the
     /// next time the user opens the app.
     private func registerVoipPushToken(hex: String) {
-        guard hex.count == 64 else {
-            print("[AppState] PushKit token wrong length: \(hex.count) (expected 64)")
+        // Validate length AND hex-only chars. Without this an arbitrary
+        // 64-char string (e.g. all 'z') would be accepted and the
+        // server would 400 — silent for the user. Flagged by external
+        // review (OpenRouter glm-5.1).
+        guard hex.count == 64,
+              hex.allSatisfy({ $0.isHexDigit }) else {
+            print("[AppState] PushKit token invalid (len=\(hex.count) hex=\(hex.allSatisfy { $0.isHexDigit }))")
             return
         }
         // Always cache so the next auth-success can retry. Cleared on
-        // successful HTTP 2xx response.
+        // successful HTTP 2xx response IF the cached value still
+        // matches THIS request — guards against a race where a second
+        // PushKit emit overwrites the cache while the first request
+        // is in-flight.
         pendingVoipPushTokenHex = hex
         guard let token = authService.loadToken(), !token.isEmpty else {
             print("[AppState] PushKit register deferred — not authenticated yet (cached for retry)")
             return
         }
-        guard let url = URL(string: serverUrl)?
-            .appendingPathComponent("api/v1/account/apns-voip-token") else {
-            return
-        }
+        // Build URL via URLComponents so the path isn't percent-encoded
+        // by `appendingPathComponent` (which can produce /api%2Fv1%2F…
+        // on some iOS versions, leading to 404).
+        guard var components = URLComponents(string: serverUrl) else { return }
+        var path = components.path
+        while path.hasSuffix("/") { path.removeLast() }
+        components.path = path + "/api/v1/account/apns-voip-token"
+        guard let url = components.url else { return }
+
         let bundleId = Bundle.main.bundleIdentifier ?? "com.qaudion.app"
         let body: [String: Any] = [
             "voip_token": hex,
@@ -484,22 +497,42 @@ final class AppState: ObservableObject {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = bodyData
-        Task {
+        Task { [weak self, hex] in
             do {
                 let (_, resp) = try await URLSession.shared.data(for: req)
                 if let http = resp as? HTTPURLResponse {
                     if (200..<300).contains(http.statusCode) {
                         print("[AppState] PushKit VoIP token registered (\(hex.prefix(16))…)")
-                        await MainActor.run { [weak self] in
-                            self?.pendingVoipPushTokenHex = nil
+                        await MainActor.run {
+                            // Only clear if cache still holds THIS token.
+                            // If a second PushKit emit raced ahead the
+                            // cache holds the new hex — must NOT wipe it.
+                            if self?.pendingVoipPushTokenHex == hex {
+                                self?.pendingVoipPushTokenHex = nil
+                            }
                         }
                     } else {
                         print("[AppState] PushKit register HTTP \(http.statusCode)")
+                        // Cache stays — `retryPendingVoipPushTokenRegistration()`
+                        // will fire next foreground/auth event.
+                        await Self.scheduleRetry(self: self)
                     }
                 }
             } catch {
                 print("[AppState] PushKit register error: \(error.localizedDescription)")
+                await Self.scheduleRetry(self: self)
             }
+        }
+    }
+
+    /// Schedule a single retry tick 30s out so transient network
+    /// failures (Wi-Fi flap, brief server hiccup) don't strand the
+    /// VoIP token in `pendingVoipPushTokenHex` until the next auth
+    /// transition.
+    private static func scheduleRetry(self ref: AppState?) async {
+        try? await Task.sleep(nanoseconds: 30_000_000_000) // 30s
+        await MainActor.run {
+            ref?.retryPendingVoipPushTokenRegistration()
         }
     }
 
