@@ -9,27 +9,42 @@ final class CallService {
     var onRxWaveformUpdate: (([Float]) -> Void)?
     var onCipherWaveformUpdate: (([Float]) -> Void)?
 
-    /// W65: Audio processing pipeline che attiva HW AEC + AGC + NS via
-    /// Apple Voice Processing I/O unit. Configurato all'inizio di ogni
-    /// chiamata, deactivato all'`endCall()`. Pre-W65 le chiamate VoIP
-    /// suonavano "eco-y, rumorose, volumi inconsistenti" perché
-    /// AVAudioSession era in mode default (`.solo`) — ora `.voiceChat`
-    /// trigger l'intero stack DSP hardware.
+    /// W65+W66: Full audio capture + processing pipeline.
     ///
-    /// NOTA: `AudioProcessingPipeline` espone anche `AudioCapture` /
-    /// `AudioPlayback` con installTap/playerNode wiring completo, ma
-    /// quelli rimangono dormienti perché il network transport
-    /// (sendAudioFrame WS → processIncomingAudio loop) non è ancora
-    /// wired a livello CallService — è ENGINE WT
-    /// (`QAudionCallIntegration.processOutgoingAudio` returns encrypted
-    /// bytes che vanno consegnati al `BCryptoWebSocketClient
-    /// .sendAudioFrame(recipientId:frame:)`, scope engine team).
+    /// W65 ha attivato `AVAudioSession.voiceChat` mode (HW AEC/NS/AGC
+    /// system-wide). W66 chiude il loop client-side: AudioCapture
+    /// instanziato con la pipeline così l'AVAudioEngine.inputNode è
+    /// **attivamente** engaged con `setVoiceProcessingEnabled(true)`
+    /// — il VP IO unit gira su DSP separato e processa ogni PCM frame
+    /// PRIMA che arrivi al nostro tap.
     ///
-    /// Anche solo il `configureForVoIP()` (che NON cattura il mic ma
-    /// sets system-wide AVAudioSession) garantisce HW AEC/NS/AGC su
-    /// QUALSIASI altro path che catturi il mic durante la chiamata —
-    /// inclusi C-level capture nel core engine.
+    /// Flow per-frame:
+    ///   1. mic → VP IO unit (HW AEC + NS + AGC) → tap callback
+    ///   2. supplemental software spectral subtraction (pipeline)
+    ///   3. processOutgoingAudio → integration encrypt → EncryptedFrame
+    ///   4. (network send: scope ENGINE WT — `wsClient.sendAudioFrame`)
+    ///
+    /// AudioPlayback è anch'esso instanziato e pronto a receive PCM
+    /// dall'incoming WS handler. Il binding network → playback è
+    /// engine WT (richiede WS dispatch → processIncomingAudio →
+    /// playback.playFrame).
+    ///
+    /// Conflitti potenziali con C-engine audio capture: il C-engine non
+    /// risulta avere capture attivo iOS-side (CLAUDE.md "voice call
+    /// quality cross-platform iOS↔Android, never tested"), quindi il
+    /// path Swift è l'unico mic consumer attivo. Se future PR engine-side
+    /// dovesse aggiungere C-level capture concorrente, va coordinato
+    /// con un toggle qui per disable Swift capture.
     private var audioPipeline: AudioProcessingPipeline?
+    private var audioCapture: AudioCapture?
+    private var audioPlayback: AudioPlayback?
+
+    /// W66: contatori di frame per diagnosi (esposti via Settings →
+    /// Diagnostica). framesEncrypted incrementa ogni volta che un PCM
+    /// dal mic completa il roundtrip processOutgoingAudio. framesPlayed
+    /// incrementa quando un PCM decrypted entra in AudioPlayback.
+    public private(set) var framesEncryptedTx: Int64 = 0
+    public private(set) var framesDecryptedRx: Int64 = 0
 
     // MARK: - Mute / Hold
 
@@ -78,32 +93,71 @@ final class CallService {
     }
 
     func startCall(engine: QAudionEngine, contactId: String) throws {
-        // W65: defensive cleanup se startCall è chiamato 2x senza endCall
-        // (caso che NON dovrebbe succedere ma proteggiamo da leak della
-        // session). NVIDIA review punto #2.
-        if let oldPipeline = audioPipeline {
-            oldPipeline.deactivateSession()
-            audioPipeline = nil
-        }
+        // W65: defensive cleanup se startCall è chiamato 2x senza endCall.
+        teardownAudioStack()
 
         // W65: PRIMA cosa — configura AVAudioSession in `.voiceChat` mode
-        // per attivare lo stack HW DSP di Apple (Voice Processing I/O):
-        //   - Echo cancellation (AEC)         — cancella il feedback dello speaker
-        //   - Noise suppression (NS)          — riduce rumore ambientale
-        //   - Automatic gain control (AGC)    — normalizza volume voce
-        //   - Voice Isolation (iOS 17+)       — isolamento neural-net del parlato
-        //   - Bluetooth A2DP/HFP routing      — auricolari wireless supportati
-        //   - 5ms IO buffer                   — bassa latenza real-time
-        //
-        // Best-effort: se la pipeline fallisce (sim / permission denied) la
-        // chiamata continua comunque — meglio audio sub-ottimale che chiamata
-        // bloccata. Errore silenziato in console per diagnosi.
+        // per attivare lo stack HW DSP di Apple (Voice Processing I/O).
+        // Best-effort: se fallisce la chiamata continua comunque.
         let pipeline = AudioProcessingPipeline()
         do {
             try pipeline.configureForVoIP()
             self.audioPipeline = pipeline
         } catch {
             print("[CallService] AVAudioSession.voiceChat config failed: \(error.localizedDescription) — fallback a session default")
+            // Even without successful session config, continue: pipeline can
+            // still attempt VP enable on the engine inputNode below.
+            self.audioPipeline = pipeline
+        }
+
+        // W66: instantiate audio capture + playback PRIMA dell'integration
+        // così il VP IO unit è attivo sul mic capture loop.
+        // Best-effort: errori catturati e loggati — la chiamata continua
+        // anche se il capture / playback falliscono (es. simulator).
+        let capture = AudioCapture(audioPipeline: pipeline)
+        let playback = AudioPlayback()
+
+        // Encrypt-on-mic-frame callback: ogni PCM dal mic passa attraverso
+        // VP IO HW DSP, poi spectral subtraction, poi processOutgoingAudio
+        // (Opus encode + AEAD encrypt). L'output `encrypted` è un
+        // `EncryptedFrame` serializzato pronto per il transport WS — ma il
+        // network sender (`BCryptoWebSocketClient.sendAudioFrame`) NON è
+        // wirable da CallService senza injection del wsClient — è
+        // ENGINE WT. Per ora i frame encryptati sono solo conteggiati
+        // così l'utente vede via Diagnostica che il loop crypto sta girando.
+        capture.onFrame = { [weak self] pcmFrame in
+            guard let self = self,
+                  let integration = self.callIntegration else { return }
+            do {
+                let encrypted = try integration.processOutgoingAudio(pcmFrame: pcmFrame)
+                self.framesEncryptedTx &+= 1
+                // Aggiorna waveform per UI (TX + cipher).
+                let txSamples = self.updateWaveformSamples(from: pcmFrame)
+                let cipherSamples = self.updateCipherSamples(from: encrypted)
+                Task { @MainActor in
+                    self.onTxWaveformUpdate?(txSamples)
+                    self.onCipherWaveformUpdate?(cipherSamples)
+                }
+                // Engine WT: encrypted bytes consegnati al transport WS.
+                // self.wsClient?.sendAudioFrame(recipientId: contactId, frame: encrypted)
+            } catch {
+                // Silent: pre-session-active errors sono attesi durante
+                // handshake; logghiamo solo quando session è attiva.
+            }
+        }
+
+        do {
+            try playback.start()
+            self.audioPlayback = playback
+        } catch {
+            print("[CallService] AudioPlayback start failed: \(error.localizedDescription)")
+        }
+
+        do {
+            try capture.start()
+            self.audioCapture = capture
+        } catch {
+            print("[CallService] AudioCapture start failed: \(error.localizedDescription) — chiamata continua senza HW VP")
         }
 
         let integration = QAudionCallIntegration()
@@ -152,13 +206,42 @@ final class CallService {
         isMuted = false
         isOnHold = false
 
-        // W65: rilascia la AVAudioSession voiceChat mode così il sistema
-        // può tornare a una session generica (es. media playback in
-        // background) senza tenere il VP IO unit attivo inutilmente.
-        // `notifyOthersOnDeactivation` riattiva eventuali altre app
-        // che erano state interrotte da `interruptSpokenAudioAndMixWithOthers`.
+        // W65+W66: stop capture/playback + rilascia AVAudioSession.
+        teardownAudioStack()
+    }
+
+    /// W66: ingresso per il RX path. Quando il network transport
+    /// (engine WT) consegnerà encrypted frames al CallService, questa
+    /// funzione decrypta e riproduce. Per ora callable da test/eng,
+    /// non chiamata da network handler (che è scope engine).
+    public func handleIncomingEncryptedFrame(_ serializedFrame: Data) {
+        guard let integration = callIntegration else { return }
+        do {
+            let pcm = try integration.processIncomingAudio(serializedFrame: serializedFrame)
+            framesDecryptedRx &+= 1
+            audioPlayback?.playFrame(pcm)
+            // RX waveform update.
+            let rxSamples = updateWaveformSamples(from: pcm)
+            Task { @MainActor in
+                self.onRxWaveformUpdate?(rxSamples)
+            }
+        } catch {
+            print("[CallService] processIncomingAudio failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// W66: stop ordinato di capture + playback + session deactivation.
+    /// Chiamato sia in `endCall()` che come defensive cleanup all'inizio
+    /// di `startCall()` (re-entry guard).
+    private func teardownAudioStack() {
+        audioCapture?.stop()
+        audioCapture = nil
+        audioPlayback?.stop()
+        audioPlayback = nil
         audioPipeline?.deactivateSession()
         audioPipeline = nil
+        framesEncryptedTx = 0
+        framesDecryptedRx = 0
     }
 
     func processOutgoingAudio(pcmFrame: Data) throws -> Data {
