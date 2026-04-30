@@ -80,14 +80,86 @@ final class MyPhonesContainer: ObservableObject {
         persist()
     }
 
-    /// Stub: would push the full peppered-hash list to the server via
-    /// `POST /contacts/phones`. Today just persists locally + flips the
-    /// `savingPhones` flag for ~600ms so the UX shows the spinner state.
-    func savePhones() async {
+    /// W54 (Track B engine wire): pubblica i phoneNumbers come peppered
+    /// hashes al server via:
+    ///   1. GET  /api/v1/contacts/pepper          → fetch pepper
+    ///   2. SHA-256(pepper ‖ E.164) per ogni numero (PepperedPhoneHash)
+    ///   3. DELETE /api/v1/contacts/phones        → wipe set precedente
+    ///   4. POST  /api/v1/contacts/phones         → register nuovi hashes
+    ///
+    /// Idempotente: il server replace l'intero set ad ogni POST. Best-effort
+    /// graceful degrade quando il server non espone l'endpoint pepper
+    /// (`getContactPepper` 404 / network error) — la persistenza locale
+    /// in UserDefaults rimane comunque, così l'app funziona offline.
+    ///
+    /// Parità con Android `SettingsViewModel.pushPeppered(phones:)`.
+    func savePhones(appState: AppState) async {
         savingPhones = true
-        try? await Task.sleep(nanoseconds: 600_000_000)
+        error = nil
+        defer { savingPhones = false }
+
+        // 1. Persist locally regardless of server outcome.
         persist()
-        savingPhones = false
+
+        // 2. Build provider — bail if not signed in (no token).
+        guard let token = appState.authService.loadToken(), !token.isEmpty else {
+            // Local-only mode: lascia un info-banner nessun-token così l'utente
+            // sa che la lista non è stata propagata al server.
+            self.error = "Sessione non attiva — numeri salvati solo localmente."
+            return
+        }
+        let config = BackendConfig(serverUrl: appState.serverUrl,
+                                   accessToken: token)
+        let provider = BCryptoBackendProvider(config: config)
+        let rest = provider.getRestClient()
+
+        // 3. Fetch pepper (alg + base64). Server response shape varies
+        //    by build — accettiamo sia { pepper } (shape iOS-engine) sia
+        //    { pepper_b64, alg } (shape Android).
+        let (pepperBytes, alg): (Data, String)
+        do {
+            let pepperData = try await rest.get("/api/v1/contacts/pepper")
+            guard let json = try JSONSerialization.jsonObject(with: pepperData) as? [String: Any] else {
+                self.error = "Risposta pepper non valida."
+                return
+            }
+            if let b64 = json["pepper_b64"] as? String,
+               let bytes = Data(base64Encoded: b64) {
+                pepperBytes = bytes
+                alg = (json["alg"] as? String) ?? "sha-256-pepper-prefix"
+            } else if let raw = json["pepper"] as? String {
+                // Older shape: pepper as raw UTF-8 string.
+                pepperBytes = Data(raw.utf8)
+                alg = "sha-256-pepper-prefix"
+            } else {
+                self.error = "Pepper mancante nella risposta server."
+                return
+            }
+        } catch {
+            // Best-effort: server senza endpoint pepper → fallback locale.
+            self.error = "Server pepper non raggiungibile — numeri salvati solo localmente."
+            return
+        }
+
+        // 4. Compute peppered hashes locally. PepperedPhoneHash usa
+        //    pepper come UTF-8 string; convertiamo qui via raw bytes.
+        let pepperString = String(data: pepperBytes, encoding: .utf8) ?? pepperBytes.base64EncodedString()
+        let hashes: [String] = phones.compactMap { e164 in
+            try? PepperedPhoneHash.hash(phone: e164, pepper: pepperString)
+        }
+
+        // 5. DELETE old set (best-effort).
+        _ = try? await rest.delete("/api/v1/contacts/phones")
+
+        // 6. POST new set if non-empty.
+        guard !hashes.isEmpty else { return }
+        let body: [String: Any] = ["alg": alg, "hashes": hashes]
+        do {
+            let data = try JSONSerialization.data(withJSONObject: body)
+            _ = try await rest.post("/api/v1/contacts/phones", body: data)
+        } catch {
+            self.error = "Push numeri al server fallito: \(error.localizedDescription)"
+        }
     }
 
     private func persist() {
@@ -99,6 +171,7 @@ final class MyPhonesContainer: ObservableObject {
 /// inside Android `ProfileScreen.kt` (lines 154-295).
 struct MyPhonesScreen: View {
     @StateObject private var container = MyPhonesContainer()
+    @EnvironmentObject private var appState: AppState
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
@@ -266,8 +339,12 @@ struct MyPhonesScreen: View {
     private var saveButton: some View {
         Button {
             Task {
-                await container.savePhones()
-                snackbar?.show(.init(text: "Numeri salvati.", severity: .info))
+                await container.savePhones(appState: appState)
+                if container.error == nil {
+                    snackbar?.show(.init(
+                        text: "Numeri salvati e pubblicati al server.",
+                        severity: .info))
+                }
             }
         } label: {
             Text(container.savingPhones
@@ -308,6 +385,7 @@ struct MyPhonesScreen: View {
 #Preview {
     NavigationStack {
         MyPhonesScreen()
+            .environmentObject(AppState())
     }
     .qAudionTheme(dark: true)
 }
