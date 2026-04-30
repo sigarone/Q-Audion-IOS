@@ -46,6 +46,18 @@ final class CallService {
     public private(set) var framesEncryptedTx: Int64 = 0
     public private(set) var framesDecryptedRx: Int64 = 0
 
+    /// W67: WebSocket transport binding. Quando setato via
+    /// `wireTransport(wsClient:peerUserId:)`, il loop chiude:
+    ///   TX: capture.onFrame → encrypt → wsClient.sendAudioFrame
+    ///   RX: wsClient handler "audio_frame" → handleIncomingEncryptedFrame
+    /// Quando nil, le encrypted bytes restano locali (counter only).
+    private var wsClient: BCryptoWebSocketClient?
+    private var peerUserId: String?
+    /// Token usato per de-registrare il handler "audio_frame" su endCall
+    /// — assumiamo che `registerHandler` sostituisca il precedente per
+    /// type, quindi de-register è no-op (ma resettiamo wsClient così
+    /// future incoming frames non triggherano playback senza session).
+
     // MARK: - Mute / Hold
 
     /// When true, processOutgoingAudio returns silent (zero-padded) ciphertext.
@@ -138,8 +150,13 @@ final class CallService {
                     self.onTxWaveformUpdate?(txSamples)
                     self.onCipherWaveformUpdate?(cipherSamples)
                 }
-                // Engine WT: encrypted bytes consegnati al transport WS.
-                // self.wsClient?.sendAudioFrame(recipientId: contactId, frame: encrypted)
+                // W67: network send via WebSocket transport. Se wsClient
+                // + peerUserId sono wirati, il frame encryptato vola
+                // verso il peer. Senza wiring, le bytes restano locali
+                // (loop verificabile solo via counter).
+                if let ws = self.wsClient, let peer = self.peerUserId {
+                    ws.sendAudioFrame(recipientId: peer, frame: encrypted)
+                }
             } catch {
                 // Silent: pre-session-active errors sono attesi durante
                 // handshake; logghiamo solo quando session è attiva.
@@ -210,23 +227,29 @@ final class CallService {
         teardownAudioStack()
     }
 
-    /// W66: ingresso per il RX path. Quando il network transport
-    /// (engine WT) consegnerà encrypted frames al CallService, questa
-    /// funzione decrypta e riproduce. Per ora callable da test/eng,
-    /// non chiamata da network handler (che è scope engine).
+    /// W66+W67: ingresso per il RX path. Chiamato dal handler "audio_frame"
+    /// del `BCryptoWebSocketClient` quando il server inoltra un frame
+    /// del peer. Esegue decrypt + playback + UI updates.
+    ///
+    /// Thread safety: il WS handler è invocato su una background queue
+    /// di URLSession. AVAudioPCMBuffer scheduleBuffer è thread-safe per
+    /// Apple docs, ma per safety con i `@Published` AppState e i counter
+    /// non-atomic, dispatchiamo l'intera elaborazione su main.
     public func handleIncomingEncryptedFrame(_ serializedFrame: Data) {
-        guard let integration = callIntegration else { return }
-        do {
-            let pcm = try integration.processIncomingAudio(serializedFrame: serializedFrame)
-            framesDecryptedRx &+= 1
-            audioPlayback?.playFrame(pcm)
-            // RX waveform update.
-            let rxSamples = updateWaveformSamples(from: pcm)
-            Task { @MainActor in
+        // Dispatch to main per coerenza con TX path (Task { @MainActor })
+        // e per evitare race su framesDecryptedRx counter.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let integration = self.callIntegration else { return }
+            do {
+                let pcm = try integration.processIncomingAudio(serializedFrame: serializedFrame)
+                self.framesDecryptedRx &+= 1
+                self.audioPlayback?.playFrame(pcm)
+                let rxSamples = self.updateWaveformSamples(from: pcm)
                 self.onRxWaveformUpdate?(rxSamples)
+            } catch {
+                print("[CallService] processIncomingAudio failed: \(error.localizedDescription)")
             }
-        } catch {
-            print("[CallService] processIncomingAudio failed: \(error.localizedDescription)")
         }
     }
 
@@ -242,6 +265,37 @@ final class CallService {
         audioPipeline = nil
         framesEncryptedTx = 0
         framesDecryptedRx = 0
+        // W67: reset transport binding. Nota: NON disconnect-iamo il
+        // wsClient (può restare connesso per signaling / chat / contacts).
+        // Solo facciamo nil-out i riferimenti così future audio frames
+        // non triggherano send/playback.
+        wsClient = nil
+        peerUserId = nil
+    }
+
+    /// W67: wire del WebSocket transport per chiudere il loop audio.
+    /// Chiamato da `AppState.startCall()` PRIMA di `startCall(engine:contactId:)`
+    /// così la prima frame catturata può immediatamente essere instradata.
+    ///
+    /// Registra il handler "audio_frame" che il `BCryptoWebSocketClient`
+    /// emette quando il server inoltra un audio frame del peer:
+    ///   1. extract `frame` field (base64) dal payload JSON
+    ///   2. decode base64 → serialized EncryptedFrame
+    ///   3. handleIncomingEncryptedFrame → decrypt → AudioPlayback
+    public func wireTransport(wsClient: BCryptoWebSocketClient,
+                              peerUserId: String) {
+        self.wsClient = wsClient
+        self.peerUserId = peerUserId
+
+        // Register handler. BCryptoWebSocketClient.registerHandler
+        // sostituisce qualsiasi precedente handler per lo stesso type,
+        // quindi non serve unregister esplicito su endCall.
+        wsClient.registerHandler(type: "audio_frame") { [weak self] _, data in
+            guard let self,
+                  let b64 = data["frame"] as? String,
+                  let frameData = Data(base64Encoded: b64) else { return }
+            self.handleIncomingEncryptedFrame(frameData)
+        }
     }
 
     func processOutgoingAudio(pcmFrame: Data) throws -> Data {

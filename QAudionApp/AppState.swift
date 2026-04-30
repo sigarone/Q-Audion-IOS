@@ -322,6 +322,24 @@ final class AppState: ObservableObject {
         rxWaveformSamples = []
         cipherWaveformSamples = []
         do {
+            // W67: wire WebSocket transport PRIMA di startCall così il
+            // handler "audio_frame" è già registrato quando il peer
+            // inizia a inviare e la capture.onFrame può immediatamente
+            // route al wsClient. Best-effort: senza token ancora non
+            // facciamo wiring (chiamata continua senza network audio,
+            // ma HW DSP capture+playback restano comunque attivi via W66).
+            if let token = authService.loadToken(), !token.isEmpty {
+                let backendConfig = BackendConfig(
+                    serverUrl: serverUrl,
+                    accessToken: token
+                )
+                let provider = BCryptoBackendProvider(config: backendConfig)
+                callService.wireTransport(
+                    wsClient: provider.getWebSocketClient(),
+                    peerUserId: contactId
+                )
+            }
+
             try callService.startCall(engine: engine, contactId: contactId)
             callState = .active
             // Track in recent calls
