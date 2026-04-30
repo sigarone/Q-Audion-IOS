@@ -60,6 +60,13 @@ final class AppState: ObservableObject {
     @Published private(set) var wsConnectionState: ConnectionState = .disconnected
     private var liveProvider: BCryptoBackendProvider?
 
+    /// W75: cached PushKit VoIP token. PushKit emits this on first
+    /// launch BEFORE the user is authenticated — we stash it here and
+    /// retry the server POST after every auth-success transition. Once
+    /// the registration succeeds, subsequent re-emits (rotation /
+    /// reinstall) hit `registerVoipPushToken` directly.
+    private var pendingVoipPushTokenHex: String?
+
     // MARK: - Call state
     @Published var isInCall: Bool = false
     @Published var isVideoCall: Bool = false
@@ -269,12 +276,17 @@ final class AppState: ObservableObject {
             // logga solo il token, no riferimenti a self. Eliminava il
             // warning compile "variable 'self' was written to, but never
             // read" che spam-ava ogni Codemagic build.
-            onTokenUpdate: { token in
+            onTokenUpdate: { [weak self] token in
+                // W75: register the VoIP token with the server so the
+                // dispatcher can wake the device for incoming calls when
+                // the WS isn't live (app suspended / killed). Wire shape
+                // matches `bcrypto-server/cmd/bcrypto-lite/account_apns_voip_token.go`:
+                //   POST /api/v1/account/apns-voip-token
+                //   { "voip_token": "<64 hex>", "bundle_id": "com.qaudion.app" }
                 let hex = token.map { String(format: "%02hhx", $0) }.joined()
-                // Stub: log token prefix. Actual server registration deferred until
-                // spec §10.1 APNs option (α/β/γ/δ) is finalised.
                 await MainActor.run {
                     print("[Q-Audion] PushKit VoIP token: \(hex.prefix(16))...")
+                    self?.registerVoipPushToken(hex: hex)
                 }
             },
             onIncomingCall: { [weak self] payload in
@@ -307,6 +319,9 @@ final class AppState: ObservableObject {
                     // on the same provider once the socket is up.
                     self.connectPersistentSocket()
                     self.bindPresenceAfterAuth()
+                    // W75: ship any cached PushKit token now that we
+                    // have a JWT — calls survive app-killed state.
+                    self.retryPendingVoipPushTokenRegistration()
                 } catch {
                     authService.clearToken()
                     self.isAuthenticated = false
@@ -327,6 +342,8 @@ final class AppState: ObservableObject {
             // W74: open the long-lived WS so the server marks us online.
             connectPersistentSocket()
             bindPresenceAfterAuth()
+            // W75: ship any cached PushKit token.
+            retryPendingVoipPushTokenRegistration()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -352,6 +369,8 @@ final class AppState: ObservableObject {
             // W74: open the long-lived WS so the server marks us online.
             connectPersistentSocket()
             bindPresenceAfterAuth()
+            // W75: ship any cached PushKit token.
+            retryPendingVoipPushTokenRegistration()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -413,6 +432,73 @@ final class AppState: ObservableObject {
                 print("[AppState] persistent WS opened (online presence active)")
             } catch {
                 print("[AppState] persistent WS open failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// W75: re-attempt the PushKit registration after auth-success.
+    /// Called from the 3 auth-success entry points so the cached token
+    /// (deferred while unauthenticated) lands the moment we have a JWT.
+    private func retryPendingVoipPushTokenRegistration() {
+        guard let hex = pendingVoipPushTokenHex else { return }
+        registerVoipPushToken(hex: hex)
+    }
+
+    /// W75: ship the PushKit VoIP token to the bcrypto-server so the
+    /// dispatcher can wake the device for incoming calls when the WS
+    /// isn't live (app suspended or killed). The server endpoint is
+    /// `POST /api/v1/account/apns-voip-token` with body
+    /// `{voip_token: "<64 hex>", bundle_id: "com.qaudion.app"}` —
+    /// matches `cmd/bcrypto-lite/account_apns_voip_token.go` line 47.
+    ///
+    /// Best-effort: any non-2xx is logged but not surfaced to the UI.
+    /// PushKit re-emits the token on every app launch and on rotation,
+    /// so a transient registration failure recovers automatically the
+    /// next time the user opens the app.
+    private func registerVoipPushToken(hex: String) {
+        guard hex.count == 64 else {
+            print("[AppState] PushKit token wrong length: \(hex.count) (expected 64)")
+            return
+        }
+        // Always cache so the next auth-success can retry. Cleared on
+        // successful HTTP 2xx response.
+        pendingVoipPushTokenHex = hex
+        guard let token = authService.loadToken(), !token.isEmpty else {
+            print("[AppState] PushKit register deferred — not authenticated yet (cached for retry)")
+            return
+        }
+        guard let url = URL(string: serverUrl)?
+            .appendingPathComponent("api/v1/account/apns-voip-token") else {
+            return
+        }
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.qaudion.app"
+        let body: [String: Any] = [
+            "voip_token": hex,
+            "bundle_id": bundleId,
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
+            return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = bodyData
+        Task {
+            do {
+                let (_, resp) = try await URLSession.shared.data(for: req)
+                if let http = resp as? HTTPURLResponse {
+                    if (200..<300).contains(http.statusCode) {
+                        print("[AppState] PushKit VoIP token registered (\(hex.prefix(16))…)")
+                        await MainActor.run { [weak self] in
+                            self?.pendingVoipPushTokenHex = nil
+                        }
+                    } else {
+                        print("[AppState] PushKit register HTTP \(http.statusCode)")
+                    }
+                }
+            } catch {
+                print("[AppState] PushKit register error: \(error.localizedDescription)")
             }
         }
     }
