@@ -75,9 +75,19 @@ final class NetworkSimulatorContainer: ObservableObject {
     let availableProfiles: [NetSimProfile] = NetSimProfile.presets
 
     func select(_ p: NetSimProfile) {
-        // Stub: engine not yet wired on iOS. Once the per-call simulator
-        // surfaces (`appState.callService.setSimProfile(p)`), forward here.
+        // W69: ora wired al `NetworkConditionSimulator` engine-side.
+        // Il setProfile è effetto immediato sul prossimo frame del
+        // CallService loop (TX e RX hooks).
         active = p
+        let enginePf = NetworkConditionSimulator.Profile(
+            id: p.id,
+            label: p.label,
+            outboundDelayMs: p.outboundDelayMs,
+            outboundLossRatio: p.outboundLossRatio,
+            inboundLossRatio: p.inboundLossRatio,
+            offline: p.offline
+        )
+        NetworkConditionSimulator.shared.setProfile(enginePf)
     }
 }
 

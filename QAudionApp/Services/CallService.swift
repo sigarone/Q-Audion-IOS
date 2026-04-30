@@ -140,27 +140,23 @@ final class CallService {
         capture.onFrame = { [weak self] pcmFrame in
             guard let self = self,
                   let integration = self.callIntegration else { return }
-            do {
-                let encrypted = try integration.processOutgoingAudio(pcmFrame: pcmFrame)
-                self.framesEncryptedTx &+= 1
-                // Aggiorna waveform per UI (TX + cipher).
-                let txSamples = self.updateWaveformSamples(from: pcmFrame)
-                let cipherSamples = self.updateCipherSamples(from: encrypted)
-                Task { @MainActor in
-                    self.onTxWaveformUpdate?(txSamples)
-                    self.onCipherWaveformUpdate?(cipherSamples)
+            // W69: dev network simulator hook. In Off (default) il call
+            // è branch-predicted off-path. In altri profili può
+            // droppare o ritardare il frame.
+            if !NetworkConditionSimulator.shared.isPassthrough() {
+                if NetworkConditionSimulator.shared.shouldDropOutbound() {
+                    return  // frame droppato — simula packet loss outbound
                 }
-                // W67: network send via WebSocket transport. Se wsClient
-                // + peerUserId sono wirati, il frame encryptato vola
-                // verso il peer. Senza wiring, le bytes restano locali
-                // (loop verificabile solo via counter).
-                if let ws = self.wsClient, let peer = self.peerUserId {
-                    ws.sendAudioFrame(recipientId: peer, frame: encrypted)
+                // Delay è async; isolated in a Task così non blocca il
+                // tap callback. Per simulare HighLatency / Satellite il
+                // peer riceve il frame con il delay configurato.
+                Task { [weak self] in
+                    await NetworkConditionSimulator.shared.delayOutbound()
+                    self?.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
                 }
-            } catch {
-                // Silent: pre-session-active errors sono attesi durante
-                // handshake; logghiamo solo quando session è attiva.
+                return
             }
+            self.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
         }
 
         do {
@@ -236,6 +232,13 @@ final class CallService {
     /// Apple docs, ma per safety con i `@Published` AppState e i counter
     /// non-atomic, dispatchiamo l'intera elaborazione su main.
     public func handleIncomingEncryptedFrame(_ serializedFrame: Data) {
+        // W69: dev network simulator hook RX. Stessa semantica del TX —
+        // simula packet loss inbound. Branch-predicted off-path in Off.
+        if !NetworkConditionSimulator.shared.isPassthrough() {
+            if NetworkConditionSimulator.shared.shouldDropInbound() {
+                return  // frame inbound droppato
+            }
+        }
         // Dispatch to main per coerenza con TX path (Task { @MainActor })
         // e per evitare race su framesDecryptedRx counter.
         DispatchQueue.main.async { [weak self] in
@@ -271,6 +274,29 @@ final class CallService {
         // non triggherano send/playback.
         wsClient = nil
         peerUserId = nil
+    }
+
+    /// W69 helper: encrypt + waveform-update + network-send routine
+    /// extracted from `capture.onFrame` per essere call-able sia dal
+    /// fast path (NetworkSim Off) che dal task-isolated delay path
+    /// (NetworkSim HighLatency/Satellite).
+    private func processAndSendEncryptedFrame(pcmFrame: Data,
+                                               integration: QAudionCallIntegration) {
+        do {
+            let encrypted = try integration.processOutgoingAudio(pcmFrame: pcmFrame)
+            framesEncryptedTx &+= 1
+            let txSamples = updateWaveformSamples(from: pcmFrame)
+            let cipherSamples = updateCipherSamples(from: encrypted)
+            Task { @MainActor [weak self] in
+                self?.onTxWaveformUpdate?(txSamples)
+                self?.onCipherWaveformUpdate?(cipherSamples)
+            }
+            if let ws = wsClient, let peer = peerUserId {
+                ws.sendAudioFrame(recipientId: peer, frame: encrypted)
+            }
+        } catch {
+            // Silent: pre-session-active errors sono attesi durante handshake.
+        }
     }
 
     /// W67: wire del WebSocket transport per chiudere il loop audio.
