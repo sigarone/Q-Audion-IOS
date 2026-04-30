@@ -252,6 +252,7 @@ final class AppState: ObservableObject {
                     let profile = try await provider.accountApi.getProfile()
                     self.currentUserId = profile.userId
                     self.isAuthenticated = true
+                    self.replayPendingTrackB()
                 } catch {
                     authService.clearToken()
                     self.isAuthenticated = false
@@ -268,6 +269,7 @@ final class AppState: ObservableObject {
             currentUserId = creds.userId
             isAuthenticated = true
             errorMessage = nil
+            replayPendingTrackB()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -289,9 +291,18 @@ final class AppState: ObservableObject {
             currentUserId = creds.userId
             isAuthenticated = true
             errorMessage = nil
+            replayPendingTrackB()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
+    }
+
+    /// W70: drain `PendingGroupInviteStore` chiamando `POST /groups/:id/join`
+    /// per ogni pending. Best-effort, mai blocca l'UI. Chiamato al
+    /// completamento di ogni transizione auth → success.
+    private func replayPendingTrackB() {
+        guard let sync = TrackBSyncService.from(self) else { return }
+        Task { _ = await sync.replayPendingGroupInvites() }
     }
 
     func logout() {

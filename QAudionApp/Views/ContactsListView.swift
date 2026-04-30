@@ -87,6 +87,13 @@ final class ContactsListContainer: ObservableObject {
             // visibile per l'utente è l'incremento del counter
             // (visibile in Diagnostica W48 quando wirato).
             PendingGroupInviteStore.append(from: invite)
+            // W70: server endpoint live → replay subito invece di
+            // attendere il prossimo login. Best-effort, se 401/5xx la
+            // pending resta nel local store per il replay successivo.
+            if let appState = self.appState,
+               let sync = TrackBSyncService.from(appState) {
+                Task { _ = await sync.replayPendingGroupInvites() }
+            }
             return false  // non aggiunto come contatto — è un gruppo
         case .fastSetup, .invalid, .unknown:
             // fastSetup è onboarding-time, gestito da OnboardingFlow.

@@ -208,6 +208,10 @@ struct ChatListScreen: View {
                     Button {
                         let n = container.totalUnread
                         container.markAllAsRead()
+                        // W70: replay server-side bulk read-all (best-effort).
+                        if let sync = TrackBSyncService.from(appState) {
+                            Task { await sync.markAllConversationsRead() }
+                        }
                         snackbar?.show(.init(
                             text: n > 0
                                 ? "Segnate \(n) conversazioni come lette."

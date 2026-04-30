@@ -219,6 +219,10 @@ struct CallHistoryView: View {
             Button("Annulla", role: .cancel) {}
             Button("Cancella", role: .destructive) {
                 store.clearAll()
+                // W70: replay loop server-side (best-effort fire-and-forget).
+                if let sync = TrackBSyncService.from(appState) {
+                    Task { await sync.deleteAllCallHistory() }
+                }
             }
         } message: {
             Text("Verranno rimosse \(store.entries.count) chiamate dallo storico locale. L'azione non si può annullare.")
@@ -300,6 +304,11 @@ struct CallHistoryView: View {
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
                         store.deleteEntry(entry.id)
+                        // W70: replay server-side (best-effort).
+                        if let sync = TrackBSyncService.from(appState) {
+                            let id = entry.id
+                            Task { await sync.deleteCallHistoryEntry(id) }
+                        }
                     } label: {
                         Label("Elimina", systemImage: "trash")
                     }
