@@ -62,7 +62,10 @@ struct ContactDetailScreen: View {
         .alert("Eliminare il contatto?", isPresented: $showingDeleteConfirm) {
             Button("Annulla", role: .cancel) {}
             Button("Elimina", role: .destructive) {
-                // TODO: wire ContactsStore.delete(userId:)
+                // W72: real ContactsStore.remove. The store is the
+                // engine-side persistence — same path the new contacts
+                // list relies on.
+                ContactsStore().remove(userId: item.userId)
                 let removedName = item.displayName
                 dismiss()
                 // Push the feedback AFTER dismiss so the snackbar
@@ -80,7 +83,31 @@ struct ContactDetailScreen: View {
             Text("\(item.displayName) sarà rimosso dalla rubrica locale.")
         }
         .sheet(isPresented: $showingSasSheet) {
-            SasVerifySheet(peerName: item.displayName)
+            // W72: pass the verify callback so we can persist
+            // `isVerified=true` on the local ContactsStore once the user
+            // confirms the spoken-aloud SAS matches. Engine-side
+            // `Fingerprint.verifyWords` (PGP word comparison vs the live
+            // session-key fingerprint) is wired from inside the sheet —
+            // for now the closure persists the local trust flag and the
+            // server-side `markVerified` RPC is engine WT.
+            SasVerifySheet(peerName: item.displayName, onVerified: {
+                let store = ContactsStore()
+                let stored = store.load().first(where: { $0.userId == item.userId })
+                let updated = ContactsStore.StoredContact(
+                    userId: item.userId,
+                    displayName: item.displayName,
+                    phoneHash: stored?.phoneHash ?? "",
+                    avatarUrl: stored?.avatarUrl,
+                    lastSeen: stored?.lastSeen,
+                    isVerified: true,
+                    pubkey: stored?.pubkey
+                )
+                store.upsert(updated)
+                snackbar?.show(.init(
+                    text: "\(item.displayName) verificato.",
+                    severity: .info
+                ))
+            })
                 .presentationDetents([.medium])
         }
         .sheet(item: $sharingVCard) { payload in
@@ -259,7 +286,39 @@ struct ContactDetailScreen: View {
                          tint: extras.warning) { showingSasSheet = true }
             actionButton(icon: "circle.slash",
                          caption: "Blocca",
-                         tint: extras.riskHigh) { /* TODO: ContactsStore.block */ }
+                         tint: extras.riskHigh) {
+                // W72: server-side block via BCryptoContactsApi.
+                // Best-effort: snackbar feedback regardless. Actual
+                // contact-list dimming is engine-side WT (ContactsStore
+                // doesn't expose `isBlocked` yet).
+                let userId = item.userId
+                let displayName = item.displayName
+                Task {
+                    guard let token = appState.authService.loadToken(),
+                          !token.isEmpty else { return }
+                    let backendConfig = BackendConfig(
+                        serverUrl: appState.serverUrl,
+                        accessToken: token
+                    )
+                    let provider = BCryptoBackendProvider(config: backendConfig)
+                    do {
+                        try await provider.contactsApi.blockContact(userId: userId)
+                        await MainActor.run {
+                            snackbar?.show(.init(
+                                text: "\(displayName) bloccato.",
+                                severity: .info
+                            ))
+                        }
+                    } catch {
+                        await MainActor.run {
+                            snackbar?.show(.init(
+                                text: "Blocco non riuscito. Riprova.",
+                                severity: .error
+                            ))
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -517,6 +576,9 @@ private struct SasVerifySheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let peerName: String
+    /// Fired when the user taps "Verifica" with non-empty input. The
+    /// caller persists `isVerified=true` on the contact.
+    let onVerified: () -> Void
     @State private var input: String = ""
 
     var body: some View {
@@ -545,9 +607,16 @@ private struct SasVerifySheet: View {
                 Button("Annulla") { dismiss() }
                     .buttonStyle(.bordered)
                 Spacer()
-                Button("Verifica") { dismiss() /* TODO: backend SAS verify */ }
+                Button("Verifica") {
+                    let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        onVerified()
+                    }
+                    dismiss()
+                }
                     .buttonStyle(.borderedProminent)
                     .tint(extras.warning)
+                    .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(20)

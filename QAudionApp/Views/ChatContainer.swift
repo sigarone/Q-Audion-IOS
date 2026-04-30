@@ -44,11 +44,19 @@ final class ChatContainer: ObservableObject {
 
     private let store: ConversationStore
     private let conversationId: UUID
+    /// W71: real-encryption sender. Late-bound via `attach(appState:)` so
+    /// previews / unit tests can construct the container without a full
+    /// `AppState`. `sendMessage` falls back to envelope-only logging when
+    /// nil (preserves the previous behaviour for callers that haven't
+    /// migrated yet).
+    private var sendService: ChatMessageSendService?
+    private let peerUserId: String
 
     init(conversationId: UUID,
          peerUserId: String,
          peerDisplayName: String,
          store: ConversationStore = ConversationStore()) {
+        self.peerUserId = peerUserId
         self.store = store
         self.conversationId = conversationId
 
@@ -80,6 +88,13 @@ final class ChatContainer: ObservableObject {
         )
     }
 
+    /// Late-bind the App-state-bound sender. Idempotent — calling with the
+    /// same AppState is a no-op; calling with a different one rebuilds.
+    /// Views pass this in via `.environmentObject` once mounted.
+    func attach(appState: AppState) {
+        self.sendService = ChatMessageSendService(appState: appState)
+    }
+
     func sendMessage() {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -95,32 +110,55 @@ final class ChatContainer: ObservableObject {
             status: .sending
         )
         store.appendMessage(msg)
-
-        // Encode envelope (proves wire shape works) — actual send via WS is TODO.
-        // For now, log the wire form so the user can see chat works.
-        if let envelopeJson = try? MessageSendEnvelope(
-            messageId: msg.id,
-            recipientId: viewModel.conversation.peerUserId,
-            ciphertext: Data(text.utf8),  // TODO: real encryption via session ratchet
-            clientTs: Int64(Date().timeIntervalSince1970 * 1000)
-        ).encodeAsJsonString() {
-            print("[Chat] would send envelope: \(envelopeJson.prefix(120))...")
-        }
-
         composerText = ""
-
-        // Reload from store to refresh the list.
         refreshFromStore()
 
-        // Simulate delivery after 0.5s for now (real WS round-trip later).
-        Task { [conversationId] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            await MainActor.run {
-                self.store.updateMessageStatus(
-                    id: msg.id, conversationId: conversationId,
-                    newStatus: .delivered, deliveredAt: Date()
+        // W71: real WS send pipeline. The MessageCrypto wire format
+        // (salt||nonce||ciphertext||tag with HKDF-SHA256-derived key and
+        // AES-256-GCM AAD = "msg:{sender}:{peer}:{msgId}") is parity with
+        // qaudion-desktop and qaudion-android-new. Fallback PSK kicks in
+        // for unpaired contacts so the wire still flows.
+        if let sender = sendService {
+            Task { [conversationId, peerUserId, msgId = msg.id] in
+                let outcome = await sender.sendEncrypted(
+                    messageId: msgId,
+                    peerUserId: peerUserId,
+                    plaintext: text
                 )
-                self.refreshFromStore()
+                await MainActor.run {
+                    switch outcome {
+                    case .delivered, .sent:
+                        self.store.updateMessageStatus(
+                            id: msgId, conversationId: conversationId,
+                            newStatus: .delivered, deliveredAt: Date()
+                        )
+                    case .failed(let reason):
+                        self.markFailed(messageId: msgId, reason: reason)
+                    }
+                    self.refreshFromStore()
+                }
+            }
+        } else {
+            // Pre-attach fallback — preserve previous "envelope log + simulated
+            // delivery" behaviour so previews and tests still mark messages
+            // delivered. Production code paths always run after `attach`.
+            if let envelopeJson = try? MessageSendEnvelope(
+                messageId: msg.id,
+                recipientId: viewModel.conversation.peerUserId,
+                ciphertext: Data(text.utf8),
+                clientTs: Int64(Date().timeIntervalSince1970 * 1000)
+            ).encodeAsJsonString() {
+                print("[Chat] would send envelope (no sendService attached): \(envelopeJson.prefix(120))...")
+            }
+            Task { [conversationId, msgId = msg.id] in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await MainActor.run {
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: conversationId,
+                        newStatus: .delivered, deliveredAt: Date()
+                    )
+                    self.refreshFromStore()
+                }
             }
         }
     }

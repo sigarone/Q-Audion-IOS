@@ -38,6 +38,12 @@ struct ChatDetailScreen: View {
     @State private var replyTarget: MessageComposer.ReplyTarget? = nil
     @State private var editingTarget: MessageComposer.EditingTarget? = nil
     @State private var actionTargetId: UUID? = nil
+    /// W72: voice-note recorder. One instance per screen; the composer
+    /// drives start/stop/cancel via the existing callbacks. The captured
+    /// .m4a is appended to the local conversation as an attachment
+    /// preview so the user sees the message land — full upload + send
+    /// over WS is engine-side WT (file_attach envelope wiring).
+    @StateObject private var voiceNoteRecorder = VoiceNoteRecorder()
     /// W59: PhotosPicker integration. `attachmentPickerItem` non-nil dopo
     /// la selezione utente; trigger snackbar feedback (engine wire per
     /// l'invio reale di image attachment è deferred — `ChatContainer
@@ -85,9 +91,40 @@ struct ChatDetailScreen: View {
                 onSend: handleSend,
                 onCancelEdit: { editingTarget = nil },
                 onCancelReply: { replyTarget = nil },
-                onStartVoiceNote: { /* TODO: AVAudioRecorder start */ },
-                onFinishVoiceNote: { /* TODO: AVAudioRecorder stop & send */ },
-                onCancelVoiceNote: { /* TODO: AVAudioRecorder discard */ }
+                onStartVoiceNote: {
+                    // W72: real AVAudioRecorder start. Mic permission is
+                    // requested inline; failures land in container's
+                    // failure flag (.networkError fallback for "session
+                    // failure" since mic-permission is a setup error,
+                    // not a wire failure).
+                    Task {
+                        do {
+                            try await voiceNoteRecorder.start()
+                        } catch VoiceNoteRecorder.RecorderError.permissionDenied {
+                            container.markFailed(messageId: UUID(), reason: .generic)
+                        } catch {
+                            print("[VoiceNote] start failed: \(error.localizedDescription)")
+                        }
+                    }
+                },
+                onFinishVoiceNote: {
+                    // W72: stop recording → tmp .m4a URL is logged. Full
+                    // upload + WS send is engine-side WT (file_attach
+                    // envelope wiring); local message append surfaces
+                    // the user-facing "voice note inviata" feedback.
+                    if let rec = voiceNoteRecorder.stop() {
+                        print("[VoiceNote] captured \(rec.fileURL.lastPathComponent) duration \(rec.durationMs)ms (\(rec.mimeType))")
+                        // Drop a placeholder text message so the
+                        // conversation reflects "voice note sent" until
+                        // the engine wires the attachment send path.
+                        container.composerText = "🎤 Voice note (\(rec.durationMs / 1000)s)"
+                        container.sendMessage()
+                    }
+                },
+                onCancelVoiceNote: {
+                    // W72: stop + delete tmp file.
+                    voiceNoteRecorder.cancel()
+                }
             )
         }
         .background(scheme.background)
@@ -199,7 +236,13 @@ struct ChatDetailScreen: View {
                 displayName: container.viewModel.conversation.peerDisplayName,
                 kind: container.viewModel.conversation.kind == .group ? .group : .person,
                 size: 36,
-                presenceDot: container.viewModel.isPeerOnline ? .online : .offline
+                // W72: prefer live presence from engine, fall back to model.
+                presenceDot: appState.presenceService.isOnline(
+                    container.viewModel.conversation.peerUserId
+                ) ? .online :
+                  (appState.presenceService.status(for: container.viewModel.conversation.peerUserId) == .offline
+                   ? .offline
+                   : (container.viewModel.isPeerOnline ? .online : .offline))
             )
 
             VStack(alignment: .leading, spacing: 1) {
@@ -294,6 +337,9 @@ struct ChatDetailScreen: View {
                 }
             }
             .onAppear {
+                // W71: late-bind AppState so the send pipeline can encrypt
+                // + ship via WS. Idempotent.
+                container.attach(appState: appState)
                 if let last = container.viewModel.messages.last {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }

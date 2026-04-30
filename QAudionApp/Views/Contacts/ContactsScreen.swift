@@ -278,7 +278,14 @@ struct ContactsScreen: View {
                 Section {
                     ForEach(items, id: \.userId) { item in
                         NavigationLink(destination: detailDestination(for: item)) {
+                            // W72: live presence dot from the engine
+                            // `BCryptoPresenceManager`. Falls back to the
+                            // model's `isOnline` heuristic if the
+                            // service hasn't received a `presence_update`
+                            // for this user yet (status .unknown).
                             ContactRow(item: item,
+                                       presence: appState.presenceService.isOnline(item.userId) ? .online :
+                                                 (appState.presenceService.status(for: item.userId) == .offline ? .offline : nil),
                                        onChatTap: { openChat(item) },
                                        onCallTap: { openCall(item) })
                         }

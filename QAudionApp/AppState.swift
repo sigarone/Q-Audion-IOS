@@ -43,6 +43,12 @@ final class AppState: ObservableObject {
     @Published var currentUserId: String?
     @Published var errorMessage: String?
 
+    /// W72: presence service — bound to the engine `BCryptoPresenceManager`
+    /// after auth-success so the contacts list / conversations / chat
+    /// header can render online/offline dots reactively. Always non-nil
+    /// so SwiftUI can `@EnvironmentObject` it without a guard.
+    @Published var presenceService: PresenceService = PresenceService()
+
     // MARK: - Call state
     @Published var isInCall: Bool = false
     @Published var isVideoCall: Bool = false
@@ -253,6 +259,7 @@ final class AppState: ObservableObject {
                     self.currentUserId = profile.userId
                     self.isAuthenticated = true
                     self.replayPendingTrackB()
+                    self.bindPresenceAfterAuth()
                 } catch {
                     authService.clearToken()
                     self.isAuthenticated = false
@@ -270,6 +277,7 @@ final class AppState: ObservableObject {
             isAuthenticated = true
             errorMessage = nil
             replayPendingTrackB()
+            bindPresenceAfterAuth()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -292,6 +300,7 @@ final class AppState: ObservableObject {
             isAuthenticated = true
             errorMessage = nil
             replayPendingTrackB()
+            bindPresenceAfterAuth()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -305,11 +314,37 @@ final class AppState: ObservableObject {
         Task { _ = await sync.replayPendingGroupInvites() }
     }
 
+    /// W72: bind the presence service to the live WS transport and
+    /// subscribe the union of contacts + conversation peers so the UI
+    /// can render online/offline dots reactively. Idempotent — calling
+    /// twice with the same auth state is a no-op (the service rebinds
+    /// to the same provider). Best-effort: failures are logged but don't
+    /// block the auth flow.
+    private func bindPresenceAfterAuth() {
+        guard let token = authService.loadToken(), !token.isEmpty else { return }
+        let backendConfig = BackendConfig(serverUrl: serverUrl, accessToken: token)
+        let provider = BCryptoBackendProvider(config: backendConfig)
+        presenceService.attach(provider: provider)
+        // Initial subscription set: known contact userIds + recent calls.
+        // Views that load additional userIds (chat list with full
+        // history) call `presenceService.subscribe(userIds:)` themselves
+        // to broaden the tracked set.
+        let contacts = ContactsStore().load().map { $0.userId }
+        let recents = recentCalls
+        let union = Array(Set(contacts + recents)).filter { !$0.isEmpty }
+        if !union.isEmpty {
+            presenceService.subscribe(userIds: union)
+        }
+    }
+
     func logout() {
         authService.clearToken()
         engine?.destroySession()
         engine?.release()
         engine = nil
+        // W72: drop presence subscriptions + cached statuses so the next
+        // login starts with a clean slate.
+        presenceService.reset()
         currentUserId = nil
         isAuthenticated = false
         callState = .idle
@@ -345,13 +380,111 @@ final class AppState: ObservableObject {
                     accessToken: token
                 )
                 let provider = BCryptoBackendProvider(config: backendConfig)
+                let ws = provider.getWebSocketClient()
                 callService.wireTransport(
-                    wsClient: provider.getWebSocketClient(),
+                    wsClient: ws,
                     peerUserId: contactId
                 )
+                // W72: pre-negotiation phase observers (caller side).
+                // Mirror desktop CallController.CallProgressPhase. Lets
+                // the UI distinguish "remote acked our offer" from
+                // "remote is now ringing locally". See engine docs in
+                // BCryptoWebSocketClient.swift (onCallProcessing /
+                // onCallReady / onCallRing / onCallPeerOffline /
+                // onCallCancel).
+                ws.onCallProcessing = { [weak self] _, _ in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        // Already `.connecting` by default — no transition
+                        // needed but log so devs see the WS arrived.
+                        print("[AppState] call_processing received — peer ack'd offer")
+                    }
+                }
+                ws.onCallReady = { [weak self] _, _, _ in
+                    DispatchQueue.main.async {
+                        // Peer finished PQC setup; flip UI to "Ringing".
+                        self?.callState = .ringing
+                    }
+                }
+                ws.onCallRing = { _, _ in
+                    // Server-side ack that caller has been notified —
+                    // informational only, no state transition.
+                    print("[AppState] call_ring server ack")
+                }
+                ws.onCallPeerOffline = { [weak self] _, _ in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        self.errorMessage = "Il destinatario non è raggiungibile."
+                        self.callService.endCall()
+                        self.callState = .ended
+                        self.isInCall = false
+                        self.callContactId = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                            self?.callState = .idle
+                        }
+                    }
+                }
+                ws.onCallCancel = { [weak self] _, reason in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        if let r = reason, !r.isEmpty {
+                            print("[AppState] call_cancel from caller: \(r)")
+                        }
+                        self.callService.endCall()
+                        self.callState = .idle
+                        self.isInCall = false
+                        self.callContactId = nil
+                    }
+                }
             }
 
             try callService.startCall(engine: engine, contactId: contactId)
+
+            // W72: integration responder-side wiring. When THIS device is
+            // the responder receiving a call, the engine emits these
+            // closures for us to relay over WS so the caller sees the
+            // pre-negotiation phases. Set immediately after callService
+            // builds the integration.
+            if let integration = callService.callIntegration,
+               let token = authService.loadToken(), !token.isEmpty {
+                let backendConfig = BackendConfig(
+                    serverUrl: serverUrl,
+                    accessToken: token
+                )
+                let provider = BCryptoBackendProvider(config: backendConfig)
+                integration.sendCallProcessing = { callId, callerId in
+                    // Forward via the calling API (which routes through WS).
+                    Task {
+                        try? await provider.callingApi.sendCallProcessing(
+                            callId: callId, callerId: callerId
+                        )
+                    }
+                }
+                integration.sendCallReady = { callId, callerId in
+                    Task {
+                        try? await provider.callingApi.sendCallReady(
+                            callId: callId, callerId: callerId
+                        )
+                    }
+                }
+                integration.requestRingLocally = { [weak self] _, _ in
+                    DispatchQueue.main.async {
+                        // Fallback ring trigger when the responder UI
+                        // didn't already start ringing locally.
+                        self?.callState = .ringing
+                    }
+                }
+                integration.onIncomingCallCancelled = { [weak self] _, _ in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        self.callService.endCall()
+                        self.callState = .idle
+                        self.isInCall = false
+                        self.callContactId = nil
+                    }
+                }
+            }
+
             callState = .active
             // Track in recent calls
             if !recentCalls.contains(contactId) {
