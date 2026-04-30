@@ -33,6 +33,9 @@ struct ContactDetailScreen: View {
     @State private var showingDeleteConfirm = false
     @State private var showingSasSheet = false
     @State private var showingEditor = false
+    /// W51: payload pronto per il share sheet vCard. Non-nil triggers
+    /// `.sheet(item:)` con `UIActivityViewController` (mail/messaggi/etc).
+    @State private var sharingVCard: VCardShareItem? = nil
 
     @Environment(\.qaudionSnackbar) private var snackbar
 
@@ -79,6 +82,12 @@ struct ContactDetailScreen: View {
         .sheet(isPresented: $showingSasSheet) {
             SasVerifySheet(peerName: item.displayName)
                 .presentationDetents([.medium])
+        }
+        .sheet(item: $sharingVCard) { payload in
+            // W51: share sheet nativo iOS con il vCard come testo (UIActivity-
+            // ViewController). Mail/Messaggi/AirDrop possono trattarlo come
+            // attachment .vcf — molti picker mostrano "Aggiungi ai Contatti".
+            VCardShareSheet(text: payload.text, filename: payload.filename)
         }
         .sheet(isPresented: $showingEditor) {
             // W23.E: edit mode pre-fills displayName + extension from
@@ -130,6 +139,21 @@ struct ContactDetailScreen: View {
             }
             .accessibilityLabel("Modifica")
 
+            // W51: Condividi vCard. Genera RFC 6350 vCard 3.0 in-memory
+            // e apre il share sheet nativo iOS (mail / Messaggi / AirDrop).
+            Button {
+                sharingVCard = VCardShareItem(
+                    text: VCardBuilder.build(for: item),
+                    filename: vCardFilename(for: item)
+                )
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 17))
+                    .foregroundStyle(scheme.primary)
+                    .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Condividi")
+
             Button { showingDeleteConfirm = true } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 17))
@@ -144,6 +168,21 @@ struct ContactDetailScreen: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(scheme.outline.opacity(0.3)).frame(height: 0.5)
         }
+    }
+
+    // MARK: - W51 vCard helpers
+
+    /// Sanitizza il displayName in un filename `.vcf` sicuro (no
+    /// slash / backslash / colon / pipe / asterisk / quote / lt / gt /
+    /// question mark — i tipici banditi su filesystem cross-platform).
+    private func vCardFilename(for item: ContactsListViewModel.Item) -> String {
+        let unsafe = CharacterSet(charactersIn: "/\\:|*\"<>?")
+        let sanitized = item.displayName
+            .components(separatedBy: unsafe)
+            .joined(separator: "_")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = sanitized.isEmpty ? "contact" : sanitized
+        return "\(base).vcf"
     }
 
     // MARK: - Hero
