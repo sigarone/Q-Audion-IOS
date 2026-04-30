@@ -165,14 +165,23 @@ final class AppState: ObservableObject {
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            guard let self = self, self.isAuthenticated else { return }
-            // If the existing provider's socket is dead, drop it so
-            // `connectPersistentSocket()` rebuilds the WS.
-            if let live = self.liveProvider, live.persistentConnection.state == .disconnected {
-                self.liveProvider = nil
+        ) { _ in
+            // The notification closure is `@Sendable` per the iOS 18+
+            // signature; mutating main-actor-isolated state must hop
+            // back through `Task { @MainActor in ... }`. We only capture
+            // `self` once inside the Task to avoid the
+            // "'self' defined but never used" warning that Xcode 26 emits
+            // when the outer closure binds `[weak self]` and forwards.
+            Task { @MainActor [weak self] in
+                guard let self = self, self.isAuthenticated else { return }
+                // If the existing provider's socket is dead, drop it so
+                // `connectPersistentSocket()` rebuilds the WS.
+                if let live = self.liveProvider,
+                   live.persistentConnection.state == .disconnected {
+                    self.liveProvider = nil
+                }
+                self.connectPersistentSocket()
             }
-            self.connectPersistentSocket()
         }
         #endif
 
@@ -453,7 +462,7 @@ final class AppState: ObservableObject {
                 switch reasonString {
                 case "busy":      reason = .declined
                 case "timeout":   reason = .unanswered
-                case "error":     reason = .failed
+                case "error":     reason = .failed("error")
                 default:          reason = .remoteEnded
                 }
                 Task {
