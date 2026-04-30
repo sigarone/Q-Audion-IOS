@@ -21,6 +21,10 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// Sovereign identity manager.
     public lazy var sovereignIdentity = SovereignIdentityManager()
 
+    /// Online-status tracker for contacts. Subscribe via
+    /// `presenceManager.subscribe(userIds:)` once the contacts view is shown.
+    public lazy var presenceManager = BCryptoPresenceManager(ws: wsClient)
+
     public var isConnected: Bool { wsClient.state == .authenticated }
 
     public init(config: BackendConfig) {

@@ -48,8 +48,17 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
 
     // MARK: - Actions
 
-    /// Create a new group call and invite recipients
-    public func createGroupCall(recipients: [String]) {
+    /// Create a new group call and invite recipients.
+    ///
+    /// Server contract — see bcrypto-server internal/signaling/messages.go
+    /// `GroupCallCreateData { title, invite_user_ids, max_participants? }`.
+    /// `title` is shown in the invite payload; `maxParticipants` is optional
+    /// (server caps to 8 when omitted).
+    public func createGroupCall(
+        recipients: [String],
+        title: String = "",
+        maxParticipants: Int? = nil
+    ) {
         guard state == .idle else { return }
         let newCallId = UUID().uuidString
         lock.lock()
@@ -59,10 +68,15 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.unlock()
         onStateChanged?(.creating)
 
-        ws.send(type: "group_call_create", data: [
+        var payload: [String: Any] = [
             "call_id": newCallId,
-            "recipients": recipients
-        ])
+            "title": title,
+            "invite_user_ids": recipients
+        ]
+        if let maxP = maxParticipants {
+            payload["max_participants"] = maxP
+        }
+        ws.send(type: "group_call_create", data: payload)
     }
 
     /// Join an existing group call
@@ -90,13 +104,34 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         endLocally()
     }
 
-    /// Forward an encrypted audio frame to all participants via server SFU
-    public func forwardAudioFrame(_ frameData: Data) {
+    /// Forward an encrypted audio frame to a specific participant via server SFU.
+    ///
+    /// Server contract — see bcrypto-server `GroupCallForwardData
+    /// { call_id, target_id, data }`. Pairwise PQC means one envelope per
+    /// recipient — the caller is expected to encrypt the frame separately for
+    /// each peer and call this method once per peer.
+    public func forwardAudioFrame(_ frameData: Data, to targetId: String) {
         guard let cid = callId, state == .active else { return }
         ws.send(type: "group_call_forward", data: [
             "call_id": cid,
-            "frame": frameData.base64EncodedString()
+            "target_id": targetId,
+            "data": frameData.base64EncodedString()
         ])
+    }
+
+    /// Convenience fan-out: forward the same frame blob to every non-self
+    /// participant. NOTE: pairwise PQC requires per-peer ciphertexts; this
+    /// helper is only valid when the caller has already produced a single
+    /// session-keyed frame. Prefer the per-target overload above.
+    public func forwardAudioFrame(_ frameData: Data) {
+        guard state == .active else { return }
+        let peers: [String] = {
+            lock.lock(); defer { lock.unlock() }
+            return _participants.map(\.id).filter { $0 != "self" }
+        }()
+        for pid in peers {
+            forwardAudioFrame(frameData, to: pid)
+        }
     }
 
     /// Toggle local mute state
@@ -115,12 +150,21 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     }
 
     // MARK: - WebSocket Handlers
+    // Message names mirror bcrypto-server internal/signaling/messages.go:
+    //   group_call_invite  → InviteUserIDs notified
+    //   group_call_state   → room state update with event = created|joined|left|ended
+    //   group_call_receive → SFU-forwarded opaque PQC frame
+    // Old iOS names (group_call_update, group_call_frame, group_call_ended) are
+    // kept as backward-compat aliases until the legacy server bake completes.
 
     private func registerHandlers() {
         ws.registerHandler(type: "group_call_invite") { [weak self] _, data in
             guard let self = self,
-                  let callId = data["call_id"] as? String,
-                  let creatorId = data["creator_id"] as? String else { return }
+                  let callId = data["call_id"] as? String else { return }
+            // Server schema: GroupCallInviteData { call_id, inviter_id, title }.
+            // Older builds emitted `creator_id` — accept either, but only as a
+            // sanity check; the value isn't used downstream yet.
+            guard ((data["inviter_id"] as? String) ?? (data["creator_id"] as? String)) != nil else { return }
             // Auto-join for now (UI can show accept/reject later)
             self.lock.lock()
             self._callId = callId
@@ -130,52 +174,91 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             self.joinGroupCall(callId: callId)
         }
 
+        // Server emits `group_call_state` for created/joined/left/ended events.
+        // GroupCallStateData = { call_id, participants, event, user_id, title? }.
+        ws.registerHandler(type: "group_call_state") { [weak self] _, data in
+            self?.handleGroupCallState(data: data)
+        }
+
+        // Backward-compat alias — older server builds emitted `group_call_update`
+        // for the same payload as `group_call_state{event:"joined"}`.
         ws.registerHandler(type: "group_call_update") { [weak self] _, data in
-            guard let self = self,
-                  let participantIds = data["participants"] as? [String] else { return }
-            self.lock.lock()
-            self._participants = participantIds.map { uid in
-                if let existing = self._participants.first(where: { $0.id == uid }) {
-                    return existing
-                }
-                return Participant(id: uid, displayName: String(uid.prefix(8)))
-            }
-            self._state = .active
-            let list = self._participants
-            self.lock.unlock()
-            self.onStateChanged?(.active)
-            self.onParticipantsChanged?(list)
+            self?.handleGroupCallState(data: data)
         }
 
+        // Server emits `group_call_receive` for SFU-forwarded opaque frames.
+        // GroupCallReceiveData = { call_id, sender_id, data }.
+        ws.registerHandler(type: "group_call_receive") { [weak self] _, data in
+            self?.handleGroupCallReceive(data: data)
+        }
+
+        // Backward-compat alias — `group_call_frame` was the older name.
         ws.registerHandler(type: "group_call_frame") { [weak self] _, data in
-            guard let self = self,
-                  let senderId = data["sender"] as? String,
-                  let frameB64 = data["frame"] as? String,
-                  let frameData = Data(base64Encoded: frameB64) else { return }
-            // Mark sender as speaking
-            self.lock.lock()
-            if let idx = self._participants.firstIndex(where: { $0.id == senderId }) {
-                self._participants[idx].isSpeaking = true
-                // Reset speaking after 500ms
-                let list = self._participants
-                self.lock.unlock()
-                self.onParticipantsChanged?(list)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.lock.lock()
-                    if let idx = self._participants.firstIndex(where: { $0.id == senderId }) {
-                        self._participants[idx].isSpeaking = false
-                    }
-                    self.lock.unlock()
-                }
-            } else {
-                self.lock.unlock()
-            }
-            self.onAudioFrame?(senderId, frameData)
+            self?.handleGroupCallReceive(data: data)
         }
 
+        // Backward-compat alias — server now sends ended via
+        // `group_call_state{event:"ended"}`. Keep the old handler as a fallback
+        // in case a legacy server build is on the wire.
         ws.registerHandler(type: "group_call_ended") { [weak self] _, _ in
             self?.endLocally()
         }
+    }
+
+    /// Apply a `group_call_state` payload to the local participant list and
+    /// state machine. Dispatches on `event` (created / joined / left / ended).
+    private func handleGroupCallState(data: [String: Any]) {
+        let event = (data["event"] as? String) ?? "joined"
+        if event == "ended" {
+            endLocally()
+            return
+        }
+
+        guard let participantIds = data["participants"] as? [String] else { return }
+        lock.lock()
+        _participants = participantIds.map { uid in
+            if let existing = _participants.first(where: { $0.id == uid }) {
+                return existing
+            }
+            return Participant(id: uid, displayName: String(uid.prefix(8)))
+        }
+        // created/joined/left all imply the room is active for us.
+        _state = .active
+        let list = _participants
+        lock.unlock()
+        onStateChanged?(.active)
+        onParticipantsChanged?(list)
+    }
+
+    /// Apply an inbound SFU frame to participant speaking state and surface
+    /// the encrypted audio bytes to the engine. Accepts both `sender_id`
+    /// (current server) and the legacy `sender` key. Frame bytes live under
+    /// `data` (current) or `frame` (legacy).
+    private func handleGroupCallReceive(data: [String: Any]) {
+        guard let senderId = (data["sender_id"] as? String) ?? (data["sender"] as? String),
+              let frameB64 = (data["data"] as? String) ?? (data["frame"] as? String),
+              let frameData = Data(base64Encoded: frameB64)
+        else { return }
+        // Mark sender as speaking
+        lock.lock()
+        if let idx = _participants.firstIndex(where: { $0.id == senderId }) {
+            _participants[idx].isSpeaking = true
+            // Reset speaking after 500ms
+            let list = _participants
+            lock.unlock()
+            onParticipantsChanged?(list)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self = self else { return }
+                self.lock.lock()
+                if let idx = self._participants.firstIndex(where: { $0.id == senderId }) {
+                    self._participants[idx].isSpeaking = false
+                }
+                self.lock.unlock()
+            }
+        } else {
+            lock.unlock()
+        }
+        onAudioFrame?(senderId, frameData)
     }
 
     private func endLocally() {

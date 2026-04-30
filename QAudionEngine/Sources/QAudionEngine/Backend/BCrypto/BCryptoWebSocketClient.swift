@@ -3,6 +3,34 @@ import Foundation
 public final class BCryptoWebSocketClient: @unchecked Sendable {
     public typealias MessageHandler = (String, [String: Any]) -> Void
 
+    // MARK: - Pre-negotiation callbacks
+    // Wired by the integration/UI layer. Set on the client BEFORE connect() so
+    // the dispatcher catches them as soon as the server starts emitting.
+    // Mirror the desktop CallController pre-negotiation events — see
+    // qaudion-desktop/src/main/calling/CallController.ts CallProgressPhase.
+
+    /// Fired when this client (caller) receives `call_processing` from the responder.
+    /// The responder has acked our call_offer and is starting PQC setup.
+    public var onCallProcessing: ((_ callId: String, _ receiverId: String) -> Void)?
+
+    /// Fired when this client (caller) receives `call_ready` from the responder.
+    /// The responder finished PQC setup and is now ringing — we should show "Ringing".
+    public var onCallReady: ((_ callId: String, _ receiverId: String, _ deviceId: String?) -> Void)?
+
+    /// Fired when this client (responder) receives `call_ring` from the server,
+    /// signalling that the caller has been notified we are ringing. Mostly an
+    /// informational ack — used to gate fallback ring triggers if the local UI
+    /// hasn't already started a CallKit alert.
+    public var onCallRing: ((_ callId: String, _ callerId: String) -> Void)?
+
+    /// Fired when this client (caller) receives `call_peer_offline` from the server.
+    /// The recipient has no live device — terminate with a "peer offline" error.
+    public var onCallPeerOffline: ((_ callId: String, _ recipientId: String) -> Void)?
+
+    /// Fired when this client (responder) receives `call_cancel` from the server.
+    /// The caller hung up before we picked up — stop ringing locally.
+    public var onCallCancel: ((_ callId: String, _ reason: String?) -> Void)?
+
     private var webSocketTask: URLSessionWebSocketTask?
     private let lock = NSLock()
     private var _state: ConnectionState = .disconnected
@@ -23,7 +51,58 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// connection as dead and tear it down so the reconnect loop picks it up.
     private let pongTimeoutSec: TimeInterval = 25
 
-    public init(config: BackendConfig) { self.config = config }
+    public init(config: BackendConfig) {
+        self.config = config
+        // Pre-negotiation dispatch — server emits these on top of the standard
+        // call_offer / call_answer / call_hangup signaling envelopes.
+        // See bcrypto-server cmd/bcrypto-lite/main.go pre-negotiation flow.
+        registerPreNegotiationHandlers()
+    }
+
+    /// Register the 5 pre-negotiation message handlers on the generic dispatcher.
+    /// Each handler parses the envelope `data` and forwards to the matching public
+    /// callback property. Called once from init — keeps wiring local to this class.
+    private func registerPreNegotiationHandlers() {
+        registerHandler(type: "call_processing") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let receiverId = (data["receiver_id"] as? String)
+                ?? (data["caller_id"] as? String)
+                ?? ""
+            self.onCallProcessing?(callId, receiverId)
+        }
+
+        registerHandler(type: "call_ready") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let receiverId = (data["receiver_id"] as? String)
+                ?? (data["caller_id"] as? String)
+                ?? ""
+            let deviceId = data["device_id"] as? String
+            self.onCallReady?(callId, receiverId, deviceId)
+        }
+
+        registerHandler(type: "call_ring") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let callerId = (data["caller_id"] as? String) ?? ""
+            self.onCallRing?(callId, callerId)
+        }
+
+        registerHandler(type: "call_peer_offline") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let recipientId = (data["recipient_id"] as? String) ?? ""
+            self.onCallPeerOffline?(callId, recipientId)
+        }
+
+        registerHandler(type: "call_cancel") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let reason = data["reason"] as? String
+            self.onCallCancel?(callId, reason)
+        }
+    }
 
     public var state: ConnectionState { lock.lock(); defer { lock.unlock() }; return _state }
 
