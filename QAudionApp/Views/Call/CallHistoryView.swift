@@ -286,11 +286,30 @@ struct CallHistoryView: View {
             Text("Nessuna chiamata recente")
                 .qaudionStyle(type.titleMedium)
                 .foregroundStyle(scheme.onSurface)
-            Text("Le chiamate effettuate appariranno qui dopo la prima telefonata.")
+            Text("Componi un numero o un ID contatto per fare la prima chiamata sicura.")
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
+
+            // W62: CTA empty-state "Componi numero" — stesso flow del
+            // bottone dial in topBar, accessibile inline così first-
+            // launch users hanno un next-step chiaro. Riusa il
+            // `showingDialPad` esistente, single source of truth.
+            Button {
+                showingDialPad = true
+            } label: {
+                Label("Componi numero", systemImage: "dial.fill")
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onPrimary)
+                    .padding(.horizontal, 18).padding(.vertical, 10)
+                    .background(
+                        Capsule().fill(scheme.primary)
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+
             Spacer()
         }
         .padding(.top, 48)
