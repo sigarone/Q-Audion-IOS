@@ -105,13 +105,19 @@ public struct GroupMemberRowUi: Identifiable, Equatable {
 }
 
 public struct GroupInfoUiState: Equatable {
+    /// W52: groupId — usato dal QR-invite sheet per encodare il payload
+    /// `qaudion-group-invite`. Default UUID() per backward-compat con
+    /// call sites pre-W52 che non lo passano.
+    public var groupId: UUID
     public var name: String
     public var epoch: Int
     public var members: [GroupMemberRowUi]
     public var error: String?
 
-    public init(name: String = "", epoch: Int = 0,
+    public init(groupId: UUID = UUID(),
+                name: String = "", epoch: Int = 0,
                 members: [GroupMemberRowUi] = [], error: String? = nil) {
+        self.groupId = groupId
         self.name = name; self.epoch = epoch
         self.members = members; self.error = error
     }

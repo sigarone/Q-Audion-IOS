@@ -24,6 +24,10 @@ struct GroupInfoScreen: View {
 
     @State private var state: GroupInfoUiState
     @State private var showingLeaveConfirm = false
+    /// W52: presenta il sheet QR di invito al gruppo. Engine wiring per
+    /// `GroupChatRepository.createInvite(groupId:)` deferred — oggi
+    /// genera un payload pure-locale (groupId + name).
+    @State private var showingInviteQr = false
     let onLeft: () -> Void
 
     init(state: GroupInfoUiState, onLeft: @escaping () -> Void = {}) {
@@ -70,6 +74,13 @@ struct GroupInfoScreen: View {
         } message: {
             Text("Non riceverai più i messaggi di questo gruppo. Per rientrare dovrai essere reinvitato da un admin.")
         }
+        .sheet(isPresented: $showingInviteQr) {
+            // W52: medium detent così la QR è ben visibile ma il sheet
+            // resta dismissable swipe-down (non interactiveDismissDisabled).
+            GroupInviteQrSheet(groupId: state.groupId,
+                               groupName: state.name)
+                .presentationDetents([.medium, .large])
+        }
     }
 
     // MARK: - Top bar
@@ -95,6 +106,17 @@ struct GroupInfoScreen: View {
                     .modifier(MonoCaption())
             }
             Spacer(minLength: 8)
+            // W52: Invita via QR. Apre sheet con QR-code che encoda il
+            // payload `qaudion-group-invite` (groupId + name). Un peer
+            // scansiona il QR dal proprio dispositivo e si auto-aggiunge
+            // al gruppo (engine wire pending — oggi solo generazione).
+            Button(action: { showingInviteQr = true }) {
+                Image(systemName: "qrcode")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(scheme.primary)
+                    .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Invita via QR")
         }
         .padding(.horizontal, 8)
         .frame(height: 56)
