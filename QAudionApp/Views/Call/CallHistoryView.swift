@@ -89,13 +89,12 @@ final class CallHistoryStore: ObservableObject {
     /// directly — preserves the invariant that all writes go through
     /// the store.
     func seedWithMockIfEmpty() {
-        if entries.isEmpty {
-            // W68: anche il mock catalog rispetta tombstones così se
-            // l'utente ha "Cancella storico" la lista resta vuota anche
-            // dopo restart finché non aggiunge nuove chiamate reali.
-            let tombstones = Self.deletedIds
-            entries = Self.mockData.filter { !tombstones.contains($0.id) }
-        }
+        // W73: the user explicitly asked to remove fake "Mario Rossi"
+        // history entries — empty state stays empty until the engine
+        // wires real CallHistoryRepository -> server pull. The
+        // `mockData` array below is kept (zero refs) for SwiftUI
+        // previews only; it will be deleted once the engine repo lands.
+        _ = Self.deletedIds  // silence unused warning during rollout
     }
 
     /// W68: tombstone set persisted to UserDefaults così le deletions

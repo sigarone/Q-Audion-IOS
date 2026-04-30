@@ -20,21 +20,21 @@ final class ContactsListContainer: ObservableObject {
         } else {
             self.service = nil
         }
-        // Load from local store first; fall back to mock if empty.
+        // W73: load from local store. Empty list = empty list — DO NOT
+        // populate with `.mock` (Mario Rossi / Anna Bianchi placeholders
+        // that surfaced as "fake contacts" during the first end-to-end
+        // QA pass). The empty-state UI in ContactsScreen handles the
+        // "Nessun contatto" copy.
         let stored = store.load()
-        if stored.isEmpty {
-            self.viewModel = .mock
-        } else {
-            self.viewModel = ContactsListViewModel(items: stored.map { sc in
-                ContactsListViewModel.Item(
-                    userId: sc.userId, displayName: sc.displayName,
-                    phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
-                    isOnline: false,
-                    unreadMessageCount: 0,
-                    isVerified: sc.isVerified
-                )
-            })
-        }
+        self.viewModel = ContactsListViewModel(items: stored.map { sc in
+            ContactsListViewModel.Item(
+                userId: sc.userId, displayName: sc.displayName,
+                phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
+                isOnline: false,
+                unreadMessageCount: 0,
+                isVerified: sc.isVerified
+            )
+        })
     }
 
     func setSearchQuery(_ query: String) {

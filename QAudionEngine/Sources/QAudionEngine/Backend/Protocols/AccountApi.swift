@@ -98,16 +98,37 @@ public struct UserProfile: Codable {
     public var displayName: String?
     public var avatarUrl: String?
     public var statusMessage: String?
+    /// SHA-256 hex of the user's phone identifier as stored on the
+    /// server. For fast-setup users this is the SHA-256 of the
+    /// `fastsetup-<uuid>` phone_id from the QR; for legacy phone
+    /// signups it's SHA-256 of the E.164 number. Surfaced so the
+    /// Account Settings screen can show the canonical identifier.
+    public var phoneHash: String?
+    /// Sequential dial-by-extension number assigned at fast-setup
+    /// time. `nil` (or 0) when the account was created via the legacy
+    /// phone-number signup path. Maps to `User.Extension` server-side.
+    public var dialExtension: Int64?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
         case displayName = "display_name"
         case avatarUrl = "avatar_url"
         case statusMessage = "status_message"
+        case phoneHash = "phone_hash"
+        case dialExtension = "extension"
     }
 
-    public init(userId: String, displayName: String? = nil, avatarUrl: String? = nil, statusMessage: String? = nil) {
-        self.userId = userId; self.displayName = displayName
-        self.avatarUrl = avatarUrl; self.statusMessage = statusMessage
+    public init(userId: String,
+                displayName: String? = nil,
+                avatarUrl: String? = nil,
+                statusMessage: String? = nil,
+                phoneHash: String? = nil,
+                dialExtension: Int64? = nil) {
+        self.userId = userId
+        self.displayName = displayName
+        self.avatarUrl = avatarUrl
+        self.statusMessage = statusMessage
+        self.phoneHash = phoneHash
+        self.dialExtension = dialExtension
     }
 }

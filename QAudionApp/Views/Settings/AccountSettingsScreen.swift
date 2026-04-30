@@ -14,11 +14,22 @@ final class AccountSettingsContainer: ObservableObject {
     private let appState: AppState
     private let avatarUploader: AvatarUploader
 
-    init(appState: AppState, initial: AccountSettingsViewModel = .mock) {
+    init(appState: AppState) {
         self.appState = appState
-        self.viewModel = initial
-        self.draftDisplayName = initial.displayName ?? ""
-        self.draftStatusMessage = initial.statusMessage ?? ""
+        // W73: start with an EMPTY state, NOT `.mock` (which had the
+        // hardcoded "4242" extension that surfaced as the user's own
+        // dial number after a fast-setup login). The screen renders a
+        // loading skeleton until `loadFromServer()` populates real data.
+        self.viewModel = AccountSettingsViewModel(
+            userId: appState.currentUserId ?? "",
+            phoneHash: "",
+            displayName: nil,
+            statusMessage: nil,
+            avatarUrl: nil,
+            dialExtension: nil
+        )
+        self.draftDisplayName = ""
+        self.draftStatusMessage = ""
         self.avatarUploader = AvatarUploader(appState: appState)
     }
 
@@ -32,13 +43,26 @@ final class AccountSettingsContainer: ObservableObject {
             do {
                 let profile = try await provider.accountApi.getProfile()
                 await MainActor.run {
+                    // W73: take phone_hash + extension from the SERVER
+                    // response, not the local placeholder. The
+                    // bcrypto-server `/profile` GET handler now returns
+                    // both fields (commit `feat(server): expose
+                    // extension+phone_hash on /profile`). For legacy
+                    // accounts where the server hasn't rolled out yet
+                    // these stay nil/0 and the UI shows "—".
+                    let extString: String?
+                    if let ext = profile.dialExtension, ext > 0 {
+                        extString = String(ext)
+                    } else {
+                        extString = nil
+                    }
                     self.viewModel = AccountSettingsViewModel(
                         userId: profile.userId,
-                        phoneHash: self.viewModel.phoneHash,
+                        phoneHash: profile.phoneHash ?? "",
                         displayName: profile.displayName,
                         statusMessage: profile.statusMessage,
                         avatarUrl: profile.avatarUrl.flatMap(URL.init(string:)),
-                        dialExtension: self.viewModel.dialExtension
+                        dialExtension: extString
                     )
                     self.draftDisplayName = profile.displayName ?? ""
                     self.draftStatusMessage = profile.statusMessage ?? ""
