@@ -79,7 +79,9 @@ final class ContactsListContainer: ObservableObject {
             userId = dl.userId
             displayName = dl.userId
             pubkey = dl.pubkey
-        case .fastSetup, .invalid, .unknown:
+        case .fastSetup, .groupInvite, .invalid, .unknown:
+            // W53: groupInvite QR è gestito dal flusso group-join,
+            // NON dalla rubrica contatti. fastSetup è onboarding-time.
             return false
         }
         let contact = ContactsStore.StoredContact(

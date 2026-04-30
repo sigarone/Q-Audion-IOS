@@ -102,13 +102,15 @@ struct HomeView: View {
     /// `NavigationSplitView` (iOS 16+, già nel deployment target).
     private var splitLayout: some View {
         NavigationSplitView(columnVisibility: $splitVisibility) {
-            // NB: il `List(selection:)` gestisce direttamente il tap-to-
-            // select sulle row Identifiable; NON serve un `NavigationLink`
-            // wrap, che creerebbe doppia push e selection conflict
-            // (caught dalla NVIDIA review).
-            List(Tab.allCases, selection: $selectedTab) { tab in
-                Label(tab.label, systemImage: tab.systemImage)
-                    .tag(tab)
+            // NB: `List(data, selection:)` initializer NON è disponibile
+            // sul plain iOS (è macOS / iPadOS specific via @available);
+            // il pattern compatibile è `List(selection:) { ForEach(...) }`
+            // con `.tag()` sulle row così la selection lega all'enum case.
+            List(selection: $selectedTab) {
+                ForEach(Tab.allCases) { tab in
+                    Label(tab.label, systemImage: tab.systemImage)
+                        .tag(tab)
+                }
             }
             .navigationTitle("Q-Audion")
             .navigationSplitViewColumnWidth(min: 220, ideal: 260)
