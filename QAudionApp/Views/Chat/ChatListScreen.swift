@@ -238,7 +238,7 @@ struct ChatListScreen: View {
                 ContactsListView()
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") { showingNewConversation = false }
+                            Button("Annulla") { showingNewConversation = false }
                         }
                     }
             }
