@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 import QAudionEngine
 
 /// Chat detail (conversation) screen. 1:1 visual port of Android
@@ -37,6 +38,12 @@ struct ChatDetailScreen: View {
     @State private var replyTarget: MessageComposer.ReplyTarget? = nil
     @State private var editingTarget: MessageComposer.EditingTarget? = nil
     @State private var actionTargetId: UUID? = nil
+    /// W59: PhotosPicker integration. `attachmentPickerItem` non-nil dopo
+    /// la selezione utente; trigger snackbar feedback (engine wire per
+    /// l'invio reale di image attachment è deferred — `ChatContainer
+    /// .sendAttachment(image:)` non esiste ancora).
+    @State private var showingPhotoPicker: Bool = false
+    @State private var attachmentPickerItem: PhotosPickerItem? = nil
 
     // Stub values for the SessionStatusStrip until the engine wires them.
     private let stubConfidence: Double = 0.92
@@ -74,7 +81,7 @@ struct ChatDetailScreen: View {
                 ),
                 editingTarget: editingTarget,
                 replyTarget: replyTarget,
-                onAttach: { /* TODO: attachment picker */ },
+                onAttach: { showingPhotoPicker = true },
                 onSend: handleSend,
                 onCancelEdit: { editingTarget = nil },
                 onCancelReply: { replyTarget = nil },
@@ -101,6 +108,30 @@ struct ChatDetailScreen: View {
                 onAction: { container.retryFailedMessage() },
                 durationSeconds: 6
             ))
+        }
+        // W59: PhotosPicker per image attachment. Usa il system out-of-
+        // process picker (no NSPhotoLibraryUsageDescription required,
+        // no permission prompt). Engine wire per encrypt+upload+send
+        // resta deferred — sull'item picked, mostra snackbar info.
+        .photosPicker(isPresented: $showingPhotoPicker,
+                      selection: $attachmentPickerItem,
+                      matching: .images)
+        .onChange(of: attachmentPickerItem) { newItem in
+            guard let item = newItem else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    let kb = max(1, data.count / 1024)
+                    snackbar?.show(.init(
+                        text: "Foto pronta (\(kb) KB) — invio attachment cifrato arriverà nella prossima wave (engine wire pending).",
+                        severity: .info,
+                        durationSeconds: 5))
+                } else {
+                    snackbar?.show(.init(
+                        text: "Lettura foto fallita.",
+                        severity: .error))
+                }
+                attachmentPickerItem = nil
+            }
         }
         .sheet(item: actionSheetBinding) { msgIdWrapper in
             BubbleActionSheet(
