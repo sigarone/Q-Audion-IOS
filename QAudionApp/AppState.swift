@@ -153,6 +153,29 @@ final class AppState: ObservableObject {
             return
         }
 
+        // W74: re-attempt the persistent WS the moment the app returns
+        // to the foreground. iOS suspends URLSessionWebSocketTask while
+        // backgrounded — by the time the user opens the app again the
+        // socket is dead but `handleDisconnect()` may not have fired
+        // yet (no `receive` failure delivered). Forcing a connect here
+        // is idempotent: `connectPersistentSocket()` short-circuits if
+        // the WS is already in `.connecting/.connected/.authenticated`.
+        #if canImport(UIKit) && os(iOS)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self, self.isAuthenticated else { return }
+            // If the existing provider's socket is dead, drop it so
+            // `connectPersistentSocket()` rebuilds the WS.
+            if let live = self.liveProvider, live.persistentConnection.state == .disconnected {
+                self.liveProvider = nil
+            }
+            self.connectPersistentSocket()
+        }
+        #endif
+
         callService.onDeepfakeAlert = { [weak self] isAlert in
             Task { @MainActor in
                 self?.deepfakeAlert = isAlert
@@ -356,6 +379,12 @@ final class AppState: ObservableObject {
         let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
         let provider = BCryptoBackendProvider(config: config)
         self.liveProvider = provider
+        // W74: register inbound call handlers BEFORE the WS lands. The
+        // server relays Android→iOS calls as `call_incoming`, NOT
+        // `call_offer` (see bcrypto-server signaling/messages.go
+        // MsgCallIncoming). Without this handler, every incoming call
+        // is silently dropped at the WS dispatcher.
+        wireIncomingCallHandlers(on: provider.getWebSocketClient())
         // Subscribe state listener so the UI can show "Connecting → Online".
         provider.persistentConnection.addStateListener { [weak self] state in
             DispatchQueue.main.async {
@@ -375,6 +404,64 @@ final class AppState: ObservableObject {
                 print("[AppState] persistent WS opened (online presence active)")
             } catch {
                 print("[AppState] persistent WS open failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// W74: register the WS dispatch handlers that turn server-relayed
+    /// call signaling into CallKit + ring on the responder side. Three
+    /// inbound types matter:
+    ///   - `call_incoming` — peer started a call. Build a CXCallUpdate
+    ///     and ask CallKit to ring + display the system call screen.
+    ///   - `call_hangup` — the active call ended (peer hung up before
+    ///     we picked up, or the server timed it out). Tell CallKit to
+    ///     close the incoming-call UI so the system stops ringing.
+    ///   - `call_cancel` — same shape as `call_hangup` but emitted when
+    ///     the caller bailed before the peer answered (legacy alias).
+    private func wireIncomingCallHandlers(on ws: BCryptoWebSocketClient) {
+        ws.registerHandler(type: "call_incoming") { [weak self] _, data in
+            guard let self = self else { return }
+            let callIdStr = data["call_id"] as? String ?? ""
+            let senderId = data["sender_id"] as? String ?? "Sconosciuto"
+            let callType = data["call_type"] as? String ?? "audio"
+            let callUUID = UUID(uuidString: callIdStr) ?? UUID()
+            // CallKit must run from MainActor — its CXProvider state
+            // machine refuses cross-thread mutations.
+            DispatchQueue.main.async {
+                Task {
+                    await self.callKit?.reportIncomingCall(
+                        uuid: callUUID,
+                        callerName: senderId,
+                        hasVideo: callType == "video"
+                    )
+                    await MainActor.run {
+                        self.activeCallKitId = callUUID
+                        self.callContactId = senderId
+                        self.isVideoCall = (callType == "video")
+                        self.callState = .ringing
+                        self.isInCall = true
+                    }
+                }
+            }
+        }
+        ws.registerHandler(type: "call_hangup") { [weak self] _, data in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                guard let uuid = self.activeCallKitId else { return }
+                let reasonString = data["reason"] as? String ?? "normal"
+                let reason: CallEndReason
+                switch reasonString {
+                case "busy":      reason = .declined
+                case "timeout":   reason = .unanswered
+                case "error":     reason = .failed
+                default:          reason = .remoteEnded
+                }
+                Task {
+                    await self.callKit?.reportCallEnded(uuid: uuid, reason: reason)
+                    await MainActor.run {
+                        self.endCall()
+                    }
+                }
             }
         }
     }
