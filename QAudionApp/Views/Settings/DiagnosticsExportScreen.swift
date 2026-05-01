@@ -77,6 +77,20 @@ final class DiagnosticsExportContainer: ObservableObject {
         // Surface a few specific counts that are meaningful:
         let phones = UserDefaults.standard.array(forKey: "com.qaudion.profile.myPhones") as? [String]
         lines.append("  myPhones count     : \(phones?.count ?? 0)")
+        // W164: per-device metadata counts (W137/W142/W158/W162).
+        // Plain integers — no key contents leaked.
+        let allKeys = UserDefaults.standard.dictionaryRepresentation().keys
+        var draftCount = 0
+        var lastSeenCount = 0
+        var buildSeenCount = 0
+        for k in allKeys {
+            if k.hasPrefix("qa.composer.draft.") { draftCount += 1 }
+            else if k.hasPrefix("qa.lastSeenAt.") { lastSeenCount += 1 }
+            else if k.hasPrefix("qaudion.buildSeen.") { buildSeenCount += 1 }
+        }
+        lines.append("  drafts saved       : \(draftCount)")
+        lines.append("  last-seen stamps   : \(lastSeenCount)")
+        lines.append("  build-seen stamps  : \(buildSeenCount)")
         lines.append("")
 
         // ─── ERRORE ATTUALE ────────────────────────────────────────
