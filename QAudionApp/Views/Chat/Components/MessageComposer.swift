@@ -147,7 +147,7 @@ struct MessageComposer: View {
                 .opacity(0.95)
             Text(formattedElapsed)
                 .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
+                .foregroundStyle(nearingCap ? extras.error : scheme.onSurface)
                 .monospacedDigit()
             // W115: copy switches when drag-up cancel is armed.
             Text(cancelArmed
