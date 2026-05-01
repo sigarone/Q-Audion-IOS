@@ -464,6 +464,24 @@ struct SettingsScreen: View {
                             subtitle: "Rimuove i testi non inviati salvati per ogni chat")
             }
             .buttonStyle(.plain)
+
+            // W153: wipe all "ultimo accesso" stamps captured by
+            // PresenceService. The next time the chat detail topbar
+            // renders for a peer, it falls back to the static crypto
+            // label until the peer is observed online again.
+            Button {
+                let cleared = Self.clearAllLastSeen()
+                cacheClearedMessage = cleared > 0
+                    ? "Eliminati \(cleared) timestamp di ultimo accesso."
+                    : "Nessun timestamp da eliminare."
+                cacheClearedAlertVisible = true
+            } label: {
+                SettingsRow(icon: "eye.slash.fill",
+                            iconColor: .orange,
+                            title: "Cancella timestamp ultimo accesso",
+                            subtitle: "Dimentica quando hai visto i contatti online")
+            }
+            .buttonStyle(.plain)
         }
         .alert("Cache liberata", isPresented: $cacheClearedAlertVisible) {
             Button("OK", role: .cancel) { }
@@ -478,6 +496,20 @@ struct SettingsScreen: View {
     /// the number of keys removed so the alert can confirm.
     private static func clearAllDrafts() -> Int {
         let prefix = "qa.composer.draft."
+        let store = UserDefaults.standard
+        let allKeys = store.dictionaryRepresentation().keys
+        var removed = 0
+        for k in allKeys where k.hasPrefix(prefix) {
+            store.removeObject(forKey: k)
+            removed += 1
+        }
+        return removed
+    }
+
+    /// W153: wipe all `qa.lastSeenAt.*` keys (LastSeenTracker
+    /// stamps). Returns the count for user feedback.
+    private static func clearAllLastSeen() -> Int {
+        let prefix = "qa.lastSeenAt."
         let store = UserDefaults.standard
         let allKeys = store.dictionaryRepresentation().keys
         var removed = 0
