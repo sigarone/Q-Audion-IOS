@@ -403,9 +403,16 @@ struct ChatListScreen: View {
     private func conversationRow(_ item: ConversationListViewModel.Item) -> some View {
         NavigationLink(destination: chatDestination(for: item)) {
             HStack(spacing: 12) {
+                // W120: presence dot on the avatar — green when peer
+                // online via PresenceService, gray when offline. Group
+                // avatars don't get a dot.
                 QAudionAvatar(displayName: item.peerDisplayName,
                               kind: item.kind == .group ? .group : .person,
-                              size: 44)
+                              size: 44,
+                              presenceDot: item.kind == .group
+                                  ? nil
+                                  : (appState.presenceService.isOnline(item.peerUserId)
+                                     ? .online : .offline))
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
                         if item.pinned {
