@@ -84,13 +84,46 @@ final class ChatContainer: ObservableObject {
         }
 
         let messages = store.loadMessages(conversationId: conversationId)
+        // W137: restore any per-conversation composer draft saved from
+        // a prior session. Empty when the user sent / explicitly cleared
+        // last time. Read BEFORE building the view-model so the very
+        // first render shows the draft instead of an empty field.
+        let restoredDraft = ComposerDraftStore.load(for: conversationId)
+        self.composerText = restoredDraft
         self.viewModel = ChatViewModel(
             conversation: conv,
             messages: messages,
-            composerText: "",
+            composerText: restoredDraft,
             isPeerTyping: false,
             isPeerOnline: false
         )
+    }
+
+    /// W137: debounced draft save. The composer fires this on every
+    /// keystroke; we coalesce to a single UserDefaults write 0.5s after
+    /// the last keystroke so heavy typing doesn't thrash the disk.
+    private var draftSaveWorkItem: DispatchWorkItem?
+
+    /// Called by the composer binding setter on every text change.
+    /// Captures the current `composerText` snapshot inside the work
+    /// item so the eventual write reflects the latest typed value.
+    func scheduleDraftSave() {
+        draftSaveWorkItem?.cancel()
+        let convId = self.conversationId
+        let item = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            ComposerDraftStore.save(self.composerText, for: convId)
+        }
+        draftSaveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+    }
+
+    /// W137: synchronous draft flush — call when the screen is going
+    /// away or the app is backgrounding so the partial text isn't lost
+    /// before the debounce timer fires.
+    func flushDraftNow() {
+        draftSaveWorkItem?.cancel()
+        ComposerDraftStore.save(composerText, for: conversationId)
     }
 
     /// Late-bind the App-state-bound sender. Idempotent — calling with the
@@ -154,6 +187,16 @@ final class ChatContainer: ObservableObject {
                 )
             }
         }
+        // W137: flush any pending draft when the app is about to lose
+        // active state. onDisappear on ChatDetailScreen covers the
+        // navigation-away case; this covers the user dragging the app
+        // off-screen WHILE the detail view is still on top.
+        center.addObserver(forName: UIApplication.willResignActiveNotification,
+                           object: nil, queue: .main) { _ in
+            Task { @MainActor [weak self] in
+                self?.flushDraftNow()
+            }
+        }
     }
 
     func sendMessage() {
@@ -189,6 +232,10 @@ final class ChatContainer: ObservableObject {
             incrementUnread: false
         )
         composerText = ""
+        // W137: a successful send clears the persisted draft so the
+        // next entry into this conversation starts fresh.
+        ComposerDraftStore.clear(for: conversationId)
+        draftSaveWorkItem?.cancel()
         refreshFromStore()
 
         // W71: real WS send pipeline. The MessageCrypto wire format
@@ -326,6 +373,13 @@ final class ChatContainer: ObservableObject {
         UserDefaults.standard.removeObject(
             forKey: "qaudion.conv.msgs.\(conversationId.uuidString.lowercased())"
         )
+        // W137: hard-clear nukes the composer draft too — any unsent
+        // text the user typed prior to wiping the chat is intentional
+        // collateral; we don't want a stray draft surviving a "delete
+        // history" gesture.
+        ComposerDraftStore.clear(for: conversationId)
+        draftSaveWorkItem?.cancel()
+        composerText = ""
         // Reset preview on the conversation row.
         store.recordNewMessage(
             conversationId: conversationId,

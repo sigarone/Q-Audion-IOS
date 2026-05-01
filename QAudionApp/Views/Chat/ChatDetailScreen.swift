@@ -106,6 +106,10 @@ struct ChatDetailScreen: View {
                         } else if !wasEmpty {
                             container.notifyComposerCleared()
                         }
+                        // W137: persist the draft (debounced 0.5s) so
+                        // the user doesn't lose half-typed messages
+                        // if iOS reaps the app in the background.
+                        container.scheduleDraftSave()
                     }
                 ),
                 editingTarget: editingTarget,
@@ -495,6 +499,10 @@ struct ChatDetailScreen: View {
                 // W90: stop suppressing local-notification banners
                 // for this peer once the chat detail screen unmounts.
                 container.resignActive()
+                // W137: flush any pending debounced draft save now,
+                // because iOS may not give us another runloop tick
+                // before the screen is fully torn down.
+                container.flushDraftNow()
             }
         }
     }
