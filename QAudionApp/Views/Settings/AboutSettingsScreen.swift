@@ -16,6 +16,9 @@ final class AboutSettingsContainer: ObservableObject {
 struct AboutSettingsScreen: View {
     @ObservedObject var container: AboutSettingsContainer
     @StateObject private var updateChecker: AppUpdateChecker
+    /// W167: live WS connection state so the diagnostic status row
+    /// updates in real time as connect / disconnect events fire.
+    @ObservedObject private var appState: AppState
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -24,6 +27,7 @@ struct AboutSettingsScreen: View {
     init(state: AppState) {
         let c = AboutSettingsContainer()
         self._container = ObservedObject(wrappedValue: c)
+        self._appState = ObservedObject(wrappedValue: state)
         _updateChecker = StateObject(wrappedValue: AppUpdateChecker(appState: state))
     }
 
@@ -66,6 +70,17 @@ struct AboutSettingsScreen: View {
                         statusRow("ML-KEM-1024 (PQC)",
                                   enabled: container.viewModel.mlKem1024Enabled)
                         kvRow("ONNX Runtime", container.viewModel.onnxruntimeVersion, mono: true)
+                    }
+                    // W167: live WebSocket connection state. Helps QA
+                    // confirm whether the server-side leg is healthy
+                    // without opening Diagnostics export.
+                    section("CONNESSIONE") {
+                        kvRow("WebSocket",
+                              appState.wsConnectionState.rawValue,
+                              mono: true)
+                        kvRow("Autenticato",
+                              appState.isAuthenticated ? "sì" : "no",
+                              mono: false)
                     }
                     section("AGGIORNAMENTI") {
                         updateBlock
