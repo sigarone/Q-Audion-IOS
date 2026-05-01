@@ -80,7 +80,11 @@ final class VoiceNoteRecorder: ObservableObject {
         do {
             let r = try AVAudioRecorder(url: url, settings: settings)
             r.prepareToRecord()
-            guard r.record() else {
+            // W107: hard cap at 5 minutes. AVAudioRecorder.record(forDuration:)
+            // auto-stops + fires audioRecorderDidFinishRecording. Without
+            // this guard the user could accidentally record for hours
+            // (e.g. forgot to release the press-to-talk).
+            guard r.record(forDuration: Self.maxRecordingSeconds) else {
                 throw RecorderError.recorderFailure("AVAudioRecorder.record() returned false")
             }
             self.recorder = r
@@ -91,6 +95,11 @@ final class VoiceNoteRecorder: ObservableObject {
             throw RecorderError.recorderFailure(error.localizedDescription)
         }
     }
+
+    /// W107: 5-minute hard cap per voice note. Most chat platforms cap
+    /// at this duration; longer recordings are rare and accidental.
+    /// AVAudioRecorder.record(forDuration:) auto-stops at the limit.
+    static let maxRecordingSeconds: TimeInterval = 5 * 60
 
     /// Stops the active recording and returns the captured file. Returns
     /// nil when there's no active recording (idempotent on accidental
