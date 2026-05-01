@@ -181,6 +181,41 @@ struct NotificationsSettingsScreen: View {
                     // message. Fires after 1.5s — long enough for
                     // the user to lock the screen and see the banner.
                     SettingsSectionHeader("DIAGNOSTICA")
+                    // W278: haptic feedback test — fires the canonical
+                    // success buzz so the tester can confirm the
+                    // 'Vibrazione' toggle (W160) is actually wired and
+                    // the device has a Taptic Engine (older iPads
+                    // don't). Tap repeatedly to feel each pattern.
+                    Button {
+                        HapticFeedback.messageSent()
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "iphone.radiowaves.left.and.right")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(.orange)
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Test feedback aptico")
+                                    .qaudionStyle(type.bodyMedium)
+                                    .foregroundStyle(scheme.onSurface)
+                                Text("Verifica vibrazione · richiede Taptic Engine")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            Spacer()
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 52)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(scheme.surfaceVariant.opacity(0.4))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
                     Button {
                         scheduleTestNotification()
                     } label: {

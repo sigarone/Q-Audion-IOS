@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.273", date: "2026-05-02",
+              title: "Test feedback aptico in DIAGNOSTICA (W278)",
+              bullets: [
+                "Notifiche → DIAGNOSTICA: 'Test feedback aptico'",
+                "Fa scattare il buzz canonico (HapticFeedback.messageSent)",
+                "Verifica che la W160 vibrazione sia wirata e che il device abbia Taptic Engine",
+                "Utile su iPad vecchi che mancano del motore aptico"
+              ]),
         .init(id: "v1.0.272", date: "2026-05-02",
               title: "Battery + brightness + screen + vendorID (W274-W277)",
               bullets: [
