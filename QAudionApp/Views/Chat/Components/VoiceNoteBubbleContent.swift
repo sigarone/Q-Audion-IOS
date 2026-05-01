@@ -31,6 +31,14 @@ struct VoiceNoteBubbleContent: View {
         return String(format: "%.1fs", secs)
     }
 
+    private var rateLabel: String {
+        switch player.playbackRate {
+        case 1.5: return "1.5×"
+        case 2.0: return "2×"
+        default:  return "1×"
+        }
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             iconButton
@@ -51,6 +59,24 @@ struct VoiceNoteBubbleContent: View {
                 }
             }
             Spacer(minLength: 4)
+            // W95: speed control. Visible only while THIS note is the
+            // active one — tapping the chip cycles 1× → 1.5× → 2× → 1×.
+            if isActive {
+                Button {
+                    player.cyclePlaybackRate()
+                } label: {
+                    Text(rateLabel)
+                        .qaudionStyle(type.labelSmall)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(scheme.surfaceVariant.opacity(0.6))
+                        )
+                        .foregroundStyle(scheme.onSurface)
+                }
+                .buttonStyle(.plain)
+            }
             Text(durationLabel)
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)

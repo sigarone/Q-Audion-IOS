@@ -37,6 +37,12 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// Whether the player is paused (vs. playing). Lets the bubble
     /// distinguish "tap to resume" from "tap to play from start".
     @Published private(set) var isPaused: Bool = false
+    /// W95: playback speed multiplier. Cycles 1.0 → 1.5 → 2.0 → 1.0
+    /// via `cyclePlaybackRate()`. Persisted across plays so the user's
+    /// preferred speed sticks for the whole session. AVAudioPlayer
+    /// requires `enableRate = true` before prepareToPlay; we set it
+    /// unconditionally now that this property exists.
+    @Published private(set) var playbackRate: Float = 1.0
 
     private var player: AVAudioPlayer?
     private var tickTimer: Timer?
@@ -62,6 +68,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         do {
             let p = try AVAudioPlayer(contentsOf: url)
             p.delegate = self
+            // W95: enable rate so cyclePlaybackRate can adjust speed.
+            // Must be set BEFORE prepareToPlay per AVAudioPlayer docs.
+            p.enableRate = true
+            p.rate = playbackRate
             p.prepareToPlay()
             guard p.play() else {
                 print("[VoiceNotePlayer] play() returned false for \(url.lastPathComponent)")
@@ -77,6 +87,20 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             print("[VoiceNotePlayer] failed to load \(url.path): \(error)")
             stop()
         }
+    }
+
+    /// W95: cycle through playback speeds 1× → 1.5× → 2× → 1×. If a
+    /// note is currently playing, the rate is applied immediately
+    /// (AVAudioPlayer adjusts in real time when enableRate=true).
+    func cyclePlaybackRate() {
+        let next: Float
+        switch playbackRate {
+        case 1.0: next = 1.5
+        case 1.5: next = 2.0
+        default:  next = 1.0
+        }
+        playbackRate = next
+        player?.rate = next
     }
 
     /// Pause the active playback without releasing the player. The
