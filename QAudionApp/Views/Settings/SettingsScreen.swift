@@ -41,6 +41,10 @@ struct SettingsScreen: View {
     /// W102: cache-clear feedback alert state.
     @State private var cacheClearedAlertVisible: Bool = false
     @State private var cacheClearedMessage: String = ""
+    /// W151: confirm dialog gate for sign-out. Logging out wipes the
+    /// auth token + flips ContentView routing back to OnboardingRoot;
+    /// trivial to do by accident from the bottom of Settings.
+    @State private var showSignOutConfirm: Bool = false
     /// W113: bump on every clear to force the SettingsRow subtitle
     /// to recompute (computed property reads filesystem; cheap but
     /// only worth doing when the row re-renders).
@@ -123,6 +127,26 @@ struct SettingsScreen: View {
                         Spacer().frame(height: 24)
                         signOutButton
                             .padding(.horizontal, 16)
+                            // W151: confirmation dialog before
+                            // wiping the session. Anchored to the
+                            // sign-out button so the dialog inherits
+                            // its presentation context.
+                            .confirmationDialog(
+                                "Uscire da Q-Audion?",
+                                isPresented: $showSignOutConfirm,
+                                titleVisibility: .visible
+                            ) {
+                                Button("Esci", role: .destructive) {
+                                    snackbar?.show(.init(
+                                        text: "Sessione chiusa.",
+                                        severity: .info,
+                                        durationSeconds: 3))
+                                    appState.logout()
+                                }
+                                Button("Annulla", role: .cancel) { }
+                            } message: {
+                                Text("Dovrai accedere di nuovo per usare le chat e le chiamate. I messaggi salvati su questo dispositivo non vengono cancellati.")
+                            }
 
                         // W118: app version + build number footer.
                         // Helps testers report bugs against a specific
@@ -468,16 +492,10 @@ struct SettingsScreen: View {
 
     private var signOutButton: some View {
         Button {
-            // AppState.logout() is sync (clears token + flips
-            // isAuthenticated to false). ContentView's reactive Group
-            // routing handles re-presenting the OnboardingRoot once
-            // isAuthenticated == false. We push a snackbar BEFORE
-            // logout so the host (still mounted on ContentView) gets
-            // the message before isAuthenticated flips and the entire
-            // SettingsScreen is torn down.
-            snackbar?.show(.init(text: "Sessione chiusa.", severity: .info,
-                                 durationSeconds: 3))
-            appState.logout()
+            // W151: gate behind a confirmation dialog. The actual
+            // logout (token wipe + routing flip) runs from the
+            // dialog's destructive button below.
+            showSignOutConfirm = true
         } label: {
             HStack {
                 // SF Symbol that semantically reads as "log out" rather
