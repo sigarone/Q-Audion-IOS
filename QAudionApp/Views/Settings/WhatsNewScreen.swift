@@ -22,6 +22,13 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.263", date: "2026-05-02",
+              title: "Clear delivered notifications dev action (W263)",
+              bullets: [
+                "Notifiche → DIAGNOSTICA: 'Cancella notifiche consegnate'",
+                "Svuota il cassetto notifiche di iOS (UNUserNotificationCenter)",
+                "Sister di 'Pulisci badge' (W166) — usate insieme per QA pulito"
+              ]),
         .init(id: "v1.0.262", date: "2026-05-02",
               title: "🎉 Type-checker beat — fix real API mismatch (W262)",
               bullets: [

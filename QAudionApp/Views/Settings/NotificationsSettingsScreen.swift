@@ -194,6 +194,41 @@ struct NotificationsSettingsScreen: View {
                     }
                     .buttonStyle(.plain)
 
+                    // W263: clear all delivered notifications from the
+                    // notification center. Testers who run W171 multiple
+                    // times can accumulate a pile of stale banners that
+                    // also keep the home-screen badge red. One tap wipes
+                    // them; complementary to W166 (clear badge counter).
+                    Button {
+                        NotificationCenterService.shared.clearAllDelivered()
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "tray.fill")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(.orange)
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Cancella notifiche consegnate")
+                                    .qaudionStyle(type.bodyMedium)
+                                    .foregroundStyle(scheme.onSurface)
+                                Text("Svuota il cassetto notifiche di iOS")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            Spacer()
+                            Image(systemName: "trash")
+                                .font(.system(size: 14, weight: .regular))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 52)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(scheme.surfaceVariant.opacity(0.4))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
                     // W169: shortcut into iOS Settings → Q-Audion
                     // permissions. Useful when the user has revoked
                     // mic / notifications and wants to fix it without
