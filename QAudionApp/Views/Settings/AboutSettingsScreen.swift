@@ -82,6 +82,21 @@ struct AboutSettingsScreen: View {
                         // memory-heavy; visible footprint helps catch
                         // leaks during long sessions.
                         kvRow("Memoria processo", Self.residentMemoryLabel(), mono: true)
+                        // W269: device locale identifier — surfaces
+                        // mismatches between the app's hardcoded Italian
+                        // strings and a user with en_US / de_DE etc.
+                        // Useful when QA reports number formatting or
+                        // pluralization quirks.
+                        kvRow("Lingua sistema", Self.systemLocaleLabel(), mono: true)
+                        // W272: total physical memory of the device
+                        // (not the app's quota). Gives context to the
+                        // 'Memoria processo' row above — 84MB out of
+                        // 4GB is fine; out of 1GB is concerning.
+                        kvRow("Memoria fisica", Self.physicalMemoryLabel(), mono: true)
+                        // W273: low-power mode status. iOS throttles
+                        // CPU and reduces background activity when on;
+                        // PQC keygen latency can spike noticeably.
+                        kvRow("Risparmio energetico", Self.lowPowerLabel(), mono: false)
                     }
                     // W159: local data summary — gives the user a
                     // sense of how much chat content lives on this
@@ -313,6 +328,37 @@ struct AboutSettingsScreen: View {
     /// available to user-space — system services may have parked some).
     private static func processorCountLabel() -> String {
         return String(ProcessInfo.processInfo.activeProcessorCount)
+    }
+
+    /// W269: device locale identifier (e.g. "it_IT", "en_US"). Reads
+    /// from `Locale.current.identifier`. Static + single-statement to
+    /// keep type-checker scope clean.
+    private static func systemLocaleLabel() -> String {
+        return Locale.current.identifier
+    }
+
+    /// W272: total physical memory in GB, formatted like "6,00 GB" via
+    /// Italian locale. ProcessInfo.physicalMemory returns bytes (UInt64).
+    private static func physicalMemoryLabel() -> String {
+        let bytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+        let gb: Double = Double(bytes) / (1024.0 * 1024.0 * 1024.0)
+        let nf = NumberFormatter()
+        nf.locale = Locale(identifier: "it_IT")
+        nf.minimumFractionDigits = 2
+        nf.maximumFractionDigits = 2
+        let formatted: String = nf.string(from: NSNumber(value: gb)) ?? "?"
+        return formatted + " GB"
+    }
+
+    /// W273: low-power mode status as a friendly Italian label. iOS
+    /// throttles CPU + reduces background activity when this is on,
+    /// which can spike PQC keygen latency by 30-60%.
+    private static func lowPowerLabel() -> String {
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            return "Attivo (CPU ridotta)"
+        } else {
+            return "Disattivato"
+        }
     }
 
     /// W267: resident memory of the current process, formatted as

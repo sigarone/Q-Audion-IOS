@@ -22,6 +22,15 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.269", date: "2026-05-02",
+              title: "Locale + memoria fisica + low-power in About (W269/W272/W273)",
+              bullets: [
+                "About → STATO SISTEMA: 3 nuove righe",
+                "W269: lingua sistema (es. 'it_IT')",
+                "W272: memoria fisica del dispositivo (RAM totale)",
+                "W273: stato risparmio energetico (CPU ridotta quando attivo)",
+                "Tutto via ProcessInfo + Locale, no async, no closures"
+              ]),
         .init(id: "v1.0.268", date: "2026-05-02",
               title: "Self-test crittografia ML-KEM-1024 (W268)",
               bullets: [
