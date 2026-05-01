@@ -94,7 +94,19 @@ struct ChatDetailScreen: View {
             MessageComposer(
                 text: Binding(
                     get: { container.composerText },
-                    set: { container.composerText = $0 }
+                    set: { newValue in
+                        let wasEmpty = container.composerText.isEmpty
+                        container.composerText = newValue
+                        // W101: typing indicator emit. Empty→non-empty
+                        // fires `is_typing=true`; non-empty→empty fires
+                        // `is_typing=false` immediately. Steady-state
+                        // typing rolls the 3s auto-stop timer.
+                        if !newValue.isEmpty {
+                            container.notifyComposerInput()
+                        } else if !wasEmpty {
+                            container.notifyComposerCleared()
+                        }
+                    }
                 ),
                 editingTarget: editingTarget,
                 replyTarget: replyTarget,

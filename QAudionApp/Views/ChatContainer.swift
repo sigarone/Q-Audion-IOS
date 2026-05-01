@@ -252,6 +252,56 @@ final class ChatContainer: ObservableObject {
         }
     }
 
+    /// W101: emit typing-start envelope when the user starts typing,
+    /// debounced typing-stop after 3 seconds of inactivity. Idempotent
+    /// — repeated calls while already typing just refresh the stop
+    /// timer. Server relays via msg_typing → peer's chatTypingNotification
+    /// → ChatContainer.observer flips isPeerTyping.
+    private var typingActive = false
+    private var typingStopWorkItem: DispatchWorkItem?
+
+    func notifyComposerInput() {
+        guard let provider = self.appState?.liveProvider else { return }
+        let peerId = peerUserId
+        // Send typing=true once per "session of typing".
+        if !typingActive {
+            typingActive = true
+            Task {
+                try? await provider.messageApi.sendTypingIndicator(
+                    recipientId: peerId, isTyping: true
+                )
+            }
+        }
+        // Reset the auto-stop timer.
+        typingStopWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.typingActive = false
+            Task {
+                try? await provider.messageApi.sendTypingIndicator(
+                    recipientId: peerId, isTyping: false
+                )
+            }
+        }
+        typingStopWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: work)
+    }
+
+    /// W101: explicitly emit typing=false (called when the user sends
+    /// the message — sendMessage already cleared composerText, but
+    /// the peer still sees "sta scrivendo…" until the auto-stop fires).
+    func notifyComposerCleared() {
+        typingStopWorkItem?.cancel()
+        guard typingActive, let provider = self.appState?.liveProvider else { return }
+        typingActive = false
+        let peerId = peerUserId
+        Task {
+            try? await provider.messageApi.sendTypingIndicator(
+                recipientId: peerId, isTyping: false
+            )
+        }
+    }
+
     /// W83: zero `unreadCount` for this conversation. Called by
     /// `ChatDetailScreen.onAppear` so opening a chat clears its badge.
     /// W90: also stamp the active-peer hint on AppState so inbound
