@@ -521,6 +521,21 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // W166: clear the home-screen badge counter without
+            // dismissing actual delivered notifications. Useful for
+            // testers who got the badge stuck during a CI session.
+            Button {
+                NotificationCenterService.shared.clearBadge()
+                cacheClearedMessage = "Badge notifiche azzerato."
+                cacheClearedAlertVisible = true
+            } label: {
+                SettingsRow(icon: "app.badge",
+                            iconColor: .orange,
+                            title: "Pulisci badge notifiche",
+                            subtitle: "Azzera il numero rosso sull'icona dell'app")
+            }
+            .buttonStyle(.plain)
+
             // W153: wipe all "ultimo accesso" stamps captured by
             // PresenceService. The next time the chat detail topbar
             // renders for a peer, it falls back to the static crypto
