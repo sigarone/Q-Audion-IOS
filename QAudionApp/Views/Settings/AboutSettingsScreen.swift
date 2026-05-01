@@ -41,6 +41,14 @@ struct AboutSettingsScreen: View {
                         // can see how long the app has been on this
                         // device. Stamped lazily via Self.firstSeen().
                         kvRow("Membro da", Self.firstSeenLabel(), mono: false)
+                        // W162: per-build install timestamp — stamped
+                        // when this specific build first launched.
+                        // Lets the user know how long they've been
+                        // running THIS version vs the older "Membro
+                        // da" which spans the whole device install.
+                        kvRow("Build installato",
+                              Self.buildInstalledLabel(buildNumber: container.viewModel.buildNumber),
+                              mono: false)
                     }
                     section("PIATTAFORMA") {
                         kvRow("Target iOS", "iOS \(container.viewModel.iosDeploymentTarget)+", mono: true)
@@ -118,6 +126,35 @@ struct AboutSettingsScreen: View {
 
         return LocalDataStats(conversations: conversations,
                               messages: messages, drafts: drafts)
+    }
+
+    /// W162: stamp the first-launch timestamp for THIS build number
+    /// (so Settings can show "Build installato 3 giorni fa"). Keyed
+    /// by `qaudion.buildSeen.<n>` so each build gets its own stamp.
+    /// Format: relative time-ago in Italian.
+    private static func buildInstalledLabel(buildNumber: String) -> String {
+        let key = "qaudion.buildSeen." + buildNumber
+        let store = UserDefaults.standard
+        let date: Date = {
+            if let prior = store.object(forKey: key) as? Date {
+                return prior
+            }
+            let now = Date()
+            store.set(now, forKey: key)
+            return now
+        }()
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < 60 { return "ora" }
+        if elapsed < 3600 {
+            let m = Int(elapsed / 60)
+            return m == 1 ? "1 minuto fa" : "\(m) minuti fa"
+        }
+        if elapsed < 86400 {
+            let h = Int(elapsed / 3600)
+            return h == 1 ? "1 ora fa" : "\(h) ore fa"
+        }
+        let d = Int(elapsed / 86400)
+        return d == 1 ? "1 giorno fa" : "\(d) giorni fa"
     }
 
     /// W158: read or stamp the first-launch timestamp under
