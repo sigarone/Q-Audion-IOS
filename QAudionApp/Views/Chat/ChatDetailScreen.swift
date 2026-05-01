@@ -397,6 +397,11 @@ struct ChatDetailScreen: View {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
+            .onDisappear {
+                // W90: stop suppressing local-notification banners
+                // for this peer once the chat detail screen unmounts.
+                container.resignActive()
+            }
         }
     }
 

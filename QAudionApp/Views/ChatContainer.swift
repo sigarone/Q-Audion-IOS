@@ -254,10 +254,22 @@ final class ChatContainer: ObservableObject {
 
     /// W83: zero `unreadCount` for this conversation. Called by
     /// `ChatDetailScreen.onAppear` so opening a chat clears its badge.
+    /// W90: also stamp the active-peer hint on AppState so inbound
+    /// banners are suppressed while this chat is on screen.
     /// Idempotent — no-op if already zero.
     func markRead() {
         store.markConversationRead(id: conversationId)
+        appState?.activePeerUserId = peerUserId
         refreshFromStore()
+    }
+
+    /// W90: clear the active-peer hint so inbound banners resume firing
+    /// once the user navigates away. Called from
+    /// `ChatDetailScreen.onDisappear`.
+    func resignActive() {
+        if appState?.activePeerUserId == peerUserId {
+            appState?.activePeerUserId = nil
+        }
     }
 
     /// W86: ship a `qa_ctl:1` t="delete" envelope to the peer + apply

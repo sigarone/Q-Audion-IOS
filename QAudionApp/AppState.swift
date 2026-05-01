@@ -63,6 +63,12 @@ final class AppState: ObservableObject {
     /// emission (W84). Set by `attachPersistentBackend`; cleared on
     /// logout / token refresh.
     internal var liveProvider: BCryptoBackendProvider?
+    /// W90: peer userId of the currently-open chat. ChatContainer.markRead
+    /// sets this on .onAppear; ChatContainer deinits clear it. Used by
+    /// `handleIncomingMessage` to suppress local-notification banners
+    /// for the conversation the user is actively viewing — avoids the
+    /// "banner pops up while I'm reading the message" UX gaffe.
+    internal var activePeerUserId: String?
 
     /// W77: pairwise PSK first-contact handshake. Built in
     /// `connectPersistentSocket()` once the WS is up so `sendOpaque`
@@ -866,6 +872,37 @@ final class AppState: ObservableObject {
             lastActivity: Date(),
             incrementUnread: !isMuted
         )
+        // W90: local-notification banner for inbound messages.
+        // Suppression rules:
+        //   - skip if conversation is muted (W89).
+        //   - skip if the user is currently viewing this peer's chat
+        //     (activePeerUserId matches the sender) — they already
+        //     see the message in the open chat, banner is redundant.
+        //   - else fire the banner so a backgrounded chat list still
+        //     surfaces the new message.
+        if !isMuted && activePeerUserId != senderId {
+            let title = conv.peerDisplayName.isEmpty ? senderId : conv.peerDisplayName
+            // Cap body at ~120 chars so multi-line essays don't blow
+            // up the banner. plaintext is already the friendly render.
+            let bodyText: String
+            if plaintext.count > 120 {
+                bodyText = String(plaintext.prefix(120)) + "…"
+            } else {
+                bodyText = plaintext
+            }
+            Task { @MainActor in
+                await NotificationCenterService.shared.scheduleLocal(
+                    category: .messageDelivered,
+                    title: title,
+                    body: bodyText,
+                    userInfo: [
+                        "conversationId": conv.id.uuidString,
+                        "peerUserId":     senderId,
+                    ],
+                    delay: 0.1
+                )
+            }
+        }
         // W80: async download + decrypt + cache. We kick this off here
         // so the cache is populated by the time the user opens the
         // chat. The send path attaches a recipient capability claim,
