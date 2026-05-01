@@ -22,6 +22,16 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.241–247", date: "2026-05-01",
+              title: "QA toolkit polish (W170–W175)",
+              bullets: [
+                "About → PIATTAFORMA: dispositivo + iOS in uso (W170)",
+                "Notifiche → DIAGNOSTICA: invio notifica di test (W171)",
+                "Footnote copyright sotto la versione (W172)",
+                "About → ASSISTENZA: contatta supporto via mail (W173)",
+                "CLAUDE.md: documentazione type-checker traps (W174)",
+                "CI: profiling flags compile-time per surfacciare bottleneck (W175)"
+              ]),
         .init(id: "v1.0.232–238", date: "2026-05-01",
               title: "Diagnostica e dev tools (W162–W167)",
               bullets: [
