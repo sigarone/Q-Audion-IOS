@@ -42,6 +42,7 @@ struct ImageBubbleContent: View {
             if let path = mediaLocalPath, !path.isEmpty {
                 if let img = loadedImage {
                     Image(uiImage: img)
+                        .renderingMode(.original)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: 240, maxHeight: 320)
@@ -99,16 +100,14 @@ struct ImageBubbleContent: View {
     }
 
     private var placeholderBox: some View {
-        // Simple gray box at the same nominal width so the layout
-        // doesn't jump when the image loads.
-        ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(scheme.surfaceVariant.opacity(0.6))
-                .frame(width: 200, height: 150)
-            Image(systemName: "photo")
-                .font(.system(size: 28))
-                .foregroundStyle(scheme.onSurfaceVariant)
-        }
+        // W111: shimmering skeleton instead of static gray placeholder.
+        // Animated linear gradient sweep gives a "loading" affordance
+        // matching iOS system patterns. Fixed dimensions match the
+        // post-load max so the layout doesn't jump when the image
+        // appears.
+        ShimmeringRectangle()
+            .frame(width: 200, height: 150)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var downloadingBox: some View {
@@ -136,6 +135,38 @@ struct ImageBubbleContent: View {
                 self.loadedImage = img
             } else {
                 print("[ImageBubbleContent] failed to load \(path) — cache reclaimed?")
+            }
+        }
+    }
+}
+
+/// W111: shimmering skeleton placeholder. Linear gradient sweep
+/// animated 1.5s → seemless looped. iOS system pattern for image
+/// loading states.
+private struct ShimmeringRectangle: View {
+    @State private var phase: CGFloat = -1.0
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            ZStack {
+                Rectangle().fill(Color.gray.opacity(0.20))
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color.white.opacity(0),
+                        Color.white.opacity(0.45),
+                        Color.white.opacity(0)
+                    ]),
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: w * 0.6)
+                .offset(x: phase * w)
+            }
+            .onAppear {
+                withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                    phase = 1.0
+                }
             }
         }
     }
