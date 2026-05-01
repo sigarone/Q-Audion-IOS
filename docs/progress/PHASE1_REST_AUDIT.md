@@ -232,12 +232,17 @@ iOS: `{ target_user_id, pqc_ciphertext, x25519_public_key, message_type, enclave
 
 Field names differ (`recipient_id` vs `target_user_id`, `ciphertext` vs `pqc_ciphertext`), iOS bundles the x25519 pubkey into the relay envelope (Android splits into separate channels), iOS default algorithm unspecified (Android `ml-kem-768`; project target is `ml-kem-1024`). Task 1.4-b5 added a TODO(parity) in `BCryptoSecurityApiImpl.sendPqcKeyExchange` — the server team must confirm whether the hybrid-handshake metadata is expected in-band or negotiated out-of-band.
 
-### 3.14 ⚠️ `security/threat-report` field names  *(TODO in code — pending server-team clarification)*
+### 3.14 ✅ `security/threat-report` field names  *(RESOLVED — see commit b86f39c)*
 
 Android: `{ category, details, severity }`.
-iOS: `{ threat_kind, severity, detail, timestamp, session_id? }`.
+iOS (current): `{ category, details, severity }` — matches Android verbatim.
 
-`category`↔`threat_kind`, `details`↔`detail`. Extra iOS fields likely ignored. Task 1.4-b5 added a TODO(parity) in `BCryptoSecurityApiImpl.reportThreat` — `detail`/`details` + `threat_kind`/`category` are safe renames once the server team confirms; iOS-extra `timestamp`/`session_id` may need dropping or server-side adoption.
+Verified 2026-05-01: `BCryptoSecurityApiImpl.swift:53-66` ships the
+canonical `category`/`details`/`severity` wire shape; the
+`threat_kind`/`detail`/`timestamp`/`session_id` skew flagged in
+Phase 1.2 was closed by commit `b86f39c` ("fix(security): align iOS
+security endpoints to Android wire"). The TODO comment in the
+audit doc is stale; this drift is NO LONGER OPEN.
 
 ### 3.15 ⚠️ `security/wipe-confirm` schema  *(TODO in code — pending server-team clarification)*
 
