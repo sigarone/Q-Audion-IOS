@@ -95,6 +95,12 @@ struct PrivacySettingsScreen: View {
     @AppStorage("qaudion.privacy.show_drafts_in_list")
     private var showDraftsInList: Bool = true
 
+    /// W160: master haptic feedback kill-switch. Off → all
+    /// HapticFeedback.* helpers short-circuit, useful for
+    /// accessibility / battery sensitivity.
+    @AppStorage("qaudion.haptics.enabled")
+    private var hapticsEnabled: Bool = true
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -149,6 +155,12 @@ struct PrivacySettingsScreen: View {
                             title: "Mostra abbozzi nella lista",
                             subtitle: "Indica le chat con messaggi non inviati",
                             isOn: $showDraftsInList
+                        )
+                        // W160: master haptic kill-switch.
+                        SettingsToggleRow(
+                            title: "Vibrazione",
+                            subtitle: "Tatto sui tap, invio messaggi e azioni",
+                            isOn: $hapticsEnabled
                         )
                     }
 
