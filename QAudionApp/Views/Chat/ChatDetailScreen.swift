@@ -618,17 +618,27 @@ struct ChatDetailScreen: View {
     /// code (single backticks, no language). The backticks themselves
     /// are stripped from the visible string.
     private static func attributedBody(_ raw: String, linkColor: Color) -> AttributedString {
-        // First pass: strip backtick wrappers and remember their
-        // ranges in the cleaned string. We rebuild incrementally
-        // rather than running regex over AttributedString (which
-        // doesn't have first-class match support).
-        let (cleaned, codeRanges) = Self.stripBackticks(raw)
-        var attr = AttributedString(cleaned)
-        // Apply monospaced + subtle background to each code run.
-        for r in codeRanges {
+        // W148/W149: single-pass parser strips `code`, **bold**, and
+        // *italic* markers in one walk so the resulting offsets align
+        // perfectly with the cleaned text (no chained-replacement
+        // offset drift). Output: cleaned string + per-style range
+        // arrays in utf16 indices of the cleaned string.
+        let parsed = Self.parseMarkdownLite(raw)
+        var attr = AttributedString(parsed.cleaned)
+        for r in parsed.code {
             guard let attrRange = Range(NSRange(location: r.lowerBound, length: r.count),
                                         in: attr) else { continue }
             attr[attrRange].font = .system(.body, design: .monospaced)
+        }
+        for r in parsed.bold {
+            guard let attrRange = Range(NSRange(location: r.lowerBound, length: r.count),
+                                        in: attr) else { continue }
+            attr[attrRange].inlinePresentationIntent = .stronglyEmphasized
+        }
+        for r in parsed.italic {
+            guard let attrRange = Range(NSRange(location: r.lowerBound, length: r.count),
+                                        in: attr) else { continue }
+            attr[attrRange].inlinePresentationIntent = .emphasized
         }
         // Then layer URL detection on top of the cleaned text.
         guard let detector = try? NSDataDetector(
@@ -647,21 +657,29 @@ struct ChatDetailScreen: View {
         return attr
     }
 
-    /// W148: walk the input character-by-character and pull out runs
-    /// wrapped in single backticks (`like this`). Returns the cleaned
-    /// string with the backticks removed plus the integer ranges
-    /// (in the cleaned string) of each code span. Unmatched backticks
-    /// (no closing pair) are preserved verbatim. Triple-backtick
-    /// fences are out of scope — we treat them as three separate
-    /// single-backticks for now.
-    private static func stripBackticks(_ raw: String) -> (cleaned: String, ranges: [Range<Int>]) {
+    /// W148/W149: unified single-pass markdown-lite parser. Recognises:
+    ///   - `code spans`     → monospace
+    ///   - **bold**         → bold weight
+    ///   - *italic*         → italic
+    /// Markers are stripped; the returned ranges are utf16 offsets
+    /// into the cleaned string so they apply directly to the
+    /// AttributedString built from it. Inside a `code` span we DON'T
+    /// parse emphasis. Unmatched markers pass through verbatim.
+    private struct ParsedMarkdownLite {
+        let cleaned: String
+        let code: [Range<Int>]
+        let bold: [Range<Int>]
+        let italic: [Range<Int>]
+    }
+
+    private static func parseMarkdownLite(_ raw: String) -> ParsedMarkdownLite {
         var cleaned = ""
-        var ranges: [Range<Int>] = []
+        var code: [Range<Int>] = []
+        var bold: [Range<Int>] = []
+        var italic: [Range<Int>] = []
         var i = raw.startIndex
         while i < raw.endIndex {
             if raw[i] == "`" {
-                // Try to find the matching closer; otherwise emit the
-                // backtick verbatim.
                 let afterOpen = raw.index(after: i)
                 if let close = raw[afterOpen...].firstIndex(of: "`"),
                    close != afterOpen {
@@ -669,15 +687,44 @@ struct ChatDetailScreen: View {
                     let start = cleaned.utf16.count
                     cleaned += inner
                     let end = cleaned.utf16.count
-                    ranges.append(start..<end)
+                    code.append(start..<end)
                     i = raw.index(after: close)
                     continue
+                }
+            }
+            if raw[i] == "*" {
+                let nextIdx = raw.index(after: i)
+                if nextIdx < raw.endIndex && raw[nextIdx] == "*" {
+                    let afterOpen = raw.index(after: nextIdx)
+                    if let close = raw.range(of: "**", range: afterOpen..<raw.endIndex)?.lowerBound,
+                       close != afterOpen {
+                        let inner = String(raw[afterOpen..<close])
+                        let start = cleaned.utf16.count
+                        cleaned += inner
+                        let end = cleaned.utf16.count
+                        bold.append(start..<end)
+                        i = raw.index(close, offsetBy: 2)
+                        continue
+                    }
+                } else {
+                    let afterOpen = nextIdx
+                    if let close = raw[afterOpen...].firstIndex(of: "*"),
+                       close != afterOpen {
+                        let inner = String(raw[afterOpen..<close])
+                        let start = cleaned.utf16.count
+                        cleaned += inner
+                        let end = cleaned.utf16.count
+                        italic.append(start..<end)
+                        i = raw.index(after: close)
+                        continue
+                    }
                 }
             }
             cleaned.append(raw[i])
             i = raw.index(after: i)
         }
-        return (cleaned, ranges)
+        return ParsedMarkdownLite(cleaned: cleaned,
+                                  code: code, bold: bold, italic: italic)
     }
 
     @ViewBuilder
