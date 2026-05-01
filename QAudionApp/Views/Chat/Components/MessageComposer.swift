@@ -46,6 +46,7 @@ struct MessageComposer: View {
     /// per annullare" while > 60pt above the mic, and the mic icon
     /// switches to xmark for visual confirmation.
     @State private var cancelArmed: Bool = false
+    @State private var recordingDotPulse: Bool = false
 
     init(text: Binding<String>,
          editingTarget: EditingTarget? = nil,
@@ -141,10 +142,19 @@ struct MessageComposer: View {
         let remaining = max(0, 300 - recordingElapsedSeconds)
         let nearingCap = remaining > 0 && remaining <= 30
         return HStack(spacing: 10) {
+            // W133: pulsing red dot — opacity oscillates 1.0 ↔ 0.45
+            // every 0.7s so the recording state reads as 'live' even
+            // before the user reads any text.
             Circle()
                 .fill(extras.error)
                 .frame(width: 8, height: 8)
-                .opacity(0.95)
+                .opacity(recordingDotPulse ? 1.0 : 0.45)
+                .animation(
+                    .easeInOut(duration: 0.7).repeatForever(autoreverses: true),
+                    value: recordingDotPulse
+                )
+                .onAppear { recordingDotPulse = true }
+                .onDisappear { recordingDotPulse = false }
             Text(formattedElapsed)
                 .qaudionStyle(type.bodyMedium)
                 .foregroundStyle(nearingCap ? extras.error : scheme.onSurface)
