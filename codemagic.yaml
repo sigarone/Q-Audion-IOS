@@ -184,30 +184,46 @@ workflows:
           # archive happens in the next step. We just want the log.
           set +e
           cd QAudionApp
-          echo "=== xcodebuild diagnose (no archive, no signing) ==="
-          # Swift compile-time profiling: warn on any function body
-          # taking >200ms or any single expression taking >200ms.
-          # That surfaces the slow expression that's tripping the
-          # type-checker even when the actual error is silent.
-          # -j 1 serialises swiftc so OOM kills become visible.
+          echo "=== which xcodebuild + version ==="
+          which xcodebuild
+          xcodebuild -version
+
+          echo ""
+          echo "=== xcodebuild build (RAW redirect, no xcbeautify pipe) ==="
+          # Redirect to file directly (no pipe) so any xcbeautify
+          # wrapper in the env can't intercept. Then cat key sections
+          # to console after.
           xcodebuild \
             -project QAudionApp.xcodeproj \
             -scheme QAudionApp \
             -configuration Release \
             -destination "generic/platform=iOS" \
             -sdk iphoneos \
-            -jobs 1 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -warn-long-function-bodies=200 -Xfrontend -warn-long-expression-type-checking=200' \
-            build 2>&1 | tee diag.log
+            SWIFT_USE_INTEGRATED_DRIVER=NO \
+            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -warn-long-function-bodies=200 -Xfrontend -warn-long-expression-type-checking=200 -Xfrontend -debug-time-function-bodies' \
+            build > diag.log 2>&1
+          DIAG_RC=$?
+          echo "xcodebuild exit code: $DIAG_RC"
+
           echo ""
-          echo "=== diag.log : grep error/warning/fatal ==="
-          grep -E "error:|warning:|fatal:|cannot find|note:.*type-check|killed|signal|long-function|long-expression" diag.log | tail -150 || true
+          echo "=== diag.log size ==="
+          wc -l diag.log || true
+
           echo ""
-          echo "=== diag.log : last 100 lines ==="
-          tail -100 diag.log || true
+          echo "=== diag.log : first 80 lines (project setup) ==="
+          head -80 diag.log || true
+
+          echo ""
+          echo "=== diag.log : grep error/warning/fatal/abort/killed ==="
+          grep -E "error:|warning:|fatal:|cannot find|killed|signal|abort|crash|long-function|long-expression|<unknown>|Segmentation|terminate|note:" diag.log | head -300 || true
+
+          echo ""
+          echo "=== diag.log : last 250 lines ==="
+          tail -250 diag.log || true
           echo ""
           echo "=== diag.log size ==="
           wc -l diag.log || true
