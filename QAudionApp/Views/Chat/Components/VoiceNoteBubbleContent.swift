@@ -74,6 +74,14 @@ struct VoiceNoteBubbleContent: View {
                     } label: {
                         Label("Condividi audio", systemImage: "square.and.arrow.up")
                     }
+                    // W117: tech info — file size + cache path.
+                    if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                       let size = attrs[.size] as? UInt64 {
+                        let kb = Double(size) / 1024.0
+                        Text(String(format: "%.1f KB · %@",
+                                    kb,
+                                    (path as NSString).lastPathComponent))
+                    }
                 }
             })
             .sheet(item: $sharingURL) { target in
