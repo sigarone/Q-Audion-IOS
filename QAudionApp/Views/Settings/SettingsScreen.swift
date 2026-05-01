@@ -66,6 +66,10 @@ struct SettingsScreen: View {
             if total < 3600 { return "\(total / 60)m \(total % 60)s" }
             return "\(total / 3600)h \((total % 3600) / 60)m"
         }()
+        // W156: copy-friendly bundle string. Tapping the version row
+        // pops a confirmation snackbar after writing it to the
+        // pasteboard — handy for bug reports against a specific build.
+        let bundleSummary = "Q-Audion v\(v) (build \(b))"
         return VStack(spacing: 4) {
             Text("Q-Audion")
                 .qaudionStyle(type.labelSmall)
@@ -80,6 +84,17 @@ struct SettingsScreen: View {
                 .monospacedDigit()
         }
         .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            #if canImport(UIKit)
+            UIPasteboard.general.string = bundleSummary
+            snackbar?.show(.init(
+                text: "Versione copiata: \(bundleSummary)",
+                severity: .info,
+                durationSeconds: 3
+            ))
+            #endif
+        }
     }
 
     private var cacheUsageSubtitle: String {
