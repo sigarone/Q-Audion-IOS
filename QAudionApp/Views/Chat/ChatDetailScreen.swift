@@ -144,12 +144,11 @@ struct ChatDetailScreen: View {
                         } catch VoiceNoteRecorder.RecorderError.permissionDenied {
                             container.markFailed(messageId: UUID(), reason: .generic)
                         } catch {
-                            // Bind into a local first so the type-checker
-                            // doesn't have to chase `error.localizedDescription`
-                            // through the print + interpolation in a
-                            // captured-self closure.
-                            let errMsg = error.localizedDescription
-                            print("[VoiceNote] start failed: \(errMsg)")
+                            // Plain String concat — multi-segment
+                            // interpolation in @Sendable closures
+                            // trips the type-checker even with locals.
+                            let errMsg: String = error.localizedDescription
+                            print("[VoiceNote] start failed: " + errMsg)
                         }
                     }
                 },
@@ -163,13 +162,17 @@ struct ChatDetailScreen: View {
                     // placeholder so the user sees a recognizable bubble.
                     if let rec = voiceNoteRecorder.stop() {
                         HapticFeedback.recordingStop()  // W114: medium bump
-                        // Pre-bind the interpolations so the Swift
-                        // type-checker doesn't time out on this print
-                        // inside the @Sendable closure.
-                        let recName = rec.fileURL.lastPathComponent
-                        let recDur = rec.durationMs
-                        let recMime = rec.mimeType
-                        print("[VoiceNote] captured \(recName) duration \(recDur)ms (\(recMime))")
+                        // Build the log line via plain String concat;
+                        // multi-segment interpolation inside this
+                        // @Sendable closure trips the type-checker
+                        // even with pre-bound locals.
+                        let recName: String = rec.fileURL.lastPathComponent
+                        let recDur: String = String(rec.durationMs)
+                        let recMime: String = rec.mimeType
+                        let logLine: String = "[VoiceNote] captured "
+                            + recName + " duration " + recDur + "ms ("
+                            + recMime + ")"
+                        print(logLine)
                         container.sendVoiceNote(rec)
                     }
                 },
