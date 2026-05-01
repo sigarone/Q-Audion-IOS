@@ -174,22 +174,48 @@ workflows:
           echo ""
           echo "=== Profiles summary ==="
           ls -la ~/Library/MobileDevice/Provisioning\ Profiles/ 2>/dev/null || echo "no profiles dir"
+      - name: Diagnose Swift compile (raw xcodebuild)
+        script: |
+          # Diagnostic-only step: run a raw `xcodebuild build` against
+          # the QAudionApp scheme so the genuine Swift compiler error
+          # surfaces (xcode-project build-ipa pipes through xcbeautify
+          # which has been swallowing the diagnostic above 'Failed to
+          # archive'). Failures here are TOLERATED — the real signed
+          # archive happens in the next step. We just want the log.
+          set +e
+          cd QAudionApp
+          echo "=== xcodebuild diagnose (no archive, no signing) ==="
+          xcodebuild \
+            -project QAudionApp.xcodeproj \
+            -scheme QAudionApp \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            build 2>&1 | tee diag.log
+          echo ""
+          echo "=== diag.log : grep error/warning/fatal ==="
+          grep -E "error:|warning:|fatal:|cannot find|note:.*type-check|killed|signal" diag.log | tail -150 || true
+          echo ""
+          echo "=== diag.log size ==="
+          wc -l diag.log || true
+          # Always succeed so the real Build IPA step still runs even
+          # when this dry build trips a diagnostic.
+          exit 0
       - name: Build IPA
         script: |
           cd QAudionApp
-          # Capture full xcodebuild output to build.log so the next
-          # failed run surfaces the actual Swift error (xcbeautify
-          # otherwise swallows the diagnostic above 'Failed to
-          # archive'). We `tee` BOTH stdout and stderr into the file
-          # then bubble the original exit code up via PIPESTATUS so
-          # the build still fails on error.
+          # Capture full xcode-project build-ipa output to build.log so
+          # the next failed run's diagnostic is at least preserved as
+          # an artifact for download. xcbeautify still filters the
+          # in-console output but the artifact has the raw stream.
           set -o pipefail
           xcode-project build-ipa \
             --project QAudionApp.xcodeproj \
             --scheme QAudionApp 2>&1 | tee build.log
           BUILD_RC=${PIPESTATUS[0]}
-          # Tail the log on failure so the most recent diagnostic
-          # lands at the bottom of the Codemagic console output.
           if [ "$BUILD_RC" -ne 0 ]; then
             echo ""
             echo "=== build.log tail (last 200 lines) ==="
@@ -319,6 +345,9 @@ workflows:
       # Captured raw xcodebuild output — surfaces the actual Swift
       # error when xcbeautify swallows it above 'Failed to archive'.
       - QAudionApp/build.log
+      # Diagnostic dry-build log without code signing — produces the
+      # raw xcodebuild output that xcbeautify hides in the IPA step.
+      - QAudionApp/diag.log
     publishing:
       app_store_connect:
         api_key: $APP_STORE_CONNECT_PRIVATE_KEY
