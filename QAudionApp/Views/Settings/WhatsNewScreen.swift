@@ -22,6 +22,24 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.220–231", date: "2026-05-01",
+              title: "Privacy & polish marathon (W137–W160)",
+              bullets: [
+                "Abbozzi composer persistenti per chat (W137) + indicatore \"Bozza:\" (W138)",
+                "Esporta chat in .txt via share sheet (W139)",
+                "Swipe \"Segna letto\" e azioni di contesto sulla lista (W140)",
+                "Finestra modifica messaggi 15 minuti (W141)",
+                "\"Ultimo accesso\" del peer in topbar chat (W142)",
+                "Banner E2E nelle chat vuote (W143)",
+                "Velocità voice-note persistente tra sessioni (W144)",
+                "Conferma prima di Elimina/Svuota/Esci (W145, W147, W151)",
+                "Conteggio non letti nel titolo \"Chat (N)\" (W146)",
+                "Markdown inline `code` / **bold** / *italic* nei bubble (W148, W149)",
+                "Cancella abbozzi + ultimo accesso da Settings (W150, W153)",
+                "Toggle privacy: anteprima link (W152), abbozzi nella lista (W155), vibrazione (W160)",
+                "Tap-to-copy versione + ID utente (W156, W157)",
+                "About: \"Membro da\" + dati locali (conversazioni, messaggi, abbozzi) (W158, W159)"
+              ]),
         .init(id: "v1.0.96", date: "2026-04-30",
               title: "QA toolkit completata",
               bullets: [
