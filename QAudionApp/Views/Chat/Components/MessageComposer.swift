@@ -42,6 +42,10 @@ struct MessageComposer: View {
     let onCancelVoiceNote: () -> Void
 
     @State private var isRecording: Bool = false
+    /// W115: drag-up cancel armed. Banner copy flips to "Rilascia
+    /// per annullare" while > 60pt above the mic, and the mic icon
+    /// switches to xmark for visual confirmation.
+    @State private var cancelArmed: Bool = false
 
     init(text: Binding<String>,
          editingTarget: EditingTarget? = nil,
@@ -133,13 +137,18 @@ struct MessageComposer: View {
                 .qaudionStyle(type.bodyMedium)
                 .foregroundStyle(scheme.onSurface)
                 .monospacedDigit()
-            Text("Rilascia per inviare · scorri per annullare")
+            // W115: copy switches when drag-up cancel is armed.
+            Text(cancelArmed
+                 ? "Rilascia per ANNULLARE"
+                 : "Rilascia per inviare · scorri verso l'alto per annullare")
                 .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
+                .foregroundStyle(cancelArmed ? extras.error : scheme.onSurfaceVariant)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 8).fill(extras.error.opacity(0.10)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(
+            (cancelArmed ? extras.error : extras.error.opacity(0.5)).opacity(0.15)
+        ))
     }
 
     private var formattedElapsed: String {
@@ -255,15 +264,30 @@ struct MessageComposer: View {
             .background(Circle().fill(isRecording ? scheme.error : scheme.surfaceVariant.opacity(0.5)))
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
+                    .onChanged { value in
                         if !isRecording {
                             isRecording = true
                             onStartVoiceNote()
                         }
+                        // W115: detect drag-up cancel intent. While the
+                        // user holds the mic, dragging fingers up by
+                        // more than 60 points sets `cancelArmed` so the
+                        // composer banner can show "Rilascia per
+                        // annullare". The actual cancel happens on
+                        // .onEnded so the user can drag back down to
+                        // commit.
+                        cancelArmed = value.translation.height < -60
                     }
-                    .onEnded { _ in
-                        if isRecording {
-                            isRecording = false
+                    .onEnded { value in
+                        guard isRecording else { return }
+                        isRecording = false
+                        if value.translation.height < -60 {
+                            // Above the cancel threshold at release →
+                            // discard.
+                            cancelArmed = false
+                            onCancelVoiceNote()
+                        } else {
+                            cancelArmed = false
                             onFinishVoiceNote()
                         }
                     }
