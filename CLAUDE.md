@@ -250,6 +250,21 @@ print(line)
 
 **Rule of thumb**: if a closure builds a String for `print` / `snackbar.show` / any function with overloads, build the full String into a `let line: String = ...` first, then pass that single String. Never do the concatenation or interpolation inline at the call site.
 
+**v1.0.255 update — `String(numericValue)` is also a trap.** `String(_:)` has many numeric overloads (Int, UInt, Int64, UInt64, Double, Float, NSNumber, Substring, Character, CChar, …). Inside a complex closure, even an unambiguous `Int` argument can trigger overload-resolution timeout:
+
+```swift
+// ❌ TIMES OUT (rec.durationMs is Int):
+let recDur: String = String(rec.durationMs)
+
+// ✅ WORKS — String(describing:) has a single overload:
+let recDur: String = String(describing: rec.durationMs)
+```
+
+Other safe alternatives that don't go through `String(_:)`'s overload set:
+- `"\(rec.durationMs)"` (single-segment interpolation of a primitive — usually fine)
+- `rec.durationMs.description`
+- Any explicit cast first: `let n = Int(rec.durationMs); let s = "\(n)"`
+
 Symptoms: the build console shows just `Failed to archive` with **no `error:`/`warning:` lines** — xcbeautify is consuming the diagnostic before tee can capture it.
 
 **Mitigation:** the codemagic.yaml has a "Diagnose Swift compile (raw xcodebuild)" step that runs before `xcode-project build-ipa` with `CODE_SIGNING_ALLOWED=NO`. That output goes to `diag.log` (artifact) and is grepped at the end of Step 6. Always check Step 6 in failed Codemagic builds, not just the Build IPA step.

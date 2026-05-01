@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.255", date: "2026-05-01",
+              title: "Fix type-checker timeout #3 — String(Int) overload trap (W255)",
+              bullets: [
+                "ChatDetailScreen.swift:175 — `String(rec.durationMs)` (Int) also times out",
+                "Root cause: String(_:) has many numeric overloads (Int, UInt, Double, …)",
+                "Fix: switch to String(describing:) which has a single overload",
+                "CLAUDE.md §13 updated with this 3rd type-checker antipattern variant"
+              ]),
         .init(id: "v1.0.253", date: "2026-05-01",
               title: "Fix type-checker timeout #2 in ChatDetailScreen (W253)",
               bullets: [

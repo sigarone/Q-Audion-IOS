@@ -167,12 +167,18 @@ struct ChatDetailScreen: View {
                     // placeholder so the user sees a recognizable bubble.
                     if let rec = voiceNoteRecorder.stop() {
                         HapticFeedback.recordingStop()  // W114: medium bump
-                        // Build the log line via plain String concat;
+                        // W255: Build the log line via plain String concat;
                         // multi-segment interpolation inside this
                         // @Sendable closure trips the type-checker
                         // even with pre-bound locals.
+                        //
+                        // Note: `String(rec.durationMs)` (where
+                        // durationMs is Int) ALSO times out because
+                        // String(_:) has many numeric overloads.
+                        // `String(describing:)` has a single overload
+                        // and resolves instantly. See CLAUDE.md §13.
                         let recName: String = rec.fileURL.lastPathComponent
-                        let recDur: String = String(rec.durationMs)
+                        let recDur: String = String(describing: rec.durationMs)
                         let recMime: String = rec.mimeType
                         let logLine: String = "[VoiceNote] captured "
                             + recName + " duration " + recDur + "ms ("
