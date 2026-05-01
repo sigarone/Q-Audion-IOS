@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 import QAudionEngine
 
 @MainActor
@@ -91,6 +92,76 @@ final class AccountSettingsContainer: ObservableObject {
                     avatarUrl: nil
                 )
                 loadFromServer()
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+
+    // MARK: - Audit P0 #2.12 — GDPR data export
+    /// Pulls /api/v1/account/export and presents a system Share sheet
+    /// so the user can save the JSON envelope to Files or AirDrop it
+    /// to a desktop. Best-effort; errors surface as errorMessage.
+    func exportMyData(presenting: UIViewController) {
+        guard let provider = makeProvider() else {
+            errorMessage = "Not signed in"
+            return
+        }
+        Task {
+            await MainActor.run { self.isLoading = true; self.errorMessage = nil }
+            do {
+                let data = try await provider.accountApi.accountExport()
+                let ts = ISO8601DateFormatter().string(from: Date())
+                    .replacingOccurrences(of: ":", with: "")
+                    .replacingOccurrences(of: "-", with: "")
+                    .prefix(15)
+                let filename = "qaudion-server-export-\(ts).json"
+                let tmp = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(filename)
+                try data.write(to: tmp)
+                await MainActor.run {
+                    let share = UIActivityViewController(
+                        activityItems: [tmp],
+                        applicationActivities: nil,
+                    )
+                    presenting.present(share, animated: true)
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+
+    // MARK: - Audit P0 #2.12 — GDPR right-to-be-forgotten
+    /// Fires DELETE /api/v1/account first, then triggers local logout
+    /// via AuthService regardless of server response. The user wants
+    /// to be forgotten — a server 5xx must not block the local wipe.
+    /// Caller wraps this in a confirmation alert per UX guidelines.
+    func deleteAccount() {
+        guard let provider = makeProvider() else {
+            errorMessage = "Not signed in"
+            return
+        }
+        Task {
+            await MainActor.run { self.isLoading = true; self.errorMessage = nil }
+            do {
+                // Best-effort server delete; ignore errors below.
+                try? await provider.accountApi.deleteAccount()
+                // Local logout — clears the keychain + tokens.
+                try await provider.accountApi.logout()
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = nil
+                    // Caller (host SwiftUI view) should observe the
+                    // auth state and route back to onboarding.
+                }
             } catch {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
