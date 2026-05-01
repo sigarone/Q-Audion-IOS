@@ -51,6 +51,7 @@ struct MessageComposer: View {
     init(text: Binding<String>,
          editingTarget: EditingTarget? = nil,
          replyTarget: ReplyTarget? = nil,
+         recordingElapsedSeconds: TimeInterval = 0,
          onAttach: @escaping () -> Void = {},
          onSend: @escaping () -> Void = {},
          onCancelEdit: @escaping () -> Void = {},
@@ -61,6 +62,7 @@ struct MessageComposer: View {
         self._text = text
         self.editingTarget = editingTarget
         self.replyTarget = replyTarget
+        self.recordingElapsedSeconds = recordingElapsedSeconds
         self.onAttach = onAttach
         self.onSend = onSend
         self.onCancelEdit = onCancelEdit

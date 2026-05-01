@@ -22,6 +22,15 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.262", date: "2026-05-02",
+              title: "🎉 Type-checker beat — fix real API mismatch (W262)",
+              bullets: [
+                "v1.0.261 structural fixes WORKED — type-checker is no longer choking",
+                "Build now reports a REAL Swift error, not a timeout",
+                "MessageComposer struct had `recordingElapsedSeconds` property but init didn't accept it",
+                "Fix: add `recordingElapsedSeconds: TimeInterval = 0` to init signature",
+                "First non-timeout failure since v1.0.225 — diagnostic infrastructure won"
+              ]),
         .init(id: "v1.0.261", date: "2026-05-02",
               title: "Wrap MessageComposer in computed property (W261)",
               bullets: [
