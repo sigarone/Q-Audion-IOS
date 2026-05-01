@@ -81,11 +81,27 @@ struct NotificationsSettingsScreen: View {
                       qh.startHour, qh.startMinute, qh.endHour, qh.endMinute)
     }
 
+    /// W96: master switch for chat-message banners. Read by
+    /// AppState.handleIncomingMessage before scheduling a UN
+    /// notification. Persisted in UserDefaults so the preference
+    /// sticks across launches; @AppStorage gives us automatic
+    /// view re-render when the toggle changes.
+    @AppStorage("qaudion.notifications.banners_enabled")
+    private var bannersEnabled: Bool = true
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    SettingsSectionHeader("BANNER")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Notifiche messaggi",
+                            subtitle: "Mostra banner per i messaggi ricevuti",
+                            isOn: $bannersEnabled
+                        )
+                    }
                     SettingsSectionHeader("SUONI")
                     VStack(spacing: 8) {
                         ringtonePickerRow

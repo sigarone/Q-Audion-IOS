@@ -898,7 +898,12 @@ final class AppState: ObservableObject {
         //     see the message in the open chat, banner is redundant.
         //   - else fire the banner so a backgrounded chat list still
         //     surfaces the new message.
-        if !isMuted && activePeerUserId != senderId {
+        // W96: respect the global banner toggle from
+        // Settings → Notifiche. Default true so a fresh install
+        // sees banners; user can opt out from settings.
+        let bannersGlobalEnabled = (UserDefaults.standard.object(
+            forKey: "qaudion.notifications.banners_enabled") as? Bool) ?? true
+        if bannersGlobalEnabled && !isMuted && activePeerUserId != senderId {
             let title = conv.peerDisplayName.isEmpty ? senderId : conv.peerDisplayName
             // Cap body at ~120 chars so multi-line essays don't blow
             // up the banner. plaintext is already the friendly render.
