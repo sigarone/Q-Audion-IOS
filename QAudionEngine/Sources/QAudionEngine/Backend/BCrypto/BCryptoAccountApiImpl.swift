@@ -37,6 +37,25 @@ public final class BCryptoAccountApiImpl: AccountApi {
         _ = try await rest.delete("/api/v1/auth/logout")
     }
 
+    /// Audit P0 #2.12 — server-side GDPR data export. Returns the
+    /// raw JSON envelope; caller merges this with its local archive.
+    public func accountExport() async throws -> Data {
+        return try await rest.get("/api/v1/account/export")
+    }
+
+    /// Audit P0 #2.12 — server-side account deletion. 204 on success.
+    /// Caller MUST treat the JWT as invalidated even on error.
+    public func deleteAccount() async throws {
+        _ = try await rest.delete("/api/v1/account")
+    }
+
+    /// Audit P0 #2.11 — per-device revocation. The deviceId path
+    /// component MUST be linked to the authenticated user (server
+    /// returns 403 otherwise).
+    public func revokeDevice(deviceId: String) async throws {
+        _ = try await rest.delete("/api/v1/devices/\(deviceId)")
+    }
+
     public func getProfile() async throws -> UserProfile {
         let data = try await rest.get("/api/v1/profile")
         return try JSONDecoder().decode(UserProfile.self, from: data)

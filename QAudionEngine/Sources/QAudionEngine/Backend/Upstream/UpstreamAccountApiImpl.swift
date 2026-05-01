@@ -34,6 +34,21 @@ public final class UpstreamAccountApiImpl: AccountApi {
         _ = try await rest.delete("/v1/accounts/logout")
     }
 
+    /// Audit P0 #2.12 — Upstream backend stub. Mirrors the bcrypto
+    /// shape; Upstream's own /accounts/* paths can be wired here when
+    /// they ship.
+    public func accountExport() async throws -> Data {
+        return try await rest.get("/v1/accounts/export")
+    }
+
+    public func deleteAccount() async throws {
+        _ = try await rest.delete("/v1/accounts")
+    }
+
+    public func revokeDevice(deviceId: String) async throws {
+        _ = try await rest.delete("/v1/devices/\(deviceId)")
+    }
+
     public func getProfile() async throws -> UserProfile {
         let data = try await rest.get("/v1/profile")
         return try JSONDecoder().decode(UserProfile.self, from: data)

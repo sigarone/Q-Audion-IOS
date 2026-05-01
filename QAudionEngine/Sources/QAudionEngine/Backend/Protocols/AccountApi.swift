@@ -14,6 +14,20 @@ public protocol AccountApi {
     func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair
     /// Logout (revokes all tokens).
     func logout() async throws
+
+    /// Audit P0 #2.12 — server-side GDPR data export. Returns the raw
+    /// JSON envelope containing the user's profile + device list +
+    /// identity-key bundle. The caller merges this with its local
+    /// archive into the final Art. 20 export.
+    func accountExport() async throws -> Data
+
+    /// Audit P0 #2.12 — server-side account deletion. 204 on success.
+    /// Caller MUST treat the JWT as invalidated even on error.
+    func deleteAccount() async throws
+
+    /// Audit P0 #2.11 — per-device revocation. The deviceId MUST be
+    /// linked to the authenticated user (server returns 403 otherwise).
+    func revokeDevice(deviceId: String) async throws
     /// Get current user's profile.
     func getProfile() async throws -> UserProfile
     /// Update profile. All three fields are independently optional and only
