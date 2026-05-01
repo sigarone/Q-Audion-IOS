@@ -456,6 +456,37 @@ struct ChatDetailScreen: View {
         return "Cifrato E2E · ML-KEM 1024"
     }
 
+    // MARK: - Empty-state banner
+
+    /// W143: educational banner shown only when the conversation has
+    /// no messages yet. Lock-icon + short copy reassures the user the
+    /// channel is end-to-end encrypted before they type the first
+    /// message — same pattern as WhatsApp / iMessage.
+    private var e2eEducationBanner: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 32, weight: .regular))
+                .foregroundStyle(extras.pqcAccent)
+            Text("Cifratura end-to-end")
+                .qaudionStyle(type.titleSmall)
+                .foregroundStyle(scheme.onSurface)
+            Text("I messaggi e le chiamate sono protetti con ML-KEM-1024 post-quantum. Nessun altro, nemmeno Q-Audion, può leggerli o ascoltarli.")
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.45))
+        )
+        .padding(.horizontal, 16)
+        .padding(.top, 24)
+    }
+
     // MARK: - Message list
 
     private var messageList: some View {
@@ -464,6 +495,15 @@ struct ChatDetailScreen: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 6) {
+                    // W143: empty-state E2E education banner. iMessage /
+                    // WhatsApp pattern — the first time the user enters
+                    // a conversation with no messages, surface the fact
+                    // that messages are end-to-end encrypted. Renders
+                    // ONLY when the message list is genuinely empty;
+                    // disappears as soon as the first message lands.
+                    if container.viewModel.messages.isEmpty {
+                        e2eEducationBanner
+                    }
                     ForEach(grouped, id: \.key) { day, msgs in
                         DayHeader(date: day)
                         ForEach(msgs) { msg in
