@@ -144,7 +144,12 @@ struct ChatDetailScreen: View {
                         } catch VoiceNoteRecorder.RecorderError.permissionDenied {
                             container.markFailed(messageId: UUID(), reason: .generic)
                         } catch {
-                            print("[VoiceNote] start failed: \(error.localizedDescription)")
+                            // Bind into a local first so the type-checker
+                            // doesn't have to chase `error.localizedDescription`
+                            // through the print + interpolation in a
+                            // captured-self closure.
+                            let errMsg = error.localizedDescription
+                            print("[VoiceNote] start failed: \(errMsg)")
                         }
                     }
                 },
@@ -158,7 +163,13 @@ struct ChatDetailScreen: View {
                     // placeholder so the user sees a recognizable bubble.
                     if let rec = voiceNoteRecorder.stop() {
                         HapticFeedback.recordingStop()  // W114: medium bump
-                        print("[VoiceNote] captured \(rec.fileURL.lastPathComponent) duration \(rec.durationMs)ms (\(rec.mimeType))")
+                        // Pre-bind the interpolations so the Swift
+                        // type-checker doesn't time out on this print
+                        // inside the @Sendable closure.
+                        let recName = rec.fileURL.lastPathComponent
+                        let recDur = rec.durationMs
+                        let recMime = rec.mimeType
+                        print("[VoiceNote] captured \(recName) duration \(recDur)ms (\(recMime))")
                         container.sendVoiceNote(rec)
                     }
                 },
