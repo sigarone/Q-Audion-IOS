@@ -210,10 +210,23 @@ private struct ShimmeringRectangle: View {
 /// Minimal fullscreen image viewer — pinch-to-zoom is iOS' native
 /// behaviour on `Image` inside a `ScrollView` on iOS 17+. For iOS 16
 /// the user just sees a big aspect-fit image with a Done button.
+/// W125: metadata header overlays the dismiss button — shows W×H plus
+/// the rough size in MP if reachable.
 struct ImageFullscreenView: View {
     @Environment(\.qaudionScheme) private var scheme
     let image: UIImage
     let onDismiss: () -> Void
+
+    private var metadataLine: String {
+        let w = Int(image.size.width)
+        let h = Int(image.size.height)
+        let mp = Double(w * h) / 1_000_000.0
+        if mp >= 0.05 {
+            return String(format: "%d × %d  ·  %.1f MP", w, h, mp)
+        } else {
+            return "\(w) × \(h)"
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -226,6 +239,15 @@ struct ImageFullscreenView: View {
             }
             VStack {
                 HStack {
+                    Text(metadataLine)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule().fill(.black.opacity(0.4))
+                        )
+                        .padding(.leading)
                     Spacer()
                     Button(action: onDismiss) {
                         Image(systemName: "xmark.circle.fill")
