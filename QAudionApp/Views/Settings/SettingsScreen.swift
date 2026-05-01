@@ -46,6 +46,25 @@ struct SettingsScreen: View {
     /// only worth doing when the row re-renders).
     @State private var cacheUsageRefreshTrigger: Int = 0
 
+    /// W118: footer with version + build pulled from the active bundle.
+    /// Format: "v1.0.183 (build 88)" — matches Codemagic's bumped
+    /// CFBundleShortVersionString + CFBundleVersion.
+    private var versionFooter: some View {
+        let info = Bundle.main.infoDictionary
+        let v = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+        let b = (info?["CFBundleVersion"] as? String) ?? "?"
+        return VStack(spacing: 4) {
+            Text("Q-Audion")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Text("v\(v) (build \(b))")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var cacheUsageSubtitle: String {
         let s = AttachmentCacheCleaner.cacheSizes()
         let totalMb = Double(s.voiceNotes &+ s.images) / (1024.0 * 1024.0)
@@ -87,6 +106,15 @@ struct SettingsScreen: View {
                         Spacer().frame(height: 24)
                         signOutButton
                             .padding(.horizontal, 16)
+
+                        // W118: app version + build number footer.
+                        // Helps testers report bugs against a specific
+                        // build without digging into TestFlight UI.
+                        // Reads from the running bundle so it's always
+                        // accurate regardless of XcodeGen's plist
+                        // injection state.
+                        versionFooter
+                            .padding(.top, 16)
                             .padding(.bottom, 32)
                     }
                 }
