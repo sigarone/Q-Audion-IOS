@@ -46,18 +46,31 @@ struct SettingsScreen: View {
     /// only worth doing when the row re-renders).
     @State private var cacheUsageRefreshTrigger: Int = 0
 
-    /// W118: footer with version + build pulled from the active bundle.
-    /// Format: "v1.0.183 (build 88)" — matches Codemagic's bumped
-    /// CFBundleShortVersionString + CFBundleVersion.
+    /// W118+W134: footer with version + build + uptime tagline.
+    /// Format: "v1.0.200 (build 105) · sessione 3h 12m"
+    /// Uptime is computed from a process-launch timestamp captured
+    /// when SettingsScreen first appears (StaticUptimeAnchor).
     private var versionFooter: some View {
         let info = Bundle.main.infoDictionary
         let v = (info?["CFBundleShortVersionString"] as? String) ?? "?"
         let b = (info?["CFBundleVersion"] as? String) ?? "?"
+        let uptime = ProcessInfo.processInfo.systemUptime
+            - StaticUptimeAnchor.processStartedAt
+        let uptimeStr: String = {
+            let total = max(0, Int(uptime))
+            if total < 60 { return "\(total)s" }
+            if total < 3600 { return "\(total / 60)m \(total % 60)s" }
+            return "\(total / 3600)h \((total % 3600) / 60)m"
+        }()
         return VStack(spacing: 4) {
             Text("Q-Audion")
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Text("v\(v) (build \(b))")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .monospacedDigit()
+            Text("Sessione attiva da \(uptimeStr)")
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .monospacedDigit()
