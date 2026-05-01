@@ -474,6 +474,30 @@ struct ChatListScreen: View {
             }
             .tint(.indigo)
         }
+        // W119: long-press context menu mirrors the swipe actions.
+        // iPad / non-touch users (Stage Manager, external trackpad)
+        // can't easily access swipe actions; right-click / long-press
+        // surfaces the same options through the contextMenu API.
+        .contextMenu {
+            Button {
+                container.togglePinned(conversationId: item.conversationId)
+            } label: {
+                Label(item.pinned ? "Sblocca" : "Fissa",
+                      systemImage: item.pinned ? "pin.slash" : "pin")
+            }
+            Button {
+                container.toggleMuted(conversationId: item.conversationId)
+            } label: {
+                Label(item.muted ? "Riattiva" : "Silenzia",
+                      systemImage: item.muted ? "bell" : "bell.slash")
+            }
+            Divider()
+            Button(role: .destructive) {
+                container.deleteConversation(conversationId: item.conversationId)
+            } label: {
+                Label("Elimina", systemImage: "trash")
+            }
+        }
     }
 
     private func formatTime(_ date: Date) -> String {
