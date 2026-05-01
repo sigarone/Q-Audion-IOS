@@ -217,6 +217,10 @@ struct ImageFullscreenView: View {
     let image: UIImage
     let onDismiss: () -> Void
 
+    /// W135: double-tap toggle 1x ↔ 2x. iOS Photos pattern. 0.25s
+    /// spring animates the scaleEffect.
+    @State private var zoomed: Bool = false
+
     private var metadataLine: String {
         let w = Int(image.size.width)
         let h = Int(image.size.height)
@@ -236,6 +240,12 @@ struct ImageFullscreenView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaleEffect(zoomed ? 2.0 : 1.0)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.85),
+                               value: zoomed)
+                    .onTapGesture(count: 2) {
+                        zoomed.toggle()
+                    }
             }
             VStack {
                 HStack {
