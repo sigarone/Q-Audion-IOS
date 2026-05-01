@@ -565,8 +565,29 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
             .id(cacheUsageRefreshTrigger)
+
+            // W268: PQC self-test. Synchronously runs ML-KEM-1024
+            // keygen + encap + decap and verifies the shared secret
+            // round-trips. If liboqs returns OQS_SUCCESS and the
+            // shared secrets match byte-for-byte, the row reports OK
+            // with elapsed milliseconds. Useful as a tester sanity
+            // check that the PQC stack is alive without making a real
+            // call.
+            Button {
+                runPqcSelfTest()
+            } label: {
+                SettingsRow(icon: "lock.shield.fill",
+                            iconColor: .orange,
+                            title: "Self-test crittografia",
+                            subtitle: "Round-trip ML-KEM-1024 (encap+decap)")
+            }
+            .buttonStyle(.plain)
         }
-        .alert("Cache liberata", isPresented: $cacheClearedAlertVisible) {
+        // W268: alert title made neutral ("Sviluppatore") because this
+        // same dispatch surface now serves the PQC self-test as well as
+        // the cache/drafts/lastSeen wipes. The actual title was always
+        // a bit of a lie for those flavors anyway.
+        .alert("Sviluppatore", isPresented: $cacheClearedAlertVisible) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(cacheClearedMessage)
@@ -663,6 +684,43 @@ struct SettingsScreen: View {
             return "1 contatto memorizzato"
         }
         return "\(n) contatti memorizzati"
+    }
+
+    // MARK: - PQC self-test (W268)
+
+    /// W268: synchronous round-trip of the ML-KEM-1024 stack. Generates
+    /// a fresh keypair, encapsulates against the public key, decapsulates
+    /// with the private key, and verifies the shared secrets match. If
+    /// any step throws or the bytes don't compare equal, surfaces a red
+    /// alert. On success, shows elapsed time + shared-secret length.
+    ///
+    /// Extracted to a method (not inline closure) per CLAUDE.md §13.
+    /// Method body has only flat statements + local lets — no nested
+    /// closures, no @Sendable Tasks. Uses cacheClearedAlertVisible as
+    /// the dispatch surface to avoid plumbing a separate alert state.
+    private func runPqcSelfTest() {
+        let pqc = PqcKeyExchange()
+        let t0: TimeInterval = ProcessInfo.processInfo.systemUptime
+        let kp = pqc.generateKeyPair()
+        do {
+            let enc = try pqc.encapsulate(remotePublicKey: kp.publicKey)
+            let dec = try pqc.decapsulate(ciphertext: enc.ciphertext,
+                                          privateKey: kp.privateKey)
+            let elapsedMs: Int = Int(
+                (ProcessInfo.processInfo.systemUptime - t0) * 1000.0
+            )
+            if dec == enc.sharedSecret {
+                let bytesLabel: String = String(enc.sharedSecret.count)
+                let msLabel: String = String(elapsedMs)
+                cacheClearedMessage = "PQC OK: " + bytesLabel
+                    + " bytes shared secret · " + msLabel + " ms"
+            } else {
+                cacheClearedMessage = "PQC FAIL: shared secret mismatch"
+            }
+        } catch {
+            cacheClearedMessage = "PQC FAIL: " + String(describing: error)
+        }
+        cacheClearedAlertVisible = true
     }
 
     // MARK: - Sign-out destructive button

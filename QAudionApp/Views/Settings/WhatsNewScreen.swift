@@ -22,6 +22,15 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.268", date: "2026-05-02",
+              title: "Self-test crittografia ML-KEM-1024 (W268)",
+              bullets: [
+                "Settings → SVILUPPATORE: 'Self-test crittografia'",
+                "Round-trip sincrono: keygen → encap → decap → confronto shared secret",
+                "Mostra OK + bytes + ms se passa, FAIL + reason se cade",
+                "Sanity check rapido che la PQC stack sia viva senza fare una chiamata",
+                "Alert title generalizzato in 'Sviluppatore' (era 'Cache liberata')"
+              ]),
         .init(id: "v1.0.267", date: "2026-05-02",
               title: "Memoria processo in About (W267)",
               bullets: [
