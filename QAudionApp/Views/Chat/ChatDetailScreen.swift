@@ -50,6 +50,11 @@ struct ChatDetailScreen: View {
     /// .sendAttachment(image:)` non esiste ancora).
     @State private var showingPhotoPicker: Bool = false
     @State private var attachmentPickerItem: PhotosPickerItem? = nil
+    /// W91: multi-select photo picker. Up to 10 photos at a time —
+    /// PhotosPicker handles the system UI; iteration of the selection
+    /// fans out to ChatContainer.sendImage one at a time so each
+    /// upload + qfile marker is independent.
+    @State private var multiPickerItems: [PhotosPickerItem] = []
     /// W85: confirmationDialog gate for the paperclip button. Tap →
     /// dialog with two options: "Galleria" (PhotosPicker) or "Camera"
     /// (UIImagePickerController via CameraPicker). Cleaner than two
@@ -188,24 +193,40 @@ struct ChatDetailScreen: View {
             )
             .ignoresSafeArea()
         }
+        // W91: multi-select photo picker (up to 10). When the user
+        // selects multiple, we fan out one ChatContainer.sendImage per
+        // item so each upload + qfile marker is independent and the
+        // chat shows N bubbles.
         .photosPicker(isPresented: $showingPhotoPicker,
-                      selection: $attachmentPickerItem,
+                      selection: $multiPickerItems,
+                      maxSelectionCount: 10,
                       matching: .images)
-        .onChange(of: attachmentPickerItem) { newItem in
-            guard let item = newItem else { return }
+        .onChange(of: multiPickerItems) { newItems in
+            // W91: fan out one sendImage per picked item. Each one
+            // goes through the same EXIF-strip + 2048px + 10MB cap
+            // pipeline + qfile marker. Sequential await rather than
+            // parallel TaskGroup keeps the WS msg_send order stable
+            // (chat shows them in selection order, not random).
+            guard !newItems.isEmpty else { return }
+            let items = newItems
+            multiPickerItems = []
             Task {
-                if let data = try? await item.loadTransferable(type: Data.self) {
-                    // W82: real send. ChatContainer.sendImage normalizes
-                    // (EXIF strip + ≤2048px downscale + JPEG q=0.85),
-                    // caps at 10 MB, persists locally, and ships through
-                    // the same qfile v3 marker pipeline as voice notes.
-                    container.sendImage(data)
-                } else {
-                    snackbar?.show(.init(
-                        text: "Lettura foto fallita.",
-                        severity: .error))
+                var failures = 0
+                for item in items {
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        await MainActor.run { container.sendImage(data) }
+                    } else {
+                        failures += 1
+                    }
                 }
-                attachmentPickerItem = nil
+                if failures > 0 {
+                    await MainActor.run {
+                        snackbar?.show(.init(
+                            text: "\(failures) foto su \(items.count) non leggibili.",
+                            severity: .warning,
+                            durationSeconds: 3))
+                    }
+                }
             }
         }
         .sheet(item: actionSheetBinding) { msgIdWrapper in
