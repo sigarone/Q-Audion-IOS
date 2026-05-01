@@ -427,7 +427,16 @@ struct ChatDetailScreen: View {
     }
 
     private var presenceLine: String {
-        if container.viewModel.isPeerOnline { return "Online · cifrato E2E" }
+        // W130: prioritize typing > online > static crypto label.
+        // 'sta scrivendo…' overrides everything when isPeerTyping
+        // is true (set by ChatContainer's chatTypingNotification
+        // observer + auto-cleared 5s after the last is_typing=true).
+        if container.viewModel.isPeerTyping {
+            return "sta scrivendo…"
+        }
+        if container.viewModel.isPeerOnline {
+            return "Online · cifrato E2E"
+        }
         return "Cifrato E2E · ML-KEM 1024"
     }
 
