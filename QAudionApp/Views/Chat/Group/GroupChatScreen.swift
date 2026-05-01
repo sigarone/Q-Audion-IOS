@@ -35,6 +35,7 @@ struct GroupChatScreen: View {
             scheme.background.ignoresSafeArea()
             VStack(spacing: 0) {
                 topBar
+                betaBanner
                 messageList
                 composer
             }
@@ -127,6 +128,27 @@ struct GroupChatScreen: View {
                 }
             }
         }
+    }
+
+    /// W110: explicit beta banner so users don't think their group
+    /// messages are being delivered. The 1:1 send pipeline is fully
+    /// wired (W71+W76+W77 + voice/image stack); group send is still
+    /// local-state-only because GroupChatRepository / server group
+    /// fanout aren't wired on iOS yet.
+    private var betaBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(extras.warning)
+            Text("Beta — i messaggi del gruppo restano sul tuo dispositivo. La consegna ai membri sarà attiva nelle prossime versioni.")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .multilineTextAlignment(.leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(extras.warning.opacity(0.10))
     }
 
     private var emptyState: some View {
