@@ -4,6 +4,12 @@ import QAudionEngine
 // Darwin / Darwin.Mach. Foundation transitively imports Darwin on
 // iOS but we make it explicit so the helper compiles cleanly.
 import Darwin
+// W282: AVAudioSession.recordPermission lives in AVFAudio
+// (re-exported from AVFoundation, but we import directly to be
+// explicit and avoid the linker reaching for QTKit on macOS).
+#if canImport(AVFAudio)
+import AVFAudio
+#endif
 
 @MainActor
 final class AboutSettingsContainer: ObservableObject {
@@ -109,6 +115,23 @@ struct AboutSettingsScreen: View {
                         // accurate bug report for layout regressions
                         // on smaller devices (iPhone SE, mini).
                         kvRow("Schermo", Self.screenSizeLabel(), mono: true)
+                        // W279: device timezone — useful when QA
+                        // reports timestamps that look 'off' (often a
+                        // user just travelled across timezones).
+                        kvRow("Fuso orario", Self.timeZoneLabel(), mono: true)
+                        // W280: calendar identifier (e.g. 'gregorian',
+                        // 'islamic-civil'). Some users have set their
+                        // device to non-Gregorian; affects DateFormatter.
+                        kvRow("Calendario", Self.calendarLabel(), mono: true)
+                        // W281: dark/light mode preference. Lets QA
+                        // confirm the design tokens are honoring the
+                        // user's UITraitCollection at render time.
+                        kvRow("Aspetto", Self.userInterfaceStyleLabel(), mono: false)
+                        // W282: microphone permission status. Voice
+                        // calls + voice notes rely on this; surfacing
+                        // it helps testers confirm the prompt was
+                        // accepted (or revoked).
+                        kvRow("Permesso microfono", Self.microphonePermissionLabel(), mono: false)
                     }
                     // W159: local data summary — gives the user a
                     // sense of how much chat content lives on this
@@ -456,6 +479,72 @@ struct AboutSettingsScreen: View {
         // Build via concat — see CLAUDE.md §13 (no multi-segment
         // interpolations even outside closures, defensive habit).
         return String(w) + "×" + String(h) + " · @" + String(scale) + "x"
+        #else
+        return "?"
+        #endif
+    }
+
+    /// W279: timezone identifier (e.g. "Europe/Rome"). Single-statement
+    /// helper that pulls from TimeZone.current.
+    private static func timeZoneLabel() -> String {
+        return TimeZone.current.identifier
+    }
+
+    /// W280: calendar identifier (e.g. "gregorian", "islamic-civil").
+    /// Affects all DateFormatter output across the app.
+    private static func calendarLabel() -> String {
+        // Calendar.Identifier is an enum; map to its rawValue for a
+        // friendly String. Single-statement, type-checker safe.
+        let id = Calendar.current.identifier
+        switch id {
+        case .gregorian:        return "Gregoriano"
+        case .buddhist:         return "Buddista"
+        case .chinese:          return "Cinese"
+        case .coptic:           return "Copto"
+        case .ethiopicAmeteAlem: return "Etiope (Amete Alem)"
+        case .ethiopicAmeteMihret: return "Etiope (Amete Mihret)"
+        case .hebrew:           return "Ebraico"
+        case .iso8601:          return "ISO 8601"
+        case .indian:           return "Indiano"
+        case .islamic:          return "Islamico"
+        case .islamicCivil:     return "Islamico civile"
+        case .japanese:         return "Giapponese"
+        case .persian:          return "Persiano"
+        case .republicOfChina:  return "Repubblica di Cina"
+        case .islamicTabular:   return "Islamico tabulare"
+        case .islamicUmmAlQura: return "Islamico (Umm al-Qura)"
+        @unknown default:       return "Sconosciuto"
+        }
+    }
+
+    /// W281: user interface style (light / dark / unspecified).
+    /// Reads from UIScreen.main.traitCollection. Note: at the View
+    /// level @Environment(\.colorScheme) is the canonical path, but
+    /// for a one-off About row this is simpler and works.
+    private static func userInterfaceStyleLabel() -> String {
+        #if canImport(UIKit)
+        switch UIScreen.main.traitCollection.userInterfaceStyle {
+        case .light:    return "Chiaro"
+        case .dark:     return "Scuro"
+        case .unspecified: return "Non specificato"
+        @unknown default: return "Sconosciuto"
+        }
+        #else
+        return "?"
+        #endif
+    }
+
+    /// W282: microphone permission state. Voice calls + W72 voice
+    /// notes rely on this; surfacing helps testers verify the prompt
+    /// was actually accepted (or revoked from iOS Settings later).
+    private static func microphonePermissionLabel() -> String {
+        #if canImport(AVFAudio)
+        switch AVAudioSession.sharedInstance().recordPermission {
+        case .granted:    return "Concesso"
+        case .denied:     return "Negato"
+        case .undetermined: return "Non richiesto"
+        @unknown default: return "Sconosciuto"
+        }
         #else
         return "?"
         #endif

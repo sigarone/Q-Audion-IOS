@@ -22,6 +22,16 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.274", date: "2026-05-02",
+              title: "Timezone + calendar + dark-mode + mic (W279-W282)",
+              bullets: [
+                "About → STATO SISTEMA: 4 nuove righe diagnostiche",
+                "W279 Fuso orario (es. 'Europe/Rome')",
+                "W280 Calendario (Gregoriano / Islamico / Ebraico / ...)",
+                "W281 Aspetto (Chiaro / Scuro / Non specificato)",
+                "W282 Permesso microfono (Concesso / Negato / Non richiesto)",
+                "AVAudioSession aggiunto agli imports per W282"
+              ]),
         .init(id: "v1.0.273", date: "2026-05-02",
               title: "Test feedback aptico in DIAGNOSTICA (W278)",
               bullets: [
