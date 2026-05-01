@@ -349,7 +349,7 @@ final class ChatContainer: ObservableObject {
         }
 
         Task { [weak self, peerId, convId, msgId] in
-            let prep = await ChatVoiceNoteSender(appState: appState)
+            let prep = ChatVoiceNoteSender(appState: appState)
             let markerJson: String
             do {
                 markerJson = try await prep.prepareMarkerJson(
@@ -527,7 +527,7 @@ final class ChatContainer: ObservableObject {
         }
 
         Task { [weak self, peerId, convId, msgId, jpeg] in
-            let prep = await ChatVoiceNoteSender(appState: appState)
+            let prep = ChatVoiceNoteSender(appState: appState)
             let markerJson: String
             do {
                 markerJson = try await prep.prepareAttachmentMarkerJson(

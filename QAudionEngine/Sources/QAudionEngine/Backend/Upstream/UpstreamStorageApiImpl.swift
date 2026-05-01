@@ -62,4 +62,31 @@ public final class UpstreamStorageApiImpl: StorageApi {
         }
         return keys
     }
+
+    // MARK: - W82 generic file storage (Signal-compatible attachment service)
+
+    /// Upload an arbitrary file via Signal's attachment service.
+    /// Returns a server-issued attachment id usable as `fileId` in the
+    /// qfile marker.
+    public func uploadFile(data: Data, filename: String) async throws -> String {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        let headers = ["Content-Type": "multipart/form-data; boundary=\(boundary)"]
+        let response = try await rest.post("/v1/storage/attachment", body: body, headers: headers)
+        guard let json = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+              let id = json["attachment_id"] as? String ?? json["id"] as? String else {
+            throw BCryptoError.decodingError
+        }
+        return id
+    }
+
+    /// Owner-direct download from Signal-compatible attachment storage.
+    public func downloadFile(fileId: String) async throws -> Data {
+        return try await rest.get("/v1/storage/attachment/\(fileId)")
+    }
 }

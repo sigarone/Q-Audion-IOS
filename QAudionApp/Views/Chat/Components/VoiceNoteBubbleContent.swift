@@ -60,17 +60,14 @@ struct VoiceNoteBubbleContent: View {
         .onTapGesture { handleTap() }
     }
 
+    private var iconSymbol: String {
+        if !isReady { return "waveform" }
+        return isPlayingThis ? "pause.fill" : "play.fill"
+    }
+
     @ViewBuilder
     private var iconButton: some View {
-        let symbol: String
-        if !isReady {
-            symbol = "waveform"
-        } else if isPlayingThis {
-            symbol = "pause.fill"
-        } else {
-            symbol = "play.fill"
-        }
-        Image(systemName: symbol)
+        Image(systemName: iconSymbol)
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(scheme.onPrimary)
             .frame(width: 36, height: 36)
