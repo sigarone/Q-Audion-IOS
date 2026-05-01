@@ -89,6 +89,13 @@ struct NotificationsSettingsScreen: View {
     @AppStorage("qaudion.notifications.banners_enabled")
     private var bannersEnabled: Bool = true
 
+    /// W265: pending + delivered notification counts. Populated by
+    /// `refreshNotificationCounts()` on .onAppear and after the
+    /// scheduleLocal / clearAllDelivered actions so the row stays
+    /// honest. UN APIs are async-only, so we hop through Task.
+    @State private var pendingCount: Int = 0
+    @State private var deliveredCount: Int = 0
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -151,6 +158,23 @@ struct NotificationsSettingsScreen: View {
                               mono: false)
                     }
 
+                    // W265: live notification counts. `pendenti` are
+                    // notifications scheduled but not yet delivered
+                    // (e.g. after tapping W171 'Invia notifica di test'
+                    // before the 1.5s trigger fires). `consegnate` are
+                    // already in the iOS notification cassette but not
+                    // yet dismissed. Helps QA verify the W171 + W263
+                    // toolkit is actually doing what it claims.
+                    SettingsSectionHeader("STATO")
+                    VStack(spacing: 8) {
+                        kvRow(label: "Pendenti",
+                              value: String(pendingCount),
+                              mono: true)
+                        kvRow(label: "Consegnate",
+                              value: String(deliveredCount),
+                              mono: true)
+                    }
+
                     // W171: schedule a fake banner so the user can
                     // verify their banner / sound / vibration setup
                     // works end-to-end without needing a real peer
@@ -158,14 +182,7 @@ struct NotificationsSettingsScreen: View {
                     // the user to lock the screen and see the banner.
                     SettingsSectionHeader("DIAGNOSTICA")
                     Button {
-                        Task {
-                            await NotificationCenterService.shared.scheduleLocal(
-                                category: .messageDelivered,
-                                title: "Q-Audion test",
-                                body: "Se vedi questo banner, le notifiche funzionano correttamente.",
-                                delay: 1.5
-                            )
-                        }
+                        scheduleTestNotification()
                     } label: {
                         HStack(spacing: 14) {
                             Image(systemName: "bell.badge.fill")
@@ -201,6 +218,9 @@ struct NotificationsSettingsScreen: View {
                     // them; complementary to W166 (clear badge counter).
                     Button {
                         NotificationCenterService.shared.clearAllDelivered()
+                        // W265: refresh the count immediately so the
+                        // STATO row reflects the wipe.
+                        refreshNotificationCounts()
                     } label: {
                         HStack(spacing: 14) {
                             Image(systemName: "tray.fill")
@@ -274,6 +294,47 @@ struct NotificationsSettingsScreen: View {
             }
         }
         .navigationTitle("Notifiche")
+        // W265: refresh the pending / delivered counts on first paint.
+        // No timer / observer — this is a snapshot for QA, not a live
+        // dashboard. Re-trigger via the buttons below if the user
+        // wants a fresh number after sending a test notification.
+        .onAppear {
+            refreshNotificationCounts()
+        }
+    }
+
+    /// W265: schedule the W171 test banner + refresh counts. Extracted
+    /// from the inline closure body (CLAUDE.md §13 — no
+    /// closure → Task → method-call patterns at SwiftUI call sites).
+    private func scheduleTestNotification() {
+        Task {
+            await NotificationCenterService.shared.scheduleLocal(
+                category: .messageDelivered,
+                title: "Q-Audion test",
+                body: "Se vedi questo banner, le notifiche funzionano correttamente.",
+                delay: 1.5
+            )
+            // Refresh counts so the user sees pending+1 immediately,
+            // then the row will flip after the trigger fires (~1.5s).
+            await MainActor.run {
+                refreshNotificationCounts()
+            }
+        }
+    }
+
+    /// W265: one-shot snapshot of UN center pending + delivered counts.
+    /// Both APIs are async-only on iOS 16+ so we hop through Task and
+    /// land back on the main actor for the @State writes. Kept as an
+    /// instance method (not closure) per CLAUDE.md §13 — Task body is
+    /// trivial (two awaits + two State writes), no nested closures.
+    private func refreshNotificationCounts() {
+        Task { @MainActor in
+            let center = UNUserNotificationCenter.current()
+            let pending = await center.pendingNotificationRequests()
+            let delivered = await center.deliveredNotifications()
+            self.pendingCount = pending.count
+            self.deliveredCount = delivered.count
+        }
     }
 
     // MARK: - Ringtone picker row

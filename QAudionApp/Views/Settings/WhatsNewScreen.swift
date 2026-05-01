@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.265", date: "2026-05-02",
+              title: "STATO section in Notifiche (pending + delivered) (W265)",
+              bullets: [
+                "Notifiche → STATO: conta pendenti + consegnate",
+                "Refresh automatico all'apertura schermata",
+                "Refresh anche dopo W171 (test) e W263 (clear)",
+                "Verifica visibile che il toolkit di QA stia agendo davvero"
+              ]),
         .init(id: "v1.0.264", date: "2026-05-02",
               title: "STATO SISTEMA section in About (W264)",
               bullets: [
