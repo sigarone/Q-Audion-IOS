@@ -69,6 +69,12 @@ final class AppState: ObservableObject {
     /// for the conversation the user is actively viewing — avoids the
     /// "banner pops up while I'm reading the message" UX gaffe.
     internal var activePeerUserId: String?
+    /// W94: pending chat deep link. Set by the notification-tap
+    /// handler (NotificationCenterService.onNotificationTap) when the
+    /// user taps a `.messageDelivered` banner. ChatListScreen observes
+    /// this and pushes the matching chat detail onto the nav stack;
+    /// once consumed it's reset to nil.
+    @Published var pendingDeepLinkConversationId: UUID?
 
     /// W77: pairwise PSK first-contact handshake. Built in
     /// `connectPersistentSocket()` once the WS is up so `sendOpaque`
@@ -179,6 +185,18 @@ final class AppState: ObservableObject {
         } catch {
             errorMessage = "Engine initialization failed: \(error.localizedDescription)"
             return
+        }
+
+        // W94: wire chat-message notification taps to pendingDeepLinkConversationId
+        // so the chat list can pick up and navigate. Idempotent — re-init
+        // overwrites the closure with a fresh AppState capture.
+        NotificationCenterService.shared.onNotificationTap = { [weak self] category, info in
+            guard category == .messageDelivered else { return }
+            guard let convIdStr = info["conversationId"],
+                  let convId = UUID(uuidString: convIdStr) else { return }
+            DispatchQueue.main.async {
+                self?.pendingDeepLinkConversationId = convId
+            }
         }
 
         // W74: re-attempt the persistent WS the moment the app returns

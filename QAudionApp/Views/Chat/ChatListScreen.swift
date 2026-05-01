@@ -37,6 +37,12 @@ struct ChatListScreen: View {
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
     @State private var showingNewGroup = false
+    /// W94: deep-link state. When `appState.pendingDeepLinkConversationId`
+    /// is published (notification tap), `deepLinkItem` captures the
+    /// matching conversation and `deepLinkActive` flips on, triggering
+    /// `navigationDestination(isPresented:)` to push ChatDetailScreen.
+    @State private var deepLinkItem: ConversationListViewModel.Item? = nil
+    @State private var deepLinkActive: Bool = false
     @State private var adminBannerDismissed = false
     /// W40: gruppo creato (non-nil → presenta GroupChatScreen full-screen).
     @State private var openedGroup: OpenedGroup? = nil
@@ -237,6 +243,30 @@ struct ChatListScreen: View {
             container.setSearchQuery(newValue)
         }
         .refreshable { container.loadFromStore() }
+        // W94: navigationDestination triggered by the deep-link state.
+        // When a notification tap publishes appState.pendingDeepLinkConversationId,
+        // the onChange below captures the matching item and flips the
+        // boolean, which iOS pushes onto the nav stack automatically.
+        .navigationDestination(isPresented: $deepLinkActive) {
+            if let item = deepLinkItem {
+                chatDestination(for: item)
+            } else {
+                EmptyView()
+            }
+        }
+        .onChange(of: appState.pendingDeepLinkConversationId) { newId in
+            guard let id = newId else { return }
+            // Reload before lookup so a freshly-created conversation
+            // (from a contact you've never messaged) is in the list.
+            container.loadFromStore()
+            if let item = container.viewModel.items.first(where: { $0.conversationId == id }) {
+                deepLinkItem = item
+                deepLinkActive = true
+            }
+            // Consume the deep link so a stale value doesn't re-fire
+            // on the next view re-render.
+            appState.pendingDeepLinkConversationId = nil
+        }
         .sheet(isPresented: $showingNewConversation) {
             NavigationStack {
                 ContactsListView()
