@@ -193,8 +193,14 @@ struct ChatDetailScreen: View {
         // con Android `SendMessageUseCase.Outcome.Failed`).
         .onChange(of: container.failedMessageId) { newId in
             guard newId != nil, let reason = container.failureReason else { return }
+            // W251: pre-bind reason.localizedDescription to a local. Multi-segment
+            // string interpolation `\(obj.field)` inside a closure that builds a
+            // SwiftUI struct literal trips Swift 6 / Xcode 26.4 type-checker
+            // timeouts. See CLAUDE.md §13. Keep this pattern.
+            let reasonText: String = reason.localizedDescription
+            let snackbarText: String = "Messaggio non inviato — " + reasonText
             snackbar?.show(.init(
-                text: "Messaggio non inviato — \(reason.localizedDescription)",
+                text: snackbarText,
                 severity: .error,
                 actionLabel: "Riprova",
                 onAction: { container.retryFailedMessage() },
@@ -711,9 +717,13 @@ struct ChatDetailScreen: View {
     }
 
     private var typingRow: some View {
-        HStack(spacing: 8) {
+        // W251: pre-bind the deep property chain to dodge type-checker timeouts.
+        // See CLAUDE.md §13.
+        let peerName: String = container.viewModel.conversation.peerDisplayName
+        let typingText: String = peerName + " sta scrivendo…"
+        return HStack(spacing: 8) {
             TypingIndicator()
-            Text("\(container.viewModel.conversation.peerDisplayName) sta scrivendo…")
+            Text(typingText)
                 .qaudionStyle(type.labelSmall)
                 .italic()
                 .foregroundStyle(scheme.onSurfaceVariant)
