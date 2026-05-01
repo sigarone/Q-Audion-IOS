@@ -146,7 +146,7 @@ struct MessageComposer: View {
             // every 0.7s so the recording state reads as 'live' even
             // before the user reads any text.
             Circle()
-                .fill(extras.error)
+                .fill(scheme.error)
                 .frame(width: 8, height: 8)
                 .opacity(recordingDotPulse ? 1.0 : 0.45)
                 .animation(
@@ -157,14 +157,14 @@ struct MessageComposer: View {
                 .onDisappear { recordingDotPulse = false }
             Text(formattedElapsed)
                 .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(nearingCap ? extras.error : scheme.onSurface)
+                .foregroundStyle(nearingCap ? scheme.error : scheme.onSurface)
                 .monospacedDigit()
             // W115: copy switches when drag-up cancel is armed.
             Text(cancelArmed
                  ? "Rilascia per ANNULLARE"
                  : "Rilascia per inviare · scorri verso l'alto per annullare")
                 .qaudionStyle(type.labelSmall)
-                .foregroundStyle(cancelArmed ? extras.error : scheme.onSurfaceVariant)
+                .foregroundStyle(cancelArmed ? scheme.error : scheme.onSurfaceVariant)
             Spacer(minLength: 0)
             // W131: countdown chip — only visible in last 30s.
             if nearingCap {
@@ -178,7 +178,7 @@ struct MessageComposer: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 8).fill(
-            (cancelArmed ? extras.error : extras.error.opacity(0.5)).opacity(0.15)
+            (cancelArmed ? scheme.error : scheme.error.opacity(0.5)).opacity(0.15)
         ))
     }
 
@@ -189,7 +189,7 @@ struct MessageComposer: View {
         let count = text.count
         let color: Color
         if count >= 5000 {
-            color = extras.error
+            color = scheme.error
         } else if count >= 4500 {
             color = extras.warning
         } else {
