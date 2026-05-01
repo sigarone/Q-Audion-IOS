@@ -457,13 +457,16 @@ struct SettingsScreen: View {
                     ? "Eliminati \(cleared) abbozzi."
                     : "Nessun abbozzo da eliminare."
                 cacheClearedAlertVisible = true
+                cacheUsageRefreshTrigger += 1
             } label: {
+                // W154: dynamic subtitle shows the live count.
                 SettingsRow(icon: "doc.text.below.ecg",
                             iconColor: .orange,
                             title: "Cancella abbozzi",
-                            subtitle: "Rimuove i testi non inviati salvati per ogni chat")
+                            subtitle: Self.draftsSubtitle())
             }
             .buttonStyle(.plain)
+            .id(cacheUsageRefreshTrigger)
 
             // W153: wipe all "ultimo accesso" stamps captured by
             // PresenceService. The next time the chat detail topbar
@@ -475,13 +478,16 @@ struct SettingsScreen: View {
                     ? "Eliminati \(cleared) timestamp di ultimo accesso."
                     : "Nessun timestamp da eliminare."
                 cacheClearedAlertVisible = true
+                cacheUsageRefreshTrigger += 1
             } label: {
+                // W154: dynamic subtitle shows the live count.
                 SettingsRow(icon: "eye.slash.fill",
                             iconColor: .orange,
                             title: "Cancella timestamp ultimo accesso",
-                            subtitle: "Dimentica quando hai visto i contatti online")
+                            subtitle: Self.lastSeenSubtitle())
             }
             .buttonStyle(.plain)
+            .id(cacheUsageRefreshTrigger)
         }
         .alert("Cache liberata", isPresented: $cacheClearedAlertVisible) {
             Button("OK", role: .cancel) { }
@@ -518,6 +524,39 @@ struct SettingsScreen: View {
             removed += 1
         }
         return removed
+    }
+
+    /// W154: count keys with a given prefix without mutating the
+    /// store. Cheap walk of the in-memory defaults dictionary.
+    private static func countKeys(prefix: String) -> Int {
+        let allKeys = UserDefaults.standard.dictionaryRepresentation().keys
+        var n = 0
+        for k in allKeys where k.hasPrefix(prefix) { n += 1 }
+        return n
+    }
+
+    /// W154: dynamic subtitle for the "Cancella abbozzi" row.
+    private static func draftsSubtitle() -> String {
+        let n = countKeys(prefix: "qa.composer.draft.")
+        if n == 0 {
+            return "Nessun abbozzo salvato"
+        }
+        if n == 1 {
+            return "1 abbozzo salvato"
+        }
+        return "\(n) abbozzi salvati"
+    }
+
+    /// W154: dynamic subtitle for the "Cancella timestamp" row.
+    private static func lastSeenSubtitle() -> String {
+        let n = countKeys(prefix: "qa.lastSeenAt.")
+        if n == 0 {
+            return "Nessun timestamp da dimenticare"
+        }
+        if n == 1 {
+            return "1 contatto memorizzato"
+        }
+        return "\(n) contatti memorizzati"
     }
 
     // MARK: - Sign-out destructive button
