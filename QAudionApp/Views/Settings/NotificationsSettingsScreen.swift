@@ -151,6 +151,45 @@ struct NotificationsSettingsScreen: View {
                               mono: false)
                     }
 
+                    // W169: shortcut into iOS Settings → Q-Audion
+                    // permissions. Useful when the user has revoked
+                    // mic / notifications and wants to fix it without
+                    // hunting through Settings.
+                    SettingsSectionHeader("SISTEMA")
+                    Button {
+                        #if canImport(UIKit)
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                        #endif
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "gearshape.fill")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(.orange)
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Apri Impostazioni iOS")
+                                    .qaudionStyle(type.bodyMedium)
+                                    .foregroundStyle(scheme.onSurface)
+                                Text("Permessi · banner · suoni di sistema")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.system(size: 14, weight: .regular))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 52)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(scheme.surfaceVariant.opacity(0.4))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
