@@ -45,6 +45,10 @@ struct SettingsScreen: View {
     /// auth token + flips ContentView routing back to OnboardingRoot;
     /// trivial to do by accident from the bottom of Settings.
     @State private var showSignOutConfirm: Bool = false
+    /// W165: confirm dialog gate for "Svuota cache allegati". Cache
+    /// wipe forces re-download of voice notes + images from peers,
+    /// which costs bandwidth on cellular — worth a confirmation tap.
+    @State private var showClearCacheConfirm: Bool = false
     /// W113: bump on every clear to force the SettingsRow subtitle
     /// to recompute (computed property reads filesystem; cheap but
     /// only worth doing when the row re-renders).
@@ -448,12 +452,10 @@ struct SettingsScreen: View {
             // Library/Caches/voicenotes and Library/Caches/images so
             // disk usage drops without losing the chat history (the
             // qfile markers stay; cache is re-fetched on next tap).
+            // W165: gated behind a confirm dialog because re-fetching
+            // hits cellular bandwidth.
             Button {
-                let bytesFreed = AttachmentCacheCleaner.clearAllCaches()
-                let mb = Double(bytesFreed) / (1024.0 * 1024.0)
-                cacheClearedMessage = String(format: "Cache liberata: %.1f MB", mb)
-                cacheClearedAlertVisible = true
-                cacheUsageRefreshTrigger += 1
+                showClearCacheConfirm = true
             } label: {
                 SettingsRow(icon: "tray.2.fill",
                             iconColor: .orange,
@@ -462,6 +464,23 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
             .id(cacheUsageRefreshTrigger)
+            // W165: confirmationDialog anchored to the cache row.
+            .confirmationDialog(
+                "Svuotare la cache degli allegati?",
+                isPresented: $showClearCacheConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Svuota", role: .destructive) {
+                    let bytesFreed = AttachmentCacheCleaner.clearAllCaches()
+                    let mb = Double(bytesFreed) / (1024.0 * 1024.0)
+                    cacheClearedMessage = String(format: "Cache liberata: %.1f MB", mb)
+                    cacheClearedAlertVisible = true
+                    cacheUsageRefreshTrigger += 1
+                }
+                Button("Annulla", role: .cancel) { }
+            } message: {
+                Text("Le foto e i vocali ricevuti verranno ri-scaricati dai mittenti la prossima volta che li apri. La cronologia dei messaggi non viene toccata.")
+            }
 
             // W150: bulk-clear all per-conversation composer drafts.
             // Useful when handing the device to someone else without a
