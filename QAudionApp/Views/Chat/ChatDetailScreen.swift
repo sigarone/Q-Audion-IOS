@@ -191,6 +191,25 @@ struct ChatDetailScreen: View {
             } label: {
                 Label("Galleria", systemImage: "photo.on.rectangle")
             }
+            // W103: paste from clipboard. Only enabled when the
+            // pasteboard has an image available — UIPasteboard.general
+            // .hasImages is checked at button press time. If user
+            // copied a screenshot or shared photo in another app,
+            // this is the fastest way to drop it into the chat.
+            if UIPasteboard.general.hasImages {
+                Button {
+                    if let img = UIPasteboard.general.image,
+                       let data = img.jpegData(compressionQuality: 1.0) {
+                        container.sendImage(data)
+                    } else {
+                        snackbar?.show(.init(
+                            text: "Nessuna immagine valida negli appunti.",
+                            severity: .warning, durationSeconds: 3))
+                    }
+                } label: {
+                    Label("Incolla immagine", systemImage: "doc.on.clipboard")
+                }
+            }
             Button("Annulla", role: .cancel) { }
         }
         .sheet(isPresented: $showCameraPicker) {
