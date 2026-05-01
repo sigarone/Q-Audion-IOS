@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.271", date: "2026-05-02",
+              title: "Svuota URLCache dev action (W271)",
+              bullets: [
+                "Settings → SVILUPPATORE: 'Svuota URLCache'",
+                "Forza re-fetch HTTP per OTA catalog + avatar download",
+                "URLCache.shared.removeAllCachedResponses()",
+                "Utile per QA che vuole verificare metadata server fresh"
+              ]),
         .init(id: "v1.0.270", date: "2026-05-02",
               title: "Cancella notifiche pianificate dev action (W270)",
               bullets: [

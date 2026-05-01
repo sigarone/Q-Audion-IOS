@@ -582,6 +582,23 @@ struct SettingsScreen: View {
                             subtitle: "Round-trip ML-KEM-1024 (encap+decap)")
             }
             .buttonStyle(.plain)
+
+            // W271: clear URLCache. Q-Audion uses URLSession for OTA
+            // catalog fetch + avatar download. URLCache.shared holds
+            // the response cache; clearing it forces a re-fetch on
+            // the next request. Useful when QA wants to verify the
+            // server is serving fresh metadata without rebooting.
+            Button {
+                URLCache.shared.removeAllCachedResponses()
+                cacheClearedMessage = "URLCache svuotata."
+                cacheClearedAlertVisible = true
+            } label: {
+                SettingsRow(icon: "network.slash",
+                            iconColor: .orange,
+                            title: "Svuota URLCache",
+                            subtitle: "Forza re-fetch per OTA / avatar")
+            }
+            .buttonStyle(.plain)
         }
         // W268: alert title made neutral ("Sviluppatore") because this
         // same dispatch surface now serves the PQC self-test as well as
