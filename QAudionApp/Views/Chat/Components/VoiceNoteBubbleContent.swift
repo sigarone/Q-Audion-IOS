@@ -253,8 +253,21 @@ struct VoiceNoteBubbleContent: View {
         }
     }
 
+    /// W124: file existence check for the cached path. Used by the
+    /// bubble to display 'file mancante' instead of an inert play
+    /// icon when the cache was reclaimed.
+    private var fileExists: Bool {
+        guard let path = mediaLocalPath, !path.isEmpty else { return false }
+        return FileManager.default.fileExists(atPath: path)
+    }
+
     private func handleTap() {
         guard let path = mediaLocalPath, !path.isEmpty else { return }
+        // W124: missing cache → no-op rather than crash the player.
+        guard FileManager.default.fileExists(atPath: path) else {
+            print("[VoiceNoteBubbleContent] file missing at \(path)")
+            return
+        }
         if isPlayingThis {
             player.pause()
             return
