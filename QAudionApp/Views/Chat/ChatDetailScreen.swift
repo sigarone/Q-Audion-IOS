@@ -100,25 +100,15 @@ struct ChatDetailScreen: View {
             )
             messageList
             MessageComposer(
+                // W260: same structural fix as W258/W259. The Binding
+                // set: closure body had a 2-branch if/else inside a
+                // SwiftUI ViewBuilder argument list — `if !newValue.isEmpty`
+                // was timing out the type-checker even though it's a
+                // trivial boolean check. Method extraction gives the
+                // type-checker a clean scope. See CLAUDE.md §13.
                 text: Binding(
                     get: { container.composerText },
-                    set: { newValue in
-                        let wasEmpty = container.composerText.isEmpty
-                        container.composerText = newValue
-                        // W101: typing indicator emit. Empty→non-empty
-                        // fires `is_typing=true`; non-empty→empty fires
-                        // `is_typing=false` immediately. Steady-state
-                        // typing rolls the 3s auto-stop timer.
-                        if !newValue.isEmpty {
-                            container.notifyComposerInput()
-                        } else if !wasEmpty {
-                            container.notifyComposerCleared()
-                        }
-                        // W137: persist the draft (debounced 0.5s) so
-                        // the user doesn't lose half-typed messages
-                        // if iOS reaps the app in the background.
-                        container.scheduleDraftSave()
-                    }
+                    set: handleComposerTextChange
                 ),
                 editingTarget: editingTarget,
                 replyTarget: replyTarget,
@@ -533,16 +523,23 @@ struct ChatDetailScreen: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
+            // W260: preemptively flattened the scroll-to-bottom closures.
+            // `if let last = container.viewModel.messages.last` is the same
+            // antipattern as the lines we already fixed — optional chain
+            // resolution inside a deeply-nested closure trips the
+            // type-checker. Pre-binding `lastId` with guard let isolates
+            // the optional unwrap from the `withAnimation` closure body.
             .onChange(of: container.viewModel.messages.count) { _ in
-                if let last = container.viewModel.messages.last {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+                guard let lastId = container.viewModel.messages.last?.id else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(lastId, anchor: .bottom)
                 }
             }
             .onChange(of: container.viewModel.isPeerTyping) { typing in
-                if typing, let last = container.viewModel.messages.last {
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                guard typing else { return }
+                guard let lastId = container.viewModel.messages.last?.id else { return }
+                withAnimation {
+                    proxy.scrollTo(lastId, anchor: .bottom)
                 }
             }
             .onAppear {
@@ -770,6 +767,24 @@ struct ChatDetailScreen: View {
         // overload. Type-checker resolves instantly even when callers
         // are deep inside closure stacks.
         return "\(failed) foto su \(total) non leggibili."
+    }
+
+    // MARK: - Composer text-change callback (W260)
+
+    private func handleComposerTextChange(_ newValue: String) {
+        let wasEmpty = container.composerText.isEmpty
+        container.composerText = newValue
+        // W101: typing indicator emit. Empty→non-empty fires
+        // `is_typing=true`; non-empty→empty fires `is_typing=false`
+        // immediately. Steady-state typing rolls the 3s auto-stop timer.
+        if !newValue.isEmpty {
+            container.notifyComposerInput()
+        } else if !wasEmpty {
+            container.notifyComposerCleared()
+        }
+        // W137: persist the draft (debounced 0.5s) so the user doesn't
+        // lose half-typed messages if iOS reaps the app in the background.
+        container.scheduleDraftSave()
     }
 
     // MARK: - Helpers

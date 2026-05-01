@@ -22,6 +22,15 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.260", date: "2026-05-01",
+              title: "Extract composer Binding(set:) + scroll callbacks (W260)",
+              bullets: [
+                "v1.0.259 worked — error moved past photos to line 112 composer Binding",
+                "Same fix: extracted `Binding(set:)` body to handleComposerTextChange method",
+                "Preemptively flattened scroll-to-bottom .onChange closures with guard let",
+                "`if let last = ... { withAnimation { ... } }` is the same antipattern",
+                "All inline closures in ChatDetailScreen body are now method-bound or trivial"
+              ]),
         .init(id: "v1.0.259", date: "2026-05-01",
               title: "Extract photo-picker callback to methods (W259)",
               bullets: [
