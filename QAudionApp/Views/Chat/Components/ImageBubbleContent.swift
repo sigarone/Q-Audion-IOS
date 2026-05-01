@@ -23,6 +23,10 @@ struct ImageBubbleContent: View {
 
     @State private var fullscreen: Bool = false
     @State private var loadedImage: UIImage? = nil
+    /// W97: long-press save-to-Photos confirmation. iOS auto-prompts
+    /// for photo-library write permission the first time
+    /// `UIImageWriteToSavedPhotosAlbum` runs.
+    @State private var saveAlertVisible: Bool = false
 
     var body: some View {
         Group {
@@ -35,6 +39,17 @@ struct ImageBubbleContent: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .contentShape(Rectangle())
                         .onTapGesture { fullscreen = true }
+                        .contextMenu {
+                            // W97: long-press → save to Photos. Use
+                            // the system "Salva immagine" idiom so
+                            // users find it where they expect.
+                            Button {
+                                UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
+                                saveAlertVisible = true
+                            } label: {
+                                Label("Salva in Foto", systemImage: "square.and.arrow.down")
+                            }
+                        }
                 } else {
                     placeholderBox
                         .onAppear { loadIfNeeded(path: path) }
@@ -47,6 +62,11 @@ struct ImageBubbleContent: View {
             if let img = loadedImage {
                 ImageFullscreenView(image: img, onDismiss: { fullscreen = false })
             }
+        }
+        .alert("Salvata in Foto", isPresented: $saveAlertVisible) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("L'immagine è ora nella libreria Foto.")
         }
     }
 
