@@ -22,6 +22,15 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.261", date: "2026-05-02",
+              title: "Wrap MessageComposer in computed property (W261)",
+              bullets: [
+                "v1.0.260 still failed — error moved up to MessageComposer( call site",
+                "Even with all closures method-extracted, 14-arg struct construction was too much",
+                "Fix: wrap the entire MessageComposer(...) in @ViewBuilder computed property",
+                "The body's ZStack now sees a single `composerView` reference",
+                "Computed properties have isolated type-check scope from the parent ViewBuilder"
+              ]),
         .init(id: "v1.0.260", date: "2026-05-01",
               title: "Extract composer Binding(set:) + scroll callbacks (W260)",
               bullets: [

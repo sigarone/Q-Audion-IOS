@@ -99,40 +99,14 @@ struct ChatDetailScreen: View {
                 rekeyInSeconds: stubRekeyInSeconds
             )
             messageList
-            MessageComposer(
-                // W260: same structural fix as W258/W259. The Binding
-                // set: closure body had a 2-branch if/else inside a
-                // SwiftUI ViewBuilder argument list — `if !newValue.isEmpty`
-                // was timing out the type-checker even though it's a
-                // trivial boolean check. Method extraction gives the
-                // type-checker a clean scope. See CLAUDE.md §13.
-                text: Binding(
-                    get: { container.composerText },
-                    set: handleComposerTextChange
-                ),
-                editingTarget: editingTarget,
-                replyTarget: replyTarget,
-                // W108: live elapsed-seconds counter for the recording
-                // banner. Recorder publishes elapsedSeconds via a 0.25s
-                // timer; passing through here is enough — SwiftUI binds
-                // the @ObservedObject so the row updates automatically.
-                recordingElapsedSeconds: voiceNoteRecorder.elapsedSeconds,
-                onAttach: { showAttachmentChoice = true },
-                onSend: handleSend,
-                onCancelEdit: { editingTarget = nil },
-                onCancelReply: { replyTarget = nil },
-                // W258: extracted the voice-note callbacks into named
-                // methods. Inline closure bodies were 4-5 levels deep
-                // (closure → Task → do/catch with pattern matching) and
-                // the type-checker exhausted itself validating EVERY
-                // statement inside — even `container.markFailed(...)`
-                // started timing out at v1.0.256. Methods have a clean
-                // type-check scope isolated from the surrounding
-                // closure constraints. See CLAUDE.md §13.
-                onStartVoiceNote: handleVoiceNoteStart,
-                onFinishVoiceNote: handleVoiceNoteFinish,
-                onCancelVoiceNote: handleVoiceNoteCancel
-            )
+            // W261: extract the MessageComposer construction itself into
+            // a separate computed property. Even with all closures
+            // extracted to methods, the 14-argument struct construction
+            // was tripping the type-checker at the call site (line 102).
+            // Computed properties have a clean type-check scope, isolated
+            // from the surrounding ZStack/VStack ViewBuilder.
+            // See CLAUDE.md §13.
+            composerView
         }
         .background(scheme.background)
         .navigationBarBackButtonHidden(true)
@@ -767,6 +741,45 @@ struct ChatDetailScreen: View {
         // overload. Type-checker resolves instantly even when callers
         // are deep inside closure stacks.
         return "\(failed) foto su \(total) non leggibili."
+    }
+
+    // MARK: - Composer view (W261)
+    //
+    // The MessageComposer struct construction has 14 arguments. Even
+    // when every closure is method-extracted (W258/W259/W260), the
+    // call site itself was tripping the type-checker — the inference
+    // load of resolving all arguments simultaneously inside a
+    // ZStack/VStack ViewBuilder context was just too much.
+    //
+    // Wrapping the construction in a `@ViewBuilder` computed property
+    // gives it its own clean type-check scope. The body's ZStack now
+    // sees a single `composerView` reference instead of an inline
+    // 14-argument struct literal.
+
+    @ViewBuilder
+    private var composerView: some View {
+        MessageComposer(
+            text: Binding(
+                get: { container.composerText },
+                set: handleComposerTextChange
+            ),
+            editingTarget: editingTarget,
+            replyTarget: replyTarget,
+            // W108: live elapsed-seconds counter for the recording
+            // banner. Recorder publishes elapsedSeconds via a 0.25s
+            // timer; passing through here is enough — SwiftUI binds
+            // the @ObservedObject so the row updates automatically.
+            recordingElapsedSeconds: voiceNoteRecorder.elapsedSeconds,
+            onAttach: { showAttachmentChoice = true },
+            onSend: handleSend,
+            onCancelEdit: { editingTarget = nil },
+            onCancelReply: { replyTarget = nil },
+            // W258: voice-note callbacks extracted to methods to dodge
+            // the type-checker exhaustion. See CLAUDE.md §13.
+            onStartVoiceNote: handleVoiceNoteStart,
+            onFinishVoiceNote: handleVoiceNoteFinish,
+            onCancelVoiceNote: handleVoiceNoteCancel
+        )
     }
 
     // MARK: - Composer text-change callback (W260)
