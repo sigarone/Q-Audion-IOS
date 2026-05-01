@@ -270,9 +270,15 @@ struct ChatDetailScreen: View {
                     }
                 }
                 if failures > 0 {
+                    // Bind into a local before the closure so the
+                    // type-checker doesn't have to chase
+                    // `items.count` through MainActor.run + snackbar?.show.
+                    let total = items.count
+                    let failedCount = failures
+                    let snackbarText = "\(failedCount) foto su \(total) non leggibili."
                     await MainActor.run {
                         snackbar?.show(.init(
-                            text: "\(failures) foto su \(items.count) non leggibili.",
+                            text: snackbarText,
                             severity: .warning,
                             durationSeconds: 3))
                     }
@@ -640,12 +646,20 @@ struct ChatDetailScreen: View {
                                         in: attr) else { continue }
             attr[attrRange].inlinePresentationIntent = .emphasized
         }
+        // W152: privacy gate — skip URL auto-detection when the user
+        // has flipped 'Anteprima link' off. The flag lives in standard
+        // UserDefaults and is read directly so this static helper
+        // doesn't need an environment dependency.
+        guard UserDefaults.standard.object(forKey: "qaudion.privacy.detect_links") == nil
+              || UserDefaults.standard.bool(forKey: "qaudion.privacy.detect_links") else {
+            return attr
+        }
         // Then layer URL detection on top of the cleaned text.
         guard let detector = try? NSDataDetector(
             types: NSTextCheckingResult.CheckingType.link.rawValue
         ) else { return attr }
-        let ns = cleaned as NSString
-        let matches = detector.matches(in: cleaned, options: [],
+        let ns = parsed.cleaned as NSString
+        let matches = detector.matches(in: parsed.cleaned, options: [],
                                        range: NSRange(location: 0, length: ns.length))
         for match in matches {
             guard let url = match.url,

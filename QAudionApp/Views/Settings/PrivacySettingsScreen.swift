@@ -81,6 +81,13 @@ struct PrivacySettingsScreen: View {
     @AppStorage("qaudion.privacy.hide_notification_content")
     private var hideNotificationContent: Bool = false
 
+    /// W152: link preview / auto-detection toggle. When off, NSDataDetector
+    /// won't render http(s) URLs in chat bubbles as tappable links — useful
+    /// when the user is suspicious of phishing peers. ChatDetailScreen
+    /// reads this @AppStorage key directly.
+    @AppStorage("qaudion.privacy.detect_links")
+    private var detectLinks: Bool = true
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -119,6 +126,14 @@ struct PrivacySettingsScreen: View {
                                 get: { container.viewModel.presenceVisibleToContacts },
                                 set: { container.togglePresence($0) }
                             )
+                        )
+                        // W152: gate URL auto-detection. Off → bubbles
+                        // render plain text and any http link the peer
+                        // sent stays inert (user must long-press → copy).
+                        SettingsToggleRow(
+                            title: "Anteprima link",
+                            subtitle: "Rileva URL nei messaggi e li rende toccabili",
+                            isOn: $detectLinks
                         )
                     }
 
