@@ -905,10 +905,16 @@ final class AppState: ObservableObject {
             forKey: "qaudion.notifications.banners_enabled") as? Bool) ?? true
         if bannersGlobalEnabled && !isMuted && activePeerUserId != senderId {
             let title = conv.peerDisplayName.isEmpty ? senderId : conv.peerDisplayName
-            // Cap body at ~120 chars so multi-line essays don't blow
-            // up the banner. plaintext is already the friendly render.
+            // W106: privacy toggle — hide content in notifications.
+            // Defaults false; when on the body is replaced with a
+            // generic "Nuovo messaggio" so the lock-screen / banner
+            // doesn't leak chat content to over-the-shoulder readers.
+            let hideContent = (UserDefaults.standard.object(
+                forKey: "qaudion.privacy.hide_notification_content") as? Bool) ?? false
             let bodyText: String
-            if plaintext.count > 120 {
+            if hideContent {
+                bodyText = "Nuovo messaggio"
+            } else if plaintext.count > 120 {
                 bodyText = String(plaintext.prefix(120)) + "…"
             } else {
                 bodyText = plaintext

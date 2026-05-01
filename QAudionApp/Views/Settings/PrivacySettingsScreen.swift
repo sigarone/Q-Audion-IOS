@@ -75,11 +75,25 @@ struct PrivacySettingsScreen: View {
         ("7 giorni",  604800)
     ]
 
+    /// W106: hide message content in lock-screen / banner notifications.
+    /// When on, the banner body shows "Nuovo messaggio" instead of the
+    /// plaintext preview. Read by AppState when scheduling local notifs.
+    @AppStorage("qaudion.privacy.hide_notification_content")
+    private var hideNotificationContent: Bool = false
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    SettingsSectionHeader("BANNER")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Nascondi contenuto notifiche",
+                            subtitle: "Mostra solo \"Nuovo messaggio\" nei banner",
+                            isOn: $hideNotificationContent
+                        )
+                    }
                     SettingsSectionHeader("MESSAGGI")
                     VStack(spacing: 8) {
                         SettingsToggleRow(
