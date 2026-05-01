@@ -903,6 +903,15 @@ final class AppState: ObservableObject {
         // sees banners; user can opt out from settings.
         let bannersGlobalEnabled = (UserDefaults.standard.object(
             forKey: "qaudion.notifications.banners_enabled") as? Bool) ?? true
+        // W122: when the user is actively viewing this peer's chat
+        // and a new message lands, fire a soft haptic so the user
+        // notices without an audio chime. Suppression already excludes
+        // muted convs from the banner, but THIS path runs even when
+        // the banner is suppressed (active chat) so the user still
+        // gets a tactile cue.
+        if !isMuted && activePeerUserId == senderId {
+            HapticFeedback.messageSent()
+        }
         if bannersGlobalEnabled && !isMuted && activePeerUserId != senderId {
             let title = conv.peerDisplayName.isEmpty ? senderId : conv.peerDisplayName
             // W106: privacy toggle — hide content in notifications.
