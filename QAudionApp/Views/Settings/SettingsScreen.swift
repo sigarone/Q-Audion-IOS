@@ -41,6 +41,21 @@ struct SettingsScreen: View {
     /// W102: cache-clear feedback alert state.
     @State private var cacheClearedAlertVisible: Bool = false
     @State private var cacheClearedMessage: String = ""
+    /// W113: bump on every clear to force the SettingsRow subtitle
+    /// to recompute (computed property reads filesystem; cheap but
+    /// only worth doing when the row re-renders).
+    @State private var cacheUsageRefreshTrigger: Int = 0
+
+    private var cacheUsageSubtitle: String {
+        let s = AttachmentCacheCleaner.cacheSizes()
+        let totalMb = Double(s.voiceNotes &+ s.images) / (1024.0 * 1024.0)
+        if totalMb < 0.1 {
+            return "Vuota — nessun allegato in cache"
+        }
+        let voiceMb = Double(s.voiceNotes) / (1024.0 * 1024.0)
+        let imgMb = Double(s.images) / (1024.0 * 1024.0)
+        return String(format: "Voice: %.1f MB · Immagini: %.1f MB", voiceMb, imgMb)
+    }
 
     var body: some View {
         NavigationStack {
@@ -354,13 +369,15 @@ struct SettingsScreen: View {
                 let mb = Double(bytesFreed) / (1024.0 * 1024.0)
                 cacheClearedMessage = String(format: "Cache liberata: %.1f MB", mb)
                 cacheClearedAlertVisible = true
+                cacheUsageRefreshTrigger += 1
             } label: {
                 SettingsRow(icon: "tray.2.fill",
                             iconColor: .orange,
                             title: "Svuota cache allegati",
-                            subtitle: "Voice note + immagini (i marker restano)")
+                            subtitle: cacheUsageSubtitle)
             }
             .buttonStyle(.plain)
+            .id(cacheUsageRefreshTrigger)
         }
         .alert("Cache liberata", isPresented: $cacheClearedAlertVisible) {
             Button("OK", role: .cancel) { }

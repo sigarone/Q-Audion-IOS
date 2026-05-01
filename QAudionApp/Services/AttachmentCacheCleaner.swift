@@ -26,6 +26,32 @@ enum AttachmentCacheCleaner {
         return freed
     }
 
+    /// W113: report current cache sizes without deleting. Lets the
+    /// settings screen show "Voice notes: 4.2 MB · Immagini: 12.8 MB"
+    /// before asking the user whether to clear.
+    static func cacheSizes() -> (voiceNotes: UInt64, images: UInt64) {
+        return (sizeOfSubdir("voicenotes"), sizeOfSubdir("images"))
+    }
+
+    private static func sizeOfSubdir(_ name: String) -> UInt64 {
+        let fm = FileManager.default
+        guard let cachesBase = try? fm.url(
+            for: .cachesDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: false
+        ) else { return 0 }
+        let dir = cachesBase.appendingPathComponent(name, isDirectory: true)
+        guard fm.fileExists(atPath: dir.path) else { return 0 }
+        var bytes: UInt64 = 0
+        if let enumerator = fm.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey]) {
+            for case let url as URL in enumerator {
+                if let s = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                    bytes &+= UInt64(s)
+                }
+            }
+        }
+        return bytes
+    }
+
     private static func clearSubdir(_ name: String) -> UInt64 {
         let fm = FileManager.default
         guard let cachesBase = try? fm.url(
