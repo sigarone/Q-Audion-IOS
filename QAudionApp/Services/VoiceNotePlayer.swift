@@ -42,7 +42,13 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     /// preferred speed sticks for the whole session. AVAudioPlayer
     /// requires `enableRate = true` before prepareToPlay; we set it
     /// unconditionally now that this property exists.
-    @Published private(set) var playbackRate: Float = 1.0
+    /// W144: persist across app launches via UserDefaults so the user
+    /// doesn't have to re-tap 1.5× every time they reopen the app.
+    @Published private(set) var playbackRate: Float = {
+        let stored = UserDefaults.standard.float(forKey: "qa.voiceNote.playbackRate")
+        // UserDefaults returns 0.0 for missing keys; coerce to default.
+        return stored > 0 ? stored : 1.0
+    }()
 
     private var player: AVAudioPlayer?
     private var tickTimer: Timer?
@@ -122,6 +128,9 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
         playbackRate = next
         player?.rate = next
+        // W144: persist the choice. UserDefaults float lookups are
+        // O(1) in-memory after first hit so this is cheap.
+        UserDefaults.standard.set(next, forKey: "qa.voiceNote.playbackRate")
     }
 
     /// Pause the active playback without releasing the player. The
