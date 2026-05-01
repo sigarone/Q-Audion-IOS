@@ -1,5 +1,9 @@
 import SwiftUI
 import QAudionEngine
+// W267: Mach syscalls (task_info, mach_task_basic_info) live in
+// Darwin / Darwin.Mach. Foundation transitively imports Darwin on
+// iOS but we make it explicit so the helper compiles cleanly.
+import Darwin
 
 @MainActor
 final class AboutSettingsContainer: ObservableObject {
@@ -73,6 +77,11 @@ struct AboutSettingsScreen: View {
                         // W266: free disk space — useful when testers
                         // hit "upload failed" or cache eviction issues.
                         kvRow("Spazio libero", Self.availableDiskSpaceLabel(), mono: true)
+                        // W267: resident memory usage of THIS process.
+                        // PQC ops (ML-KEM-1024) + ONNX inference can be
+                        // memory-heavy; visible footprint helps catch
+                        // leaks during long sessions.
+                        kvRow("Memoria processo", Self.residentMemoryLabel(), mono: true)
                     }
                     // W159: local data summary — gives the user a
                     // sense of how much chat content lives on this
@@ -304,6 +313,40 @@ struct AboutSettingsScreen: View {
     /// available to user-space — system services may have parked some).
     private static func processorCountLabel() -> String {
         return String(ProcessInfo.processInfo.activeProcessorCount)
+    }
+
+    /// W267: resident memory of the current process, formatted as
+    /// "84,3 MB" (Italian decimal-comma) or "?". Uses
+    /// mach_task_basic_info via the task_info() Mach syscall; the
+    /// resident_size field is the same number Activity Monitor and
+    /// Instruments report as "Memory". Cheap (no allocation, single
+    /// syscall). Static + single-statement-like to keep type-checker
+    /// happy. See CLAUDE.md §13.
+    private static func residentMemoryLabel() -> String {
+        var info = mach_task_basic_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info_data_t>.stride
+                / MemoryLayout<natural_t>.stride
+        )
+        let kr: kern_return_t = withUnsafeMutablePointer(to: &info) { ptr in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reb in
+                task_info(mach_task_self_,
+                          task_flavor_t(MACH_TASK_BASIC_INFO),
+                          reb,
+                          &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return "?" }
+        let mb: Double = Double(info.resident_size) / (1024.0 * 1024.0)
+        // Italian decimal-comma formatting via NumberFormatter; avoids
+        // locale-shenanigans of String(format:) which uses the user's
+        // active locale (could be en_US in some sims).
+        let nf = NumberFormatter()
+        nf.locale = Locale(identifier: "it_IT")
+        nf.minimumFractionDigits = 1
+        nf.maximumFractionDigits = 1
+        let formatted: String = nf.string(from: NSNumber(value: mb)) ?? "?"
+        return formatted + " MB"
     }
 
     /// W266: free disk space label, e.g. "12,4 GB liberi" or "?".

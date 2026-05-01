@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.267", date: "2026-05-02",
+              title: "Memoria processo in About (W267)",
+              bullets: [
+                "About → STATO SISTEMA: nuova riga 'Memoria processo'",
+                "Resident size via mach_task_basic_info (Mach syscall)",
+                "Stessa cifra che Activity Monitor / Instruments mostra come 'Memory'",
+                "Utile per individuare leak in sessioni lunghe (PQC + ONNX)"
+              ]),
         .init(id: "v1.0.266", date: "2026-05-02",
               title: "Spazio libero su disco in About (W266)",
               bullets: [
