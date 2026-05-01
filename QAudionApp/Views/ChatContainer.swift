@@ -263,6 +263,41 @@ final class ChatContainer: ObservableObject {
         refreshFromStore()
     }
 
+    /// W93: hard-clear local message history for this conversation.
+    /// Conversation row stays around (so the contact remains in the
+    /// list with empty preview); only the messages bucket is wiped.
+    func clearLocalHistory() {
+        // ConversationStore stores messages under
+        // `qaudion.conv.msgs.<conversationId>`. We can re-purpose the
+        // existing deleteConversation path partially: remove only the
+        // messages bucket without touching the convo list.
+        UserDefaults.standard.removeObject(
+            forKey: "qaudion.conv.msgs.\(conversationId.uuidString.lowercased())"
+        )
+        // Reset preview on the conversation row.
+        store.recordNewMessage(
+            conversationId: conversationId,
+            lastMessagePreview: "",
+            lastActivity: Date(),
+            incrementUnread: false
+        )
+        refreshFromStore()
+    }
+
+    /// W93: server-side block/unblock via ContactsApi. Returns true on
+    /// success. Idempotent semantically (blocking an already-blocked
+    /// contact returns success per server behaviour).
+    func toggleBlock(appState: AppState) async -> Bool {
+        guard let provider = appState.liveProvider else { return false }
+        do {
+            try await provider.contactsApi.blockContact(userId: peerUserId)
+            return true
+        } catch {
+            print("[ChatContainer] block failed: \(error)")
+            return false
+        }
+    }
+
     /// W90: clear the active-peer hint so inbound banners resume firing
     /// once the user navigates away. Called from
     /// `ChatDetailScreen.onDisappear`.

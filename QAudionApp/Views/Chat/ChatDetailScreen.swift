@@ -344,7 +344,33 @@ struct ChatDetailScreen: View {
             .disabled(container.viewModel.conversation.kind == .group)
             .accessibilityLabel("Chiamata video")
 
-            Button(action: { /* TODO: chat info menu */ }) {
+            // W93: overflow menu — clear chat history + block / unblock
+            // contact. The local-store wipe is immediate; block / unblock
+            // hits ContactsApi.blockContact via the persistent backend.
+            Menu {
+                Button(role: .destructive) {
+                    container.clearLocalHistory()
+                    snackbar?.show(.init(
+                        text: "Cronologia locale cancellata.",
+                        severity: .info,
+                        durationSeconds: 2))
+                } label: {
+                    Label("Svuota cronologia", systemImage: "tray")
+                }
+                Button(role: .destructive) {
+                    Task {
+                        let ok = await container.toggleBlock(appState: appState)
+                        await MainActor.run {
+                            snackbar?.show(.init(
+                                text: ok ? "Contatto bloccato." : "Operazione fallita.",
+                                severity: ok ? .info : .error,
+                                durationSeconds: 2))
+                        }
+                    }
+                } label: {
+                    Label("Blocca contatto", systemImage: "hand.raised.fill")
+                }
+            } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(scheme.onSurface)
