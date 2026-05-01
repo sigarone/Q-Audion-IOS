@@ -27,6 +27,15 @@ struct ImageBubbleContent: View {
     /// for photo-library write permission the first time
     /// `UIImageWriteToSavedPhotosAlbum` runs.
     @State private var saveAlertVisible: Bool = false
+    /// W100: share sheet target wrapper for `.sheet(item:)`. The
+    /// activity items list contains either the on-disk URL (when the
+    /// JPEG cache hit) or the in-memory UIImage (fallback).
+    @State private var sharingTarget: ImageShareTarget? = nil
+
+    private struct ImageShareTarget: Identifiable {
+        let id = UUID()
+        let activityItems: [Any]
+    }
 
     var body: some View {
         Group {
@@ -49,6 +58,22 @@ struct ImageBubbleContent: View {
                             } label: {
                                 Label("Salva in Foto", systemImage: "square.and.arrow.down")
                             }
+                            // W100: share sheet — AirDrop / Files /
+                            // Messages / Mail. Prefer the on-disk URL
+                            // so receivers get the original JPEG with
+                            // mime preserved; fall back to UIImage if
+                            // path is missing.
+                            Button {
+                                if let path = mediaLocalPath, !path.isEmpty {
+                                    sharingTarget = ImageShareTarget(
+                                        activityItems: [URL(fileURLWithPath: path)]
+                                    )
+                                } else {
+                                    sharingTarget = ImageShareTarget(activityItems: [img])
+                                }
+                            } label: {
+                                Label("Condividi", systemImage: "square.and.arrow.up")
+                            }
                         }
                 } else {
                     placeholderBox
@@ -67,6 +92,9 @@ struct ImageBubbleContent: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("L'immagine è ora nella libreria Foto.")
+        }
+        .sheet(item: $sharingTarget) { target in
+            ActivityShareSheet(activityItems: target.activityItems)
         }
     }
 
