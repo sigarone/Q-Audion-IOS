@@ -61,6 +61,10 @@ struct ChatDetailScreen: View {
     /// separate buttons in the composer row.
     @State private var showAttachmentChoice: Bool = false
     @State private var showCameraPicker: Bool = false
+    /// W145: pending message id for the "Elimina per tutti" confirm
+    /// dialog. Non-nil → the dialog is up; tapping the destructive
+    /// button fires container.deleteMessage and clears the state.
+    @State private var pendingDeleteForAllId: UUID? = nil
 
     // Stub values for the SessionStatusStrip until the engine wires them.
     private let stubConfidence: Double = 0.92
@@ -295,19 +299,10 @@ struct ChatDetailScreen: View {
                     ))
                 },
                 onDeleteForAll: {
-                    // W86: ship a qa_ctl:1 t="delete" envelope. Container
-                    // applies the local tombstone immediately + sends the
-                    // envelope to the peer. Spoof check on the receiver
-                    // ensures only the original sender can delete.
-                    if let target = container.viewModel.messages
-                        .first(where: { $0.id == msgIdWrapper.id }) {
-                        container.deleteMessage(target)
-                        snackbar?.show(.init(
-                            text: "Messaggio eliminato per tutti.",
-                            severity: .info,
-                            durationSeconds: 2
-                        ))
-                    }
+                    // W145: don't fire the destructive action straight
+                    // away — surface a confirm dialog. The actual delete
+                    // runs from the dialog's destructive button below.
+                    pendingDeleteForAllId = msgIdWrapper.id
                 },
                 onDeleteForMe: {
                     // TODO(engine): delete-local da ConversationStore.
@@ -328,6 +323,38 @@ struct ChatDetailScreen: View {
             // half the screen, which is plenty for the 6-emoji row +
             // up to 4 action rows.
             .presentationDetents([.medium])
+        }
+        // W145: confirm before "delete for everyone". This is a
+        // destructive action that ships a qa_ctl:1 t="delete" envelope
+        // to the peer — easy to tap by accident, hard to undo.
+        .confirmationDialog(
+            "Eliminare il messaggio per tutti?",
+            isPresented: Binding(
+                get: { pendingDeleteForAllId != nil },
+                set: { if !$0 { pendingDeleteForAllId = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Elimina per tutti", role: .destructive) {
+                guard let id = pendingDeleteForAllId,
+                      let target = container.viewModel.messages
+                        .first(where: { $0.id == id }) else {
+                    pendingDeleteForAllId = nil
+                    return
+                }
+                container.deleteMessage(target)
+                snackbar?.show(.init(
+                    text: "Messaggio eliminato per tutti.",
+                    severity: .info,
+                    durationSeconds: 2
+                ))
+                pendingDeleteForAllId = nil
+            }
+            Button("Annulla", role: .cancel) {
+                pendingDeleteForAllId = nil
+            }
+        } message: {
+            Text("Il destinatario non potrà più leggerlo. L'azione non può essere annullata.")
         }
     }
 
