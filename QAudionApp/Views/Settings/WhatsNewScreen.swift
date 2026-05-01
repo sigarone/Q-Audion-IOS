@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.252", date: "2026-05-01",
+              title: "Quick-copy build identifier in About (W179)",
+              bullets: [
+                "About → ASSISTENZA: nuovo bottone 'Copia diagnostica rapida'",
+                "Copia in clipboard: versione · build · dispositivo · iOS",
+                "Sister di 'Contatta supporto' — stesso payload, transport diverso",
+                "Useful per Slack/Discord/issue trackers senza aprire Mail"
+              ]),
         .init(id: "v1.0.251", date: "2026-05-01",
               title: "Fix type-checker timeout in ChatDetailScreen (W251)",
               bullets: [

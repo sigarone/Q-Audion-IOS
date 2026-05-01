@@ -127,6 +127,53 @@ struct AboutSettingsScreen: View {
                             )
                         }
                         .buttonStyle(.plain)
+
+                        // W179: copy a compact build-ID blob (version,
+                        // build, device, iOS) to the clipboard so testers
+                        // can paste it into any chat / issue tracker
+                        // without opening Mail. Sister to "Contatta
+                        // supporto" — same data, different transport.
+                        Button {
+                            #if canImport(UIKit)
+                            let v = container.viewModel.appVersion
+                            let b = container.viewModel.buildNumber
+                            let device = Self.deviceModelLabel()
+                            let ios = Self.iosVersionLabel()
+                            // W179: single-segment + concatenation only.
+                            // See CLAUDE.md §13 — no multi-segment
+                            // interpolation inside the closure.
+                            let line: String =
+                                "Q-Audion v" + v + " (build " + b + ") · "
+                                + device + " · " + ios
+                            UIPasteboard.general.string = line
+                            #endif
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "doc.on.doc.fill")
+                                    .font(.system(size: 17, weight: .regular))
+                                    .foregroundStyle(scheme.primary)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Copia diagnostica rapida")
+                                        .qaudionStyle(type.bodyMedium)
+                                        .foregroundStyle(scheme.onSurface)
+                                    Text("Versione · build · dispositivo · iOS")
+                                        .qaudionStyle(type.labelSmall)
+                                        .foregroundStyle(scheme.onSurfaceVariant)
+                                }
+                                Spacer()
+                                Image(systemName: "doc.on.clipboard")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 52)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(scheme.surfaceVariant.opacity(0.4))
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                     Spacer().frame(height: 24)
                 }
