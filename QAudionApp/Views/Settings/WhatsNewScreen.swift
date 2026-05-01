@@ -22,6 +22,16 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.232–238", date: "2026-05-01",
+              title: "Diagnostica e dev tools (W162–W167)",
+              bullets: [
+                "About: 'Build installato N giorni fa' (W162)",
+                "Settings → SVILUPPATORE: Reset metadati locali (W163)",
+                "Diagnostic export: conta abbozzi · ultimo accesso · build seen (W164)",
+                "Conferma prima di Svuota cache allegati (W165)",
+                "Pulisci badge notifiche dev action (W166)",
+                "About → CONNESSIONE: stato WS live + autenticato (W167)"
+              ]),
         .init(id: "v1.0.220–231", date: "2026-05-01",
               title: "Privacy & polish marathon (W137–W160)",
               bullets: [
