@@ -490,6 +490,28 @@ struct ChatDetailScreen: View {
         }
     }
 
+    /// W127: scan plaintext for http(s) URLs using NSDataDetector and
+    /// build an AttributedString where each match is tagged with
+    /// `.link = url` so SwiftUI Text renders them tappable. Returns
+    /// the un-attributed body on detector failure (extremely rare).
+    private static func attributedBody(_ raw: String, linkColor: Color) -> AttributedString {
+        var attr = AttributedString(raw)
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue
+        ) else { return attr }
+        let ns = raw as NSString
+        let matches = detector.matches(in: raw, options: [],
+                                       range: NSRange(location: 0, length: ns.length))
+        for match in matches {
+            guard let url = match.url,
+                  let attrRange = Range(match.range, in: attr) else { continue }
+            attr[attrRange].link = url
+            attr[attrRange].foregroundColor = linkColor
+            attr[attrRange].underlineStyle = .single
+        }
+        return attr
+    }
+
     @ViewBuilder
     private func messageRow(for msg: Message) -> some View {
         let variant: MessageBubbleVariant = (msg.direction == .outgoing) ? .sent : .received
@@ -544,10 +566,16 @@ struct ChatDetailScreen: View {
                     durationMs: dur
                 )
             } else {
-                Text(msg.plaintext)
+                // W127: AttributedString with NSDataDetector-style URL
+                // detection so http(s) links in the message body render
+                // as tappable. Text on iOS 15+ honors AttributedRun.link
+                // and styles + handles tap automatically. Falls back to
+                // plain string if construction fails.
+                Text(Self.attributedBody(msg.plaintext, linkColor: extras.success))
                     .qaudionStyle(type.bodyMedium)
                     .foregroundStyle(scheme.onSurface)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .tint(extras.success)
             }
         }
         .onLongPressGesture(minimumDuration: 0.4) {
