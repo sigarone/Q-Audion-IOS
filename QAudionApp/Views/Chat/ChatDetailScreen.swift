@@ -630,129 +630,13 @@ struct ChatDetailScreen: View {
         }
     }
 
-    /// W127: scan plaintext for http(s) URLs using NSDataDetector and
-    /// build an AttributedString where each match is tagged with
-    /// `.link = url` so SwiftUI Text renders them tappable. Returns
-    /// the un-attributed body on detector failure (extremely rare).
-    /// W148: also style backtick-wrapped runs as monospaced inline
-    /// code (single backticks, no language). The backticks themselves
-    /// are stripped from the visible string.
+    /// W127/W148/W149/W152: delegate to MarkdownLiteParser for
+    /// monospaced code spans, bold/italic emphasis, and tappable URL
+    /// detection. The heavy lifting lives in
+    /// `Services/MarkdownLiteParser.swift` so this view file's
+    /// type-checker job stays small.
     private static func attributedBody(_ raw: String, linkColor: Color) -> AttributedString {
-        // W148/W149: single-pass parser strips `code`, **bold**, and
-        // *italic* markers in one walk so the resulting offsets align
-        // perfectly with the cleaned text (no chained-replacement
-        // offset drift). Output: cleaned string + per-style range
-        // arrays in utf16 indices of the cleaned string.
-        let parsed = Self.parseMarkdownLite(raw)
-        var attr = AttributedString(parsed.cleaned)
-        for r in parsed.code {
-            guard let attrRange = Range(NSRange(location: r.lowerBound, length: r.count),
-                                        in: attr) else { continue }
-            attr[attrRange].font = .system(.body, design: .monospaced)
-        }
-        for r in parsed.bold {
-            guard let attrRange = Range(NSRange(location: r.lowerBound, length: r.count),
-                                        in: attr) else { continue }
-            attr[attrRange].inlinePresentationIntent = .stronglyEmphasized
-        }
-        for r in parsed.italic {
-            guard let attrRange = Range(NSRange(location: r.lowerBound, length: r.count),
-                                        in: attr) else { continue }
-            attr[attrRange].inlinePresentationIntent = .emphasized
-        }
-        // W152: privacy gate — skip URL auto-detection when the user
-        // has flipped 'Anteprima link' off. The flag lives in standard
-        // UserDefaults and is read directly so this static helper
-        // doesn't need an environment dependency.
-        guard UserDefaults.standard.object(forKey: "qaudion.privacy.detect_links") == nil
-              || UserDefaults.standard.bool(forKey: "qaudion.privacy.detect_links") else {
-            return attr
-        }
-        // Then layer URL detection on top of the cleaned text.
-        guard let detector = try? NSDataDetector(
-            types: NSTextCheckingResult.CheckingType.link.rawValue
-        ) else { return attr }
-        let ns = parsed.cleaned as NSString
-        let matches = detector.matches(in: parsed.cleaned, options: [],
-                                       range: NSRange(location: 0, length: ns.length))
-        for match in matches {
-            guard let url = match.url,
-                  let attrRange = Range(match.range, in: attr) else { continue }
-            attr[attrRange].link = url
-            attr[attrRange].foregroundColor = linkColor
-            attr[attrRange].underlineStyle = .single
-        }
-        return attr
-    }
-
-    /// W148/W149: unified single-pass markdown-lite parser. Recognises:
-    ///   - `code spans`     → monospace
-    ///   - **bold**         → bold weight
-    ///   - *italic*         → italic
-    /// Markers are stripped; the returned ranges are utf16 offsets
-    /// into the cleaned string so they apply directly to the
-    /// AttributedString built from it. Inside a `code` span we DON'T
-    /// parse emphasis. Unmatched markers pass through verbatim.
-    private struct ParsedMarkdownLite {
-        let cleaned: String
-        let code: [Range<Int>]
-        let bold: [Range<Int>]
-        let italic: [Range<Int>]
-    }
-
-    private static func parseMarkdownLite(_ raw: String) -> ParsedMarkdownLite {
-        var cleaned = ""
-        var code: [Range<Int>] = []
-        var bold: [Range<Int>] = []
-        var italic: [Range<Int>] = []
-        var i = raw.startIndex
-        while i < raw.endIndex {
-            if raw[i] == "`" {
-                let afterOpen = raw.index(after: i)
-                if let close = raw[afterOpen...].firstIndex(of: "`"),
-                   close != afterOpen {
-                    let inner = String(raw[afterOpen..<close])
-                    let start = cleaned.utf16.count
-                    cleaned += inner
-                    let end = cleaned.utf16.count
-                    code.append(start..<end)
-                    i = raw.index(after: close)
-                    continue
-                }
-            }
-            if raw[i] == "*" {
-                let nextIdx = raw.index(after: i)
-                if nextIdx < raw.endIndex && raw[nextIdx] == "*" {
-                    let afterOpen = raw.index(after: nextIdx)
-                    if let close = raw.range(of: "**", range: afterOpen..<raw.endIndex)?.lowerBound,
-                       close != afterOpen {
-                        let inner = String(raw[afterOpen..<close])
-                        let start = cleaned.utf16.count
-                        cleaned += inner
-                        let end = cleaned.utf16.count
-                        bold.append(start..<end)
-                        i = raw.index(close, offsetBy: 2)
-                        continue
-                    }
-                } else {
-                    let afterOpen = nextIdx
-                    if let close = raw[afterOpen...].firstIndex(of: "*"),
-                       close != afterOpen {
-                        let inner = String(raw[afterOpen..<close])
-                        let start = cleaned.utf16.count
-                        cleaned += inner
-                        let end = cleaned.utf16.count
-                        italic.append(start..<end)
-                        i = raw.index(after: close)
-                        continue
-                    }
-                }
-            }
-            cleaned.append(raw[i])
-            i = raw.index(after: i)
-        }
-        return ParsedMarkdownLite(cleaned: cleaned,
-                                  code: code, bold: bold, italic: italic)
+        return MarkdownLiteParser.attributedBody(raw, linkColor: linkColor)
     }
 
     @ViewBuilder
