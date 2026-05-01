@@ -36,6 +36,11 @@ struct AboutSettingsScreen: View {
                         kvRow("App", container.viewModel.appVersion, mono: false)
                         kvRow("Build", container.viewModel.buildNumber, mono: true)
                         kvRow("Commit", container.viewModel.gitCommitShort, mono: true)
+                        // W158: capture first-launch timestamp once,
+                        // then surface it as "Membro da" so the user
+                        // can see how long the app has been on this
+                        // device. Stamped lazily via Self.firstSeen().
+                        kvRow("Membro da", Self.firstSeenLabel(), mono: false)
                     }
                     section("PIATTAFORMA") {
                         kvRow("Target iOS", "iOS \(container.viewModel.iosDeploymentTarget)+", mono: true)
@@ -65,6 +70,27 @@ struct AboutSettingsScreen: View {
         VStack(spacing: 8) {
             content()
         }
+    }
+
+    /// W158: read or stamp the first-launch timestamp under
+    /// `qaudion.firstSeen`. Idempotent — only writes the value the
+    /// first time this helper runs on a given device.
+    private static func firstSeenLabel() -> String {
+        let key = "qaudion.firstSeen"
+        let store = UserDefaults.standard
+        let date: Date = {
+            if let prior = store.object(forKey: key) as? Date {
+                return prior
+            }
+            let now = Date()
+            store.set(now, forKey: key)
+            return now
+        }()
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f.string(from: date)
     }
 
     // MARK: - Rows
