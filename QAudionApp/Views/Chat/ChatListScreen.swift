@@ -437,7 +437,33 @@ struct ChatListScreen: View {
                             .qaudionStyle(type.labelSmall)
                             .foregroundStyle(scheme.onSurfaceVariant)
                     }
-                    if let preview = item.lastMessagePreview {
+                    // W138: if a composer draft exists for this
+                    // conversation, surface it as the row preview with
+                    // a leading "Bozza:" tag. WhatsApp / iMessage idiom
+                    // — keeps the user aware of unfinished thoughts
+                    // without making them open every chat.
+                    if let draftPreview = draftPreviewSnippet(for: item.conversationId) {
+                        HStack {
+                            HStack(spacing: 4) {
+                                Text("Bozza:")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(extras.warning)
+                                Text(draftPreview)
+                                    .qaudionStyle(type.bodySmall)
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                                    .italic()
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 6)
+                            if item.unreadCount > 0 {
+                                Text("\(item.unreadCount)")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(scheme.onPrimary)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Capsule().fill(scheme.primary))
+                            }
+                        }
+                    } else if let preview = item.lastMessagePreview {
                         HStack {
                             Text(preview)
                                 .qaudionStyle(type.bodySmall)
@@ -505,6 +531,22 @@ struct ChatListScreen: View {
                 Label("Elimina", systemImage: "trash")
             }
         }
+    }
+
+    /// W138: read the persisted composer draft (if any) for this
+    /// conversation and return a single-line snippet to surface in the
+    /// row. Returns nil when no draft exists. Snippet capped at 80
+    /// characters with an ellipsis since rows are tight.
+    private func draftPreviewSnippet(for conversationId: UUID) -> String? {
+        let raw = ComposerDraftStore.load(for: conversationId)
+        let collapsed = raw
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !collapsed.isEmpty else { return nil }
+        if collapsed.count > 80 {
+            return String(collapsed.prefix(80)) + "…"
+        }
+        return collapsed
     }
 
     private func formatTime(_ date: Date) -> String {
