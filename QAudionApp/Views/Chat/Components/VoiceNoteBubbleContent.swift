@@ -101,9 +101,21 @@ struct VoiceNoteBubbleContent: View {
                 }
             }
             Spacer(minLength: 4)
-            // W95: speed control. Visible only while THIS note is the
-            // active one — tapping the chip cycles 1× → 1.5× → 2× → 1×.
+            // W95+W105: speed control + ±15s skip. Only visible while
+            // THIS note is the active one. Skip-back/forward use the
+            // VoiceNotePlayer.skip API; chip cycles speed.
             if isActive {
+                Button {
+                    player.skip(seconds: -15.0, messageId: messageId)
+                } label: {
+                    Image(systemName: "gobackward.15")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(scheme.onSurface)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Indietro 15 secondi")
+
                 Button {
                     player.cyclePlaybackRate()
                 } label: {
@@ -118,6 +130,17 @@ struct VoiceNoteBubbleContent: View {
                         .foregroundStyle(scheme.onSurface)
                 }
                 .buttonStyle(.plain)
+
+                Button {
+                    player.skip(seconds: 15.0, messageId: messageId)
+                } label: {
+                    Image(systemName: "goforward.15")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(scheme.onSurface)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Avanti 15 secondi")
             }
             Text(durationLabel)
                 .qaudionStyle(type.labelSmall)
