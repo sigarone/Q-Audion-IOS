@@ -33,6 +33,23 @@ enum AttachmentCacheCleaner {
         return (sizeOfSubdir("voicenotes"), sizeOfSubdir("images"))
     }
 
+    /// W128: count of items in each cache subdir. Useful for stats /
+    /// diagnostics ('243 voice notes · 87 images').
+    static func cacheCounts() -> (voiceNotes: Int, images: Int) {
+        return (countSubdir("voicenotes"), countSubdir("images"))
+    }
+
+    private static func countSubdir(_ name: String) -> Int {
+        let fm = FileManager.default
+        guard let cachesBase = try? fm.url(
+            for: .cachesDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: false
+        ) else { return 0 }
+        let dir = cachesBase.appendingPathComponent(name, isDirectory: true)
+        guard fm.fileExists(atPath: dir.path) else { return 0 }
+        return (try? fm.contentsOfDirectory(atPath: dir.path).count) ?? 0
+    }
+
     private static func sizeOfSubdir(_ name: String) -> UInt64 {
         let fm = FileManager.default
         guard let cachesBase = try? fm.url(

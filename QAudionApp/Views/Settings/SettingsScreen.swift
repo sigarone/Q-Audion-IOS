@@ -71,9 +71,13 @@ struct SettingsScreen: View {
         if totalMb < 0.1 {
             return "Vuota — nessun allegato in cache"
         }
+        let c = AttachmentCacheCleaner.cacheCounts()
         let voiceMb = Double(s.voiceNotes) / (1024.0 * 1024.0)
         let imgMb = Double(s.images) / (1024.0 * 1024.0)
-        return String(format: "Voice: %.1f MB · Immagini: %.1f MB", voiceMb, imgMb)
+        // W128: include item counts so the user knows whether the disk
+        // usage comes from many small notes vs. a few big images.
+        return String(format: "%d voice (%.1f MB) · %d immagini (%.1f MB)",
+                      c.voiceNotes, voiceMb, c.images, imgMb)
     }
 
     var body: some View {
