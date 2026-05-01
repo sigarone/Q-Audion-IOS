@@ -316,7 +316,11 @@ struct ChatDetailScreen: View {
                         severity: .info,
                         durationSeconds: 3
                     ))
-                }
+                },
+                // W141: surface the sentAt so BubbleActionSheet can
+                // hide the Modifica row past the 15-min edit window.
+                sentAt: container.viewModel.messages
+                    .first(where: { $0.id == msgIdWrapper.id })?.sentAt
             )
             // iOS 16.0 deployment target: `.medium` is the only detent
             // available; `.height(_:)` and `.presentationDragIndicator`

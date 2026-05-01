@@ -28,6 +28,21 @@ struct BubbleActionSheet: View {
     let onCopy: () -> Void
     let onDeleteForAll: () -> Void
     let onDeleteForMe: () -> Void
+    /// W141: edit eligibility window. When the message was sent more
+    /// than `editWindowSeconds` ago, "Modifica" is hidden — Telegram
+    /// uses 48h, WhatsApp 15min; we follow WhatsApp by default.
+    /// Caller passes the message's `sentAt` (or nil to disable the
+    /// gate, useful for tests / messages without a sentAt).
+    var sentAt: Date? = nil
+    var editWindowSeconds: TimeInterval = 15 * 60
+
+    /// True when `sentAt` is set AND the elapsed time is within the
+    /// window. nil sentAt → grandfathered (true), preserves the old
+    /// behaviour for any caller that hasn't migrated.
+    private var withinEditWindow: Bool {
+        guard let sentAt else { return true }
+        return Date().timeIntervalSince(sentAt) <= editWindowSeconds
+    }
 
     private let emojis = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 
@@ -41,7 +56,11 @@ struct BubbleActionSheet: View {
             Divider().background(scheme.outline.opacity(0.4))
 
             VStack(spacing: 0) {
-                if isOwn && isText {
+                // W141: edit row only when own + text + still within
+                // the edit window. Past the cutoff it disappears
+                // entirely so the user doesn't try and get a surprise
+                // failure from the engine.
+                if isOwn && isText && withinEditWindow {
                     actionRow(label: "Modifica",
                               icon: "pencil",
                               danger: false,
