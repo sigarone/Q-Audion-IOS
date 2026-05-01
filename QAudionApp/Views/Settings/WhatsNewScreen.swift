@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.266", date: "2026-05-02",
+              title: "Spazio libero su disco in About (W266)",
+              bullets: [
+                "About → STATO SISTEMA: nuova riga 'Spazio libero'",
+                "Usa volumeAvailableCapacityForImportantUsage (cifra realistica)",
+                "Aiuta i tester a indagare upload falliti o eviction cache",
+                "Formattato in locale italiana via ByteCountFormatter"
+              ]),
         .init(id: "v1.0.265", date: "2026-05-02",
               title: "STATO section in Notifiche (pending + delivered) (W265)",
               bullets: [

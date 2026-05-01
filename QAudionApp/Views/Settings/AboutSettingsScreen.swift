@@ -70,6 +70,9 @@ struct AboutSettingsScreen: View {
                         kvRow("Uptime processo", Self.processUptimeLabel(), mono: true)
                         kvRow("Stato termico", Self.thermalStateLabel(), mono: false)
                         kvRow("Core CPU disponibili", Self.processorCountLabel(), mono: true)
+                        // W266: free disk space — useful when testers
+                        // hit "upload failed" or cache eviction issues.
+                        kvRow("Spazio libero", Self.availableDiskSpaceLabel(), mono: true)
                     }
                     // W159: local data summary — gives the user a
                     // sense of how much chat content lives on this
@@ -301,6 +304,34 @@ struct AboutSettingsScreen: View {
     /// available to user-space — system services may have parked some).
     private static func processorCountLabel() -> String {
         return String(ProcessInfo.processInfo.activeProcessorCount)
+    }
+
+    /// W266: free disk space label, e.g. "12,4 GB liberi" or "?".
+    /// Uses .volumeAvailableCapacityForImportantUsage which honors
+    /// iOS's purgeable-cache reservation — gives testers the realistic
+    /// number for "how much can my app actually grow into" not the
+    /// absolute filesystem free space. Italian locale formatting.
+    private static func availableDiskSpaceLabel() -> String {
+        let fm = FileManager.default
+        guard let docs = try? fm.url(for: .documentDirectory,
+                                     in: .userDomainMask,
+                                     appropriateFor: nil,
+                                     create: false) else {
+            return "?"
+        }
+        let keys: [URLResourceKey] = [.volumeAvailableCapacityForImportantUsageKey]
+        guard let values = try? docs.resourceValues(forKeys: Set(keys)),
+              let bytes = values.volumeAvailableCapacityForImportantUsage else {
+            return "?"
+        }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useGB, .useMB]
+        formatter.countStyle = .decimal
+        formatter.locale = Locale(identifier: "it_IT")
+        // Build the label via String concat (no \(...) inside a closure
+        // context). See CLAUDE.md §13.
+        let formatted: String = formatter.string(fromByteCount: Int64(bytes))
+        return formatted + " liberi"
     }
 
     /// W162: stamp the first-launch timestamp for THIS build number
