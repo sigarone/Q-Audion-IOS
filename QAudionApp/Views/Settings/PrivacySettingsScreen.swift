@@ -88,6 +88,13 @@ struct PrivacySettingsScreen: View {
     @AppStorage("qaudion.privacy.detect_links")
     private var detectLinks: Bool = true
 
+    /// W155: control whether unsent composer drafts are surfaced on the
+    /// chat list as "Bozza: …" rows. Off → list always shows the last
+    /// message preview, drafts stay invisible from the home screen
+    /// (still persisted, still restored when entering the chat).
+    @AppStorage("qaudion.privacy.show_drafts_in_list")
+    private var showDraftsInList: Bool = true
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -134,6 +141,14 @@ struct PrivacySettingsScreen: View {
                             title: "Anteprima link",
                             subtitle: "Rileva URL nei messaggi e li rende toccabili",
                             isOn: $detectLinks
+                        )
+                        // W155: hide drafts from the chat list so a
+                        // glance at the home screen doesn't reveal
+                        // half-typed messages.
+                        SettingsToggleRow(
+                            title: "Mostra abbozzi nella lista",
+                            subtitle: "Indica le chat con messaggi non inviati",
+                            isOn: $showDraftsInList
                         )
                     }
 

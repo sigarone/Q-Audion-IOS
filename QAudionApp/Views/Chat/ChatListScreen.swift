@@ -612,7 +612,19 @@ struct ChatListScreen: View {
     /// conversation and return a single-line snippet to surface in the
     /// row. Returns nil when no draft exists. Snippet capped at 80
     /// characters with an ellipsis since rows are tight.
+    /// W155: respects the `qaudion.privacy.show_drafts_in_list` toggle
+    /// — when off, this returns nil regardless of stored content so
+    /// the list never reveals unsent text from the home screen.
     private func draftPreviewSnippet(for conversationId: UUID) -> String? {
+        // Read the privacy toggle directly out of UserDefaults so
+        // this helper doesn't need an environment dependency. Default
+        // is true (show drafts), preserving existing behaviour for
+        // users who never toggled it.
+        let prefsKey = "qaudion.privacy.show_drafts_in_list"
+        if UserDefaults.standard.object(forKey: prefsKey) != nil
+           && !UserDefaults.standard.bool(forKey: prefsKey) {
+            return nil
+        }
         let raw = ComposerDraftStore.load(for: conversationId)
         let collapsed = raw
             .replacingOccurrences(of: "\n", with: " ")
