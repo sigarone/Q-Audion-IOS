@@ -45,6 +45,15 @@ struct AboutSettingsScreen: View {
                     section("PIATTAFORMA") {
                         kvRow("Target iOS", "iOS \(container.viewModel.iosDeploymentTarget)+", mono: true)
                     }
+                    // W159: local data summary — gives the user a
+                    // sense of how much chat content lives on this
+                    // device without exposing any peer content.
+                    section("DATI LOCALI") {
+                        let stats = Self.localDataStats()
+                        kvRow("Conversazioni", "\(stats.conversations)", mono: true)
+                        kvRow("Messaggi totali", "\(stats.messages)", mono: true)
+                        kvRow("Abbozzi salvati", "\(stats.drafts)", mono: true)
+                    }
                     section("SICUREZZA") {
                         statusRow("ML-KEM-1024 (PQC)",
                                   enabled: container.viewModel.mlKem1024Enabled)
@@ -70,6 +79,45 @@ struct AboutSettingsScreen: View {
         VStack(spacing: 8) {
             content()
         }
+    }
+
+    /// W159: local data stats. Walks the in-memory UserDefaults
+    /// dictionary to count conversations / messages / drafts. Cheap
+    /// — no disk I/O beyond the initial defaults plist load.
+    private struct LocalDataStats {
+        let conversations: Int
+        let messages: Int
+        let drafts: Int
+    }
+
+    private static func localDataStats() -> LocalDataStats {
+        let store = UserDefaults.standard
+        let allKeys = store.dictionaryRepresentation().keys
+        let convKey = "qaudion.conv.list"
+        let msgPrefix = "qaudion.conv.msgs."
+        let draftPrefix = "qaudion.composer.draft."
+
+        // Conversations are persisted as a single JSON array under
+        // qaudion.conv.list — count its elements if available.
+        var conversations = 0
+        if let data = store.data(forKey: convKey),
+           let arr = (try? JSONSerialization.jsonObject(with: data)) as? [Any] {
+            conversations = arr.count
+        }
+
+        var messages = 0
+        for k in allKeys where k.hasPrefix(msgPrefix) {
+            if let data = store.data(forKey: k),
+               let arr = (try? JSONSerialization.jsonObject(with: data)) as? [Any] {
+                messages += arr.count
+            }
+        }
+
+        var drafts = 0
+        for k in allKeys where k.hasPrefix(draftPrefix) { drafts += 1 }
+
+        return LocalDataStats(conversations: conversations,
+                              messages: messages, drafts: drafts)
     }
 
     /// W158: read or stamp the first-launch timestamp under
