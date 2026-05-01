@@ -44,6 +44,12 @@ final class PresenceService: ObservableObject {
         mgr.statusChanged = { [weak self] snapshot in
             DispatchQueue.main.async {
                 self?.statuses = snapshot
+                // W142: stamp "last seen" for every userId observed
+                // online. The tracker throttles internally so a noisy
+                // presence stream doesn't thrash UserDefaults.
+                for (userId, status) in snapshot where status == .online {
+                    LastSeenTracker.recordOnline(userId)
+                }
             }
         }
         self.manager = mgr
