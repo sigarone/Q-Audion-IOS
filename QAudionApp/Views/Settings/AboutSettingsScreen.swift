@@ -62,6 +62,15 @@ struct AboutSettingsScreen: View {
                         kvRow("Dispositivo", Self.deviceModelLabel(), mono: false)
                         kvRow("iOS in uso", Self.iosVersionLabel(), mono: true)
                     }
+                    // W264: live system telemetry. Useful for testers
+                    // chasing performance regressions or thermal
+                    // throttling during long voice/video calls. All
+                    // values are read on each render — cheap (no I/O).
+                    section("STATO SISTEMA") {
+                        kvRow("Uptime processo", Self.processUptimeLabel(), mono: true)
+                        kvRow("Stato termico", Self.thermalStateLabel(), mono: false)
+                        kvRow("Core CPU disponibili", Self.processorCountLabel(), mono: true)
+                    }
                     // W159: local data summary — gives the user a
                     // sense of how much chat content lives on this
                     // device without exposing any peer content.
@@ -252,6 +261,46 @@ struct AboutSettingsScreen: View {
         #else
         return "?"
         #endif
+    }
+
+    /// W264: process uptime as a short Italian label, e.g. "3h 12m"
+    /// or "47s". Computed from ProcessInfo.systemUptime which is the
+    /// device's monotonic uptime — we anchor on
+    /// StaticUptimeAnchor.processStartedAt for a real process timer.
+    /// Done as a static helper to keep the call-site interpolation
+    /// out of the SwiftUI body. See CLAUDE.md §13.
+    private static func processUptimeLabel() -> String {
+        // processStartedAt is a snapshot of ProcessInfo.systemUptime at
+        // process-launch — both endpoints are TimeIntervals on the same
+        // monotonic clock, so subtraction gives elapsed seconds.
+        let now: TimeInterval = ProcessInfo.processInfo.systemUptime
+        let elapsed: TimeInterval = now - StaticUptimeAnchor.processStartedAt
+        let secs = Int(elapsed)
+        if secs < 60 { return String(secs) + "s" }
+        let mins = secs / 60
+        if mins < 60 { return String(mins) + "m " + String(secs % 60) + "s" }
+        let hours = mins / 60
+        return String(hours) + "h " + String(mins % 60) + "m"
+    }
+
+    /// W264: thermal state as a friendly Italian label. The .nominal
+    /// state is normal; .fair / .serious / .critical indicate the
+    /// device is throttling. Useful when testers report calls dropping
+    /// quality after a few minutes — could be thermal-related.
+    private static func thermalStateLabel() -> String {
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal:  return "Normale"
+        case .fair:     return "Tiepido"
+        case .serious:  return "Caldo"
+        case .critical: return "Critico"
+        @unknown default: return "Sconosciuto"
+        }
+    }
+
+    /// W264: number of activeProcessors (the CPU cores currently
+    /// available to user-space — system services may have parked some).
+    private static func processorCountLabel() -> String {
+        return String(ProcessInfo.processInfo.activeProcessorCount)
     }
 
     /// W162: stamp the first-launch timestamp for THIS build number
