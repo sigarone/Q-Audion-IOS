@@ -614,13 +614,28 @@ struct ChatDetailScreen: View {
     /// build an AttributedString where each match is tagged with
     /// `.link = url` so SwiftUI Text renders them tappable. Returns
     /// the un-attributed body on detector failure (extremely rare).
+    /// W148: also style backtick-wrapped runs as monospaced inline
+    /// code (single backticks, no language). The backticks themselves
+    /// are stripped from the visible string.
     private static func attributedBody(_ raw: String, linkColor: Color) -> AttributedString {
-        var attr = AttributedString(raw)
+        // First pass: strip backtick wrappers and remember their
+        // ranges in the cleaned string. We rebuild incrementally
+        // rather than running regex over AttributedString (which
+        // doesn't have first-class match support).
+        let (cleaned, codeRanges) = Self.stripBackticks(raw)
+        var attr = AttributedString(cleaned)
+        // Apply monospaced + subtle background to each code run.
+        for r in codeRanges {
+            guard let attrRange = Range(NSRange(location: r.lowerBound, length: r.count),
+                                        in: attr) else { continue }
+            attr[attrRange].font = .system(.body, design: .monospaced)
+        }
+        // Then layer URL detection on top of the cleaned text.
         guard let detector = try? NSDataDetector(
             types: NSTextCheckingResult.CheckingType.link.rawValue
         ) else { return attr }
-        let ns = raw as NSString
-        let matches = detector.matches(in: raw, options: [],
+        let ns = cleaned as NSString
+        let matches = detector.matches(in: cleaned, options: [],
                                        range: NSRange(location: 0, length: ns.length))
         for match in matches {
             guard let url = match.url,
@@ -630,6 +645,39 @@ struct ChatDetailScreen: View {
             attr[attrRange].underlineStyle = .single
         }
         return attr
+    }
+
+    /// W148: walk the input character-by-character and pull out runs
+    /// wrapped in single backticks (`like this`). Returns the cleaned
+    /// string with the backticks removed plus the integer ranges
+    /// (in the cleaned string) of each code span. Unmatched backticks
+    /// (no closing pair) are preserved verbatim. Triple-backtick
+    /// fences are out of scope — we treat them as three separate
+    /// single-backticks for now.
+    private static func stripBackticks(_ raw: String) -> (cleaned: String, ranges: [Range<Int>]) {
+        var cleaned = ""
+        var ranges: [Range<Int>] = []
+        var i = raw.startIndex
+        while i < raw.endIndex {
+            if raw[i] == "`" {
+                // Try to find the matching closer; otherwise emit the
+                // backtick verbatim.
+                let afterOpen = raw.index(after: i)
+                if let close = raw[afterOpen...].firstIndex(of: "`"),
+                   close != afterOpen {
+                    let inner = String(raw[afterOpen..<close])
+                    let start = cleaned.utf16.count
+                    cleaned += inner
+                    let end = cleaned.utf16.count
+                    ranges.append(start..<end)
+                    i = raw.index(after: close)
+                    continue
+                }
+            }
+            cleaned.append(raw[i])
+            i = raw.index(after: i)
+        }
+        return (cleaned, ranges)
     }
 
     @ViewBuilder
