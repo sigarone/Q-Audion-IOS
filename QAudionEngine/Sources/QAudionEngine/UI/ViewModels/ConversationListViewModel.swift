@@ -47,7 +47,16 @@ public struct ConversationListViewModel: ViewModelProtocol {
         }
         guard !searchQuery.isEmpty else { return pinnedFirst }
         let q = searchQuery.lowercased()
-        return pinnedFirst.filter { $0.peerDisplayName.lowercased().contains(q) }
+        // W104: extend search to also match the last-message preview.
+        // Useful when the user remembers a phrase but not who said it
+        // (e.g. searching "pizza" surfaces every conv mentioning food).
+        return pinnedFirst.filter { item in
+            if item.peerDisplayName.lowercased().contains(q) { return true }
+            if let preview = item.lastMessagePreview?.lowercased(), preview.contains(q) {
+                return true
+            }
+            return false
+        }
     }
 
     public static let mock = ConversationListViewModel(items: [
