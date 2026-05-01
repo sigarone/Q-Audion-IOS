@@ -47,6 +47,48 @@ final class DiagnosticsExportContainer: ObservableObject {
         lines.append("  timezone    : \(TimeZone.current.identifier)")
         lines.append("")
 
+        // ─── SYSTEM STATE (W283 — pulls from W264-W282 telemetry) ──
+        // Pre-bind every interpolated value to a local — see CLAUDE.md
+        // §13. Each line gets ONE simple local interpolation, no chains.
+        lines.append("SYSTEM STATE")
+        let pi = ProcessInfo.processInfo
+        let thermal: String = {
+            switch pi.thermalState {
+            case .nominal:   return "nominal"
+            case .fair:      return "fair"
+            case .serious:   return "serious"
+            case .critical:  return "critical"
+            @unknown default: return "?"
+            }
+        }()
+        let lowPower: String = pi.isLowPowerModeEnabled ? "yes" : "no"
+        let cores: String = String(pi.activeProcessorCount)
+        let physMemMB: String = String(pi.physicalMemory / (1024 * 1024))
+        let uptimeSec: String = String(Int(pi.systemUptime))
+        lines.append("  thermal state : \(thermal)")
+        lines.append("  low-power mode: \(lowPower)")
+        lines.append("  active cores  : \(cores)")
+        lines.append("  physical mem  : \(physMemMB) MB")
+        lines.append("  system uptime : \(uptimeSec) s")
+
+        // Free-disk: pull volumeAvailableCapacityForImportantUsage. This
+        // is the realistic "how much can grow into" number iOS exposes,
+        // accounting for purgeable caches.
+        let docsURL = try? FileManager.default.url(for: .documentDirectory,
+                                                   in: .userDomainMask,
+                                                   appropriateFor: nil,
+                                                   create: false)
+        let freeMB: String = {
+            guard let url = docsURL,
+                  let vals = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+                  let bytes = vals.volumeAvailableCapacityForImportantUsage else {
+                return "?"
+            }
+            return String(bytes / (1024 * 1024))
+        }()
+        lines.append("  free disk     : \(freeMB) MB")
+        lines.append("")
+
         // ─── AUTH STATE (no secrets) ───────────────────────────────
         lines.append("AUTH")
         lines.append("  authenticated : \(appState.isAuthenticated)")

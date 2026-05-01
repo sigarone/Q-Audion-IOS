@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.275", date: "2026-05-02",
+              title: "Diagnostics export: SYSTEM STATE section (W283)",
+              bullets: [
+                "Esporta diagnostica: nuova sezione 'SYSTEM STATE'",
+                "Aggrega thermal · low-power · cores · physical mem · uptime · free disk",
+                "Pre-bind disciplinato di ogni valore (CLAUDE.md §13)",
+                "Bug-report di QA ora si auto-include il contesto hardware"
+              ]),
         .init(id: "v1.0.274", date: "2026-05-02",
               title: "Timezone + calendar + dark-mode + mic (W279-W282)",
               bullets: [
