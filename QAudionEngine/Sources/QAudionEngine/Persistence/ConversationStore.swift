@@ -63,6 +63,68 @@ public final class ConversationStore {
         defaults.removeObject(forKey: ConversationStore.messagesKey(for: id))
     }
 
+    /// W83 — bump `lastMessagePreview` + `lastActivity` (and optionally
+    /// `unreadCount`) on the conversation row. Called whenever a new
+    /// message arrives or is sent. Without this, the chat list shows
+    /// the FIRST message preview forever and never reorders by recency.
+    ///
+    /// - Parameters:
+    ///   - id: conversation id.
+    ///   - lastMessagePreview: friendly preview (already rendered —
+    ///     pass the placeholder for cross-platform attachments, not
+    ///     raw JSON).
+    ///   - lastActivity: unix-Date of the new message.
+    ///   - incrementUnread: `true` for inbound messages received while
+    ///     the chat is closed; `false` for outbound or when the user
+    ///     is actively viewing the conversation.
+    public func recordNewMessage(conversationId id: UUID,
+                                 lastMessagePreview: String,
+                                 lastActivity: Date,
+                                 incrementUnread: Bool) {
+        var list = loadConversations()
+        guard let idx = list.firstIndex(where: { $0.id == id }) else { return }
+        let old = list[idx]
+        // Cap preview at 120 chars so the chat list doesn't render
+        // a multi-line wall on long messages.
+        let truncated: String
+        if lastMessagePreview.count > 120 {
+            truncated = String(lastMessagePreview.prefix(120)) + "…"
+        } else {
+            truncated = lastMessagePreview
+        }
+        list[idx] = Conversation(
+            id: old.id,
+            peerUserId: old.peerUserId,
+            peerDisplayName: old.peerDisplayName,
+            lastMessagePreview: truncated,
+            lastActivity: lastActivity,
+            unreadCount: incrementUnread ? old.unreadCount + 1 : old.unreadCount,
+            pinned: old.pinned,
+            kind: old.kind
+        )
+        saveConversations(list)
+    }
+
+    /// W83 — reset `unreadCount` to zero for one conversation (called
+    /// when the user opens the chat detail screen). Idempotent.
+    public func markConversationRead(id: UUID) {
+        var list = loadConversations()
+        guard let idx = list.firstIndex(where: { $0.id == id }),
+              list[idx].unreadCount > 0 else { return }
+        let old = list[idx]
+        list[idx] = Conversation(
+            id: old.id,
+            peerUserId: old.peerUserId,
+            peerDisplayName: old.peerDisplayName,
+            lastMessagePreview: old.lastMessagePreview,
+            lastActivity: old.lastActivity,
+            unreadCount: 0,
+            pinned: old.pinned,
+            kind: old.kind
+        )
+        saveConversations(list)
+    }
+
     // MARK: - Messages
 
     public func loadMessages(conversationId: UUID) -> [Message] {

@@ -339,6 +339,11 @@ struct ChatDetailScreen: View {
                 // W71: late-bind AppState so the send pipeline can encrypt
                 // + ship via WS. Idempotent.
                 container.attach(appState: appState)
+                // W83: clear the unread badge as soon as the user is
+                // looking at this conversation. Receipts handler still
+                // increments unread for messages arriving while the
+                // chat is closed; this only resets the count on open.
+                container.markRead()
                 if let last = container.viewModel.messages.last {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }

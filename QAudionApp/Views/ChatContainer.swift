@@ -125,7 +125,13 @@ final class ChatContainer: ObservableObject {
             }()
             guard peerMatch else { return }
             Task { @MainActor [weak self] in
-                self?.refreshFromStore()
+                guard let self = self else { return }
+                // W83: while the user is looking at this conversation,
+                // any inbound message bumped unreadCount on the row.
+                // Auto-clear so the badge stays at zero until the user
+                // navigates away.
+                self.store.markConversationRead(id: self.conversationId)
+                self.refreshFromStore()
             }
         }
         center.addObserver(forName: AppState.chatTypingNotification,
@@ -165,6 +171,15 @@ final class ChatContainer: ObservableObject {
             status: .sending
         )
         store.appendMessage(msg)
+        // W83: bump conversation preview + activity for outbound text.
+        // Outbound never increments unread (sender already read what
+        // they typed). Truncated preview is computed inside the store.
+        store.recordNewMessage(
+            conversationId: conversationId,
+            lastMessagePreview: text,
+            lastActivity: Date(),
+            incrementUnread: false
+        )
         composerText = ""
         refreshFromStore()
 
@@ -231,6 +246,14 @@ final class ChatContainer: ObservableObject {
         }
     }
 
+    /// W83: zero `unreadCount` for this conversation. Called by
+    /// `ChatDetailScreen.onAppear` so opening a chat clears its badge.
+    /// Idempotent — no-op if already zero.
+    func markRead() {
+        store.markConversationRead(id: conversationId)
+        refreshFromStore()
+    }
+
     /// W79: ship a recorded voice note over the existing 1:1 chat path.
     /// Pipeline: encrypt+upload via `ChatVoiceNoteSender` → use the
     /// resulting `qfile` v3 marker JSON as the plaintext of a normal
@@ -272,6 +295,12 @@ final class ChatContainer: ObservableObject {
             mediaMimeType: recording.mimeType
         )
         store.appendMessage(local)
+        store.recordNewMessage(
+            conversationId: convId,
+            lastMessagePreview: displayText,
+            lastActivity: Date(),
+            incrementUnread: false
+        )
         refreshFromStore()
 
         // Async upload + send. Failures flip the row to .failed via
@@ -447,6 +476,12 @@ final class ChatContainer: ObservableObject {
             mediaMimeType: "image/jpeg"
         )
         store.appendMessage(local)
+        store.recordNewMessage(
+            conversationId: convId,
+            lastMessagePreview: "📷 Foto",
+            lastActivity: Date(),
+            incrementUnread: false
+        )
         refreshFromStore()
 
         guard let sendService = self.sendService,
