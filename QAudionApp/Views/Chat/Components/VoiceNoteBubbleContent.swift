@@ -116,7 +116,13 @@ struct VoiceNoteBubbleContent: View {
             seed: Int(messageId.uuidString.utf8.prefix(8).reduce(0) { ($0 &+ Int($1)) & 0x7FFF_FFFF }),
             progress: p,
             playedColor: scheme.primary,
-            unplayedColor: scheme.onSurfaceVariant.opacity(isActive ? 0.45 : 0.30)
+            unplayedColor: scheme.onSurfaceVariant.opacity(isActive ? 0.45 : 0.30),
+            // W98: drag-to-scrub only enabled while this bubble is the
+            // active player. Otherwise the gesture is nil and the row
+            // is just a passive visualization.
+            onScrub: isActive ? { pos in
+                player.seek(to: pos, messageId: messageId)
+            } : nil
         )
         .frame(height: 22)
     }
@@ -125,12 +131,15 @@ struct VoiceNoteBubbleContent: View {
     /// derived from the messageId so each bubble keeps a stable shape
     /// across re-renders (without persisting the per-bar amplitudes
     /// to disk). Bar amplitudes range 0.25...1.0 of the row height.
+    /// W98: drag-to-scrub gesture on the row when this bubble is the
+    /// active note — calls onScrub with normalized position 0...1.
     private struct WaveformRow: View {
         let barCount: Int
         let seed: Int
         let progress: Double
         let playedColor: Color
         let unplayedColor: Color
+        let onScrub: ((Double) -> Void)?
 
         var body: some View {
             GeometryReader { geo in
@@ -146,6 +155,16 @@ struct VoiceNoteBubbleContent: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .contentShape(Rectangle())
+                .gesture(
+                    onScrub.map { handler in
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let pos = max(0.0, min(1.0, Double(value.location.x / geo.size.width)))
+                                handler(pos)
+                            }
+                    }
+                )
             }
         }
 

@@ -89,6 +89,18 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
     }
 
+    /// W98: jump to a normalized position (0...1) in the currently-
+    /// playing note. Used by the bubble's drag-to-scrub gesture on
+    /// the waveform. No-op if no player is loaded for `messageId`.
+    func seek(to normalizedPosition: Double, messageId: UUID) {
+        guard let p = player, currentlyPlayingId == messageId else { return }
+        let target = max(0.0, min(1.0, normalizedPosition)) * p.duration
+        p.currentTime = target
+        // Update the published progress immediately so the waveform
+        // cursor jumps without waiting for the next 100ms tick.
+        progress = max(0.0, min(1.0, p.duration > 0 ? p.currentTime / p.duration : 0))
+    }
+
     /// W95: cycle through playback speeds 1× → 1.5× → 2× → 1×. If a
     /// note is currently playing, the rate is applied immediately
     /// (AVAudioPlayer adjusts in real time when enableRate=true).
