@@ -22,6 +22,16 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.256", date: "2026-05-01",
+              title: "Drop debug prints in voice-note callbacks (W256)",
+              bullets: [
+                "Even `let line: String = \"...\" + errMsg` (both sides typed) times out",
+                "The `+` operator has too many overloads to resolve in nested closures",
+                "Pragmatic fix: drop the diagnostic prints entirely — they were debug-only",
+                "Pre-emptive: also dropped the 5-segment concat in onFinishVoiceNote",
+                "Production uses os_log anyway; debug `print` is not load-bearing",
+                "CLAUDE.md §13 updated with this 4th type-checker antipattern variant"
+              ]),
         .init(id: "v1.0.255", date: "2026-05-01",
               title: "Fix type-checker timeout #3 — String(Int) overload trap (W255)",
               bullets: [

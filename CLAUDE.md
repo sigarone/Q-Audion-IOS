@@ -265,6 +265,24 @@ Other safe alternatives that don't go through `String(_:)`'s overload set:
 - `rec.durationMs.description`
 - Any explicit cast first: `let n = Int(rec.durationMs); let s = "\(n)"`
 
+**v1.0.256 update — even pre-bound `+` concat with explicit types times out.** The most stubborn variant:
+
+```swift
+// ❌ TIMES OUT, even with both sides explicitly typed as String:
+let errMsg: String = error.localizedDescription
+let line: String = "[VoiceNote] start failed: " + errMsg
+print(line)
+```
+
+The `+` operator has many overloads (String+String, Array+Array, AdditiveArithmetic, custom Self+Self conformances, …). Inside a deeply nested closure (e.g. `Task { do { try await ... } catch { ... } }` inside a SwiftUI ViewBuilder argument), the type-checker exhausts its budget exploring all `+` candidates plus all the closure's surrounding constraints.
+
+**Pragmatic rule for debug prints in nested closures**: don't build the String at all. Either:
+1. Drop the print (debug-only logs aren't load-bearing — `_ = error` to suppress unused-variable warnings)
+2. Use multiple `print()` calls with single-literal arguments (no concatenation)
+3. Move the formatting to a top-level helper function called from the closure (lifts type inference out of the nested context)
+
+Production code should use `os_log` / `Logger` anyway, never `print`.
+
 Symptoms: the build console shows just `Failed to archive` with **no `error:`/`warning:` lines** — xcbeautify is consuming the diagnostic before tee can capture it.
 
 **Mitigation:** the codemagic.yaml has a "Diagnose Swift compile (raw xcodebuild)" step that runs before `xcode-project build-ipa` with `CODE_SIGNING_ALLOWED=NO`. That output goes to `diag.log` (artifact) and is grepped at the end of Step 6. Always check Step 6 in failed Codemagic builds, not just the Build IPA step.

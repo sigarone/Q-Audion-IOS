@@ -144,16 +144,17 @@ struct ChatDetailScreen: View {
                         } catch VoiceNoteRecorder.RecorderError.permissionDenied {
                             container.markFailed(messageId: UUID(), reason: .generic)
                         } catch {
-                            // W253: even with errMsg pre-bound, leaving
-                            // the `+` inside `print(...)` still trips
-                            // the type-checker because `print` has many
-                            // overloads (variadic, separator, terminator,
-                            // to:&Output). Build the full line into a
-                            // local String first, then pass that single
-                            // String to `print`. See CLAUDE.md §13.
-                            let errMsg: String = error.localizedDescription
-                            let line: String = "[VoiceNote] start failed: " + errMsg
-                            print(line)
+                            // W256: dropped the diagnostic print entirely.
+                            // Even `let line: String = "..." + errMsg`
+                            // (with both sides explicitly typed as String)
+                            // times out the type-checker in this nested
+                            // closure context. The `+` operator's overload
+                            // set (String+String, Array+Array, AdditiveArithmetic, …)
+                            // combined with the surrounding closure type
+                            // constraints exhausts the type-checker budget.
+                            // Production uses os_log anyway; debug print
+                            // wasn't load-bearing. See CLAUDE.md §13.
+                            _ = error
                         }
                     }
                 },
@@ -167,23 +168,12 @@ struct ChatDetailScreen: View {
                     // placeholder so the user sees a recognizable bubble.
                     if let rec = voiceNoteRecorder.stop() {
                         HapticFeedback.recordingStop()  // W114: medium bump
-                        // W255: Build the log line via plain String concat;
-                        // multi-segment interpolation inside this
-                        // @Sendable closure trips the type-checker
-                        // even with pre-bound locals.
-                        //
-                        // Note: `String(rec.durationMs)` (where
-                        // durationMs is Int) ALSO times out because
-                        // String(_:) has many numeric overloads.
-                        // `String(describing:)` has a single overload
-                        // and resolves instantly. See CLAUDE.md §13.
-                        let recName: String = rec.fileURL.lastPathComponent
-                        let recDur: String = String(describing: rec.durationMs)
-                        let recMime: String = rec.mimeType
-                        let logLine: String = "[VoiceNote] captured "
-                            + recName + " duration " + recDur + "ms ("
-                            + recMime + ")"
-                        print(logLine)
+                        // W256: dropped the diagnostic print(logLine) call
+                        // entirely. The 5-segment String concatenation it
+                        // built was the next domino after the line-155 fix
+                        // — same type-checker exhaustion. Production uses
+                        // os_log anyway; debug print wasn't load-bearing.
+                        // See CLAUDE.md §13.
                         container.sendVoiceNote(rec)
                     }
                 },
