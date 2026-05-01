@@ -857,11 +857,14 @@ final class AppState: ObservableObject {
         // chat list reflects new messages and the count badge shows.
         // Use the already-rendered `plaintext` (placeholder for media)
         // so cross-platform attachments don't leak raw JSON to the list.
+        // W89: muted conversations skip the unread bump so the badge
+        // stays clean (the message still lands and re-orders the list).
+        let isMuted = conv.muted ?? false
         store.recordNewMessage(
             conversationId: conv.id,
             lastMessagePreview: plaintext,
             lastActivity: Date(),
-            incrementUnread: true
+            incrementUnread: !isMuted
         )
         // W80: async download + decrypt + cache. We kick this off here
         // so the cache is populated by the time the user opens the

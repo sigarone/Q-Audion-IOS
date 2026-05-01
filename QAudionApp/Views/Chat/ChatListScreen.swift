@@ -383,6 +383,14 @@ struct ChatListScreen: View {
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(extras.warning)
                         }
+                        if item.muted {
+                            // W89: bell-slash next to the name signals the
+                            // muted state. Subdued tint so it doesn't
+                            // compete with the pinned indicator.
+                            Image(systemName: "bell.slash.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
                         Text(item.peerDisplayName)
                             .qaudionStyle(type.titleSmall)
                             .foregroundStyle(scheme.onSurface)
@@ -426,6 +434,15 @@ struct ChatListScreen: View {
                       systemImage: item.pinned ? "pin.slash" : "pin")
             }
             .tint(.orange)
+            // W89: mute / unmute. Muted conversations skip unread
+            // increments and (future) suppress local-notif banner.
+            Button {
+                container.toggleMuted(conversationId: item.conversationId)
+            } label: {
+                Label(item.muted ? "Riattiva" : "Silenzia",
+                      systemImage: item.muted ? "bell" : "bell.slash")
+            }
+            .tint(.indigo)
         }
     }
 

@@ -15,10 +15,16 @@ public struct Conversation: Equatable, Sendable, Hashable, Codable, Identifiable
     public let unreadCount: Int
     public let pinned: Bool
     public let kind: Kind
+    /// W89: muted conversations don't trigger banner / sound on inbound
+    /// messages and skip the unread-bump (their badge stays clean).
+    /// Optional Bool for Codable backward compat with v1.0.153 stored
+    /// rows — older payloads decode with `nil` (treated as not muted).
+    public let muted: Bool?
 
     public init(id: UUID, peerUserId: String, peerDisplayName: String,
                 lastMessagePreview: String?, lastActivity: Date,
-                unreadCount: Int, pinned: Bool, kind: Kind = .oneToOne) {
+                unreadCount: Int, pinned: Bool, kind: Kind = .oneToOne,
+                muted: Bool? = nil) {
         self.id = id
         self.peerUserId = peerUserId
         self.peerDisplayName = peerDisplayName
@@ -27,5 +33,6 @@ public struct Conversation: Equatable, Sendable, Hashable, Codable, Identifiable
         self.unreadCount = unreadCount
         self.pinned = pinned
         self.kind = kind
+        self.muted = muted
     }
 }

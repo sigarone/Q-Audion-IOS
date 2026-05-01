@@ -11,10 +11,15 @@ public struct ConversationListViewModel: ViewModelProtocol {
         public let unreadCount: Int
         public let pinned: Bool
         public let kind: Conversation.Kind
+        /// W89: mirror of `Conversation.muted` so the chat list row
+        /// can render a bell-slash indicator without re-loading the
+        /// underlying Conversation. Default false.
+        public let muted: Bool
 
         public init(conversationId: UUID, peerUserId: String, peerDisplayName: String,
                     lastMessagePreview: String?, lastActivity: Date,
-                    unreadCount: Int, pinned: Bool, kind: Conversation.Kind = .oneToOne) {
+                    unreadCount: Int, pinned: Bool, kind: Conversation.Kind = .oneToOne,
+                    muted: Bool = false) {
             self.conversationId = conversationId
             self.peerUserId = peerUserId
             self.peerDisplayName = peerDisplayName
@@ -23,6 +28,7 @@ public struct ConversationListViewModel: ViewModelProtocol {
             self.unreadCount = unreadCount
             self.pinned = pinned
             self.kind = kind
+            self.muted = muted
         }
     }
 

@@ -36,7 +36,8 @@ final class ConversationListContainer: ObservableObject {
                 lastActivity: conv.lastActivity,
                 unreadCount: unread,
                 pinned: conv.pinned,
-                kind: conv.kind
+                kind: conv.kind,
+                muted: conv.muted ?? false
             )
         }
         viewModel = ConversationListViewModel(items: items, searchQuery: searchText)
@@ -78,7 +79,35 @@ final class ConversationListContainer: ObservableObject {
             lastActivity: old.lastActivity,
             unreadCount: old.unreadCount,
             pinned: !old.pinned,
-            kind: old.kind
+            kind: old.kind,
+            muted: old.muted
+        )
+        store.upsertConversation(convs[idx])
+        loadFromStore()
+    }
+
+    /// W89: toggle the mute flag. Muted conversations:
+    ///   - skip the unread-bump on inbound messages (badge stays at 0).
+    ///   - in a future patch, suppress local-notification banner +
+    ///     APNs sound (server already supports a per-conversation mute
+    ///     hint via the push payload).
+    /// Idempotent (re-firing flips state). UI surfaces the state via
+    /// the bell-slash icon next to the row.
+    func toggleMuted(conversationId: UUID) {
+        var convs = store.loadConversations()
+        guard let idx = convs.firstIndex(where: { $0.id == conversationId }) else { return }
+        let old = convs[idx]
+        let nowMuted = !(old.muted ?? false)
+        convs[idx] = Conversation(
+            id: old.id,
+            peerUserId: old.peerUserId,
+            peerDisplayName: old.peerDisplayName,
+            lastMessagePreview: old.lastMessagePreview,
+            lastActivity: old.lastActivity,
+            unreadCount: old.unreadCount,
+            pinned: old.pinned,
+            kind: old.kind,
+            muted: nowMuted
         )
         store.upsertConversation(convs[idx])
         loadFromStore()
