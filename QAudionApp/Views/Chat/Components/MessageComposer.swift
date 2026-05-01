@@ -135,7 +135,12 @@ struct MessageComposer: View {
     /// W108: live recording banner. Shows a red pulsing dot + the
     /// elapsed time (M:SS), plus a "Rilascia per inviare" hint.
     private var recordingBanner: some View {
-        HStack(spacing: 10) {
+        // W131: in the last 30 seconds before the 5min hard cap, show
+        // a remaining-time chip so the user can wrap up. Threshold
+        // mirrors VoiceNoteRecorder.maxRecordingSeconds (300s).
+        let remaining = max(0, 300 - recordingElapsedSeconds)
+        let nearingCap = remaining > 0 && remaining <= 30
+        return HStack(spacing: 10) {
             Circle()
                 .fill(extras.error)
                 .frame(width: 8, height: 8)
@@ -151,6 +156,15 @@ struct MessageComposer: View {
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(cancelArmed ? extras.error : scheme.onSurfaceVariant)
             Spacer(minLength: 0)
+            // W131: countdown chip — only visible in last 30s.
+            if nearingCap {
+                Text(String(format: "%.0fs alla fine", remaining))
+                    .qaudionStyle(type.labelSmall)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(extras.warning.opacity(0.3)))
+                    .foregroundStyle(extras.warning)
+                    .monospacedDigit()
+            }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 8).fill(
