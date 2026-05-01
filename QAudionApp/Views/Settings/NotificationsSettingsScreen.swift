@@ -249,6 +249,44 @@ struct NotificationsSettingsScreen: View {
                     }
                     .buttonStyle(.plain)
 
+                    // W270: cancel all pending notification requests.
+                    // Sister of W263 which clears delivered ones — this
+                    // wipes the queue of scheduled-but-not-yet-fired
+                    // notifications. Useful if the QA tester taps W171
+                    // 'Invia notifica di test' and changes mind before
+                    // the 1.5s trigger fires.
+                    Button {
+                        UNUserNotificationCenter.current()
+                            .removeAllPendingNotificationRequests()
+                        refreshNotificationCounts()
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "calendar.badge.minus")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(.orange)
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Cancella notifiche pianificate")
+                                    .qaudionStyle(type.bodyMedium)
+                                    .foregroundStyle(scheme.onSurface)
+                                Text("Annulla la coda dei trigger non ancora scattati")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            Spacer()
+                            Image(systemName: "xmark.circle")
+                                .font(.system(size: 14, weight: .regular))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 52)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(scheme.surfaceVariant.opacity(0.4))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
                     // W169: shortcut into iOS Settings → Q-Audion
                     // permissions. Useful when the user has revoked
                     // mic / notifications and wants to fix it without

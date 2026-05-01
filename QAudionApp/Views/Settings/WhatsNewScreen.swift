@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.270", date: "2026-05-02",
+              title: "Cancella notifiche pianificate dev action (W270)",
+              bullets: [
+                "Notifiche → DIAGNOSTICA: 'Cancella notifiche pianificate'",
+                "Sister di W263 (consegnate) — questa annulla i trigger in coda",
+                "Utile se il tester tocca W171 e cambia idea prima dell'1.5s",
+                "API: UNUserNotificationCenter.removeAllPendingNotificationRequests()"
+              ]),
         .init(id: "v1.0.269", date: "2026-05-02",
               title: "Locale + memoria fisica + low-power in About (W269/W272/W273)",
               bullets: [
