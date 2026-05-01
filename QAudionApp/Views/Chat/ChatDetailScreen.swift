@@ -65,6 +65,10 @@ struct ChatDetailScreen: View {
     /// dialog. Non-nil → the dialog is up; tapping the destructive
     /// button fires container.deleteMessage and clears the state.
     @State private var pendingDeleteForAllId: UUID? = nil
+    /// W147: confirm dialog gate for "Svuota cronologia". Uses Bool
+    /// rather than UUID since the action is screen-scoped — there's
+    /// only one history per chat detail view.
+    @State private var showClearHistoryConfirm: Bool = false
 
     // Stub values for the SessionStatusStrip until the engine wires them.
     private let stubConfidence: Double = 0.92
@@ -356,6 +360,26 @@ struct ChatDetailScreen: View {
         } message: {
             Text("Il destinatario non potrà più leggerlo. L'azione non può essere annullata.")
         }
+        // W147: confirm before wiping the conversation history
+        // locally. Server-side messages are unaffected (this only
+        // clears the on-device cache), but rebuilding the view from
+        // scratch loses any local-only metadata too — worth a tap.
+        .confirmationDialog(
+            "Svuotare la cronologia locale?",
+            isPresented: $showClearHistoryConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Svuota", role: .destructive) {
+                container.clearLocalHistory()
+                snackbar?.show(.init(
+                    text: "Cronologia locale cancellata.",
+                    severity: .info,
+                    durationSeconds: 2))
+            }
+            Button("Annulla", role: .cancel) { }
+        } message: {
+            Text("Tutti i messaggi e gli allegati di questa chat verranno rimossi solo da questo dispositivo.")
+        }
     }
 
     // MARK: - Top bar
@@ -422,11 +446,11 @@ struct ChatDetailScreen: View {
             // hits ContactsApi.blockContact via the persistent backend.
             Menu {
                 Button(role: .destructive) {
-                    container.clearLocalHistory()
-                    snackbar?.show(.init(
-                        text: "Cronologia locale cancellata.",
-                        severity: .info,
-                        durationSeconds: 2))
+                    // W147: gate behind confirm dialog instead of
+                    // wiping straight away — the action is hard to
+                    // undo (no engine-side rewind) and one stray tap
+                    // shouldn't nuke a long thread.
+                    showClearHistoryConfirm = true
                 } label: {
                     Label("Svuota cronologia", systemImage: "tray")
                 }
