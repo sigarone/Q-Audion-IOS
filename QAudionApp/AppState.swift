@@ -828,7 +828,11 @@ final class AppState: ObservableObject {
             // companion device, e.g. desktop session) can match the row.
             serverMessageId: serverMsgId,
             mediaLocalPath: nil,
-            mediaDurationMs: initialMediaDur
+            mediaDurationMs: initialMediaDur,
+            // W82: route bubble UI by mime (audio/* → voice player,
+            // image/* → image preview). Stamped up-front from the
+            // marker so the row already shows the right placeholder.
+            mediaMimeType: pendingMarker?.qfile.mime
         )
         store.appendMessage(msg)
         // W80: async download + decrypt + cache. We kick this off here
@@ -850,7 +854,8 @@ final class AppState: ObservableObject {
                             conversationId: convId,
                             plaintext: friendly,
                             mediaLocalPath: cacheURL.path,
-                            mediaDurationMs: marker.qfile.durationMs ?? 0
+                            mediaDurationMs: marker.qfile.durationMs,
+                            mediaMimeType: marker.qfile.mime
                         )
                         NotificationCenter.default.post(
                             name: AppState.chatRefreshNotification,
@@ -859,7 +864,7 @@ final class AppState: ObservableObject {
                         )
                     }
                 } catch {
-                    print("[AppState] voice-note receive failed from \(senderId): \(error)")
+                    print("[AppState] attachment receive failed from \(senderId): \(error)")
                     // Leave the placeholder text in place; user can
                     // tap a retry CTA in a future patch (snackbar
                     // not surfaced today to avoid noise on transient

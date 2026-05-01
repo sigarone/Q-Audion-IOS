@@ -130,11 +130,23 @@ final class ChatVoiceNoteReceiver {
         }
 
         // Filename includes the fileId so re-deliveries land idempotently.
-        // Sanitize to keep only filesystem-safe chars (server-issued ids
-        // are typically UUID-shaped but we don't trust them blindly).
+        // Extension chosen by mime so the file plays/loads correctly.
         let safe = marker.qfile.fileId.unicodeScalars
             .map { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_" ? Character($0) : Character("_") }
-        let outURL = cacheDir.appendingPathComponent(String(safe) + ".m4a")
+        let ext: String
+        let mime = marker.qfile.mime.lowercased()
+        if mime.hasPrefix("image/jpeg") || mime.hasPrefix("image/jpg") {
+            ext = "jpg"
+        } else if mime.hasPrefix("image/png") {
+            ext = "png"
+        } else if mime.hasPrefix("image/heic") {
+            ext = "heic"
+        } else if mime.hasPrefix("audio/") {
+            ext = "m4a"
+        } else {
+            ext = "bin"
+        }
+        let outURL = cacheDir.appendingPathComponent(String(safe) + "." + ext)
         do {
             try plaintextBytes.write(to: outURL, options: [.atomic])
         } catch {
@@ -143,15 +155,24 @@ final class ChatVoiceNoteReceiver {
         return outURL
     }
 
-    /// Render the friendly bubble text once the voice note has landed.
-    /// Mirrors the sender side ("🎤 Nota vocale (4.2s)") with the
-    /// duration carried in the marker.
+    /// Render the friendly bubble text once the attachment has landed.
+    /// Voice note: "🎤 Nota vocale (4.2s)"; image: "📷 Foto"; other: "📎 Allegato".
     static func renderReceivedText(marker: FileTransfer.FileMarker) -> String {
-        if let dur = marker.qfile.durationMs, dur > 0 {
-            let secs = Double(dur) / 1000.0
-            return String(format: "🎤 Nota vocale (%.1fs)", secs)
+        let mime = marker.qfile.mime.lowercased()
+        if mime.hasPrefix("audio/") {
+            if let dur = marker.qfile.durationMs, dur > 0 {
+                let secs = Double(dur) / 1000.0
+                return String(format: "🎤 Nota vocale (%.1fs)", secs)
+            }
+            return "🎤 Nota vocale"
         }
-        return "🎤 Nota vocale"
+        if mime.hasPrefix("image/") {
+            return "📷 Foto"
+        }
+        if mime.hasPrefix("video/") {
+            return "🎬 Video"
+        }
+        return "📎 Allegato"
     }
 }
 

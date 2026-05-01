@@ -156,11 +156,11 @@ struct ChatDetailScreen: View {
             guard let item = newItem else { return }
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self) {
-                    let kb = max(1, data.count / 1024)
-                    snackbar?.show(.init(
-                        text: "Foto pronta (\(kb) KB) — invio attachment cifrato arriverà nella prossima wave (engine wire pending).",
-                        severity: .info,
-                        durationSeconds: 5))
+                    // W82: real send. ChatContainer.sendImage normalizes
+                    // (EXIF strip + ≤2048px downscale + JPEG q=0.85),
+                    // caps at 10 MB, persists locally, and ships through
+                    // the same qfile v3 marker pipeline as voice notes.
+                    container.sendImage(data)
                 } else {
                     snackbar?.show(.init(
                         text: "Lettura foto fallita.",
@@ -359,13 +359,24 @@ struct ChatDetailScreen: View {
             replyQuote: nil,
             reactions: []
         ) {
-            // W81: voice-note bubbles render the play/pause UI bound
-            // to the global VoiceNotePlayer. Trigger condition: the
-            // message carries a non-zero mediaDurationMs (sender stamps
-            // it on send; receiver lifts it from the qfile marker
-            // before async download completes — so the row already
-            // shows the spinner + duration).
-            if let dur = msg.mediaDurationMs, dur > 0 {
+            // W81/W82: route bubble UI by media MIME type so voice
+            // notes get the play/pause player and image attachments
+            // get the inline preview + tap-to-fullscreen.
+            if let mime = msg.mediaMimeType, mime.hasPrefix("audio/") {
+                VoiceNoteBubbleContent(
+                    player: VoiceNotePlayer.shared,
+                    messageId: msg.id,
+                    mediaLocalPath: msg.mediaLocalPath,
+                    durationMs: msg.mediaDurationMs ?? 0
+                )
+            } else if let mime = msg.mediaMimeType, mime.hasPrefix("image/") {
+                ImageBubbleContent(
+                    messageId: msg.id,
+                    mediaLocalPath: msg.mediaLocalPath
+                )
+            } else if let dur = msg.mediaDurationMs, dur > 0 {
+                // Legacy fallback: pre-W82 voice notes lack mediaMimeType
+                // but carry duration. Render via voice player.
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
                     messageId: msg.id,

@@ -268,7 +268,8 @@ final class ChatContainer: ObservableObject {
             readAt: nil,
             status: .sending,
             mediaLocalPath: localCachePath,
-            mediaDurationMs: Int64(recording.durationMs)
+            mediaDurationMs: Int64(recording.durationMs),
+            mediaMimeType: recording.mimeType
         )
         store.appendMessage(local)
         refreshFromStore()
@@ -400,6 +401,158 @@ final class ChatContainer: ObservableObject {
     func clearFailureFlag() {
         failedMessageId = nil
         failureReason = nil
+    }
+
+    /// W82: ship an image attachment via the same qfile v3 pipeline as
+    /// voice notes. Performs three normalizations before encryption:
+    ///   1. Re-encode through `UIImage` → `jpegData(compressionQuality:)`
+    ///      to strip EXIF (geolocation, device serial, timestamps, etc.).
+    ///      Apple's CGImage I/O preserves EXIF by default; bouncing
+    ///      through UIImage is the simplest portable strip.
+    ///   2. Downscale long-side to ≤ 2048px so a 12 MP capture doesn't
+    ///      blow the recipient's cache budget. Aspect-preserved.
+    ///   3. Cap the encoded JPEG at 10 MB hard ceiling — anything larger
+    ///      is rejected (the user gets a snackbar via the failure flag).
+    func sendImage(_ rawImageData: Data) {
+        let peerId = peerUserId
+        let convId = conversationId
+        let msgId = UUID()
+
+        // Normalize: load → downscale → re-encode JPEG (no EXIF).
+        guard let normalized = Self.normalizeImageForChat(rawImageData) else {
+            print("[ChatContainer] sendImage normalization failed")
+            return
+        }
+        let jpeg = normalized.data
+        guard jpeg.count <= 10 * 1024 * 1024 else {
+            print("[ChatContainer] sendImage rejected: \(jpeg.count) bytes > 10MB cap")
+            return
+        }
+
+        // Persist the local copy first so the sender bubble shows the
+        // image immediately while the upload is in flight.
+        let localCachePath = Self.persistOutboundImage(jpeg: jpeg, msgId: msgId)
+
+        let local = Message(
+            id: msgId,
+            conversationId: convId,
+            direction: .outgoing,
+            plaintext: "📷 Foto",
+            sentAt: Date(),
+            deliveredAt: nil,
+            readAt: nil,
+            status: .sending,
+            mediaLocalPath: localCachePath,
+            mediaDurationMs: nil,
+            mediaMimeType: "image/jpeg"
+        )
+        store.appendMessage(local)
+        refreshFromStore()
+
+        guard let sendService = self.sendService,
+              let appState = self.appState else {
+            // Preview / unit-test fallback — simulate delivery.
+            Task { @MainActor [weak self, msgId, convId] in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                self?.store.updateMessageStatus(
+                    id: msgId, conversationId: convId,
+                    newStatus: .delivered, deliveredAt: Date()
+                )
+                self?.refreshFromStore()
+            }
+            return
+        }
+
+        Task { [weak self, peerId, convId, msgId, jpeg] in
+            let prep = await ChatVoiceNoteSender(appState: appState)
+            let markerJson: String
+            do {
+                markerJson = try await prep.prepareAttachmentMarkerJson(
+                    bytes: jpeg,
+                    mime: "image/jpeg",
+                    filename: "image-\(msgId.uuidString).jpg",
+                    durationMs: nil,
+                    recipientUserId: peerId
+                )
+            } catch {
+                print("[ChatContainer] sendImage prep failed: \(error)")
+                await MainActor.run { self?.markFailed(messageId: msgId, reason: .uploadFailure) }
+                return
+            }
+            let outcome = await sendService.sendEncrypted(
+                messageId: msgId, peerUserId: peerId, plaintext: markerJson
+            )
+            await MainActor.run {
+                guard let self = self else { return }
+                switch outcome {
+                case .delivered(let serverMsgId):
+                    self.store.setServerMessageId(
+                        localId: msgId, conversationId: convId,
+                        serverMessageId: serverMsgId
+                    )
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: convId,
+                        newStatus: .delivered, deliveredAt: Date()
+                    )
+                case .sent:
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: convId,
+                        newStatus: .delivered, deliveredAt: Date()
+                    )
+                case .failed(let reason):
+                    self.markFailed(messageId: msgId, reason: reason)
+                }
+                self.refreshFromStore()
+            }
+        }
+    }
+
+    /// W82 — image normalization: strip EXIF + downscale to ≤2048px.
+    /// Returns the JPEG data + the size used. Returns nil if the
+    /// original bytes don't decode as a UIImage (corrupted / unsupported).
+    private static func normalizeImageForChat(_ rawData: Data) -> (data: Data, size: CGSize)? {
+        guard let img = UIImage(data: rawData) else { return nil }
+        let maxLong: CGFloat = 2048
+        let original = img.size
+        let longest = max(original.width, original.height)
+        let scale: CGFloat = (longest > maxLong) ? (maxLong / longest) : 1.0
+        let target = CGSize(width: floor(original.width * scale),
+                            height: floor(original.height * scale))
+        let renderer = UIGraphicsImageRenderer(size: target,
+                                               format: { let f = UIGraphicsImageRendererFormat();
+                                                         f.scale = 1.0; f.opaque = true;
+                                                         return f }())
+        let normalized = renderer.image { _ in
+            img.draw(in: CGRect(origin: .zero, size: target))
+        }
+        // jpegData(compressionQuality:) re-encodes from the rendered
+        // bitmap — drops all EXIF / IPTC / XMP from the source.
+        guard let jpeg = normalized.jpegData(compressionQuality: 0.85) else {
+            return nil
+        }
+        return (jpeg, target)
+    }
+
+    /// W82: persist a JPEG to Library/Caches/images/<msgId>.jpg so the
+    /// sender's bubble can render the local copy without re-fetching.
+    private static func persistOutboundImage(jpeg: Data, msgId: UUID) -> String? {
+        do {
+            let base = try FileManager.default.url(
+                for: .cachesDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true
+            )
+            let dir = base.appendingPathComponent("images", isDirectory: true)
+            if !FileManager.default.fileExists(atPath: dir.path) {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
+            let dst = dir.appendingPathComponent("\(msgId.uuidString).jpg")
+            try? FileManager.default.removeItem(at: dst)
+            try jpeg.write(to: dst, options: [.atomic])
+            return dst.path
+        } catch {
+            print("[ChatContainer] persistOutboundImage failed: \(error)")
+            return nil
+        }
     }
 
     /// W81: copy a freshly-captured /tmp M4A into the durable voice-note

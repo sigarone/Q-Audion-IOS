@@ -88,8 +88,29 @@ final class ChatVoiceNoteSender {
         } catch {
             throw Error.readFailed(error.localizedDescription)
         }
+        return try await prepareAttachmentMarkerJson(
+            bytes: bytes,
+            mime: recording.mimeType,
+            filename: "voicenote-\(recording.fileURL.deletingPathExtension().lastPathComponent).m4a",
+            durationMs: Int64(recording.durationMs),
+            recipientUserId: recipientUserId
+        )
+    }
 
-        // 2. Build the FileTransfer dependencies. We rebuild per-call so
+    /// W82 — generic attachment send (image, voice note, future media).
+    /// All chat-attachment types share the same wire (qfile v3 marker
+    /// inside an AES-256-GCM-encrypted msg_send), so one orchestrator
+    /// covers all of them. The `mime` is stamped into `marker.qfile.mime`
+    /// so the receiver can route to the right bubble; `durationMs` is
+    /// optional and only set for voice notes.
+    func prepareAttachmentMarkerJson(
+        bytes: Data,
+        mime: String,
+        filename: String,
+        durationMs: Int64?,
+        recipientUserId: String
+    ) async throws -> String {
+        // 1. Build the FileTransfer dependencies. We rebuild per-call so
         //    the service stays stateless and a token rotation is picked
         //    up on the next send.
         guard let token = appState.authService.loadToken(), !token.isEmpty,
@@ -100,23 +121,17 @@ final class ChatVoiceNoteSender {
         let provider = BCryptoBackendProvider(config: backendConfig)
         // No `provider.initialize()` — `uploadFile` and `issueToken` are
         // REST-only; a fresh provider with the auth token is sufficient.
-        // Avoiding initialize() also skips opening a duplicate WS just
-        // for this one upload (the persistent WS lives on AppState).
 
         let storage = FileTransfer.StorageApi(
             uploadFile: { data, filename in
                 try await provider.storageApi.uploadFile(data: data, filename: filename)
             },
             downloadFile: { _ in
-                // Sender-side path never downloads — receiver builds its
-                // own StorageApi with the claim wired through the
-                // download-token client.
                 throw Error.uploadFailed("sender-side download invoked unexpectedly")
             }
         )
 
-        // 3. Resolve PSK adapter — same pairwise/auto naming as
-        //    ChatMessageSendService.
+        // 2. Resolve PSK adapter — same ladder as ChatMessageSendService.
         let vault = SovereignKeyVault()
         let vaultAdapter = Self.makeVaultAdapter(
             vault: vault,
@@ -124,27 +139,25 @@ final class ChatVoiceNoteSender {
             senderId: senderId
         )
 
-        // 4. Encrypt + upload via the existing FileTransfer.
+        // 3. Encrypt + upload via the existing FileTransfer.
         let fileTransfer = FileTransfer(
             storage: storage,
             vault: vaultAdapter,
             selfUserId: senderId
         )
-        let filename = "voicenote-\(recording.fileURL.deletingPathExtension().lastPathComponent).m4a"
         let baseMarker: FileTransfer.FileMarker
         do {
             baseMarker = try await fileTransfer.upload(
                 recipientId: recipientUserId,
                 bytes: bytes,
                 filename: filename,
-                mime: recording.mimeType
+                mime: mime
             )
         } catch {
             throw Error.uploadFailed(error.localizedDescription)
         }
 
-        // 5. Mint the recipient capability so the peer (different user)
-        //    can fetch the ciphertext.
+        // 4. Mint the recipient capability.
         let issued: IssuedDownloadToken
         do {
             issued = try await provider.downloadTokenClient.issueToken(
@@ -155,7 +168,7 @@ final class ChatVoiceNoteSender {
             throw Error.tokenIssueFailed(error.localizedDescription)
         }
 
-        // 6. Repack the marker with the claim + duration.
+        // 5. Repack the marker with the claim + duration (optional).
         let q = baseMarker.qfile
         let enriched = FileTransfer.FileMarker(qfile: .init(
             fileId: q.fileId,
@@ -168,11 +181,10 @@ final class ChatVoiceNoteSender {
             keyId: q.keyId,
             ts: q.ts,
             downloadClaim: issued.claim,
-            durationMs: Int64(recording.durationMs)
+            durationMs: durationMs
         ))
 
-        // 7. Serialize → plaintext that the regular send pipeline will
-        //    encrypt as a normal chat msg_send.
+        // 6. Serialize.
         do {
             return try FileTransfer.serializeMarker(enriched)
         } catch {

@@ -41,13 +41,20 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// v3 marker on receive so the bubble can render "🎤 Nota vocale
     /// (4.2s)" before AVAudioPlayer probes the file.
     public let mediaDurationMs: Int64?
+    /// W82: MIME type of the attached media (`audio/mp4`, `image/jpeg`,
+    /// etc.). Lets the chat bubble route to the right preview view
+    /// (voice note vs. image) without filename heuristics. Optional for
+    /// backward compat — older messages decode with `nil` and the bubble
+    /// falls back to the legacy "render-by-duration" branch.
+    public let mediaMimeType: String?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
                 readAt: Date?, status: Status, senderUserId: String? = nil,
                 serverMessageId: String? = nil,
                 mediaLocalPath: String? = nil,
-                mediaDurationMs: Int64? = nil) {
+                mediaDurationMs: Int64? = nil,
+                mediaMimeType: String? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -60,5 +67,6 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.serverMessageId = serverMessageId
         self.mediaLocalPath = mediaLocalPath
         self.mediaDurationMs = mediaDurationMs
+        self.mediaMimeType = mediaMimeType
     }
 }
