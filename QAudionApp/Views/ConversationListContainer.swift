@@ -127,6 +127,20 @@ final class ConversationListContainer: ObservableObject {
         loadFromStore()
     }
 
+    /// W140: clear the unread badge on a single row. Useful when the
+    /// user already saw the conversation via banner / external preview
+    /// and just wants the badge gone without opening the chat. Mirrors
+    /// `markConversationRead` on ConversationStore but reloads the
+    /// view-model so the badge disappears immediately. Idempotent —
+    /// noop when unreadCount is already zero.
+    func markRead(conversationId: UUID) {
+        let convs = store.loadConversations()
+        guard let conv = convs.first(where: { $0.id == conversationId }),
+              conv.unreadCount > 0 else { return }
+        store.markConversationRead(id: conversationId)
+        loadFromStore()
+    }
+
     /// Total unread count across all conversations. Used by the
     /// ChatListScreen overflow menu to gate the "Segna tutti come letti"
     /// action — disabled when zero.

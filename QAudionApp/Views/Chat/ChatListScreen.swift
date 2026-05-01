@@ -502,6 +502,19 @@ struct ChatListScreen: View {
             .padding(.vertical, 4)
         }
         .listRowBackground(scheme.background)
+        // W140: leading swipe — mark as read. Common iOS Mail / Messages
+        // affordance. Hidden when the row already has zero unread so the
+        // gesture isn't a no-op.
+        .swipeActions(edge: .leading) {
+            if item.unreadCount > 0 {
+                Button {
+                    container.markRead(conversationId: item.conversationId)
+                } label: {
+                    Label("Segna letto", systemImage: "envelope.open")
+                }
+                .tint(.blue)
+            }
+        }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {
                 container.deleteConversation(conversationId: item.conversationId)
@@ -530,6 +543,15 @@ struct ChatListScreen: View {
         // can't easily access swipe actions; right-click / long-press
         // surfaces the same options through the contextMenu API.
         .contextMenu {
+            // W140: surface "Segna letto" in the long-press menu too —
+            // hidden when there's nothing to mark.
+            if item.unreadCount > 0 {
+                Button {
+                    container.markRead(conversationId: item.conversationId)
+                } label: {
+                    Label("Segna letto", systemImage: "envelope.open")
+                }
+            }
             Button {
                 container.togglePinned(conversationId: item.conversationId)
             } label: {
