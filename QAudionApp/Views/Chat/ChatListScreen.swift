@@ -215,7 +215,13 @@ struct ChatListScreen: View {
                 .padding(.trailing, 16)
                 .padding(.bottom, 16)
         }
-        .navigationTitle("Chat")
+        // W146: surface total unread inside the nav title — "Chat (3)"
+        // when there's something to read, plain "Chat" otherwise.
+        // iOS Mail / Messages idiom that keeps the count visible even
+        // when individual rows are scrolled off-screen.
+        .navigationTitle(container.totalUnread > 0
+                         ? "Chat (\(container.totalUnread))"
+                         : "Chat")
         .navigationBarTitleDisplayMode(.inline)
         // W50: overflow menu — "Segna tutti come letti" gated dal
         // count totale di unread. Disabilitato quando la lista è
