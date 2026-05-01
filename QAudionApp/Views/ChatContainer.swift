@@ -247,7 +247,17 @@ final class ChatContainer: ObservableObject {
         let displayText = String(format: "🎤 Nota vocale (%.1fs)", durSec)
         let msgId = UUID()
 
+        // W81: copy the captured M4A from /tmp into the persistent
+        // voice-notes cache so the sender can replay their own bubble
+        // after the app restarts. /tmp is reclaimed by iOS on next
+        // launch; Library/Caches survives suspension.
+        let localCachePath: String? = Self.persistOutboundVoiceNote(
+            from: recording.fileURL, msgId: msgId
+        )
+
         // Local row first so the chat reflects the action immediately.
+        // mediaDurationMs makes the row render via VoiceNoteBubbleContent
+        // (W81); mediaLocalPath populates the play button immediately.
         let local = Message(
             id: msgId,
             conversationId: convId,
@@ -256,7 +266,9 @@ final class ChatContainer: ObservableObject {
             sentAt: Date(),
             deliveredAt: nil,
             readAt: nil,
-            status: .sending
+            status: .sending,
+            mediaLocalPath: localCachePath,
+            mediaDurationMs: Int64(recording.durationMs)
         )
         store.appendMessage(local)
         refreshFromStore()
@@ -388,6 +400,34 @@ final class ChatContainer: ObservableObject {
     func clearFailureFlag() {
         failedMessageId = nil
         failureReason = nil
+    }
+
+    /// W81: copy a freshly-captured /tmp M4A into the durable voice-note
+    /// cache (Library/Caches/voicenotes/<msgId>.m4a) so the sender can
+    /// replay their own bubble after the app restarts. Returns the
+    /// destination path on success, or `nil` on copy failure (the
+    /// bubble will then show the placeholder + spinner; the file's
+    /// already been uploaded ciphertext-side so the receiver still
+    /// works).
+    private static func persistOutboundVoiceNote(from src: URL, msgId: UUID) -> String? {
+        do {
+            let base = try FileManager.default.url(
+                for: .cachesDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true
+            )
+            let dir = base.appendingPathComponent("voicenotes", isDirectory: true)
+            if !FileManager.default.fileExists(atPath: dir.path) {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
+            let dst = dir.appendingPathComponent("\(msgId.uuidString).m4a")
+            // If the file already exists (rare race), remove first.
+            try? FileManager.default.removeItem(at: dst)
+            try FileManager.default.copyItem(at: src, to: dst)
+            return dst.path
+        } catch {
+            print("[ChatContainer] persistOutboundVoiceNote failed: \(error)")
+            return nil
+        }
     }
 
     func refreshFromStore() {

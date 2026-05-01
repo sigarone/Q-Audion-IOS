@@ -359,10 +359,25 @@ struct ChatDetailScreen: View {
             replyQuote: nil,
             reactions: []
         ) {
-            Text(msg.plaintext)
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // W81: voice-note bubbles render the play/pause UI bound
+            // to the global VoiceNotePlayer. Trigger condition: the
+            // message carries a non-zero mediaDurationMs (sender stamps
+            // it on send; receiver lifts it from the qfile marker
+            // before async download completes — so the row already
+            // shows the spinner + duration).
+            if let dur = msg.mediaDurationMs, dur > 0 {
+                VoiceNoteBubbleContent(
+                    player: VoiceNotePlayer.shared,
+                    messageId: msg.id,
+                    mediaLocalPath: msg.mediaLocalPath,
+                    durationMs: dur
+                )
+            } else {
+                Text(msg.plaintext)
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(scheme.onSurface)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .onLongPressGesture(minimumDuration: 0.4) {
             actionTargetId = msg.id
