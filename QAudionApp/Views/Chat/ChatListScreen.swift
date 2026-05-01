@@ -508,22 +508,38 @@ struct ChatListScreen: View {
     }
 
     private func formatTime(_ date: Date) -> String {
-        // Same day → HH:mm; this week → weekday short; older → dd/MM.
+        // W121: more granular relative time. Order:
+        //   1. < 1 min: "ora"
+        //   2. same day: HH:mm
+        //   3. yesterday: "ieri"
+        //   4. < 7 days: weekday short
+        //   5. same year: dd/MM
+        //   6. older: dd/MM/yy
         let cal = Calendar.current
+        let now = Date()
+        let elapsed = now.timeIntervalSince(date)
+        if elapsed < 60, elapsed >= 0 {
+            return "ora"
+        }
         if cal.isDateInToday(date) {
             let f = DateFormatter()
             f.dateFormat = "HH:mm"
             return f.string(from: date)
         }
-        if let days = cal.dateComponents([.day], from: date, to: Date()).day,
+        if cal.isDateInYesterday(date) {
+            return "ieri"
+        }
+        if let days = cal.dateComponents([.day], from: date, to: now).day,
            days < 7 {
             let f = DateFormatter()
             f.locale = Locale(identifier: "it_IT")
             f.dateFormat = "EEE"
             return f.string(from: date).capitalized
         }
+        let nowYear = cal.component(.year, from: now)
+        let dateYear = cal.component(.year, from: date)
         let f = DateFormatter()
-        f.dateFormat = "dd/MM"
+        f.dateFormat = (nowYear == dateYear) ? "dd/MM" : "dd/MM/yy"
         return f.string(from: date)
     }
 
