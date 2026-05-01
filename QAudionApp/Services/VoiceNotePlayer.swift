@@ -101,6 +101,15 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         progress = max(0.0, min(1.0, p.duration > 0 ? p.currentTime / p.duration : 0))
     }
 
+    /// W99: skip relative seconds within the active note. Negative
+    /// values rewind. Clamps to [0, duration].
+    func skip(seconds: Double, messageId: UUID) {
+        guard let p = player, currentlyPlayingId == messageId else { return }
+        let newTime = max(0.0, min(p.duration, p.currentTime + seconds))
+        p.currentTime = newTime
+        progress = p.duration > 0 ? newTime / p.duration : 0
+    }
+
     /// W95: cycle through playback speeds 1× → 1.5× → 2× → 1×. If a
     /// note is currently playing, the rate is applied immediately
     /// (AVAudioPlayer adjusts in real time when enableRate=true).

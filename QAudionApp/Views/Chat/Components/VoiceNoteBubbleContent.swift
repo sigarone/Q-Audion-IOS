@@ -1,5 +1,20 @@
 import SwiftUI
+import UIKit
 import QAudionEngine
+
+/// W99: minimal UIActivityViewController wrapper. Used by chat
+/// attachment bubbles for the system share sheet (AirDrop / Files /
+/// Mail / Messages). Mirrors VCardShareSheet without the temp-file
+/// dance — caller already has the URL on disk.
+struct ActivityShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController,
+                                context: Context) {}
+}
 
 /// W81 — bubble content for voice-note messages.
 ///
@@ -39,7 +54,34 @@ struct VoiceNoteBubbleContent: View {
         }
     }
 
+    /// Identifiable URL wrapper so SwiftUI's `.sheet(item:)` accepts it.
+    private struct ShareTarget: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
+    @State private var sharingURL: ShareTarget? = nil
+
     var body: some View {
+        bubbleRow
+            // W99: long-press → context menu with "Condividi" action
+            // that opens the system share sheet with the cached M4A
+            // file URL. User can then save to Files / send via AirDrop /
+            // email / etc. Disabled while the file is still downloading.
+            .contextMenu(menuItems: {
+                if let path = mediaLocalPath, !path.isEmpty {
+                    Button {
+                        sharingURL = ShareTarget(url: URL(fileURLWithPath: path))
+                    } label: {
+                        Label("Condividi audio", systemImage: "square.and.arrow.up")
+                    }
+                }
+            })
+            .sheet(item: $sharingURL) { target in
+                ActivityShareSheet(activityItems: [target.url])
+            }
+    }
+
+    private var bubbleRow: some View {
         HStack(spacing: 10) {
             iconButton
             VStack(alignment: .leading, spacing: 4) {
