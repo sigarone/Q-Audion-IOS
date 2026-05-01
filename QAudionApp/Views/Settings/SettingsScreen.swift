@@ -38,6 +38,9 @@ struct SettingsScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.qaudionSnackbar) private var snackbar
+    /// W102: cache-clear feedback alert state.
+    @State private var cacheClearedAlertVisible: Bool = false
+    @State private var cacheClearedMessage: String = ""
 
     var body: some View {
         NavigationStack {
@@ -341,6 +344,28 @@ struct SettingsScreen: View {
                             subtitle: "Build · device · stato · share")
             }
             .buttonStyle(.plain)
+
+            // W102: clear voice-note + image attachment cache. Wipes
+            // Library/Caches/voicenotes and Library/Caches/images so
+            // disk usage drops without losing the chat history (the
+            // qfile markers stay; cache is re-fetched on next tap).
+            Button {
+                let bytesFreed = AttachmentCacheCleaner.clearAllCaches()
+                let mb = Double(bytesFreed) / (1024.0 * 1024.0)
+                cacheClearedMessage = String(format: "Cache liberata: %.1f MB", mb)
+                cacheClearedAlertVisible = true
+            } label: {
+                SettingsRow(icon: "tray.2.fill",
+                            iconColor: .orange,
+                            title: "Svuota cache allegati",
+                            subtitle: "Voice note + immagini (i marker restano)")
+            }
+            .buttonStyle(.plain)
+        }
+        .alert("Cache liberata", isPresented: $cacheClearedAlertVisible) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(cacheClearedMessage)
         }
         .padding(.horizontal, 16)
     }
