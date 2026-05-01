@@ -1324,7 +1324,10 @@ final class AppState: ObservableObject {
                 // onCallCancel).
                 ws.onCallProcessing = { [weak self] _, _ in
                     DispatchQueue.main.async {
-                        guard let self = self else { return }
+                        // Bail out if AppState was deallocated mid-flight.
+                        // No need to bind self — the closure body doesn't
+                        // touch any instance state, just logs.
+                        guard self != nil else { return }
                         // Already `.connecting` by default — no transition
                         // needed but log so devs see the WS arrived.
                         print("[AppState] call_processing received — peer ack'd offer")
