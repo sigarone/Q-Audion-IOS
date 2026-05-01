@@ -423,6 +423,23 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
             .id(cacheUsageRefreshTrigger)
+
+            // W150: bulk-clear all per-conversation composer drafts.
+            // Useful when handing the device to someone else without a
+            // full account reset — drafts can leak in-progress thoughts.
+            Button {
+                let cleared = Self.clearAllDrafts()
+                cacheClearedMessage = cleared > 0
+                    ? "Eliminati \(cleared) abbozzi."
+                    : "Nessun abbozzo da eliminare."
+                cacheClearedAlertVisible = true
+            } label: {
+                SettingsRow(icon: "doc.text.below.ecg",
+                            iconColor: .orange,
+                            title: "Cancella abbozzi",
+                            subtitle: "Rimuove i testi non inviati salvati per ogni chat")
+            }
+            .buttonStyle(.plain)
         }
         .alert("Cache liberata", isPresented: $cacheClearedAlertVisible) {
             Button("OK", role: .cancel) { }
@@ -430,6 +447,21 @@ struct SettingsScreen: View {
             Text(cacheClearedMessage)
         }
         .padding(.horizontal, 16)
+    }
+
+    /// W150: walk standardUserDefaults dictionary keys and remove any
+    /// composer-draft entries (prefix `qa.composer.draft.`). Returns
+    /// the number of keys removed so the alert can confirm.
+    private static func clearAllDrafts() -> Int {
+        let prefix = "qa.composer.draft."
+        let store = UserDefaults.standard
+        let allKeys = store.dictionaryRepresentation().keys
+        var removed = 0
+        for k in allKeys where k.hasPrefix(prefix) {
+            store.removeObject(forKey: k)
+            removed += 1
+        }
+        return removed
     }
 
     // MARK: - Sign-out destructive button
