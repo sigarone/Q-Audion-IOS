@@ -99,36 +99,48 @@ final class ChatContainer: ObservableObject {
         // landed for THIS conversation's peer.
         let center = NotificationCenter.default
         let peerId = self.peerUserId
+        // The NotificationCenter closure is `@Sendable` per the iOS 18
+        // signature — mutating @MainActor state must hop into a
+        // `Task { @MainActor in ... }`. Same fix as W74c on AppState's
+        // willEnterForeground observer.
         center.addObserver(forName: AppState.chatRefreshNotification,
-                           object: nil, queue: .main) { [weak self] note in
-            guard let self = self else { return }
-            // Refresh always — store changes may have arrived via any
-            // peer (incoming msg_receive may have created a new
-            // conversation row before the user opened the chat).
-            if let info = note.userInfo as? [String: Any],
-               let from = info["peerUserId"] as? String,
-               from != peerId {
-                // Message for a different peer; ignore.
-                return
+                           object: nil, queue: .main) { note in
+            // Capture only Sendable values out of the note so we don't
+            // close over the non-Sendable `Notification` itself.
+            let peerMatch: Bool = {
+                guard let info = note.userInfo as? [String: Any],
+                      let from = info["peerUserId"] as? String else {
+                    // Notes without peerUserId (delivery/read receipts)
+                    // always refresh — store-level updates may apply
+                    // to any conversation.
+                    return true
+                }
+                return from == peerId
+            }()
+            guard peerMatch else { return }
+            Task { @MainActor [weak self] in
+                self?.refreshFromStore()
             }
-            self.refreshFromStore()
         }
         center.addObserver(forName: AppState.chatTypingNotification,
-                           object: nil, queue: .main) { [weak self] note in
-            guard let self = self,
-                  let info = note.userInfo as? [String: Any],
+                           object: nil, queue: .main) { note in
+            guard let info = note.userInfo as? [String: Any],
                   let from = info["senderId"] as? String,
                   from == peerId,
-                  let isTyping = info["isTyping"] as? Bool else { return }
-            // Patch isPeerTyping into the view-model without rebuilding
-            // the whole list — keeps the chat scroll stable.
-            self.viewModel = ChatViewModel(
-                conversation: self.viewModel.conversation,
-                messages: self.viewModel.messages,
-                composerText: self.composerText,
-                isPeerTyping: isTyping,
-                isPeerOnline: self.viewModel.isPeerOnline
-            )
+                  let isTyping = info["is_typing"] as? Bool ??
+                                  (info["isTyping"] as? Bool) else { return }
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                // Patch isPeerTyping into the view-model without rebuilding
+                // the whole list — keeps the chat scroll stable.
+                self.viewModel = ChatViewModel(
+                    conversation: self.viewModel.conversation,
+                    messages: self.viewModel.messages,
+                    composerText: self.composerText,
+                    isPeerTyping: isTyping,
+                    isPeerOnline: self.viewModel.isPeerOnline
+                )
+            }
         }
     }
 
