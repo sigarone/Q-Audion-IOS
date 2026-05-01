@@ -559,11 +559,23 @@ struct ChatListScreen: View {
 
     // MARK: - Empty state
 
+    @State private var emptyStateBounce: Bool = false
+
     private var emptyState: some View {
         VStack(spacing: 16) {
+            // W129: gentle bounce on the empty-state icon to nudge the
+            // user without being obnoxious. 1.0 → 1.08 → 1.0 over 1.4s
+            // ease-in-out repeating, autoreverse=true. Matches the
+            // VoiceNote pulse animation pattern (W126).
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 56))
                 .foregroundStyle(scheme.onSurfaceVariant)
+                .scaleEffect(emptyStateBounce ? 1.08 : 1.0)
+                .animation(
+                    .easeInOut(duration: 1.4).repeatForever(autoreverses: true),
+                    value: emptyStateBounce
+                )
+                .onAppear { emptyStateBounce = true }
             Text("Nessuna conversazione")
                 .qaudionStyle(type.titleMedium)
                 .foregroundStyle(scheme.onSurface)
