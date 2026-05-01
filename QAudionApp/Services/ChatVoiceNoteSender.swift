@@ -182,7 +182,11 @@ final class ChatVoiceNoteSender {
 
     // MARK: - PSK adapter (mirrors ChatMessageSendService resolution)
 
-    private static func makeVaultAdapter(
+    /// Internal-visible so ``ChatVoiceNoteReceiver`` can reuse the same
+    /// ladder. Intentionally not `public` — outside the app target there
+    /// are no consumers, and keeping the surface tight prevents
+    /// accidentally exposing the PSK fallback to engine code.
+    static func makeVaultAdapter(
         vault: SovereignKeyVault,
         peerUserId: String,
         senderId: String

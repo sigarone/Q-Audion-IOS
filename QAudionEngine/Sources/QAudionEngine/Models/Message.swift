@@ -32,11 +32,22 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// the receipts handler simply falls back to the broadcast-refresh
     /// path until those messages are re-sent or replaced.
     public let serverMessageId: String?
+    /// W80: local filesystem path to a decrypted media payload (voice
+    /// note / attachment). `nil` for plain text messages and for inbound
+    /// voice notes that haven't finished downloading yet. Optional for
+    /// backward compat with v1.0.140-v1.0.143 stored conversations.
+    public let mediaLocalPath: String?
+    /// W80: voice-note duration in milliseconds. Lifted from the qfile
+    /// v3 marker on receive so the bubble can render "🎤 Nota vocale
+    /// (4.2s)" before AVAudioPlayer probes the file.
+    public let mediaDurationMs: Int64?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
                 readAt: Date?, status: Status, senderUserId: String? = nil,
-                serverMessageId: String? = nil) {
+                serverMessageId: String? = nil,
+                mediaLocalPath: String? = nil,
+                mediaDurationMs: Int64? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -47,5 +58,7 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.status = status
         self.senderUserId = senderUserId
         self.serverMessageId = serverMessageId
+        self.mediaLocalPath = mediaLocalPath
+        self.mediaDurationMs = mediaDurationMs
     }
 }

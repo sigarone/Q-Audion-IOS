@@ -92,10 +92,40 @@ public final class ConversationStore {
             readAt: readAt ?? old.readAt,
             status: newStatus,
             senderUserId: old.senderUserId,
-            serverMessageId: old.serverMessageId
+            serverMessageId: old.serverMessageId,
+            mediaLocalPath: old.mediaLocalPath,
+            mediaDurationMs: old.mediaDurationMs
         )
         guard let data = try? encoder.encode(list) else { return }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
+    }
+
+    /// W80: bind decrypted voice-note media (local cache path + duration)
+    /// to a previously-stored message. Updates plaintext too so the chat
+    /// bubble shows the friendly "🎤 Nota vocale (4.2s)" instead of the
+    /// "download in arrivo" placeholder we wrote on receive.
+    public func setMediaInfo(localId: UUID, conversationId: UUID,
+                             plaintext: String?, mediaLocalPath: String,
+                             mediaDurationMs: Int64) {
+        var list = loadMessages(conversationId: conversationId)
+        guard let idx = list.firstIndex(where: { $0.id == localId }) else { return }
+        let old = list[idx]
+        list[idx] = Message(
+            id: old.id, conversationId: old.conversationId, direction: old.direction,
+            plaintext: plaintext ?? old.plaintext,
+            sentAt: old.sentAt,
+            deliveredAt: old.deliveredAt, readAt: old.readAt,
+            status: old.status, senderUserId: old.senderUserId,
+            serverMessageId: old.serverMessageId,
+            mediaLocalPath: mediaLocalPath,
+            mediaDurationMs: mediaDurationMs
+        )
+        do {
+            let data = try encoder.encode(list)
+            defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
+        } catch {
+            print("[ConversationStore] setMediaInfo encode failed for conv=\(conversationId): \(error)")
+        }
     }
 
     // MARK: - W78: server message-id reconciliation
@@ -114,7 +144,9 @@ public final class ConversationStore {
             plaintext: old.plaintext, sentAt: old.sentAt,
             deliveredAt: old.deliveredAt, readAt: old.readAt,
             status: old.status, senderUserId: old.senderUserId,
-            serverMessageId: serverMessageId
+            serverMessageId: serverMessageId,
+            mediaLocalPath: old.mediaLocalPath,
+            mediaDurationMs: old.mediaDurationMs
         )
         guard let data = try? encoder.encode(list) else { return }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
@@ -145,7 +177,9 @@ public final class ConversationStore {
                 readAt: readAt ?? old.readAt,
                 status: newStatus,
                 senderUserId: old.senderUserId,
-                serverMessageId: old.serverMessageId
+                serverMessageId: old.serverMessageId,
+                mediaLocalPath: old.mediaLocalPath,
+                mediaDurationMs: old.mediaDurationMs
             )
             do {
                 let data = try encoder.encode(list)

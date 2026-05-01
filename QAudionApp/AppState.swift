@@ -738,6 +738,12 @@ final class AppState: ObservableObject {
             let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
             psk = Data(digest)
         }
+        // W80: capture the RAW decrypted plaintext separately from the
+        // friendly UI rendering so we can detect qfile markers and
+        // kick off the receive pipeline. Without this split, the
+        // marker JSON would already have been replaced by the
+        // "(download in arrivo)" placeholder before we get to parse.
+        var decryptedRaw: String = ""
         do {
             let pt = try crypto.decrypt(
                 wireBlob: cipher,
@@ -746,7 +752,7 @@ final class AppState: ObservableObject {
                 recipientId: currentUserId ?? "",
                 msgId: clientMsgId ?? serverMsgId
             )
-            let raw = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
+            decryptedRaw = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
             // W78: cross-platform attachment placeholder. Desktop and
             // Android send voice notes / files via the qa_ctl:1
             // `attach_announce` envelope (XChaCha20-Poly1305 + TUS).
@@ -758,7 +764,7 @@ final class AppState: ObservableObject {
             // shape for `qfile` markers (legacy iOS-internal file
             // transfer) so a stray Desktop-FileTransfer marker doesn't
             // leak as text either.
-            plaintext = Self.renderInboundPlaintext(raw)
+            plaintext = Self.renderInboundPlaintext(decryptedRaw)
         } catch {
             print("[AppState] msg_receive decrypt failed from \(senderId): \(error)")
             plaintext = "[messaggio cifrato non leggibile]"
@@ -793,6 +799,20 @@ final class AppState: ObservableObject {
             store.upsertConversation(conv)
         }
         let msgUUID = UUID()
+        // W80: voice-note receive — if the decrypted plaintext is a
+        // `qfile` v3 marker (carrying a download_claim), persist the
+        // duration up front so the row already shows "🎤 Nota vocale
+        // (4.2s) (download in arrivo)", and kick off the async
+        // download+decrypt that flips the row to a playable bubble
+        // once the M4A lands in the cache.
+        var initialMediaDur: Int64? = nil
+        var pendingMarker: FileTransfer.FileMarker? = nil
+        if !decryptedRaw.isEmpty,
+           let marker = FileTransfer.tryParseMarker(text: decryptedRaw),
+           marker.qfile.downloadClaim != nil {
+            initialMediaDur = marker.qfile.durationMs
+            pendingMarker = marker
+        }
         let msg = Message(
             id: msgUUID,
             conversationId: conv.id,
@@ -806,9 +826,47 @@ final class AppState: ObservableObject {
             // W78: persist the server id on inbound messages too so any
             // future cross-device sync (read receipts emitted by a
             // companion device, e.g. desktop session) can match the row.
-            serverMessageId: serverMsgId
+            serverMessageId: serverMsgId,
+            mediaLocalPath: nil,
+            mediaDurationMs: initialMediaDur
         )
         store.appendMessage(msg)
+        // W80: async download + decrypt + cache. We kick this off here
+        // so the cache is populated by the time the user opens the
+        // chat. The send path attaches a recipient capability claim,
+        // which the receiver redeems via the X-Download-* headers.
+        if let marker = pendingMarker {
+            Task { [weak self, msgUUID, convId = conv.id, senderId] in
+                guard let self = self else { return }
+                let receiver = ChatVoiceNoteReceiver(appState: self)
+                do {
+                    let cacheURL = try await receiver.fetch(
+                        marker: marker, senderId: senderId
+                    )
+                    let friendly = ChatVoiceNoteReceiver.renderReceivedText(marker: marker)
+                    await MainActor.run {
+                        ConversationStore().setMediaInfo(
+                            localId: msgUUID,
+                            conversationId: convId,
+                            plaintext: friendly,
+                            mediaLocalPath: cacheURL.path,
+                            mediaDurationMs: marker.qfile.durationMs ?? 0
+                        )
+                        NotificationCenter.default.post(
+                            name: AppState.chatRefreshNotification,
+                            object: nil,
+                            userInfo: ["peerUserId": senderId, "conversationId": convId]
+                        )
+                    }
+                } catch {
+                    print("[AppState] voice-note receive failed from \(senderId): \(error)")
+                    // Leave the placeholder text in place; user can
+                    // tap a retry CTA in a future patch (snackbar
+                    // not surfaced today to avoid noise on transient
+                    // network blips).
+                }
+            }
+        }
         // Auto-ack delivery so the sender flips its UI to "delivered".
         // Best-effort fire-and-forget. ChatContainer's user-mark-as-read
         // sends `msg_read` separately when the screen is open.
