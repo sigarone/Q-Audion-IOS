@@ -483,6 +483,25 @@ struct SettingsScreen: View {
             .buttonStyle(.plain)
             .id(cacheUsageRefreshTrigger)
 
+            // W163: combined reset of all small per-device metadata
+            // accumulated by W137 / W142 / W158 / W162 (drafts,
+            // last-seen, first-seen, build-seen). One-click privacy
+            // reset for testers handing off a device.
+            Button {
+                let n = Self.resetAllLocalMetadata()
+                cacheClearedMessage = n > 0
+                    ? "Eliminate \(n) chiavi di metadati locali."
+                    : "Nessun metadato da eliminare."
+                cacheClearedAlertVisible = true
+                cacheUsageRefreshTrigger += 1
+            } label: {
+                SettingsRow(icon: "wand.and.stars",
+                            iconColor: .orange,
+                            title: "Reset metadati locali",
+                            subtitle: "Abbozzi · ultimo accesso · primo lancio · build seen")
+            }
+            .buttonStyle(.plain)
+
             // W153: wipe all "ultimo accesso" stamps captured by
             // PresenceService. The next time the chat detail topbar
             // renders for a peer, it falls back to the static crypto
@@ -521,6 +540,35 @@ struct SettingsScreen: View {
         let allKeys = store.dictionaryRepresentation().keys
         var removed = 0
         for k in allKeys where k.hasPrefix(prefix) {
+            store.removeObject(forKey: k)
+            removed += 1
+        }
+        return removed
+    }
+
+    /// W163: combined reset of all small per-device metadata.
+    /// Removes drafts, last-seen, first-seen, build-seen entries.
+    /// Returns the number of UserDefaults keys actually removed.
+    private static func resetAllLocalMetadata() -> Int {
+        let prefixes: [String] = [
+            "qa.composer.draft.",
+            "qa.lastSeenAt.",
+            "qaudion.buildSeen.",
+        ]
+        let single: [String] = [
+            "qaudion.firstSeen",
+        ]
+        let store = UserDefaults.standard
+        let allKeys = store.dictionaryRepresentation().keys
+        var removed = 0
+        for k in allKeys {
+            for p in prefixes where k.hasPrefix(p) {
+                store.removeObject(forKey: k)
+                removed += 1
+                break
+            }
+        }
+        for k in single where store.object(forKey: k) != nil {
             store.removeObject(forKey: k)
             removed += 1
         }
