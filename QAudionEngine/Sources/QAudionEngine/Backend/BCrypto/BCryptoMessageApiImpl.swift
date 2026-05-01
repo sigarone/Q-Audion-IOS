@@ -61,6 +61,20 @@ public final class BCryptoMessageApiImpl: MessageApi {
         )
     }
 
+    /// W84 — batch read receipt with explicit sender_id. Server relays
+    /// to that user so their UI flips ✓ → ✓✓ blue. Idempotent and
+    /// fire-and-forget; no inline ack from the server.
+    public func sendReadReceipts(senderId: String, messageIds: [String]) async throws {
+        guard !messageIds.isEmpty else { return }
+        ws.send(
+            type: "msg_read",
+            data: [
+                "sender_id":   senderId,
+                "message_ids": messageIds,
+            ]
+        )
+    }
+
     public func sendTypingIndicator(recipientId: String, isTyping: Bool) async throws {
         ws.send(
             type: "msg_typing",

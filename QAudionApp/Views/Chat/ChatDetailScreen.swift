@@ -344,6 +344,10 @@ struct ChatDetailScreen: View {
                 // increments unread for messages arriving while the
                 // chat is closed; this only resets the count on open.
                 container.markRead()
+                // W84: emit msg_read to the peer so their UI flips
+                // ✓✓ → ✓✓ blue. Once per chat-open (not on every
+                // refresh) to keep WS chatter bounded.
+                container.emitReadReceipts()
                 if let last = container.viewModel.messages.last {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }

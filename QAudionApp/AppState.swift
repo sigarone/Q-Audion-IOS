@@ -58,7 +58,11 @@ final class AppState: ObservableObject {
     /// the time, which broke the presence dot end-to-end. Recreated on
     /// logout so the next session starts fresh.
     @Published private(set) var wsConnectionState: ConnectionState = .disconnected
-    private var liveProvider: BCryptoBackendProvider?
+    /// Persistent backend provider. Internal-visible (was `private`)
+    /// so ChatContainer can access `messageApi` for read-receipt
+    /// emission (W84). Set by `attachPersistentBackend`; cleared on
+    /// logout / token refresh.
+    internal var liveProvider: BCryptoBackendProvider?
 
     /// W77: pairwise PSK first-contact handshake. Built in
     /// `connectPersistentSocket()` once the WS is up so `sendOpaque`

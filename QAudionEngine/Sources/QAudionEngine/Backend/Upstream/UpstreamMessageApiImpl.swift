@@ -52,6 +52,19 @@ public final class UpstreamMessageApiImpl: MessageApi {
         _ = try await rest.post("/v1/receipts/\(messageId)", body: body)
     }
 
+    /// W84 — batch read receipts. Signal-compatible REST has no native
+    /// batch endpoint, so fall back to N parallel single-id calls.
+    public func sendReadReceipts(senderId: String, messageIds: [String]) async throws {
+        // Parallel for speed; per-id failures don't block the rest.
+        await withTaskGroup(of: Void.self) { group in
+            for id in messageIds {
+                group.addTask { [weak self] in
+                    try? await self?.sendReadReceipt(messageId: id)
+                }
+            }
+        }
+    }
+
     /// Send a typing indicator to the recipient.
     public func sendTypingIndicator(recipientId: String, isTyping: Bool) async throws {
         let body = try JSONSerialization.data(withJSONObject: [

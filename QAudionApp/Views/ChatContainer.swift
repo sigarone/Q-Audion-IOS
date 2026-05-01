@@ -254,6 +254,34 @@ final class ChatContainer: ObservableObject {
         refreshFromStore()
     }
 
+    /// W84: emit a `msg_read` receipt to the peer for all inbound
+    /// messages with a server id. Server relays so the peer's UI flips
+    /// ✓✓ to ✓✓ blue. Best-effort fire-and-forget; failures don't
+    /// surface (logs only).
+    ///
+    /// Called from `ChatDetailScreen.onAppear` — once per chat open,
+    /// not on every refresh, to keep the WS chatter bounded. The chat-
+    /// refresh notification handler intentionally does NOT call this
+    /// method; it just zeros the local badge via `markConversationRead`.
+    func emitReadReceipts() {
+        guard let provider = self.appState?.liveProvider else { return }
+        let peerId = peerUserId
+        let inboundServerIds = store.loadMessages(conversationId: conversationId)
+            .filter { $0.direction == .incoming }
+            .compactMap { $0.serverMessageId }
+        guard !inboundServerIds.isEmpty else { return }
+        Task { [peerId, inboundServerIds] in
+            do {
+                try await provider.messageApi.sendReadReceipts(
+                    senderId: peerId,
+                    messageIds: inboundServerIds
+                )
+            } catch {
+                print("[ChatContainer] sendReadReceipts failed: \(error)")
+            }
+        }
+    }
+
     /// W79: ship a recorded voice note over the existing 1:1 chat path.
     /// Pipeline: encrypt+upload via `ChatVoiceNoteSender` → use the
     /// resulting `qfile` v3 marker JSON as the plaintext of a normal
