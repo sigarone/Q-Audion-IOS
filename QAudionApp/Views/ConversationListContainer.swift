@@ -41,6 +41,15 @@ final class ConversationListContainer: ObservableObject {
             )
         }
         viewModel = ConversationListViewModel(items: items, searchQuery: searchText)
+        // W109: keep the app icon badge in sync with the total unread
+        // count across all conversations. Clears to 0 when everything
+        // is read, lights up when new messages arrive in muted-or-not
+        // conversations (we use the post-readMark unread which already
+        // factors out user-marked-read state).
+        let total = viewModel.items.reduce(0) { $0 + $1.unreadCount }
+        Task { @MainActor in
+            NotificationCenterService.shared.setBadge(total)
+        }
     }
 
     func setSearchQuery(_ query: String) {

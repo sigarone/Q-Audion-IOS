@@ -157,6 +157,18 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         }
     }
 
+    /// W109: set the app icon badge to a specific count (clamped to
+    /// 999 so a hostile peer can't spam the icon to absurd numbers).
+    /// Calling with 0 hides the badge entirely.
+    func setBadge(_ count: Int) {
+        let clamped = max(0, min(count, 999))
+        if #available(iOS 16.0, *) {
+            center.setBadgeCount(clamped)
+        } else {
+            UIApplication.shared.applicationIconBadgeNumber = clamped
+        }
+    }
+
     // MARK: - UNUserNotificationCenterDelegate
 
     nonisolated func userNotificationCenter(
