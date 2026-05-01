@@ -40,6 +40,12 @@ final class VoiceNoteRecorder: ObservableObject {
 
     private var recorder: AVAudioRecorder?
     private var startedAt: Date?
+    /// W108: live elapsed-seconds counter, ticked by a 0.25s timer.
+    /// SwiftUI binds to this so the composer can render "0:34" /
+    /// "1:12" instead of a static "Recording…" label. Reset to 0 on
+    /// cancel / stop.
+    @Published private(set) var elapsedSeconds: TimeInterval = 0
+    private var elapsedTimer: Timer?
 
     /// Starts a new recording. Caller is expected to await; throws on
     /// permission denial or session/recorder failure.
@@ -89,6 +95,17 @@ final class VoiceNoteRecorder: ObservableObject {
             }
             self.recorder = r
             self.startedAt = Date()
+            // W108: kick off the 0.25s timer that publishes elapsed.
+            self.elapsedSeconds = 0
+            self.elapsedTimer?.invalidate()
+            let t = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self = self, let started = self.startedAt else { return }
+                    self.elapsedSeconds = Date().timeIntervalSince(started)
+                }
+            }
+            RunLoop.main.add(t, forMode: .common)
+            self.elapsedTimer = t
         } catch let e as RecorderError {
             throw e
         } catch {
@@ -111,6 +128,9 @@ final class VoiceNoteRecorder: ObservableObject {
         let dur = startedAt.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
         recorder = nil
         startedAt = nil
+        elapsedTimer?.invalidate()
+        elapsedTimer = nil
+        elapsedSeconds = 0
         Self.deactivateSession()
         // Sanity check — recorder.stop() is async-flushing; tiny files
         // may not exist yet, so we trust the URL and leave the upload
@@ -125,6 +145,9 @@ final class VoiceNoteRecorder: ObservableObject {
         r.stop()
         recorder = nil
         startedAt = nil
+        elapsedTimer?.invalidate()
+        elapsedTimer = nil
+        elapsedSeconds = 0
         try? FileManager.default.removeItem(at: url)
         Self.deactivateSession()
     }

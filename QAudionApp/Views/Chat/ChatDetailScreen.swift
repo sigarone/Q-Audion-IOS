@@ -110,6 +110,11 @@ struct ChatDetailScreen: View {
                 ),
                 editingTarget: editingTarget,
                 replyTarget: replyTarget,
+                // W108: live elapsed-seconds counter for the recording
+                // banner. Recorder publishes elapsedSeconds via a 0.25s
+                // timer; passing through here is enough — SwiftUI binds
+                // the @ObservedObject so the row updates automatically.
+                recordingElapsedSeconds: voiceNoteRecorder.elapsedSeconds,
                 onAttach: { showAttachmentChoice = true },
                 onSend: handleSend,
                 onCancelEdit: { editingTarget = nil },

@@ -33,6 +33,10 @@ struct MessageComposer: View {
     /// Voice-note callbacks. The defaults are no-ops so callers that do
     /// not yet have a recorder wired can pass nothing and still get a UI
     /// without a runtime crash on long-press.
+    /// W108: live elapsed-seconds counter from VoiceNoteRecorder.
+    /// Composer renders "0:34" overlay above the input row while
+    /// isRecording. Default 0 keeps existing call sites compatible.
+    var recordingElapsedSeconds: TimeInterval = 0
     let onStartVoiceNote: () -> Void
     let onFinishVoiceNote: () -> Void
     let onCancelVoiceNote: () -> Void
@@ -68,6 +72,9 @@ struct MessageComposer: View {
             }
             if let reply = replyTarget {
                 replyBanner(reply)
+            }
+            if isRecording {
+                recordingBanner
             }
             inputRow
         }
@@ -112,6 +119,32 @@ struct MessageComposer: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 8).fill(extras.warning.opacity(0.15)))
+    }
+
+    /// W108: live recording banner. Shows a red pulsing dot + the
+    /// elapsed time (M:SS), plus a "Rilascia per inviare" hint.
+    private var recordingBanner: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(extras.error)
+                .frame(width: 8, height: 8)
+                .opacity(0.95)
+            Text(formattedElapsed)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+                .monospacedDigit()
+            Text("Rilascia per inviare · scorri per annullare")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(extras.error.opacity(0.10)))
+    }
+
+    private var formattedElapsed: String {
+        let total = max(0, Int(recordingElapsedSeconds))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     private func replyBanner(_ reply: ReplyTarget) -> some View {
