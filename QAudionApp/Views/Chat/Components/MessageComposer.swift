@@ -80,6 +80,13 @@ struct MessageComposer: View {
             if isRecording {
                 recordingBanner
             }
+            // W116: character counter once the message exceeds 1000
+            // characters. Helps the user pace long messages and gives
+            // an early warning before hitting any future server cap
+            // (currently no client-side limit on text length).
+            if text.count >= 1000 {
+                charCountFooter
+            }
             inputRow
         }
         .padding(.horizontal, 10)
@@ -149,6 +156,29 @@ struct MessageComposer: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(
             (cancelArmed ? extras.error : extras.error.opacity(0.5)).opacity(0.15)
         ))
+    }
+
+    /// W116: long-message char counter. Hidden under 1000 chars, fades
+    /// from onSurfaceVariant (green-ish) → warning at 4500 → error at
+    /// 5000 (soft cap matching most chat platforms).
+    private var charCountFooter: some View {
+        let count = text.count
+        let color: Color
+        if count >= 5000 {
+            color = extras.error
+        } else if count >= 4500 {
+            color = extras.warning
+        } else {
+            color = scheme.onSurfaceVariant
+        }
+        return HStack {
+            Spacer()
+            Text("\(count) caratteri")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(color)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 6)
     }
 
     private var formattedElapsed: String {
