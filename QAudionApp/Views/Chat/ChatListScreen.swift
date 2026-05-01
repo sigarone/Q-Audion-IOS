@@ -46,6 +46,11 @@ struct ChatListScreen: View {
     @State private var adminBannerDismissed = false
     /// W40: gruppo creato (non-nil → presenta GroupChatScreen full-screen).
     @State private var openedGroup: OpenedGroup? = nil
+    /// W139: pending conversation export — non-nil triggers the share
+    /// sheet. The wrapper holds the on-disk URL of the rendered .txt
+    /// transcript, which `UIActivityViewController` ships out via
+    /// AirDrop / Files / Mail / Messages.
+    @State private var exportTarget: ExportTarget? = nil
 
     /// Sentinel Identifiable per `.fullScreenCover(item:)` con il
     /// groupId + name appena creati.
@@ -53,6 +58,13 @@ struct ChatListScreen: View {
         let id: UUID
         let name: String
         let memberCount: Int
+    }
+
+    /// W139: wrapper for `.sheet(item:)`. Identity is the file URL —
+    /// each export produces a fresh tmp file so identity is unique.
+    private struct ExportTarget: Identifiable {
+        let id: URL
+        var url: URL { id }
     }
 
     /// W57 (Track B engine wire #3): admin banner content. Priorità
@@ -276,6 +288,12 @@ struct ChatListScreen: View {
                         }
                     }
             }
+        }
+        // W139: present the export share sheet when a transcript file
+        // has been written. Single activityItem = the on-disk URL so
+        // receivers see a real .txt with proper UTI.
+        .sheet(item: $exportTarget) { target in
+            ActivityShareSheet(activityItems: [target.url])
         }
         .sheet(isPresented: $showingNewGroup) {
             // W40.A: full group-creation flow. ContactPicker +
@@ -524,6 +542,14 @@ struct ChatListScreen: View {
                 Label(item.muted ? "Riattiva" : "Silenzia",
                       systemImage: item.muted ? "bell" : "bell.slash")
             }
+            // W139: export the transcript as a plaintext .txt and hand
+            // it to the system share sheet. Decrypted-on-device content
+            // — leaves the sandbox only at the user's direction.
+            Button {
+                exportConversation(item: item)
+            } label: {
+                Label("Esporta chat", systemImage: "square.and.arrow.up.on.square")
+            }
             Divider()
             Button(role: .destructive) {
                 container.deleteConversation(conversationId: item.conversationId)
@@ -531,6 +557,27 @@ struct ChatListScreen: View {
                 Label("Elimina", systemImage: "trash")
             }
         }
+    }
+
+    /// W139: build the transcript file off the row tap, then surface
+    /// the share sheet via `exportTarget`. The store read happens on
+    /// MainActor synchronously — chat sizes are small (capped at the
+    /// engine layer), so no need to dispatch off-main.
+    private func exportConversation(item: ConversationListViewModel.Item) {
+        let store = ConversationStore()
+        let messages = store.loadMessages(conversationId: item.conversationId)
+        guard let url = ConversationExporter.export(
+            messages: messages,
+            peerDisplayName: item.peerDisplayName
+        ) else {
+            snackbar?.show(.init(
+                text: "Esportazione fallita.",
+                severity: .error,
+                durationSeconds: 3
+            ))
+            return
+        }
+        exportTarget = ExportTarget(id: url)
     }
 
     /// W138: read the persisted composer draft (if any) for this
