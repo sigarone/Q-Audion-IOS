@@ -90,6 +90,44 @@ struct AboutSettingsScreen: View {
                     section("AGGIORNAMENTI") {
                         updateBlock
                     }
+                    // W173: 1-tap mailto to support — pre-fills the
+                    // subject with the build identifier so triage is
+                    // faster. Plain UIApplication.shared.open call.
+                    section("ASSISTENZA") {
+                        Button {
+                            #if canImport(UIKit)
+                            let v = container.viewModel.appVersion
+                            let b = container.viewModel.buildNumber
+                            let subject = "Q-Audion v\(v) (build \(b)) — segnalazione"
+                            let encoded = subject
+                                .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+                            if let url = URL(string: "mailto:support@qaudion.app?subject=" + encoded) {
+                                UIApplication.shared.open(url)
+                            }
+                            #endif
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "envelope.fill")
+                                    .font(.system(size: 17, weight: .regular))
+                                    .foregroundStyle(scheme.primary)
+                                    .frame(width: 22)
+                                Text("Contatta supporto")
+                                    .qaudionStyle(type.bodyMedium)
+                                    .foregroundStyle(scheme.onSurface)
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 52)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(scheme.surfaceVariant.opacity(0.4))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
