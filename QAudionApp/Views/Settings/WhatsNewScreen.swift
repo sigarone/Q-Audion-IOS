@@ -22,6 +22,16 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.258", date: "2026-05-01",
+              title: "Extract voice-note callbacks to methods (W258)",
+              bullets: [
+                "v1.0.257 still failed — even `container.markFailed(...)` timed out",
+                "Root cause: 4-5 levels of closure depth exhausts the type-checker",
+                "Structural fix: extract closure bodies into named methods",
+                "Methods have a clean type-check scope, isolated from closure constraints",
+                "Pattern: `onStartVoiceNote: handleVoiceNoteStart` (no inline { ... })",
+                "CLAUDE.md §13 updated with this 5th and final antipattern variant"
+              ]),
         .init(id: "v1.0.256", date: "2026-05-01",
               title: "Drop debug prints in voice-note callbacks (W256)",
               bullets: [

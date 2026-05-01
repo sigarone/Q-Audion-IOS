@@ -131,56 +131,17 @@ struct ChatDetailScreen: View {
                 onSend: handleSend,
                 onCancelEdit: { editingTarget = nil },
                 onCancelReply: { replyTarget = nil },
-                onStartVoiceNote: {
-                    HapticFeedback.recordingStart()  // W114: light bump
-                    // W72: real AVAudioRecorder start. Mic permission is
-                    // requested inline; failures land in container's
-                    // failure flag (.networkError fallback for "session
-                    // failure" since mic-permission is a setup error,
-                    // not a wire failure).
-                    Task {
-                        do {
-                            try await voiceNoteRecorder.start()
-                        } catch VoiceNoteRecorder.RecorderError.permissionDenied {
-                            container.markFailed(messageId: UUID(), reason: .generic)
-                        } catch {
-                            // W256: dropped the diagnostic print entirely.
-                            // Even `let line: String = "..." + errMsg`
-                            // (with both sides explicitly typed as String)
-                            // times out the type-checker in this nested
-                            // closure context. The `+` operator's overload
-                            // set (String+String, Array+Array, AdditiveArithmetic, …)
-                            // combined with the surrounding closure type
-                            // constraints exhausts the type-checker budget.
-                            // Production uses os_log anyway; debug print
-                            // wasn't load-bearing. See CLAUDE.md §13.
-                            _ = error
-                        }
-                    }
-                },
-                onFinishVoiceNote: {
-                    // W79: real upload+send pipeline. ChatContainer.sendVoiceNote
-                    // orchestrates the whole flow: read tmp M4A, encrypt+upload
-                    // via FileTransfer (HKDF-SHA256 + AES-256-GCM), mint a
-                    // recipient capability token, build a qfile v3 marker, and
-                    // ship it as the plaintext of a regular msg_send. Local
-                    // conversation row carries a friendly "🎤 Nota vocale (X.Ys)"
-                    // placeholder so the user sees a recognizable bubble.
-                    if let rec = voiceNoteRecorder.stop() {
-                        HapticFeedback.recordingStop()  // W114: medium bump
-                        // W256: dropped the diagnostic print(logLine) call
-                        // entirely. The 5-segment String concatenation it
-                        // built was the next domino after the line-155 fix
-                        // — same type-checker exhaustion. Production uses
-                        // os_log anyway; debug print wasn't load-bearing.
-                        // See CLAUDE.md §13.
-                        container.sendVoiceNote(rec)
-                    }
-                },
-                onCancelVoiceNote: {
-                    // W72: stop + delete tmp file.
-                    voiceNoteRecorder.cancel()
-                }
+                // W258: extracted the voice-note callbacks into named
+                // methods. Inline closure bodies were 4-5 levels deep
+                // (closure → Task → do/catch with pattern matching) and
+                // the type-checker exhausted itself validating EVERY
+                // statement inside — even `container.markFailed(...)`
+                // started timing out at v1.0.256. Methods have a clean
+                // type-check scope isolated from the surrounding
+                // closure constraints. See CLAUDE.md §13.
+                onStartVoiceNote: handleVoiceNoteStart,
+                onFinishVoiceNote: handleVoiceNoteFinish,
+                onCancelVoiceNote: handleVoiceNoteCancel
             )
         }
         .background(scheme.background)
@@ -732,6 +693,57 @@ struct ChatDetailScreen: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+    }
+
+    // MARK: - Voice-note callback methods (W258)
+    //
+    // Extracted from inline closures because the inline bodies were
+    // 4-5 levels deep (closure → Task → do/catch with pattern matching)
+    // and Swift 6 / Xcode 26.4 type-checker exhausted itself validating
+    // EVERY statement inside — even simple function calls like
+    // `container.markFailed(...)` started timing out at v1.0.256.
+    //
+    // Methods have a clean type-check scope, isolated from the
+    // surrounding closure type constraints. See CLAUDE.md §13.
+
+    private func handleVoiceNoteStart() {
+        HapticFeedback.recordingStart()  // W114: light bump
+        Task {
+            await self.startVoiceNoteAsync()
+        }
+    }
+
+    private func startVoiceNoteAsync() async {
+        do {
+            try await voiceNoteRecorder.start()
+        } catch {
+            // W258: simplified — any error from start() becomes a
+            // generic failure. Previously we pattern-matched
+            // RecorderError.permissionDenied separately, but it called
+            // markFailed with the same .generic reason as the catch-all
+            // branch. The pattern match was over-engineering and
+            // contributed to the type-checker exhaustion.
+            await MainActor.run {
+                container.markFailed(messageId: UUID(), reason: .generic)
+            }
+        }
+    }
+
+    private func handleVoiceNoteFinish() {
+        // W79: real upload+send pipeline. ChatContainer.sendVoiceNote
+        // orchestrates the whole flow: read tmp M4A, encrypt+upload via
+        // FileTransfer (HKDF-SHA256 + AES-256-GCM), mint a recipient
+        // capability token, build a qfile v3 marker, and ship it as
+        // the plaintext of a regular msg_send.
+        if let rec = voiceNoteRecorder.stop() {
+            HapticFeedback.recordingStop()  // W114: medium bump
+            container.sendVoiceNote(rec)
+        }
+    }
+
+    private func handleVoiceNoteCancel() {
+        // W72: stop + delete tmp file.
+        voiceNoteRecorder.cancel()
     }
 
     // MARK: - Helpers

@@ -283,6 +283,54 @@ The `+` operator has many overloads (String+String, Array+Array, AdditiveArithme
 
 Production code should use `os_log` / `Logger` anyway, never `print`.
 
+**v1.0.258 update — even trivial function calls time out at sufficient closure depth.** v1.0.256 dropped all the String construction. v1.0.257 build STILL failed:
+
+```
+ChatDetailScreen.swift:145:29: error: the compiler is unable to type-check this expression in reasonable time
+container.markFailed(messageId: UUID(), reason: .generic)
+^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```
+
+A bog-standard method call with two arguments — but inside `closure → Task → do/catch with pattern matching` it's enough to exhaust the type-checker.
+
+**The structural fix**: extract the inline closure body into a named method.
+
+```swift
+// ❌ BEFORE — 4 levels of closure constraints:
+onStartVoiceNote: {
+    HapticFeedback.recordingStart()
+    Task {
+        do {
+            try await voiceNoteRecorder.start()
+        } catch VoiceNoteRecorder.RecorderError.permissionDenied {
+            container.markFailed(messageId: UUID(), reason: .generic)  // TIMES OUT
+        } catch {
+            _ = error
+        }
+    }
+},
+
+// ✅ AFTER — closure is trivial, type-checker has clean scope per method:
+onStartVoiceNote: handleVoiceNoteStart,
+
+private func handleVoiceNoteStart() {
+    HapticFeedback.recordingStart()
+    Task { await self.startVoiceNoteAsync() }
+}
+
+private func startVoiceNoteAsync() async {
+    do {
+        try await voiceNoteRecorder.start()
+    } catch {
+        await MainActor.run {
+            container.markFailed(messageId: UUID(), reason: .generic)
+        }
+    }
+}
+```
+
+**Rule of thumb**: any inline closure body deeper than `closure → Task → do/catch` should be moved to a method. Reference the method by name in the closure-binding parameter (no `{ ... }` at the call site).
+
 Symptoms: the build console shows just `Failed to archive` with **no `error:`/`warning:` lines** — xcbeautify is consuming the diagnostic before tee can capture it.
 
 **Mitigation:** the codemagic.yaml has a "Diagnose Swift compile (raw xcodebuild)" step that runs before `xcode-project build-ipa` with `CODE_SIGNING_ALLOWED=NO`. That output goes to `diag.log` (artifact) and is grepped at the end of Step 6. Always check Step 6 in failed Codemagic builds, not just the Build IPA step.
