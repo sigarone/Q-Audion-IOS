@@ -520,11 +520,27 @@ struct ChatListScreen: View {
             Text("Nessuna conversazione")
                 .qaudionStyle(type.titleMedium)
                 .foregroundStyle(scheme.onSurface)
-            Text("Inizia una nuova chat o un gruppo dai pulsanti in basso.")
+            Text("Aggiungi un contatto per iniziare a scrivere.")
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
+            // W112: actionable CTA — opens the contacts sheet directly
+            // instead of asking the user to find the FAB. Clearer
+            // affordance for first-time users with no chats yet.
+            Button {
+                showingNewConversation = true
+            } label: {
+                Label("Nuova conversazione", systemImage: "plus.bubble.fill")
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18)
+                            .fill(scheme.primary)
+                    )
+                    .foregroundStyle(scheme.onPrimary)
+            }
+            .buttonStyle(.plain)
             Spacer().frame(height: 16)
         }
         .frame(maxWidth: .infinity)
