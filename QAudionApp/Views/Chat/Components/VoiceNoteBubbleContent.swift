@@ -172,6 +172,18 @@ struct VoiceNoteBubbleContent: View {
             .frame(width: 36, height: 36)
             .background(Circle().fill(isReady ? scheme.primary : scheme.surfaceVariant.opacity(0.65)))
             .opacity(isReady ? 1.0 : 0.6)
+            // W126: subtle scale pulse on the icon when this bubble is
+            // the actively-playing note. Cue the user that this is the
+            // bubble making sound (when multiple voice notes are
+            // visible, distinguishing 'which one is talking right now'
+            // can be harder than it sounds).
+            .scaleEffect(isPlayingThis ? 1.06 : 1.0)
+            .animation(
+                isPlayingThis
+                    ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true)
+                    : .default,
+                value: isPlayingThis
+            )
     }
 
     @ViewBuilder
