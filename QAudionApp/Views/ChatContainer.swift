@@ -545,25 +545,68 @@ final class ChatContainer: ObservableObject {
         refreshFromStore()
     }
 
-    /// Resetta i flag di failure e ri-tenta la send pipeline. Il composer
-    /// viene ripopolato col plaintext del messaggio fallito così l'utente
-    /// può modificarlo prima del retry o premere direttamente "Invia".
+    /// Resetta i flag di failure e ri-tenta la send pipeline.
+    ///
+    /// **W88**: branched on `mediaMimeType` so voice notes and images
+    /// rebuild their pipeline from the local cache instead of falling
+    /// through to text-send (which would lose the attachment). Three
+    /// paths:
+    ///
+    ///   - **text**: composerText repopulated with the original plaintext;
+    ///     the old failed row is removed and `sendMessage()` produces a
+    ///     fresh bubble. (Old behaviour kept the failed row + spawned
+    ///     a duplicate; cleaner UX is to replace.)
+    ///   - **audio/* (voice note)**: the cached M4A still lives at
+    ///     `Library/Caches/voicenotes/<oldMsgId>.m4a`. Reconstruct a
+    ///     `VoiceNoteRecorder.Recording` and call `sendVoiceNote`.
+    ///   - **image/* (photo)**: the cached JPEG lives at
+    ///     `Library/Caches/images/<oldMsgId>.jpg`. Re-read the bytes
+    ///     and call `sendImage`.
+    ///
+    /// In all three branches the OLD failed row is hard-removed so the
+    /// chat doesn't show two bubbles for the same message.
     func retryFailedMessage() {
         guard let id = failedMessageId,
               let msg = store.loadMessages(conversationId: conversationId)
                   .first(where: { $0.id == id })
         else { return }
-        composerText = msg.plaintext
+        // Clear failure flags so the snackbar dismisses.
         failedMessageId = nil
         failureReason = nil
-        // Marca il vecchio messaggio come "sending" così la UI mostra
-        // di nuovo l'icona clock invece dell'errore.
-        store.updateMessageStatus(
-            id: id, conversationId: conversationId, newStatus: .sending
-        )
+
+        let mime = msg.mediaMimeType ?? ""
+
+        if mime.hasPrefix("audio/"),
+           let path = msg.mediaLocalPath, !path.isEmpty,
+           FileManager.default.fileExists(atPath: path),
+           let durMs = msg.mediaDurationMs {
+            // Voice-note retry: rebuild a Recording from the cache and
+            // re-ship via sendVoiceNote.
+            store.removeMessage(id: id, conversationId: conversationId)
+            refreshFromStore()
+            let rec = VoiceNoteRecorder.Recording(
+                fileURL: URL(fileURLWithPath: path),
+                durationMs: Int(durMs),
+                mimeType: mime
+            )
+            sendVoiceNote(rec)
+            return
+        }
+        if mime.hasPrefix("image/"),
+           let path = msg.mediaLocalPath, !path.isEmpty,
+           let bytes = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+            // Image retry: re-read the JPEG and re-ship via sendImage.
+            store.removeMessage(id: id, conversationId: conversationId)
+            refreshFromStore()
+            sendImage(bytes)
+            return
+        }
+        // Text fallback: pop the body back into the composer and ship
+        // via sendMessage. Hard-remove the old row so we don't end up
+        // with two copies of the same line.
+        store.removeMessage(id: id, conversationId: conversationId)
         refreshFromStore()
-        // sendMessage è il punto canonico — quando l'engine wires
-        // crypto/WS, retry passerà per gli stessi catch handler.
+        composerText = msg.plaintext
         sendMessage()
     }
 

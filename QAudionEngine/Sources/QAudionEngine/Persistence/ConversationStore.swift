@@ -142,6 +142,16 @@ public final class ConversationStore {
         defaults.set(data, forKey: ConversationStore.messagesKey(for: msg.conversationId))
     }
 
+    /// W88: hard-remove a message row (used by the retry flow after a
+    /// failed voice/image send — we delete the failed row then re-emit
+    /// to avoid showing two bubbles for the same content).
+    public func removeMessage(id: UUID, conversationId: UUID) {
+        var list = loadMessages(conversationId: conversationId)
+        list.removeAll { $0.id == id }
+        guard let data = try? encoder.encode(list) else { return }
+        defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
+    }
+
     public func updateMessageStatus(id: UUID, conversationId: UUID, newStatus: Message.Status,
                                     deliveredAt: Date? = nil, readAt: Date? = nil) {
         var list = loadMessages(conversationId: conversationId)
