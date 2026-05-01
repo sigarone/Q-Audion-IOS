@@ -120,6 +120,7 @@ struct ChatDetailScreen: View {
                 onCancelEdit: { editingTarget = nil },
                 onCancelReply: { replyTarget = nil },
                 onStartVoiceNote: {
+                    HapticFeedback.recordingStart()  // W114: light bump
                     // W72: real AVAudioRecorder start. Mic permission is
                     // requested inline; failures land in container's
                     // failure flag (.networkError fallback for "session
@@ -144,6 +145,7 @@ struct ChatDetailScreen: View {
                     // conversation row carries a friendly "🎤 Nota vocale (X.Ys)"
                     // placeholder so the user sees a recognizable bubble.
                     if let rec = voiceNoteRecorder.stop() {
+                        HapticFeedback.recordingStop()  // W114: medium bump
                         print("[VoiceNote] captured \(rec.fileURL.lastPathComponent) duration \(rec.durationMs)ms (\(rec.mimeType))")
                         container.sendVoiceNote(rec)
                     }

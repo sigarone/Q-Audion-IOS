@@ -160,6 +160,8 @@ final class ChatContainer: ObservableObject {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
+        // W114: soft haptic tap so the user feels the send fire.
+        HapticFeedback.messageSent()
         let outboundId = UUID()
         let msg = Message(
             id: outboundId,
@@ -363,6 +365,7 @@ final class ChatContainer: ObservableObject {
     /// otherwise — the peer's spoof check would reject it anyway).
     /// Idempotent — re-firing is a no-op once the row is tombstoned.
     func deleteMessage(_ message: Message) {
+        HapticFeedback.destructiveAction()  // W114: heavy thud
         guard message.direction == .outgoing else {
             print("[ChatContainer] deleteMessage rejected: cannot delete peer's message")
             return
@@ -413,6 +416,7 @@ final class ChatContainer: ObservableObject {
     /// is always the envelope sender, by construction). Empty emoji
     /// or > 16 chars is rejected (Desktop hardening parity).
     func toggleReaction(_ message: Message, emoji: String) {
+        HapticFeedback.reactionToggle()  // W114: selection click
         let trimmed = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               trimmed.count <= ChatControlEnvelope.reactionEmojiCapChars else {
