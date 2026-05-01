@@ -883,7 +883,15 @@ final class AppState: ObservableObject {
     ///   - `qfile` v2 marker (legacy iOS-internal FileTransfer) — same
     ///     placeholder, since the receive UI hasn't been wired yet.
     /// Anything else is returned as-is.
+    ///
+    /// **DoS guard**: parsers walk JSON, so cap the input to 64 KiB.
+    /// A regular chat message is well under 1 KiB; voice-note envelopes
+    /// (with base64 sha256 + uuid + a few hundred bytes of metadata)
+    /// stay under 2 KiB. 64 KiB is comfortably above the worst-case
+    /// legitimate envelope and defangs a malicious peer crafting a
+    /// pathological JSON to chew CPU on the receiver.
     static func renderInboundPlaintext(_ raw: String) -> String {
+        guard raw.utf8.count <= 64 * 1024 else { return raw }
         // attach_announce path — qa_ctl:1 marker.
         if let env = try? AttachAnnounceEnvelope.parse(raw), let env = env {
             let mime = env.att.mime

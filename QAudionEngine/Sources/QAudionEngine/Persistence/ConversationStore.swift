@@ -121,7 +121,12 @@ public final class ConversationStore {
     }
 
     /// Update status by server id (used by msg_delivered / msg_read
-    /// handlers). Returns true if a row was matched and updated.
+    /// handlers). Returns true if at least one row was matched and updated.
+    /// Server ids are globally unique by design, but we still scan every
+    /// conversation because (a) a buggy server could in theory emit the
+    /// same id twice and we'd rather flip both rows than half-flip, and
+    /// (b) defensive programming costs almost nothing here (UserDefaults
+    /// I/O is local).
     @discardableResult
     public func updateStatusByServerId(serverMessageId: String, newStatus: Message.Status,
                                        deliveredAt: Date? = nil, readAt: Date? = nil) -> Bool {
@@ -142,11 +147,12 @@ public final class ConversationStore {
                 senderUserId: old.senderUserId,
                 serverMessageId: old.serverMessageId
             )
-            if let data = try? encoder.encode(list) {
+            do {
+                let data = try encoder.encode(list)
                 defaults.set(data, forKey: ConversationStore.messagesKey(for: conv.id))
+            } catch {
+                print("[ConversationStore] updateStatusByServerId encode failed for conv=\(conv.id): \(error)")
             }
-            // Server ids are globally unique — first match is the only match.
-            return true
         }
         return anyMatched
     }
