@@ -157,7 +157,10 @@ public final class ConversationStore {
             serverMessageId: old.serverMessageId,
             mediaLocalPath: old.mediaLocalPath,
             mediaDurationMs: old.mediaDurationMs,
-            mediaMimeType: old.mediaMimeType
+            mediaMimeType: old.mediaMimeType,
+            clientMsgId: old.clientMsgId,
+            edited: old.edited,
+            deletedAt: old.deletedAt
         )
         guard let data = try? encoder.encode(list) else { return }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
@@ -212,7 +215,10 @@ public final class ConversationStore {
             serverMessageId: serverMessageId,
             mediaLocalPath: old.mediaLocalPath,
             mediaDurationMs: old.mediaDurationMs,
-            mediaMimeType: old.mediaMimeType
+            mediaMimeType: old.mediaMimeType,
+            clientMsgId: old.clientMsgId,
+            edited: old.edited,
+            deletedAt: old.deletedAt
         )
         guard let data = try? encoder.encode(list) else { return }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
@@ -246,7 +252,10 @@ public final class ConversationStore {
                 serverMessageId: old.serverMessageId,
                 mediaLocalPath: old.mediaLocalPath,
                 mediaDurationMs: old.mediaDurationMs,
-            mediaMimeType: old.mediaMimeType
+            mediaMimeType: old.mediaMimeType,
+            clientMsgId: old.clientMsgId,
+            edited: old.edited,
+            deletedAt: old.deletedAt
             )
             do {
                 let data = try encoder.encode(list)
@@ -256,6 +265,81 @@ public final class ConversationStore {
             }
         }
         return anyMatched
+    }
+
+    // MARK: - W86: clientMsgId-keyed mutations (qa_ctl envelopes)
+
+    /// Locate a message by its sender-generated `clientMsgId`. Returns
+    /// the conversation id along with the row so the caller can re-save
+    /// without scanning every conv twice. iOS rows have unique
+    /// `clientMsgId` values across the entire store (UUIDv4); a hit is
+    /// the only hit.
+    public func findByClientMsgId(_ clientMsgId: String) -> (conversationId: UUID, message: Message)? {
+        for conv in loadConversations() {
+            let msgs = loadMessages(conversationId: conv.id)
+            if let m = msgs.first(where: { $0.clientMsgId == clientMsgId }) {
+                return (conv.id, m)
+            }
+        }
+        return nil
+    }
+
+    /// W86: apply a `qa_ctl:1` t="edit" envelope. Replaces `plaintext`
+    /// and stamps `edited = true`. Caller (AppState) is responsible for
+    /// the spoof check (only the original sender can edit) before
+    /// invoking. Returns true if a row was matched and updated.
+    @discardableResult
+    public func applyEditByClientMsgId(_ clientMsgId: String,
+                                       newPlaintext: String) -> Bool {
+        guard let (convId, _) = findByClientMsgId(clientMsgId) else { return false }
+        var list = loadMessages(conversationId: convId)
+        guard let idx = list.firstIndex(where: { $0.clientMsgId == clientMsgId }) else { return false }
+        let old = list[idx]
+        list[idx] = Message(
+            id: old.id, conversationId: old.conversationId, direction: old.direction,
+            plaintext: newPlaintext,
+            sentAt: old.sentAt, deliveredAt: old.deliveredAt, readAt: old.readAt,
+            status: old.status, senderUserId: old.senderUserId,
+            serverMessageId: old.serverMessageId,
+            mediaLocalPath: old.mediaLocalPath,
+            mediaDurationMs: old.mediaDurationMs,
+            mediaMimeType: old.mediaMimeType,
+            clientMsgId: old.clientMsgId,
+            edited: true,
+            deletedAt: old.deletedAt
+        )
+        guard let data = try? encoder.encode(list) else { return false }
+        defaults.set(data, forKey: ConversationStore.messagesKey(for: convId))
+        return true
+    }
+
+    /// W86: apply a `qa_ctl:1` t="delete" envelope. Replaces `plaintext`
+    /// with the localized tombstone and stamps `deletedAt`. Caller
+    /// performs the spoof check. Returns true on match.
+    @discardableResult
+    public func applyDeleteByClientMsgId(_ clientMsgId: String,
+                                         tombstone: String = "Messaggio eliminato",
+                                         at deletedAt: Date = Date()) -> Bool {
+        guard let (convId, _) = findByClientMsgId(clientMsgId) else { return false }
+        var list = loadMessages(conversationId: convId)
+        guard let idx = list.firstIndex(where: { $0.clientMsgId == clientMsgId }) else { return false }
+        let old = list[idx]
+        list[idx] = Message(
+            id: old.id, conversationId: old.conversationId, direction: old.direction,
+            plaintext: tombstone,
+            sentAt: old.sentAt, deliveredAt: old.deliveredAt, readAt: old.readAt,
+            status: old.status, senderUserId: old.senderUserId,
+            serverMessageId: old.serverMessageId,
+            mediaLocalPath: nil,    // detach the media — playable bubble would reference a
+            mediaDurationMs: nil,   //  decrypted file that no longer represents the message.
+            mediaMimeType: nil,
+            clientMsgId: old.clientMsgId,
+            edited: old.edited,
+            deletedAt: deletedAt
+        )
+        guard let data = try? encoder.encode(list) else { return false }
+        defaults.set(data, forKey: ConversationStore.messagesKey(for: convId))
+        return true
     }
 
     // MARK: - Reset

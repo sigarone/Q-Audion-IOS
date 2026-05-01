@@ -768,6 +768,15 @@ final class AppState: ObservableObject {
             // shape for `qfile` markers (legacy iOS-internal file
             // transfer) so a stray Desktop-FileTransfer marker doesn't
             // leak as text either.
+            // W86: route qa_ctl:1 control envelopes (delete / edit)
+            // BEFORE persisting as a new inbound row. These mutate
+            // an EXISTING row keyed by clientMsgId rather than
+            // appending. A successful route returns early — the chat
+            // refresh notification fires from inside the route helper.
+            if let env = try? ChatControlEnvelope.parse(decryptedRaw) {
+                handleControlEnvelope(env, senderId: senderId)
+                return
+            }
             plaintext = Self.renderInboundPlaintext(decryptedRaw)
         } catch {
             print("[AppState] msg_receive decrypt failed from \(senderId): \(error)")
@@ -836,7 +845,12 @@ final class AppState: ObservableObject {
             // W82: route bubble UI by mime (audio/* → voice player,
             // image/* → image preview). Stamped up-front from the
             // marker so the row already shows the right placeholder.
-            mediaMimeType: pendingMarker?.qfile.mime
+            mediaMimeType: pendingMarker?.qfile.mime,
+            // W86: persist the sender-generated clientMsgId so future
+            // qa_ctl:1 envelopes (edit/delete/reaction) targeting this
+            // message can find the row. Without this, peers can't edit
+            // or delete what they previously sent us.
+            clientMsgId: clientMsgId
         )
         store.appendMessage(msg)
         // W83: bump conversation preview + activity + unread so the
@@ -899,6 +913,49 @@ final class AppState: ObservableObject {
             name: AppState.chatRefreshNotification,
             object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": conv.id]
+        )
+    }
+
+    /// W86: route a `qa_ctl:1` control envelope (delete / edit) to the
+    /// matching local row, applying the spoof check. Spoof rule: only
+    /// the original sender of `target` may edit or delete. For inbound
+    /// rows this means `original.senderUserId == envelopeSenderId`.
+    /// For outbound rows (peer trying to modify OUR message) the
+    /// envelope is rejected outright.
+    private func handleControlEnvelope(_ env: ChatControlEnvelope,
+                                       senderId envelopeSenderId: String) {
+        let store = ConversationStore()
+        let target: String
+        switch env {
+        case .delete(let t, _): target = t
+        case .edit(let t, _, _): target = t
+        }
+        guard let (convId, original) = store.findByClientMsgId(target) else {
+            print("[AppState] qa_ctl envelope: target \(target.prefix(8))… not found")
+            return
+        }
+        // Spoof check.
+        if original.direction == .outgoing {
+            print("[AppState] qa_ctl envelope: peer attempted to modify our outbound message — rejected")
+            return
+        }
+        if original.senderUserId != envelopeSenderId {
+            print("[AppState] qa_ctl envelope: sender mismatch (envelope=\(envelopeSenderId), original=\(original.senderUserId ?? "?")) — rejected")
+            return
+        }
+        // Apply.
+        let applied: Bool
+        switch env {
+        case .delete:
+            applied = store.applyDeleteByClientMsgId(target)
+        case .edit(_, let newBody, _):
+            applied = store.applyEditByClientMsgId(target, newPlaintext: newBody)
+        }
+        guard applied else { return }
+        NotificationCenter.default.post(
+            name: AppState.chatRefreshNotification,
+            object: nil,
+            userInfo: ["peerUserId": envelopeSenderId, "conversationId": convId]
         )
     }
 

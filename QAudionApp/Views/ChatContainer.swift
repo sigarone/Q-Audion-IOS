@@ -160,15 +160,21 @@ final class ChatContainer: ObservableObject {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
+        let outboundId = UUID()
         let msg = Message(
-            id: UUID(),
+            id: outboundId,
             conversationId: conversationId,
             direction: .outgoing,
             plaintext: text,
             sentAt: Date(),
             deliveredAt: nil,
             readAt: nil,
-            status: .sending
+            status: .sending,
+            // W86: stamp clientMsgId on outbound so the receiver can
+            // target this message for future edit/delete envelopes.
+            // Equals id.uuidString — the same value we already pass as
+            // `client_msg_id` on the msg_send WS envelope.
+            clientMsgId: outboundId.uuidString
         )
         store.appendMessage(msg)
         // W83: bump conversation preview + activity for outbound text.
@@ -254,6 +260,91 @@ final class ChatContainer: ObservableObject {
         refreshFromStore()
     }
 
+    /// W86: ship a `qa_ctl:1` t="delete" envelope to the peer + apply
+    /// the tombstone locally so both sides see "Messaggio eliminato".
+    /// Only own outbound messages can be deleted (we'd be spoofing
+    /// otherwise — the peer's spoof check would reject it anyway).
+    /// Idempotent — re-firing is a no-op once the row is tombstoned.
+    func deleteMessage(_ message: Message) {
+        guard message.direction == .outgoing else {
+            print("[ChatContainer] deleteMessage rejected: cannot delete peer's message")
+            return
+        }
+        guard let cmid = message.clientMsgId, !cmid.isEmpty else {
+            print("[ChatContainer] deleteMessage: row missing clientMsgId — pre-W86 message?")
+            return
+        }
+        // 1. Apply locally first so the bubble flips immediately.
+        store.applyDeleteByClientMsgId(cmid)
+        refreshFromStore()
+        // 2. Ship envelope.
+        let envelope = ChatControlEnvelope.delete(
+            target: cmid,
+            ts: ChatControlEnvelope.nowTsSeconds()
+        )
+        emitControlEnvelope(envelope)
+    }
+
+    /// W86: ship a `qa_ctl:1` t="edit" envelope to the peer + replace
+    /// the body locally. Only own outbound text messages can be edited
+    /// (peer's spoof check rejects edits of their own messages too).
+    func editMessage(_ message: Message, newPlaintext: String) {
+        let trimmed = newPlaintext.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard message.direction == .outgoing else { return }
+        guard let cmid = message.clientMsgId, !cmid.isEmpty else { return }
+        // Cap body at the cross-platform limit (8 KiB).
+        guard trimmed.utf8.count <= ChatControlEnvelope.editBodyCapBytes else {
+            print("[ChatContainer] editMessage rejected: body > 8 KiB")
+            return
+        }
+        // 1. Apply locally.
+        store.applyEditByClientMsgId(cmid, newPlaintext: trimmed)
+        refreshFromStore()
+        // 2. Ship envelope.
+        let envelope = ChatControlEnvelope.edit(
+            target: cmid,
+            newBody: trimmed,
+            ts: ChatControlEnvelope.nowTsSeconds()
+        )
+        emitControlEnvelope(envelope)
+    }
+
+    /// W86: shared envelope-emission tail for delete/edit/(future)reaction.
+    /// Encrypts the JSON envelope as the plaintext of a normal `msg_send`
+    /// (server is unaware — sees ciphertext only). Best-effort
+    /// fire-and-forget; failures log only.
+    private func emitControlEnvelope(_ envelope: ChatControlEnvelope) {
+        guard let sendService = self.sendService else {
+            print("[ChatContainer] emitControlEnvelope: no sendService bound")
+            return
+        }
+        let peerId = peerUserId
+        let envelopeId = UUID()
+        let json: String
+        do {
+            json = try envelope.toJsonString()
+        } catch {
+            print("[ChatContainer] envelope serialize failed: \(error)")
+            return
+        }
+        Task { [peerId, json, envelopeId] in
+            // The envelope rides as a normal chat message; the receiver's
+            // handleIncomingMessage detects the qa_ctl marker and routes
+            // it via handleControlEnvelope INSTEAD of appending a row.
+            // We don't store the envelope locally either (would clutter
+            // the chat with unrenderable JSON).
+            let outcome = await sendService.sendEncrypted(
+                messageId: envelopeId,
+                peerUserId: peerId,
+                plaintext: json
+            )
+            if case .failed(let reason) = outcome {
+                print("[ChatContainer] envelope send failed: \(reason)")
+            }
+        }
+    }
+
     /// W84: emit a `msg_read` receipt to the peer for all inbound
     /// messages with a server id. Server relays so the peer's UI flips
     /// ✓✓ to ✓✓ blue. Best-effort fire-and-forget; failures don't
@@ -320,7 +411,9 @@ final class ChatContainer: ObservableObject {
             status: .sending,
             mediaLocalPath: localCachePath,
             mediaDurationMs: Int64(recording.durationMs),
-            mediaMimeType: recording.mimeType
+            mediaMimeType: recording.mimeType,
+            // W86: stamp clientMsgId so peer can target with edit/delete.
+            clientMsgId: msgId.uuidString
         )
         store.appendMessage(local)
         store.recordNewMessage(
@@ -501,7 +594,9 @@ final class ChatContainer: ObservableObject {
             status: .sending,
             mediaLocalPath: localCachePath,
             mediaDurationMs: nil,
-            mediaMimeType: "image/jpeg"
+            mediaMimeType: "image/jpeg",
+            // W86: stamp clientMsgId so peer can target with edit/delete.
+            clientMsgId: msgId.uuidString
         )
         store.appendMessage(local)
         store.recordNewMessage(

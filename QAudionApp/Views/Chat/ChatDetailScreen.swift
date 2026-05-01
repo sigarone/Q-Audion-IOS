@@ -231,14 +231,19 @@ struct ChatDetailScreen: View {
                     ))
                 },
                 onDeleteForAll: {
-                    // TODO(engine): delete-for-all RPC. Per ora feedback
-                    // ottimistico — il messaggio resta nel store finché
-                    // l'engine non implementa la cancellazione.
-                    snackbar?.show(.init(
-                        text: "Messaggio eliminato per tutti.",
-                        severity: .warning,
-                        durationSeconds: 3
-                    ))
+                    // W86: ship a qa_ctl:1 t="delete" envelope. Container
+                    // applies the local tombstone immediately + sends the
+                    // envelope to the peer. Spoof check on the receiver
+                    // ensures only the original sender can delete.
+                    if let target = container.viewModel.messages
+                        .first(where: { $0.id == msgIdWrapper.id }) {
+                        container.deleteMessage(target)
+                        snackbar?.show(.init(
+                            text: "Messaggio eliminato per tutti.",
+                            severity: .info,
+                            durationSeconds: 2
+                        ))
+                    }
                 },
                 onDeleteForMe: {
                     // TODO(engine): delete-local da ConversationStore.
@@ -459,13 +464,21 @@ struct ChatDetailScreen: View {
     // MARK: - Helpers
 
     private func handleSend() {
-        // If we're editing, the engine has no edit RPC yet — treat it as
-        // a no-op for the message list and just clear the local edit
-        // banner. The composed text becomes a fresh outgoing message
-        // (matches Android's stub behaviour today).
-        if editingTarget != nil {
+        // W86: if editing, ship a qa_ctl:1 edit envelope to the peer
+        // instead of creating a new message. ChatContainer.editMessage
+        // applies the local replacement + emits the envelope. The
+        // composer text is consumed; we clear it manually since
+        // sendMessage isn't called.
+        if let target = editingTarget,
+           let targetUUID = UUID(uuidString: target.messageId),
+           let original = container.viewModel.messages.first(where: { $0.id == targetUUID }) {
+            container.editMessage(original, newPlaintext: container.composerText)
+            container.composerText = ""
             editingTarget = nil
+            replyTarget = nil
+            return
         }
+        editingTarget = nil
         let replyHandled = (replyTarget != nil)
         replyTarget = nil
         container.sendMessage()

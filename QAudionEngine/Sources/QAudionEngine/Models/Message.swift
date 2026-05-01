@@ -47,6 +47,25 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// backward compat — older messages decode with `nil` and the bubble
     /// falls back to the legacy "render-by-duration" branch.
     public let mediaMimeType: String?
+    /// W86: sender-generated UUID that uniquely identifies a message
+    /// across all peers. Used as the `target` field in `qa_ctl:1`
+    /// envelopes (edit / delete / reaction) — peers reference each
+    /// other's messages by this id, NOT by `serverMessageId` or by the
+    /// local row UUID.
+    /// On outbound, equals `id.uuidString` (we already use this when
+    /// emitting `client_msg_id` on `msg_send`).
+    /// On inbound, populated from `msg_receive.client_msg_id`.
+    /// Optional for backward compat with v1.0.140-v1.0.151 stored
+    /// conversations — older rows decode with `nil`.
+    public let clientMsgId: String?
+    /// W86: true when the message has been replaced via a `qa_ctl:1` t="edit"
+    /// envelope. Optional Bool (default nil → render as not-edited) so
+    /// older stored rows decode without Codable failure.
+    public let edited: Bool?
+    /// W86: timestamp of a `qa_ctl:1` t="delete" envelope. When non-nil
+    /// the row renders as a tombstone ("Messaggio eliminato"); body is
+    /// already replaced in `plaintext` at receive time.
+    public let deletedAt: Date?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
@@ -54,7 +73,10 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
                 serverMessageId: String? = nil,
                 mediaLocalPath: String? = nil,
                 mediaDurationMs: Int64? = nil,
-                mediaMimeType: String? = nil) {
+                mediaMimeType: String? = nil,
+                clientMsgId: String? = nil,
+                edited: Bool? = nil,
+                deletedAt: Date? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -68,5 +90,8 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.mediaLocalPath = mediaLocalPath
         self.mediaDurationMs = mediaDurationMs
         self.mediaMimeType = mediaMimeType
+        self.clientMsgId = clientMsgId
+        self.edited = edited
+        self.deletedAt = deletedAt
     }
 }
