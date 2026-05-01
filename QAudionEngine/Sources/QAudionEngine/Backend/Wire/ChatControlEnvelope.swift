@@ -7,10 +7,11 @@ import Foundation
 /// **Cross-platform parity** (Desktop `ChatControlEnvelope.ts`, Android
 /// `ChatControlEnvelope.kt`):
 ///
-/// | Variant | Wire JSON                                                          |
-/// | ------- | ------------------------------------------------------------------ |
-/// | delete  | `{"qa_ctl":1,"t":"delete","target":"<clientMsgId>","ts":<unix-s>}`  |
-/// | edit    | `{"qa_ctl":1,"t":"edit","target":"<clientMsgId>","new_body":"…","ts":<unix-s>}` |
+/// | Variant   | Wire JSON                                                          |
+/// | --------- | ------------------------------------------------------------------ |
+/// | delete    | `{"qa_ctl":1,"t":"delete","target":"<clientMsgId>","ts":<unix-s>}` |
+/// | edit      | `{"qa_ctl":1,"t":"edit","target":"<clientMsgId>","new_body":"…","ts":<unix-s>}` |
+/// | reaction  | `{"qa_ctl":1,"t":"reaction","target":"<clientMsgId>","emoji":"👍","ts":<unix-s>}` |
 ///
 /// Field semantics:
 ///   - `target` is the **sender-generated `clientMsgId`** of the message
@@ -35,6 +36,7 @@ import Foundation
 public enum ChatControlEnvelope: Equatable {
     case delete(target: String, ts: Int64?)
     case edit(target: String, newBody: String, ts: Int64?)
+    case reaction(target: String, emoji: String, ts: Int64?)
 
     public static let qaCtlVersion: Int = 1
 
@@ -44,6 +46,7 @@ public enum ChatControlEnvelope: Equatable {
         case missingField(String)
         case bodyTooLarge(Int)
         case emptyBody
+        case emojiTooLong(Int)
 
         public var errorDescription: String? {
             switch self {
@@ -52,12 +55,18 @@ public enum ChatControlEnvelope: Equatable {
             case .missingField(let k): return "missing field: \(k)"
             case .bodyTooLarge(let n): return "edit new_body too large: \(n) bytes"
             case .emptyBody: return "edit new_body empty / whitespace-only"
+            case .emojiTooLong(let n): return "reaction emoji too long: \(n) chars"
             }
         }
     }
 
     /// 8 KiB cap on edit body (Desktop hardening parity).
     public static let editBodyCapBytes: Int = 8 * 1024
+    /// 16-char cap on reaction emoji (Desktop hardening parity).
+    /// Note: Swift `String.count` is grapheme-cluster based, so a single
+    /// flag emoji (👨‍👩‍👧‍👦) counts as 1; 16 graphemes is plenty for any
+    /// legit reaction.
+    public static let reactionEmojiCapChars: Int = 16
 
     // MARK: - Decode
 
@@ -84,9 +93,8 @@ public enum ChatControlEnvelope: Equatable {
         // Extract `target` (or legacy `ref`).
         guard let target = (any["target"] as? String) ?? (any["ref"] as? String),
               !target.isEmpty else {
-            // Some variants (attach_announce, reaction) don't have
-            // target — but for delete/edit it's required.
-            if typeStr == "delete" || typeStr == "edit" {
+            // delete / edit / reaction all require target.
+            if typeStr == "delete" || typeStr == "edit" || typeStr == "reaction" {
                 throw Error.missingField("target")
             }
             return nil
@@ -111,8 +119,16 @@ public enum ChatControlEnvelope: Equatable {
                 throw Error.bodyTooLarge(byteCount)
             }
             return .edit(target: target, newBody: body, ts: ts)
-        case "attach_announce", "reaction":
-            // Caller routes these through a different codec.
+        case "reaction":
+            guard let emoji = any["emoji"] as? String, !emoji.isEmpty else {
+                throw Error.missingField("emoji")
+            }
+            if emoji.count > reactionEmojiCapChars {
+                throw Error.emojiTooLong(emoji.count)
+            }
+            return .reaction(target: target, emoji: emoji, ts: ts)
+        case "attach_announce":
+            // Caller routes attach_announce through AttachAnnounceEnvelope.
             return nil
         default:
             throw Error.unknownVariant(typeStr)
@@ -148,6 +164,15 @@ public enum ChatControlEnvelope: Equatable {
                 "t":        "edit",
                 "target":   target,
                 "new_body": newBody,
+            ]
+            if let ts = ts { d["ts"] = ts }
+            return d
+        case .reaction(let target, let emoji, let ts):
+            var d: [String: Any] = [
+                "qa_ctl": Self.qaCtlVersion,
+                "t":      "reaction",
+                "target": target,
+                "emoji":  emoji,
             ]
             if let ts = ts { d["ts"] = ts }
             return d

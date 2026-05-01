@@ -310,7 +310,39 @@ final class ChatContainer: ObservableObject {
         emitControlEnvelope(envelope)
     }
 
-    /// W86: shared envelope-emission tail for delete/edit/(future)reaction.
+    /// W87: toggle a reaction on any message (own or peer's). Updates
+    /// the local row immediately + emits the qa_ctl:1 reaction envelope
+    /// to the peer. Reactions don't have a spoof check (the originator
+    /// is always the envelope sender, by construction). Empty emoji
+    /// or > 16 chars is rejected (Desktop hardening parity).
+    func toggleReaction(_ message: Message, emoji: String) {
+        let trimmed = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.count <= ChatControlEnvelope.reactionEmojiCapChars else {
+            print("[ChatContainer] toggleReaction rejected: emoji invalid")
+            return
+        }
+        guard let cmid = message.clientMsgId, !cmid.isEmpty else {
+            print("[ChatContainer] toggleReaction: row missing clientMsgId — pre-W86 message?")
+            return
+        }
+        guard let myUserId = appState?.currentUserId, !myUserId.isEmpty else {
+            print("[ChatContainer] toggleReaction: missing currentUserId")
+            return
+        }
+        // 1. Apply locally first so the bubble flips immediately.
+        _ = store.applyReactionToggleByClientMsgId(cmid, userId: myUserId, emoji: trimmed)
+        refreshFromStore()
+        // 2. Ship envelope.
+        let envelope = ChatControlEnvelope.reaction(
+            target: cmid,
+            emoji: trimmed,
+            ts: ChatControlEnvelope.nowTsSeconds()
+        )
+        emitControlEnvelope(envelope)
+    }
+
+    /// W86: shared envelope-emission tail for delete/edit/reaction.
     /// Encrypts the JSON envelope as the plaintext of a normal `msg_send`
     /// (server is unaware — sees ciphertext only). Best-effort
     /// fire-and-forget; failures log only.

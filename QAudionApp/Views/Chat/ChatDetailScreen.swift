@@ -213,13 +213,14 @@ struct ChatDetailScreen: View {
                 isOwn: messageIsOwn(msgIdWrapper.id),
                 isText: true,  // all messages are text in current model
                 onReact: { emoji in
-                    // TODO(engine): persist reaction su Message.reactions.
-                    // Per ora optimistic snackbar feedback.
-                    snackbar?.show(.init(
-                        text: "Reazione \(emoji) aggiunta.",
-                        severity: .info,
-                        durationSeconds: 2
-                    ))
+                    // W87: toggle a qa_ctl:1 reaction. ChatContainer
+                    // applies the local toggle immediately + emits the
+                    // envelope to the peer. Toggle semantics — second
+                    // tap with the same emoji removes the reaction.
+                    if let target = container.viewModel.messages
+                        .first(where: { $0.id == msgIdWrapper.id }) {
+                        container.toggleReaction(target, emoji: emoji)
+                    }
                 },
                 onEdit: { startEdit(messageId: msgIdWrapper.id) },
                 onCopy: {
@@ -404,13 +405,29 @@ struct ChatDetailScreen: View {
         let variant: MessageBubbleVariant = (msg.direction == .outgoing) ? .sent : .received
         let timeLabel = Self.timeFormatter.string(from: msg.sentAt)
         let delivery = mapDelivery(msg.status)
+        // W87: build reactions strip from Message.reactions (emoji →
+        // [userId]). `highlighted = true` when the local user is among
+        // the userIds — lets the chip render with the local accent so
+        // they can see "I reacted with 👍".
+        let myUserId = appState.currentUserId ?? ""
+        let reactionChips: [MessageReaction] = (msg.reactions ?? [:])
+            .filter { !$0.value.isEmpty }
+            .sorted { $0.value.count > $1.value.count }
+            .map { (emoji, users) in
+                MessageReaction(
+                    id: emoji,
+                    emoji: emoji,
+                    count: users.count,
+                    highlighted: !myUserId.isEmpty && users.contains(myUserId)
+                )
+            }
 
         MessageBubble(
             variant: variant,
             timeLabel: timeLabel,
             delivery: variant == .sent ? delivery : nil,
             replyQuote: nil,
-            reactions: []
+            reactions: reactionChips
         ) {
             // W81/W82: route bubble UI by media MIME type so voice
             // notes get the play/pause player and image attachments

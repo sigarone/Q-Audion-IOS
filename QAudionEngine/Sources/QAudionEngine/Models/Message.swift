@@ -66,6 +66,13 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// the row renders as a tombstone ("Messaggio eliminato"); body is
     /// already replaced in `plaintext` at receive time.
     public let deletedAt: Date?
+    /// W87: emoji → [userId] map for `qa_ctl:1` t="reaction" envelopes.
+    /// Per-user attribution lets us toggle (re-emit removes the
+    /// reaction) and highlight the local user's own reactions in the
+    /// bubble. Empty arrays are pruned by the apply helper to keep
+    /// the dict tidy. Optional for Codable backward compat with
+    /// pre-W87 stored rows.
+    public let reactions: [String: [String]]?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
@@ -76,7 +83,8 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
                 mediaMimeType: String? = nil,
                 clientMsgId: String? = nil,
                 edited: Bool? = nil,
-                deletedAt: Date? = nil) {
+                deletedAt: Date? = nil,
+                reactions: [String: [String]]? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -93,5 +101,6 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.clientMsgId = clientMsgId
         self.edited = edited
         self.deletedAt = deletedAt
+        self.reactions = reactions
     }
 }

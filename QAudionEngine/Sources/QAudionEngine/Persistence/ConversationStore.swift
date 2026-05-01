@@ -160,7 +160,8 @@ public final class ConversationStore {
             mediaMimeType: old.mediaMimeType,
             clientMsgId: old.clientMsgId,
             edited: old.edited,
-            deletedAt: old.deletedAt
+            deletedAt: old.deletedAt,
+            reactions: old.reactions
         )
         guard let data = try? encoder.encode(list) else { return }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
@@ -218,7 +219,8 @@ public final class ConversationStore {
             mediaMimeType: old.mediaMimeType,
             clientMsgId: old.clientMsgId,
             edited: old.edited,
-            deletedAt: old.deletedAt
+            deletedAt: old.deletedAt,
+            reactions: old.reactions
         )
         guard let data = try? encoder.encode(list) else { return }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
@@ -255,7 +257,8 @@ public final class ConversationStore {
             mediaMimeType: old.mediaMimeType,
             clientMsgId: old.clientMsgId,
             edited: old.edited,
-            deletedAt: old.deletedAt
+            deletedAt: old.deletedAt,
+            reactions: old.reactions
             )
             do {
                 let data = try encoder.encode(list)
@@ -306,7 +309,8 @@ public final class ConversationStore {
             mediaMimeType: old.mediaMimeType,
             clientMsgId: old.clientMsgId,
             edited: true,
-            deletedAt: old.deletedAt
+            deletedAt: old.deletedAt,
+            reactions: old.reactions
         )
         guard let data = try? encoder.encode(list) else { return false }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: convId))
@@ -340,6 +344,61 @@ public final class ConversationStore {
         guard let data = try? encoder.encode(list) else { return false }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: convId))
         return true
+    }
+
+    /// W87: toggle a reaction. If `userId` already reacted with `emoji`
+    /// to the target, REMOVE that reaction (the user is "un-reacting").
+    /// Otherwise ADD it. Empty emoji buckets are pruned to keep the
+    /// dict tidy.
+    ///
+    /// Returns `nil` if the target wasn't found, otherwise `true` if
+    /// a reaction was ADDED, `false` if REMOVED. Caller can use the
+    /// boolean for analytics/UI feedback.
+    @discardableResult
+    public func applyReactionToggleByClientMsgId(_ clientMsgId: String,
+                                                 userId: String,
+                                                 emoji: String) -> Bool? {
+        guard let (convId, _) = findByClientMsgId(clientMsgId) else { return nil }
+        var list = loadMessages(conversationId: convId)
+        guard let idx = list.firstIndex(where: { $0.clientMsgId == clientMsgId }) else { return nil }
+        let old = list[idx]
+        var dict: [String: [String]] = old.reactions ?? [:]
+        var users = dict[emoji] ?? []
+        let added: Bool
+        if let pos = users.firstIndex(of: userId) {
+            users.remove(at: pos)
+            added = false
+        } else {
+            users.append(userId)
+            added = true
+        }
+        if users.isEmpty {
+            dict.removeValue(forKey: emoji)
+        } else {
+            dict[emoji] = users
+        }
+        list[idx] = Message(
+            id: old.id, conversationId: old.conversationId, direction: old.direction,
+            plaintext: old.plaintext, sentAt: old.sentAt,
+            deliveredAt: old.deliveredAt, readAt: old.readAt,
+            status: old.status, senderUserId: old.senderUserId,
+            serverMessageId: old.serverMessageId,
+            mediaLocalPath: old.mediaLocalPath,
+            mediaDurationMs: old.mediaDurationMs,
+            mediaMimeType: old.mediaMimeType,
+            clientMsgId: old.clientMsgId,
+            edited: old.edited,
+            deletedAt: old.deletedAt,
+            reactions: dict.isEmpty ? nil : dict
+        )
+        do {
+            let data = try encoder.encode(list)
+            defaults.set(data, forKey: ConversationStore.messagesKey(for: convId))
+        } catch {
+            print("[ConversationStore] applyReactionToggle encode failed for conv=\(convId): \(error)")
+            return nil
+        }
+        return added
     }
 
     // MARK: - Reset

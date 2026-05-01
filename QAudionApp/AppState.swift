@@ -929,12 +929,30 @@ final class AppState: ObservableObject {
         switch env {
         case .delete(let t, _): target = t
         case .edit(let t, _, _): target = t
+        case .reaction(let t, _, _): target = t
         }
         guard let (convId, original) = store.findByClientMsgId(target) else {
             print("[AppState] qa_ctl envelope: target \(target.prefix(8))… not found")
             return
         }
-        // Spoof check.
+        // W87: reactions DON'T require a spoof check — any peer can
+        // react to any message (Desktop/Android parity). Only the
+        // delete/edit variants enforce origin matching.
+        if case .reaction(_, let emoji, _) = env {
+            // Toggle for the envelope's sender — if they previously
+            // reacted with this emoji, the toggle removes it; otherwise
+            // adds it.
+            _ = store.applyReactionToggleByClientMsgId(
+                target, userId: envelopeSenderId, emoji: emoji
+            )
+            NotificationCenter.default.post(
+                name: AppState.chatRefreshNotification,
+                object: nil,
+                userInfo: ["peerUserId": envelopeSenderId, "conversationId": convId]
+            )
+            return
+        }
+        // delete / edit spoof check.
         if original.direction == .outgoing {
             print("[AppState] qa_ctl envelope: peer attempted to modify our outbound message — rejected")
             return
@@ -950,6 +968,8 @@ final class AppState: ObservableObject {
             applied = store.applyDeleteByClientMsgId(target)
         case .edit(_, let newBody, _):
             applied = store.applyEditByClientMsgId(target, newPlaintext: newBody)
+        case .reaction:
+            applied = false  // handled above
         }
         guard applied else { return }
         NotificationCenter.default.post(
