@@ -177,9 +177,28 @@ workflows:
       - name: Build IPA
         script: |
           cd QAudionApp
+          # Capture full xcodebuild output to build.log so the next
+          # failed run surfaces the actual Swift error (xcbeautify
+          # otherwise swallows the diagnostic above 'Failed to
+          # archive'). We `tee` BOTH stdout and stderr into the file
+          # then bubble the original exit code up via PIPESTATUS so
+          # the build still fails on error.
+          set -o pipefail
           xcode-project build-ipa \
             --project QAudionApp.xcodeproj \
-            --scheme QAudionApp
+            --scheme QAudionApp 2>&1 | tee build.log
+          BUILD_RC=${PIPESTATUS[0]}
+          # Tail the log on failure so the most recent diagnostic
+          # lands at the bottom of the Codemagic console output.
+          if [ "$BUILD_RC" -ne 0 ]; then
+            echo ""
+            echo "=== build.log tail (last 200 lines) ==="
+            tail -200 build.log || true
+            echo ""
+            echo "=== Swift errors only (grep) ==="
+            grep -E "error:|warning:" build.log | tail -100 || true
+            exit "$BUILD_RC"
+          fi
       - name: Patch onnxruntime.framework MinimumOSVersion + re-sign
         script: |
           set -e
@@ -297,6 +316,9 @@ workflows:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app.dSYM
+      # Captured raw xcodebuild output — surfaces the actual Swift
+      # error when xcbeautify swallows it above 'Failed to archive'.
+      - QAudionApp/build.log
     publishing:
       app_store_connect:
         api_key: $APP_STORE_CONNECT_PRIVATE_KEY
