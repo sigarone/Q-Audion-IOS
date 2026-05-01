@@ -233,39 +233,15 @@ struct ChatDetailScreen: View {
                       selection: $multiPickerItems,
                       maxSelectionCount: 10,
                       matching: .images)
+        // W259: extracted the multi-photo picker callback into methods.
+        // Same pattern as W258 voice-note fix — inline closure body was
+        // 4+ levels deep (closure → Task → for → if → MainActor.run with
+        // struct literal) and the interpolation
+        // `"\(failedCount) foto su \(total) non leggibili."` re-tripped
+        // the type-checker once the W258 voice-note fix unblocked the
+        // earlier compile path. See CLAUDE.md §13.
         .onChange(of: multiPickerItems) { newItems in
-            // W91: fan out one sendImage per picked item. Each one
-            // goes through the same EXIF-strip + 2048px + 10MB cap
-            // pipeline + qfile marker. Sequential await rather than
-            // parallel TaskGroup keeps the WS msg_send order stable
-            // (chat shows them in selection order, not random).
-            guard !newItems.isEmpty else { return }
-            let items = newItems
-            multiPickerItems = []
-            Task {
-                var failures = 0
-                for item in items {
-                    if let data = try? await item.loadTransferable(type: Data.self) {
-                        await MainActor.run { container.sendImage(data) }
-                    } else {
-                        failures += 1
-                    }
-                }
-                if failures > 0 {
-                    // Bind into a local before the closure so the
-                    // type-checker doesn't have to chase
-                    // `items.count` through MainActor.run + snackbar?.show.
-                    let total = items.count
-                    let failedCount = failures
-                    let snackbarText = "\(failedCount) foto su \(total) non leggibili."
-                    await MainActor.run {
-                        snackbar?.show(.init(
-                            text: snackbarText,
-                            severity: .warning,
-                            durationSeconds: 3))
-                    }
-                }
-            }
+            handleMultiPhotoPicker(newItems)
         }
         .sheet(item: actionSheetBinding) { msgIdWrapper in
             BubbleActionSheet(
@@ -744,6 +720,56 @@ struct ChatDetailScreen: View {
     private func handleVoiceNoteCancel() {
         // W72: stop + delete tmp file.
         voiceNoteRecorder.cancel()
+    }
+
+    // MARK: - Multi-photo picker callback methods (W259)
+    //
+    // Extracted from .onChange(of: multiPickerItems) for the same reason
+    // as the voice-note callbacks (W258): inline closure body 4+ levels
+    // deep was tripping the type-checker on the snackbar interpolation.
+    // See CLAUDE.md §13.
+
+    private func handleMultiPhotoPicker(_ newItems: [PhotosPickerItem]) {
+        guard !newItems.isEmpty else { return }
+        let items = newItems
+        multiPickerItems = []
+        Task { await self.processMultiPhotoPicker(items) }
+    }
+
+    private func processMultiPhotoPicker(_ items: [PhotosPickerItem]) async {
+        // W91: fan out one sendImage per picked item. Each one goes
+        // through the same EXIF-strip + 2048px + 10MB cap pipeline +
+        // qfile marker. Sequential await rather than parallel TaskGroup
+        // keeps the WS msg_send order stable (chat shows them in
+        // selection order, not random).
+        var failures = 0
+        for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self) {
+                await MainActor.run { container.sendImage(data) }
+            } else {
+                failures += 1
+            }
+        }
+        if failures > 0 {
+            // W259: defer the interpolation to a static method so the
+            // type-checker has a clean scope. Calling it via Self.
+            // gives a fully-resolved single-overload symbol.
+            let snackbarText: String = Self.photoFailureSnackbarText(
+                failed: failures, total: items.count)
+            await MainActor.run {
+                snackbar?.show(.init(
+                    text: snackbarText,
+                    severity: .warning,
+                    durationSeconds: 3))
+            }
+        }
+    }
+
+    private static func photoFailureSnackbarText(failed: Int, total: Int) -> String {
+        // Single-statement static method — minimal context, single
+        // overload. Type-checker resolves instantly even when callers
+        // are deep inside closure stacks.
+        return "\(failed) foto su \(total) non leggibili."
     }
 
     // MARK: - Helpers

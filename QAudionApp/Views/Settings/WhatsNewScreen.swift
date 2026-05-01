@@ -22,6 +22,15 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.259", date: "2026-05-01",
+              title: "Extract photo-picker callback to methods (W259)",
+              bullets: [
+                "v1.0.258 voice-note fix worked — error moved to multi-photo callback",
+                "Same antipattern: closure → Task → for → if → MainActor.run + interpolation",
+                "Same structural fix: extract closure body to instance methods",
+                "Snackbar interpolation moved to a static helper (single-overload, fast)",
+                "All inline closure bodies in ChatDetailScreen.swift now ≤ 1-2 levels deep"
+              ]),
         .init(id: "v1.0.258", date: "2026-05-01",
               title: "Extract voice-note callbacks to methods (W258)",
               bullets: [
