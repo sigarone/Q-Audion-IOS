@@ -208,3 +208,59 @@ The app is on TestFlight but has not been exercised end-to-end. Expect to debug:
 4. **Always bump the tag** for a new release (e.g. `v1.0.23`). Don't re-use old tags; don't build from branches.
 5. **Treat Apple emails after upload as canonical**. Codemagic reporting "publishing succeeded" only means the upload HTTP call returned 2xx. Apple may still reject on validation minutes later via email. Always check inbox before declaring victory.
 6. **Use `TodoWrite` for multi-step tasks** and follow the superpowers skill guidance when relevant.
+
+### 13. Swift type-checker timeout traps (Xcode 26.4)
+
+Xcode 26.4 / Swift 6's type-checker is **less forgiving** than earlier versions for multi-segment string interpolation inside `@Sendable` closures or `Task { @MainActor in ... }` blocks. Patterns to avoid:
+
+```swift
+// ❌ TYPE-CHECKER TIMEOUT (silent build failure):
+Task { @MainActor in
+    print("[X] received \(obj.field) at \(timestamp)ms (\(other.nested))")
+    snackbar?.show(.init(text: "\(a) of \(b) failed.", ...))
+}
+
+// ✅ Pre-bind locals or use String + concat:
+Task { @MainActor in
+    let a = obj.field
+    let b = timestamp
+    let c = other.nested
+    print("[X] received " + String(a) + " at " + String(b) + "ms (" + c + ")")
+    let msg: String = "\(a) of \(b) failed."
+    await MainActor.run { snackbar?.show(.init(text: msg, ...)) }
+}
+```
+
+Symptoms: the build console shows just `Failed to archive` with **no `error:`/`warning:` lines** — xcbeautify is consuming the diagnostic before tee can capture it.
+
+**Mitigation:** the codemagic.yaml has a "Diagnose Swift compile (raw xcodebuild)" step that runs before `xcode-project build-ipa` with `CODE_SIGNING_ALLOWED=NO`. That output goes to `diag.log` (artifact) and is grepped at the end of Step 6. Always check Step 6 in failed Codemagic builds, not just the Build IPA step.
+
+### 14. Single-file Swift compile budget
+
+`ChatDetailScreen.swift` is the largest user-facing file (~830 lines after the v1.0.225 markdown extraction). Adding more state observers or complex view-builder branches risks the type-checker timeout. **Extract any new helper > 40 lines into its own `Services/*.swift` file** — see `Services/MarkdownLiteParser.swift` (W148/W149/W127/W152) as the reference pattern.
+
+### 15. `guard let self = self` patterns in @Sendable closures
+
+Xcode 26.4 elevates `value 'self' was defined but never used` from warning to **error** in some compile modes. If the closure body doesn't actually call `self.foo`, replace:
+
+```swift
+{ [weak self] _, _ in
+    DispatchQueue.main.async {
+        guard let self = self else { return }   // ❌
+        print("...")
+    }
+}
+```
+
+with:
+
+```swift
+{ [weak self] _, _ in
+    DispatchQueue.main.async {
+        guard self != nil else { return }       // ✅
+        print("...")
+    }
+}
+```
+
+(Already fixed at AppState.swift:1327 — see commit `d31f34e`.)
