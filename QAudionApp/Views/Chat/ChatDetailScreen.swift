@@ -50,6 +50,12 @@ struct ChatDetailScreen: View {
     /// .sendAttachment(image:)` non esiste ancora).
     @State private var showingPhotoPicker: Bool = false
     @State private var attachmentPickerItem: PhotosPickerItem? = nil
+    /// W85: confirmationDialog gate for the paperclip button. Tap →
+    /// dialog with two options: "Galleria" (PhotosPicker) or "Camera"
+    /// (UIImagePickerController via CameraPicker). Cleaner than two
+    /// separate buttons in the composer row.
+    @State private var showAttachmentChoice: Bool = false
+    @State private var showCameraPicker: Bool = false
 
     // Stub values for the SessionStatusStrip until the engine wires them.
     private let stubConfidence: Double = 0.92
@@ -87,7 +93,7 @@ struct ChatDetailScreen: View {
                 ),
                 editingTarget: editingTarget,
                 replyTarget: replyTarget,
-                onAttach: { showingPhotoPicker = true },
+                onAttach: { showAttachmentChoice = true },
                 onSend: handleSend,
                 onCancelEdit: { editingTarget = nil },
                 onCancelReply: { replyTarget = nil },
@@ -149,6 +155,39 @@ struct ChatDetailScreen: View {
         // process picker (no NSPhotoLibraryUsageDescription required,
         // no permission prompt). Engine wire per encrypt+upload+send
         // resta deferred — sull'item picked, mostra snackbar info.
+        // W85: pick library vs camera. Tapping the paperclip in the
+        // composer fires `showAttachmentChoice = true` (set in
+        // `onAttach`); the user then routes to either PhotosPicker
+        // (system out-of-process picker, no NSPhotoLibraryUsageDescription
+        // needed) or CameraPicker (UIImagePickerController, requires
+        // NSCameraUsageDescription which is already declared).
+        .confirmationDialog("Aggiungi allegato",
+                            isPresented: $showAttachmentChoice,
+                            titleVisibility: .visible) {
+            Button {
+                showCameraPicker = true
+            } label: {
+                Label("Scatta foto", systemImage: "camera")
+            }
+            Button {
+                showingPhotoPicker = true
+            } label: {
+                Label("Galleria", systemImage: "photo.on.rectangle")
+            }
+            Button("Annulla", role: .cancel) { }
+        }
+        .sheet(isPresented: $showCameraPicker) {
+            CameraPicker(
+                onCapture: { data in
+                    container.sendImage(data)
+                    showCameraPicker = false
+                },
+                onCancel: {
+                    showCameraPicker = false
+                }
+            )
+            .ignoresSafeArea()
+        }
         .photosPicker(isPresented: $showingPhotoPicker,
                       selection: $attachmentPickerItem,
                       matching: .images)
