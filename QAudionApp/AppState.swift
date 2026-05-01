@@ -750,6 +750,13 @@ final class AppState: ObservableObject {
         } catch {
             print("[AppState] msg_receive decrypt failed from \(senderId): \(error)")
             plaintext = "[messaggio cifrato non leggibile]"
+            // W77b: auto-rekey on decrypt failure. Same pattern as
+            // qaudion-desktop's `MessageService.on('needRekey')` → fires
+            // a fresh KEY_EXCHANGE_OFFER with `force=true` so the next
+            // message from this peer rides a freshly-derived PSK. Saves
+            // the user from having to manually re-pair when keychains
+            // get desynced (e.g. after one side reinstalls).
+            triggerKeyExchange(with: senderId, force: true)
         }
 
         // Persist into the conversation store. The conversation is
