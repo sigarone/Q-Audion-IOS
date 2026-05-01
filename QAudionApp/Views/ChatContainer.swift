@@ -176,7 +176,20 @@ final class ChatContainer: ObservableObject {
                 )
                 await MainActor.run {
                     switch outcome {
-                    case .delivered, .sent:
+                    case .delivered(let serverMessageId):
+                        // W78: bind the server id to the local row so
+                        // subsequent msg_delivered/msg_read receipts can
+                        // be reconciled.
+                        self.store.setServerMessageId(
+                            localId: msgId,
+                            conversationId: conversationId,
+                            serverMessageId: serverMessageId
+                        )
+                        self.store.updateMessageStatus(
+                            id: msgId, conversationId: conversationId,
+                            newStatus: .delivered, deliveredAt: Date()
+                        )
+                    case .sent:
                         self.store.updateMessageStatus(
                             id: msgId, conversationId: conversationId,
                             newStatus: .delivered, deliveredAt: Date()

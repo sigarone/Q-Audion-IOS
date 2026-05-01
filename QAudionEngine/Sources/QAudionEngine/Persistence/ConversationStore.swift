@@ -91,10 +91,64 @@ public final class ConversationStore {
             deliveredAt: deliveredAt ?? old.deliveredAt,
             readAt: readAt ?? old.readAt,
             status: newStatus,
-            senderUserId: old.senderUserId
+            senderUserId: old.senderUserId,
+            serverMessageId: old.serverMessageId
         )
         guard let data = try? encoder.encode(list) else { return }
         defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
+    }
+
+    // MARK: - W78: server message-id reconciliation
+
+    /// Bind the server-issued message id to a locally-persisted message,
+    /// so subsequent `msg_delivered` / `msg_read` events (which carry
+    /// only server ids) can flip the right row. Idempotent.
+    public func setServerMessageId(localId: UUID, conversationId: UUID, serverMessageId: String) {
+        var list = loadMessages(conversationId: conversationId)
+        guard let idx = list.firstIndex(where: { $0.id == localId }) else { return }
+        let old = list[idx]
+        // Skip if already bound — server delivers the same ack at most once.
+        if old.serverMessageId == serverMessageId { return }
+        list[idx] = Message(
+            id: old.id, conversationId: old.conversationId, direction: old.direction,
+            plaintext: old.plaintext, sentAt: old.sentAt,
+            deliveredAt: old.deliveredAt, readAt: old.readAt,
+            status: old.status, senderUserId: old.senderUserId,
+            serverMessageId: serverMessageId
+        )
+        guard let data = try? encoder.encode(list) else { return }
+        defaults.set(data, forKey: ConversationStore.messagesKey(for: conversationId))
+    }
+
+    /// Update status by server id (used by msg_delivered / msg_read
+    /// handlers). Returns true if a row was matched and updated.
+    @discardableResult
+    public func updateStatusByServerId(serverMessageId: String, newStatus: Message.Status,
+                                       deliveredAt: Date? = nil, readAt: Date? = nil) -> Bool {
+        var anyMatched = false
+        for conv in loadConversations() {
+            var list = loadMessages(conversationId: conv.id)
+            guard let idx = list.firstIndex(where: { $0.serverMessageId == serverMessageId }) else {
+                continue
+            }
+            anyMatched = true
+            let old = list[idx]
+            list[idx] = Message(
+                id: old.id, conversationId: old.conversationId, direction: old.direction,
+                plaintext: old.plaintext, sentAt: old.sentAt,
+                deliveredAt: deliveredAt ?? old.deliveredAt,
+                readAt: readAt ?? old.readAt,
+                status: newStatus,
+                senderUserId: old.senderUserId,
+                serverMessageId: old.serverMessageId
+            )
+            if let data = try? encoder.encode(list) {
+                defaults.set(data, forKey: ConversationStore.messagesKey(for: conv.id))
+            }
+            // Server ids are globally unique — first match is the only match.
+            return true
+        }
+        return anyMatched
     }
 
     // MARK: - Reset

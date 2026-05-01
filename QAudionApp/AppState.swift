@@ -746,7 +746,19 @@ final class AppState: ObservableObject {
                 recipientId: currentUserId ?? "",
                 msgId: clientMsgId ?? serverMsgId
             )
-            plaintext = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
+            let raw = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
+            // W78: cross-platform attachment placeholder. Desktop and
+            // Android send voice notes / files via the qa_ctl:1
+            // `attach_announce` envelope (XChaCha20-Poly1305 + TUS).
+            // iOS does not yet implement that download/decrypt path
+            // (deferred until the engine ships the Double Ratchet
+            // chain-key snapshot needed for parity), so when one of
+            // those envelopes arrives we surface a friendly placeholder
+            // instead of pasting raw JSON into the chat history. Same
+            // shape for `qfile` markers (legacy iOS-internal file
+            // transfer) so a stray Desktop-FileTransfer marker doesn't
+            // leak as text either.
+            plaintext = Self.renderInboundPlaintext(raw)
         } catch {
             print("[AppState] msg_receive decrypt failed from \(senderId): \(error)")
             plaintext = "[messaggio cifrato non leggibile]"
@@ -789,7 +801,12 @@ final class AppState: ObservableObject {
             sentAt: Date(),
             deliveredAt: Date(),
             readAt: nil,
-            status: .delivered
+            status: .delivered,
+            senderUserId: senderId,
+            // W78: persist the server id on inbound messages too so any
+            // future cross-device sync (read receipts emitted by a
+            // companion device, e.g. desktop session) can match the row.
+            serverMessageId: serverMsgId
         )
         store.appendMessage(msg)
         // Auto-ack delivery so the sender flips its UI to "delivered".
@@ -810,27 +827,90 @@ final class AppState: ObservableObject {
 
     /// Mark the locally-stored copies of delivered messages as
     /// `.delivered` so the sender's UI flips the receipt icon.
+    /// W78: server↔client id reconciliation now wired. ChatContainer
+    /// stamps the server id on each outbound message after the WS ack
+    /// (`ChatMessageSendService.Outcome.delivered(serverMessageId:)`),
+    /// so we can look up the row directly by server id here.
     private func handleDeliveryReceipts(ids: [String]) {
-        // The server passes back the SERVER messageIds, but the local
-        // store is keyed by the client UUIDs. Without a server↔client
-        // ID map (USER WT — engine-side persist of the round-trip),
-        // we can't reliably match. Post a notification so an open
-        // ChatContainer can re-fetch and the engine can wire the
-        // deeper match later.
-        NotificationCenter.default.post(
-            name: AppState.chatRefreshNotification,
-            object: nil,
-            userInfo: ["deliveredServerIds": ids]
-        )
+        let store = ConversationStore()
+        let now = Date()
+        var matchedAny = false
+        for sid in ids {
+            if store.updateStatusByServerId(serverMessageId: sid,
+                                            newStatus: .delivered,
+                                            deliveredAt: now) {
+                matchedAny = true
+            }
+        }
+        if matchedAny {
+            NotificationCenter.default.post(
+                name: AppState.chatRefreshNotification,
+                object: nil,
+                userInfo: ["deliveredServerIds": ids]
+            )
+        }
     }
 
     /// Mark the locally-stored messages as `.read` for the given sender.
+    /// W78: same server-id reconciliation as the delivery receipts path.
     private func handleReadReceipts(senderId: String, ids: [String]) {
-        NotificationCenter.default.post(
-            name: AppState.chatRefreshNotification,
-            object: nil,
-            userInfo: ["readSenderId": senderId, "readServerIds": ids]
-        )
+        let store = ConversationStore()
+        let now = Date()
+        var matchedAny = false
+        for sid in ids {
+            if store.updateStatusByServerId(serverMessageId: sid,
+                                            newStatus: .read,
+                                            readAt: now) {
+                matchedAny = true
+            }
+        }
+        if matchedAny {
+            NotificationCenter.default.post(
+                name: AppState.chatRefreshNotification,
+                object: nil,
+                userInfo: ["readSenderId": senderId, "readServerIds": ids]
+            )
+        }
+    }
+
+    /// W78: render incoming chat plaintext, replacing cross-platform
+    /// attachment envelopes with a friendly placeholder until iOS
+    /// ships the matching download/decrypt path (Wave 2D-5c port).
+    /// Today we recognize:
+    ///   - `qa_ctl:1` `attach_announce` (Desktop / Android voice notes
+    ///     and file shares) — XChaCha20-Poly1305 + TUS, requires the
+    ///     Double Ratchet chain-key snapshot iOS doesn't expose yet.
+    ///   - `qfile` v2 marker (legacy iOS-internal FileTransfer) — same
+    ///     placeholder, since the receive UI hasn't been wired yet.
+    /// Anything else is returned as-is.
+    static func renderInboundPlaintext(_ raw: String) -> String {
+        // attach_announce path — qa_ctl:1 marker.
+        if let env = try? AttachAnnounceEnvelope.parse(raw), let env = env {
+            let mime = env.att.mime
+            if mime.hasPrefix("audio/") {
+                if let dur = env.att.durationMs, dur > 0 {
+                    let secs = Double(dur) / 1000.0
+                    return String(format: "🎤 Nota vocale (%.1fs) — supporto cross-platform in arrivo", secs)
+                }
+                return "🎤 Nota vocale — supporto cross-platform in arrivo"
+            }
+            if mime.hasPrefix("image/") {
+                return "🖼️ Immagine — supporto cross-platform in arrivo"
+            }
+            if mime.hasPrefix("video/") {
+                return "🎬 Video — supporto cross-platform in arrivo"
+            }
+            return "📎 Allegato — supporto cross-platform in arrivo"
+        }
+        // qfile legacy marker — iOS-internal FileTransfer.
+        if let marker = FileTransfer.tryParseMarker(text: raw) {
+            let mime = marker.qfile.mime
+            if mime.hasPrefix("audio/") {
+                return "🎤 Nota vocale (download in arrivo)"
+            }
+            return "📎 \(marker.qfile.name) (download in arrivo)"
+        }
+        return raw
     }
 
     /// Surface peer typing state. `ChatContainer` picks this up via
