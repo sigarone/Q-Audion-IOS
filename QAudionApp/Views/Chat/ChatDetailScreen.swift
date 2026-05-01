@@ -108,17 +108,16 @@ struct ChatDetailScreen: View {
                     }
                 },
                 onFinishVoiceNote: {
-                    // W72: stop recording → tmp .m4a URL is logged. Full
-                    // upload + WS send is engine-side WT (file_attach
-                    // envelope wiring); local message append surfaces
-                    // the user-facing "voice note inviata" feedback.
+                    // W79: real upload+send pipeline. ChatContainer.sendVoiceNote
+                    // orchestrates the whole flow: read tmp M4A, encrypt+upload
+                    // via FileTransfer (HKDF-SHA256 + AES-256-GCM), mint a
+                    // recipient capability token, build a qfile v3 marker, and
+                    // ship it as the plaintext of a regular msg_send. Local
+                    // conversation row carries a friendly "🎤 Nota vocale (X.Ys)"
+                    // placeholder so the user sees a recognizable bubble.
                     if let rec = voiceNoteRecorder.stop() {
                         print("[VoiceNote] captured \(rec.fileURL.lastPathComponent) duration \(rec.durationMs)ms (\(rec.mimeType))")
-                        // Drop a placeholder text message so the
-                        // conversation reflects "voice note sent" until
-                        // the engine wires the attachment send path.
-                        container.composerText = "🎤 Voice note (\(rec.durationMs / 1000)s)"
-                        container.sendMessage()
+                        container.sendVoiceNote(rec)
                     }
                 },
                 onCancelVoiceNote: {

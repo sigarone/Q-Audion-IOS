@@ -163,7 +163,11 @@ public struct IssuedDownloadToken: Equatable {
 /// ``AttachAnnounceEnvelope.AttachAnnounceMeta`` (extension TBD in a
 /// future spec bump). The recipient redeems via the three headers in
 /// ``BCryptoDownloadTokenClient/downloadHeaders(claim:)``.
-public struct DownloadTokenClaim: Equatable {
+///
+/// Codable so it can ride inside the iOS-internal ``FileTransfer.FileMarker``
+/// for voice-note delivery (W79 — iPhone↔iPhone send pipeline). Snake-case
+/// JSON keys keep the wire interchangeable with the server-issued shape.
+public struct DownloadTokenClaim: Equatable, Codable {
     public let fileId: String
     public let expiresAtMs: Int64
     public let maxUses: Int32
@@ -174,5 +178,12 @@ public struct DownloadTokenClaim: Equatable {
         self.expiresAtMs = expiresAtMs
         self.maxUses = maxUses
         self.tokenHex = tokenHex
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case fileId = "file_id"
+        case expiresAtMs = "expires_at_ms"
+        case maxUses = "max_uses"
+        case tokenHex = "token_hex"
     }
 }

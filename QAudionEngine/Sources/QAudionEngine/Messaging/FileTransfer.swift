@@ -49,6 +49,42 @@ public final class FileTransfer: @unchecked Sendable {
             public let keyId: String
             /// Unix-ms timestamp embedded in AAD. v1 markers omit this and are rejected.
             public let ts: Int64
+            /// W79 — recipient capability claim. When the sender owns the
+            /// upload and the recipient is a different user, the sender
+            /// mints this via `BCryptoDownloadTokenClient.issueToken`
+            /// after upload and embeds it here. Recipients with a claim
+            /// apply the 3 headers (`X-Download-Token` / `Expires-Ms` /
+            /// `Max-Uses`) on `GET /api/v1/files/{id}`. Optional for
+            /// backward compat with v2 markers (no claim) — those still
+            /// decode and the receiver falls back to owner-direct fetch.
+            public let downloadClaim: DownloadTokenClaim?
+            /// W79 — voice-note duration in ms. Lets the chat UI render
+            /// "🎤 Nota vocale (4.2s)" before downloading the audio.
+            public let durationMs: Int64?
+
+            public init(fileId: String, name: String, size: Int, mime: String,
+                        salt: String, nonce: String, tag: String, keyId: String,
+                        ts: Int64,
+                        downloadClaim: DownloadTokenClaim? = nil,
+                        durationMs: Int64? = nil) {
+                self.fileId = fileId
+                self.name = name
+                self.size = size
+                self.mime = mime
+                self.salt = salt
+                self.nonce = nonce
+                self.tag = tag
+                self.keyId = keyId
+                self.ts = ts
+                self.downloadClaim = downloadClaim
+                self.durationMs = durationMs
+            }
+
+            private enum CodingKeys: String, CodingKey {
+                case fileId, name, size, mime, salt, nonce, tag, keyId, ts
+                case downloadClaim = "download_claim"
+                case durationMs = "duration_ms"
+            }
         }
         public let qfile: QFile
 

@@ -50,6 +50,11 @@ final class ChatContainer: ObservableObject {
     /// nil (preserves the previous behaviour for callers that haven't
     /// migrated yet).
     private var sendService: ChatMessageSendService?
+    /// W79: cached AppState ref so `sendVoiceNote` can build the
+    /// `ChatVoiceNoteSender` (which needs auth token + currentUserId
+    /// + serverUrl). Kept weak via guard at call site to avoid a
+    /// retain cycle through the container hierarchy.
+    private weak var appState: AppState?
     private let peerUserId: String
 
     init(conversationId: UUID,
@@ -93,6 +98,7 @@ final class ChatContainer: ObservableObject {
     /// Views pass this in via `.environmentObject` once mounted.
     func attach(appState: AppState) {
         self.sendService = ChatMessageSendService(appState: appState)
+        self.appState = appState
         // W76: listen for chat envelope events (msg_receive, typing,
         // delivery / read receipts) relayed from AppState's WS
         // dispatcher. Refresh the local view-model when something
@@ -221,6 +227,109 @@ final class ChatContainer: ObservableObject {
                     )
                     self.refreshFromStore()
                 }
+            }
+        }
+    }
+
+    /// W79: ship a recorded voice note over the existing 1:1 chat path.
+    /// Pipeline: encrypt+upload via `ChatVoiceNoteSender` → use the
+    /// resulting `qfile` v3 marker JSON as the plaintext of a normal
+    /// `msg_send`. The local conversation row carries a friendly
+    /// placeholder ("🎤 Nota vocale (4.2s)") so the user sees a
+    /// recognizable bubble instead of the marker JSON.
+    /// Receiver-side handling: `AppState.handleIncomingMessage`
+    /// detects the qfile marker; today (v1.0.143) it shows the same
+    /// placeholder text (download/playback wiring lands in v1.0.144).
+    func sendVoiceNote(_ recording: VoiceNoteRecorder.Recording) {
+        let peerId = peerUserId
+        let convId = conversationId
+        let durSec = Double(recording.durationMs) / 1000.0
+        let displayText = String(format: "🎤 Nota vocale (%.1fs)", durSec)
+        let msgId = UUID()
+
+        // Local row first so the chat reflects the action immediately.
+        let local = Message(
+            id: msgId,
+            conversationId: convId,
+            direction: .outgoing,
+            plaintext: displayText,
+            sentAt: Date(),
+            deliveredAt: nil,
+            readAt: nil,
+            status: .sending
+        )
+        store.appendMessage(local)
+        refreshFromStore()
+
+        // Async upload + send. Failures flip the row to .failed via
+        // `markFailed` so the existing snackbar surfaces a Retry CTA.
+        guard let sendService = self.sendService,
+              let appState = self.appState else {
+            // No backend wired (preview / unit test) — fall back to a
+            // simulated delivery so the UI still flows.
+            Task { @MainActor [weak self, msgId, convId] in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                self?.store.updateMessageStatus(
+                    id: msgId, conversationId: convId,
+                    newStatus: .delivered, deliveredAt: Date()
+                )
+                self?.refreshFromStore()
+            }
+            return
+        }
+
+        Task { [weak self, peerId, convId, msgId] in
+            let prep = await ChatVoiceNoteSender(appState: appState)
+            let markerJson: String
+            do {
+                markerJson = try await prep.prepareMarkerJson(
+                    for: recording,
+                    recipientUserId: peerId
+                )
+            } catch let e as ChatVoiceNoteSender.Error {
+                print("[ChatContainer] voice note prep failed: \(e.localizedDescription)")
+                await MainActor.run {
+                    self?.markFailed(messageId: msgId, reason: .uploadFailure)
+                }
+                return
+            } catch {
+                print("[ChatContainer] voice note prep failed: \(error)")
+                await MainActor.run {
+                    self?.markFailed(messageId: msgId, reason: .generic)
+                }
+                return
+            }
+            // Marker prepared — encrypt-and-ship via the same WS send
+            // pipeline as a regular text message. The wire `plaintext`
+            // is the marker JSON; the local store keeps the friendly
+            // display text untouched.
+            let outcome = await sendService.sendEncrypted(
+                messageId: msgId,
+                peerUserId: peerId,
+                plaintext: markerJson
+            )
+            await MainActor.run {
+                guard let self = self else { return }
+                switch outcome {
+                case .delivered(let serverMsgId):
+                    self.store.setServerMessageId(
+                        localId: msgId,
+                        conversationId: convId,
+                        serverMessageId: serverMsgId
+                    )
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: convId,
+                        newStatus: .delivered, deliveredAt: Date()
+                    )
+                case .sent:
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: convId,
+                        newStatus: .delivered, deliveredAt: Date()
+                    )
+                case .failed(let reason):
+                    self.markFailed(messageId: msgId, reason: reason)
+                }
+                self.refreshFromStore()
             }
         }
     }

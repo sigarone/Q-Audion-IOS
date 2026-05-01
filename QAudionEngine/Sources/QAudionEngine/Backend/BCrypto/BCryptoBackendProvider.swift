@@ -13,6 +13,10 @@ public final class BCryptoBackendProvider: BackendProvider {
     public lazy var contactsApi: ContactsApi = BCryptoContactsApiImpl(rest: restClient)
     public lazy var storageApi: StorageApi = BCryptoStorageApiImpl(rest: restClient)
     public lazy var securityApi: SecurityApi = BCryptoSecurityApiImpl(rest: restClient)
+    /// W79 — voice-note recipient capability minter / redeemer.
+    /// Used by the iOS-internal `qfile` v3 send pipeline so the recipient
+    /// can `GET /api/v1/files/{id}` with the 3 download-token headers.
+    public lazy var downloadTokenClient = BCryptoDownloadTokenClient(rest: restClient)
     public lazy var persistentConnection: PersistentConnection = BCryptoPersistentConnectionImpl(ws: wsClient)
 
     /// OIDC SSO client (lazy, only created if needed).
