@@ -22,6 +22,16 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.272", date: "2026-05-02",
+              title: "Battery + brightness + screen + vendorID (W274-W277)",
+              bullets: [
+                "About → STATO SISTEMA: 3 nuove righe diagnostiche",
+                "W274 Batteria: livello + stato (in carica / scarica / piena)",
+                "W275 Luminosità schermo: 0..100%",
+                "W276 Schermo: dimensioni (es. '390×844 · @3x')",
+                "W277 ID dispositivo (vendor): identifierForVendor truncato",
+                "Tutto via UIDevice + UIScreen, single-statement helpers"
+              ]),
         .init(id: "v1.0.271", date: "2026-05-02",
               title: "Svuota URLCache dev action (W271)",
               bullets: [

@@ -97,6 +97,18 @@ struct AboutSettingsScreen: View {
                         // CPU and reduces background activity when on;
                         // PQC keygen latency can spike noticeably.
                         kvRow("Risparmio energetico", Self.lowPowerLabel(), mono: false)
+                        // W274: battery state + level. Useful when QA
+                        // notices the app crashing on low battery
+                        // (iOS aggressively reaps memory below 10%).
+                        kvRow("Batteria", Self.batteryLabel(), mono: false)
+                        // W275: screen brightness. Auto-brightness can
+                        // make AASIST face/voice trust UI hard to read
+                        // at low values; this is a quick check.
+                        kvRow("Luminosità schermo", Self.brightnessLabel(), mono: true)
+                        // W276: screen size + scale. Helps file an
+                        // accurate bug report for layout regressions
+                        // on smaller devices (iPhone SE, mini).
+                        kvRow("Schermo", Self.screenSizeLabel(), mono: true)
                     }
                     // W159: local data summary — gives the user a
                     // sense of how much chat content lives on this
@@ -106,6 +118,12 @@ struct AboutSettingsScreen: View {
                         kvRow("Conversazioni", "\(stats.conversations)", mono: true)
                         kvRow("Messaggi totali", "\(stats.messages)", mono: true)
                         kvRow("Abbozzi salvati", "\(stats.drafts)", mono: true)
+                        // W277: identifierForVendor. UUID stable across
+                        // launches as long as the user has at least one
+                        // app from the same vendor installed. Resets on
+                        // full reinstall. Different from auth token /
+                        // device-id (those are server-issued).
+                        kvRow("ID dispositivo (vendor)", Self.vendorIdLabel(), mono: true)
                     }
                     section("SICUREZZA") {
                         statusRow("ML-KEM-1024 (PQC)",
@@ -359,6 +377,88 @@ struct AboutSettingsScreen: View {
         } else {
             return "Disattivato"
         }
+    }
+
+    /// W274: battery state + level. UIDevice requires
+    /// `isBatteryMonitoringEnabled = true` to populate these — set
+    /// once on first read here. Format: "78% · In carica" or
+    /// "12% · Scarica".
+    private static func batteryLabel() -> String {
+        #if canImport(UIKit)
+        let dev = UIDevice.current
+        if !dev.isBatteryMonitoringEnabled {
+            dev.isBatteryMonitoringEnabled = true
+        }
+        let level = dev.batteryLevel
+        let pct: String
+        if level < 0 {
+            pct = "?"
+        } else {
+            pct = String(Int(level * 100.0)) + "%"
+        }
+        let stateText: String
+        switch dev.batteryState {
+        case .charging:   stateText = "In carica"
+        case .full:       stateText = "Piena"
+        case .unplugged:  stateText = "Scarica"
+        case .unknown:    stateText = "Sconosciuto"
+        @unknown default: stateText = "?"
+        }
+        return pct + " · " + stateText
+        #else
+        return "?"
+        #endif
+    }
+
+    /// W275: screen brightness 0..1 → "47%" string. Reads from
+    /// UIScreen.main.brightness which is the auto-brightness adjusted
+    /// value, not the system setting slider.
+    private static func brightnessLabel() -> String {
+        #if canImport(UIKit)
+        let value: Double = Double(UIScreen.main.brightness)
+        let pct: Int = Int((value * 100.0).rounded())
+        return String(pct) + "%"
+        #else
+        return "?"
+        #endif
+    }
+
+    /// W277: identifierForVendor as a short truncated UUID, e.g.
+    /// "5C9F4E2A…". Full UUID is too long for a kvRow; the prefix is
+    /// enough to correlate when triaging. Resets on full app reinstall
+    /// (when no other apps from the same vendor are installed).
+    private static func vendorIdLabel() -> String {
+        #if canImport(UIKit)
+        guard let uuid = UIDevice.current.identifierForVendor else {
+            return "?"
+        }
+        let full: String = uuid.uuidString
+        // Take the first 8 chars + ellipsis for a compact display.
+        if full.count > 9 {
+            let head = String(full.prefix(8))
+            return head + "…"
+        }
+        return full
+        #else
+        return "?"
+        #endif
+    }
+
+    /// W276: screen size + native scale. e.g. "390×844 · @3x". The
+    /// width/height are in points (logical pixels); native scale tells
+    /// you how many physical pixels per point.
+    private static func screenSizeLabel() -> String {
+        #if canImport(UIKit)
+        let bounds = UIScreen.main.bounds
+        let scale: Int = Int(UIScreen.main.nativeScale)
+        let w: Int = Int(bounds.width)
+        let h: Int = Int(bounds.height)
+        // Build via concat — see CLAUDE.md §13 (no multi-segment
+        // interpolations even outside closures, defensive habit).
+        return String(w) + "×" + String(h) + " · @" + String(scale) + "x"
+        #else
+        return "?"
+        #endif
     }
 
     /// W267: resident memory of the current process, formatted as
