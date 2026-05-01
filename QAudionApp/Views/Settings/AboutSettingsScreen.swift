@@ -56,6 +56,11 @@ struct AboutSettingsScreen: View {
                     }
                     section("PIATTAFORMA") {
                         kvRow("Target iOS", "iOS \(container.viewModel.iosDeploymentTarget)+", mono: true)
+                        // W170: surface the runtime device + OS info
+                        // so testers can quickly confirm what they're
+                        // running on without leaving the app.
+                        kvRow("Dispositivo", Self.deviceModelLabel(), mono: false)
+                        kvRow("iOS in uso", Self.iosVersionLabel(), mono: true)
                     }
                     // W159: local data summary — gives the user a
                     // sense of how much chat content lives on this
@@ -141,6 +146,27 @@ struct AboutSettingsScreen: View {
 
         return LocalDataStats(conversations: conversations,
                               messages: messages, drafts: drafts)
+    }
+
+    /// W170: device model label for the PIATTAFORMA row.
+    /// UIDevice.current.model returns generic "iPhone" / "iPad" — the
+    /// hardware identifier (e.g. iPhone15,4) lives under sysctl, but
+    /// the user-friendly model name is enough here.
+    private static func deviceModelLabel() -> String {
+        #if canImport(UIKit)
+        return UIDevice.current.model
+        #else
+        return "?"
+        #endif
+    }
+
+    /// W170: running iOS version (UIDevice.current.systemVersion).
+    private static func iosVersionLabel() -> String {
+        #if canImport(UIKit)
+        return "iOS " + UIDevice.current.systemVersion
+        #else
+        return "?"
+        #endif
     }
 
     /// W162: stamp the first-launch timestamp for THIS build number
