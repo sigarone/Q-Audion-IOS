@@ -444,10 +444,10 @@ final class AppState: ObservableObject {
                 ws.sendOpaqueMessage(recipientId: recipientId, payload: wire)
             }
         )
-        cke.onKeyExchanged = { contactId, _, fingerprint in
+        cke.onKeyExchanged = { (contactId: String, _: String, fingerprint: String) in
             print("[AppState] Pairwise PSK derived for \(contactId.prefix(8))… fp=\(fingerprint.prefix(8))…")
         }
-        cke.onError = { contactId, error in
+        cke.onError = { (contactId: String, error: Error) in
             print("[AppState] PSK exchange error for \(contactId.prefix(8))…: \(error)")
         }
         self.contactKeyExchange = cke
