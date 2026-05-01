@@ -24,7 +24,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
     public func sendCallOffer(recipientId: String, sdp: String) async throws {
         // Mint a fresh call_id and stash for the rest of the session.
         let cid = UUID().uuidString
-        callIdLock.lock(); activeCallId = cid; callIdLock.unlock()
+        setActiveCallId(cid)
         ws.send(
             type: "call_offer",
             data: [
@@ -70,7 +70,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
             ]
         )
         // Clear after hangup so the next outgoing call starts fresh.
-        callIdLock.lock(); activeCallId = nil; callIdLock.unlock()
+        clearActiveCallId()
     }
 
     public func sendOpaqueMessage(recipientId: String, data: Data) async throws {
@@ -122,5 +122,17 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// `sendCallAnswer` / `sendIceCandidate` / `sendHangup` use it.
     public func bindIncomingCallId(_ callId: String) {
         callIdLock.lock(); activeCallId = callId; callIdLock.unlock()
+    }
+
+    /// Sync helpers — Swift 6 prohibits NSLock.lock/unlock directly inside
+    /// `async` functions ("instance method 'lock' is unavailable from
+    /// asynchronous contexts"). Wrapping the mutation in a sync method
+    /// makes the lock call a sync→sync call which is allowed.
+    private func setActiveCallId(_ cid: String) {
+        callIdLock.lock(); activeCallId = cid; callIdLock.unlock()
+    }
+
+    private func clearActiveCallId() {
+        callIdLock.lock(); activeCallId = nil; callIdLock.unlock()
     }
 }
