@@ -970,7 +970,11 @@ final class AppState: ObservableObject {
     static func renderInboundPlaintext(_ raw: String) -> String {
         guard raw.utf8.count <= 64 * 1024 else { return raw }
         // attach_announce path — qa_ctl:1 marker.
-        if let env = try? AttachAnnounceEnvelope.parse(raw), let env = env {
+        // `try? parse` collapses the Optional<Optional<…>> down to a
+        // single Optional, so a single `if let` is enough; the previous
+        // `let env = env` shadowing pattern errored because the inner
+        // bind sees a non-optional value.
+        if let env = try? AttachAnnounceEnvelope.parse(raw) {
             let mime = env.att.mime
             if mime.hasPrefix("audio/") {
                 if let dur = env.att.durationMs, dur > 0 {
