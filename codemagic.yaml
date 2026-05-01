@@ -217,6 +217,24 @@ workflows:
       - name: Build IPA
         script: |
           cd QAudionApp
+          # First echo the diagnostic step's findings into THIS step's
+          # console so the actual Swift error surfaces here even when
+          # the operator only pastes Step 7. The diag.log from the
+          # previous step lives in QAudionApp/diag.log.
+          if [ -f diag.log ]; then
+            echo "=== diag.log : grep error/warning/long-fn (from Step 6) ==="
+            grep -E "error:|warning:|fatal:|cannot find|note:.*type-check|killed|signal|long-function|long-expression" diag.log | tail -200 || true
+            echo ""
+            echo "=== diag.log : last 150 lines ==="
+            tail -150 diag.log || true
+            echo ""
+            echo "=== diag.log size ==="
+            wc -l diag.log || true
+            echo ""
+          else
+            echo "[Build IPA] no diag.log found from Step 6 — skipping pre-print"
+          fi
+
           # Capture full xcode-project build-ipa output to build.log so
           # the next failed run's diagnostic is at least preserved as
           # an artifact for download. xcbeautify still filters the
