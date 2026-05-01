@@ -578,6 +578,21 @@ struct ChatListScreen: View {
             } label: {
                 Label("Esporta chat", systemImage: "square.and.arrow.up.on.square")
             }
+            // W157: copy the peer userId for share / debug. Useful
+            // when the user wants to forward a contact via SMS / mail
+            // without going through the full profile screen.
+            Button {
+                #if canImport(UIKit)
+                UIPasteboard.general.string = item.peerUserId
+                snackbar?.show(.init(
+                    text: "ID utente copiato.",
+                    severity: .info,
+                    durationSeconds: 2
+                ))
+                #endif
+            } label: {
+                Label("Copia ID utente", systemImage: "doc.on.doc")
+            }
             Divider()
             Button(role: .destructive) {
                 container.deleteConversation(conversationId: item.conversationId)
