@@ -22,6 +22,15 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.253", date: "2026-05-01",
+              title: "Fix type-checker timeout #2 in ChatDetailScreen (W253)",
+              bullets: [
+                "ChatDetailScreen.swift:151 — print(\"...\" + errMsg) still tripped the type-checker",
+                "Even with errMsg pre-bound, the `+` operator inside `print(...)` was the problem",
+                "`print` has many overloads (variadic / separator / terminator / to:&Output)",
+                "Fix: build full line into a local String, then `print(line)`",
+                "Same pattern as onFinishVoiceNote (lines 169-175) — now consistent"
+              ]),
         .init(id: "v1.0.252", date: "2026-05-01",
               title: "Quick-copy build identifier in About (W179)",
               bullets: [

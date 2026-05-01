@@ -231,6 +231,25 @@ Task { @MainActor in
 }
 ```
 
+**v1.0.253 update — pre-binding alone is NOT enough.** Even this pattern still trips the type-checker:
+
+```swift
+// ❌ STILL TIMES OUT (v1.0.251 → v1.0.252 broke on this exact line):
+let errMsg: String = error.localizedDescription
+print("[VoiceNote] start failed: " + errMsg)
+```
+
+The reason: `print` has many overloads (variadic, separator:, terminator:, to: &Output). Combined with `String + String → String` operator overloads, the type-checker explores too many resolution paths. The `+` MUST live outside the `print(...)` call:
+
+```swift
+// ✅ WORKS:
+let errMsg: String = error.localizedDescription
+let line: String = "[VoiceNote] start failed: " + errMsg
+print(line)
+```
+
+**Rule of thumb**: if a closure builds a String for `print` / `snackbar.show` / any function with overloads, build the full String into a `let line: String = ...` first, then pass that single String. Never do the concatenation or interpolation inline at the call site.
+
 Symptoms: the build console shows just `Failed to archive` with **no `error:`/`warning:` lines** — xcbeautify is consuming the diagnostic before tee can capture it.
 
 **Mitigation:** the codemagic.yaml has a "Diagnose Swift compile (raw xcodebuild)" step that runs before `xcode-project build-ipa` with `CODE_SIGNING_ALLOWED=NO`. That output goes to `diag.log` (artifact) and is grepped at the end of Step 6. Always check Step 6 in failed Codemagic builds, not just the Build IPA step.

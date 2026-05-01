@@ -144,11 +144,16 @@ struct ChatDetailScreen: View {
                         } catch VoiceNoteRecorder.RecorderError.permissionDenied {
                             container.markFailed(messageId: UUID(), reason: .generic)
                         } catch {
-                            // Plain String concat — multi-segment
-                            // interpolation in @Sendable closures
-                            // trips the type-checker even with locals.
+                            // W253: even with errMsg pre-bound, leaving
+                            // the `+` inside `print(...)` still trips
+                            // the type-checker because `print` has many
+                            // overloads (variadic, separator, terminator,
+                            // to:&Output). Build the full line into a
+                            // local String first, then pass that single
+                            // String to `print`. See CLAUDE.md §13.
                             let errMsg: String = error.localizedDescription
-                            print("[VoiceNote] start failed: " + errMsg)
+                            let line: String = "[VoiceNote] start failed: " + errMsg
+                            print(line)
                         }
                     }
                 },
