@@ -99,6 +99,15 @@ struct SettingsScreen: View {
             ))
             #endif
         }
+        .overlay(alignment: .bottom) {
+            // W172: tiny copyright line — appears under the version
+            // info as a footnote. No tap action.
+            Text("© 2026 Q-Audion · ML-KEM-1024 PQC")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
+                .offset(y: 24)
+        }
+        .padding(.bottom, 24)
     }
 
     private var cacheUsageSubtitle: String {
