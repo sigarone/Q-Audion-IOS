@@ -151,6 +151,49 @@ struct NotificationsSettingsScreen: View {
                               mono: false)
                     }
 
+                    // W171: schedule a fake banner so the user can
+                    // verify their banner / sound / vibration setup
+                    // works end-to-end without needing a real peer
+                    // message. Fires after 1.5s — long enough for
+                    // the user to lock the screen and see the banner.
+                    SettingsSectionHeader("DIAGNOSTICA")
+                    Button {
+                        Task {
+                            await NotificationCenterService.shared.scheduleLocal(
+                                category: .messageDelivered,
+                                title: "Q-Audion test",
+                                body: "Se vedi questo banner, le notifiche funzionano correttamente.",
+                                delay: 1.5
+                            )
+                        }
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "bell.badge.fill")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(.orange)
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Invia notifica di test")
+                                    .qaudionStyle(type.bodyMedium)
+                                    .foregroundStyle(scheme.onSurface)
+                                Text("Banner finto fra ~1.5s · blocca lo schermo per vederlo")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            Spacer()
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 52)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(scheme.surfaceVariant.opacity(0.4))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
                     // W169: shortcut into iOS Settings → Q-Audion
                     // permissions. Useful when the user has revoked
                     // mic / notifications and wants to fix it without
