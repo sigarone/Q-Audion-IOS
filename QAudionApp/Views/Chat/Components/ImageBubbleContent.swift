@@ -23,6 +23,9 @@ struct ImageBubbleContent: View {
 
     @State private var fullscreen: Bool = false
     @State private var loadedImage: UIImage? = nil
+    /// W123: tracks whether the load failed so we can show a retry
+    /// button instead of an indefinite shimmer.
+    @State private var loadFailed: Bool = false
     /// W97: long-press save-to-Photos confirmation. iOS auto-prompts
     /// for photo-library write permission the first time
     /// `UIImageWriteToSavedPhotosAlbum` runs.
@@ -76,6 +79,8 @@ struct ImageBubbleContent: View {
                                 Label("Condividi", systemImage: "square.and.arrow.up")
                             }
                         }
+                } else if loadFailed {
+                    failedBox(path: path)
                 } else {
                     placeholderBox
                         .onAppear { loadIfNeeded(path: path) }
@@ -133,9 +138,39 @@ struct ImageBubbleContent: View {
             if let data = try? Data(contentsOf: url),
                let img = UIImage(data: data) {
                 self.loadedImage = img
+                self.loadFailed = false
             } else {
                 print("[ImageBubbleContent] failed to load \(path) — cache reclaimed?")
+                self.loadFailed = true
             }
+        }
+    }
+
+    /// W123: error-state view shown when the cache file is missing or
+    /// unreadable. Tap retries the load — useful when the user
+    /// scrolled past + back, in case the cache repopulated.
+    @ViewBuilder
+    private func failedBox(path: String) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(scheme.surfaceVariant.opacity(0.6))
+                .frame(width: 200, height: 150)
+            VStack(spacing: 6) {
+                Image(systemName: "photo.badge.exclamationmark")
+                    .font(.system(size: 28))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                Text("Foto non disponibile")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                Text("Tocca per riprovare")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.primary)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            loadFailed = false
+            loadIfNeeded(path: path)
         }
     }
 }
