@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.276", date: "2026-05-02",
+              title: "'Apri Privacy iOS' deep-link in Privacy (W284)",
+              bullets: [
+                "Privacy → SISTEMA: 'Apri Privacy in Impostazioni iOS'",
+                "Sister di W169 (Notifiche → SISTEMA), stesso destination URL",
+                "Più vicino al contesto mentale quando l'utente legge i toggle privacy",
+                "Util quando Mic / NFC / Camera permessi sono stati revocati"
+              ]),
         .init(id: "v1.0.275", date: "2026-05-02",
               title: "Diagnostics export: SYSTEM STATE section (W283)",
               bullets: [

@@ -192,12 +192,58 @@ struct PrivacySettingsScreen: View {
                               mono: false)
                     }
 
+                    // W284: deep-link into iOS Settings → Privacy &
+                    // Security for Q-Audion. Lets the user revisit
+                    // mic / contacts / NFC / camera permissions
+                    // without hunting through Settings. Sister of
+                    // W169 (same destination, different entry point).
+                    SettingsSectionHeader("SISTEMA")
+                    Button {
+                        openIOSPrivacySettings()
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "lock.shield")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(.orange)
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Apri Privacy in Impostazioni iOS")
+                                    .qaudionStyle(type.bodyMedium)
+                                    .foregroundStyle(scheme.onSurface)
+                                Text("Mic · contatti · NFC · fotocamera")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.system(size: 14, weight: .regular))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 52)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(scheme.surfaceVariant.opacity(0.4))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
             }
         }
         .navigationTitle("Privacy")
+    }
+
+    /// W284: open iOS Settings → Q-Audion entry. Same URL as W169 but
+    /// reachable from the Privacy screen (closer to mental context).
+    private func openIOSPrivacySettings() {
+        #if canImport(UIKit)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+        #endif
     }
 
     // MARK: - Duration picker
