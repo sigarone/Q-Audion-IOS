@@ -439,6 +439,26 @@ final class ChatContainer: ObservableObject {
         emitControlEnvelope(envelope)
     }
 
+    /// W326: delete-local. Tombstone the message in our local store
+    /// without sending any envelope to the peer (their copy stays
+    /// intact). Used by the "Elimina per te" action in the chat
+    /// bubble action sheet — the user wants to hide it from their
+    /// own view without affecting the conversation on the other side.
+    ///
+    /// Closes audit §2.1 (TODO_AUDIT.md).
+    ///
+    /// Idempotent — re-firing is a no-op once the row is tombstoned.
+    func deleteMessageLocally(_ message: Message) {
+        HapticFeedback.destructiveAction()  // W114: heavy thud
+        guard let cmid = message.clientMsgId, !cmid.isEmpty else {
+            print("[ChatContainer] deleteMessageLocally: missing clientMsgId")
+            return
+        }
+        // Apply tombstone locally — no peer envelope.
+        store.applyDeleteByClientMsgId(cmid)
+        refreshFromStore()
+    }
+
     /// W86: ship a `qa_ctl:1` t="edit" envelope to the peer + replace
     /// the body locally. Only own outbound text messages can be edited
     /// (peer's spoof check rejects edits of their own messages too).

@@ -237,12 +237,11 @@ struct ChatDetailScreen: View {
                     pendingDeleteForAllId = msgIdWrapper.id
                 },
                 onDeleteForMe: {
-                    // TODO(engine): delete-local da ConversationStore.
-                    snackbar?.show(.init(
-                        text: "Messaggio eliminato per te.",
-                        severity: .info,
-                        durationSeconds: 3
-                    ))
+                    // W326: wired to ChatContainer.deleteMessageLocally
+                    // via method extraction (defensive against the
+                    // type-checker saga in this file). The closure
+                    // body stays a single statement.
+                    handleDeleteForMe(messageId: msgIdWrapper.id)
                 },
                 // W141: surface the sentAt so BubbleActionSheet can
                 // hide the Modifica row past the 15-min edit window.
@@ -691,6 +690,31 @@ struct ChatDetailScreen: View {
     private func handleVoiceNoteCancel() {
         // W72: stop + delete tmp file.
         voiceNoteRecorder.cancel()
+    }
+
+    // MARK: - W326: delete-for-me handler
+    //
+    // Closes audit §2.1 — was a TODO(engine) no-op. The method-
+    // extraction is defensive: the inline closure body would have
+    // been:
+    //
+    //   if let m = container.viewModel.messages.first(where: { $0.id == id }) {
+    //       container.deleteMessageLocally(m)
+    //   }
+    //   snackbar?.show(.init(text: "...", severity: .info, ...))
+    //
+    // That's enough closure depth + branching to risk the type-checker
+    // saga (W221-W262). Method extraction keeps the closure trivial.
+
+    private func handleDeleteForMe(messageId: UUID) {
+        if let target = container.viewModel.messages.first(where: { $0.id == messageId }) {
+            container.deleteMessageLocally(target)
+        }
+        snackbar?.show(.init(
+            text: "Messaggio eliminato per te.",
+            severity: .info,
+            durationSeconds: 3
+        ))
     }
 
     // MARK: - Multi-photo picker callback methods (W259)

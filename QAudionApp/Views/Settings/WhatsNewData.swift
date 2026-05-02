@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.308", date: "2026-05-02",
+              title: "Wire delete-for-me — audit §2 100% closed (W326)",
+              bullets: [
+                "ChatContainer: nuovo deleteMessageLocally(_:) — tombstone senza envelope",
+                "ChatDetailScreen onDeleteForMe → handleDeleteForMe (method-extracted)",
+                "Closure body trivial (1 statement) — safe per CLAUDE.md §13",
+                "Audit §2 engine-TODOs: 4/4 ✅ (delete-local was the last)",
+                "Touched ChatDetailScreen.swift defensively — saga file"
+              ]),
         .init(id: "v1.0.307", date: "2026-05-02",
               title: "Audit §3 stub-UI sweep — InCall + Bubble (W323-W325)",
               bullets: [
