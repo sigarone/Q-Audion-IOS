@@ -1716,6 +1716,32 @@ final class AppState: ObservableObject {
                         self.callContactId = nil
                     }
                 }
+                // W389: forward the real ML-KEM-1024 session key into
+                // CallSessionKeyBroker so AppState.callPqcSessionKey
+                // swaps from the W369 transitional PSK-derived seed to
+                // the PQC handshake output. The broker also re-posts
+                // sasReadyNotification, which LiveInCallScreen and the
+                // WebRTC controller observe to re-render SAS words and
+                // (when the binary supports insertable streams)
+                // re-install the PQC sealer with the correct key.
+                // Capture `self` weakly in the closure that gets stored
+                // on the integration so we don't hold AppState alive via
+                // callService → integration → closure. The peerId is
+                // captured by-value from `contactId`.
+                integration.onPqcSessionKeyEstablished = { [weak self] sharedSecret in
+                    // The integration fires this from its WS dispatch
+                    // queue. Both AppState and CallSessionKeyBroker are
+                    // @MainActor, so hop explicitly via a MainActor Task.
+                    let peerId = contactId
+                    let weakSelf = self  // re-capture for Task scope
+                    Task { @MainActor in
+                        guard let strongSelf = weakSelf else { return }
+                        // Bind broker on first use; idempotent.
+                        CallSessionKeyBroker.shared.bind(to: strongSelf)
+                        CallSessionKeyBroker.shared.registerPqcSessionKey(
+                            sharedSecret, for: peerId)
+                    }
+                }
             }
 
             callState = .active

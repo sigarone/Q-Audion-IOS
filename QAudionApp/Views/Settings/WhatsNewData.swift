@@ -12,6 +12,18 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.366", date: "2026-05-02",
+              title: "🔐 PQC handshake → CallSessionKeyBroker (W389, deep-fix #1/4)",
+              bullets: [
+                "Chiuso onestamente uno dei 4 punti aperti del PARITY_AUDIT_HONEST",
+                "QAudionCallIntegration: nuovo callback onPqcSessionKeyEstablished((Data) -> Void)",
+                "Fire da entrambe le derivazioni reali: case .accept (caller, post-decapsulate) e case .offer (responder, post-encapsulate)",
+                "AppState.startCall: integration.onPqcSessionKeyEstablished forwarda al broker via Task @MainActor",
+                "AppState.callPqcSessionKey ora swappa dal seed PSK transitional W369 alla key ML-KEM-1024 reale",
+                "SAS panel re-rendera con parole derivate dalla session key reale (parità Android)",
+                "SasVerificationStore auto-invalida verifiche storiche sotto fingerprint diverso",
+                "Weak-self capture corretto per evitare retain cycle integration → closure → AppState"
+              ]),
         .init(id: "v1.0.365", date: "2026-05-02",
               title: "🛠 Fix build: UUID inout + Sendable closure (W388)",
               bullets: [

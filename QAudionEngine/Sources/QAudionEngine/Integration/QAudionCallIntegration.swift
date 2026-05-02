@@ -38,6 +38,27 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     public var onStateChanged: ((CallState) -> Void)?
     public var onDeepfakeAlert: ((ConfidenceIndex.Level, Float) -> Void)?
+
+    /// W389 — fired the moment the ML-KEM-1024 PQC handshake completes
+    /// successfully on EITHER side (caller `case .accept` after
+    /// `decapsulate`, responder `case .offer` after `encapsulate`). The
+    /// 32-byte shared secret is exactly the value that
+    /// `QAudionEngine.initSession(sharedSecret:)` is initialised with —
+    /// i.e. the real session key — and is the cross-platform-stable
+    /// input the SAS computation must use for parity with Android.
+    ///
+    /// App layer is expected to forward this into
+    /// `CallSessionKeyBroker.shared.registerPqcSessionKey(_:for:)` so
+    /// `AppState.callPqcSessionKey` swaps from the W369 transitional
+    /// PSK-derived seed to the real ML-KEM secret. Once that swap
+    /// happens the SAS panel re-renders with PQC-derived words, and any
+    /// previously stored verification under the transitional fingerprint
+    /// is auto-invalidated by `SasVerificationStore` (different
+    /// fingerprint = new verification required).
+    ///
+    /// Fires at most once per call. The integration does not retain
+    /// the secret; the caller is responsible for lifecycle.
+    public var onPqcSessionKeyEstablished: ((Data) -> Void)?
     /// Set a BCryptoRestClient to enable userId pre-resolution before OFFER.
     /// Without this, OFFERs use Signal recipientId which may cause server routing failures.
     public var restClient: BCryptoRestClient?
@@ -170,6 +191,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             Task { try? await sendOpaqueMessage(accept) }
             lock.lock(); state = .active; lock.unlock()
             onStateChanged?(.active)
+            // W389: surface the real ML-KEM-1024 session key so the app
+            // layer can swap the W369 transitional PSK seed for the
+            // PQC-derived secret in `AppState.callPqcSessionKey`. Fired
+            // AFTER engine.initSession so the audio pipeline is already
+            // active under the same key — observers can rely on it.
+            onPqcSessionKeyEstablished?(result.sharedSecret)
 
             // Pre-negotiation step 2: PQC OFFER fully deserialised — tell the
             // caller we are ringing locally so its UI flips to "Ringing".
@@ -183,6 +210,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try engine.initSession(sharedSecret: sharedSecret)
             lock.lock(); state = .active; lock.unlock()
             onStateChanged?(.active)
+            // W389: caller side — same surface as the responder branch.
+            // After this fires, both ends hold the same 32 bytes for
+            // SAS derivation.
+            onPqcSessionKeyEstablished?(sharedSecret)
 
         case .keyExchangeOffer(let payload):
             // Peer is initiating first-contact PSK derivation.
