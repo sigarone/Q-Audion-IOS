@@ -34,7 +34,7 @@ public extension CallingApi {
 ///   JSON decoder reject any STUN-only entry with `keyNotFound`.
 /// - `wssTurnUrl` / `onionAddress` are top-level fields used by the
 ///   transport selector for the WS-TURN and Tor onion fallbacks.
-public struct RelayServer: Codable, Equatable {
+public struct RelayServer: Decodable, Equatable {
     public let urls: [String]
     public let username: String?
     public let credential: String?
@@ -67,7 +67,7 @@ public struct RelayServer: Codable, Equatable {
     }
 }
 
-public struct RelayResponse: Codable, Equatable {
+public struct RelayResponse: Decodable, Equatable {
     public let relays: [RelayServer]
     public let wssTurnUrl: String?
     public let onionAddress: String?

@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.320", date: "2026-05-02",
+              title: "🛠 Fix build: RelayServer/RelayResponse → Decodable only (W341)",
+              bullets: [
+                "Codemagic v1.0.314 build failure: 'type RelayServer/RelayResponse does not conform to Encodable'",
+                "Cause: custom Decoder init + multiple coding keys → encoder synthesis fail",
+                "Fix: drop Codable → Decodable (server-only DTO, mai serializzato lato client)",
+                "Sblocca tutta la pipeline W334-W340 — 7 release in coda di build"
+              ]),
         .init(id: "v1.0.319", date: "2026-05-02",
               title: "👥 GroupSenderKey primitives — magic 0xE4 (W340)",
               bullets: [
