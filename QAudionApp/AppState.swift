@@ -960,19 +960,37 @@ final class AppState: ObservableObject {
         // "(download in arrivo)" placeholder before we get to parse.
         var decryptedRaw: String = ""
         do {
-            // W351: route v3 (0xE3) wire blobs through the MessageRatchet
-            // engine; everything else (no magic byte / 0xE2 v2) falls
-            // back to the legacy v1 MessageCrypto path. Detection on the
-            // first byte is cheap and cross-platform-safe (both engines
-            // reject the other's format on first-byte mismatch).
+            // W351 + W374: route by wire-format magic byte.
+            //   0xE3 → v3.1 ratchet (forward secrecy, canonical CBOR AAD)
+            //   0xE2 → v2 epoch-routed (W374 cross-platform compat)
+            //   anything else → legacy v1 MessageCrypto path
+            // First-byte detection is cheap and cross-platform-safe;
+            // both engines reject the other's format up front.
             let pt: Data
-            if MessageWireFormat.detect(cipher) == .v3 {
+            switch MessageWireFormat.detect(cipher) {
+            case .v3:
                 pt = try ratchetDecryptV3(
                     wire: cipher,
                     psk: psk,
                     senderId: senderId,
                     msgId: clientMsgId ?? serverMsgId)
-            } else {
+            case .v2:
+                // v2 kept the v1 AAD shape ("msg:sender:recipient:msgId")
+                // and only added the epoch-routing header in the wire.
+                // PSK is already resolved above via the same ladder.
+                let aad = Data("msg:\(senderId):\(currentUserId ?? ""):\(clientMsgId ?? serverMsgId)".utf8)
+                if let plain = MessageCryptoV2.decrypt(wire: cipher, psk: psk, aad: aad) {
+                    pt = plain
+                } else {
+                    pt = try crypto.decrypt(
+                        wireBlob: cipher,
+                        psk: psk,
+                        senderId: senderId,
+                        recipientId: currentUserId ?? "",
+                        msgId: clientMsgId ?? serverMsgId
+                    )
+                }
+            case .v1:
                 pt = try crypto.decrypt(
                     wireBlob: cipher,
                     psk: psk,

@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.351", date: "2026-05-02",
+              title: "🔄 v2 (0xE2) inbound compat decoder (W374)",
+              bullets: [
+                "Nuovo MessageCryptoV2: decoder per il wire 0xE2 (epoch-routed)",
+                "Wire layout: magic | epoch_len | epoch | salt(32) | nonce(12) | ct | tag(16)",
+                "HKDF-SHA256(psk, salt=wire.salt, info='q-audion-msg-key') → 32-byte AES key",
+                "AAD = 'msg:sender:recipient:msgId' (stesso shape del v1 — parità Android)",
+                "AppState dispatcher routes ora 0xE3→ratchet, 0xE2→v2, fallback→v1",
+                "Niente più auto-rekey rumoroso su v2 inbound da peer Android vecchio",
+                "Cross-platform parità byte-perfect con MessageCrypto.kt::decryptV2"
+              ]),
         .init(id: "v1.0.350", date: "2026-05-02",
               title: "🔐 Biometric-gated SovereignKeyVault accessor (W373)",
               bullets: [
