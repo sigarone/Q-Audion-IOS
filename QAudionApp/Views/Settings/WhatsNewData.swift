@@ -12,6 +12,18 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.314", date: "2026-05-02",
+              title: "🔌 TURN credentials cache (W335)",
+              bullets: [
+                "Nuovo RelayCredentialsProvider actor — TTL-aware cache di /api/v1/calling/relays",
+                "Refresh 5 minuti prima della scadenza (parità con Android RelayCredentialsProvider.kt)",
+                "Coalescing concorrente: una sola network call in volo per refresh",
+                "currentOrRefresh() — fallback safe per WebRTC path (ritorna nil su errore)",
+                "RelayServer.username/credential ora optional (STUN-only server compat)",
+                "RelayResponse decoda wss_turn_url + onion_address (campi top-level Android)",
+                "JSONDecoder tollerante: ttl, ttlSeconds, ttl_seconds tutti accettati",
+                "Tests: cached reuse, force refresh, invalidate, STUN-only decode"
+              ]),
         .init(id: "v1.0.313", date: "2026-05-02",
               title: "📞 Voice call wire format aligned with Android (W334)",
               bullets: [
