@@ -211,6 +211,47 @@ struct AboutSettingsScreen: View {
                         }
                         .buttonStyle(.plain)
 
+                        // W288: open TestFlight feedback URL in browser.
+                        // The standard public TestFlight feedback URL
+                        // for an app uses the App Apple ID; ours is
+                        // REDACTED_APP_ID per CLAUDE.md.
+                        Button {
+                            #if canImport(UIKit)
+                            // Hardcode the public feedback URL since
+                            // the App Apple ID is stable.
+                            let url = URL(string: "https://testflight.apple.com/v1/app/REDACTED_APP_ID")
+                            if let u = url {
+                                UIApplication.shared.open(u)
+                            }
+                            #endif
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "ant.fill")
+                                    .font(.system(size: 17, weight: .regular))
+                                    .foregroundStyle(scheme.primary)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Feedback TestFlight")
+                                        .qaudionStyle(type.bodyMedium)
+                                        .foregroundStyle(scheme.onSurface)
+                                    Text("Apri pagina pubblica del beta")
+                                        .qaudionStyle(type.labelSmall)
+                                        .foregroundStyle(scheme.onSurfaceVariant)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 52)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(scheme.surfaceVariant.opacity(0.4))
+                            )
+                        }
+                        .buttonStyle(.plain)
+
                         // W179: copy a compact build-ID blob (version,
                         // build, device, iOS) to the clipboard so testers
                         // can paste it into any chat / issue tracker
@@ -499,8 +540,9 @@ struct AboutSettingsScreen: View {
     /// W280: calendar identifier (e.g. "gregorian", "islamic-civil").
     /// Affects all DateFormatter output across the app.
     private static func calendarLabel() -> String {
-        // Calendar.Identifier is an enum; map to its rawValue for a
-        // friendly String. Single-statement, type-checker safe.
+        // W289: in Xcode 26.4 strict mode @unknown default isn't
+        // enough for Calendar.Identifier (the SDK added new cases
+        // like .dangi). Use a regular default to make it exhaustive.
         let id = Calendar.current.identifier
         switch id {
         case .gregorian:        return "Gregoriano"
@@ -519,7 +561,7 @@ struct AboutSettingsScreen: View {
         case .republicOfChina:  return "Repubblica di Cina"
         case .islamicTabular:   return "Islamico tabulare"
         case .islamicUmmAlQura: return "Islamico (Umm al-Qura)"
-        @unknown default:       return "Sconosciuto"
+        default:                return "Sconosciuto"
         }
     }
 
@@ -630,9 +672,9 @@ struct AboutSettingsScreen: View {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useGB, .useMB]
         formatter.countStyle = .decimal
-        formatter.locale = Locale(identifier: "it_IT")
-        // Build the label via String concat (no \(...) inside a closure
-        // context). See CLAUDE.md §13.
+        // W289: ByteCountFormatter has no `locale` property in iOS
+        // Foundation — it derives formatting from the system locale
+        // automatically. Removed the bogus assignment.
         let formatted: String = formatter.string(fromByteCount: Int64(bytes))
         return formatted + " liberi"
     }

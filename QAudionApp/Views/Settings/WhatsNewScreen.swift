@@ -22,6 +22,16 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.279", date: "2026-05-02",
+              title: "Fix Xcode 26.4 build errors (W289) + W288 TF link",
+              bullets: [
+                "v1.0.278 build failed: 2 real Swift errors caught by diag step",
+                "Fix W289a: Calendar.Identifier switch needed regular `default` (Xcode 26.4 strict)",
+                "Fix W289b: ByteCountFormatter has no .locale property — removed",
+                "Aggiunto W288: 'Feedback TestFlight' button in About → ASSISTENZA",
+                "Apre la pagina pubblica del beta su testflight.apple.com",
+                "Aggiunto TODO_AUDIT.md — outstanding work audit nel repo"
+              ]),
         .init(id: "v1.0.278", date: "2026-05-02",
               title: "Audio session cat + UN auth status (W286/W287)",
               bullets: [
