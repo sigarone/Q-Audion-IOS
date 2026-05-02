@@ -195,6 +195,14 @@ struct BackupSettingsScreen: View {
                         kvRow(label: "Cifratura",
                               value: "Locale (QAUD/AES-256-GCM)",
                               mono: true)
+                        // W306: estimate of current data that WOULD
+                        // go into the next backup. Walks UserDefaults
+                        // for the conversation/message keys and sums
+                        // their byte sizes. Cheap (no I/O), gives
+                        // testers a sense of 'will this fit'.
+                        kvRow(label: "Backup stimato",
+                              value: Self.estimatedBackupSizeLabel(),
+                              mono: true)
                     }
 
                     SettingsSectionHeader("AZIONI")
@@ -399,6 +407,40 @@ struct BackupSettingsScreen: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(extras.riskHigh.opacity(0.12))
         )
+    }
+
+    /// W306: estimate the byte size of the local conversation +
+    /// message + draft data that would be included in a backup.
+    /// Walks UserDefaults for the relevant keys and sums their
+    /// stored payload sizes. Returns a ByteCountFormatter-formatted
+    /// label like '127 KB' or '4,2 MB'. Cheap — single pass over
+    /// the user defaults dictionary.
+    private static func estimatedBackupSizeLabel() -> String {
+        let store = UserDefaults.standard
+        let allKeys = store.dictionaryRepresentation().keys
+        var totalBytes: Int64 = 0
+        // Conversation list
+        if let data = store.data(forKey: "qaudion.conv.list") {
+            totalBytes += Int64(data.count)
+        }
+        // Per-conversation message blobs (qaudion.conv.msgs.<convId>)
+        let msgPrefix = "qaudion.conv.msgs."
+        for k in allKeys where k.hasPrefix(msgPrefix) {
+            if let data = store.data(forKey: k) {
+                totalBytes += Int64(data.count)
+            }
+        }
+        // Composer drafts (qaudion.composer.draft.<convId>)
+        let draftPrefix = "qaudion.composer.draft."
+        for k in allKeys where k.hasPrefix(draftPrefix) {
+            if let s = store.string(forKey: k) {
+                totalBytes += Int64(s.utf8.count)
+            }
+        }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useKB, .useBytes]
+        formatter.countStyle = .decimal
+        return formatter.string(fromByteCount: totalBytes)
     }
 }
 

@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.295", date: "2026-05-02",
+              title: "Backup: 'Backup stimato' size preview (W306)",
+              bullets: [
+                "Settings → Backup: nuova riga 'Backup stimato'",
+                "Stima byte di conv list + messaggi + abbozzi da UserDefaults",
+                "Formattato via ByteCountFormatter (KB / MB)",
+                "Tester sa al volo se il backup sarà piccolo o pesante"
+              ]),
         .init(id: "v1.0.294", date: "2026-05-02",
               title: "Idiom row in About → PIATTAFORMA (W305)",
               bullets: [
