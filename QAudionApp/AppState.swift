@@ -729,6 +729,48 @@ final class AppState: ObservableObject {
                 self?.handleTypingIndicator(senderId: senderId, isTyping: isTyping)
             }
         }
+
+        // W328 (CRITICAL): handle msg_pending_sync — the server pushes
+        // up to 50 queued offline messages on every reconnect via this
+        // single envelope (`{type: "msg_pending_sync", messages: [...]}`).
+        // Before this fix iOS silently dropped the entire batch, losing
+        // every offline message until the next live `msg_receive` came
+        // in. PARITY_AUDIT_HONEST.md (Agent C) flagged this as
+        // CRITICAL — users were losing messages.
+        ws.registerHandler(type: "msg_pending_sync") { [weak self] _, data in
+            guard let self = self else { return }
+            guard let batch = data["messages"] as? [[String: Any]] else {
+                print("[AppState] msg_pending_sync: missing 'messages' array")
+                return
+            }
+            // Replay each entry through the same path as a live
+            // msg_receive. Order matters — server pushes oldest first.
+            DispatchQueue.main.async {
+                for entry in batch {
+                    self.replayPendingSyncEntry(entry)
+                }
+            }
+        }
+    }
+
+    /// W328: replay one entry from a `msg_pending_sync` batch as if it
+    /// arrived via `msg_receive`. Same field-extraction guards.
+    /// Method-extracted to keep the closure body trivial per
+    /// CLAUDE.md §13.
+    private func replayPendingSyncEntry(_ entry: [String: Any]) {
+        guard let senderId = entry["sender_id"] as? String,
+              !senderId.isEmpty,
+              let cipherB64 = entry["encrypted_payload"] as? String,
+              let serverMsgId = entry["message_id"] as? String,
+              let cipher = Data(base64Encoded: cipherB64) else {
+            return
+        }
+        handleIncomingMessage(
+            senderId: senderId,
+            serverMsgId: serverMsgId,
+            cipher: cipher,
+            clientMsgId: entry["client_msg_id"] as? String
+        )
     }
 
     /// Persist an incoming peer message to the local store + post a

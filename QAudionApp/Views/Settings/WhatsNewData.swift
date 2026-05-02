@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.310", date: "2026-05-02",
+              title: "🚨 CRITICAL FIX: msg_pending_sync handler (W328)",
+              bullets: [
+                "PARITY_AUDIT_HONEST.md confermato: il vecchio audit era SCOPE-RESTRETTO",
+                "Server pushava fino a 50 messaggi offline su ogni reconnect — iOS li droppava silenziosamente",
+                "Aggiunto handler msg_pending_sync che replaya ogni entry attraverso handleIncomingMessage",
+                "Audit Agent C ha individuato 4 CRITICAL bugs + 4 MAJOR — questo è il primo fix",
+                "Utenti stavano perdendo messaggi offline su ogni connessione persa"
+              ]),
         .init(id: "v1.0.309", date: "2026-05-02",
               title: "🎯 AUDIT 100% AGENT-SCOPE CLOSED",
               bullets: [
