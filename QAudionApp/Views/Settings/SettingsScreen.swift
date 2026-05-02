@@ -363,6 +363,19 @@ struct SettingsScreen: View {
                             subtitle: "VoIP push · banner · suoni")
             }
             .buttonStyle(.plain)
+
+            // W379: rollover toggles for cross-platform parity flags.
+            // Lives under "Conversazioni" so testers can find it next to
+            // the chat-related settings.
+            NavigationLink {
+                CrossPlatformBetaScreen()
+            } label: {
+                SettingsRow(icon: "arrow.triangle.2.circlepath",
+                            iconColor: scheme.primary,
+                            title: "Cross-platform (beta)",
+                            subtitle: "Wire-format v3 · attach_announce · capability per peer")
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }

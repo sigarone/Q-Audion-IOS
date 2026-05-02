@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.356", date: "2026-05-02",
+              title: "⚙️ Settings → Cross-platform (beta) UI (W379)",
+              bullets: [
+                "Nuova schermata CrossPlatformBetaScreen sotto Settings → Conversazioni",
+                "Toggle: Chat v3 force-outbound + Voice notes attach_announce",
+                "Reset capability flags button: cancella PeerCapabilityRegistry mapping",
+                "Diagnostic card: v3 force, attach_announce, biometry type/availability",
+                "Testers rollover/rollback senza touch UserDefaults raw",
+                "@AppStorage bindings reattivi cross-screen"
+              ]),
         .init(id: "v1.0.355", date: "2026-05-02",
               title: "🔌 Bind CallSessionKeyBroker on WS connect (W378)",
               bullets: [
