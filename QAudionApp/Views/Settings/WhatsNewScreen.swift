@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.287", date: "2026-05-02",
+              title: "Estendi tap-to-copy a Bundle name/id + vendor ID (W298)",
+              bullets: [
+                "About → VERSIONE: 'Bundle name' e 'Bundle id' tap-to-copy",
+                "About → DATI LOCALI: 'ID dispositivo (vendor)' tap-to-copy",
+                "Stessa pattern di W297 (Commit) — clipboard + haptic",
+                "I 4 metadati più copiati nei bug report ora copy-out 1 tap"
+              ]),
         .init(id: "v1.0.286", date: "2026-05-02",
               title: "Tap-to-copy commit row in About (W297)",
               bullets: [

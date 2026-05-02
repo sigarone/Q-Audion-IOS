@@ -70,12 +70,11 @@ struct AboutSettingsScreen: View {
                         // W290: bundle metadata. CFBundleName is the
                         // app's display name as Apple sees it in iTC,
                         // CFBundleIdentifier is the canonical reverse-
-                        // DNS id. Useful when the QA tester needs to
-                        // copy these for an issue against a specific
-                        // build (also surfaces if the bundle id ever
-                        // drifts from com.qaudion.app).
-                        kvRow("Bundle name", Self.bundleDisplayName(), mono: true)
-                        kvRow("Bundle id", Self.bundleIdentifier(), mono: true)
+                        // DNS id. W298: also tap-to-copy since these
+                        // are the most commonly-copied IDs in bug
+                        // reports.
+                        tapCopyRow("Bundle name", Self.bundleDisplayName())
+                        tapCopyRow("Bundle id", Self.bundleIdentifier())
                     }
                     section("PIATTAFORMA") {
                         kvRow("Target iOS", "iOS \(container.viewModel.iosDeploymentTarget)+", mono: true)
@@ -165,7 +164,9 @@ struct AboutSettingsScreen: View {
                         // app from the same vendor installed. Resets on
                         // full reinstall. Different from auth token /
                         // device-id (those are server-issued).
-                        kvRow("ID dispositivo (vendor)", Self.vendorIdLabel(), mono: true)
+                        // W298: tap-to-copy for the truncated UUID
+                        // prefix (lets QA include it in bug reports).
+                        tapCopyRow("ID dispositivo (vendor)", Self.vendorIdLabel())
                     }
                     section("SICUREZZA") {
                         statusRow("ML-KEM-1024 (PQC)",
