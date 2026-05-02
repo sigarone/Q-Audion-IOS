@@ -51,6 +51,23 @@ struct ContentView: View {
                 fromAdmin: invite.fromAdmin)
                 .environmentObject(appState)
         }
+        // W403: cross-platform auto-join — when a Desktop or Android
+        // peer adds us to a group via `member_added` (without a
+        // preceding iOS `group_invite` envelope), surface a snackbar
+        // so the user has visibility. The auto-bootstrap already
+        // happened in handleInboundMemberAdded; this is just UX.
+        .onReceive(NotificationCenter.default.publisher(for: AppState.groupAutoJoinedNotification)) { note in
+            guard let info = note.userInfo,
+                  let gid = info["groupId"] as? String,
+                  let from = info["fromAdmin"] as? String else { return }
+            let shortFrom = from.count > 12 ? String(from.prefix(8)) + "…" : from
+            let shortGid = String(gid.prefix(8)) + "…"
+            snackbarHost.show(.init(
+                text: "Aggiunto al gruppo \(shortGid) da \(shortFrom)",
+                severity: .info,
+                durationSeconds: 5
+            ))
+        }
         // W18.A: apply the Q-Audion design system at the very top so
         // every descendant view can read tokens via @Environment without
         // each having to re-apply the modifier.

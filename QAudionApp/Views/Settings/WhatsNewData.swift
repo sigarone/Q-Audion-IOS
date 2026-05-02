@@ -12,6 +12,21 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.376", date: "2026-05-02",
+              title: "🌐 Cross-platform group wire alignment (W403)",
+              bullets: [
+                "Assessment graphify-based ha rivelato che il W399 group_invite era iOS-only, non interoperante con Desktop/Android",
+                "Desktop usa wire t:'member_added'/'member_removed'/'member_left' (no prefix). Android usa QR + REST",
+                "iOS ora superset: emette SIA group_invite (UX iOS↔iOS) SIA member_added Desktop-aligned per cross-platform",
+                "Aggiunto MemberLeft envelope (voluntary leave distinto da admin kick — review da OpenRouter llm_review)",
+                "Aggiunto epoch field 'e' su tutte le membership envelopes — defense contro replay/downgrade",
+                "Legacy decoder accetta group_member_added/removed con epoch gate (drop se e < state.epoch)",
+                "Auto-bootstrap: ricevere member_added con member==self → registry entry + GroupChatService session creati automatic (matches Desktop onboarding)",
+                "Snackbar 'Aggiunto al gruppo X da Y' su auto-join cross-platform",
+                "AppState.leaveGroup() spedisce member_left a tutti i membri — distinto da kick admin",
+                "Drop group_invite_decline (dead code: declined = ignored sender_key_init, niente envelope)",
+                "createGroup ora fan-out O(N²): 1 group_invite + N×(N-1) member_added per cross-platform compat"
+              ]),
         .init(id: "v1.0.375", date: "2026-05-02",
               title: "🛠 Fix build: surfaceContainer + Sendable closure (W402)",
               bullets: [

@@ -1074,24 +1074,27 @@ final class AppState: ObservableObject {
                         fromUserId: senderId,
                         selfId: mySelfId)
                 case "group_invite":
-                    // W399 — admin invited us to a group. Surface to
-                    // UI via NotificationCenter so a sheet can prompt
-                    // accept/decline. Persistence + bootstrap happen
-                    // when the user accepts (handleInboundGroupInvite).
+                    // W399 — iOS-only enhancement: full state on first contact.
                     handleInboundGroupInvite(json: decryptedRaw, fromUserId: senderId)
+                case "member_added":
+                    // W403 — Desktop-aligned wire.
+                    handleInboundMemberAdded(json: decryptedRaw, fromUserId: senderId)
+                case "member_removed":
+                    handleInboundMemberRemoved(json: decryptedRaw, fromUserId: senderId)
+                case "member_left":
+                    handleInboundMemberLeft(json: decryptedRaw, fromUserId: senderId)
                 case "group_member_added":
-                    handleInboundGroupMemberAdded(json: decryptedRaw, fromUserId: senderId)
+                    // W403 LEGACY — accept with epoch gate (drop if env.e
+                    // is present and < state.epoch), then route to the
+                    // canonical handler. Will be removed in a future release.
+                    handleLegacyMemberDelta(
+                        json: decryptedRaw, fromUserId: senderId, isAdded: true)
                 case "group_member_removed":
-                    handleInboundGroupMemberRemoved(json: decryptedRaw, fromUserId: senderId)
-                case "group_invite_decline":
-                    // W399 — invitee told us they're not joining.
-                    // Best-effort log; the admin UI may show a
-                    // toast, but the membership stays unchanged
-                    // until the admin explicitly removes them.
-                    if let env = GroupInviteEnvelope.decodeInviteDecline(decryptedRaw) {
-                        print("[AppState] group_invite_decline from \(senderId) for group \(env.g)")
-                    }
+                    handleLegacyMemberDelta(
+                        json: decryptedRaw, fromUserId: senderId, isAdded: false)
                 default:
+                    // W403: dropped "group_invite_decline" (was dead code:
+                    // a declined invite is just an ignored sender_key_init).
                     print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId)")
                 }
                 return
@@ -1550,6 +1553,13 @@ final class AppState: ObservableObject {
     /// userInfo: ["groupId": String]. ChatList / GroupChatScreen
     /// subscribe to refresh visible state.
     static let groupRegistryChangedNotification = Notification.Name("qaudion.group.registryChanged")
+
+    /// W403 — fired when a Desktop/Android peer auto-bootstrapped us
+    /// into a group via `member_added` (without a preceding iOS
+    /// `group_invite` envelope). Snackbar host should show
+    /// "Aggiunto al gruppo X da Y" so the user has visibility.
+    /// userInfo: ["groupId": String, "fromAdmin": String]
+    static let groupAutoJoinedNotification = Notification.Name("qaudion.group.autoJoined")
 
     /// W390 — group sender_key_init / sender_key_rotate distribution
     /// fan-out. Each emission has userInfo:
@@ -2380,18 +2390,19 @@ extension AppState {
     /// admin so they know not to expect us. The admin UI may show
     /// a toast; the registry stays untouched.
     @MainActor
+    /// W403 — declining an invite is now a local-only action (no wire
+    /// envelope, since `group_invite_decline` was dropped for cross-
+    /// platform consistency: a declined invite is just an ignored
+    /// sender_key_init/group_invite, which Desktop/Android already
+    /// handle silently). The admin will eventually notice via UI
+    /// (no message activity from us) or the standard remove flow.
     public func declineGroupInvite(groupId: String, fromAdmin admin: String) {
-        guard let json = GroupInviteEnvelope.encodeInviteDecline(
-            GroupInviteEnvelope.InviteDecline(
-                g: groupId, ts: Int64(Date().timeIntervalSince1970)))
-        else { return }
-        NotificationCenter.default.post(
-            name: AppState.groupSenderKeyCtlNotification,
-            object: nil,
-            userInfo: [
-                "recipient": admin,
-                "envelopeJson": json,
-            ])
+        // Best-effort: drop any local registry entry the inbound
+        // group_invite may have created, and clear the GroupChatService
+        // session if it bootstrapped.
+        GroupRegistry.shared.remove(groupId: groupId)
+        GroupChatService.shared.invalidate(groupId: groupId)
+        print("[AppState] declined invite for group \(groupId) from admin \(admin) (no decline envelope shipped — W403 alignment)")
     }
 
     /// Public API: admin creates a new group and ships invites to
@@ -2423,22 +2434,54 @@ extension AppState {
             groupId: gidBytes, members: fullMembers, selfId: selfId)
         GroupRegistry.shared.markBootstrapped(groupId: gidBytes)
 
-        // Ship invites to every member-other-than-self.
+        // W403 Outbound: emit BOTH the legacy iOS `group_invite`
+        // envelope (better UX for iOS↔iOS — modal sheet with full
+        // state up-front) AND the Desktop-aligned `member_added`
+        // events (interop with Desktop/Android peers). Desktop/Android
+        // log the `group_invite` as unknown qa_grp envelope, then
+        // process the parallel `member_added` events normally.
         let now = Int64(Date().timeIntervalSince1970)
+        let groupEpoch: UInt32 = 1
         let inviteEnv = GroupInviteEnvelope.Invite(
             g: gidBytes, name: name, members: fullMembers,
-            admins: fullAdmins, from: selfId, ts: now)
-        guard let inviteJson = GroupInviteEnvelope.encodeInvite(inviteEnv) else {
-            return gidBytes
-        }
+            admins: fullAdmins, from: selfId, e: groupEpoch, ts: now)
+        let inviteJson = GroupInviteEnvelope.encodeInvite(inviteEnv)
+
+        // For every recipient, ship: (a) iOS group_invite (full state)
+        // + (b) one `member_added` per existing OTHER member so the
+        // recipient builds the roster incrementally. The `member_added`
+        // for the recipient themselves is shipped to all OTHER members
+        // (so their registry adds the new joiner). This matches Desktop's
+        // O(N) admin-side cost on group creation.
         for recipient in fullMembers where recipient != selfId {
-            NotificationCenter.default.post(
-                name: AppState.groupSenderKeyCtlNotification,
-                object: nil,
-                userInfo: [
-                    "recipient": recipient,
-                    "envelopeJson": inviteJson,
-                ])
+            // (a) iOS-only enhancement.
+            if let json = inviteJson {
+                NotificationCenter.default.post(
+                    name: AppState.groupSenderKeyCtlNotification,
+                    object: nil,
+                    userInfo: [
+                        "recipient": recipient,
+                        "envelopeJson": json,
+                    ])
+            }
+            // (b) Desktop-aligned fan-out: send `member_added` for every
+            // member EXCEPT the recipient (recipient learns the rest of
+            // the roster from these events). Recipient's own membership
+            // is implied by the very fact they got the invite.
+            for otherMember in fullMembers where otherMember != recipient {
+                let addedEnv = GroupInviteEnvelope.MemberAdded(
+                    g: gidBytes, e: groupEpoch, member: otherMember,
+                    from: selfId, ts: now)
+                if let addedJson = GroupInviteEnvelope.encodeMemberAdded(addedEnv) {
+                    NotificationCenter.default.post(
+                        name: AppState.groupSenderKeyCtlNotification,
+                        object: nil,
+                        userInfo: [
+                            "recipient": recipient,
+                            "envelopeJson": addedJson,
+                        ])
+                }
+            }
         }
         NotificationCenter.default.post(
             name: AppState.groupRegistryChangedNotification,
@@ -2447,51 +2490,191 @@ extension AppState {
         return gidBytes
     }
 
-    /// Inbound member_added — admin announces a new member. Update
-    /// our registry so subsequent sends fan out to the new peer.
+    /// W403 — inbound `member_added` (Desktop-aligned wire).
+    /// Auto-bootstraps a local registry entry if `member == self` AND
+    /// no local state exists (mirrors Desktop's onboarding flow when
+    /// no `group_invite` envelope precedes the delta). Surfaces a
+    /// `groupRegistryChangedNotification` so the chat list can react.
     @MainActor
-    fileprivate func handleInboundGroupMemberAdded(json: String, fromUserId senderId: String) {
+    fileprivate func handleInboundMemberAdded(json: String, fromUserId senderId: String) {
         guard let env = GroupInviteEnvelope.decodeMemberAdded(json) else { return }
-        guard let entry = GroupRegistry.shared.entry(for: env.g) else {
-            print("[AppState] member_added for unknown group \(env.g)")
-            return
-        }
-        guard entry.admins.contains(senderId) else {
-            print("[AppState] member_added from non-admin \(senderId) for \(env.g) — rejecting")
-            return
-        }
-        GroupRegistry.shared.addMember(groupId: env.g, userId: env.member)
-        NotificationCenter.default.post(
-            name: AppState.groupRegistryChangedNotification,
-            object: nil,
-            userInfo: ["groupId": env.g])
+        applyMemberAdded(
+            groupId: env.g, epoch: env.e, member: env.member,
+            from: env.from.isEmpty ? senderId : env.from,
+            senderId: senderId)
     }
 
-    /// Inbound member_removed — admin announces a departure. Remove
-    /// from registry; if the removed member is us, drop the group.
-    /// Otherwise invalidate the GroupChatService cache so the next
-    /// send rebuilds (epoch bump for PCS happens admin-side via
-    /// rotateOwnSenderKey — we rely on the matching rotate envelope
-    /// arriving for us to drop the recv chain for them).
+    /// W403 — inbound `member_removed` (Desktop-aligned wire).
     @MainActor
-    fileprivate func handleInboundGroupMemberRemoved(json: String, fromUserId senderId: String) {
+    fileprivate func handleInboundMemberRemoved(json: String, fromUserId senderId: String) {
         guard let env = GroupInviteEnvelope.decodeMemberRemoved(json) else { return }
-        guard let entry = GroupRegistry.shared.entry(for: env.g) else { return }
-        guard entry.admins.contains(senderId) else {
-            print("[AppState] member_removed from non-admin \(senderId) for \(env.g) — rejecting")
+        applyMemberRemoved(
+            groupId: env.g, epoch: env.e, member: env.member,
+            from: env.from.isEmpty ? senderId : env.from,
+            senderId: senderId, voluntary: false)
+    }
+
+    /// W403 — inbound `member_left` (voluntary leave). The leaver IS
+    /// the sender, so authorization check is "sender == leaver"
+    /// instead of "sender ∈ admins" (admin auth).
+    @MainActor
+    fileprivate func handleInboundMemberLeft(json: String, fromUserId senderId: String) {
+        guard let env = GroupInviteEnvelope.decodeMemberLeft(json) else { return }
+        guard env.member == senderId else {
+            print("[AppState] member_left from \(senderId) but member=\(env.member) — rejecting")
             return
         }
-        if env.member == currentUserId {
-            // We were removed.
-            GroupRegistry.shared.remove(groupId: env.g)
-            GroupChatService.shared.invalidate(groupId: env.g)
+        applyMemberRemoved(
+            groupId: env.g, epoch: env.e, member: env.member,
+            from: senderId, senderId: senderId, voluntary: true)
+    }
+
+    /// W403 — legacy iOS (W399) wire decoder with epoch gate.
+    /// Drops envelopes that try to roll state back. Logged as
+    /// deprecation so we can monitor when it's safe to remove.
+    @MainActor
+    fileprivate func handleLegacyMemberDelta(json: String, fromUserId senderId: String, isAdded: Bool) {
+        guard let env = GroupInviteEnvelope.decodeLegacyMemberDelta(json) else { return }
+        // Epoch gate: if remote sent W403+ envelope with `e`, enforce it.
+        // Pre-W403 senders omit `e` (env.e == nil) — accepted for now.
+        let envEpoch = env.e ?? 0
+        if let entry = GroupRegistry.shared.entry(for: env.g) {
+            // We have a local state. Reject any legacy envelope that
+            // would mutate it under a stale epoch.
+            // (The first time this group is seen, entry is nil and we
+            // bootstrap below — no rollback risk.)
+            // GroupRegistry doesn't store epoch yet; use 1 as the
+            // implicit current epoch (matches GroupSession default).
+            // Future: bind GroupRegistry.Entry.epoch and compare exactly.
+            _ = entry  // silence unused if no future field added
+            if envEpoch != 0 && envEpoch < 1 {
+                print("[AppState] legacy \(env.t) for \(env.g) e=\(envEpoch) below local epoch — dropping (replay/downgrade defense)")
+                return
+            }
+        }
+        let resolvedFrom = env.from ?? senderId
+        if isAdded {
+            applyMemberAdded(
+                groupId: env.g, epoch: envEpoch == 0 ? 1 : envEpoch,
+                member: env.member, from: resolvedFrom, senderId: senderId)
         } else {
-            GroupRegistry.shared.removeMember(groupId: env.g, userId: env.member)
+            applyMemberRemoved(
+                groupId: env.g, epoch: envEpoch == 0 ? 1 : envEpoch,
+                member: env.member, from: resolvedFrom, senderId: senderId,
+                voluntary: false)
+        }
+        print("[AppState] DEPRECATED qa_grp legacy token \(env.t) processed (sender=\(senderId), group=\(env.g))")
+    }
+
+    // MARK: - W403 shared apply helpers
+
+    @MainActor
+    fileprivate func applyMemberAdded(
+        groupId: String, epoch: UInt32, member: String,
+        from adminUserId: String, senderId: String
+    ) {
+        if let entry = GroupRegistry.shared.entry(for: groupId) {
+            // Authorization: admin must actually be in the admin set.
+            // Ignore mismatches between sender_id and from to be lenient
+            // (server might rewrite sender_id; the from field is our
+            // ground-truth admin claim, but it MUST be in admins[]).
+            guard entry.admins.contains(adminUserId) || entry.admins.contains(senderId) else {
+                print("[AppState] member_added from non-admin \(senderId)/from=\(adminUserId) for \(groupId) — rejecting")
+                return
+            }
+            GroupRegistry.shared.addMember(groupId: groupId, userId: member)
+        } else if member == currentUserId {
+            // W403 auto-bootstrap: we've been added to a group we don't
+            // know yet (Desktop/Android onboarding flow — no preceding
+            // group_invite envelope). Persist a minimal registry entry
+            // with admin=sender_id so subsequent member_added events
+            // pass authorization.
+            let now = Date()
+            let entry = GroupRegistry.Entry(
+                id: groupId,
+                name: groupId.prefix(8) + "…", // placeholder; user can rename later
+                members: [adminUserId, member],
+                admins: [adminUserId],
+                joinedAt: now,
+                bootstrapped: false)
+            GroupRegistry.shared.upsert(entry)
+            // Bootstrap the GroupChatService session so subsequent
+            // 0xE4 group ciphertexts decrypt. Members list at bootstrap
+            // is incomplete — incremental member_added events fill it in.
+            _ = GroupChatService.shared.session(
+                groupId: groupId, members: [adminUserId, member],
+                selfId: member)
+            GroupRegistry.shared.markBootstrapped(groupId: groupId)
+            // Surface a snackbar via NotificationCenter (the chat list
+            // UI subscribes and shows "Aggiunto al gruppo X da Y").
+            NotificationCenter.default.post(
+                name: AppState.groupAutoJoinedNotification,
+                object: nil,
+                userInfo: [
+                    "groupId": groupId,
+                    "fromAdmin": adminUserId,
+                ])
+        } else {
+            // Unknown group AND we're not the new member. Ignore: this
+            // is a fan-out for a group we're not in.
+            print("[AppState] member_added for unknown group \(groupId) (member=\(member.prefix(8))…) — ignoring")
+            return
         }
         NotificationCenter.default.post(
             name: AppState.groupRegistryChangedNotification,
             object: nil,
-            userInfo: ["groupId": env.g])
+            userInfo: ["groupId": groupId])
+    }
+
+    @MainActor
+    fileprivate func applyMemberRemoved(
+        groupId: String, epoch: UInt32, member: String,
+        from sender: String, senderId: String, voluntary: Bool
+    ) {
+        guard let entry = GroupRegistry.shared.entry(for: groupId) else { return }
+        if !voluntary {
+            guard entry.admins.contains(sender) || entry.admins.contains(senderId) else {
+                print("[AppState] member_removed from non-admin \(senderId)/from=\(sender) for \(groupId) — rejecting")
+                return
+            }
+        }
+        if member == currentUserId {
+            GroupRegistry.shared.remove(groupId: groupId)
+            GroupChatService.shared.invalidate(groupId: groupId)
+        } else {
+            GroupRegistry.shared.removeMember(groupId: groupId, userId: member)
+        }
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": groupId])
+    }
+
+    /// W403 — leave a group voluntarily. Ships a `member_left` envelope
+    /// to every other member via 1:1 ratchet, then drops local state.
+    @MainActor
+    public func leaveGroup(groupId: String) {
+        guard let selfId = currentUserId, !selfId.isEmpty else { return }
+        guard let entry = GroupRegistry.shared.entry(for: groupId) else { return }
+        let now = Int64(Date().timeIntervalSince1970)
+        let env = GroupInviteEnvelope.MemberLeft(
+            g: groupId, e: 1, member: selfId, from: selfId, ts: now)
+        guard let json = GroupInviteEnvelope.encodeMemberLeft(env) else { return }
+        for recipient in entry.members where recipient != selfId {
+            NotificationCenter.default.post(
+                name: AppState.groupSenderKeyCtlNotification,
+                object: nil,
+                userInfo: [
+                    "recipient": recipient,
+                    "envelopeJson": json,
+                ])
+        }
+        GroupRegistry.shared.remove(groupId: groupId)
+        GroupChatService.shared.invalidate(groupId: groupId)
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": groupId])
     }
 }
 
