@@ -23,6 +23,9 @@ struct CreateGroupScreen: View {
     @Environment(\.qaudionType) private var type
     @Environment(\.dismiss) private var dismiss
     @Environment(\.qaudionSnackbar) private var snackbar
+    /// W400: needed to call AppState.createGroup which ships invites
+    /// via 1:1 ratchet to each selected member.
+    @EnvironmentObject private var appState: AppState
 
     @State private var state: CreateGroupUiState
     let onGroupCreated: (UUID) -> Void
@@ -246,23 +249,55 @@ struct CreateGroupScreen: View {
             state.error = "Seleziona almeno un contatto"
             return
         }
-        // Stub: simula la creazione (engine wiring pending).
+        // W400: real path. AppState.createGroup persists in
+        // GroupRegistry, bootstraps the GroupChatService session
+        // (random 32-byte sender seed → CK_0), AND ships a
+        // qa_grp:1 group_invite envelope via the 1:1 ratchet to
+        // every selected member. The local user is auto-joined.
         state.creating = true
-        let groupId = UUID()
         let displayName = state.name.trimmingCharacters(in: .whitespaces)
             .isEmpty
             ? "Gruppo \(state.selectedMemberIds.count) membri"
             : state.name
+        let memberIds = Array(state.selectedMemberIds)
+        // Admin-only initial set: just self. The local user can
+        // promote others later via the GroupInfo screen (admin
+        // toggle wired to AppState.setGroupAdmin if/when added).
+        guard let gidHex = appState.createGroup(
+            name: displayName, members: memberIds, admins: []
+        ) else {
+            state.creating = false
+            state.error = "Impossibile creare il gruppo (utente non autenticato)"
+            return
+        }
+        // Convert the gidHex back to UUID for the existing
+        // onGroupCreated callback signature (which navigates to
+        // GroupChatScreen). The GroupChatScreen already maps
+        // groupId.uuidString → hex internally for vault lookups.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            // Tiny delay so the snackbar lands AFTER the dismiss
+            // animation, matching the prior UX timing.
+            try? await Task.sleep(nanoseconds: 200_000_000)
             state.creating = false
             snackbar?.show(.init(
-                text: "Gruppo \"\(displayName)\" creato.",
+                text: "Gruppo \"\(displayName)\" creato. Invio inviti…",
                 severity: .info
             ))
             dismiss()
-            onGroupCreated(groupId)
+            // Map the 32-char hex back to a UUID for the existing
+            // navigation callback. Insert hyphens at standard offsets.
+            if let uuid = Self.uuid(fromHex: gidHex) {
+                onGroupCreated(uuid)
+            }
         }
+    }
+
+    /// W400 — re-hyphenate a 32-char lowercase hex string to UUID.
+    private static func uuid(fromHex hex: String) -> UUID? {
+        guard hex.count == 32 else { return nil }
+        let s = hex
+        let formatted = "\(s.prefix(8))-\(s.dropFirst(8).prefix(4))-\(s.dropFirst(12).prefix(4))-\(s.dropFirst(16).prefix(4))-\(s.suffix(12))"
+        return UUID(uuidString: formatted)
     }
 
     // MARK: - Error banner

@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.373", date: "2026-05-02",
+              title: "🪟 UI minori chiuse: invite sheet + create-group reale (W400)",
+              bullets: [
+                "Nuovo GroupInviteSheet — modale che si presenta automaticamente quando arriva un qa_grp:1 group_invite",
+                "ContentView observer su groupInviteReceivedNotification → set @State pendingGroupInvite → .sheet(item:) presentazione",
+                "Pulsanti Accetta → AppState.acceptGroupInvite (registry persist + bootstrap GroupChatService) e Rifiuta → AppState.declineGroupInvite (ship qa_grp:1 group_invite_decline)",
+                "presentationDetents([.medium]) — sheet a metà schermo, design system tokens (scheme.primary, surfaceContainer)",
+                "CreateGroupScreen.handleCreate ora chiama AppState.createGroup REALE invece dello stub UUID() simulato",
+                "createGroup persiste in GroupRegistry, bootstrappa GroupChatService session, ship qa_grp:1 group_invite a ogni member selezionato via 1:1 ratchet",
+                "Bridge UUID↔hex per compat con onGroupCreated callback navigation esistente",
+                "Snackbar feedback aggiornato: 'Gruppo X creato. Invio inviti…'",
+                "Tutto il path end-to-end ora funziona: User A crea gruppo → User B vede sheet su Accetta → entrambi possono inviare/decifrare messaggi nel 0xE4 group wire"
+              ]),
         .init(id: "v1.0.372", date: "2026-05-02",
               title: "👥 Group invite plumbing reale (W399, gap #3 chiuso)",
               bullets: [

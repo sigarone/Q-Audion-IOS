@@ -16,10 +16,40 @@ struct ContentView: View {
     /// every screen + every sheet inside the same NavigationStack.
     @StateObject private var snackbarHost = QAudionSnackbarHostState()
 
+    /// W400 — pending group invite from a NotificationCenter post.
+    /// When non-nil, the sheet pops up. Set/cleared by the observer.
+    @State private var pendingGroupInvite: PendingGroupInvite?
+
     var body: some View {
         ZStack(alignment: .top) {
             mainStack
             QAudionSnackbarHost(state: snackbarHost)
+        }
+        // W400: subscribe to inbound group invites so the user gets a
+        // sheet immediately. Posts come from
+        // AppState.handleInboundGroupInvite (qa_grp:1, t:"group_invite"
+        // arriving via 1:1 ratchet).
+        .onReceive(NotificationCenter.default.publisher(for: AppState.groupInviteReceivedNotification)) { note in
+            guard let info = note.userInfo,
+                  let gid = info["groupId"] as? String,
+                  let name = info["groupName"] as? String,
+                  let members = info["members"] as? [String],
+                  let admins = info["admins"] as? [String],
+                  let from = info["from"] as? String else {
+                return
+            }
+            pendingGroupInvite = PendingGroupInvite(
+                id: gid, name: name, members: members,
+                admins: admins, fromAdmin: from)
+        }
+        .sheet(item: $pendingGroupInvite) { invite in
+            GroupInviteSheet(
+                groupId: invite.id,
+                groupName: invite.name,
+                members: invite.members,
+                admins: invite.admins,
+                fromAdmin: invite.fromAdmin)
+                .environmentObject(appState)
         }
         // W18.A: apply the Q-Audion design system at the very top so
         // every descendant view can read tokens via @Environment without
