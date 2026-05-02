@@ -192,9 +192,11 @@ struct BackupSettingsScreen: View {
                     VStack(spacing: 8) {
                         kvRow(label: "Data", value: lastBackupText, mono: false)
                         kvRow(label: "Dimensione", value: lastBackupSizeText, mono: true)
-                        kvRow(label: "Cifratura",
-                              value: "Locale (QAUD/AES-256-GCM)",
-                              mono: true)
+                        // W308: 'Cifratura' becomes tap-to-copy. The
+                        // algorithm string is the most-pasted value in
+                        // security questions / audit responses.
+                        tapCopyRow(label: "Cifratura",
+                                   value: "Locale (QAUD/AES-256-GCM)")
                         // W306: estimate of current data that WOULD
                         // go into the next backup. Walks UserDefaults
                         // for the conversation/message keys and sums
@@ -333,6 +335,41 @@ struct BackupSettingsScreen: View {
     }
 
     // MARK: - Rows + helpers
+
+    /// W308: tap-to-copy variant of kvRow. Mirror of the AboutSettings
+    /// + AccountSettings helpers from W297/W307 — same visual +
+    /// interaction. Useful for the Cifratura algo string which is
+    /// the most-pasted value in security audit questions.
+    private func tapCopyRow(label: String, value: String) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Text(value)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Image(systemName: "doc.on.clipboard")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            #if canImport(UIKit)
+            UIPasteboard.general.string = value
+            HapticFeedback.messageSent()
+            #endif
+        }
+    }
 
     private func kvRow(label: String, value: String, mono: Bool) -> some View {
         HStack(spacing: 14) {

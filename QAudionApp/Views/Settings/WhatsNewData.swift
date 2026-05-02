@@ -12,6 +12,13 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.297", date: "2026-05-02",
+              title: "Backup: Cifratura tap-to-copy (W308)",
+              bullets: [
+                "Settings → Backup: 'Cifratura' tap-to-copy",
+                "QAUD/AES-256-GCM è il valore più chiesto in security audit",
+                "tapCopyRow helper estesi a 3 file (About, Account, Backup)"
+              ]),
         .init(id: "v1.0.296", date: "2026-05-02",
               title: "Account: User ID + Phone Hash tap-to-copy (W307)",
               bullets: [
