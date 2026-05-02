@@ -212,13 +212,16 @@ struct GroupInfoScreen: View {
     }
 
     private func handleLeave() {
-        // Stub: simula leave (engine wiring pending).
+        // W409: real leave path. Snackbar surfaces user feedback;
+        // dismiss closes the info sheet; onLeft delegates the actual
+        // engine-side leave (ship qa_grp:1 member_left + tear down
+        // local registry/session) to the caller, which has the
+        // groupId in scope and wires AppState.leaveGroup.
         snackbar?.show(.init(
             text: "Hai lasciato il gruppo.",
             severity: .info
         ))
         dismiss()
-        // Caller (futuro GroupChatScreen) gestisce pop addizionale.
         onLeft()
     }
 

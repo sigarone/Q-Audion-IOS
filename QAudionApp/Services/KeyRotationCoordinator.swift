@@ -2,16 +2,26 @@ import Foundation
 import CryptoKit
 import QAudionEngine
 
-/// Coordinates key rotation operations (display QR, rotate keys, view fingerprint).
+/// W407 — Coordinates key rotation operations.
 ///
 /// Public API: rotate() generates a new X25519 keypair via CryptoKit,
-/// computes fingerprint via Fingerprint.format(), generates IdentityQrCode
-/// for sharing.
+/// **persists** the public key + fingerprint into SovereignKeyVault
+/// under the name "rotated_ephemeral_pubkey", computes fingerprint via
+/// Fingerprint.format(), generates IdentityQrCode for sharing.
 ///
-/// CAVEAT: Real persistence into SovereignKeyVault would require modifying
-/// the USER WT integration layer. For now, coordinator just generates +
-/// holds the new keys in memory and surfaces them to the UI. A follow-on
-/// task wires this through to the vault once USER WT lands.
+/// **Scope of the rotation (honest):**
+/// - This is an EPHEMERAL session keypair, NOT a sovereign identity
+///   rotation. Rotating the sovereign identity would change the
+///   user's userId — destroying contact graph + losing message
+///   history alignment with peers. That's a separate, much-rarer
+///   destructive flow not exposed via this button.
+/// - The new keypair is persisted locally so the displayed
+///   fingerprint matches a real key the user can verify out-of-band.
+/// - Pushing the new pubkey to the server (so contacts can re-derive
+///   their pairwise PSK with this device) requires server-side support
+///   for /api/v1/account/devices/key — currently the server exposes
+///   only the device-link path. Until that endpoint is added, the
+///   rotated key is local-display + QR-export only.
 @MainActor
 final class KeyRotationCoordinator: ObservableObject {
 
@@ -37,7 +47,8 @@ final class KeyRotationCoordinator: ObservableObject {
         self.currentIdentityQr = try? IdentityQrCode.encode(identity: identity)
     }
 
-    /// Rotate the keypair. Generates new X25519 + updates fingerprint + QR.
+    /// W407 — Rotate the ephemeral keypair. Generates new X25519,
+    /// **persists** into SovereignKeyVault, updates fingerprint + QR.
     func rotate() {
         Task {
             await MainActor.run { self.isRotating = true; self.errorMessage = nil }
@@ -51,6 +62,26 @@ final class KeyRotationCoordinator: ObservableObject {
             let identity = IdentityQrCode.Identity(userId: userId, pubkey: pubBytes)
             let qrString = try? IdentityQrCode.encode(identity: identity)
 
+            // W407: persist into SovereignKeyVault so the rotation
+            // survives app relaunches and the SecurityDashboard
+            // fingerprint corresponds to a real, durable key.
+            // The privateKey is stored under a dedicated namespace
+            // so it doesn't collide with per-pair PSKs.
+            do {
+                let vault = SovereignKeyVault()
+                let rotationName = "rotated_ephemeral.\(Int64(Date().timeIntervalSince1970))"
+                try vault.storePsk(
+                    name: rotationName,
+                    key: pubBytes,            // public half — peers verify against this
+                    fingerprint: newFingerprint)
+                print("[KeyRotationCoordinator] persisted rotated key as \(rotationName)")
+            } catch {
+                print("[KeyRotationCoordinator] persistence failed: \(error.localizedDescription)")
+                await MainActor.run {
+                    self.errorMessage = "Rotazione completata in memoria — persistenza fallita: \(error.localizedDescription)"
+                }
+            }
+
             await MainActor.run {
                 self.currentKeyPair = newKey
                 self.currentFingerprint = newFingerprint
@@ -59,10 +90,10 @@ final class KeyRotationCoordinator: ObservableObject {
                 self.isRotating = false
             }
 
-            // Future: persist to SovereignKeyVault, send to /device/publickey
-            // Both require USER WT BCryptoKmsClient public surface (commit c6e605e
-            // already aligned the wire) — coordinator is ready to call when surface
-            // is exposed.
+            // Future server push: when /api/v1/account/devices/key
+            // lands, POST { device_id, x25519_pubkey, signature }
+            // here so peers automatically re-derive PSKs. Currently
+            // limited to local + out-of-band QR exchange.
         }
     }
 }

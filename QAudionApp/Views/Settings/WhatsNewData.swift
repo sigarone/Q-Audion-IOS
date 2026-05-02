@@ -12,6 +12,33 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.378", date: "2026-05-02",
+              title: "🛠 De-faking pass 2: keymgmt + device revoke + group leave + Tor honest (W407+W408+W409)",
+              bullets: [
+                "W407 — KeyRotationCoordinator persiste la nuova chiave nel SovereignKeyVault sotto rotated_ephemeral.<ts> (prima era solo in-memory)",
+                "W407 — SecurityDashboard.deriveDisplayPubkey legge la VERA chiave Curve25519 dal SovereignIdentityManager invece di SHA256(userId)",
+                "W407 — fingerprint mostrata corrisponde alla chiave reale che i contatti vedono",
+                "W408 — DeviceManagementContainer.revoke chiama DELETE /api/v1/devices/<id> via BCryptoRestClient con il token live (prima era // stubbed)",
+                "W408 — refresh chiama GET /api/v1/devices/ + ripristina riga su errore + errorMessage @Published per snackbar",
+                "W408 — fallback graceful (mock-only init) per preview senza AppState",
+                "W409 — GroupInfoScreen.onLeft callback ora chiama AppState.leaveGroup(groupId) reale",
+                "W409 — leaveGroup spedisce qa_grp:1 t:'member_left' a tutti i membri via 1:1 ratchet + tear down GroupRegistry + GroupChatService session",
+                "W409 — Transport Tor toggle disabled con hint onesto: iOS non espone SOCKS proxy di sistema, riattivato quando arriva un Tor client bundled"
+              ]),
+        .init(id: "v1.0.377", date: "2026-05-02",
+              title: "🧰 De-faking pass 1: privacy + notifications + calls toggle reali (W404+W405+W406)",
+              bullets: [
+                "11 toggle che prima persistevano in UserDefaults ma nessuno leggeva il flag → ora gated davvero",
+                "W404 PrivacyGate single source of truth: read receipts + typing + presence + msg preview + 6 keys",
+                "W404 ChatContainer.notifyComposerInput / emitReadReceipts gated su PrivacyGate",
+                "W404 banner body: hideContent OR !messagePreviewInNotifications → 'Nuovo messaggio' generico",
+                "W405 NotificationsGate: in-app sound + vibration + quiet hours (start/end minutes-since-midnight)",
+                "W405 NotificationCenterService.scheduleLocal drop su quiet-hours, sound=nil su in-app-sound off",
+                "W405 willPresent presentation options rispettano bannersEnabled + inAppSoundEnabled + isQuietNow",
+                "W406 CallsGate: AEC/NS/AGC → AudioProcessingPipeline.voiceProcessingOverride",
+                "W406 Apple VP I/O bundled — collapsing all-three a singolo switch (any-of-three off → VP disabled)",
+                "Default ON tutti per back-compat — utente che non apre Settings non vede cambiamenti"
+              ]),
         .init(id: "v1.0.376", date: "2026-05-02",
               title: "🌐 Cross-platform group wire alignment (W403)",
               bullets: [

@@ -48,6 +48,15 @@ struct GroupChatScreen: View {
                 GroupInfoScreen(
                     state: makeInfoState(),
                     onLeft: {
+                        // W409: actually leave the group via AppState.
+                        // Ships qa_grp:1 t:"member_left" envelope to all
+                        // remaining members through the 1:1 ratchet, then
+                        // tears down local registry + GroupChatService
+                        // session for this groupId.
+                        let gidHex = groupId.uuidString
+                            .replacingOccurrences(of: "-", with: "")
+                            .lowercased()
+                        appState.leaveGroup(groupId: gidHex)
                         showingInfo = false
                         dismiss()
                     }

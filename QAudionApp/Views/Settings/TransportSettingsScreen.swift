@@ -105,17 +105,26 @@ struct TransportSettingsScreen: View {
                         .padding(.top, 6)
 
                     SettingsSectionHeader("ANONIMIZZAZIONE")
+                    // W409: honest UI for the Tor toggle. iOS does not
+                    // expose system-wide SOCKS proxy support, so even
+                    // with the toggle ON the URLSession used by the
+                    // app's REST/WS transport would still go direct.
+                    // Until a bundled Tor client (e.g. Onion-based
+                    // CFNetwork hook) ships, the row is rendered in
+                    // a disabled state with an explicit "non
+                    // disponibile su iOS" hint so the user isn't
+                    // misled into thinking they're anonymized.
                     SettingsToggleRow(
                         title: "Instrada via Tor",
                         subtitle: "Tutto il segnale e media via rete Tor",
-                        isOn: $container.draftTorEnabled
+                        isOn: .constant(false)
                     )
-                    if container.draftTorEnabled {
-                        Text("Tutto il traffico di segnalazione e media è instradato via Tor. Aspettati latenza maggiore.")
-                            .qaudionStyle(type.labelSmall)
-                            .foregroundStyle(scheme.onSurfaceVariant)
-                            .padding(.horizontal, 14).padding(.top, 6)
-                    }
+                    .opacity(0.45)
+                    .disabled(true)
+                    Text("Non disponibile su iOS in questa versione: la piattaforma non espone un proxy SOCKS di sistema. Verrà riattivato quando l'app integrerà un client Tor bundled.")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .padding(.horizontal, 14).padding(.top, 6)
 
                     SettingsSectionHeader("SERVER TURN")
                     turnInputRow

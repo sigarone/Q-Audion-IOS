@@ -41,6 +41,16 @@ final class SecurityDashboardContainer: ObservableObject {
     }
 
     private func deriveDisplayPubkey() -> Data {
+        // W407 — read the REAL sovereign identity pubkey from the
+        // persisted vault instead of a fake SHA256(userId) digest.
+        // The fingerprint shown to the user now matches the actual
+        // public key contacts see. Falls back to userId-hash only if
+        // no identity was generated yet (e.g. immediately post-
+        // FastSetup before save).
+        let mgr = SovereignIdentityManager()
+        if let identity = mgr.loadIdentity() {
+            return identity.publicKey
+        }
         let userId = appState.currentUserId ?? "unknown-user"
         return Data(SHA256.hash(data: Data(userId.utf8)))
     }
