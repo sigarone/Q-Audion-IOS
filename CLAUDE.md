@@ -152,18 +152,20 @@ bg.paste(img, mask=img.split()[-1])
 bg.save(path, 'PNG', optimize=True)
 ```
 
-### 12. Xcode 26 / iOS 26 SDK deadline
+### 12. Xcode 26 / iOS 26 SDK deadline ✅ RISOLTO
 
-Apple emits **ITMS-90725** (informational) on every upload: starting **April 28, 2026**, App Store Connect will only accept builds made with Xcode 26 / iOS 26 SDK.
+**Storico:** Apple emise **ITMS-90725** (informational) su ogni upload con build Xcode 16.2: "starting **April 28, 2026**, App Store Connect will only accept builds made with Xcode 26 / iOS 26 SDK".
 
-Today's date matters: the deadline is close. When Codemagic adds Xcode 26 to its Mac mini M2 runners, update `codemagic.yaml`:
+**Stato attuale (post W396):** il `codemagic.yaml` di entrambi i workflow specifica `xcode: 26.4`. Codemagic ha aggiunto Xcode 26 ai Mac mini M2 runner nelle finestre seguenti:
 
-```yaml
-environment:
-  xcode: 26.0   # was 16.2
-```
+- **2025-09-20** Xcode 26.0 disponibile come opt-in
+- **2025-11-24** Xcode 26.1 → default (`latest`)
+- **2026-01-11** Xcode 26.2 → default
+- **2026-04-26** Xcode 26.4 → default
 
-Check availability at https://docs.codemagic.io/specs/versions-macos/. `xcode: latest` also works but is less deterministic.
+`xcode: latest` funziona ma è non-deterministico fra build paralleli; pinning a `26.4` (il default attuale) è la scelta sicura. Il pinning va bumpato quando Codemagic ruota il default — controllare https://docs.codemagic.io/specs-macos/xcode-26-4/ (e la pagina sibling per `26-5/`, `26-6/` etc. man mano che escono).
+
+**Quindi:** la deadline 28/04/2026 NON è un problema — i build di questa repo già usano l'SDK richiesto. ITMS-90725 non viene più emesso post-W347.
 
 ## Current `codemagic.yaml` env var dependencies
 
