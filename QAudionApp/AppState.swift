@@ -1073,6 +1073,24 @@ final class AppState: ObservableObject {
                         envelopeJson: decryptedRaw,
                         fromUserId: senderId,
                         selfId: mySelfId)
+                case "group_invite":
+                    // W399 — admin invited us to a group. Surface to
+                    // UI via NotificationCenter so a sheet can prompt
+                    // accept/decline. Persistence + bootstrap happen
+                    // when the user accepts (handleInboundGroupInvite).
+                    handleInboundGroupInvite(json: decryptedRaw, fromUserId: senderId)
+                case "group_member_added":
+                    handleInboundGroupMemberAdded(json: decryptedRaw, fromUserId: senderId)
+                case "group_member_removed":
+                    handleInboundGroupMemberRemoved(json: decryptedRaw, fromUserId: senderId)
+                case "group_invite_decline":
+                    // W399 — invitee told us they're not joining.
+                    // Best-effort log; the admin UI may show a
+                    // toast, but the membership stays unchanged
+                    // until the admin explicitly removes them.
+                    if let env = GroupInviteEnvelope.decodeInviteDecline(decryptedRaw) {
+                        print("[AppState] group_invite_decline from \(senderId) for group \(env.g)")
+                    }
                 default:
                     print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId)")
                 }
@@ -1511,6 +1529,28 @@ final class AppState: ObservableObject {
     /// userInfo = ["groupId": String, "recipient": String, "wire": Data]
     /// AppState observes this and ships an opaque_message per recipient.
     static let groupChatFanOutNotification = Notification.Name("qaudion.group.fanout")
+    /// W399 — non-isolated read of the persisted current userId.
+    /// Used by SwiftUI Views (GroupChatScreen.makeInfoState) that
+    /// need the userId without taking an EnvironmentObject ref.
+    /// Reads from UserDefaults (mirrored on every login by
+    /// AppState's auth flow).
+    public static var currentUserIdSnapshot: String? {
+        return UserDefaults.standard.string(forKey: "currentUserId")
+    }
+
+    /// W399 — surfaced to UI when an inbound group_invite arrives.
+    /// userInfo: ["groupId": String, "groupName": String,
+    ///   "members": [String], "admins": [String], "from": String]
+    /// A sheet can subscribe and present accept/decline buttons. On
+    /// accept, the UI calls AppState.acceptGroupInvite(groupId:).
+    static let groupInviteReceivedNotification = Notification.Name("qaudion.group.inviteReceived")
+
+    /// W399 — fired after acceptGroupInvite or local createGroup
+    /// finishes registry persistence + GroupChatService bootstrap.
+    /// userInfo: ["groupId": String]. ChatList / GroupChatScreen
+    /// subscribe to refresh visible state.
+    static let groupRegistryChangedNotification = Notification.Name("qaudion.group.registryChanged")
+
     /// W390 — group sender_key_init / sender_key_rotate distribution
     /// fan-out. Each emission has userInfo:
     ///   - "recipient": the peer userId to ship to
@@ -2261,6 +2301,191 @@ extension AppState {
                 }
             }
         }
+    }
+}
+
+// MARK: - W399: group invite plumbing
+
+extension AppState {
+
+    /// Inbound `qa_grp:1, t:"group_invite"` from a peer admin.
+    /// Validates basic fields then surfaces via NotificationCenter
+    /// so a sheet can prompt the user.
+    @MainActor
+    fileprivate func handleInboundGroupInvite(json: String, fromUserId senderId: String) {
+        guard let env = GroupInviteEnvelope.decodeInvite(json) else {
+            print("[AppState] handleInboundGroupInvite: malformed JSON from \(senderId)")
+            return
+        }
+        // Sanity: the sender must actually be in the admins list of
+        // the invite. A spoofed invite from a non-admin is rejected
+        // (defense-in-depth — the sender_id is server-overridden).
+        guard env.admins.contains(senderId) || env.from == senderId else {
+            print("[AppState] handleInboundGroupInvite: sender \(senderId) not in admins of invite for group \(env.g) — rejecting")
+            return
+        }
+        // If we're already in this group, treat as a no-op (idempotent
+        // re-invites are valid for offline peers replaying).
+        if GroupRegistry.shared.entry(for: env.g) != nil {
+            print("[AppState] handleInboundGroupInvite: already member of \(env.g), ignoring re-invite")
+            return
+        }
+        NotificationCenter.default.post(
+            name: AppState.groupInviteReceivedNotification,
+            object: nil,
+            userInfo: [
+                "groupId": env.g,
+                "groupName": env.name,
+                "members": env.members,
+                "admins": env.admins,
+                "from": env.from,
+            ])
+    }
+
+    /// Public API for the UI (sheet) to accept an inbound invite.
+    /// Persists the entry, bootstraps the GroupChatService session
+    /// (which fires replayBufferedCtl for any sender_key_init that
+    /// pre-arrived under W395), and notifies observers.
+    @MainActor
+    public func acceptGroupInvite(groupId: String, name: String,
+                                  members: [String], admins: [String]) {
+        guard let selfId = currentUserId, !selfId.isEmpty else {
+            print("[AppState] acceptGroupInvite: no currentUserId")
+            return
+        }
+        let entry = GroupRegistry.Entry(
+            id: groupId, name: name, members: members,
+            admins: admins, joinedAt: Date(), bootstrapped: false)
+        GroupRegistry.shared.upsert(entry)
+        // Force the GroupChatService to bootstrap the session right
+        // away — that drains the W395 buffered ctl envelopes (which
+        // may have already arrived from the existing members).
+        _ = GroupChatService.shared.session(
+            groupId: groupId, members: members, selfId: selfId)
+        GroupRegistry.shared.markBootstrapped(groupId: groupId)
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": groupId])
+    }
+
+    /// Public API for the UI to decline an inbound invite. Best-
+    /// effort: ships a `qa_grp:1 group_invite_decline` to the
+    /// admin so they know not to expect us. The admin UI may show
+    /// a toast; the registry stays untouched.
+    @MainActor
+    public func declineGroupInvite(groupId: String, fromAdmin admin: String) {
+        guard let json = GroupInviteEnvelope.encodeInviteDecline(
+            GroupInviteEnvelope.InviteDecline(
+                g: groupId, ts: Int64(Date().timeIntervalSince1970)))
+        else { return }
+        NotificationCenter.default.post(
+            name: AppState.groupSenderKeyCtlNotification,
+            object: nil,
+            userInfo: [
+                "recipient": admin,
+                "envelopeJson": json,
+            ])
+    }
+
+    /// Public API: admin creates a new group and ships invites to
+    /// every member via 1:1 ratchet. The local user is auto-joined
+    /// (registry entry persisted, GroupChatService session
+    /// bootstrapped) so they can immediately send into the group.
+    /// Each invitee receives a `qa_grp:1 group_invite` and decides
+    /// independently to accept.
+    @MainActor
+    public func createGroup(name: String, members: [String], admins: [String]) -> String? {
+        guard let selfId = currentUserId, !selfId.isEmpty else {
+            print("[AppState] createGroup: no currentUserId")
+            return nil
+        }
+        // Generate a fresh 16-byte group id (UUIDv4 → hex).
+        let gidBytes = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        // Make sure self is in members AND admins (admin-creator).
+        var fullMembers = members
+        if !fullMembers.contains(selfId) { fullMembers.append(selfId) }
+        var fullAdmins = admins
+        if !fullAdmins.contains(selfId) { fullAdmins.append(selfId) }
+
+        // Local persist + bootstrap.
+        let entry = GroupRegistry.Entry(
+            id: gidBytes, name: name, members: fullMembers,
+            admins: fullAdmins, joinedAt: Date(), bootstrapped: false)
+        GroupRegistry.shared.upsert(entry)
+        _ = GroupChatService.shared.session(
+            groupId: gidBytes, members: fullMembers, selfId: selfId)
+        GroupRegistry.shared.markBootstrapped(groupId: gidBytes)
+
+        // Ship invites to every member-other-than-self.
+        let now = Int64(Date().timeIntervalSince1970)
+        let inviteEnv = GroupInviteEnvelope.Invite(
+            g: gidBytes, name: name, members: fullMembers,
+            admins: fullAdmins, from: selfId, ts: now)
+        guard let inviteJson = GroupInviteEnvelope.encodeInvite(inviteEnv) else {
+            return gidBytes
+        }
+        for recipient in fullMembers where recipient != selfId {
+            NotificationCenter.default.post(
+                name: AppState.groupSenderKeyCtlNotification,
+                object: nil,
+                userInfo: [
+                    "recipient": recipient,
+                    "envelopeJson": inviteJson,
+                ])
+        }
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": gidBytes])
+        return gidBytes
+    }
+
+    /// Inbound member_added — admin announces a new member. Update
+    /// our registry so subsequent sends fan out to the new peer.
+    @MainActor
+    fileprivate func handleInboundGroupMemberAdded(json: String, fromUserId senderId: String) {
+        guard let env = GroupInviteEnvelope.decodeMemberAdded(json) else { return }
+        guard let entry = GroupRegistry.shared.entry(for: env.g) else {
+            print("[AppState] member_added for unknown group \(env.g)")
+            return
+        }
+        guard entry.admins.contains(senderId) else {
+            print("[AppState] member_added from non-admin \(senderId) for \(env.g) — rejecting")
+            return
+        }
+        GroupRegistry.shared.addMember(groupId: env.g, userId: env.member)
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": env.g])
+    }
+
+    /// Inbound member_removed — admin announces a departure. Remove
+    /// from registry; if the removed member is us, drop the group.
+    /// Otherwise invalidate the GroupChatService cache so the next
+    /// send rebuilds (epoch bump for PCS happens admin-side via
+    /// rotateOwnSenderKey — we rely on the matching rotate envelope
+    /// arriving for us to drop the recv chain for them).
+    @MainActor
+    fileprivate func handleInboundGroupMemberRemoved(json: String, fromUserId senderId: String) {
+        guard let env = GroupInviteEnvelope.decodeMemberRemoved(json) else { return }
+        guard let entry = GroupRegistry.shared.entry(for: env.g) else { return }
+        guard entry.admins.contains(senderId) else {
+            print("[AppState] member_removed from non-admin \(senderId) for \(env.g) — rejecting")
+            return
+        }
+        if env.member == currentUserId {
+            // We were removed.
+            GroupRegistry.shared.remove(groupId: env.g)
+            GroupChatService.shared.invalidate(groupId: env.g)
+        } else {
+            GroupRegistry.shared.removeMember(groupId: env.g, userId: env.member)
+        }
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": env.g])
     }
 }
 

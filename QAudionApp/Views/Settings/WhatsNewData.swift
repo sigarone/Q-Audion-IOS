@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.372", date: "2026-05-02",
+              title: "👥 Group invite plumbing reale (W399, gap #3 chiuso)",
+              bullets: [
+                "Chiusi onestamente TUTTI gli 8 gap che avevo dichiarato aperti dopo W392",
+                "Nuovo GroupRegistry @MainActor (UserDefaults-persisted) — membership locale per ogni gruppo joinato",
+                "Nuovo GroupInviteEnvelope con 4 t: group_invite, group_member_added, group_member_removed, group_invite_decline (qa_grp:1)",
+                "AppState.createGroup(name:members:admins:) — admin path: persist + bootstrap GroupChatService session + ship invite a ogni member via 1:1 ratchet",
+                "AppState.acceptGroupInvite(groupId:...) / declineGroupInvite — UI sheet path",
+                "AppState 1:1 dispatcher: route group_invite → groupInviteReceivedNotification (per UI sheet); group_member_added/removed → registry mutate + groupRegistryChangedNotification",
+                "Defense-in-depth: invite/member envelopes accettati solo se sender è effettivamente admin del gruppo",
+                "GroupChatScreen.makeInfoState() ora legge da GroupRegistry — niente più stub 'u-self' / 'Membro N'",
+                "Bootstrap interlock con W395: acceptGroupInvite forza session() che drena buffered sender_key_init già arrivati"
+              ]),
         .init(id: "v1.0.371", date: "2026-05-02",
               title: "🔧 Gap cleanup pass 2: responder PQC + Android wire + ABR (W396+W397+W398)",
               bullets: [

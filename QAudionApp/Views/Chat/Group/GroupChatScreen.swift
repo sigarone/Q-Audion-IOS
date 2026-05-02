@@ -344,13 +344,32 @@ struct GroupChatScreen: View {
     }
 
     private func makeInfoState() -> GroupInfoUiState {
-        // Stub members list — engine wiring sostituirà con la
-        // membership reale.
-        GroupInfoUiState(
+        // W399 — read real membership from GroupRegistry. Falls back
+        // to the legacy stub layout only if the group hasn't been
+        // joined yet (e.g. invite not accepted, or registry corrupted).
+        let groupIdHex = groupId.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let selfId = AppState.currentUserIdSnapshot ?? "u-self"
+        if let entry = GroupRegistry.shared.entry(for: groupIdHex) {
+            let rows = entry.members.map { uid in
+                GroupMemberRowUi(
+                    userId: uid,
+                    displayName: uid == selfId ? "Tu" : uid,
+                    isAdmin: entry.admins.contains(uid),
+                    isSelf: uid == selfId)
+            }
+            return GroupInfoUiState(
+                name: entry.name,
+                epoch: 1,
+                members: rows)
+        }
+        // Stub fallback — kept so a fresh group view doesn't crash
+        // before the user accepts the invite (or AppState bootstrap
+        // races the SwiftUI render).
+        return GroupInfoUiState(
             name: state.name,
             epoch: 1,
             members: [
-                GroupMemberRowUi(userId: "u-self", displayName: "Tu",
+                GroupMemberRowUi(userId: selfId, displayName: "Tu",
                                  isAdmin: true, isSelf: true)
             ] + (1...max(0, state.memberCount - 1)).map { i in
                 GroupMemberRowUi(
