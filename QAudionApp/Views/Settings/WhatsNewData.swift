@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.328", date: "2026-05-02",
+              title: "🔌 Thread RelayCredentialsProvider into WebRTC ICE (W349)",
+              bullets: [
+                "AppState.ensureRelayProvider(): lazy-init shared RelayCredentialsProvider",
+                "Riusato cross-call (TTL-aware cache), refresh 5min prima della scadenza",
+                "WebRTC call controller ora riceve provider non-nil",
+                "currentOrRefresh() dentro fetchIceServers fornisce TURN credentials reali al PeerConnection",
+                "Senza questo i RTCIceServer eran [], e WebRTC fallback su default Google STUN — niente TURN",
+                "Closure cross-platform: iOS↔Android calls ora hanno NAT traversal completo via TURN"
+              ]),
         .init(id: "v1.0.327", date: "2026-05-02",
               title: "🔌 Wire WebRTC into AppState call lifecycle (W348)",
               bullets: [

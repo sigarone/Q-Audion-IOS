@@ -146,6 +146,19 @@ final class AppState: ObservableObject {
     /// `SasConstants.infoWords = "sas-words-v1"`. Drift here would
     /// silently diverge the two-peer ceremony.
     @Published var callPqcSessionKey: Data?
+    /// W348: shared TURN credentials cache. Lazy-initialised the first
+    /// time a WebRTC call needs ICE servers, then reused across calls
+    /// (the RelayCredentialsProvider actor coalesces concurrent
+    /// refreshes and re-uses the cached bundle until it's within
+    /// 5 minutes of expiry).
+    private var _relayProvider: RelayCredentialsProvider?
+    func ensureRelayProvider() -> RelayCredentialsProvider? {
+        guard let provider = liveProvider else { return nil }
+        if let existing = _relayProvider { return existing }
+        let p = RelayCredentialsProvider(api: provider.callingApi)
+        _relayProvider = p
+        return p
+    }
     /// W347: WebRTC bridge for the active call. Lives only for the
     /// duration of one call; reset to nil on `endCall()`. Typed as
     /// `Any?` because the QAudionWebRtcCallController class is gated
@@ -1574,7 +1587,7 @@ final class AppState: ObservableObject {
             if let provider = liveProvider {
                 let controller = QAudionWebRtcCallController(
                     callingApi: provider.callingApi,
-                    relayProvider: nil  // TODO: thread RelayCredentialsProvider
+                    relayProvider: ensureRelayProvider()
                 )
                 webRtcController = controller
                 Task { [weak self] in
@@ -1783,7 +1796,7 @@ extension AppState {
         // Spawn a controller bound to the live CallingApi + relay provider.
         let controller = QAudionWebRtcCallController(
             callingApi: provider.callingApi,
-            relayProvider: nil  // TODO: wire RelayCredentialsProvider once injected at startup
+            relayProvider: ensureRelayProvider()
         )
         webRtcController = controller
         Task {
