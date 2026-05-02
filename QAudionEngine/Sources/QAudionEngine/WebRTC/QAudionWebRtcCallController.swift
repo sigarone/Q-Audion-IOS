@@ -45,6 +45,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onRemoteAudioTrack: ((RTCAudioTrack) -> Void)?
     public var onRemoteVideoTrack: ((RTCVideoTrack) -> Void)?
 
+    /// W383: optional PQC session key for the inner SRTP layer.
+    /// When set BEFORE startOutgoingCall / acceptIncomingCall, the
+    /// controller automatically installs PqcFrameEncryptor /
+    /// PqcFrameDecryptor on every sender + receiver via
+    /// `QAudionPeerConnection.installPqcSealer` (W382). Mid-call
+    /// updates re-install the sealer on next set.
+    public var pqcSessionKey: Data? {
+        didSet { applyPqcSealerIfPossible() }
+    }
+
     private let callingApi: CallingApi
     private let relayProvider: RelayCredentialsProvider?
     private var peerConnection: QAudionPeerConnection?
@@ -75,6 +85,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             delegate: self)
         peerConnection = pc
         pc.addLocalAudioTrack()
+        // W383: install PQC sealer if a session key was set BEFORE
+        // the call started. (Late arrivals via the
+        // `pqcSessionKey` didSet also call this, but that path
+        // requires the peerConnection already exist — we set both
+        // up in the same task here so the order is safe.)
+        applyPqcSealerIfPossible()
 
         let sdp: String = try await withCheckedThrowingContinuation { cont in
             pc.createOffer(audioOnly: audioOnly) { result in
@@ -116,6 +132,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             delegate: self)
         peerConnection = pc
         pc.addLocalAudioTrack()
+        // W383: install PQC sealer if a session key was set BEFORE
+        // the call started. (Late arrivals via the
+        // `pqcSessionKey` didSet also call this, but that path
+        // requires the peerConnection already exist — we set both
+        // up in the same task here so the order is safe.)
+        applyPqcSealerIfPossible()
 
         // 1. Apply remote offer.
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -160,6 +182,22 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
 
     // MARK: - Internal
+
+    /// W383 — install (or re-install) the PqcRtpFrameSealer on the
+    /// active peer connection. Safe to call on a nil key (no-op) or
+    /// before the peer connection is up (no-op until next call to
+    /// applyPqcSealerIfPossible after the connection is built).
+    private func applyPqcSealerIfPossible() {
+        guard let key = pqcSessionKey, key.count == 32 else { return }
+        guard let pc = peerConnection else { return }
+        do {
+            let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+            pc.installPqcSealer(sealer)
+            print("[WebRtcCallController] PQC sealer installed (key.count=\(key.count))")
+        } catch {
+            print("[WebRtcCallController] PQC sealer install failed: \(error)")
+        }
+    }
 
     private func fetchIceServers() async -> [RTCIceServer] {
         guard let provider = relayProvider else { return [] }

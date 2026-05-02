@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.360", date: "2026-05-02",
+              title: "🔄 Auto-install PQC sealer on call setup (W383)",
+              bullets: [
+                "QAudionWebRtcCallController.pqcSessionKey: didSet trigger applyPqcSealerIfPossible",
+                "startOutgoingCall + acceptIncomingCall installano sealer dopo addLocalAudioTrack",
+                "Mid-call key updates re-install sealer su next set (rekey-friendly)",
+                "32-byte gate: solo session keys validi triggerano install",
+                "End-to-end W376/W382/W383: PQC SRTP layer attivo se key publishata da W375 broker"
+              ]),
         .init(id: "v1.0.359", date: "2026-05-02",
               title: "🔐 PQC frame encryptor adapter wired (W382)",
               bullets: [
