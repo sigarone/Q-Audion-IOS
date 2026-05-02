@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.381", date: "2026-05-02",
+              title: "🛠 Fix build W411 (W412)",
+              bullets: [
+                "Codemagic v1.0.380 IPA failed: 'cannot find RTCIceServer in scope' x3 in AppState.swift",
+                "Causa: `#if canImport(WebRTC)` guarda la disponibilità del modulo MA non importa i symbols",
+                "Fix: aggiunto `#if canImport(WebRTC) import WebRTC #endif` in cima ad AppState.swift",
+                "Build dovrebbe passare adesso — error puramente di import mancante"
+              ]),
         .init(id: "v1.0.380", date: "2026-05-02",
               title: "🚇 De-faking pass 3: Transport + Presence honest (W411)",
               bullets: [

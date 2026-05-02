@@ -2,6 +2,13 @@ import Foundation
 import SwiftUI
 import CryptoKit
 import QAudionEngine
+#if canImport(WebRTC)
+// W412: needed by the W411 RTCIceServer references inside the
+// WebRTC bridge code paths. The QAudionEngine extension types
+// (QAudionWebRtcCallController.iceServerOverride: [RTCIceServer]?)
+// require the symbol to be in scope at the call site too.
+import WebRTC
+#endif
 
 enum CallState: String {
     case idle
