@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.318", date: "2026-05-02",
+              title: "🔌 Wire SAS engine in InCallScreen (W339)",
+              bullets: [
+                "AppState: nuovo @Published callPqcSessionKey: Data?",
+                "AppState: computed callSasWords usa ComputeSasUseCase quando key è settato",
+                "endCall() resetta callPqcSessionKey (no stale key cross-call)",
+                "LiveInCallScreen passa appState.callSasWords invece di [] hardcoded",
+                "Quando il call PQC handshake popolerà callPqcSessionKey, le parole appariranno automaticamente",
+                "Foundation: il path di setup chiamata setterà la chiave dopo ML-KEM",
+                "Audit: SAS DECORATIVO → SAS WIRED (engine reale + bridge UI)"
+              ]),
         .init(id: "v1.0.317", date: "2026-05-02",
               title: "🔑 SAS engine reale — niente piu parole hardcoded (W338)",
               bullets: [

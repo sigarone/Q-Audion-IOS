@@ -103,7 +103,11 @@ struct LiveInCallScreen: View {
                 rekeyInSeconds: liveRekeyInSeconds,
                 rekeyTotalSeconds: Self.rekeyTotalSeconds,
                 pqcActive: appState.backendType == "PQC",
-                sasWords: [],
+                // W339: real SAS from ComputeSasUseCase — derived from
+                // appState.callPqcSessionKey when set by the call setup
+                // path. While the key is nil (current state in most
+                // builds) the array is empty and the panel hides.
+                sasWords: appState.callSasWords,
                 sasVerified: false,
                 keyInfo: nil,
                 transportMode: liveTransportMode,

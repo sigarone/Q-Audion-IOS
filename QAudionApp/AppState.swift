@@ -134,6 +134,18 @@ final class AppState: ObservableObject {
     @Published var pskActive: Bool = false
     @Published var pskName: String = ""
     @Published var pskFingerprint: String = ""
+    /// PQC session key for the active call, used to derive the in-call
+    /// 6-PGP-word SAS via [ComputeSasUseCase]. Set by the call setup
+    /// path once the ML-KEM-1024 handshake completes; cleared on
+    /// `endCall()`. While nil the SAS panel stays hidden in the UI
+    /// (`callSasWords` returns empty).
+    ///
+    /// Cross-platform contract: this is the same shared secret the
+    /// Android peer feeds into its `ComputeSasUseCase` — see
+    /// `SasConstants.salt = "qaudion-sas-v1"` /
+    /// `SasConstants.infoWords = "sas-words-v1"`. Drift here would
+    /// silently diverge the two-peer ceremony.
+    @Published var callPqcSessionKey: Data?
     @Published var rekeyCount: Int = 0
     @Published var encryptionAlgo: String = "ML-KEM-1024 + AES-256-GCM"
     @Published var transportType: String = "P2P Direct"
@@ -1547,11 +1559,32 @@ final class AppState: ObservableObject {
         deepfakeAlert = false
         callContactId = nil
         activeCallKitId = nil
+        // W339: drop the PQC session key so the SAS panel hides on the
+        // next call setup. Holding stale key material across calls
+        // would otherwise let one call's verified SAS appear on the
+        // next, unverified call.
+        callPqcSessionKey = nil
         txWaveformSamples = []
         rxWaveformSamples = []
         cipherWaveformSamples = []
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.callState = .idle
+        }
+    }
+
+    /// W339: derive the 6-PGP-word in-call SAS from the active call's
+    /// PQC session key. Returns an empty array when `callPqcSessionKey`
+    /// is nil — the InCallScreen hides the SAS panel in that case.
+    /// Both peers compute the SAS from the same shared secret using the
+    /// same canonical salt/info, so two same-version peers always agree
+    /// on the 6-word string.
+    var callSasWords: [String] {
+        guard let key = callPqcSessionKey, !key.isEmpty else { return [] }
+        do {
+            return try ComputeSasUseCase.invoke(sessionKey: key).words
+                .map { $0.uppercased() }
+        } catch {
+            return []
         }
     }
 
