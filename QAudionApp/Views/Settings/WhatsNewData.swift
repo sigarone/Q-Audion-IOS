@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.357", date: "2026-05-02",
+              title: "🧪 CrossPlatformKatTests — consolidated regression gate (W380)",
+              bullets: [
+                "Nuova test class CrossPlatformKatTests che esercita ogni superficie cross-platform",
+                "SAS KAT W338: bookshelf,pupil,blockade,mural,drifter,snapshot",
+                "PGP word list size + first/last + SasConstants exact bytes",
+                "MessageWireFormat detect, GroupSenderKey wire+AAD layout",
+                "WireRelayFrameCodec audio mux, PepperedPhoneHash byte form",
+                "DeviceLinkingProtocol QR scheme + url-safe, CanonicalCBOR layout",
+                "HKDF labels frozen — drift = silent decrypt mismatch → fail loud"
+              ]),
         .init(id: "v1.0.356", date: "2026-05-02",
               title: "⚙️ Settings → Cross-platform (beta) UI (W379)",
               bullets: [
