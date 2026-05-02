@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.325", date: "2026-05-02",
+              title: "📎 AttachmentEncryption — XChaCha20-Poly1305 + canonical CBOR (W346)",
+              bullets: [
+                "Port AttachmentEncryption.kt: XChaCha20-Poly1305 from-scratch in CryptoKit",
+                "HChaCha20 inner permutation 20-round + ChaCha20-Poly1305 (12B nonce)",
+                "Canonical CBOR AAD: {0:attId, 1:mime, 2:sha256, 3:byte_length(8 BE)}",
+                "HKDF-SHA256(chainKey, info=label||CBOR{0:attId,1:senderUuid}) per (key32, nonce24)",
+                "encrypt/decrypt + SHA-256 plaintext binding (anti-tamper)",
+                "8 test: round-trip, 200KB payload, wrong key/attId/sha256 fail, derivations deterministic",
+                "Foundation per voice notes cross-platform (next: wire qfile→attach_announce send path)"
+              ]),
         .init(id: "v1.0.324", date: "2026-05-02",
               title: "👥 Group session orchestration — chat di gruppo end-to-end (W345)",
               bullets: [
