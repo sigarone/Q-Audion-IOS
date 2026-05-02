@@ -295,6 +295,30 @@ struct GroupChatScreen: View {
         memberIds: [String],
         selfId: String
     ) async {
+        // W390 — REAL sender_key_init distribution. Before encrypting
+        // the first group message, ship a `qa_grp:1 sender_key_init`
+        // envelope to every member that hasn't yet received our send
+        // chain. Each envelope is wrapped in the 1:1 ratchet via
+        // `groupSenderKeyCtlNotification` (fan-out wire) — AppState's
+        // existing chat send path encrypts it under the per-pair PSK
+        // and ships as opaque_message. The recipient detects qa_grp:1
+        // in the decrypted plaintext and routes to
+        // GroupChatService.handleInboundSenderKeyInit before we drop
+        // any user-visible bubble. After this fan-out completes, the
+        // group ciphertext is sent — store-and-forward order keeps
+        // the init landing first in normal cases.
+        let pendingInits = GroupChatService.shared.pendingInitsAfterBootstrap(
+            groupId: groupIdHex, members: memberIds, selfId: selfId)
+        for init_ in pendingInits {
+            NotificationCenter.default.post(
+                name: AppState.groupSenderKeyCtlNotification,
+                object: nil,
+                userInfo: [
+                    "recipient": init_.recipientId,
+                    "envelopeJson": init_.envelopeJson,
+                ]
+            )
+        }
         guard let wire = GroupChatService.shared.encrypt(
             plaintext: plaintext,
             groupId: groupIdHex,

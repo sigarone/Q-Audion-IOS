@@ -12,6 +12,20 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.367", date: "2026-05-02",
+              title: "👥 Group chat REAL sender_key_init (W390, deep-fix #2/4)",
+              bullets: [
+                "Chiusa la 'scorciatoia deterministica' su seed = SHA-256(groupId+label)",
+                "GroupChatService.session(): random 32-byte seed per ogni nuova GroupState (engine.create selfSeed=nil)",
+                "Nuovo PendingSenderKeyInit con (recipientId, envelopeJson)",
+                "pendingInitsAfterBootstrap(): produce SenderKeyInitEnvelope(qa_grp:1) JSON per ogni membro non-self",
+                "Idempotente: shippedInits cache evita re-emissione su send successive",
+                "GroupChatScreen.sendGroupOverWire: prima del fan-out 0xE4, posta groupSenderKeyCtlNotification per ogni membro",
+                "AppState.wireGroupChatFanOut: nuovo observer per groupSenderKeyCtlNotification → ChatMessageSendService.sendEncrypted (ratchet 1:1)",
+                "AppState 1:1 inbound dispatcher: GroupChatService.detectGroupCtlType() → route handleInboundSenderKey{Init,Rotate} prima di persistere chat row",
+                "loadExistingSession() drop-on-the-floor se nessuna session locale (no bootstrap on inbound — peer re-shippa via pending_sync dopo join)",
+                "Parità Android: stesso protocollo qa_grp:1, stesso engine.handleSenderKeyInit semantics"
+              ]),
         .init(id: "v1.0.366", date: "2026-05-02",
               title: "🔐 PQC handshake → CallSessionKeyBroker (W389, deep-fix #1/4)",
               bullets: [

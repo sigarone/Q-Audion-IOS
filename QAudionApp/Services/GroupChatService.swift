@@ -3,24 +3,39 @@ import CryptoKit
 import QAudionEngine
 
 /// W371 — top-level group-chat bridge.
+/// W390 (deep-fix #2/4) — REAL `sender_key_init` distribution. The
+/// previous transitional path bootstrapped each member's send chain
+/// from a deterministic SHA-256(groupId || label) seed so peers could
+/// agree on CK_0 without signaling. That works for symmetric crypto
+/// agreement but it is **not** the cross-platform protocol Android
+/// implements — and crucially it gives every member of a group the
+/// same send-chain seed, breaking sender attribution and PCS.
 ///
-/// Owns one [GroupSession] per active group (lazy-init, persisted via
-/// the W364 KeychainGroupSessionVault). Provides `send` / `receive`
-/// entry points so GroupChatScreen and the AppState dispatcher can
-/// stop being beta-banner-only.
+/// The REAL protocol (matches Android, FIPS-style sender-key trees):
+///   1. Each member generates their OWN random 32-byte seed.
+///   2. The member ships a `sender_key_init` envelope (`qa_grp:1`)
+///      to every OTHER member, wrapped in the 1:1 ratchet (so the
+///      seed is forward-secret under the per-pair PSK).
+///   3. Recipients call `engine.handleSenderKeyInit(...)` to install
+///      the sender's recv chain — exact same engine API the Android
+///      implementation uses.
+///   4. Group messages then ride the 0xE4 wire envelope using each
+///      member's independent send chain — sender_id in the AAD makes
+///      attribution unambiguous, and a per-member rotate is local
+///      (no all-members re-keying required).
 ///
 /// **Wire format:** every group message rides the GroupSenderKey
 /// 0xE4 wire envelope (W340 + W345). The outer transport is a fan-out
 /// of `opaque_message` frames — one per remaining member — bound to
-/// the per-pair PSK / v3 ratchet on the 1:1 layer. This means a
-/// member who isn't online when the message is sent gets it on
-/// reconnect via `msg_pending_sync` like any other message.
+/// the per-pair PSK / v3 ratchet on the 1:1 layer.
 ///
-/// **Bootstrap key:** the room key for the GroupSession is bootstrapped
-/// from the same deterministic SHA-256(callId || "qaudion-group-v1")
-/// the W354 GroupCallController uses, so all members agree on the
-/// chain seed without any extra signaling. PCS at membership-change
-/// time is provided by the W345 `handleMemberRemoved` epoch bump.
+/// **Backward compatibility:** if a peer hasn't received our init
+/// envelope yet (offline at create-time) and we ship a group msg, the
+/// recipient gets the wire bytes but `decryptFromGroup` returns nil
+/// (no recv chain installed). The `msg_pending_sync` queue delivers
+/// the init envelope on reconnect; the message can be retried, OR the
+/// fan-out logic ships init+message back-to-back so the init lands
+/// first in store-and-forward order.
 @MainActor
 public final class GroupChatService {
 
@@ -31,32 +46,62 @@ public final class GroupChatService {
 
     private var sessions: [String: GroupState] = [:]   // groupId → state
 
+    /// Tracks which (groupId, recipientId) pairs have already received
+    /// our `sender_key_init` envelope so we don't re-emit on every
+    /// send. Survives a session as long as the AppState lives;
+    /// persistence across launches is handled by the engine's vault
+    /// (if recv chains for that recipient are installed, they keep
+    /// our send chain → no re-init needed).
+    private var shippedInits: [String: Set<String>] = [:]
+
     public init() {}
+
+    public struct PendingSenderKeyInit: Equatable {
+        public let recipientId: String
+        /// JSON-encoded `SenderKeyInitEnvelope` payload that the caller
+        /// must wrap into a 1:1 chat ciphertext (existing PSK / v3
+        /// ratchet path) and ship via `ChatMessageSendService`.
+        public let envelopeJson: String
+    }
 
     /// Convert a hex group id (the on-wire form) to its raw bytes.
     private func bytes(for groupId: String) -> Data? {
         return try? GroupSenderKey.fromHex(groupId)
     }
 
+    /// Look up an existing session WITHOUT bootstrapping. Returns nil
+    /// if neither the in-memory cache nor the vault has a snapshot for
+    /// this (groupId, selfId). Used by inbound `sender_key_init`
+    /// handlers — we don't want to bootstrap a session for a group the
+    /// local user hasn't joined yet (would race with the membership
+    /// signaling layer).
+    private func loadExistingSession(groupId: String, selfId: String) -> GroupState? {
+        if let cached = sessions[groupId] { return cached }
+        guard let gid = bytes(for: groupId), !selfId.isEmpty else { return nil }
+        if let existing = Self.vault.load(groupIdBytes: gid, groupEpoch: 1, selfId: selfId) {
+            sessions[groupId] = existing
+            return existing
+        }
+        return nil
+    }
+
     /// Lazy-init or recover a `GroupState` for the given group + self
     /// id. Loads from KeychainGroupSessionVault if a snapshot exists,
-    /// otherwise bootstraps a fresh session with the deterministic
-    /// per-group seed (so iOS, Android, Desktop all derive the same
-    /// CK_0 without coordination).
+    /// otherwise bootstraps a fresh session with a random seed (W390 —
+    /// no more deterministic shortcut).
+    /// Returns the state if the session is valid; nil on bad input.
     public func session(groupId: String, members: [String], selfId: String) -> GroupState? {
         if let cached = sessions[groupId] { return cached }
         guard let gid = bytes(for: groupId), !members.contains(where: { $0.isEmpty }), !selfId.isEmpty else {
             return nil
         }
         if let existing = Self.vault.load(groupIdBytes: gid, groupEpoch: 1, selfId: selfId) {
-            // Vault returned an already-live GroupState (the protocol
-            // is "engine-owned snapshot"; iOS impl uses a codec
-            // round-trip but the public type stays GroupState).
             sessions[groupId] = existing
             return existing
         }
-        // Fresh session — derive a deterministic seed (so peers agree).
-        let seed = Self.deterministicSeed(groupId: groupId)
+        // Fresh session — random seed (W390). The matching
+        // sender_key_init envelopes for every other member are
+        // produced by `pendingInitsAfterBootstrap(...)`.
         do {
             let state = try engine.create(
                 groupIdBytes: gid,
@@ -64,7 +109,7 @@ public final class GroupChatService {
                 members: members,
                 admins: [],
                 selfId: selfId,
-                selfSeed: seed
+                selfSeed: nil // engine generates 32 bytes via SecureRandom
             )
             sessions[groupId] = state
             return state
@@ -93,6 +138,9 @@ public final class GroupChatService {
 
     /// Decrypt a wire blob received from `senderId`. Returns the UTF-8
     /// plaintext, or nil on AEAD / replay / unknown-sender failure.
+    /// **Note**: returns nil if no recv chain is installed for senderId
+    /// (i.e. their `sender_key_init` envelope hasn't arrived yet). The
+    /// caller can then queue the wire blob for retry.
     public func decrypt(wire: Data, senderId: String, groupId: String, members: [String], selfId: String) -> String? {
         guard let state = session(groupId: groupId, members: members, selfId: selfId) else {
             return nil
@@ -107,18 +155,125 @@ public final class GroupChatService {
     /// + epoch bump so the next message rebuilds.
     public func invalidate(groupId: String) {
         sessions.removeValue(forKey: groupId)
+        shippedInits.removeValue(forKey: groupId)
     }
 
-    // MARK: - Helpers
+    // MARK: - W390 sender_key_init distribution
 
-    /// Bootstrap seed = SHA-256(groupId || "qaudion-group-chat-v1") so
-    /// every member arrives at the same CK_0 without signaling. Same
-    /// strategy GroupCallController uses for the room key (W354), with
-    /// a different label so the chat seed and call key don't collide.
-    private static func deterministicSeed(groupId: String) -> Data {
-        var ikm = Data(groupId.utf8)
-        ikm.append(Data("qaudion-group-chat-v1".utf8))
-        return Data(SHA256.hash(data: ikm))
+    /// Returns the list of `sender_key_init` envelopes that must be
+    /// shipped via 1:1 ratchet to every other member of the group so
+    /// they can install OUR send chain on their side.
+    ///
+    /// Idempotent: tracks which recipients have already been shipped
+    /// and only returns the missing ones. When all members have been
+    /// shipped, returns an empty list.
+    ///
+    /// Caller protocol:
+    ///   1. Before the first `encrypt(...)` for a group, call this.
+    ///   2. For each PendingSenderKeyInit, ship the JSON via the
+    ///      existing 1:1 ratchet path (ChatMessageSendService). The
+    ///      recipient's chat dispatcher detects the `qa_grp:1` marker
+    ///      and routes to `handleInboundSenderKeyInit(...)`.
+    ///   3. Then ship the actual encrypted group message wire bytes.
+    public func pendingInitsAfterBootstrap(groupId: String, members: [String], selfId: String) -> [PendingSenderKeyInit] {
+        guard let state = session(groupId: groupId, members: members, selfId: selfId) else {
+            return []
+        }
+        let already = shippedInits[groupId] ?? Set<String>()
+        let recipients = members.filter { $0 != selfId && !already.contains($0) }
+        guard !recipients.isEmpty else { return [] }
+
+        // Build the SenderKeyInitEnvelope from our send chain. The seed
+        // we ship is the CURRENT chain key (CK_n) — the recipient's
+        // engine.handleSenderKeyInit installs lastSeen = idx-1, so they
+        // pick up exactly where we are.
+        let env = SenderKeyInitEnvelope(
+            g: GroupSenderKey.toHex(state.groupIdBytes),
+            e: state.groupEpoch,
+            seed: state.sendChain.ck.base64EncodedString(),
+            idx: state.sendChain.nextIdx
+        )
+        guard let jsonData = try? JSONEncoder().encode(env),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            return []
+        }
+
+        var pending: [PendingSenderKeyInit] = []
+        var newSet = already
+        for r in recipients {
+            pending.append(PendingSenderKeyInit(recipientId: r, envelopeJson: jsonString))
+            newSet.insert(r)
+        }
+        shippedInits[groupId] = newSet
+        return pending
     }
 
+    /// Called by AppState's 1:1 chat inbound dispatcher when the
+    /// decrypted plaintext parses as `{qa_grp:1, t:"sender_key_init", ...}`.
+    /// Installs the sender's recv chain on our local GroupState so we
+    /// can subsequently decrypt their group messages.
+    public func handleInboundSenderKeyInit(
+        envelopeJson: String,
+        fromUserId: String,
+        selfId: String
+    ) {
+        guard let data = envelopeJson.data(using: .utf8),
+              let env = try? JSONDecoder().decode(SenderKeyInitEnvelope.self, from: data) else {
+            print("[GroupChatService] handleInboundSenderKeyInit: malformed JSON from \(fromUserId)")
+            return
+        }
+        // Don't bootstrap on inbound init — only install on a session
+        // the local user has already joined. If we receive an init for
+        // an unknown group, we silently drop. The peer can re-ship via
+        // msg_pending_sync once we eventually join.
+        guard let state = loadExistingSession(groupId: env.g, selfId: selfId) else {
+            print("[GroupChatService] handleInboundSenderKeyInit: no session yet for group \(env.g) — dropping (peer must re-ship after we join)")
+            return
+        }
+        do {
+            try engine.handleSenderKeyInit(state: state, env: env, fromUserId: fromUserId)
+        } catch {
+            print("[GroupChatService] handleInboundSenderKeyInit failed (group=\(env.g), from=\(fromUserId)): \(error)")
+        }
+    }
+
+    /// Companion to `handleInboundSenderKeyInit` for periodic rotates
+    /// (admin-driven re-key). Same wire shape but `t` is
+    /// `sender_key_rotate` and the envelope carries the seed (not the
+    /// current chain-key snapshot).
+    public func handleInboundSenderKeyRotate(
+        envelopeJson: String,
+        fromUserId: String,
+        selfId: String
+    ) {
+        guard let data = envelopeJson.data(using: .utf8),
+              let env = try? JSONDecoder().decode(SenderKeyRotateEnvelope.self, from: data) else {
+            print("[GroupChatService] handleInboundSenderKeyRotate: malformed JSON from \(fromUserId)")
+            return
+        }
+        guard let state = loadExistingSession(groupId: env.g, selfId: selfId) else {
+            print("[GroupChatService] handleInboundSenderKeyRotate: no session yet for group \(env.g) — dropping")
+            return
+        }
+        do {
+            try engine.handleSenderKeyRotate(state: state, env: env, fromUserId: fromUserId)
+        } catch {
+            print("[GroupChatService] handleInboundSenderKeyRotate failed (group=\(env.g), from=\(fromUserId)): \(error)")
+        }
+    }
+
+    /// Lightweight detector for the 1:1 chat inbound dispatcher.
+    /// Returns the envelope type (`"sender_key_init"` or
+    /// `"sender_key_rotate"`) if the plaintext parses as a
+    /// `qa_grp:1` envelope, else nil. Lets the dispatcher decide
+    /// routing without fully decoding the structure twice.
+    public static func detectGroupCtlType(_ plaintext: String) -> String? {
+        guard let data = plaintext.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let qa = obj["qa_grp"] as? Int, qa == 1,
+              let t = obj["t"] as? String else {
+            return nil
+        }
+        return t
+    }
 }

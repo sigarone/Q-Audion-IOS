@@ -1028,6 +1028,32 @@ final class AppState: ObservableObject {
                 handleControlEnvelope(env, senderId: senderId)
                 return
             }
+            // W390: route `qa_grp:1` envelopes (sender_key_init,
+            // sender_key_rotate) to the GroupChatService BEFORE
+            // persisting as a chat row. These are protocol messages,
+            // not user-visible text. The handler installs the recv
+            // chain so subsequent group ciphertexts from this sender
+            // can decrypt; if no group session exists locally yet, the
+            // handler drops silently (the peer will re-ship after we
+            // join via the membership signaling layer).
+            if let groupCtlType = GroupChatService.detectGroupCtlType(decryptedRaw) {
+                let mySelfId = currentUserId ?? ""
+                switch groupCtlType {
+                case "sender_key_init":
+                    GroupChatService.shared.handleInboundSenderKeyInit(
+                        envelopeJson: decryptedRaw,
+                        fromUserId: senderId,
+                        selfId: mySelfId)
+                case "sender_key_rotate":
+                    GroupChatService.shared.handleInboundSenderKeyRotate(
+                        envelopeJson: decryptedRaw,
+                        fromUserId: senderId,
+                        selfId: mySelfId)
+                default:
+                    print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId)")
+                }
+                return
+            }
             plaintext = Self.renderInboundPlaintext(decryptedRaw)
         } catch {
             print("[AppState] msg_receive decrypt failed from \(senderId): \(error)")
@@ -1461,6 +1487,16 @@ final class AppState: ObservableObject {
     /// userInfo = ["groupId": String, "recipient": String, "wire": Data]
     /// AppState observes this and ships an opaque_message per recipient.
     static let groupChatFanOutNotification = Notification.Name("qaudion.group.fanout")
+    /// W390 — group sender_key_init / sender_key_rotate distribution
+    /// fan-out. Each emission has userInfo:
+    ///   - "recipient": the peer userId to ship to
+    ///   - "envelopeJson": the JSON-encoded `qa_grp:1` envelope
+    /// AppState.wireGroupSenderKeyCtlFanOut wraps each emission in the
+    /// 1:1 ratchet via ChatMessageSendService.sendEncrypted, so the
+    /// envelope rides the same per-pair PSK / v3 ratchet path text
+    /// chat uses. The recipient's chat dispatcher detects the
+    /// `qa_grp:1` marker and routes to GroupChatService.
+    static let groupSenderKeyCtlNotification = Notification.Name("qaudion.group.senderKeyCtl")
 
     /// W77: dispatch inbound `opaque_message` envelopes. The QUAD frame
     /// inside the payload carries either:
@@ -2037,6 +2073,37 @@ extension AppState {
                         recipientId: recipient, data: wire)
                 } catch {
                     print("[AppState] groupChat fan-out to \(recipient) failed: \(error)")
+                }
+            }
+        }
+        // W390: also subscribe to the sender_key_init / rotate fan-out
+        // so each (recipientId, envelopeJson) emission is wrapped in
+        // the per-pair PSK / v3 ratchet via ChatMessageSendService and
+        // shipped as a regular `msg_send`. Recipient's chat dispatcher
+        // detects the `qa_grp:1` marker in the decrypted plaintext and
+        // routes to GroupChatService.handleInboundSenderKeyInit BEFORE
+        // a chat row is persisted.
+        NotificationCenter.default.addObserver(
+            forName: AppState.groupSenderKeyCtlNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let recipient = note.userInfo?["recipient"] as? String,
+                  let envelopeJson = note.userInfo?["envelopeJson"] as? String else {
+                return
+            }
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                let sender = ChatMessageSendService(appState: self)
+                let outcome = await sender.sendEncrypted(
+                    messageId: UUID(),
+                    peerUserId: recipient,
+                    plaintext: envelopeJson)
+                switch outcome {
+                case .delivered, .sent:
+                    break
+                case .failed(let reason):
+                    print("[AppState] sender_key_ctl ship to \(recipient) failed: \(reason)")
                 }
             }
         }
