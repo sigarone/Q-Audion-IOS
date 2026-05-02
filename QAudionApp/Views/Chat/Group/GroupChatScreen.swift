@@ -21,6 +21,9 @@ struct GroupChatScreen: View {
     @Environment(\.qaudionType) private var type
     @Environment(\.dismiss) private var dismiss
     @Environment(\.qaudionSnackbar) private var snackbar
+    /// W409: needed to call AppState.leaveGroup from the
+    /// GroupInfoScreen.onLeft callback.
+    @EnvironmentObject private var appState: AppState
 
     let groupId: UUID
     @State private var state: GroupChatUiState

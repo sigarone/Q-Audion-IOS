@@ -139,7 +139,7 @@ final class DeviceManagementContainer: ObservableObject {
             do {
                 let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
                 let provider = BCryptoBackendProvider(config: config)
-                _ = try await provider.restClient.delete("/api/v1/devices/\(deviceId)")
+                _ = try await provider.getRestClient().delete("/api/v1/devices/\(deviceId)")
                 print("[DeviceManagementContainer] revoke OK for \(deviceId)")
             } catch {
                 // Restore the row on failure so the user can retry.
@@ -166,7 +166,7 @@ final class DeviceManagementContainer: ObservableObject {
             do {
                 let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
                 let provider = BCryptoBackendProvider(config: config)
-                let data = try await provider.restClient.get("/api/v1/devices/")
+                let data = try await provider.getRestClient().get("/api/v1/devices/")
                 // The server response shape (devices: [...]) is intentionally
                 // not strictly typed here — for now we just stamp the refresh
                 // timestamp and let the next list-load pull the fresh data

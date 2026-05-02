@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.379", date: "2026-05-02",
+              title: "🛠 Fix build W407+W408+W409 (W410)",
+              bullets: [
+                "Codemagic IPA step exit 65 con 3 errori Swift compile",
+                "Fix #1: GroupChatScreen mancava @EnvironmentObject appState — aggiunto",
+                "Fix #2: SovereignIdentity ha encryptionPublic, NON publicKey — schema reale ripristinato in SecurityDashboard",
+                "Fix #3: BCryptoBackendProvider.restClient è private — uso getRestClient() pubblico in DeviceManagementContainer",
+                "Build dovrebbe passare ora — gli errori erano tutti symbol-name mismatches non semantici"
+              ]),
         .init(id: "v1.0.378", date: "2026-05-02",
               title: "🛠 De-faking pass 2: keymgmt + device revoke + group leave + Tor honest (W407+W408+W409)",
               bullets: [

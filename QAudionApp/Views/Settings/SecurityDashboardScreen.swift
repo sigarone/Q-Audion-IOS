@@ -49,7 +49,10 @@ final class SecurityDashboardContainer: ObservableObject {
         // FastSetup before save).
         let mgr = SovereignIdentityManager()
         if let identity = mgr.loadIdentity() {
-            return identity.publicKey
+            // W410: real field is `encryptionPublic` (Curve25519 X25519
+            // 32-byte pubkey). Was wrongly named `publicKey` in W407 —
+            // built failure surfaced the real schema.
+            return identity.encryptionPublic
         }
         let userId = appState.currentUserId ?? "unknown-user"
         return Data(SHA256.hash(data: Data(userId.utf8)))
