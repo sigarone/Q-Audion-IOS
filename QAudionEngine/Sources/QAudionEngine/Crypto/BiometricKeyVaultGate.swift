@@ -65,9 +65,14 @@ public final class BiometricKeyVaultGate: @unchecked Sendable {
             throw GateError.biometryUnavailable
         }
         do {
-            try await ctx.evaluatePolicy(
-                .deviceOwnerAuthentication,
-                localizedReason: reason
+            // W385: avoid name collision with the iOS 16+ stock
+            // `evaluatePolicy(_:localizedReason:)` async overload —
+            // use a distinct helper name on our extension to keep the
+            // call unambiguous on every deployment target.
+            try await Self.runEvaluatePolicy(
+                ctx: ctx,
+                policy: .deviceOwnerAuthentication,
+                reason: reason
             )
         } catch let err as LAError {
             switch err.code {
@@ -123,15 +128,19 @@ public final class BiometricKeyVaultGate: @unchecked Sendable {
 }
 
 #if canImport(LocalAuthentication)
-private extension LAContext {
-    /// Async wrapper for evaluatePolicy. The platform-provided
-    /// completion-handler API doesn't bridge cleanly to async/await on
-    /// older deployment targets, so we wrap it ourselves.
-    func evaluatePolicy(
-        _ policy: LAPolicy, localizedReason: String
+extension BiometricKeyVaultGate {
+    /// W385 — distinct helper name (not `evaluatePolicy`) so we don't
+    /// collide with the iOS 16+ stock async overload of the same
+    /// signature on LAContext. The completion-handler form is the
+    /// stable cross-version primitive; we always wrap it ourselves so
+    /// behavior is predictable.
+    fileprivate static func runEvaluatePolicy(
+        ctx: LAContext,
+        policy: LAPolicy,
+        reason: String
     ) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            self.evaluatePolicy(policy, localizedReason: localizedReason) { success, err in
+            ctx.evaluatePolicy(policy, localizedReason: reason) { success, err in
                 if success {
                     cont.resume()
                 } else if let err = err {

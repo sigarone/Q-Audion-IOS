@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.362", date: "2026-05-02",
+              title: "🛠 Fix build: BiometricKeyVaultGate evaluatePolicy ambiguity (W385)",
+              bullets: [
+                "Codemagic flag: 'ambiguous use of evaluatePolicy(_:localizedReason:)' iOS 16+",
+                "Mio extension async wrapper collideva con stock async overload Apple",
+                "Fix: rinominato a runEvaluatePolicy come static helper su BiometricKeyVaultGate",
+                "Niente più ambiguity — completion-handler primitive è sempre il cross-version path",
+                "Sblocca build W378-W384 in coda CI"
+              ]),
         .init(id: "v1.0.361", date: "2026-05-02",
               title: "🔗 SAS-ready → WebRTC controller forwarding (W384)",
               bullets: [
