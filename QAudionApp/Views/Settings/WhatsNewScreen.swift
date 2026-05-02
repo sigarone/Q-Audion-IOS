@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.282", date: "2026-05-02",
+              title: "Wire admin banner CTA URL (W293)",
+              bullets: [
+                "ChatListScreen admin banner: era TODO no-op, ora apre URL",
+                "Esteso AdminBannerData con `ctaURL: URL?` opzionale",
+                "Tap del CTA → UIApplication.shared.open(url) se URL presente",
+                "Wired un altro TODO(engine) dall'audit (TODO_AUDIT.md §2.2)"
+              ]),
         .init(id: "v1.0.281", date: "2026-05-02",
               title: "Settings top-bar Menu — wired engine TODO (W292)",
               bullets: [

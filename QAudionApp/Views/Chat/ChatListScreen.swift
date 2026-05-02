@@ -378,9 +378,16 @@ struct ChatListScreen: View {
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .lineLimit(3)
                 if let cta = data.ctaLabel {
-                    Button(cta) { /* TODO: wire to admin URL/action */ }
-                        .font(type.labelLarge.font)
-                        .foregroundStyle(scheme.primary)
+                    // W293: wire the CTA button to the optional URL.
+                    // Pre-bind the URL into a local outside the Button
+                    // closure to keep type-checker scope clean per
+                    // CLAUDE.md §13. nil URL → no-op.
+                    let url: URL? = data.ctaURL
+                    Button(cta) {
+                        Self.openAdminCtaURL(url)
+                    }
+                    .font(type.labelLarge.font)
+                    .foregroundStyle(scheme.primary)
                 }
             }
             Spacer()
@@ -776,6 +783,16 @@ struct ChatListScreen: View {
             .accessibilityLabel("Nuova chat")
         }
     }
+
+    /// W293: open the admin banner's CTA URL (if any). Static helper
+    /// kept on the struct so the call site closure body is a single
+    /// statement — type-checker safe per CLAUDE.md §13.
+    fileprivate static func openAdminCtaURL(_ url: URL?) {
+        #if canImport(UIKit)
+        guard let target = url else { return }
+        UIApplication.shared.open(target)
+        #endif
+    }
 }
 
 // MARK: - AdminBannerData
@@ -785,6 +802,18 @@ struct AdminBannerData: Equatable {
     let title: String
     let message: String
     let ctaLabel: String?
+    /// W293: optional URL for the CTA button. nil → tapping the CTA
+    /// is a no-op (some banners are purely informational and the
+    /// CTA is rendered just for visual emphasis). Otherwise opens
+    /// in the system browser via `UIApplication.shared.open`.
+    let ctaURL: URL?
+
+    init(title: String, message: String, ctaLabel: String? = nil, ctaURL: URL? = nil) {
+        self.title = title
+        self.message = message
+        self.ctaLabel = ctaLabel
+        self.ctaURL = ctaURL
+    }
 }
 
 // MARK: - Preview
