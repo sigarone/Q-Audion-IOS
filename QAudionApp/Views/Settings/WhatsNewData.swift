@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.352", date: "2026-05-02",
+              title: "🔑 CallSessionKeyBroker — surface real PQC key for SAS (W375)",
+              bullets: [
+                "Nuovo @MainActor broker: pipe ML-KEM-1024 session key → AppState.callPqcSessionKey",
+                "registerPqcSessionKey(secret, for:peerId): re-seed + post sasReadyNotification",
+                "Auto-invalidate W368 SasVerificationStore se nuovo fingerprint differente",
+                "deriveSessionKey helper: HKDF-SHA256 su ML-KEM || X25519 || enclave (parità Android)",
+                "Bind chiamato da AppState; PQC handshake path call-side può ora pubblicare key real",
+                "W369 PSK transitional resta come fallback se handshake non completa"
+              ]),
         .init(id: "v1.0.351", date: "2026-05-02",
               title: "🔄 v2 (0xE2) inbound compat decoder (W374)",
               bullets: [
