@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.294", date: "2026-05-02",
+              title: "Idiom row in About → PIATTAFORMA (W305)",
+              bullets: [
+                "About → PIATTAFORMA: nuova riga 'Idiom'",
+                "Distingue iPhone / iPad / Mac (Catalyst) / TV / CarPlay",
+                "QA può capire al volo se un layout bug è phone o pad",
+                "Default fallback per .vision (iOS 17+) e cases futuri"
+              ]),
         .init(id: "v1.0.293", date: "2026-05-02",
               title: "OtaUpdate: 'Ultimo controllo N minuti fa' (W304)",
               bullets: [

@@ -83,6 +83,11 @@ struct AboutSettingsScreen: View {
                         // running on without leaving the app.
                         kvRow("Dispositivo", Self.deviceModelLabel(), mono: false)
                         kvRow("iOS in uso", Self.iosVersionLabel(), mono: true)
+                        // W305: device idiom (phone / pad / mac via
+                        // Catalyst). Useful when QA reports a layout
+                        // bug — was it on iPhone or iPad? Idiom tells
+                        // you immediately.
+                        kvRow("Idiom", Self.idiomLabel(), mono: false)
                     }
                     // W264: live system telemetry. Useful for testers
                     // chasing performance regressions or thermal
@@ -439,6 +444,26 @@ struct AboutSettingsScreen: View {
     private static func deviceModelLabel() -> String {
         #if canImport(UIKit)
         return UIDevice.current.model
+        #else
+        return "?"
+        #endif
+    }
+
+    /// W305: friendly label for UIUserInterfaceIdiom. Following the
+    /// W289 pattern, use a regular `default` instead of @unknown
+    /// default — Xcode 26.4 strict mode treats that as exhaustive
+    /// even when the SDK adds new cases (.vision in iOS 17+).
+    private static func idiomLabel() -> String {
+        #if canImport(UIKit)
+        switch UIDevice.current.userInterfaceIdiom {
+        case .phone:        return "iPhone"
+        case .pad:          return "iPad"
+        case .mac:          return "Mac (Catalyst)"
+        case .tv:           return "Apple TV"
+        case .carPlay:      return "CarPlay"
+        case .unspecified:  return "?"
+        default:            return "Altro"
+        }
         #else
         return "?"
         #endif
