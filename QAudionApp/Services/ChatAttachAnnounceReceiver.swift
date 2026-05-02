@@ -1,0 +1,159 @@
+import Foundation
+import CryptoKit
+import QAudionEngine
+
+/// W356 — receiver-side counterpart of [ChatAttachAnnounceSender].
+///
+/// Given a parsed [AttachAnnounceEnvelope] (from the inbound chat
+/// plaintext) plus the (sender, recipient) pair, this service:
+///
+///   1. Mints the same deterministic chain key the sender used.
+///   2. Downloads the ciphertext from `/api/v1/files/{file_id}` via
+///      the existing storage API.
+///   3. Calls AttachmentEncryption.decryptAttachment which:
+///        - re-derives (key, nonce) from chainKey + attachmentId + senderUuid
+///        - opens the XChaCha20-Poly1305 sealed box with the canonical
+///          CBOR AAD (anti-tamper: any tampered byte invalidates the tag)
+///        - verifies SHA-256(plaintext) matches the announced digest
+///   4. Writes the recovered plaintext to a temp file and returns the
+///      URL so the caller (UI bubble) can play the voice note.
+///
+/// **Cross-platform contract:** the chain key derivation, AEAD opening,
+/// and SHA-256 verification all match the sender's path exactly so an
+/// Android-produced attach_announce envelope decodes here without any
+/// coordination beyond knowing the (sender, recipient) pair.
+@MainActor
+final class ChatAttachAnnounceReceiver {
+
+    enum ReceiveError: Error, LocalizedError {
+        case notAuthenticated
+        case downloadFailed(String)
+        case decodeFailed(String)
+        case writeFailed(String)
+        case invalidId
+
+        var errorDescription: String? {
+            switch self {
+            case .notAuthenticated:    return "Non autenticato"
+            case .downloadFailed(let m): return "Download fallito: \(m)"
+            case .decodeFailed(let m): return "Decodifica fallita: \(m)"
+            case .writeFailed(let m):  return "Scrittura fallita: \(m)"
+            case .invalidId:           return "ID allegato non valido"
+            }
+        }
+    }
+
+    private let appState: AppState
+
+    init(appState: AppState) {
+        self.appState = appState
+    }
+
+    /// Download + decrypt + write to temp file. Returns the temp URL.
+    func downloadAndDecrypt(
+        envelope: AttachAnnounceEnvelope,
+        senderId: String
+    ) async throws -> URL {
+        guard let token = appState.authService.loadToken(), !token.isEmpty,
+              let recipientId = appState.currentUserId, !recipientId.isEmpty else {
+            throw ReceiveError.notAuthenticated
+        }
+        guard let attachmentId = Data(base64Encoded: envelope.att.id),
+              attachmentId.count == 16 else {
+            throw ReceiveError.invalidId
+        }
+        guard let expectedSha = Data(base64Encoded: envelope.att.sha256B64),
+              expectedSha.count == 32 else {
+            throw ReceiveError.decodeFailed("sha256_b64 not 32 bytes")
+        }
+
+        // 1. Download ciphertext.
+        let backendConfig = BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
+        let provider = BCryptoBackendProvider(config: backendConfig)
+        let ciphertext: Data
+        do {
+            ciphertext = try await provider.storageApi.downloadFile(fileId: envelope.att.fileId)
+        } catch {
+            throw ReceiveError.downloadFailed(error.localizedDescription)
+        }
+
+        // 2. Build meta + chain key (same derivation as sender).
+        let senderUuidBytes = Self.uuidBytes(from: senderId) ?? Data(repeating: 0, count: 16)
+        let meta: AttachmentEncryption.Meta
+        do {
+            meta = try AttachmentEncryption.Meta(
+                attachmentId: attachmentId,
+                senderUuid: senderUuidBytes,
+                mime: envelope.att.mime,
+                byteLength: Int(envelope.att.byteLength)
+            )
+        } catch {
+            throw ReceiveError.decodeFailed(String(describing: error))
+        }
+        let chainKey = Self.deterministicChainKey(senderId: senderId, recipientUserId: recipientId)
+
+        // 3. Decrypt + verify SHA-256.
+        let plaintext: Data
+        do {
+            plaintext = try AttachmentEncryption.decryptAttachment(
+                messageChainKey: chainKey,
+                ciphertext: ciphertext,
+                meta: meta,
+                expectedSha256Plain: expectedSha
+            )
+        } catch {
+            throw ReceiveError.decodeFailed(String(describing: error))
+        }
+
+        // 4. Write to temp.
+        let tempDir = FileManager.default.temporaryDirectory
+        let ext = Self.fileExtension(forMime: envelope.att.mime)
+        let url = tempDir.appendingPathComponent("attach-\(envelope.att.id.prefix(16))\(ext)")
+        do {
+            try plaintext.write(to: url, options: [.atomic])
+        } catch {
+            throw ReceiveError.writeFailed(error.localizedDescription)
+        }
+        return url
+    }
+
+    // MARK: - Helpers
+
+    private static func deterministicChainKey(senderId: String, recipientUserId: String) -> Data {
+        let pair = [senderId, recipientUserId].sorted().joined(separator: ":")
+        let info = Data("attach-chain-v1:\(pair)".utf8)
+        let ikm = Data(SHA256.hash(data: Data("qaudion-attach-ikm:\(pair)".utf8)))
+        let derived = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: Data("qaudion-attach-salt-v1".utf8),
+            info: info,
+            outputByteCount: 32
+        )
+        return derived.withUnsafeBytes { Data($0) }
+    }
+
+    private static func uuidBytes(from str: String) -> Data? {
+        guard let u = UUID(uuidString: str) else { return nil }
+        var bytes = Data(count: 16)
+        bytes.withUnsafeMutableBytes { ptr in
+            guard let base = ptr.baseAddress else { return }
+            withUnsafeBytes(of: u.uuid) { src in
+                memcpy(base, src.baseAddress!, 16)
+            }
+        }
+        return bytes
+    }
+
+    private static func fileExtension(forMime mime: String) -> String {
+        switch mime.lowercased() {
+        case "audio/opus":     return ".opus"
+        case "audio/m4a", "audio/x-m4a", "audio/mp4": return ".m4a"
+        case "audio/wav":      return ".wav"
+        case "image/jpeg":     return ".jpg"
+        case "image/png":      return ".png"
+        case "video/mp4":      return ".mp4"
+        case "application/pdf":return ".pdf"
+        default:               return ".bin"
+        }
+    }
+}

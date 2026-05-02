@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.335", date: "2026-05-02",
+              title: "📥 Voice notes attach_announce receiver (W356)",
+              bullets: [
+                "Nuovo ChatAttachAnnounceReceiver: download + decrypt cross-platform",
+                "Pipeline: parse envelope → download ciphertext → AttachmentEncryption.decrypt → SHA-256 verify → temp file URL",
+                "Stessa derivazione chain key del sender (W355): HKDF-SHA256 over PSK",
+                "MIME → file extension mapping (audio/opus, m4a, wav, jpg, png, mp4, pdf)",
+                "Opens Android-produced + Desktop-produced attach_announce envelope senza coordinazione",
+                "Audit PARITY: voice notes ricezione cross-platform → ENGINE COMPLETO bidirezionale",
+                "Wiring nel ChatVoiceNoteReceiver = follow-up UI (questo è il puro engine path)"
+              ]),
         .init(id: "v1.0.334", date: "2026-05-02",
               title: "📎 Voice notes attach_announce sender (W355)",
               bullets: [
