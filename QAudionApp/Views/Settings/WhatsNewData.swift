@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.343", date: "2026-05-02",
+              title: "🎙 AppState.ensureGroupCallController + audio pipeline (W366)",
+              bullets: [
+                "Lazy-init shared GroupCallController backed da BCryptoGroupCallManager",
+                "AudioCapture + AudioPlayback bound automaticamente via attachAudioPipeline",
+                "Reused cross-call (singleton per-AppState) — no leak audio session",
+                "Pronto per il bind nel GroupCallView / GroupCallScreen UI",
+                "Audit PARITY group voice call: engine + WS + audio + persistence TUTTI wired"
+              ]),
         .init(id: "v1.0.342", date: "2026-05-02",
               title: "🤝 Per-peer v3 capability negotiation (W365)",
               bullets: [
