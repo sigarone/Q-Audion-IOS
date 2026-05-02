@@ -83,15 +83,16 @@ public final class VideoCallPipeline: NSObject {
     private var captureInput: AVCaptureDeviceInput?
 
     // The engine pieces below are internally thread-safe (their own
-    // NSLocks + VideoToolbox session locking). Marking them
-    // `nonisolated(unsafe)` lets the AVCapture queue (encoder.encode),
-    // the VT decoder thread (decoder.onPixelBuffer), and the WS
-    // transport thread (acceptInboundFragment) drive them without a
-    // MainActor hop on every frame.
-    private nonisolated(unsafe) let encoder = HevcEncoder()
-    private nonisolated(unsafe) let decoder = HevcDecoder()
-    private nonisolated(unsafe) let outboundFragmenter = VideoFrameFragmenter()
-    private nonisolated(unsafe) let inboundFragmenter = VideoFrameFragmenter()
+    // NSLocks + VideoToolbox session locking). Each declares
+    // `@unchecked Sendable` upstream, so a `let` here is implicitly
+    // safe to read from any isolation context — Swift 6 / Xcode 26.4
+    // strict mode flags `nonisolated(unsafe)` on Sendable lets as
+    // unnecessary (and the build promotes that diagnostic to an
+    // error). W401: dropped the annotation.
+    private let encoder = HevcEncoder()
+    private let decoder = HevcDecoder()
+    private let outboundFragmenter = VideoFrameFragmenter()
+    private let inboundFragmenter = VideoFrameFragmenter()
 
     #if canImport(WebRTC)
     /// W394 — current PQC sealer for the video transport. AppState

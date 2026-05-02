@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.374", date: "2026-05-02",
+              title: "🛠 Fix build: 'nonisolated(unsafe)' redundant su Sendable lets (W401)",
+              bullets: [
+                "Codemagic Step 7 IPA build per v1.0.373 fallito su 4 warning Xcode 26.4 promossi a errore",
+                "VideoCallPipeline: encoder/decoder/outboundFragmenter/inboundFragmenter sono `let` di tipi @unchecked Sendable (HevcEncoder, HevcDecoder, VideoFrameFragmenter)",
+                "Swift 6 strict mode considera `nonisolated(unsafe)` ridondante su let Sendable e flagga la diagnostic",
+                "Fix: rimossa l'annotazione, tenuto il commento esplicativo del perché può essere acceduto da nonisolated context",
+                "I `var` `nonisolated(unsafe)` (pqcEncryptor/Decryptor optional, callback typealiases, target Int) restano — la diagnostic è specifica per 'constant with Sendable type'"
+              ]),
         .init(id: "v1.0.373", date: "2026-05-02",
               title: "🪟 UI minori chiuse: invite sheet + create-group reale (W400)",
               bullets: [
