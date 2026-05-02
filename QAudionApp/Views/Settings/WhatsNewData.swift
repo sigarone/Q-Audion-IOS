@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.375", date: "2026-05-02",
+              title: "🛠 Fix build: surfaceContainer + Sendable closure (W402)",
+              bullets: [
+                "Codemagic Step 7 IPA per v1.0.374 fallito su 1 errore + 3 warning concurrency",
+                "GroupInviteSheet: scheme.surfaceContainer non esiste su QAudionColorScheme (mio errore di assumption — design-system ha solo Material 3 base + Variant)",
+                "Fix: surfaceContainer.opacity(0.6/0.8) → surfaceVariant.opacity(...) (token che esiste davvero)",
+                "AppState.wireSasReadyToController: NotificationCenter closure su queue:.main accede webRtcController/videoPipeline (@MainActor) — strict mode ne richiede hop esplicito",
+                "Fix: corpo della closure spostato dentro Task { @MainActor [weak self] in ... }",
+                "Build dovrebbe ora compilare clean"
+              ]),
         .init(id: "v1.0.374", date: "2026-05-02",
               title: "🛠 Fix build: 'nonisolated(unsafe)' redundant su Sendable lets (W401)",
               bullets: [

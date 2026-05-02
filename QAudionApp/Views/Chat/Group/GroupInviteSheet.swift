@@ -83,7 +83,7 @@ struct GroupInviteSheet: View {
                 .padding(14)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(scheme.surfaceContainer.opacity(0.6))
+                        .fill(scheme.surfaceVariant.opacity(0.6))
                 )
 
                 Text("Accettando, riceverai i messaggi del gruppo e potrai inviare. Il tuo numero di telefono e l'identificativo verranno mostrati agli altri membri.")
@@ -109,7 +109,7 @@ struct GroupInviteSheet: View {
                         .frame(maxWidth: .infinity, minHeight: 48)
                         .background(
                             RoundedRectangle(cornerRadius: 12)
-                                .fill(scheme.surfaceContainer.opacity(0.8))
+                                .fill(scheme.surfaceVariant.opacity(0.8))
                         )
                 }
 

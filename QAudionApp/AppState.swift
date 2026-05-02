@@ -2218,21 +2218,27 @@ extension AppState {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self,
-                  let key = self.callPqcSessionKey else { return }
-            #if canImport(WebRTC)
-            if let ctrl = self.webRtcController as? QAudionWebRtcCallController {
-                ctrl.pqcSessionKey = key
-                print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes)")
-            }
-            #endif
-            // W394: rotate the video pipeline's sealer with the new
-            // ML-KEM secret. From this moment forward, every outbound
-            // fragment is sealed under the post-handshake key and
-            // every inbound fragment is opened with it.
-            if let pipeline = self.videoPipeline {
-                pipeline.rotatePqcSealer(key)
-                print("[AppState] video pipeline PQC sealer rotated (\(key.count) bytes)")
+            // W402: AppState is @MainActor, so accessing webRtcController /
+            // videoPipeline / rotatePqcSealer from this NotificationCenter
+            // closure (delivered on .main queue but not declared @MainActor)
+            // requires an explicit MainActor hop under Swift 6 strict mode.
+            Task { @MainActor [weak self] in
+                guard let self = self,
+                      let key = self.callPqcSessionKey else { return }
+                #if canImport(WebRTC)
+                if let ctrl = self.webRtcController as? QAudionWebRtcCallController {
+                    ctrl.pqcSessionKey = key
+                    print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes)")
+                }
+                #endif
+                // W394: rotate the video pipeline's sealer with the new
+                // ML-KEM secret. From this moment forward, every outbound
+                // fragment is sealed under the post-handshake key and
+                // every inbound fragment is opened with it.
+                if let pipeline = self.videoPipeline {
+                    pipeline.rotatePqcSealer(key)
+                    print("[AppState] video pipeline PQC sealer rotated (\(key.count) bytes)")
+                }
             }
         }
     }
