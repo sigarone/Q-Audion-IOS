@@ -12,6 +12,20 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.327", date: "2026-05-02",
+              title: "🔌 Wire WebRTC into AppState call lifecycle (W348)",
+              bullets: [
+                "AppState.webRtcController: Any? — bridge per-call al QAudionWebRtcCallController",
+                "Handler call_offer / call_answer / call_ice ora routed al WebRTC bridge",
+                "startCall lancia anche outgoing WebRTC offer (parallelo al PQC path durante rollover)",
+                "endCall() chiama controller.hangup() e resetta webRtcController",
+                "#if canImport(WebRTC) gates: build su host senza framework rimane funzionante (no-op stubs)",
+                "Inbound call_offer: spawn controller + acceptIncomingCall + sendCallAnswer auto",
+                "Inbound call_answer: setRemoteAnswer sul controller esistente",
+                "Inbound call_ice: handleRemoteIce passa candidate al peer connection",
+                "Local ICE candidates flow out via CallingApi.sendIceCandidate via delegate",
+                "Voice/video call REAL su iOS↔Android ora possibile via WebRTC stack standard"
+              ]),
         .init(id: "v1.0.326", date: "2026-05-02",
               title: "🌐 WebRTC SPM dependency + 1:1 call controller (W347)",
               bullets: [

@@ -146,6 +146,13 @@ final class AppState: ObservableObject {
     /// `SasConstants.infoWords = "sas-words-v1"`. Drift here would
     /// silently diverge the two-peer ceremony.
     @Published var callPqcSessionKey: Data?
+    /// W347: WebRTC bridge for the active call. Lives only for the
+    /// duration of one call; reset to nil on `endCall()`. Typed as
+    /// `Any?` because the QAudionWebRtcCallController class is gated
+    /// on `canImport(WebRTC)` — using Any here lets the AppState
+    /// header compile even on hosts where the WebRTC XCFramework
+    /// hasn't been resolved yet.
+    var webRtcController: Any?
     @Published var rekeyCount: Int = 0
     @Published var encryptionAlgo: String = "ML-KEM-1024 + AES-256-GCM"
     @Published var transportType: String = "P2P Direct"
@@ -795,16 +802,35 @@ final class AppState: ObservableObject {
             }
         }
 
-        // W333: at-least-don't-drop handlers for call_answer / call_ice.
-        // iOS today runs the SDP-less PQC path, so these envelopes are
-        // intentionally not consumed for media. But before this fix
-        // they were SILENTLY dropped at the dispatcher with no log.
-        // Now we log them so they surface in diag.
-        ws.registerHandler(type: "call_answer") { _, data in
-            print("[AppState] received call_answer (SDP path not used on iOS) keys=\(data.keys)")
+        // W347: route call_offer / call_answer / call_ice through the
+        // WebRTC bridge if it's been spun up by the call lifecycle.
+        // The bridge is opt-in per call (AppState.webRtcController) so
+        // builds without the WebRTC framework available still compile.
+        ws.registerHandler(type: "call_offer") { [weak self] _, data in
+            guard let self = self,
+                  let sdp = data["sdp"] as? String,
+                  let callerId = (data["sender_id"] as? String) ?? (data["caller_id"] as? String) else {
+                print("[AppState] call_offer: missing sdp/caller_id")
+                return
+            }
+            self.handleIncomingWebRtcOffer(callerId: callerId, sdp: sdp)
         }
-        ws.registerHandler(type: "call_ice") { _, data in
-            print("[AppState] received call_ice (SDP path not used on iOS) keys=\(data.keys)")
+        ws.registerHandler(type: "call_answer") { [weak self] _, data in
+            guard let self = self else { return }
+            if let sdp = data["sdp"] as? String {
+                self.handleIncomingWebRtcAnswer(sdp: sdp)
+            } else {
+                print("[AppState] call_answer: no sdp field")
+            }
+        }
+        ws.registerHandler(type: "call_ice") { [weak self] _, data in
+            guard let self = self else { return }
+            let candidate = (data["candidate"] as? String) ?? ""
+            let sdpMid = data["sdp_mid"] as? String
+            let mlineIndex = (data["sdp_mline_index"] as? Int).map { Int32($0) } ?? 0
+            self.handleIncomingWebRtcIce(candidate: candidate,
+                                            sdpMid: sdpMid,
+                                            sdpMLineIndex: mlineIndex)
         }
 
         // W328 (CRITICAL): handle msg_pending_sync — the server pushes
@@ -1538,6 +1564,35 @@ final class AppState: ObservableObject {
             }
 
             callState = .active
+            // W347: also kick off a WebRTC outgoing call. This rides in
+            // PARALLEL with the legacy SDP-less PQC path during the
+            // rollover — the peer that supports WebRTC will pick the
+            // first valid offer it sees. Best-effort: if WebRTC isn't
+            // available (test target etc.), the legacy path keeps the
+            // call up.
+            #if canImport(WebRTC)
+            if let provider = liveProvider {
+                let controller = QAudionWebRtcCallController(
+                    callingApi: provider.callingApi,
+                    relayProvider: nil  // TODO: thread RelayCredentialsProvider
+                )
+                webRtcController = controller
+                Task { [weak self] in
+                    do {
+                        try await controller.startOutgoingCall(
+                            recipientId: contactId,
+                            audioOnly: !video
+                        )
+                        print("[AppState] WebRTC outgoing offer sent to \(contactId)")
+                    } catch {
+                        print("[AppState] WebRTC startOutgoingCall failed: \(error)")
+                        await MainActor.run {
+                            self?.webRtcController = nil
+                        }
+                    }
+                }
+            }
+            #endif
             // Track in recent calls
             if !recentCalls.contains(contactId) {
                 recentCalls.insert(contactId, at: 0)
@@ -1564,6 +1619,15 @@ final class AppState: ObservableObject {
         // would otherwise let one call's verified SAS appear on the
         // next, unverified call.
         callPqcSessionKey = nil
+        // W347: tear down the WebRTC bridge for this call. The
+        // controller's own deinit / hangup() closes the underlying
+        // RTCPeerConnection.
+        #if canImport(WebRTC)
+        if let ctrl = webRtcController as? QAudionWebRtcCallController {
+            Task { await ctrl.hangup() }
+        }
+        #endif
+        webRtcController = nil
         txWaveformSamples = []
         rxWaveformSamples = []
         cipherWaveformSamples = []
@@ -1705,3 +1769,67 @@ final class AppState: ObservableObject {
         return result
     }
 }
+
+// MARK: - W347: WebRTC bridge
+
+#if canImport(WebRTC)
+extension AppState {
+    /// W347: handle inbound `call_offer` SDP via the WebRTC bridge. Spins
+    /// up a fresh QAudionWebRtcCallController for this call, applies the
+    /// remote offer, and ships the answer through the existing
+    /// `CallingApi.sendCallAnswer` envelope.
+    func handleIncomingWebRtcOffer(callerId: String, sdp: String) {
+        guard let provider = liveProvider else { return }
+        // Spawn a controller bound to the live CallingApi + relay provider.
+        let controller = QAudionWebRtcCallController(
+            callingApi: provider.callingApi,
+            relayProvider: nil  // TODO: wire RelayCredentialsProvider once injected at startup
+        )
+        webRtcController = controller
+        Task {
+            do {
+                try await controller.acceptIncomingCall(callerId: callerId,
+                                                         offerSdp: sdp,
+                                                         audioOnly: !isVideoCall)
+                print("[AppState] WebRTC: accepted incoming call from \(callerId)")
+            } catch {
+                print("[AppState] WebRTC acceptIncomingCall failed: \(error)")
+            }
+        }
+    }
+
+    func handleIncomingWebRtcAnswer(sdp: String) {
+        guard let controller = webRtcController as? QAudionWebRtcCallController else {
+            print("[AppState] WebRTC: ignoring call_answer (no active controller)")
+            return
+        }
+        Task {
+            do {
+                try await controller.handleRemoteAnswer(sdp: sdp)
+                print("[AppState] WebRTC: applied remote answer SDP (\(sdp.count) chars)")
+            } catch {
+                print("[AppState] WebRTC handleRemoteAnswer failed: \(error)")
+            }
+        }
+    }
+
+    func handleIncomingWebRtcIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
+        guard let controller = webRtcController as? QAudionWebRtcCallController else { return }
+        controller.handleRemoteIce(candidate: candidate,
+                                     sdpMid: sdpMid,
+                                     sdpMLineIndex: sdpMLineIndex)
+    }
+}
+#else
+extension AppState {
+    /// WebRTC framework not available in this target — no-op stubs so the
+    /// AppState handlers keep their call sites intact.
+    func handleIncomingWebRtcOffer(callerId: String, sdp: String) {
+        print("[AppState] WebRTC: call_offer received but WebRTC framework not linked")
+    }
+    func handleIncomingWebRtcAnswer(sdp: String) {
+        print("[AppState] WebRTC: call_answer received but WebRTC framework not linked")
+    }
+    func handleIncomingWebRtcIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {}
+}
+#endif
