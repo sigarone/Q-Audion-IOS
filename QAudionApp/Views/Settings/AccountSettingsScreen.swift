@@ -232,12 +232,14 @@ struct AccountSettingsScreen: View {
 
                     SettingsSectionHeader("IDENTITÀ")
                     VStack(spacing: 8) {
-                        kvRow(label: "User ID",
-                              value: container.viewModel.userId,
-                              mono: true)
-                        kvRow(label: "Phone Hash",
-                              value: phoneHashShort,
-                              mono: true)
+                        // W307: User ID + Phone Hash become tap-to-copy.
+                        // These are the two values most often pasted in
+                        // bug reports / cross-device verification, but
+                        // they used to be select-and-hold to copy.
+                        tapCopyRow(label: "User ID",
+                                   value: container.viewModel.userId)
+                        tapCopyRow(label: "Phone Hash",
+                                   value: phoneHashShort)
                         if let ext = container.viewModel.dialExtension {
                             kvRow(label: "Interno",
                                   value: ext,
@@ -368,6 +370,41 @@ struct AccountSettingsScreen: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(scheme.surfaceVariant.opacity(0.4))
         )
+    }
+
+    /// W307: kvRow variant with tap-to-copy. Mirror of the
+    /// AboutSettingsScreen pattern (W297). Tapping copies `value` to
+    /// UIPasteboard + fires HapticFeedback.messageSent. Trailing
+    /// clipboard icon telegraphs the gesture.
+    private func tapCopyRow(label: String, value: String) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Text(value)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Image(systemName: "doc.on.clipboard")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            #if canImport(UIKit)
+            UIPasteboard.general.string = value
+            HapticFeedback.messageSent()
+            #endif
+        }
     }
 
     private func textField(label: String,

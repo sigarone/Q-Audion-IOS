@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.296", date: "2026-05-02",
+              title: "Account: User ID + Phone Hash tap-to-copy (W307)",
+              bullets: [
+                "Account → IDENTITÀ: 'User ID' e 'Phone Hash' tap-to-copy",
+                "Sister di W297/W298 (About) — stesso pattern",
+                "Clipboard icon + haptic feedback alla copia",
+                "I valori più richiesti in bug-report cross-device"
+              ]),
         .init(id: "v1.0.295", date: "2026-05-02",
               title: "Backup: 'Backup stimato' size preview (W306)",
               bullets: [
