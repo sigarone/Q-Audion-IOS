@@ -133,8 +133,11 @@ final class ChatAttachAnnounceReceiver {
     }
 
     private static func uuidBytes(from str: String) -> Data? {
-        guard var u = UUID(uuidString: str) else { return nil }
-        return withUnsafeBytes(of: &u.uuid) { Data($0) }
+        // W388: `UUID.uuid` is a get-only computed property; copy the tuple
+        // into a mutable local before passing as inout.
+        guard let u = UUID(uuidString: str) else { return nil }
+        var tuple = u.uuid
+        return withUnsafeBytes(of: &tuple) { Data($0) }
     }
 
     private static func fileExtension(forMime mime: String) -> String {

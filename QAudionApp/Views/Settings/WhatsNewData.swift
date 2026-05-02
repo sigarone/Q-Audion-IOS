@@ -12,6 +12,18 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.365", date: "2026-05-02",
+              title: "🛠 Fix build: UUID inout + Sendable closure (W388)",
+              bullets: [
+                "Codemagic flag #1: 'cannot pass immutable value as inout argument: uuid is a get-only property'",
+                "UUID.uuid è computed (returns tuple by value), non può essere &inout direttamente",
+                "Fix: copia tuple in var locale prima di withUnsafeBytes(of: &tuple)",
+                "Applicato a ChatAttachAnnounceSender (uuidV4Bytes + uuidBytes) e Receiver (uuidBytes)",
+                "Codemagic flag #2: 'main actor-isolated property liveProvider can not be referenced from a Sendable closure'",
+                "wireGroupChatFanOut: NotificationCenter closure (queue:.main) non è MainActor isolated per Swift 6",
+                "Fix: accesso a self.liveProvider spostato dentro Task { @MainActor in ... }",
+                "Sblocca finalmente pipeline W378-W387 in coda CI"
+              ]),
         .init(id: "v1.0.364", date: "2026-05-02",
               title: "🛠 Fix build: CallSessionKeyBroker public + UUID warnings (W387)",
               bullets: [

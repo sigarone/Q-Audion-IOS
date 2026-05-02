@@ -1996,13 +1996,16 @@ extension AppState {
             object: nil,
             queue: .main
         ) { [weak self] note in
-            guard let self = self,
-                  let recipient = note.userInfo?["recipient"] as? String,
-                  let wire = note.userInfo?["wire"] as? Data,
-                  let provider = self.liveProvider else {
+            guard let recipient = note.userInfo?["recipient"] as? String,
+                  let wire = note.userInfo?["wire"] as? Data else {
                 return
             }
-            Task {
+            // W388: `liveProvider` is main-actor-isolated; resolve it
+            // inside a `@MainActor` Task so Swift 6 strict concurrency
+            // doesn't complain about cross-actor capture in the
+            // (otherwise main-queue) NotificationCenter closure.
+            Task { @MainActor [weak self] in
+                guard let provider = self?.liveProvider else { return }
                 do {
                     try await provider.callingApi.sendOpaqueMessage(
                         recipientId: recipient, data: wire)

@@ -160,19 +160,20 @@ final class ChatAttachAnnounceSender {
     }
 
     private static func uuidV4Bytes() -> Data {
-        var u = UUID()
-        // W387: capture the result of `withUnsafeBytes` so Swift 6
-        // strict mode doesn't warn about an unused return value.
-        // Use a mutable inout to satisfy the `withUnsafeBytes(of:&...)`
-        // overload that returns a Data slice directly.
-        return withUnsafeBytes(of: &u.uuid) { Data($0) }
+        // W388: `UUID.uuid` is a get-only computed property, so we cannot
+        // pass it as `inout` to `withUnsafeBytes(of:&...)`. Copy the tuple
+        // into a mutable local first.
+        let u = UUID()
+        var tuple = u.uuid
+        return withUnsafeBytes(of: &tuple) { Data($0) }
     }
 
     /// Try to parse a UUIDv4 string into raw 16-byte form. Returns nil
     /// if the input is not a valid UUID (e.g. "self" placeholder, custom
     /// userId scheme without hyphens).
     private static func uuidBytes(from str: String) -> Data? {
-        guard var u = UUID(uuidString: str) else { return nil }
-        return withUnsafeBytes(of: &u.uuid) { Data($0) }
+        guard let u = UUID(uuidString: str) else { return nil }
+        var tuple = u.uuid
+        return withUnsafeBytes(of: &tuple) { Data($0) }
     }
 }
