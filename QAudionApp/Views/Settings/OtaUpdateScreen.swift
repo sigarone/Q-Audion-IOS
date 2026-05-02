@@ -89,10 +89,20 @@ final class OtaUpdateContainer: ObservableObject {
     /// decidere di tap "Installa" → apertura App Store via downloadUrl.
     /// Engine wiring per la verifica Ed25519 + catalog multi-release
     /// resta deferred.
+    /// W304: timestamp of last successful check — surfaced in the UI
+    /// so QA can see when the catalog was last queried.
+    @Published private(set) var lastCheckedAt: Date? = nil
+
     func check(appState: AppState) async {
         checking = true
         error = nil
-        defer { checking = false }
+        defer {
+            checking = false
+            // Stamp on every check, even if it ends in error — what
+            // matters for QA is 'when did we last try' not 'when did
+            // we last succeed'.
+            lastCheckedAt = Date()
+        }
 
         let checker = AppUpdateChecker(appState: appState)
         await checker.checkForUpdates()
@@ -214,6 +224,16 @@ struct OtaUpdateScreen: View {
                         errorBanner(err)
                     }
                     actionButtons.padding(.top, 4)
+                    // W304: 'Ultimo controllo N minuti fa' — surfaces
+                    // when the catalog was last queried. Renders only
+                    // if at least one check has been performed in this
+                    // session.
+                    if let last = container.lastCheckedAt {
+                        Text(Self.lastCheckedLabel(last))
+                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .padding(.top, 8)
+                    }
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
@@ -603,6 +623,16 @@ struct OtaUpdateScreen: View {
         f.locale = Locale(identifier: "it_IT")
         f.dateFormat = "d MMM"
         return f.string(from: date)
+    }
+
+    /// W304: 'Ultimo controllo N minuti fa' relative label. Static so
+    /// the call-site stays trivial — CLAUDE.md §13.
+    private static func lastCheckedLabel(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.unitsStyle = .full
+        let rel: String = f.localizedString(for: date, relativeTo: Date())
+        return "Ultimo controllo " + rel
     }
 }
 

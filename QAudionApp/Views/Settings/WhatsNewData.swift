@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.293", date: "2026-05-02",
+              title: "OtaUpdate: 'Ultimo controllo N minuti fa' (W304)",
+              bullets: [
+                "Aggiornamento OTA: timestamp 'Ultimo controllo N minuti fa'",
+                "Stamped a ogni check() (anche errori)",
+                "Sister di W295 / W303 — pattern relativo it_IT",
+                "Stub UI polish — TODO_AUDIT.md §3 progress"
+              ]),
         .init(id: "v1.0.292", date: "2026-05-02",
               title: "DeviceManagement: 'Aggiornato N minuti fa' (W303)",
               bullets: [
