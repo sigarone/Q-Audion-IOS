@@ -133,15 +133,8 @@ final class ChatAttachAnnounceReceiver {
     }
 
     private static func uuidBytes(from str: String) -> Data? {
-        guard let u = UUID(uuidString: str) else { return nil }
-        var bytes = Data(count: 16)
-        bytes.withUnsafeMutableBytes { ptr in
-            guard let base = ptr.baseAddress else { return }
-            withUnsafeBytes(of: u.uuid) { src in
-                memcpy(base, src.baseAddress!, 16)
-            }
-        }
-        return bytes
+        guard var u = UUID(uuidString: str) else { return nil }
+        return withUnsafeBytes(of: &u.uuid) { Data($0) }
     }
 
     private static func fileExtension(forMime mime: String) -> String {

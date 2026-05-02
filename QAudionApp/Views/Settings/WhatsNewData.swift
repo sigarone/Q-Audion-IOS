@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.364", date: "2026-05-02",
+              title: "🛠 Fix build: CallSessionKeyBroker public + UUID warnings (W387)",
+              bullets: [
+                "Codemagic flag: 'method cannot be declared public because parameter uses internal type AppState'",
+                "Fix: bind(to:) ora internal (AppState è internal-only nel target QAudionApp)",
+                "Plus 3 warnings withUnsafeBytes 'unused result' su uuidBytes helpers",
+                "Fix: usato withUnsafeBytes(of: &u.uuid) { Data($0) } che cattura il return value",
+                "Codice più pulito: una riga al posto di withUnsafeMutableBytes + memcpy nested",
+                "Sblocca pipeline W378-W386 in coda CI"
+              ]),
         .init(id: "v1.0.363", date: "2026-05-02",
               title: "🛠 Fix build: stub PqcFrameEncryptor (no RTCFrameEncryptor in binary) (W386)",
               bullets: [

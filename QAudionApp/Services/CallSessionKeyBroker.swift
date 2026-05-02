@@ -36,7 +36,10 @@ public final class CallSessionKeyBroker {
 
     public init() {}
 
-    public func bind(to appState: AppState) {
+    /// W387: AppState is `internal` to QAudionApp, so this method must
+    /// also be `internal` (Swift access-control rule: public method
+    /// can't take an internal parameter type).
+    func bind(to appState: AppState) {
         self.appState = appState
     }
 
