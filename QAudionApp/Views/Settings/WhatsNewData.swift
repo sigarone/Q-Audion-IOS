@@ -12,6 +12,18 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.348", date: "2026-05-02",
+              title: "👥 GroupChatService — top-level group-chat bridge (W371)",
+              bullets: [
+                "Nuovo GroupChatService singleton (per-AppState)",
+                "Lazy GroupSession (W345) per group + KeychainGroupSessionVault (W364)",
+                "encrypt(plaintext, groupId, members, selfId) → wire 0xE4 envelope",
+                "decrypt(wire, senderId, groupId, members, selfId) → plaintext",
+                "Bootstrap seed deterministic SHA-256(groupId || 'qaudion-group-chat-v1')",
+                "Tutti i membri agree su CK_0 senza extra signaling — cross-platform compatible",
+                "Pronto per il bind in GroupChatScreen.handleSend (replace il local-only append)",
+                "Audit closure: 'group text chat ROTTO' → ENGINE FULLY WIRED, UI hookup follow-up trivial"
+              ]),
         .init(id: "v1.0.347", date: "2026-05-02",
               title: "📋 PARITY_AUDIT_HONEST.md final scoreboard (W370)",
               bullets: [
