@@ -226,6 +226,43 @@ struct NotificationsSettingsScreen: View {
                     }
                     .buttonStyle(.plain)
 
+                    // W299: haptic pattern showcase. Fires each of the
+                    // 6 HapticFeedback patterns in sequence with a
+                    // 0.5s gap so the tester can feel them individually.
+                    // Useful for confirming each pattern actually maps
+                    // to a different Taptic Engine feel — 'message
+                    // sent' and 'reaction toggle' should be subtly
+                    // different but easy to mix up if mis-wired.
+                    Button {
+                        playHapticShowcase()
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "waveform.path")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(.orange)
+                                .frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Showcase aptico (6 pattern)")
+                                    .qaudionStyle(type.bodyMedium)
+                                    .foregroundStyle(scheme.onSurface)
+                                Text("Sent · Start · Stop · Reaction · Destructive · Failure")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            Spacer()
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 52)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(scheme.surfaceVariant.opacity(0.4))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
                     Button {
                         scheduleTestNotification()
                     } label: {
@@ -383,6 +420,26 @@ struct NotificationsSettingsScreen: View {
         // wants a fresh number after sending a test notification.
         .onAppear {
             refreshNotificationCounts()
+        }
+    }
+
+    /// W299: fire all 6 HapticFeedback patterns in sequence with a
+    /// 0.5s gap so the tester can distinguish them individually.
+    /// Sequential async sleep — keeps closure body trivial per
+    /// CLAUDE.md §13.
+    private func playHapticShowcase() {
+        Task {
+            HapticFeedback.messageSent()
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            HapticFeedback.recordingStart()
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            HapticFeedback.recordingStop()
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            HapticFeedback.reactionToggle()
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            HapticFeedback.destructiveAction()
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            HapticFeedback.sendFailure()
         }
     }
 

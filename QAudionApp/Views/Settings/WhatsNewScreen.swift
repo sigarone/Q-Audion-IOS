@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.288", date: "2026-05-02",
+              title: "Showcase aptico 6 pattern in DIAGNOSTICA (W299)",
+              bullets: [
+                "Notifiche → DIAGNOSTICA: 'Showcase aptico'",
+                "Fa scattare i 6 pattern HapticFeedback in sequenza",
+                "Sent · Start · Stop · Reaction · Destructive · Failure",
+                "Tester può distinguere ogni pattern singolarmente (gap 0.5s)"
+              ]),
         .init(id: "v1.0.287", date: "2026-05-02",
               title: "Estendi tap-to-copy a Bundle name/id + vendor ID (W298)",
               bullets: [
