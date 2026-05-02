@@ -101,17 +101,34 @@ final class ChatMessageSendService {
             return .failed(reason: .cryptoFailure)
         }
 
-        // Encrypt with the Desktop-compatible wire format. AAD binds the
-        // ciphertext to the (sender, recipient, msgId) triplet.
+        // W352: outbound v3 ratchet routing. Default OFF until peers have
+        // had time to update past v1.0.330 (which added the inbound v3
+        // routing). Enable by setting UserDefaults
+        // `ChatRatchetV3.enabled` = true. Once enabled, every outbound
+        // chat message rides the v3.1 wire format (magic 0xE3, canonical
+        // CBOR AAD, forward-secrecy chain) instead of the legacy v1
+        // MessageCrypto path. Inbound v3 already lands via W351 since
+        // last release.
+        let useV3 = UserDefaults.standard.bool(forKey: "ChatRatchetV3.enabled")
         let wireBlob: Data
         do {
-            wireBlob = try crypto.encrypt(
-                plaintext: plaintextData,
-                psk: psk,
-                senderId: senderId,
-                recipientId: peerUserId,
-                msgId: messageId.uuidString
-            )
+            if useV3 {
+                wireBlob = try Self.ratchetEncryptV3(
+                    plaintext: plaintextData,
+                    psk: psk,
+                    senderId: senderId,
+                    peerId: peerUserId,
+                    msgId: messageId.uuidString
+                )
+            } else {
+                wireBlob = try crypto.encrypt(
+                    plaintext: plaintextData,
+                    psk: psk,
+                    senderId: senderId,
+                    recipientId: peerUserId,
+                    msgId: messageId.uuidString
+                )
+            }
         } catch {
             print("[ChatSend] encrypt failed: \(error.localizedDescription)")
             return .failed(reason: .cryptoFailure)
@@ -170,5 +187,36 @@ final class ChatMessageSendService {
         let pair = [peerUserId, senderId].sorted().joined(separator: ":")
         let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
         return Data(digest)
+    }
+
+    // MARK: - W352: v3 outbound ratchet
+
+    /// Ratchet engine + vault are static so a peer's send chain
+    /// advances correctly across multiple sends within a session.
+    /// Mirrors the static held by AppState's inbound path so both
+    /// directions share state when running in the same process.
+    private static let ratchetVault: InMemoryRatchetVault = InMemoryRatchetVault()
+    private static let ratchet: MessageRatchet = MessageRatchet(vault: ratchetVault)
+
+    /// Encrypt a plaintext for the v3.1 wire (magic 0xE3, canonical
+    /// CBOR AAD, forward-secrecy chain). Bootstraps the per-peer
+    /// session from `psk` if no snapshot is in the vault yet.
+    private static func ratchetEncryptV3(
+        plaintext: Data,
+        psk: Data,
+        senderId: String,
+        peerId: String,
+        msgId: String
+    ) throws -> Data {
+        let session = try ratchet.ensureSession(
+            epochId: "v1",          // single epoch until we wire negotiation
+            selfId: senderId,
+            peerId: peerId,
+            pskRoot: psk
+        )
+        let aad = MessageRatchet.buildMessageAD(
+            senderId: senderId, recipientId: peerId, clientMsgId: msgId)
+        return try ratchet.encrypt(
+            session: session, plaintext: plaintext, aad: aad, clientMsgId: msgId)
     }
 }

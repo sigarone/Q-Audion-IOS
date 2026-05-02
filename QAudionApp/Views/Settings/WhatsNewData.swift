@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.331", date: "2026-05-02",
+              title: "🔐 v3 ratchet outbound encrypt — chat cross-platform completo (W352)",
+              bullets: [
+                "ChatMessageSendService route v3 outbound se UserDefaults['ChatRatchetV3.enabled'] = true",
+                "ratchetEncryptV3: ensureSession (PSK come pskRoot) + canonical CBOR AAD",
+                "Static MessageRatchet + InMemoryRatchetVault condivisi (parità con inbound side W351)",
+                "Default OFF per safety: peers vecchi devono prima updatarsi a W351 inbound",
+                "Una volta toggle ON: chat 1:1 v3.1 cross-platform full (forward secrecy intra-epoch)",
+                "Chiusura completa audit '1:1 chat ROTTO' — engine + inbound + outbound TUTTI WIRED"
+              ]),
         .init(id: "v1.0.330", date: "2026-05-02",
               title: "🔐 v3 ratchet routing inbound — decrypt cross-platform (W351)",
               bullets: [
