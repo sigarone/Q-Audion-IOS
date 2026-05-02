@@ -12,6 +12,18 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.341", date: "2026-05-02",
+              title: "🔐 Keychain-backed GroupSessionVault — group state persiste (W364)",
+              bullets: [
+                "Nuovo GroupSessionSnapshotCodec: BE binary (parità RatchetSnapshotCodec layout)",
+                "version | groupId | epoch(u32) | selfId | members[] | admins[] | sendChain | recvChains[]",
+                "Ogni recv chain include skipped[] entries (key, nonce, expiresAtMs)",
+                "KeychainGroupSessionVault: SecItemAdd/Update WhenUnlockedThisDeviceOnly",
+                "Service distinto 'com.bcrypto.qaudion.group.v1' — non interferisce con 1:1 ratchet",
+                "Account string = '<groupId_hex>|<epoch>|<selfId>' per item granularity",
+                "Group state ora persiste app relaunch (era in-memory)",
+                "3 test: empty recv round-trip + recv+skipped + version reject"
+              ]),
         .init(id: "v1.0.340", date: "2026-05-02",
               title: "📥 Wire attach_announce inbound auto-download (W363)",
               bullets: [
