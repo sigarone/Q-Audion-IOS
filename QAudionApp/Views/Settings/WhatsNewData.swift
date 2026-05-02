@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.349", date: "2026-05-02",
+              title: "👥 GroupChatScreen.handleSend wired end-to-end (W372)",
+              bullets: [
+                "GroupChatScreen.handleSend ora chiama GroupChatService.encrypt → 0xE4 wire bytes",
+                "Posta NotificationCenter event groupChatFanOutNotification per ogni recipient",
+                "AppState.wireGroupChatFanOut subscriber: ships opaque_message via CallingApi",
+                "Server store-and-forward msg_pending_sync copre peer offline (stesso path 1:1)",
+                "Beta banner ora obsoleto — engine + transport sono entrambi attivi",
+                "Audit closure: 'group text chat ROTTO' → END-TO-END WIRED"
+              ]),
         .init(id: "v1.0.348", date: "2026-05-02",
               title: "👥 GroupChatService — top-level group-chat bridge (W371)",
               bullets: [

@@ -150,6 +150,9 @@ final class AppState: ObservableObject {
     /// Lazy-init via `ensureGroupCallController(_:)` — one controller
     /// per AppState, reused across calls.
     var groupCallController: GroupCallController?
+    /// W372: NotificationCenter observer guard — only register the
+    /// group-chat fan-out listener once per AppState lifetime.
+    private var groupFanOutWired: Bool = false
     /// W348: shared TURN credentials cache. Lazy-initialised the first
     /// time a WebRTC call needs ICE servers, then reused across calls
     /// (the RelayCredentialsProvider actor coalesces concurrent
@@ -485,6 +488,15 @@ final class AppState: ObservableObject {
             if s == .connecting || s == .connected || s == .authenticated {
                 return
             }
+        }
+        // W372: subscribe (idempotent — NotificationCenter accepts
+        // duplicate observers of the same selector but our use case
+        // sends one fan-out per send, which keeps the closure list
+        // bounded). Use a guard flag so we only register once per
+        // AppState lifetime.
+        if !groupFanOutWired {
+            wireGroupChatFanOut()
+            groupFanOutWired = true
         }
         let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
         let provider = BCryptoBackendProvider(config: config)
@@ -1419,6 +1431,10 @@ final class AppState: ObservableObject {
     /// subscribes in `attach(appState:)` and unsubscribes on dealloc.
     static let chatRefreshNotification = Notification.Name("qaudion.chat.refresh")
     static let chatTypingNotification = Notification.Name("qaudion.chat.typing")
+    /// W372: fan-out request from GroupChatScreen.handleSend.
+    /// userInfo = ["groupId": String, "recipient": String, "wire": Data]
+    /// AppState observes this and ships an opaque_message per recipient.
+    static let groupChatFanOutNotification = Notification.Name("qaudion.group.fanout")
 
     /// W77: dispatch inbound `opaque_message` envelopes. The QUAD frame
     /// inside the payload carries either:
@@ -1910,6 +1926,38 @@ final class AppState: ObservableObject {
             result[i] = peak
         }
         return result
+    }
+}
+
+// MARK: - W372: group chat fan-out
+
+extension AppState {
+    /// Subscribe once at AppState init to the group fan-out
+    /// notification. Each emission ships a single opaque_message to
+    /// the named recipient with the encrypted wire bytes as payload.
+    /// Server-side store-and-forward via msg_pending_sync covers
+    /// offline peers — same path 1:1 chat already uses.
+    func wireGroupChatFanOut() {
+        NotificationCenter.default.addObserver(
+            forName: AppState.groupChatFanOutNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self = self,
+                  let recipient = note.userInfo?["recipient"] as? String,
+                  let wire = note.userInfo?["wire"] as? Data,
+                  let provider = self.liveProvider else {
+                return
+            }
+            Task {
+                do {
+                    try await provider.callingApi.sendOpaqueMessage(
+                        recipientId: recipient, data: wire)
+                } catch {
+                    print("[AppState] groupChat fan-out to \(recipient) failed: \(error)")
+                }
+            }
+        }
     }
 }
 

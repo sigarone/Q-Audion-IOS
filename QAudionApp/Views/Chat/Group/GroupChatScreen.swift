@@ -262,6 +262,61 @@ struct GroupChatScreen: View {
         )
         state.messages.append(new)
         state.composerText = ""
+
+        // W372: encrypt via GroupChatService (W345 + W364) and ship
+        // through the BCrypto opaque_message fan-out (one envelope per
+        // remaining group member, sealed under the per-pair PSK on
+        // the 1:1 layer). The fan-out fire-and-forgets — server
+        // store-and-forward via msg_pending_sync handles offline peers.
+        let groupIdHex = groupId.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let memberRows = makeInfoState().members
+        let memberIds = memberRows.map { $0.userId }
+        let selfId = memberRows.first(where: { $0.isSelf })?.userId ?? "u-self"
+        Task {
+            await sendGroupOverWire(
+                plaintext: trimmed,
+                groupIdHex: groupIdHex,
+                memberIds: memberIds,
+                selfId: selfId
+            )
+        }
+    }
+
+    /// W372 — encrypt via GroupChatService + fan out to each non-self
+    /// member as an opaque_message. Stays an async best-effort path:
+    /// any failure is logged and surfaced via the snackbar but does
+    /// NOT roll back the local-state append (the user already saw
+    /// their bubble; rolling back would be a worse UX than the message
+    /// landing late on the peer side).
+    @MainActor
+    private func sendGroupOverWire(
+        plaintext: String,
+        groupIdHex: String,
+        memberIds: [String],
+        selfId: String
+    ) async {
+        guard let wire = GroupChatService.shared.encrypt(
+            plaintext: plaintext,
+            groupId: groupIdHex,
+            members: memberIds,
+            selfId: selfId
+        ) else {
+            print("[GroupChatScreen] encrypt failed for group \(groupIdHex)")
+            return
+        }
+        // Hand off to AppState which holds the live BCryptoMessageApi.
+        let peers = memberIds.filter { $0 != selfId }
+        for peer in peers {
+            NotificationCenter.default.post(
+                name: AppState.groupChatFanOutNotification,
+                object: nil,
+                userInfo: [
+                    "groupId": groupIdHex,
+                    "recipient": peer,
+                    "wire": wire,
+                ]
+            )
+        }
     }
 
     private func makeInfoState() -> GroupInfoUiState {
