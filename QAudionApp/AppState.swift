@@ -500,6 +500,10 @@ final class AppState: ObservableObject {
             // handshake completion path can re-seed callPqcSessionKey
             // from the real ML-KEM shared secret once it's available.
             CallSessionKeyBroker.shared.bind(to: self)
+            // W383: forward broker notifications to the WebRTC
+            // controller so the PQC SRTP sealer (W376/W382) gets
+            // installed automatically when the handshake key arrives.
+            wireSasReadyToController()
             groupFanOutWired = true
         }
         let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
@@ -1948,6 +1952,33 @@ final class AppState: ObservableObject {
             result[i] = peak
         }
         return result
+    }
+}
+
+// MARK: - W384: SAS-ready → WebRTC sealer install observer
+
+extension AppState {
+    /// Subscribes to CallSessionKeyBroker.sasReadyNotification (W375)
+    /// and forwards the freshly-derived ML-KEM session key into the
+    /// QAudionWebRtcCallController.pqcSessionKey (W383). The
+    /// controller's didSet then installs PqcFrameEncryptor +
+    /// Decryptor on every RTP sender/receiver of the active peer
+    /// connection, lighting up the PQC SRTP layer mid-call.
+    func wireSasReadyToController() {
+        NotificationCenter.default.addObserver(
+            forName: CallSessionKeyBroker.sasReadyNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self,
+                  let key = self.callPqcSessionKey else { return }
+            #if canImport(WebRTC)
+            if let ctrl = self.webRtcController as? QAudionWebRtcCallController {
+                ctrl.pqcSessionKey = key
+                print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes)")
+            }
+            #endif
+        }
     }
 }
 

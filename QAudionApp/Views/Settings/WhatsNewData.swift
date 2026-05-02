@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.361", date: "2026-05-02",
+              title: "🔗 SAS-ready → WebRTC controller forwarding (W384)",
+              bullets: [
+                "AppState.wireSasReadyToController(): subscribe a CallSessionKeyBroker.sasReadyNotification",
+                "Forwarda key real (ML-KEM) → QAudionWebRtcCallController.pqcSessionKey (W383)",
+                "Trigger automatico installPqcSealer su senders+receivers attivi",
+                "End-to-end W375→W383→W384: PQC SRTP layer attivato post-handshake senza intervento manuale",
+                "#if canImport(WebRTC) gate: build senza framework rimane funzionante"
+              ]),
         .init(id: "v1.0.360", date: "2026-05-02",
               title: "🔄 Auto-install PQC sealer on call setup (W383)",
               bullets: [
