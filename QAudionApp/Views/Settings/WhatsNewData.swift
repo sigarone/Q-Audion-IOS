@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.358", date: "2026-05-02",
+              title: "📋 PeerCapability snapshot list in Settings (W381)",
+              bullets: [
+                "PeerCapabilityRegistry.allCapabilities(): snapshot ordinato per peerId",
+                "CrossPlatformBetaScreen render lista live: peer + flag (V3 verde / unknown grigio)",
+                "Empty state quando nessun peer osservato",
+                "Visualizza tester: quali peer sono già passati a v3 senza flip globale"
+              ]),
         .init(id: "v1.0.357", date: "2026-05-02",
               title: "🧪 CrossPlatformKatTests — consolidated regression gate (W380)",
               bullets: [

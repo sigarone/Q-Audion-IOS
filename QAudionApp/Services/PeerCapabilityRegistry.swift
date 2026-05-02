@@ -87,6 +87,16 @@ public final class PeerCapabilityRegistry: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// W381: snapshot of the current per-peer state. Used by the
+    /// Cross-Platform Beta settings screen to render the list of
+    /// observed peers + their flag.
+    public func allCapabilities() -> [(peerId: String, capability: Capability)] {
+        lock.lock(); defer { lock.unlock() }
+        return cache
+            .map { ($0.key, $0.value) }
+            .sorted { $0.0 < $1.0 }
+    }
+
     /// Whether to use v3 outbound for this peer. Combines the legacy
     /// global flag (`ChatRatchetV3.enabled`, off by default) with the
     /// per-peer observation. The global flag stays as a kill-switch

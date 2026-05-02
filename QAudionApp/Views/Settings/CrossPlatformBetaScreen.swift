@@ -99,13 +99,29 @@ struct CrossPlatformBetaScreen: View {
     }
 
     private var peerCapsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let snapshot = PeerCapabilityRegistry.shared.allCapabilities()
+        return VStack(alignment: .leading, spacing: 12) {
             Text("Capability per peer")
                 .qaudionStyle(type.titleSmall)
                 .foregroundStyle(scheme.onSurface)
             Text("Per ogni contatto, il flag v3-capable viene osservato e persiste. Reset → re-discovery automatica al prossimo messaggio inbound.")
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
+
+            // W381: live snapshot of observed peers.
+            if snapshot.isEmpty {
+                Text("Nessun peer ancora osservato. La discovery parte al primo messaggio inbound.")
+                    .qaudionStyle(type.labelSmall)
+                    .italic()
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(snapshot, id: \.peerId) { entry in
+                        peerRow(peerId: entry.peerId, cap: entry.capability)
+                    }
+                }
+            }
+
             Button {
                 resetPeerCapsConfirm = true
             } label: {
@@ -125,6 +141,24 @@ struct CrossPlatformBetaScreen: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12).fill(scheme.surface.opacity(0.6)))
+    }
+
+    private func peerRow(peerId: String, cap: PeerCapabilityRegistry.Capability) -> some View {
+        let truncated: String = peerId.count > 20
+            ? String(peerId.prefix(20)) + "…"
+            : peerId
+        let badgeColor = cap == .v3 ? extras.success : scheme.onSurfaceVariant
+        return HStack {
+            Text(truncated)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurface)
+                .lineLimit(1)
+            Spacer()
+            Text(cap.rawValue.uppercased())
+                .qaudionStyle(type.labelSmall)
+                .monospacedDigit()
+                .foregroundStyle(badgeColor)
+        }
     }
 
     private var diagnosticCard: some View {
