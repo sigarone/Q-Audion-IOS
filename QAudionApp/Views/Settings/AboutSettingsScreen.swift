@@ -106,6 +106,13 @@ struct AboutSettingsScreen: View {
                         // Useful when QA reports number formatting or
                         // pluralization quirks.
                         kvRow("Lingua sistema", Self.systemLocaleLabel(), mono: true)
+                        // W300: region identifier separated from locale.
+                        // Locale 'it_IT' splits into language=it + region=IT.
+                        // Region drives default currency, calendar week
+                        // start, etc. Useful when an Italian-speaking
+                        // user has their region set to a non-Italy place
+                        // (e.g. 'it_CH' — Italian in Switzerland).
+                        kvRow("Regione", Self.regionLabel(), mono: true)
                         // W272: total physical memory of the device
                         // (not the app's quota). Gives context to the
                         // 'Memoria processo' row above — 84MB out of
@@ -491,6 +498,19 @@ struct AboutSettingsScreen: View {
     /// keep type-checker scope clean.
     private static func systemLocaleLabel() -> String {
         return Locale.current.identifier
+    }
+
+    /// W300: region identifier (e.g. "IT", "CH", "US"). Falls back to
+    /// the locale's regionCode if the iOS 16+ `Locale.Region` API
+    /// surfaces nil. Static helper, no closures.
+    private static func regionLabel() -> String {
+        if #available(iOS 16.0, *) {
+            if let region = Locale.current.region {
+                return region.identifier
+            }
+        }
+        // Fallback for completeness — pre-iOS 16 / unset region.
+        return Locale.current.regionCode ?? "?"
     }
 
     /// W272: total physical memory in GB, formatted like "6,00 GB" via

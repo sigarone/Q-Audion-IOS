@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.289", date: "2026-05-02",
+              title: "Riga 'Regione' in About → STATO SISTEMA (W300)",
+              bullets: [
+                "About → STATO SISTEMA: 'Regione' (es. 'IT', 'CH', 'US')",
+                "Distinta dalla 'Lingua sistema' (W269)",
+                "Locale.current.region.identifier con fallback iOS 15-",
+                "Utile per debug 'it_CH' — italiano + regione Svizzera"
+              ]),
         .init(id: "v1.0.288", date: "2026-05-02",
               title: "Showcase aptico 6 pattern in DIAGNOSTICA (W299)",
               bullets: [
