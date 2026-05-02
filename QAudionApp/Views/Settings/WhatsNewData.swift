@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.300", date: "2026-05-02",
+              title: "🎉 v1.0.300 milestone — STATISTICHE section in About (W311)",
+              bullets: [
+                "300ª release! About guadagna una sezione 'STATISTICHE'",
+                "Conta release nel changelog (≥300 entries)",
+                "Giorni dall'installazione (da W158 'Membro da')",
+                "Build distinte launciate (da W162 buildSeen stamps)",
+                "Reads cheap, recomputed on render"
+              ]),
         .init(id: "v1.0.299", date: "2026-05-02",
               title: "WhatsNew: 'Esporta come testo' share button (W310)",
               bullets: [

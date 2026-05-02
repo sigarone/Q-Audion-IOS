@@ -180,6 +180,21 @@ struct AboutSettingsScreen: View {
                         // prefix (lets QA include it in bug reports).
                         tapCopyRow("ID dispositivo (vendor)", Self.vendorIdLabel())
                     }
+                    // W311: STATISTICHE section celebrating v1.0.300
+                    // milestone. Surfaces meta-data about the app's
+                    // release cadence + the user's relationship with
+                    // it. Cheap reads — just dictionary lookups.
+                    section("STATISTICHE") {
+                        kvRow("Release nel changelog",
+                              Self.changelogReleaseCountLabel(),
+                              mono: true)
+                        kvRow("Giorni dall'installazione",
+                              Self.daysSinceFirstSeenLabel(),
+                              mono: true)
+                        kvRow("Build identificativo",
+                              Self.totalKnownBuildsLabel(),
+                              mono: true)
+                    }
                     section("SICUREZZA") {
                         statusRow("ML-KEM-1024 (PQC)",
                                   enabled: container.viewModel.mlKem1024Enabled)
@@ -435,6 +450,41 @@ struct AboutSettingsScreen: View {
     /// ever changed.
     private static func bundleIdentifier() -> String {
         return Bundle.main.bundleIdentifier ?? "?"
+    }
+
+    /// W311: count of release entries in the in-app changelog. Reads
+    /// from ReleaseNote.releaseNotes.count — the data file (W302).
+    private static func changelogReleaseCountLabel() -> String {
+        return String(ReleaseNote.releaseNotes.count) + " entries"
+    }
+
+    /// W311: days since first launch on this device. Reuses the
+    /// same first-seen stamp as W158 'Membro da'. Static helper
+    /// that recomputes on each render (cheap — UserDefaults read +
+    /// arithmetic).
+    private static func daysSinceFirstSeenLabel() -> String {
+        let key = "qaudion.firstSeen"
+        let store = UserDefaults.standard
+        let firstSeen: Date = (store.object(forKey: key) as? Date) ?? Date()
+        let elapsed: TimeInterval = Date().timeIntervalSince(firstSeen)
+        let days: Int = Int(elapsed / 86400.0)
+        if days == 0 { return "Oggi" }
+        if days == 1 { return "1 giorno" }
+        return String(days) + " giorni"
+    }
+
+    /// W311: count of distinct build numbers that have been launched
+    /// on this device. Walks UserDefaults for the qaudion.buildSeen.
+    /// prefix — each build gets its own stamp via W162.
+    private static func totalKnownBuildsLabel() -> String {
+        let prefix = "qaudion.buildSeen."
+        let store = UserDefaults.standard
+        let allKeys = store.dictionaryRepresentation().keys
+        var n = 0
+        for k in allKeys where k.hasPrefix(prefix) { n += 1 }
+        if n == 0 { return "—" }
+        if n == 1 { return "1 build" }
+        return String(n) + " build"
     }
 
     /// W170: device model label for the PIATTAFORMA row.
