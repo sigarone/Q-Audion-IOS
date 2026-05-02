@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.334", date: "2026-05-02",
+              title: "📎 Voice notes attach_announce sender (W355)",
+              bullets: [
+                "Nuovo ChatAttachAnnounceSender: pipeline cross-platform completa",
+                "1. Mint UUIDv4 attachment id 16-byte",
+                "2. AttachmentEncryption.encrypt (W346 XChaCha20-Poly1305 + canonical CBOR AAD)",
+                "3. Upload ciphertext via BCryptoStorageApi /api/v1/files/upload",
+                "4. Build attach_announce envelope JSON {qa_ctl:1, t:..., att:{...}, ts}",
+                "Caller passa il JSON come testo al ChatMessageSendService → outer encrypt PSK/v3",
+                "Chain key transitional: HKDF-SHA256 deterministico da PSK bound to pair tuple",
+                "Future: chain key arriverà dal MessageRatchet per-message snapshot",
+                "Wire byte-perfect con Android attach_announce + Desktop TS — interop completo"
+              ]),
         .init(id: "v1.0.333", date: "2026-05-02",
               title: "🎙 GroupCallController — N-way audio cross-platform (W354)",
               bullets: [
