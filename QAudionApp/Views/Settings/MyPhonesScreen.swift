@@ -141,11 +141,11 @@ final class MyPhonesContainer: ObservableObject {
             return
         }
 
-        // 4. Compute peppered hashes locally. PepperedPhoneHash usa
-        //    pepper come UTF-8 string; convertiamo qui via raw bytes.
-        let pepperString = String(data: pepperBytes, encoding: .utf8) ?? pepperBytes.base64EncodedString()
+        // 4. Compute peppered hashes locally with the byte form of the
+        //    pepper (W343 — feeding a base64 string into SHA-256
+        //    silently broke server-side matching against Android peers).
         let hashes: [String] = phones.compactMap { e164 in
-            try? PepperedPhoneHash.hash(phone: e164, pepper: pepperString)
+            try? PepperedPhoneHash.hash(phone: e164, pepperBytes: pepperBytes)
         }
 
         // 5. DELETE old set (best-effort).

@@ -43,12 +43,15 @@ final class ContactsRefreshService {
             baseUrl: url,
             bearerTokenProvider: { token }
         )
+        // W343 cross-platform parity: fetchPepper now returns
+        // (pepperBytes, alg). Use the byte form so the SHA-256 input
+        // matches Android byte-for-byte.
         let pepper = try await client.fetchPepper()
         let hashes = phonesToCheck.compactMap { phone -> (input: String, hash: String?) in
-            (phone, try? PepperedPhoneHash.hash(phone: phone, pepper: pepper))
+            (phone, try? PepperedPhoneHash.hash(phone: phone, pepperBytes: pepper.pepperBytes))
         }
         let validHashes = hashes.compactMap { $0.hash }
-        let entries = try await client.discover(hashes: validHashes)
+        let entries = try await client.discover(alg: pepper.alg, hashes: validHashes)
         // Map back to StoredContact (display name comes from local phonebook;
         // the discover-v2 response only confirms userId existence).
         let resolved: [ContactsStore.StoredContact] = entries.compactMap { entry in

@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.322", date: "2026-05-02",
+              title: "📞 Peppered v2 contact discovery — fix interop con Android (W343)",
+              bullets: [
+                "BUG cross-platform: PepperedPhoneHash usava pepper.utf8 invece dei BYTE base64-decodificati",
+                "Fix: nuovo entry point hash(phone:pepperBytes:) con Data — match byte-perfetto Android",
+                "Convenience hash(phone:pepperBase64:) decoda automaticamente la risposta server",
+                "Vecchio hash(phone:pepper:) deprecato (interpretato come base64)",
+                "BCryptoContactsDiscoverV2Client.fetchPepper() ritorna PepperBundle{bytes, alg}",
+                "discover() invia {alg, hashes} matching DiscoverContactsV2Request Android",
+                "NUOVO registerPepperedPhones(): POST /contacts/phones — peers Android ora trovano iOS",
+                "Aggiornati ContactsRefreshService, PhonebookSyncCoordinator, MyPhonesScreen",
+                "Audit PARITY: 'iOS invisibile agli Android su discovery' → CHIUSO"
+              ]),
         .init(id: "v1.0.321", date: "2026-05-02",
               title: "🎥 Video frame fragmenter + VideoConstants (W342)",
               bullets: [

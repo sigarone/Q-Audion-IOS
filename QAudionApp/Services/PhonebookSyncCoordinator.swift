@@ -165,7 +165,10 @@ final class PhonebookSyncCoordinator {
             baseUrl: url,
             bearerTokenProvider: { token }
         )
-        let pepper: String
+        // W343: fetchPepper now returns (bytes, alg). The byte form is
+        // the canonical hash input — feeding the base64 string into
+        // SHA-256 silently broke server-side matching.
+        let pepper: BCryptoContactsDiscoverV2Client.PepperBundle
         do {
             pepper = try await client.fetchPepper()
         } catch {
@@ -176,7 +179,7 @@ final class PhonebookSyncCoordinator {
         var hashToInfo: [String: (phone: String, name: String)] = [:]
         var allHashes: [String] = []
         for entry in normalized {
-            if let hash = try? PepperedPhoneHash.hash(phone: entry.phone, pepper: pepper) {
+            if let hash = try? PepperedPhoneHash.hash(phone: entry.phone, pepperBytes: pepper.pepperBytes) {
                 if hashToInfo[hash] == nil {
                     hashToInfo[hash] = entry
                     allHashes.append(hash)
@@ -187,7 +190,7 @@ final class PhonebookSyncCoordinator {
         // Step 4 — discover-v2.
         let discovered: [BCryptoContactsDiscoverV2Client.DiscoveredEntry]
         do {
-            discovered = try await client.discover(hashes: allHashes)
+            discovered = try await client.discover(alg: pepper.alg, hashes: allHashes)
         } catch {
             throw Error.fetchFailed("Discover-v2 failed: \(error.localizedDescription)")
         }
