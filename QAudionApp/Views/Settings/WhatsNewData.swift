@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.344", date: "2026-05-02",
+              title: "🎚 GroupCallView wires GroupCallController for real audio (W367)",
+              bullets: [
+                "GroupCallViewModel: optional GroupCallController arg",
+                "toggleMute ora chiama controller.setMuted (era solo UI-only)",
+                "endCall via controller.endCallForAll → audio pipeline stop pulito",
+                "Legacy fallback se controller=nil per preview SwiftUI",
+                "Closure: 'group voice call ROTTO — hangup non ha transport' → CHIUSO end-to-end UI"
+              ]),
         .init(id: "v1.0.343", date: "2026-05-02",
               title: "🎙 AppState.ensureGroupCallController + audio pipeline (W366)",
               bullets: [
