@@ -2151,12 +2151,46 @@ extension AppState {
         let provider = BCryptoBackendProvider(config: backendConfig)
         let ws = provider.getWebSocketClient()
 
+        // W392 (deep-fix #4/4): wrap each video fragment in the
+        // engine's PqcRtpFrameSealer so the on-wire transport is PQC-
+        // sealed AES-256-GCM keyed off the W389-surfaced ML-KEM
+        // session key. This is the "non-SRTP path" — it doesn't
+        // require RTCFrameEncryptor (stripped from the WebRTC binary,
+        // see W386). Both peers derive an identical sealer master
+        // key from the same shared secret, so out-of-order or lossy
+        // delivery is handled by AES-GCM's per-frame nonce read off
+        // the wire.
+        //
+        // If the call's PQC key isn't 32 bytes (transitional W369
+        // seed before handshake completes, or test build without
+        // crypto), the sealer is nil and fragments ship in clear —
+        // matches the audio path's current contract.
+        #if canImport(WebRTC)
+        var sealer: PqcRtpFrameSealer? = nil
+        if let key = self.callPqcSessionKey, key.count == 32 {
+            sealer = try? PqcRtpFrameSealer(pqcSessionKey: key)
+        }
+        let encryptor: PqcFrameEncryptor? = sealer.map { PqcFrameEncryptor(sealer: $0) }
+        let decryptor: PqcFrameDecryptor? = sealer.map { PqcFrameDecryptor(sealer: $0) }
+        #endif
+
         // Outbound — each fragment ships as a video_frame WS envelope.
         // The fragment header (W340) embeds frame_id / fragIdx /
         // totalFrags so the peer's defragmenter can reassemble even
         // under packet loss.
         pipeline.onOutboundFragment = { [weak ws] fragment in
-            ws?.sendVideoFrame(recipientId: peerId, frame: fragment)
+            let toShip: Data
+            #if canImport(WebRTC)
+            if let enc = encryptor {
+                let sealed = enc.encryptPlaintext(fragment)
+                toShip = sealed.isEmpty ? fragment : sealed
+            } else {
+                toShip = fragment
+            }
+            #else
+            toShip = fragment
+            #endif
+            ws?.sendVideoFrame(recipientId: peerId, frame: toShip)
         }
 
         // Inbound — register the WS handler. The handler is set per
@@ -2165,7 +2199,18 @@ extension AppState {
             guard let pipeline = pipeline,
                   let b64 = data["frame"] as? String,
                   let raw = Data(base64Encoded: b64) else { return }
-            pipeline.acceptInboundFragment(raw)
+            let unwrapped: Data
+            #if canImport(WebRTC)
+            if let dec = decryptor {
+                let opened = dec.decryptCiphertext(raw)
+                unwrapped = opened.isEmpty ? raw : opened
+            } else {
+                unwrapped = raw
+            }
+            #else
+            unwrapped = raw
+            #endif
+            pipeline.acceptInboundFragment(unwrapped)
         }
 
         do {

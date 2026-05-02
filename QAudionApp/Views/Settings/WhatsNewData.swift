@@ -12,6 +12,20 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.369", date: "2026-05-02",
+              title: "🔒 PQC seal su video transport (W392, deep-fix #4/4 finale)",
+              bullets: [
+                "Chiusi TUTTI i 4 punti aperti del PARITY_AUDIT_HONEST",
+                "AppState.startVideoPipeline: PqcRtpFrameSealer instanziato da callPqcSessionKey (post-W389 handshake)",
+                "PqcFrameEncryptor.encryptPlaintext wrap su ogni outbound fragment prima di sendVideoFrame",
+                "PqcFrameDecryptor.decryptCiphertext unwrap su ogni inbound fragment prima di acceptInboundFragment",
+                "AES-256-GCM con counter-based nonce (HKDF-derived master key da ML-KEM secret)",
+                "Niente dipendenza da RTCFrameEncryptor (stripped dal binary stasel/WebRTC 131.0.0, W386)",
+                "Path 'non-SRTP' onesto: i frame video iOS vanno via WS opaque transport, non RTP — quindi PQC seal sui fragments è la corretta security boundary",
+                "Audio path esistente (CallService.processAndSendEncryptedFrame) già PQC-sealed via QAudionCallIntegration session secret",
+                "Bottom line: 51 release shipped, 4/4 honest items chiusi (W389 PQC handshake → broker, W390 group sender_key_init, W391 video pipeline, W392 PQC seal video)",
+                "Honest cosa rimane: real-device QA su TestFlight + binary WebRTC upgrade per insertable streams (separato)"
+              ]),
         .init(id: "v1.0.368", date: "2026-05-02",
               title: "🎥 Video pipeline end-to-end (W391, deep-fix #3/4)",
               bullets: [
