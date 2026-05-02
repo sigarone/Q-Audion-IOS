@@ -166,6 +166,8 @@ struct VideoCallView: View {
                 label: "Inverti"
             ) {
                 isRearCamera.toggle()
+                // W393: real flip via the pipeline (front ↔ back).
+                appState.videoFlipCamera()
             }
 
             videoButton(
@@ -174,6 +176,9 @@ struct VideoCallView: View {
                 isActive: !isCameraOn
             ) {
                 isCameraOn.toggle()
+                // W393: pause/resume the AVCaptureSession without
+                // tearing down encoder / fragmenter / transport.
+                appState.videoSetCameraEnabled(isCameraOn)
             }
 
             videoButton(

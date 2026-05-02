@@ -93,6 +93,19 @@ public final class VideoCallPipeline: NSObject {
     private nonisolated(unsafe) let outboundFragmenter = VideoFrameFragmenter()
     private nonisolated(unsafe) let inboundFragmenter = VideoFrameFragmenter()
 
+    #if canImport(WebRTC)
+    /// W394 — current PQC sealer for the video transport. AppState
+    /// rotates this when CallSessionKeyBroker fires sasReadyNotification
+    /// (i.e. the W389 ML-KEM secret arrives). The closure captures
+    /// `self` weakly and reads this property on every fragment so
+    /// rekey is observed without rewiring callbacks. Lock-protected
+    /// because rotate() is called from MainActor while seal()/open()
+    /// run from the encoder/transport queues.
+    private nonisolated(unsafe) var pqcEncryptor: PqcFrameEncryptor?
+    private nonisolated(unsafe) var pqcDecryptor: PqcFrameDecryptor?
+    private let sealerLock = NSLock()
+    #endif
+
     private var isRunning: Bool = false
     /// Periodic purge timer for stale incomplete inbound frames.
     private var purgeTimer: DispatchSourceTimer?
@@ -133,20 +146,113 @@ public final class VideoCallPipeline: NSObject {
         isRunning = false
     }
 
+    /// W393: flip front ↔ rear camera mid-call. Reconfigures the
+    /// AVCaptureSession in a single beginConfiguration/commitConfiguration
+    /// transaction so the user only sees a brief freeze, not a full
+    /// teardown. No-op if no other camera is available.
+    public func flipCamera() {
+        let target: AVCaptureDevice.Position = (cameraPosition == .front) ? .back : .front
+        guard AVCaptureDevice.default(
+            .builtInWideAngleCamera, for: .video, position: target) != nil
+        else {
+            print("[VideoCallPipeline] flipCamera: no \(target == .back ? "rear" : "front") camera available")
+            return
+        }
+        cameraPosition = target
+        // Re-run setup. Idempotent: removes existing input, adds the
+        // new one. The encoder + fragmenter state survives.
+        do {
+            try setupSession()
+        } catch {
+            print("[VideoCallPipeline] flipCamera setup failed: \(error)")
+        }
+    }
+
+    /// W393: pause / resume the capture pipeline without tearing it
+    /// down. Encoder + decoder + transport bindings stay live so when
+    /// the user toggles back on, the very next frame from the camera
+    /// reaches the peer with no re-init.
+    public func setCameraEnabled(_ enabled: Bool) {
+        guard isRunning else { return }
+        if enabled {
+            if !captureSession.isRunning {
+                captureSession.startRunning()
+            }
+        } else {
+            if captureSession.isRunning {
+                captureSession.stopRunning()
+            }
+        }
+    }
+
     /// Inbound fragment arrival point for the transport layer to call.
     /// Reentrant-safe; fragmenter has its own lock.
+    /// W394: applies PQC unwrap if a decryptor is currently installed.
     public nonisolated func acceptInboundFragment(_ payload: Data) {
-        // Defragment + decode; both have their own locks.
-        // Note: this is `nonisolated` so the WS / sealed-frame
-        // transport can call it without hopping to MainActor first
-        // (tight TX/RX loop budget).
-        if let frame = inboundFragmenter.defragment(payload) {
+        let unwrapped: Data
+        #if canImport(WebRTC)
+        sealerLock.lock()
+        let dec = pqcDecryptor
+        sealerLock.unlock()
+        if let dec = dec {
+            let opened = dec.decryptCiphertext(payload)
+            unwrapped = opened.isEmpty ? payload : opened
+        } else {
+            unwrapped = payload
+        }
+        #else
+        unwrapped = payload
+        #endif
+        if let frame = inboundFragmenter.defragment(unwrapped) {
             do {
                 try decoder.decode(frame.nalUnit)
             } catch {
                 print("[VideoCallPipeline] inbound decode failed: \(error)")
             }
         }
+    }
+
+    /// W394: PQC seal helper for the outbound path. Caller passes a
+    /// raw fragment; gets back a sealed-or-clear payload depending on
+    /// whether the rekey has installed a sealer.
+    public nonisolated func sealOutboundFragment(_ fragment: Data) -> Data {
+        #if canImport(WebRTC)
+        sealerLock.lock()
+        let enc = pqcEncryptor
+        sealerLock.unlock()
+        if let enc = enc {
+            let sealed = enc.encryptPlaintext(fragment)
+            return sealed.isEmpty ? fragment : sealed
+        }
+        return fragment
+        #else
+        return fragment
+        #endif
+    }
+
+    /// W394: install / rotate the PQC sealer. Called when
+    /// CallSessionKeyBroker fires sasReadyNotification with a fresh
+    /// 32-byte ML-KEM-derived secret. Idempotent — the call site
+    /// can fire it on every notification without checking.
+    public func rotatePqcSealer(_ newKey: Data?) {
+        #if canImport(WebRTC)
+        sealerLock.lock()
+        defer { sealerLock.unlock() }
+        guard let key = newKey, key.count == 32 else {
+            pqcEncryptor = nil
+            pqcDecryptor = nil
+            return
+        }
+        do {
+            let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+            pqcEncryptor = PqcFrameEncryptor(sealer: sealer)
+            pqcDecryptor = PqcFrameDecryptor(sealer: sealer)
+        } catch {
+            print("[VideoCallPipeline] rotatePqcSealer failed: \(error)")
+            pqcEncryptor = nil
+            pqcDecryptor = nil
+        }
+        #endif
     }
 
     // MARK: - AVCaptureSession setup

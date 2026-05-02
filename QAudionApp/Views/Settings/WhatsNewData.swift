@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.370", date: "2026-05-02",
+              title: "🧹 Gap cleanup pass 1: video UX + sealer rekey + group buffer (W393+W394+W395)",
+              bullets: [
+                "W393 (gap #6+#7): camera flip front↔back via VideoCallPipeline.flipCamera (single beginConfiguration, encoder/fragmenter survive)",
+                "W393: cam ON/OFF pause-resume captureSession senza teardown encoder",
+                "W393: permission-denied UX — errorMessage banner localized invece di silent fail",
+                "W393: bridge AppState.videoFlipCamera + videoSetCameraEnabled → wired su VideoCallView buttons",
+                "W394 (gap #8): VideoCallPipeline.rotatePqcSealer per re-key mid-call (sealerLock-protected, sealOutboundFragment + acceptInboundFragment leggono current sealer dinamicamente)",
+                "W394: wireSasReadyToController ora propaga la nuova ML-KEM key anche al video pipeline (W389 broker → controller + pipeline)",
+                "W395 (gap #2): GroupChatService buffer-and-replay per sender_key_init/rotate arrivati prima del bootstrap locale del gruppo",
+                "W395: bounded buffer 32 entries/group (FIFO eviction)",
+                "W395: replay automatico in session(...) quando local user finalmente joina via vault load OR engine.create"
+              ]),
         .init(id: "v1.0.369", date: "2026-05-02",
               title: "🔒 PQC seal su video transport (W392, deep-fix #4/4 finale)",
               bullets: [

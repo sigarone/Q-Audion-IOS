@@ -54,6 +54,21 @@ public final class GroupChatService {
     /// our send chain → no re-init needed).
     private var shippedInits: [String: Set<String>] = [:]
 
+    /// W395 — buffer-and-replay for inbound `sender_key_init` /
+    /// `sender_key_rotate` envelopes that arrive before the local
+    /// user has joined the group (and therefore before
+    /// loadExistingSession returns a state). Keyed by groupId; each
+    /// pending entry remembers the senderId, the envelope JSON, and
+    /// the type ("sender_key_init" / "sender_key_rotate"). When the
+    /// local user later bootstraps the group via session(...), the
+    /// buffered envelopes are replayed in arrival order.
+    private struct BufferedCtl: Equatable {
+        let fromUserId: String
+        let envelopeJson: String
+        let kind: String   // "sender_key_init" | "sender_key_rotate"
+    }
+    private var bufferedInits: [String: [BufferedCtl]] = [:]
+
     public init() {}
 
     public struct PendingSenderKeyInit: Equatable {
@@ -97,6 +112,9 @@ public final class GroupChatService {
         }
         if let existing = Self.vault.load(groupIdBytes: gid, groupEpoch: 1, selfId: selfId) {
             sessions[groupId] = existing
+            // W395 — replay any buffered ctl envelopes that arrived
+            // before this session was bootstrapped.
+            replayBufferedCtl(groupId: groupId, state: existing, selfId: selfId)
             return existing
         }
         // Fresh session — random seed (W390). The matching
@@ -112,10 +130,42 @@ public final class GroupChatService {
                 selfSeed: nil // engine generates 32 bytes via SecureRandom
             )
             sessions[groupId] = state
+            // W395 — replay any inbound ctl envelopes that arrived
+            // before our local bootstrap.
+            replayBufferedCtl(groupId: groupId, state: state, selfId: selfId)
             return state
         } catch {
             print("[GroupChatService] session create failed: \(error)")
             return nil
+        }
+    }
+
+    /// W395 — drain buffered sender_key_{init,rotate} envelopes for
+    /// the freshly-bootstrapped session. Called from session(...)
+    /// after a successful create / vault-load. FIFO order so the
+    /// install/rotate sequence the senders shipped is preserved.
+    private func replayBufferedCtl(groupId: String, state: GroupState, selfId: String) {
+        guard let buffered = bufferedInits.removeValue(forKey: groupId), !buffered.isEmpty else {
+            return
+        }
+        print("[GroupChatService] replaying \(buffered.count) buffered ctl envelopes for group \(groupId)")
+        for entry in buffered {
+            switch entry.kind {
+            case "sender_key_init":
+                if let data = entry.envelopeJson.data(using: .utf8),
+                   let env = try? JSONDecoder().decode(SenderKeyInitEnvelope.self, from: data) {
+                    do { try engine.handleSenderKeyInit(state: state, env: env, fromUserId: entry.fromUserId) }
+                    catch { print("[GroupChatService] replay sender_key_init failed: \(error)") }
+                }
+            case "sender_key_rotate":
+                if let data = entry.envelopeJson.data(using: .utf8),
+                   let env = try? JSONDecoder().decode(SenderKeyRotateEnvelope.self, from: data) {
+                    do { try engine.handleSenderKeyRotate(state: state, env: env, fromUserId: entry.fromUserId) }
+                    catch { print("[GroupChatService] replay sender_key_rotate failed: \(error)") }
+                }
+            default:
+                break
+            }
         }
     }
 
@@ -152,10 +202,13 @@ public final class GroupChatService {
     }
 
     /// Drop the cached state for a group. Used after `handleMemberRemoved`
-    /// + epoch bump so the next message rebuilds.
+    /// + epoch bump so the next message rebuilds. W395: also clears
+    /// the buffered-ctl queue so a stale init from before the epoch
+    /// bump doesn't get replayed against the new chain.
     public func invalidate(groupId: String) {
         sessions.removeValue(forKey: groupId)
         shippedInits.removeValue(forKey: groupId)
+        bufferedInits.removeValue(forKey: groupId)
     }
 
     // MARK: - W390 sender_key_init distribution
@@ -222,12 +275,12 @@ public final class GroupChatService {
             print("[GroupChatService] handleInboundSenderKeyInit: malformed JSON from \(fromUserId)")
             return
         }
-        // Don't bootstrap on inbound init — only install on a session
-        // the local user has already joined. If we receive an init for
-        // an unknown group, we silently drop. The peer can re-ship via
-        // msg_pending_sync once we eventually join.
+        // W395: if no local session yet, BUFFER instead of drop. When
+        // the local user later joins (via session(...) bootstrap), the
+        // engine.handleSenderKeyInit is replayed in arrival order.
         guard let state = loadExistingSession(groupId: env.g, selfId: selfId) else {
-            print("[GroupChatService] handleInboundSenderKeyInit: no session yet for group \(env.g) — dropping (peer must re-ship after we join)")
+            bufferCtl(groupId: env.g, fromUserId: fromUserId,
+                      envelopeJson: envelopeJson, kind: "sender_key_init")
             return
         }
         do {
@@ -252,7 +305,9 @@ public final class GroupChatService {
             return
         }
         guard let state = loadExistingSession(groupId: env.g, selfId: selfId) else {
-            print("[GroupChatService] handleInboundSenderKeyRotate: no session yet for group \(env.g) — dropping")
+            // W395 — same buffering as init.
+            bufferCtl(groupId: env.g, fromUserId: fromUserId,
+                      envelopeJson: envelopeJson, kind: "sender_key_rotate")
             return
         }
         do {
@@ -260,6 +315,20 @@ public final class GroupChatService {
         } catch {
             print("[GroupChatService] handleInboundSenderKeyRotate failed (group=\(env.g), from=\(fromUserId)): \(error)")
         }
+    }
+
+    /// W395 — append a ctl envelope to the buffer for a not-yet-
+    /// bootstrapped group. Bounded at 32 entries per group so a flood
+    /// of inits from a stranger can't OOM the device. Oldest entry
+    /// is dropped on overflow.
+    private func bufferCtl(groupId: String, fromUserId: String, envelopeJson: String, kind: String) {
+        var arr = bufferedInits[groupId] ?? []
+        arr.append(BufferedCtl(fromUserId: fromUserId, envelopeJson: envelopeJson, kind: kind))
+        if arr.count > 32 {
+            arr.removeFirst(arr.count - 32)
+        }
+        bufferedInits[groupId] = arr
+        print("[GroupChatService] buffered \(kind) for group \(groupId) from \(fromUserId) (queue depth = \(arr.count))")
     }
 
     /// Lightweight detector for the 1:1 chat inbound dispatcher.
