@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.299", date: "2026-05-02",
+              title: "WhatsNew: 'Esporta come testo' share button (W310)",
+              bullets: [
+                "'Cosa c'è di nuovo': toolbar share button → export .txt",
+                "Genera plain-text con header '## v1.0.X — date' + bullet list",
+                "Rispetta il filtro 'Solo ultime 5' (esporta solo visibili)",
+                "Sheet con UIActivityViewController (Mail · Messages · Files)",
+                "Utile per condividere release log fuori dall'app"
+              ]),
         .init(id: "v1.0.298", date: "2026-05-02",
               title: "Shared TapCopyRow component (W309)",
               bullets: [

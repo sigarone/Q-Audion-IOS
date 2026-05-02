@@ -34,6 +34,10 @@ struct WhatsNewScreen: View {
     /// the last build they ran.
     @State private var latestOnly: Bool = false
 
+    /// W310: share-sheet item for the export-as-text action. Set to
+    /// non-nil triggers the .sheet to present a UIActivityViewController.
+    @State private var sharingText: ChangelogShareItem? = nil
+
     /// W301: visible entries — full list or just the top 5.
     private var visibleEntries: [ReleaseNote] {
         if latestOnly {
@@ -71,6 +75,45 @@ struct WhatsNewScreen: View {
         }
         .navigationTitle("Cosa c'è di nuovo")
         .navigationBarTitleDisplayMode(.inline)
+        // W310: trailing toolbar button → export the visible entries
+        // as plain text via UIActivityViewController (Mail / Messages /
+        // Files / etc.). Useful for testers who want to paste the
+        // changelog into an external doc without screenshotting.
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    let payload = Self.formatChangelog(visibleEntries)
+                    sharingText = ChangelogShareItem(text: payload)
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .accessibilityLabel("Esporta cambiamenti")
+            }
+        }
+        .sheet(item: $sharingText) { item in
+            ChangelogShareSheet(text: item.text)
+        }
+    }
+
+    /// W310: build a plain-text representation of the changelog.
+    /// Each entry: '## v1.0.X — date' header, blank line, '- bullet'
+    /// list, blank line. Static so the call-site stays trivial per
+    /// CLAUDE.md §13.
+    private static func formatChangelog(_ entries: [ReleaseNote]) -> String {
+        var lines: [String] = []
+        lines.append("Q-Audion iOS — Changelog")
+        lines.append("Source: feature/ios-android-parity")
+        lines.append("")
+        for note in entries {
+            lines.append("## " + note.id + " — " + note.date)
+            lines.append(note.title)
+            lines.append("")
+            for bullet in note.bullets {
+                lines.append("- " + bullet)
+            }
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Intro
@@ -159,4 +202,27 @@ struct WhatsNewScreen: View {
         WhatsNewScreen()
     }
     .qAudionTheme(dark: true)
+}
+
+// MARK: - W310 share-sheet helpers
+
+/// W310: identifiable wrapper for the share-sheet payload so the
+/// `.sheet(item:)` modifier can present it.
+struct ChangelogShareItem: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
+/// W310: thin SwiftUI wrapper around UIActivityViewController so the
+/// changelog can be shared via Mail / Messages / Files / etc.
+struct ChangelogShareSheet: UIViewControllerRepresentable {
+    let text: String
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [text],
+                                 applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController,
+                                context: Context) {}
 }
