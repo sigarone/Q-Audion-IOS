@@ -270,7 +270,24 @@ struct ContactDetailScreen: View {
         HStack(alignment: .top, spacing: 8) {
             actionButton(icon: "bubble.right",
                          caption: "Chat",
-                         tint: scheme.primary) { /* TODO: deep-link chat */ }
+                         tint: scheme.primary) {
+                // W294: graceful interim — actual deep-link to a
+                // ChatDetailScreen requires a global nav coordinator
+                // (not currently wired). For now we dismiss this
+                // detail screen + push a guidance snackbar telling
+                // the user to use the Chat tab. Better than a no-op.
+                // See TODO_AUDIT.md §2.3 for the proper fix.
+                let peer: String = item.displayName
+                dismiss()
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    snackbar?.show(.init(
+                        text: Self.openChatGuidance(peer: peer),
+                        severity: .info,
+                        durationSeconds: 4
+                    ))
+                }
+            }
             actionButton(icon: "phone",
                          caption: "Audio",
                          tint: extras.success) {
@@ -564,6 +581,12 @@ struct ContactDetailScreen: View {
             }
             Spacer(minLength: 0)
         }
+    }
+
+    /// W294: build the guidance snackbar text via static method to keep
+    /// the closure body trivial. CLAUDE.md §13.
+    private static func openChatGuidance(peer: String) -> String {
+        return "Apri la chat con " + peer + " dalla scheda Chat."
     }
 }
 

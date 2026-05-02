@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.283", date: "2026-05-02",
+              title: "Wire 'Apri chat' su ContactDetail (W294)",
+              bullets: [
+                "ContactDetail action 'Chat': era TODO no-op, ora reagisce",
+                "Dismiss della scheda + snackbar guida 'Apri da Chat'",
+                "Soluzione interim — deep-link reale richiede nav coordinator globale",
+                "Rimane in TODO_AUDIT.md §2.3 per il fix definitivo"
+              ]),
         .init(id: "v1.0.282", date: "2026-05-02",
               title: "Wire admin banner CTA URL (W293)",
               bullets: [
