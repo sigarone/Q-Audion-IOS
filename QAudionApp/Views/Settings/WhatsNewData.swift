@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.347", date: "2026-05-02",
+              title: "📋 PARITY_AUDIT_HONEST.md final scoreboard (W370)",
+              bullets: [
+                "Doc rewrite riflette closure end-to-end: ogni item audit ha engine + UI wiring",
+                "Release timeline W334→W369: 36 tag, ~10k righe engine + ~3.5k test",
+                "Feature flags rollover: ChatRatchetV3.enabled, peerCaps, VoiceNote.attachAnnounce.enabled",
+                "Sezione 'NOT covered': v2 compat, GroupChat UI hookup, real ML-KEM key, SRTP-PQC, real device QA",
+                "100% audit closure honest vs original scope — i remaining sono nuovi item discovered durante sweep"
+              ]),
         .init(id: "v1.0.346", date: "2026-05-02",
               title: "🔑 Seed callPqcSessionKey from PSK ladder (W369)",
               bullets: [
