@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.338", date: "2026-05-02",
+              title: "🛠 Fix build: HevcEncoder iOS 17.4 availability gate (W360)",
+              bullets: [
+                "Codemagic flagged: 'kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder' iOS 17.4+ only",
+                "Wrapped in #available(iOS 17.4, *) → empty spec dict on iOS 16/17",
+                "VideoToolbox HEVC HW resta default su tutti iPhone iOS 16+ — no perdita HW",
+                "Sblocca pipeline W338-W358 in coda Codemagic",
+                "DeviceLinkingProtocol QR swap (W359) shipped also in this batch"
+              ]),
         .init(id: "v1.0.337", date: "2026-05-02",
               title: "🎧 GroupCallController audio pipeline wiring (W358)",
               bullets: [

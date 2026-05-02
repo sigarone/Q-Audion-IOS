@@ -68,15 +68,25 @@ public final class HevcEncoder: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if session != nil { return }
         var newSession: VTCompressionSession?
-        let encoderSpec: [String: Any] = [
-            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: true
-        ]
+        // W360: kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder
+        // is iOS 17.4+ only. Our deployment target is iOS 16 so we
+        // build an empty encoder-spec there and let VideoToolbox pick
+        // the default encoder (HEVC HW is the default on every supported
+        // iPhone running iOS 16+ anyway, so we don't lose the HW path).
+        let encoderSpec: CFDictionary
+        if #available(iOS 17.4, *) {
+            encoderSpec = [
+                kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: true
+            ] as CFDictionary
+        } else {
+            encoderSpec = [String: Any]() as CFDictionary
+        }
         let status = VTCompressionSessionCreate(
             allocator: kCFAllocatorDefault,
             width: Int32(width),
             height: Int32(height),
             codecType: kCMVideoCodecType_HEVC,
-            encoderSpecification: encoderSpec as CFDictionary,
+            encoderSpecification: encoderSpec,
             imageBufferAttributes: nil,
             compressedDataAllocator: nil,
             outputCallback: HevcEncoder.outputCallback,

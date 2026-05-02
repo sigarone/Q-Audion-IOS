@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreImage.CIFilterBuiltins
 import CryptoKit
+import QAudionEngine
 
 /// "Collega nuovo dispositivo" screen. 1:1 port di Android
 /// `qaudion-android-new/feature/feature-settings/.../LinkNewDeviceScreen.kt`.
@@ -274,20 +275,18 @@ struct LinkNewDeviceScreen: View {
     }
 
     private func encodePairingPayload(pubkey: Data) -> String {
-        // Wire format compat con Android: JSON con kind + pubkey hex
-        // (l'Android source usa una struct serializable; il JSON minimo
-        // qui è sufficiente per il QR-decode lato peer).
-        let pubHex = pubkey.map { String(format: "%02x", $0) }.joined()
-        let json: [String: Any] = [
-            "v": 1,
-            "kind": "bcrypto-device-link",
-            "pubkey": pubHex
-        ]
-        if let data = try? JSONSerialization.data(withJSONObject: json),
-           let s = String(data: data, encoding: .utf8) {
-            return s
-        }
-        return "bcrypto-device-link:\(pubHex)"
+        // W359: switch from the iOS-only JSON shape to the cross-
+        // platform DeviceLinkingProtocol QR. Android, Desktop, and
+        // iOS all share `qaudion://link/<base64url(pub|userIdLen|
+        // userId|oneTimeCode)>` so a single QR is scannable on every
+        // platform.
+        let proto = DeviceLinkingProtocol()
+        // Use the current authenticated user id; fall back to a synth
+        // for unauthenticated previews so the QR still renders.
+        let userId = UserDefaults.standard.string(forKey: "currentUserId")
+            ?? UUID().uuidString
+        let qr = proto.generateLinkQr(userId: userId, devicePubKey: pubkey)
+        return proto.encodeLinkQr(qr)
     }
 
     private func generateQrImage(content: String) -> UIImage? {
