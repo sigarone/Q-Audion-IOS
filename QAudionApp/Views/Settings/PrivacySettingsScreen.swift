@@ -153,7 +153,11 @@ struct PrivacySettingsScreen: View {
                         )
                         SettingsToggleRow(
                             title: "Presenza visibile",
-                            subtitle: "Mostra ai contatti quando sei online",
+                            // W411 honest copy: client-side gating limits
+                            // what we subscribe to. Full server-side
+                            // hiding richiede endpoint dedicato non
+                            // ancora esposto.
+                            subtitle: "Off: non vedi quando i contatti sono online (l'app non si iscrive ai loro stati)",
                             isOn: Binding(
                                 get: { container.viewModel.presenceVisibleToContacts },
                                 set: { container.togglePresence($0) }

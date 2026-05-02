@@ -63,10 +63,24 @@ final class PresenceService: ObservableObject {
     /// Replace the tracked set. Server treats this as authoritative.
     /// Drops cached statuses for users no longer tracked so the UI
     /// doesn't display stale online dots after a contact is removed.
+    /// W411: when the user has disabled "Presenza visibile ai
+    /// contatti" in Privacy settings, this becomes a no-op — we
+    /// don't subscribe to anyone's presence (so we don't see online
+    /// dots) AND we don't emit subscribe envelopes to the server.
+    /// The latter is the closest a client can get to "private mode"
+    /// without server-side support: contacts can still infer we're
+    /// online from our WS connection state, but the app does not
+    /// actively advertise us as a presence subscriber. Honest
+    /// limitation: full server-side hiding requires a dedicated
+    /// /api/v1/account/presence endpoint that doesn't exist yet.
     func subscribe(userIds: [String]) {
         let set = Set(userIds.filter { !$0.isEmpty })
         subscribed = set
         statuses = statuses.filter { set.contains($0.key) }
+        guard PrivacyGate.presenceVisibleToContacts else {
+            // Off → don't subscribe; presence dots stay grey.
+            return
+        }
         manager?.subscribe(userIds: Array(set))
     }
 

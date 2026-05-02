@@ -64,12 +64,20 @@ public final class QAudionPeerConnection: NSObject {
     private let audioTrackId = "audio0"
     private let videoTrackId = "video0"
 
-    public init(factory: RTCPeerConnectionFactory, iceServers: [RTCIceServer], delegate: Delegate?) {
+    public init(factory: RTCPeerConnectionFactory,
+                iceServers: [RTCIceServer],
+                iceTransportPolicy: RTCIceTransportPolicy = .all,
+                delegate: Delegate?) {
         self.factory = factory
         self.delegate = delegate
         super.init()
 
         let config = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: iceServers)
+        // W411: honor the user's TransportMode preference. When the
+        // app sets `.relay`, host/srflx candidates are filtered out
+        // and all media flows through TURN — needed for restricted
+        // carrier-NAT environments.
+        config.iceTransportPolicy = iceTransportPolicy
         guard let pc = factory.peerConnection(with: config,
                                                 constraints: mediaConstraints,
                                                 delegate: self) else {

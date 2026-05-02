@@ -55,6 +55,20 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         didSet { applyPqcSealerIfPossible() }
     }
 
+    /// W411 — optional override for the ICE server list. When set
+    /// (typically by AppState reading TransportGate.preferredTurnUrl),
+    /// the controller skips the relay-pool fetch and uses ONLY these
+    /// servers. Useful for self-hosted TURN deployments + QA. Set
+    /// before startOutgoingCall / acceptIncomingCall.
+    public var iceServerOverride: [RTCIceServer]?
+
+    /// W411 — optional override for the ICE transport policy. When
+    /// `.relay` is forced, WebRTC bypasses host candidates and
+    /// requires all media to flow through the relay. Maps from
+    /// TransportGate.preferredMode: turn/relay → .relay,
+    /// otherwise default `.all`.
+    public var iceTransportPolicyOverride: RTCIceTransportPolicy?
+
     private let callingApi: CallingApi
     private let relayProvider: RelayCredentialsProvider?
     private var peerConnection: QAudionPeerConnection?
@@ -82,6 +96,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let pc = QAudionPeerConnection(
             factory: QAudionPeerConnectionFactory.shared.factory,
             iceServers: iceServers,
+            iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)
         peerConnection = pc
         pc.addLocalAudioTrack()
@@ -129,6 +144,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let pc = QAudionPeerConnection(
             factory: QAudionPeerConnectionFactory.shared.factory,
             iceServers: iceServers,
+            iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)
         peerConnection = pc
         pc.addLocalAudioTrack()
@@ -200,6 +216,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
 
     private func fetchIceServers() async -> [RTCIceServer] {
+        // W411: when the user has explicitly configured a custom TURN
+        // server in TransportSettings, bypass the server-side relay
+        // pool fetch and use the override directly.
+        if let override = iceServerOverride, !override.isEmpty {
+            return override
+        }
         guard let provider = relayProvider else { return [] }
         guard let bundle = await provider.currentOrRefresh() else { return [] }
         return QAudionPeerConnectionFactory.iceServers(from: bundle.servers)

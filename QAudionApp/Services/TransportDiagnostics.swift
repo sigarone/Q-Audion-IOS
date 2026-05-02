@@ -81,6 +81,8 @@ final class TransportDiagnostics: ObservableObject {
     }
 
     /// Persist user transport changes (mode + Tor toggle + URL) into SettingsStore.
+    /// W411: also writes to TransportGate so the WebRTC bridge sees
+    /// the user's choice at peer-connection creation time.
     func saveTransport(mode: TransportSettingsViewModel.Mode,
                        torEnabled: Bool,
                        preferredUrl: URL?) {
@@ -96,5 +98,8 @@ final class TransportDiagnostics: ObservableObject {
         store.saveTransport(updated)
         self.torEnabled = torEnabled
         self.preferredTurnUrl = preferredUrl
+        // W411: surface to TransportGate for live consumption.
+        TransportGate.setPreferredTurnUrl(preferredUrl)
+        TransportGate.setPreferredMode(mode.rawValue)
     }
 }
