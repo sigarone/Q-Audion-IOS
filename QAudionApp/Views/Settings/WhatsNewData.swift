@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.301", date: "2026-05-02",
+              title: "Estratto SWIFT6_PATTERNS.md (W312)",
+              bullets: [
+                "Nuovo: SWIFT6_PATTERNS.md nel root del repo",
+                "Estratto da CLAUDE.md §13 (W174-W258 saga)",
+                "Reference stabile per agenti che lavoreranno su Q-Audion iOS",
+                "Audit §6 hygiene progress (3 of ~3)"
+              ]),
         .init(id: "v1.0.300", date: "2026-05-02",
               title: "🎉 v1.0.300 milestone — STATISTICHE section in About (W311)",
               bullets: [
