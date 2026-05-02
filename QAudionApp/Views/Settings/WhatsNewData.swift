@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.315", date: "2026-05-02",
+              title: "🔐 v3.1 ratchet foundations: CanonicalCBOR + wire detect (W336)",
+              bullets: [
+                "Nuovo CanonicalCbor encoder (RFC 8949 §4.2 restricted profile)",
+                "Byte-for-byte parità con MessageRatchet.kt::CanonicalCbor + Node oracle",
+                "Map keys ordinati per length-then-bytewise-lex (canonical sort)",
+                "Smallest-head encoding (uint 0..23 in 1 byte, 24..255 in 2, ecc.)",
+                "buildMessageAD = {m,r,s,v:3} canonical CBOR (sostituisce v2 colon string)",
+                "buildInitInfo = ['v3', dir, lo, hi] per HKDF init",
+                "MessageWireFormat: detect 0xE2/0xE3/v1 + parseV3Header (epoch/dir/chainIdx)",
+                "Test parità: head encoding, key sort, KAT-aligned vector test",
+                "Foundation per il prossimo port full di MessageRatchet (multi-day)"
+              ]),
         .init(id: "v1.0.314", date: "2026-05-02",
               title: "🔌 TURN credentials cache (W335)",
               bullets: [
