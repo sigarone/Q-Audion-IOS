@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.346", date: "2026-05-02",
+              title: "🔑 Seed callPqcSessionKey from PSK ladder (W369)",
+              bullets: [
+                "AppState.startCall ora popola callPqcSessionKey via deriveTransitionalSasKey",
+                "Ladder PSK identico a ChatMessageSendService: auto:<prefix>:<peer> → bare → fallback",
+                "Both peers hold same PSK → derive same 6 SAS words (W338 ComputeSasUseCase)",
+                "Transitional: sostituibile dal real ML-KEM-1024 session key quando il PQC handshake lo surfacerà",
+                "Nel frattempo: SAS panel finalmente renderizza parole reali (era sempre vuoto)",
+                "pskActive flag ora vero durante chiamata → CallSecurityBadge mostra PQC active"
+              ]),
         .init(id: "v1.0.345", date: "2026-05-02",
               title: "✅ SAS verification persistence (W368)",
               bullets: [

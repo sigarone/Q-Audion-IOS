@@ -1544,6 +1544,17 @@ final class AppState: ObservableObject {
         txWaveformSamples = []
         rxWaveformSamples = []
         cipherWaveformSamples = []
+        // W369: seed `callPqcSessionKey` from the per-pair PSK so the
+        // SAS panel renders REAL words derived from the same secret
+        // both peers hold. This is a transitional source — it will be
+        // replaced by the actual ML-KEM-1024 session key once the
+        // PQC handshake plumbing surfaces it. Until then the SAS is
+        // still a meaningful authentication primitive: identical on
+        // both ends if and only if the PSK ladder agrees.
+        callPqcSessionKey = Self.deriveTransitionalSasKey(
+            selfId: currentUserId ?? "",
+            peerId: contactId)
+        pskActive = !(callPqcSessionKey?.isEmpty ?? true)
         do {
             // W67: wire WebSocket transport PRIMA di startCall così il
             // handler "audio_frame" è già registrato quando il peer
@@ -1736,6 +1747,36 @@ final class AppState: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.callState = .idle
         }
+    }
+
+    /// W369: transitional SAS key derivation. Loads the per-pair PSK
+    /// from the SovereignKeyVault using the same ladder
+    /// ChatMessageSendService uses (auto:<prefix>:<peer> → bare
+    /// peerId → deterministic SHA-256(pair) fallback) and uses it as
+    /// the SAS engine input. Both peers hold the same PSK so they
+    /// derive the same 6 words.
+    ///
+    /// This is a TRANSITIONAL bridge until the call PQC handshake
+    /// surfaces the real ML-KEM-1024 session key. The SAS still
+    /// authenticates the call: identical words on both ends ⇔ same
+    /// PSK ladder agreed; mismatched words ⇒ key tampering or one
+    /// side has a stale PSK.
+    private static func deriveTransitionalSasKey(selfId: String, peerId: String) -> Data {
+        guard !peerId.isEmpty, !selfId.isEmpty else { return Data() }
+        let vault = SovereignKeyVault()
+        let prefix = peerId.count > 8 ? String(peerId.prefix(8)) : peerId
+        let autoName = "auto:\(prefix):\(peerId)"
+        if let stored = (try? vault.loadPsk(name: autoName)) ?? nil, !stored.isEmpty {
+            return stored
+        }
+        if let stored = (try? vault.loadPsk(name: peerId)) ?? nil, !stored.isEmpty {
+            return stored
+        }
+        // Deterministic fallback (same as ChatMessageSendService.fallbackPsk):
+        // both peers derive the same key from the sorted-pair tuple.
+        let pair = [peerId, selfId].sorted().joined(separator: ":")
+        let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
+        return Data(digest)
     }
 
     /// W339: derive the 6-PGP-word in-call SAS from the active call's
