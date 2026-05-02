@@ -200,7 +200,27 @@ struct SettingsScreen: View {
                 .qaudionStyle(type.titleLarge)
                 .foregroundStyle(scheme.onSurface)
             Spacer()
-            Button(action: { /* TODO: header menu */ }) {
+            // W292: replaced the TODO no-op stub with a real Menu of
+            // side-effect-only quick actions. Avoids new navigation
+            // state plumbing — each item is a single statement that
+            // copies / opens / triggers something visible.
+            Menu {
+                Button {
+                    copyBuildIdToPasteboard()
+                } label: {
+                    Label("Copia versione + build", systemImage: "doc.on.clipboard")
+                }
+                Button {
+                    openIOSSettings()
+                } label: {
+                    Label("Apri Impostazioni iOS", systemImage: "gear")
+                }
+                Button {
+                    openTestFlightFeedback()
+                } label: {
+                    Label("Feedback TestFlight", systemImage: "ant.fill")
+                }
+            } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(scheme.onSurface)
@@ -701,6 +721,40 @@ struct SettingsScreen: View {
             return "1 contatto memorizzato"
         }
         return "\(n) contatti memorizzati"
+    }
+
+    // MARK: - Top-bar Menu actions (W292)
+
+    /// W292: copy 'Q-Audion v1.0.X (build N)' to UIPasteboard.
+    /// Sister of W179 in About — this is reachable from the top-bar
+    /// `⋯` Menu without scrolling to ASSISTENZA.
+    private func copyBuildIdToPasteboard() {
+        #if canImport(UIKit)
+        let v = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "?"
+        let b = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? "?"
+        let line: String = "Q-Audion v" + v + " (build " + b + ")"
+        UIPasteboard.general.string = line
+        cacheClearedMessage = "Copiato: " + line
+        cacheClearedAlertVisible = true
+        #endif
+    }
+
+    /// W292: open iOS Settings → Q-Audion. Sister of W169 / W284.
+    private func openIOSSettings() {
+        #if canImport(UIKit)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+        #endif
+    }
+
+    /// W292: open the public TestFlight feedback page. Sister of W288.
+    private func openTestFlightFeedback() {
+        #if canImport(UIKit)
+        if let url = URL(string: "https://testflight.apple.com/v1/app/REDACTED_APP_ID") {
+            UIApplication.shared.open(url)
+        }
+        #endif
     }
 
     // MARK: - PQC self-test (W268)

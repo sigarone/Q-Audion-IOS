@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.281", date: "2026-05-02",
+              title: "Settings top-bar Menu — wired engine TODO (W292)",
+              bullets: [
+                "Settings → top-bar `⋯`: era TODO no-op, ora Menu funzionante",
+                "Quick actions: Copia versione · Impostazioni iOS · Feedback TF",
+                "Wired uno dei TODO(engine) dall'audit (TODO_AUDIT.md §2.4)",
+                "Ogni voce è side-effect-only — nessuna nuova navigation state"
+              ]),
         .init(id: "v1.0.280", date: "2026-05-02",
               title: "Bundle metadata + GitHub tags link (W290/W291)",
               bullets: [
