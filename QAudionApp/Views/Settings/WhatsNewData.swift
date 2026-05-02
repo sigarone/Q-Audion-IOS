@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.340", date: "2026-05-02",
+              title: "📥 Wire attach_announce inbound auto-download (W363)",
+              bullets: [
+                "AppState.handleIncomingMessage detect attach_announce envelope dopo decrypt",
+                "Spawn ChatVoiceNoteReceiver.fetchAttachAnnounce → ChatAttachAnnounceReceiver",
+                "Auto-download + AttachmentEncryption.decrypt + write tempfile",
+                "Aggiorna ConversationStore con local path + duration + mime → playable bubble",
+                "ChatVoiceNoteReceiver.fetchAttachAnnounce: error mapping cross-platform → legacy categories",
+                "Audit PARITY: voice notes inbound da Android/Desktop ora auto-downloadano su iOS",
+                "Combined con W362 (sender flag): voice notes cross-platform end-to-end attivabili"
+              ]),
         .init(id: "v1.0.339", date: "2026-05-02",
               title: "🔌 ChatVoiceNoteSender wired to attach_announce + userId persist (W361-W362)",
               bullets: [

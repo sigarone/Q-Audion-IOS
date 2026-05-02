@@ -174,5 +174,38 @@ final class ChatVoiceNoteReceiver {
         }
         return "📎 Allegato"
     }
+
+    // MARK: - W363: attach_announce path (cross-platform)
+
+    /// Cross-platform companion to [fetch] for the qa_ctl:1
+    /// attach_announce envelope shape. Delegates the heavy lifting
+    /// to [ChatAttachAnnounceReceiver] (W356) and returns a URL the
+    /// chat bubble can play. The temp-file location differs from the
+    /// legacy qfile path (caches/voicenotes vs. tmp), but the bubble
+    /// only needs the URL itself.
+    func fetchAttachAnnounce(envelope: AttachAnnounceEnvelope, senderId: String) async throws -> URL {
+        let receiver = ChatAttachAnnounceReceiver(appState: appState)
+        do {
+            return try await receiver.downloadAndDecrypt(envelope: envelope, senderId: senderId)
+        } catch let err as ChatAttachAnnounceReceiver.ReceiveError {
+            // Map the cross-platform receiver's error categories onto our
+            // own so the caller's existing error-handling switch keeps
+            // working.
+            switch err {
+            case .notAuthenticated:
+                throw Error.downloadFailed("non autenticato")
+            case .downloadFailed(let m):
+                throw Error.downloadFailed(m)
+            case .decodeFailed(let m):
+                throw Error.decryptFailed(m)
+            case .invalidId:
+                throw Error.decryptFailed("attachment id non valido")
+            case .writeFailed(let m):
+                throw Error.writeFailed(m)
+            }
+        } catch {
+            throw Error.decryptFailed(String(describing: error))
+        }
+    }
 }
 

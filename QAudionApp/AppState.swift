@@ -1023,11 +1023,22 @@ final class AppState: ObservableObject {
         // once the M4A lands in the cache.
         var initialMediaDur: Int64? = nil
         var pendingMarker: FileTransfer.FileMarker? = nil
+        var pendingAttachAnnounce: AttachAnnounceEnvelope? = nil
         if !decryptedRaw.isEmpty,
            let marker = FileTransfer.tryParseMarker(text: decryptedRaw),
            marker.qfile.downloadClaim != nil {
             initialMediaDur = marker.qfile.durationMs
             pendingMarker = marker
+        }
+        // W363: also detect the cross-platform attach_announce envelope.
+        // Mutually exclusive with the qfile marker — if both somehow
+        // parse (shouldn't, since `qa_ctl` and `qfile` are different
+        // top-level keys) the qfile path wins for backward compat.
+        if pendingMarker == nil,
+           !decryptedRaw.isEmpty,
+           let env = try? AttachAnnounceEnvelope.parse(decryptedRaw) {
+            initialMediaDur = env.att.durationMs
+            pendingAttachAnnounce = env
         }
         let msg = Message(
             id: msgUUID,
@@ -1048,7 +1059,7 @@ final class AppState: ObservableObject {
             // W82: route bubble UI by mime (audio/* → voice player,
             // image/* → image preview). Stamped up-front from the
             // marker so the row already shows the right placeholder.
-            mediaMimeType: pendingMarker?.qfile.mime,
+            mediaMimeType: pendingMarker?.qfile.mime ?? pendingAttachAnnounce?.att.mime,
             // W86: persist the sender-generated clientMsgId so future
             // qa_ctl:1 envelopes (edit/delete/reaction) targeting this
             // message can find the row. Without this, peers can't edit
@@ -1154,6 +1165,52 @@ final class AppState: ObservableObject {
                     // tap a retry CTA in a future patch (snackbar
                     // not surfaced today to avoid noise on transient
                     // network blips).
+                }
+            }
+        }
+        // W363: mirror the same async-fetch pattern for the cross-
+        // platform attach_announce envelope (W355/W356 wire), so an
+        // Android- or Desktop-produced voice note auto-downloads and
+        // becomes a playable bubble.
+        if let envelope = pendingAttachAnnounce {
+            Task { [weak self, msgUUID, convId = conv.id, senderId] in
+                guard let self = self else { return }
+                let receiver = ChatVoiceNoteReceiver(appState: self)
+                do {
+                    let cacheURL = try await receiver.fetchAttachAnnounce(
+                        envelope: envelope, senderId: senderId
+                    )
+                    let mime = envelope.att.mime
+                    let durMs = envelope.att.durationMs
+                    let friendly: String = {
+                        if mime.hasPrefix("audio/") {
+                            if let dur = durMs, dur > 0 {
+                                let secs = Double(dur) / 1000.0
+                                return String(format: "🎤 Nota vocale (%.1fs)", secs)
+                            }
+                            return "🎤 Nota vocale"
+                        }
+                        if mime.hasPrefix("image/") { return "🖼️ Immagine" }
+                        if mime.hasPrefix("video/") { return "🎬 Video" }
+                        return "📎 Allegato"
+                    }()
+                    await MainActor.run {
+                        ConversationStore().setMediaInfo(
+                            localId: msgUUID,
+                            conversationId: convId,
+                            plaintext: friendly,
+                            mediaLocalPath: cacheURL.path,
+                            mediaDurationMs: durMs,
+                            mediaMimeType: mime
+                        )
+                        NotificationCenter.default.post(
+                            name: AppState.chatRefreshNotification,
+                            object: nil,
+                            userInfo: ["peerUserId": senderId, "conversationId": convId]
+                        )
+                    }
+                } catch {
+                    print("[AppState] attach_announce receive failed from \(senderId): \(error)")
                 }
             }
         }
