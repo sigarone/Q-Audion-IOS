@@ -12,6 +12,21 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.316", date: "2026-05-02",
+              title: "🔐 MessageRatchet engine port — v3.1 cross-platform (W337)",
+              bullets: [
+                "Port completo del MessageRatchet Android (forward secrecy intra-epoch)",
+                "RatchetSession (class, ref-semantics) + SkippedKey + RatchetSnapshot",
+                "RatchetVault protocol + InMemoryRatchetVault (test fixture)",
+                "ensureSession: HKDF init da PSK, lex-min/max direction flags",
+                "encrypt: deriva (msgKey, nonce) → AES-GCM seal → packWire → step chain",
+                "decrypt: unpackWire → check epoch+dir → cache lookup OR skip-ahead OR in-order",
+                "Skip-ahead bounded a 10_000 (denial-of-service guard)",
+                "Skipped keys cache LRU (256 entries, TTL 7 giorni)",
+                "Write-ahead persist: vault.save chiamato PRIMA di tornare wire bytes",
+                "CryptoKit HKDF-SHA256 + AES.GCM (parità byte-perfetto con BouncyCastle)",
+                "10 test: round-trip, bidirezionale, OoO, replay, skip overflow, AAD tamper, persistence"
+              ]),
         .init(id: "v1.0.315", date: "2026-05-02",
               title: "🔐 v3.1 ratchet foundations: CanonicalCBOR + wire detect (W336)",
               bullets: [
