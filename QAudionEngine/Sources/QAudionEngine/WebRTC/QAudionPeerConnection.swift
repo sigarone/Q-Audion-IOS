@@ -98,6 +98,23 @@ public final class QAudionPeerConnection: NSObject {
         return true
     }
 
+    /// W382 — install a PQC frame encryptor / decryptor on every
+    /// existing RTP sender + receiver. Call this AFTER
+    /// addLocalAudioTrack and AFTER setLocalDescription so the
+    /// senders/receivers list is populated. Idempotent: re-installing
+    /// over an existing encryptor replaces it (use for rekey).
+    public func installPqcSealer(_ sealer: PqcRtpFrameSealer) {
+        guard let pc = peerConnection else { return }
+        let enc = PqcFrameEncryptor(sealer: sealer)
+        let dec = PqcFrameDecryptor(sealer: sealer)
+        for sender in pc.senders {
+            sender.frameEncryptor = enc
+        }
+        for receiver in pc.receivers {
+            receiver.frameDecryptor = dec
+        }
+    }
+
     /// Mute / unmute the local microphone.
     public func setMicrophoneMuted(_ muted: Bool) {
         localAudioTrack?.isEnabled = !muted

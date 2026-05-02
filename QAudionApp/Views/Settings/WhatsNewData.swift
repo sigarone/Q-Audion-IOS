@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.359", date: "2026-05-02",
+              title: "🔐 PQC frame encryptor adapter wired (W382)",
+              bullets: [
+                "Nuovo PqcFrameEncryptor + PqcFrameDecryptor: RTCFrameEncryptor/Decryptor adapter",
+                "Wrappa PqcRtpFrameSealer (W376) per ogni RTP packet via insertable-streams API",
+                "QAudionPeerConnection.installPqcSealer(sealer): install su tutti sender+receiver",
+                "getMaxCiphertextByteSize: pre-compute size +28 bytes (nonce+tag) per WebRTC alloc",
+                "Fail-closed su seal/open error: empty Data → SRTP rifiuta",
+                "Closure W376: PQC SRTP layer real, attivato on-demand dal call controller"
+              ]),
         .init(id: "v1.0.358", date: "2026-05-02",
               title: "📋 PeerCapability snapshot list in Settings (W381)",
               bullets: [
