@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.284", date: "2026-05-02",
+              title: "MyPhones: 'Aggiornato N minuti fa' (W295)",
+              bullets: [
+                "Settings → I miei numeri: timestamp 'Aggiornato N minuti fa'",
+                "Stamped quando l'utente preme 'Salva' (UserDefaults)",
+                "RelativeDateTimeFormatter con locale 'it_IT'",
+                "Visivo che le modifiche sono state effettivamente persistite"
+              ]),
         .init(id: "v1.0.283", date: "2026-05-02",
               title: "Wire 'Apri chat' su ContactDetail (W294)",
               bullets: [

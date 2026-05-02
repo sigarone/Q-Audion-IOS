@@ -164,6 +164,18 @@ final class MyPhonesContainer: ObservableObject {
 
     private func persist() {
         UserDefaults.standard.set(phones, forKey: phonesKey)
+        // W295: stamp the last-saved timestamp so the UI can show
+        // "Aggiornato N minuti fa" — gives the user feedback that
+        // changes actually landed in storage.
+        UserDefaults.standard.set(Date(), forKey: lastSavedKey)
+    }
+
+    private let lastSavedKey = "com.qaudion.profile.myPhones.lastSavedAt"
+
+    /// W295: last-saved date (or nil if never saved on this device).
+    /// Read by the screen body to render the timestamp row.
+    var lastSavedAt: Date? {
+        UserDefaults.standard.object(forKey: lastSavedKey) as? Date
     }
 }
 
@@ -187,6 +199,16 @@ struct MyPhonesScreen: View {
                         errorBanner(err)
                     }
                     saveButton
+                    // W295: last-saved-at row. Renders only if the
+                    // user has saved at least once (fresh installs see
+                    // nothing). Builds the label via static helper to
+                    // keep the closure body trivial — CLAUDE.md §13.
+                    if let saved = container.lastSavedAt {
+                        Text(Self.lastSavedLabel(saved))
+                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .padding(.top, 4)
+                    }
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
@@ -195,6 +217,17 @@ struct MyPhonesScreen: View {
         }
         .navigationTitle("I miei numeri")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// W295: format the last-saved timestamp as 'Aggiornato N minuti fa'
+    /// using RelativeDateTimeFormatter with Italian locale. Static so
+    /// the call site closure remains trivial.
+    private static func lastSavedLabel(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.unitsStyle = .full
+        let rel: String = f.localizedString(for: date, relativeTo: Date())
+        return "Aggiornato " + rel
     }
 
     // MARK: - Header card (extension + phones)
