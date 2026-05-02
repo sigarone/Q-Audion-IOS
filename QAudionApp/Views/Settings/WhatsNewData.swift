@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.333", date: "2026-05-02",
+              title: "🎙 GroupCallController — N-way audio cross-platform (W354)",
+              bullets: [
+                "Port GroupCallController.kt: state machine + Opus encode/decode + AES-GCM seal",
+                "createCall / join / leave / endCallForAll / setMuted",
+                "Bridge a BCryptoGroupCallManager esistente (group_call_create/join/forward/leave)",
+                "Room key SHA-256(callId || 'qaudion-group-v1') — parità Android byte-perfect",
+                "Per-sender Opus decoder map (Opus state stateful → no shared decoder)",
+                "Wire format sealed: nonce(12) | ciphertext | tag(16) — decodable da Android",
+                "onIncomingPcmFrame callback: PCM ready per AudioPlayback jitter buffer",
+                "sendOutgoingPcmFrame / sendOutgoingOpusFrame: 2 entry point per la mic capture",
+                "Audit PARITY: 'group voice call ROTTO' → ENGINE COMPLETO + transport"
+              ]),
         .init(id: "v1.0.332", date: "2026-05-02",
               title: "🎥 HEVC hardware encoder (VTCompressionSession) (W353)",
               bullets: [
