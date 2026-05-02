@@ -44,6 +44,23 @@ struct PhoneEntryScreen: View {
 
     @State private var raw: String = "+39 "
     @State private var validationError: String?
+    // W315 — track last submit attempt to give the user feedback that
+    // their tap was registered (server flow is stubbed today).
+    @State private var lastAttemptAt: Date? = nil
+
+    // W315 — formatter pre-built once. Avoids multi-segment interpolation
+    // in body per SWIFT6_PATTERNS.md §1.
+    private static let attemptFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "it_IT")
+        df.dateFormat = "HH:mm:ss"
+        return df
+    }()
+
+    private static func formatLastAttempt(_ date: Date) -> String {
+        let stamp: String = attemptFormatter.string(from: date)
+        return "Ultimo tentativo: " + stamp
+    }
 
     private var isValid: Bool {
         PhoneHashHelper.isValid(raw)
@@ -131,6 +148,16 @@ struct PhoneEntryScreen: View {
                 .disabled(!isValid)
                 .padding(.horizontal, 24)
 
+                // W315 — last-attempt timestamp (helps testers verify the
+                // tap landed even though server OTP isn't wired).
+                if let last = lastAttemptAt {
+                    Text(Self.formatLastAttempt(last))
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .padding(.horizontal, 24)
+                        .padding(.top, 8)
+                }
+
                 Spacer().frame(height: 16)
 
                 // Status banner — explicit about the current limitation
@@ -155,6 +182,9 @@ struct PhoneEntryScreen: View {
     }
 
     private func submit() {
+        // W315 — record attempt regardless of outcome so the user sees
+        // visible feedback for the stubbed server path.
+        lastAttemptAt = Date()
         do {
             let e164 = try PhoneHashHelper.normalizeE164(raw)
             let hash = PhoneHashHelper.sha256Hex(e164)

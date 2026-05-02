@@ -33,6 +33,17 @@ struct LinkNewDeviceScreen: View {
     @State private var fingerprintGroups: [String] = []
     @State private var generating: Bool = true
     @State private var errorMessage: String? = nil
+    // W316 — UX feedback for tap-to-copy on the fingerprint.
+    @State private var copiedFlash: Bool = false
+
+    // W316 — static copy helpers (avoid multi-segment interpolation in
+    // ViewBuilder closures per SWIFT6_PATTERNS.md §1).
+    private static let stubPairingHint: String =
+        "Funzione in arrivo — il pairing server-side non è ancora attivo. Per ora il QR genera solo materiale locale."
+    private static let copyHint: String =
+        "Tocca il fingerprint per copiarlo."
+    private static let copiedConfirmation: String =
+        "Fingerprint copiato negli appunti."
 
     init(onPairingComplete: @escaping (String) -> Void = { _ in }) {
         self.onPairingComplete = onPairingComplete
@@ -48,6 +59,12 @@ struct LinkNewDeviceScreen: View {
                     if !fingerprintGroups.isEmpty {
                         fingerprintBlock
                     }
+                    // W316 — explicit stub disclaimer about server wiring.
+                    Text(Self.stubPairingHint)
+                        .qaudionStyle(type.labelSmall)
+                        .italic()
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     if let err = errorMessage {
                         errorBanner(err)
                     }
@@ -172,6 +189,11 @@ struct LinkNewDeviceScreen: View {
                     }
                 }
             }
+            // W316 — tap-to-copy hint / confirmation row.
+            Text(copiedFlash ? Self.copiedConfirmation : Self.copyHint)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(copiedFlash ? scheme.primary : scheme.onSurfaceVariant)
+                .padding(.top, 4)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -183,6 +205,21 @@ struct LinkNewDeviceScreen: View {
             RoundedRectangle(cornerRadius: 4)
                 .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
         )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: copyFingerprint)
+    }
+
+    // W316 — extracted copy helper. Closure body kept trivial per
+    // SWIFT6_PATTERNS.md §5 (no deep nesting in onTapGesture closure).
+    private func copyFingerprint() {
+        let joined: String = fingerprintGroups.joined(separator: " ")
+        guard !joined.isEmpty else { return }
+        UIPasteboard.general.string = joined
+        copiedFlash = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            copiedFlash = false
+        }
     }
 
     private func errorBanner(_ msg: String) -> some View {

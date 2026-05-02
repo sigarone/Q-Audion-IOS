@@ -24,6 +24,13 @@ import SwiftUI
 /// the QR.
 struct WelcomeScreen: View {
 
+    // W314 — static copy helpers (avoid multi-segment interpolation in
+    // ViewBuilder closures per SWIFT6_PATTERNS.md §1).
+    private static let stubHintInvite: String =
+        "Funzione in arrivo — usa per ora la Configurazione rapida (QR)."
+    private static let stubHintLogin: String =
+        "Funzione in arrivo — il login via numero richiede l'OTP server."
+
     let onStartFastSetup: () -> Void
     let onStartRegister: () -> Void
     let onStartLogin: () -> Void
@@ -80,11 +87,23 @@ struct WelcomeScreen: View {
                             label: "Inizia con un codice invito",
                             variant: .secondary
                         )
+                        // W314 — stub disclaimer for invite-code path
+                        Text(Self.stubHintInvite)
+                            .qaudionStyle(type.labelSmall)
+                            .italic()
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         QAudionButton(
                             action: onStartLogin,
                             label: "Accedi con un account esistente",
                             variant: .text
                         )
+                        // W314 — stub disclaimer for phone-login path
+                        Text(Self.stubHintLogin)
+                            .qaudionStyle(type.labelSmall)
+                            .italic()
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     Spacer().frame(height: 24)
