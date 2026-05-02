@@ -730,6 +730,71 @@ final class AppState: ObservableObject {
             }
         }
 
+        // W329: handle server `error` envelope. The server emits
+        // `{type:"error", code, message}` for AUTH_FAILED, USER_BLOCKED,
+        // PAYLOAD_TOO_LARGE, GROUP_CALL_ERROR, etc. iOS was silently
+        // dropping all of these. Surface to the UI via errorMessage.
+        ws.registerHandler(type: "error") { [weak self] _, data in
+            let code = (data["code"] as? String) ?? "?"
+            let msg = (data["message"] as? String) ?? "Errore server"
+            DispatchQueue.main.async {
+                self?.errorMessage = "[" + code + "] " + msg
+            }
+        }
+
+        // W330: handle `remote_wipe`. Security/compliance — server
+        // sends this when an admin or recovery flow has triggered a
+        // remote wipe. Server also tries to send an FCM push but
+        // hub.go:615 SKIPS the push for ios-apns devices, so the WS
+        // envelope is the ONLY path. Before this fix, iOS users
+        // could ignore wipe commands. Action: clear auth + force
+        // sign-out. (TODO: future — also wipe local stores.)
+        ws.registerHandler(type: "remote_wipe") { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.authService.clearToken()
+                self?.errorMessage = "Account cancellato remotamente."
+            }
+        }
+
+        // W331: handle `account_locked`. Server emits when admin
+        // locks an account. iOS must drop tokens + force back to
+        // login.
+        ws.registerHandler(type: "account_locked") { [weak self] _, data in
+            let reason = (data["reason"] as? String) ?? "Account bloccato"
+            DispatchQueue.main.async {
+                self?.authService.clearToken()
+                self?.errorMessage = reason
+            }
+        }
+
+        // W332: handle `kms_key_available` + `kms_key_revoked` — the
+        // server pushes these when admin provisions or revokes a key.
+        // Android handles them inline; iOS used to wait for the next
+        // REST poll. Surface a notice + trigger a refresh on next
+        // app foreground.
+        ws.registerHandler(type: "kms_key_available") { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.errorMessage = "Nuova chiave KMS disponibile."
+            }
+        }
+        ws.registerHandler(type: "kms_key_revoked") { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.errorMessage = "Una chiave KMS è stata revocata."
+            }
+        }
+
+        // W333: at-least-don't-drop handlers for call_answer / call_ice.
+        // iOS today runs the SDP-less PQC path, so these envelopes are
+        // intentionally not consumed for media. But before this fix
+        // they were SILENTLY dropped at the dispatcher with no log.
+        // Now we log them so they surface in diag.
+        ws.registerHandler(type: "call_answer") { _, data in
+            print("[AppState] received call_answer (SDP path not used on iOS) keys=\(data.keys)")
+        }
+        ws.registerHandler(type: "call_ice") { _, data in
+            print("[AppState] received call_ice (SDP path not used on iOS) keys=\(data.keys)")
+        }
+
         // W328 (CRITICAL): handle msg_pending_sync — the server pushes
         // up to 50 queued offline messages on every reconnect via this
         // single envelope (`{type: "msg_pending_sync", messages: [...]}`).

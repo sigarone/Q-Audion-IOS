@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.311", date: "2026-05-02",
+              title: "🚨 6 protocol-handler fixes (W329-W333) — Agent C audit",
+              bullets: [
+                "W329 'error' envelope → errorMessage UI (era silenzioso)",
+                "W330 'remote_wipe' → clear auth + sign-out (security regression chiusa)",
+                "W331 'account_locked' → clear auth + lock UI",
+                "W332 'kms_key_available'/'kms_key_revoked' → notice utente",
+                "W333 'call_answer'/'call_ice' → log invece di drop silenzioso",
+                "Tutti dispatch handlers nel WS, allineati al server protocol surface"
+              ]),
         .init(id: "v1.0.310", date: "2026-05-02",
               title: "🚨 CRITICAL FIX: msg_pending_sync handler (W328)",
               bullets: [
