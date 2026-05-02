@@ -97,10 +97,16 @@ public struct EnhancedDeviceItem: Identifiable, Equatable {
 final class DeviceManagementContainer: ObservableObject {
     @Published var viewModel: DeviceManagementViewModel
     @Published private(set) var enhanced: [EnhancedDeviceItem] = []
+    /// W303: timestamp of last refresh — stamped at construction
+    /// and after every refresh() call. Surfaces in the UI as
+    /// "Aggiornato N minuti fa" so testers know the list isn't
+    /// stale.
+    @Published private(set) var lastRefreshAt: Date = Date()
 
     init(initial: DeviceManagementViewModel = .mock) {
         self.viewModel = initial
         self.enhanced = initial.devices.map { EnhancedDeviceItem(from: $0) }
+        self.lastRefreshAt = Date()
     }
 
     func revoke(deviceId: String) {
@@ -113,6 +119,7 @@ final class DeviceManagementContainer: ObservableObject {
     func refresh() {
         // Stub: future hook su POST /auth/devices
         enhanced = viewModel.devices.map { EnhancedDeviceItem(from: $0) }
+        lastRefreshAt = Date()
     }
 }
 
@@ -158,6 +165,17 @@ struct DeviceManagementScreen: View {
                             .foregroundStyle(scheme.onSurfaceVariant)
                             .padding(.horizontal, 14).padding(.top, 12)
                     }
+
+                    // W303: 'Aggiornato N minuti fa' — surfaces the
+                    // last-refresh timestamp so the user knows whether
+                    // the list is fresh or stale. Useful especially
+                    // since the refresh is a stub today (no real
+                    // server fetch); the timestamp at least makes the
+                    // toolbar Refresh button visibly do something.
+                    Text(Self.lastRefreshLabel(container.lastRefreshAt))
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .padding(.horizontal, 14).padding(.top, 8)
 
                     Spacer().frame(height: 24)
                 }
@@ -263,6 +281,17 @@ struct DeviceManagementScreen: View {
             get: { showingRevokeConfirm != nil },
             set: { newValue in if !newValue { showingRevokeConfirm = nil } }
         )
+    }
+
+    /// W303: format the last-refresh timestamp as 'Aggiornato N minuti fa'
+    /// using RelativeDateTimeFormatter with Italian locale. Static so
+    /// the call site stays trivial — CLAUDE.md §13.
+    private static func lastRefreshLabel(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.unitsStyle = .full
+        let rel: String = f.localizedString(for: date, relativeTo: Date())
+        return "Aggiornato " + rel
     }
 }
 

@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.292", date: "2026-05-02",
+              title: "DeviceManagement: 'Aggiornato N minuti fa' (W303)",
+              bullets: [
+                "Settings → Dispositivi: timestamp 'Aggiornato N minuti fa'",
+                "Stamped al construct + dopo ogni refresh()",
+                "Sister di W295 (MyPhones) — pattern relativo it_IT",
+                "Stub UI polish — TODO_AUDIT.md §3 progress"
+              ]),
         .init(id: "v1.0.291", date: "2026-05-02",
               title: "Split WhatsNew data → WhatsNewData.swift (W302)",
               bullets: [
