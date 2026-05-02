@@ -12,6 +12,18 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.332", date: "2026-05-02",
+              title: "🎥 HEVC hardware encoder (VTCompressionSession) (W353)",
+              bullets: [
+                "Port HevcHwVideoEncoder.kt → HevcEncoder.swift via Apple VideoToolbox",
+                "VTCompressionSessionCreate con HEVC HW acceleration enabled",
+                "RealTime + Main_AutoLevel profile + bitrate ABR + ExpectedFrameRate",
+                "MaxKeyFrameIntervalDuration = 2s (parità VideoConstants.keyframeIntervalSec)",
+                "Output AVCC length-prefix → conversione Annex-B (start-code 0x00000001)",
+                "Key frame inject VPS + SPS + PPS dal CMVideoFormatDescription",
+                "onNal callback delivers (Data, isKeyFrame) → consumabile da VideoFrameFragmenter",
+                "Smoke test: blank YUV420 frame → at least one key NAL with parameter sets"
+              ]),
         .init(id: "v1.0.331", date: "2026-05-02",
               title: "🔐 v3 ratchet outbound encrypt — chat cross-platform completo (W352)",
               bullets: [
