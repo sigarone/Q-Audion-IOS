@@ -43,6 +43,14 @@ public final class GroupCallController: @unchecked Sendable {
     private var perSenderDecoders: [String: OpusCodec] = [:]
     private let encoder: OpusCodec = OpusCodec()
 
+    /// W358: optional audio I/O pipeline. When set via
+    /// `attachAudioPipeline()`, the controller takes ownership of the
+    /// capture source (mic → PCM → encrypt → forward) and the playback
+    /// sink (incoming PCM → playback). Both are ManagedLifecycle: start
+    /// fires when the call enters .active, stop fires on teardown.
+    private var capture: AudioCapture?
+    private var playback: AudioPlayback?
+
     public init(manager: BCryptoGroupCallManager) {
         self.manager = manager
         wireManagerCallbacks()
@@ -69,11 +77,13 @@ public final class GroupCallController: @unchecked Sendable {
 
     public func leave() {
         manager.leaveGroupCall()
+        stopAudioPipeline()
         teardown()
     }
 
     public func endCallForAll() {
         manager.endGroupCall()
+        stopAudioPipeline()
         teardown()
     }
 
@@ -118,6 +128,54 @@ public final class GroupCallController: @unchecked Sendable {
     /// frame granularity until a real N-source mixer lands).
     public var onIncomingPcmFrame: ((String, Data) -> Void)?
 
+    /// W358: bind the in-process AudioCapture (mic) and AudioPlayback
+    /// (speaker) lifecycles to this call. Once attached, the
+    /// controller owns starting/stopping them in lockstep with the
+    /// call state (active → start, idle → stop). The default
+    /// `onIncomingPcmFrame` callback is replaced with one that pushes
+    /// directly into the bound playback's jitter buffer.
+    public func attachAudioPipeline(capture: AudioCapture, playback: AudioPlayback) {
+        lock.lock()
+        self.capture = capture
+        self.playback = playback
+        lock.unlock()
+        capture.onFrame = { [weak self] pcm in
+            self?.sendOutgoingPcmFrame(pcm)
+        }
+        // Default sink: dump incoming PCM into the jitter buffer.
+        // Caller can replace by reassigning onIncomingPcmFrame after
+        // attachAudioPipeline returns (e.g. for a per-sender mixer).
+        onIncomingPcmFrame = { [weak self] _, pcm in
+            self?.playback?.playFrame(pcm)
+        }
+    }
+
+    /// Manually start the audio pipeline. Called from the state
+    /// transition into .active; safe to invoke multiple times (each
+    /// component idempotent).
+    public func startAudioPipeline() throws {
+        lock.lock()
+        let capture = self.capture
+        let playback = self.playback
+        lock.unlock()
+        if let playback = playback {
+            try? playback.start()
+        }
+        if let capture = capture {
+            try capture.start()
+        }
+    }
+
+    /// Stop the audio pipeline. Idempotent.
+    public func stopAudioPipeline() {
+        lock.lock()
+        let capture = self.capture
+        let playback = self.playback
+        lock.unlock()
+        capture?.stop()
+        playback?.stop()
+    }
+
     // MARK: - Internal
 
     private func wireManagerCallbacks() {
@@ -133,8 +191,15 @@ public final class GroupCallController: @unchecked Sendable {
                 if let cid = self.manager.callId {
                     let parts = self.manager.participants.map(\.id)
                     self.setState(.active(callId: cid, participants: parts))
+                    // W358: kick off the bound audio pipeline once the
+                    // server confirms the room is live. Best-effort —
+                    // a missing mic permission throws here and we fall
+                    // back to RX-only.
+                    do { try self.startAudioPipeline() }
+                    catch { print("[GroupCallController] startAudioPipeline failed: \(error)") }
                 }
             case .ended:
+                self.stopAudioPipeline()
                 self.teardown()
             case .idle:
                 self.setState(.idle)

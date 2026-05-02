@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.337", date: "2026-05-02",
+              title: "🎧 GroupCallController audio pipeline wiring (W358)",
+              bullets: [
+                "GroupCallController.attachAudioPipeline(capture, playback): bind I/O components",
+                "capture.onFrame → sendOutgoingPcmFrame (encode + seal + forward)",
+                "Default sink: onIncomingPcmFrame → playback.playFrame (jitter buffer)",
+                "Auto-start audio pipeline su transition state.active (lifecycle managed)",
+                "Auto-stop su leave / endCallForAll / state.ended (no leak audio session)",
+                "Best-effort permission handling (mic denied → RX-only, log + continue)",
+                "Caller può comunque sostituire onIncomingPcmFrame per N-source mixer custom"
+              ]),
         .init(id: "v1.0.336", date: "2026-05-02",
               title: "🔐 Keychain-backed ratchet vault — chain state survives crash (W357)",
               bullets: [
