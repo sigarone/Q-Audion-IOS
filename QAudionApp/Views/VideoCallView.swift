@@ -13,6 +13,10 @@ struct VideoCallView: View {
     @State private var isRearCamera = false
     @State private var isSpeaker = true
     @State private var showControls = true
+    /// W391 — local pipeline reference. Held by AppState (lifecycle
+    /// bound to the active call). When non-nil, the placeholders are
+    /// replaced by real LocalCameraPreview / RemoteVideoDisplay views.
+    @State private var pipelineRef: VideoCallPipeline?
 
     var body: some View {
         ZStack {
@@ -61,19 +65,28 @@ struct VideoCallView: View {
 
     // MARK: - Remote Video Placeholder
 
+    @ViewBuilder
     private var remoteVideoPlaceholder: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "video.fill")
-                .font(.system(size: 48))
-                .foregroundColor(.white.opacity(0.3))
+        if let pipeline = pipelineRef ?? appState.videoPipeline {
+            // W391: real remote video — AVSampleBufferDisplayLayer
+            // consumes decoded CVPixelBuffers from the engine's HEVC
+            // decoder.
+            RemoteVideoDisplay(pipeline: pipeline)
+                .ignoresSafeArea()
+        } else {
+            VStack(spacing: 8) {
+                Image(systemName: "video.fill")
+                    .font(.system(size: 48))
+                    .foregroundColor(.white.opacity(0.3))
 
-            Text("Video cifrato")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.3))
+                Text("Video cifrato")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.3))
 
-            Text("\(appState.videoCodec) + AES-256-GCM")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(.green.opacity(0.5))
+                Text("\(appState.videoCodec) + AES-256-GCM")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.green.opacity(0.5))
+            }
         }
     }
 
@@ -107,30 +120,40 @@ struct VideoCallView: View {
 
     // MARK: - Local Camera Preview (PiP)
 
+    @ViewBuilder
     private var localPreview: some View {
         HStack {
             Spacer()
-
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(white: 0.15))
-                .frame(width: 120, height: 160)
-                .overlay(
-                    VStack(spacing: 6) {
-                        Image(systemName: "person.fill")
-                            .font(.title)
-                            .foregroundColor(.gray)
-                        Text("Tu")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                    }
-                )
-                .overlay(
+            ZStack {
+                if let pipeline = pipelineRef ?? appState.videoPipeline {
+                    // W391: real local camera — AVCaptureVideoPreview
+                    // Layer attached to the pipeline's session.
+                    LocalCameraPreview(pipeline: pipeline)
+                        .frame(width: 120, height: 160)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                } else {
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
-                )
-                .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
-                .padding(.trailing, 16)
-                .padding(.bottom, 8)
+                        .fill(Color(white: 0.15))
+                        .frame(width: 120, height: 160)
+                        .overlay(
+                            VStack(spacing: 6) {
+                                Image(systemName: "person.fill")
+                                    .font(.title)
+                                    .foregroundColor(.gray)
+                                Text("Tu")
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                            }
+                        )
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
+            .padding(.trailing, 16)
+            .padding(.bottom, 8)
         }
     }
 

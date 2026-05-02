@@ -12,6 +12,22 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.368", date: "2026-05-02",
+              title: "🎥 Video pipeline end-to-end (W391, deep-fix #3/4)",
+              bullets: [
+                "Chiusa la 'video call media: UI presente ma backend stubbed' del PARITY_AUDIT_HONEST",
+                "Engine: nuovo HevcDecoder (VTDecompressionSession, simmetrico a HevcEncoder)",
+                "Annex-B parsing, parameter-set caching (VPS/SPS/PPS), CMVideoFormatDescription auto-build",
+                "App: VideoCallPipeline orchestrator (AVCaptureSession + HevcEncoder + HevcDecoder + 2x VideoFrameFragmenter)",
+                "Outbound: capture → encode → fragment → onOutboundFragment(transport callback)",
+                "Inbound: acceptInboundFragment(transport) → defragment → decode → onDecodedFrame(UI)",
+                "UI bridges: LocalCameraPreview (AVCaptureVideoPreviewLayer) + RemoteVideoDisplay (AVSampleBufferDisplayLayer)",
+                "VideoCallView: placeholder rimossi, real video render quando AppState.videoPipeline non-nil",
+                "AppState.startVideoPipeline: lifecycle wired in startCall(video:true), endCall stop+release",
+                "Transport hook: pipeline.onOutboundFragment → ws.sendVideoFrame; ws video_frame handler → pipeline.acceptInboundFragment",
+                "Stale-fragment purge timer 100ms (incomplete frames evicted, niente memory leak su packet loss)",
+                "Honest: pipeline ships RAW fragment over WS — il PqcRtpFrameSealer wrap rimane TODO per parity Android wire totale (engine pieces già pronti, glue layer ~50 righe)"
+              ]),
         .init(id: "v1.0.367", date: "2026-05-02",
               title: "👥 Group chat REAL sender_key_init (W390, deep-fix #2/4)",
               bullets: [

@@ -150,6 +150,11 @@ final class AppState: ObservableObject {
     /// Lazy-init via `ensureGroupCallController(_:)` — one controller
     /// per AppState, reused across calls.
     var groupCallController: GroupCallController?
+    /// W391: live video pipeline for the active 1:1 video call.
+    /// Created in startCall(video:true), stopped in endCall. Held by
+    /// AppState (not by the View) so SwiftUI re-creation doesn't tear
+    /// down the AVCaptureSession mid-call.
+    @Published var videoPipeline: VideoCallPipeline?
     /// W372: NotificationCenter observer guard — only register the
     /// group-chat fan-out listener once per AppState lifetime.
     private var groupFanOutWired: Bool = false
@@ -1781,6 +1786,13 @@ final class AppState: ObservableObject {
             }
 
             callState = .active
+            // W391: bring up the video pipeline for video calls.
+            // Best-effort: if camera permission is denied or hardware
+            // is unavailable, the call continues without video (the
+            // UI placeholders stay visible).
+            if video {
+                await startVideoPipeline(for: contactId)
+            }
             // W347: also kick off a WebRTC outgoing call. This rides in
             // PARALLEL with the legacy SDP-less PQC path during the
             // rollover — the peer that supports WebRTC will pick the
@@ -1825,6 +1837,10 @@ final class AppState: ObservableObject {
 
     func endCall() {
         callService.endCall()
+        // W391: tear down the video pipeline alongside the audio
+        // session. Idempotent if no video pipeline was started.
+        videoPipeline?.stop()
+        videoPipeline = nil
         callState = .ended
         isInCall = false
         isVideoCall = false
@@ -2106,6 +2122,58 @@ extension AppState {
                     print("[AppState] sender_key_ctl ship to \(recipient) failed: \(reason)")
                 }
             }
+        }
+    }
+}
+
+// MARK: - W391: video call pipeline lifecycle
+
+extension AppState {
+    /// Bring up the W391 video pipeline for the active call. Wires:
+    ///   - outbound fragments → `wsClient.sendVideoFrame` to peer
+    ///   - inbound `video_frame` WS events → `pipeline.acceptInboundFragment`
+    /// Best-effort: a failure here doesn't abort the call (the audio
+    /// path keeps working; the SwiftUI placeholders stay visible).
+    @MainActor
+    func startVideoPipeline(for peerId: String) async {
+        // Tear down any leftover pipeline from a previous call.
+        videoPipeline?.stop()
+
+        let pipeline = VideoCallPipeline()
+
+        // Resolve transport (WS client). Without an authenticated
+        // session there's nowhere to ship frames; bail out gracefully.
+        guard let token = authService.loadToken(), !token.isEmpty else {
+            print("[AppState] startVideoPipeline: no auth token, skipping")
+            return
+        }
+        let backendConfig = BackendConfig(serverUrl: serverUrl, accessToken: token)
+        let provider = BCryptoBackendProvider(config: backendConfig)
+        let ws = provider.getWebSocketClient()
+
+        // Outbound — each fragment ships as a video_frame WS envelope.
+        // The fragment header (W340) embeds frame_id / fragIdx /
+        // totalFrags so the peer's defragmenter can reassemble even
+        // under packet loss.
+        pipeline.onOutboundFragment = { [weak ws] fragment in
+            ws?.sendVideoFrame(recipientId: peerId, frame: fragment)
+        }
+
+        // Inbound — register the WS handler. The handler is set per
+        // call; previous registrations are overwritten by registerHandler.
+        ws.registerHandler(type: "video_frame") { [weak pipeline] _, data in
+            guard let pipeline = pipeline,
+                  let b64 = data["frame"] as? String,
+                  let raw = Data(base64Encoded: b64) else { return }
+            pipeline.acceptInboundFragment(raw)
+        }
+
+        do {
+            try await pipeline.start()
+            self.videoPipeline = pipeline
+            print("[AppState] video pipeline up for peer \(peerId)")
+        } catch {
+            print("[AppState] video pipeline start failed: \(error)")
         }
     }
 }
