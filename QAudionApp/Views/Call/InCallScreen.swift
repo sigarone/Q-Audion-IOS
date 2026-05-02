@@ -213,8 +213,33 @@ struct InCallScreen: View {
             Text("online · verified voice")
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(scheme.onSurfaceVariant)
+            // W323: tiny "DATI DEMO" badge surfaced when key panel is
+            // not present — heuristic for "engine not yet wired" so
+            // testers know the numbers above are placeholder.
+            if keyInfo == nil {
+                stubBadge
+            }
         }
     }
+
+    /// W323: small italianized "DEMO" pill. Static foreground / no
+    /// closures + no multi-segment interpolation (SWIFT6_PATTERNS §1).
+    private var stubBadge: some View {
+        Text(Self.stubBadgeText)
+            .qaudionStyle(type.labelSmall)
+            .tracking(1.0)
+            .foregroundStyle(extras.warning)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule().stroke(extras.warning.opacity(0.6), lineWidth: 1)
+            )
+            .accessibilityLabel("Dati demo, non ancora collegati al motore")
+    }
+
+    /// W323: static helper — String formatting kept out of @ViewBuilder
+    /// per SWIFT6_PATTERNS §1 / §6.
+    private static let stubBadgeText: String = "DEMO"
 
     // MARK: - Stats card
 

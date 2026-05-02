@@ -63,7 +63,38 @@ struct LiveInCallScreen: View {
         // duration label + sparkline tick without forcing CallService
         // to push @Published updates.
         TimelineView(.periodic(from: .now, by: 1)) { _ in
-            InCallScreen(
+            inCallScreenView
+        }
+        .overlay(alignment: .topTrailing) {
+            // W324: stub disclaimer next to the rekey countdown. The
+            // rekey timer rendered inside InCallScreen is a local
+            // anchor, not the engine's real next-rekey-ETA. Surface
+            // that to testers so a "ticking" 252→0 doesn't look
+            // load-bearing.
+            stubRekeyDisclaimer
+                .padding(.top, 56)
+                .padding(.trailing, 12)
+        }
+        .onAppear {
+            resolvePeerDisplayName()
+            rekeyAnchorEpoch = Date().timeIntervalSince1970
+        }
+        .onChange(of: appState.callContactId) { _ in
+            // Re-resolve when the call peer changes (e.g. switching
+            // between successive calls on the same showcase entry).
+            resolvePeerDisplayName()
+        }
+    }
+
+    // MARK: - Sub-views (extracted to keep TimelineView body shallow,
+    //                   per SWIFT6_PATTERNS §5/§6).
+
+    /// W324: composing all the InCallScreen args inline used to be a
+    /// 22-arg call inside a TimelineView closure — wrapping it in a
+    /// computed property keeps the type-checker scope clean.
+    @ViewBuilder
+    private var inCallScreenView: some View {
+        InCallScreen(
                 peerDisplayName: cachedPeerDisplayName,
                 avatarUrl: nil,
                 durationSeconds: Int(appState.callService.callDurationSeconds),
@@ -107,17 +138,27 @@ struct LiveInCallScreen: View {
                     appState.endCall()
                 }
             )
-        }
-        .onAppear {
-            resolvePeerDisplayName()
-            rekeyAnchorEpoch = Date().timeIntervalSince1970
-        }
-        .onChange(of: appState.callContactId) { _ in
-            // Re-resolve when the call peer changes (e.g. switching
-            // between successive calls on the same showcase entry).
-            resolvePeerDisplayName()
-        }
     }
+
+    /// W324: tiny "DEMO" badge anchored to the top-trailing corner.
+    /// Italian copy. Static formatting (no closures, no multi-segment
+    /// interpolation) per SWIFT6_PATTERNS §1.
+    @ViewBuilder
+    private var stubRekeyDisclaimer: some View {
+        Text(Self.stubRekeyText)
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(1.0)
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule().stroke(Color.orange.opacity(0.6), lineWidth: 1)
+            )
+            .accessibilityLabel("Rekey demo, contatore non collegato al motore")
+    }
+
+    /// W324: static helper — keep the literal out of @ViewBuilder.
+    private static let stubRekeyText: String = "REKEY DEMO"
 
     // MARK: - Derived state
 

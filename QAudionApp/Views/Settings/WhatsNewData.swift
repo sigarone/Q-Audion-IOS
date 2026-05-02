@@ -12,6 +12,21 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.307", date: "2026-05-02",
+              title: "Audit §3 stub-UI sweep — InCall + Bubble (W323-W325)",
+              bullets: [
+                "InCallScreen (W323): 'DEMO' capsule badge quando keyInfo == nil",
+                "LiveInCallScreen (W324): 'REKEY DEMO' overlay + extract InCallScreen call",
+                "BubbleActionSheet (W325): disabled '+' ora flash tooltip 'Picker emoji in arrivo'",
+                "TUTTE le 16 §3 stub UIs ora polished",
+                "Audit §3 100% closed"
+              ]),
+        .init(id: "v1.0.306", date: "2026-05-02",
+              title: "Refresh TODO_AUDIT.md scoreboard",
+              bullets: [
+                "Updated audit progress matrix",
+                "§3 stub UIs: 13/16 → 16/16 dopo W323-W325"
+              ]),
         .init(id: "v1.0.305", date: "2026-05-02",
               title: "Audit §3 stub-UI sweep batch — onboarding (W314-W316)",
               bullets: [

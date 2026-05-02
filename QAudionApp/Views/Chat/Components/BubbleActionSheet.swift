@@ -46,12 +46,27 @@ struct BubbleActionSheet: View {
 
     private let emojis = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 
+    /// W325: visibility flag for the "Picker emoji in arrivo" hint
+    /// shown when the disabled "+" stub is tapped. Auto-hides after
+    /// `Self.plusHintAutoDismissSeconds`.
+    @State private var showPlusHint: Bool = false
+
     var body: some View {
         VStack(spacing: 0) {
             reactionRow
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
                 .padding(.bottom, 8)
+
+            // W325: tooltip-style hint surfaced when the user taps the
+            // disabled "+" emoji-picker stub. Static copy, no
+            // interpolation (SWIFT6_PATTERNS §1).
+            if showPlusHint {
+                plusHintRow
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .transition(.opacity)
+            }
 
             Divider().background(scheme.outline.opacity(0.4))
 
@@ -106,16 +121,62 @@ struct BubbleActionSheet: View {
                 .accessibilityLabel("Reagisci con \(emoji)")
             }
             // Disabled "+" stub — lands in a future wave with a full picker.
-            ZStack {
-                Circle().fill(scheme.surfaceVariant.opacity(0.45))
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.onSurfaceVariant)
+            // W325: tappable now (purely informational): surfaces a
+            // small "Picker emoji in arrivo" hint below the row so the
+            // user understands the affordance is intentional, not a
+            // bug. The button still does NOT call onReact().
+            Button(action: revealPlusHint) {
+                ZStack {
+                    Circle().fill(scheme.surfaceVariant.opacity(0.45))
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                }
+                .frame(width: 40, height: 40)
+                .opacity(0.5)
             }
-            .frame(width: 40, height: 40)
-            .opacity(0.5)
-            .accessibilityHidden(true)
+            .buttonStyle(.plain)
+            .accessibilityLabel(Self.plusHintAccessibilityLabel)
             Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - W325 helpers
+
+    private static let plusHintText: String = "Picker emoji in arrivo"
+    private static let plusHintAccessibilityLabel: String =
+        "Altre reazioni: picker emoji in arrivo"
+    private static let plusHintAutoDismissSeconds: Double = 2.0
+
+    private var plusHintRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Text(Self.plusHintText)
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(scheme.surfaceVariant.opacity(0.5))
+        )
+    }
+
+    private func revealPlusHint() {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            showPlusHint = true
+        }
+        // Auto-dismiss the tooltip after a short window so the action
+        // sheet doesn't stay padded forever.
+        let delay = Self.plusHintAutoDismissSeconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showPlusHint = false
+            }
         }
     }
 
