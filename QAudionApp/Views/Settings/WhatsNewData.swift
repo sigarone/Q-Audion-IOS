@@ -12,6 +12,15 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.298", date: "2026-05-02",
+              title: "Shared TapCopyRow component (W309)",
+              bullets: [
+                "Nuovo: DesignSystem/Components/TapCopyRow.swift",
+                "Promuove il pattern W297/W307/W308 in un componente condiviso",
+                "Pure additive — i 3 helper per-file restano invariati per ora",
+                "Future tap-to-copy possono usare il componente condiviso",
+                "Hygiene: §6 audit progress (DRY refactor)"
+              ]),
         .init(id: "v1.0.297", date: "2026-05-02",
               title: "Backup: Cifratura tap-to-copy (W308)",
               bullets: [
