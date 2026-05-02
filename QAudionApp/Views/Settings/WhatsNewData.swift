@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.342", date: "2026-05-02",
+              title: "🤝 Per-peer v3 capability negotiation (W365)",
+              bullets: [
+                "Nuovo PeerCapabilityRegistry: tracker per-peer (unknown / v1 / v3)",
+                "probeInbound: detect magic byte → flag peer as v3-capable on first observation",
+                "Outbound: shouldUseV3Outbound = global flag OR per-peer observed v3",
+                "Niente più toggle manuale per ogni device — v3 si accende incrementalmente",
+                "Kill-switch UserDefaults['ChatRatchetV3.enabled'] resta come override globale",
+                "Persiste UserDefaults['ChatRatchetV3.peerCaps'] (map peerId → state)",
+                "Conservative: una volta osservato v3, non rolling back se v1 dopo (multi-device peers)"
+              ]),
         .init(id: "v1.0.341", date: "2026-05-02",
               title: "🔐 Keychain-backed GroupSessionVault — group state persiste (W364)",
               bullets: [

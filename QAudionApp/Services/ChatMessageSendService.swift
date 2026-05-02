@@ -101,15 +101,13 @@ final class ChatMessageSendService {
             return .failed(reason: .cryptoFailure)
         }
 
-        // W352: outbound v3 ratchet routing. Default OFF until peers have
-        // had time to update past v1.0.330 (which added the inbound v3
-        // routing). Enable by setting UserDefaults
-        // `ChatRatchetV3.enabled` = true. Once enabled, every outbound
-        // chat message rides the v3.1 wire format (magic 0xE3, canonical
-        // CBOR AAD, forward-secrecy chain) instead of the legacy v1
-        // MessageCrypto path. Inbound v3 already lands via W351 since
-        // last release.
-        let useV3 = UserDefaults.standard.bool(forKey: "ChatRatchetV3.enabled")
+        // W365: per-peer v3 capability gate. The global UserDefaults
+        // flag still works as a kill-switch — but normally we now flip
+        // to v3 automatically the first time we observe a v3 inbound
+        // from this peer (PeerCapabilityRegistry.probeInbound writes
+        // the flag). This means v3 lights up incrementally as peers
+        // upgrade, without any manual coordination per device.
+        let useV3 = PeerCapabilityRegistry.shared.shouldUseV3Outbound(for: peerUserId)
         let wireBlob: Data
         do {
             if useV3 {

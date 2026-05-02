@@ -931,6 +931,12 @@ final class AppState: ObservableObject {
             let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
             psk = Data(digest)
         }
+        // W365: probe the wire-format magic byte to learn this peer's
+        // capability. Once we observe a v3 inbound, every outbound
+        // chat message to that peer also goes v3 (without needing the
+        // global UserDefaults flag).
+        PeerCapabilityRegistry.shared.probeInbound(cipher, from: senderId)
+
         // W80: capture the RAW decrypted plaintext separately from the
         // friendly UI rendering so we can detect qfile markers and
         // kick off the receive pipeline. Without this split, the
