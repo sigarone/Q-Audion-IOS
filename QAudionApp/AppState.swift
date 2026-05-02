@@ -383,6 +383,11 @@ final class AppState: ObservableObject {
                 do {
                     let profile = try await provider.accountApi.getProfile()
                     self.currentUserId = profile.userId
+                    // W361: mirror to UserDefaults so engine-adjacent
+                    // services (LinkNewDeviceScreen QR, future
+                    // background tasks) can read the userId without
+                    // taking a reference to AppState.
+                    UserDefaults.standard.set(profile.userId, forKey: "currentUserId")
                     self.isAuthenticated = true
                     self.replayPendingTrackB()
                     // W74: open the long-lived WS so the server flips
@@ -407,6 +412,7 @@ final class AppState: ObservableObject {
                 phoneNumber: userId, password: credential, serverUrl: defaultServerUrl
             )
             currentUserId = creds.userId
+            UserDefaults.standard.set(creds.userId, forKey: "currentUserId")
             isAuthenticated = true
             errorMessage = nil
             replayPendingTrackB()
@@ -434,6 +440,7 @@ final class AppState: ObservableObject {
                 phoneHash: phoneHash, password: credential, serverUrl: defaultServerUrl
             )
             currentUserId = creds.userId
+            UserDefaults.standard.set(creds.userId, forKey: "currentUserId")
             isAuthenticated = true
             errorMessage = nil
             replayPendingTrackB()
@@ -1448,6 +1455,7 @@ final class AppState: ObservableObject {
         // login starts with a clean slate.
         presenceService.reset()
         currentUserId = nil
+        UserDefaults.standard.removeObject(forKey: "currentUserId")
         isAuthenticated = false
         callState = .idle
         isInCall = false

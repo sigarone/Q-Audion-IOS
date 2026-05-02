@@ -72,6 +72,22 @@ final class ChatVoiceNoteSender {
         for recording: VoiceNoteRecorder.Recording,
         recipientUserId: String
     ) async throws -> String {
+        // W362: when UserDefaults["VoiceNote.attachAnnounce.enabled"]
+        // is true, route through the cross-platform attach_announce
+        // pipeline (W355 sender). Default OFF — flipped per-tester
+        // until peers have W356 receive logic deployed; once both
+        // sides flip on, voice notes work iOS↔Android↔Desktop.
+        if UserDefaults.standard.bool(forKey: "VoiceNote.attachAnnounce.enabled") {
+            do {
+                return try await ChatAttachAnnounceSender(appState: appState)
+                    .prepareEnvelopeJson(recording: recording,
+                                          recipientUserId: recipientUserId)
+            } catch {
+                // Fall back to the legacy qfile path on any error so
+                // the user can still send during the rollover.
+                print("[ChatVoiceNoteSender] attach_announce path failed, falling back to qfile: \(error)")
+            }
+        }
 
         // 1. Read the captured M4A bytes.
         // AVAudioRecorder.stop() is synchronous on the API, but the

@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.339", date: "2026-05-02",
+              title: "🔌 ChatVoiceNoteSender wired to attach_announce + userId persist (W361-W362)",
+              bullets: [
+                "AppState mirror currentUserId in UserDefaults (W361) — LinkNewDeviceScreen QR ora usa real userId",
+                "Cleanup su logout (removeObject) per evitare stale userId in QR successivi",
+                "ChatVoiceNoteSender route a ChatAttachAnnounceSender quando UserDefaults['VoiceNote.attachAnnounce.enabled']=true",
+                "Default OFF: rollover safe (peers vecchi non hanno receive path)",
+                "Fallback automatico al legacy qfile path su errore (no message loss)",
+                "Quando flag ON entrambi i lati: voice notes cross-platform iOS↔Android↔Desktop"
+              ]),
         .init(id: "v1.0.338", date: "2026-05-02",
               title: "🛠 Fix build: HevcEncoder iOS 17.4 availability gate (W360)",
               bullets: [
