@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.290", date: "2026-05-02",
+              title: "WhatsNew: toggle 'Solo ultime 5' (W301)",
+              bullets: [
+                "'Cosa c'è di nuovo': nuovo toggle in cima 'Solo ultime 5'",
+                "Filtra a `releaseNotes.prefix(5)` quando attivo",
+                "Riduce lo scroll dopo 50+ release shipped",
+                "Stato @State scoped alla schermata, non persiste"
+              ]),
         .init(id: "v1.0.289", date: "2026-05-02",
               title: "Riga 'Regione' in About → STATO SISTEMA (W300)",
               bullets: [
@@ -441,13 +449,39 @@ struct WhatsNewScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
+    /// W301: 'Latest only' toggle. When true, only the top 5 entries
+    /// are rendered. Useful when the changelog grows past the user's
+    /// patience threshold but they only want to know what's new since
+    /// the last build they ran.
+    @State private var latestOnly: Bool = false
+
+    /// W301: visible entries — full list or just the top 5.
+    private var visibleEntries: [ReleaseNote] {
+        if latestOnly {
+            return Array(ReleaseNote.releaseNotes.prefix(5))
+        }
+        return ReleaseNote.releaseNotes
+    }
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     intro
-                    ForEach(ReleaseNote.releaseNotes) { note in
+                    // W301: filter toggle row above the list. Compact
+                    // styling so it doesn't compete with the intro.
+                    HStack(spacing: 8) {
+                        Toggle(isOn: $latestOnly) {
+                            Text("Solo ultime 5")
+                                .qaudionStyle(type.labelSmall)
+                                .foregroundStyle(scheme.onSurface)
+                        }
+                        .toggleStyle(.switch)
+                        .tint(scheme.primary)
+                    }
+                    .padding(.vertical, 4)
+                    ForEach(visibleEntries) { note in
                         releaseCard(note)
                     }
                     Spacer().frame(height: 24)
