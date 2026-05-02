@@ -27,8 +27,11 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         if let f = _factory { return f }
         // RTCInitializeSSL is idempotent — safe to call once on first use.
         RTCInitializeSSL()
-        let encoderFactory = RTCDefaultVideoEncoderFactory()
-        let decoderFactory = RTCDefaultVideoDecoderFactory()
+        // W350: prefer HEVC over H264 in SDP. Both peers fall back to
+        // H264 when one side doesn't advertise HEVC, but when both do
+        // the lower bitrate wins.
+        let encoderFactory = HevcPreferredVideoEncoderFactory()
+        let decoderFactory = HevcPreferredVideoDecoderFactory()
         let factory = RTCPeerConnectionFactory(
             encoderFactory: encoderFactory,
             decoderFactory: decoderFactory

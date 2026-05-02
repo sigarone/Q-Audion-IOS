@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.329", date: "2026-05-02",
+              title: "🎬 HEVC-preferred video codec factories (W350)",
+              bullets: [
+                "Port HevcAwareVideoEncoderFactory.kt → HevcPreferredVideo{Encoder,Decoder}Factory",
+                "supportedCodecs() ordina H265 prima di H264/VP8/VP9 nella SDP",
+                "Wrapper sui RTCDefaultVideo{Encoder,Decoder}Factory standard CryptoKit/WebRTC",
+                "iPhone iOS 16+ supporta HEVC nativo — no availability gate needed",
+                "QAudionPeerConnectionFactory ora usa le HEVC-prefer factories di default",
+                "Risparmio ~30% bandwidth a parità di qualità percepita su cellular",
+                "Cross-platform: matches Android HevcAware factory che fa lo stesso reorder"
+              ]),
         .init(id: "v1.0.328", date: "2026-05-02",
               title: "🔌 Thread RelayCredentialsProvider into WebRTC ICE (W349)",
               bullets: [
