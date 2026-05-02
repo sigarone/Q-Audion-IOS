@@ -4,7 +4,11 @@ workflows:
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
-      xcode: latest
+      # W313: pinned to 26.4 (was 'latest', which resolved to 26.4.1).
+      # Apple ITMS-90725 deadline (April 28, 2026) requires Xcode 26+
+      # for App Store submissions — pin matches current behavior with
+      # reproducibility for future runs.
+      xcode: 26.4
     triggering:
       events:
         - push
@@ -34,7 +38,8 @@ workflows:
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
-      xcode: latest
+      # W313: pinned to 26.4 (same reason as above workflow).
+      xcode: 26.4
       groups:
         - asc_credentials   # must contain APP_STORE_CONNECT_KEY_IDENTIFIER,
                             # APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_PRIVATE_KEY

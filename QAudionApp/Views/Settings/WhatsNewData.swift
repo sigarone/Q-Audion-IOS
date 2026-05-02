@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.302", date: "2026-05-02",
+              title: "Pin xcode 26.4 in codemagic.yaml (W313)",
+              bullets: [
+                "codemagic.yaml: 'xcode: latest' → 'xcode: 26.4' (entrambi i workflow)",
+                "Latest resolveva già a 26.4.1 — pin per reproducibilità",
+                "Soddisfa Apple ITMS-90725 deadline (April 28, 2026)",
+                "Audit §1 critical item DONE (Xcode 26 deadline)"
+              ]),
         .init(id: "v1.0.301", date: "2026-05-02",
               title: "Estratto SWIFT6_PATTERNS.md (W312)",
               bullets: [
