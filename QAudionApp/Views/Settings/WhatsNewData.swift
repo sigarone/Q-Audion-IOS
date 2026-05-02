@@ -12,6 +12,16 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.350", date: "2026-05-02",
+              title: "🔐 Biometric-gated SovereignKeyVault accessor (W373)",
+              bullets: [
+                "Nuovo BiometricKeyVaultGate: wrapper async su SovereignKeyVault",
+                "protectedLoad(name, reason): prompt LAContext.evaluatePolicy(.deviceOwnerAuthentication)",
+                "Face ID / Touch ID / Optic ID + passcode fallback per HIGH-value PSK",
+                "biometryType / isBiometryAvailable: probe sync per UI badge",
+                "Opt-in upgrade — caller esistenti continuano con SovereignKeyVault.loadPsk diretto",
+                "Cross-platform parity con Android Keystore biometric-gated SOVEREIGN tier"
+              ]),
         .init(id: "v1.0.349", date: "2026-05-02",
               title: "👥 GroupChatScreen.handleSend wired end-to-end (W372)",
               bullets: [
