@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.303", date: "2026-05-02",
+              title: "NetworkSimulator: stub disclaimer (W317)",
+              bullets: [
+                "Settings → Simulatore rete: aggiunto disclaimer '⚠️ stub UI'",
+                "Esplicito che il packet shaper non agisce sul transport",
+                "Evita confusione QA: 'perché non funziona?'",
+                "Sister polish dei W295/W303 — UX wins su stub UIs"
+              ]),
         .init(id: "v1.0.302", date: "2026-05-02",
               title: "Pin xcode 26.4 in codemagic.yaml (W313)",
               bullets: [

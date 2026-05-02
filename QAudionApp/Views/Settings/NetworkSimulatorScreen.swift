@@ -203,6 +203,13 @@ struct NetworkSimulatorScreen: View {
                 .modifier(MonoBodySmall())
             Text("offline: \(container.active.offline ? "true" : "false")")
                 .modifier(MonoBodySmall())
+            // W317: stub disclaimer — make it explicit that the UI is
+            // not yet wired to a real packet shaper. Avoids the QA
+            // tester wondering 'why doesn't this affect my call'.
+            Text("⚠️ stub UI — packet shaper non ancora wired sul transport")
+                .font(.system(size: 10, weight: .regular, design: .monospaced))
+                .foregroundStyle(extras.warning)
+                .padding(.top, 6)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
