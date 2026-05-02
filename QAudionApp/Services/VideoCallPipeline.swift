@@ -230,6 +230,21 @@ public final class VideoCallPipeline: NSObject {
         #endif
     }
 
+    /// W398 — read the inbound fragmenter's loss-window counters.
+    /// Returns (received, lost) since the last call. Used by the
+    /// AbrController to compute recent loss percentage.
+    public nonisolated func consumeInboundAbrSample() -> (received: Int, lost: Int) {
+        return inboundFragmenter.consumeAbrSample()
+    }
+
+    /// W398 — adjust the HEVC encoder's target bitrate mid-stream.
+    /// Called by AbrController based on observed inbound loss rate.
+    /// HevcEncoder.setBitrate clamps to [minVideoBitrateBps,
+    /// maxVideoBitrateBps] so any value is safe.
+    public nonisolated func setEncoderBitrate(_ newBps: Int) {
+        encoder.setBitrate(newBps)
+    }
+
     /// W394: install / rotate the PQC sealer. Called when
     /// CallSessionKeyBroker fires sasReadyNotification with a fresh
     /// 32-byte ML-KEM-derived secret. Idempotent — the call site

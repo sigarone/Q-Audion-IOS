@@ -153,6 +153,8 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
             return nil
         }
         pendingFrames.removeValue(forKey: frameId)
+        // W398: count completed frames for loss-rate denominator.
+        framesReceivedInWindow &+= 1
 
         // Reassemble NAL unit.
         let totalSize = pending.fragments.reduce(0) { $0 + ($1?.count ?? 0) }
@@ -173,6 +175,8 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
     /// Purge stale incomplete frames that exceeded the reassembly timeout.
     /// Should be called periodically (e.g., every 100ms). Returns the
     /// number of purged frames.
+    /// W398: each purge is also accumulated into a sliding-window
+    /// loss counter so the ABR controller can read recent loss rate.
     @discardableResult
     public func purgeStaleFrames() -> Int {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -185,7 +189,28 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         for id in staleIds {
             pendingFrames.removeValue(forKey: id)
         }
+        // W398: counter bookkeeping.
+        framesLostInWindow &+= staleIds.count
         return staleIds.count
+    }
+
+    // MARK: - W398 ABR feedback
+
+    private var framesReceivedInWindow: Int = 0
+    private var framesLostInWindow: Int = 0
+
+    /// W398 — read and reset the sliding-window loss counters. Called
+    /// by AbrController every `abrSampleIntervalMs` to compute recent
+    /// loss percentage. Returned tuple: (received, lost). lossPct =
+    /// lost / max(received + lost, 1).
+    public func consumeAbrSample() -> (received: Int, lost: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        let r = framesReceivedInWindow
+        let l = framesLostInWindow
+        framesReceivedInWindow = 0
+        framesLostInWindow = 0
+        return (r, l)
     }
 
     public var pendingFrameCount: Int {

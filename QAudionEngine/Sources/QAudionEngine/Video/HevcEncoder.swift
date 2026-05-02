@@ -156,6 +156,27 @@ public final class HevcEncoder: @unchecked Sendable {
         }
     }
 
+    /// W398 — adjust bitrate mid-stream. VTCompressionSession allows
+    /// AverageBitRate to be re-set on a live session; the encoder
+    /// adjusts its rate-control on the next frames. No restart needed.
+    /// Bounded to [VideoConstants.minVideoBitrateBps,
+    /// maxVideoBitrateBps] so a wild ABR controller can't push the
+    /// encoder into degenerate states.
+    public func setBitrate(_ newBps: Int) {
+        let clamped = max(VideoConstants.minVideoBitrateBps,
+                          min(VideoConstants.maxVideoBitrateBps, newBps))
+        lock.lock()
+        guard let session = session else { lock.unlock(); return }
+        lock.unlock()
+        let status = VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_AverageBitRate,
+            value: NSNumber(value: clamped))
+        if status != noErr {
+            print("[HevcEncoder] setBitrate(\(clamped)) failed status=\(status)")
+        }
+    }
+
     /// Flush any queued frames and emit them through `onNal`.
     public func flush() {
         lock.lock()

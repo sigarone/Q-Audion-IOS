@@ -155,6 +155,16 @@ final class AppState: ObservableObject {
     /// AppState (not by the View) so SwiftUI re-creation doesn't tear
     /// down the AVCaptureSession mid-call.
     @Published var videoPipeline: VideoCallPipeline?
+    /// W398: ABR controller bound to the active video pipeline.
+    /// Co-lifecycled with videoPipeline.
+    private var abrController: AbrController?
+    /// W396: responder-side QAudionCallIntegration. Lazy-created on
+    /// inbound `call_incoming` BEFORE the user accepts on CallKit so
+    /// we have somewhere to land the early PQC OFFER opaque_message.
+    /// Once landed, encapsulate fires + ML-KEM secret is forwarded to
+    /// the broker via onPqcSessionKeyEstablished. This unblocks W389
+    /// for the responder side (was previously caller-only).
+    private var responderCallIntegration: QAudionCallIntegration?
     /// W372: NotificationCenter observer guard — only register the
     /// group-chat fan-out listener once per AppState lifetime.
     private var groupFanOutWired: Bool = false
@@ -713,6 +723,15 @@ final class AppState: ObservableObject {
                         self.isVideoCall = (callType == "video")
                         self.callState = .ringing
                         self.isInCall = true
+                        // W396: pre-create the responder integration
+                        // so the early PQC OFFER (which arrives
+                        // immediately after the call_incoming envelope
+                        // — possibly before the user accepts on
+                        // CallKit) has somewhere to land.
+                        let integration = self.ensureResponderIntegration(forCaller: senderId)
+                        integration.didReceiveIncomingCallOffer(
+                            callId: callIdStr, callerId: senderId)
+                        integration.setLocallyRinging(true)
                     }
                 }
             }
@@ -1511,7 +1530,7 @@ final class AppState: ObservableObject {
     /// Routes to `ContactKeyExchange.handleOffer/handleAccept` so the
     /// pairwise PSK handshake completes without explicit UI action.
     private func wireOpaqueMessageHandler(on ws: BCryptoWebSocketClient, cke: ContactKeyExchange) {
-        ws.registerHandler(type: "opaque_message") { _, data in
+        ws.registerHandler(type: "opaque_message") { [weak self] _, data in
             guard let senderId = data["sender_id"] as? String,
                   !senderId.isEmpty,
                   let blobB64 = data["data"] as? String,
@@ -1528,13 +1547,116 @@ final class AppState: ObservableObject {
                 Task { await cke.handleOffer(senderId: senderId, peerPubKey: pub) }
             case .keyExchangeAccept(let pub):
                 Task { await cke.handleAccept(senderId: senderId, peerPubKey: pub) }
+            case .offer:
+                // W396 — responder side. The caller shipped a PQC
+                // OFFER. Route to the lazily-created responder
+                // integration so encapsulate fires and the ML-KEM
+                // shared secret is forwarded to the broker.
+                Task { @MainActor [weak self] in
+                    self?.routeInboundPqcOffer(blob: blob, senderId: senderId)
+                }
+            case .accept:
+                // W396 — caller side. The responder shipped a PQC
+                // ACCEPT. Route to the existing caller integration
+                // (callService.callIntegration) so decapsulate fires.
+                Task { @MainActor [weak self] in
+                    self?.routeInboundPqcAccept(blob: blob, senderId: senderId)
+                }
             default:
-                // Other capability frames (offer/accept/audio/etc.) are
-                // routed by the call/audio path elsewhere — ignore here
-                // unless the engine adds first-class support.
+                // Audio / video / dcSdp* / hangup frames are handled
+                // elsewhere or not yet first-class.
                 break
             }
         }
+    }
+
+    /// W396 — responder-side dispatch: ensure an integration exists
+    /// (lazy-create if first OFFER for this peer), pre-stash the
+    /// incoming-call ids, and fire onCapabilityMessageReceived so
+    /// the engine can encapsulate and ship ACCEPT.
+    @MainActor
+    private func routeInboundPqcOffer(blob: Data, senderId: String) {
+        let integration = ensureResponderIntegration(forCaller: senderId)
+        // Build the send-opaque closure bound to this caller. Each
+        // outbound ACCEPT rides the existing CallingApi WS path.
+        let sendOpaque: (Data) async throws -> Void = { [weak self] payload in
+            guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
+            try await provider.callingApi.sendOpaqueMessage(
+                recipientId: senderId, data: payload)
+        }
+        do {
+            try integration.onCapabilityMessageReceived(
+                data: blob, sendOpaqueMessage: sendOpaque)
+        } catch {
+            print("[AppState] responder onCapabilityMessageReceived failed: \(error)")
+        }
+    }
+
+    /// W396 — caller-side dispatch: forward the PQC ACCEPT to the
+    /// existing caller integration owned by callService. The
+    /// integration's decapsulate path fires onPqcSessionKeyEstablished
+    /// (W389) which surfaces the real ML-KEM secret to the broker.
+    @MainActor
+    private func routeInboundPqcAccept(blob: Data, senderId: String) {
+        guard let integration = callService.callIntegration,
+              let provider = liveProvider else {
+            print("[AppState] PQC ACCEPT arrived from \(senderId) with no caller integration")
+            return
+        }
+        // Reuse the same opaque sender the caller startCall built.
+        let sendOpaque: (Data) async throws -> Void = { payload in
+            try await provider.callingApi.sendOpaqueMessage(
+                recipientId: senderId, data: payload)
+        }
+        do {
+            try integration.onCapabilityMessageReceived(
+                data: blob, sendOpaqueMessage: sendOpaque)
+        } catch {
+            print("[AppState] caller onCapabilityMessageReceived failed: \(error)")
+        }
+    }
+
+    /// W396 — lazy-create the responder integration the first time we
+    /// see an inbound PQC envelope from this caller. Idempotent: a
+    /// subsequent call returns the cached instance. Wires the same
+    /// callbacks the caller path uses (onPqcSessionKeyEstablished →
+    /// broker; sendCallProcessing/Ready via the live CallingApi).
+    @MainActor
+    private func ensureResponderIntegration(forCaller callerId: String) -> QAudionCallIntegration {
+        if let existing = responderCallIntegration {
+            return existing
+        }
+        let integration = QAudionCallIntegration()
+        // W389: forward the ML-KEM secret to the broker. peerId is the
+        // CALLER (we're the responder), so SAS / video sealer rotate
+        // are bound to the right peer for this device.
+        integration.onPqcSessionKeyEstablished = { [weak self] sharedSecret in
+            let peerId = callerId
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                CallSessionKeyBroker.shared.bind(to: self)
+                CallSessionKeyBroker.shared.registerPqcSessionKey(
+                    sharedSecret, for: peerId)
+            }
+        }
+        // Pre-negotiation hooks — same shape the caller-side block in
+        // startCall uses, but mirrored for the responder.
+        if let provider = liveProvider {
+            integration.sendCallProcessing = { callId, callerId in
+                Task {
+                    try? await provider.callingApi.sendCallProcessing(
+                        callId: callId, callerId: callerId)
+                }
+            }
+            integration.sendCallReady = { callId, callerId in
+                Task {
+                    try? await provider.callingApi.sendCallReady(
+                        callId: callId, callerId: callerId)
+                }
+            }
+        }
+        responderCallIntegration = integration
+        return integration
     }
 
     /// W77: public hook to trigger the first-contact PSK handshake with a
@@ -1837,10 +1959,18 @@ final class AppState: ObservableObject {
 
     func endCall() {
         callService.endCall()
+        // W398: stop ABR loop before video pipeline teardown so the
+        // controller doesn't try to set bitrate on a freed encoder.
+        abrController?.stop()
+        abrController = nil
         // W391: tear down the video pipeline alongside the audio
         // session. Idempotent if no video pipeline was started.
         videoPipeline?.stop()
         videoPipeline = nil
+        // W396: tear down the responder integration so a subsequent
+        // call from the same peer starts with a clean state machine.
+        responderCallIntegration?.onCallEnded()
+        responderCallIntegration = nil
         callState = .ended
         isInCall = false
         isVideoCall = false
@@ -2169,27 +2299,62 @@ extension AppState {
         // the W389 broker reports.
         pipeline.rotatePqcSealer(self.callPqcSessionKey)
 
+        // W397 — Android wire-compat is OPT-IN via UserDefaults.
+        // Default ON for cross-platform interop (iOS↔Android needs
+        // WireRelayFrameCodec); flip OFF via the Beta panel for
+        // legacy iOS↔iOS-only mode (raw sealed fragments).
+        let androidWire = (UserDefaults.standard.object(
+            forKey: "qaudion.video.android_wire_compat") as? Bool) ?? true
+        let seqCounter = AndroidVideoWireAdapter.SequenceCounter()
+
         // Outbound — each fragment ships as a video_frame WS envelope.
         // sealOutboundFragment reads the current sealer from the
         // pipeline so rekey is observed without rewiring closures.
         pipeline.onOutboundFragment = { [weak ws, weak pipeline] fragment in
-            let toShip = pipeline?.sealOutboundFragment(fragment) ?? fragment
+            // Parse the iOS sub-header BEFORE sealing so the sealed
+            // envelope carries it inside the ciphertext. The Android
+            // wrapper only needs the metadata to rebuild the outer
+            // mux header — the iOS receiver still uses the inner
+            // sub-header for defragmentation.
+            let parsed = AndroidVideoWireAdapter.parseIosFragment(fragment)
+            let sealed = pipeline?.sealOutboundFragment(fragment) ?? fragment
+            let toShip: Data
+            if androidWire, let p = parsed,
+               let android = AndroidVideoWireAdapter.encodeForAndroid(
+                    sealedFragment: sealed,
+                    innerFragment: p,
+                    sequence: seqCounter.next()) {
+                toShip = android
+            } else {
+                toShip = sealed
+            }
             ws?.sendVideoFrame(recipientId: peerId, frame: toShip)
         }
 
-        // Inbound — register the WS handler. acceptInboundFragment
-        // applies PQC unwrap internally if a decryptor is installed.
+        // Inbound — register the WS handler. When Android-wire is on,
+        // unwrap the outer mux header first; either way feed the
+        // post-seal envelope to acceptInboundFragment which applies
+        // PQC unwrap internally before defragmentation.
         ws.registerHandler(type: "video_frame") { [weak pipeline] _, data in
             guard let pipeline = pipeline,
                   let b64 = data["frame"] as? String,
                   let raw = Data(base64Encoded: b64) else { return }
-            pipeline.acceptInboundFragment(raw)
+            if androidWire,
+               let unwrapped = AndroidVideoWireAdapter.decodeFromAndroid(raw) {
+                pipeline.acceptInboundFragment(unwrapped.sealedFragment)
+            } else {
+                pipeline.acceptInboundFragment(raw)
+            }
         }
 
         do {
             try await pipeline.start()
             self.videoPipeline = pipeline
-            print("[AppState] video pipeline up for peer \(peerId)")
+            // W398: spin up ABR loop on the same lifecycle.
+            let abr = AbrController(pipeline: pipeline)
+            abr.start()
+            self.abrController = abr
+            print("[AppState] video pipeline up for peer \(peerId), ABR active")
         } catch let err as VideoCallPipeline.PipelineError {
             // W393: user-visible error surfacing. The audio call keeps
             // running; only the video portion is degraded. Surface a

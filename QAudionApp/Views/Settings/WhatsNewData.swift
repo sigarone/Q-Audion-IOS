@@ -12,6 +12,21 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.371", date: "2026-05-02",
+              title: "🔧 Gap cleanup pass 2: responder PQC + Android wire + ABR (W396+W397+W398)",
+              bullets: [
+                "W396 (gap #1): responder-side PQC handshake wired",
+                "W396: AppState.responderCallIntegration lazy-creato su call_incoming, didReceiveIncomingCallOffer pre-stash",
+                "W396: opaque_message dispatcher ora instrada .offer al responder e .accept al caller",
+                "W396: onPqcSessionKeyEstablished lato responder forwarda la ML-KEM secret reale al broker (W389 ora funziona da entrambi i lati)",
+                "W397 (gap #4): AndroidVideoWireAdapter wrapping fragments via WireRelayFrameCodec (mux=0x02 + EncryptedFrame)",
+                "W397: opt-in via UserDefaults qaudion.video.android_wire_compat (default ON per cross-platform)",
+                "W397: SequenceCounter per call, encode/decode bidirezionale, parità byte-by-byte attesa con Android (verifica reale su device)",
+                "W398 (gap #5): AbrController con sample loop ogni 2s, decrease 30% su loss>5%, increase 50kbps dopo 5 intervalli sostenuti <2%",
+                "W398: VideoFrameFragmenter espone consumeAbrSample() (received/lost counters)",
+                "W398: HevcEncoder.setBitrate via VTSessionSetProperty AverageBitRate (clamp [200kbps, 2.5Mbps])",
+                "W398: AbrController lifecycle-bound a videoPipeline in AppState"
+              ]),
         .init(id: "v1.0.370", date: "2026-05-02",
               title: "🧹 Gap cleanup pass 1: video UX + sealer rekey + group buffer (W393+W394+W395)",
               bullets: [
