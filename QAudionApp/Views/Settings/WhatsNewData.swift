@@ -12,6 +12,21 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.324", date: "2026-05-02",
+              title: "👥 Group session orchestration — chat di gruppo end-to-end (W345)",
+              bullets: [
+                "Port GroupSession.kt: state machine completa per gruppi multi-sender",
+                "GroupState (members, admins, send chain + N recv chains per peer)",
+                "create / handleSenderKeyInit / handleSenderKeyRotate / rotateOwnSenderKey",
+                "encryptForGroup / decryptFromGroupOrThrow — write-ahead persist",
+                "handleMemberAdded (no epoch bump, ship init envelope al new member)",
+                "handleMemberRemoved (epoch bump + drop tutti i recv chain + rotate own seed)",
+                "Skip-ahead bounded a 10_000 + skipped-cache LRU 256 entries",
+                "Replay rejection, derived-nonce check, AAD utf-8 'grp:hex:sid:idx'",
+                "GroupSessionVault protocol + InMemoryGroupSessionVault",
+                "10 test: round-trip A↔B, replay, member add/remove, epoch bump, rotate, envelope guards",
+                "Audit PARITY: 'GroupSession ROTTO' → ENGINE COMPLETO"
+              ]),
         .init(id: "v1.0.323", date: "2026-05-02",
               title: "🔗 Multi-device pairing — DeviceLinkingProtocol port (W344)",
               bullets: [
