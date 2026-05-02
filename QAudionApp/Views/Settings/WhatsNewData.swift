@@ -12,6 +12,18 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.336", date: "2026-05-02",
+              title: "🔐 Keychain-backed ratchet vault — chain state survives crash (W357)",
+              bullets: [
+                "Nuovo RatchetSnapshotCodec: binary BE codec (parità Android RatchetSnapshotCodec.kt)",
+                "u8 version | utf8(epoch/self/peer) | dirFlags | ck | nextSendIdx(u64) | ckRecv | lastSeen | skipped[N]",
+                "Nuovo KeychainRatchetVault: SecItemAdd/Update con WhenUnlockedThisDeviceOnly",
+                "Service distinto 'com.bcrypto.qaudion.ratchet.v1' — non interferisce con PSK vault",
+                "AppState + ChatMessageSendService ora usano KeychainRatchetVault (era InMemory)",
+                "Chain keys persistono attraverso app relaunch / device restart",
+                "Risolve 'skip-ahead exceeded' che bloccava decrypt dopo lunga finestra offline",
+                "4 test: round-trip + nil lastSeen + version reject + truncated reject"
+              ]),
         .init(id: "v1.0.335", date: "2026-05-02",
               title: "📥 Voice notes attach_announce receiver (W356)",
               bullets: [

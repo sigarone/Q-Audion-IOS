@@ -1801,14 +1801,13 @@ final class AppState: ObservableObject {
 
 extension AppState {
 
-    /// Lazy-init MessageRatchet + InMemoryRatchetVault held on a static so
-    /// per-peer sessions survive across messages. The vault is in-memory
-    /// only for now — production hardening will add a Keychain-backed
-    /// vault that persists chain keys across process death. Until then,
-    /// app relaunch resets every peer's chain to idx=0 (which on the
-    /// SEND side means a momentary "skip-ahead" on the peer; the
-    /// ratchet handles it via the skipped-keys cache).
-    private static let ratchetVault: InMemoryRatchetVault = InMemoryRatchetVault()
+    /// W357: Keychain-backed ratchet vault. Each (epochId, peerId)
+    /// snapshot lives in its own keychain item with
+    /// `WhenUnlockedThisDeviceOnly`. Survives process death so long-
+    /// offline windows still decrypt cleanly when iOS comes back online.
+    /// Falls back to in-memory if keychain access fails (rare; would
+    /// require the device to be locked or a corrupted item).
+    private static let ratchetVault: RatchetVault = KeychainRatchetVault()
     private static let ratchet: MessageRatchet = MessageRatchet(vault: ratchetVault)
 
     /// Decrypt a v3.1 wire blob. Bootstraps the per-peer session from

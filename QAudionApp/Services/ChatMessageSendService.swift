@@ -191,11 +191,10 @@ final class ChatMessageSendService {
 
     // MARK: - W352: v3 outbound ratchet
 
-    /// Ratchet engine + vault are static so a peer's send chain
-    /// advances correctly across multiple sends within a session.
-    /// Mirrors the static held by AppState's inbound path so both
-    /// directions share state when running in the same process.
-    private static let ratchetVault: InMemoryRatchetVault = InMemoryRatchetVault()
+    /// W357: Keychain-backed vault — same persistence surface AppState
+    /// uses for inbound, so chain state survives process death on both
+    /// directions of the chain.
+    private static let ratchetVault: RatchetVault = KeychainRatchetVault()
     private static let ratchet: MessageRatchet = MessageRatchet(vault: ratchetVault)
 
     /// Encrypt a plaintext for the v3.1 wire (magic 0xE3, canonical
