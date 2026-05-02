@@ -8,22 +8,35 @@ final class CallsSettingsContainer: ObservableObject {
 
     init(store: SettingsStore = SettingsStore()) {
         self.store = store
-        self.viewModel = store.loadCalls()
+        // W406: read from CallsGate so the displayed state matches the
+        // value the audio pipeline will read on startCall.
+        let legacy = store.loadCalls()
+        self.viewModel = CallsSettingsViewModel(
+            codecPreference: legacy.codecPreference,
+            isAecEnabled: CallsGate.aecEnabled,
+            isNsEnabled: CallsGate.nsEnabled,
+            isAgcEnabled: CallsGate.agcEnabled,
+            isVoipBackgroundModeActive: legacy.isVoipBackgroundModeActive,
+            preferredCallQuality: legacy.preferredCallQuality
+        )
     }
 
     func toggleAec(_ enabled: Bool) {
         viewModel = makeUpdated(aec: enabled)
         store.saveCalls(viewModel)
+        CallsGate.setAec(enabled)
     }
 
     func toggleNs(_ enabled: Bool) {
         viewModel = makeUpdated(ns: enabled)
         store.saveCalls(viewModel)
+        CallsGate.setNs(enabled)
     }
 
     func toggleAgc(_ enabled: Bool) {
         viewModel = makeUpdated(agc: enabled)
         store.saveCalls(viewModel)
+        CallsGate.setAgc(enabled)
     }
 
     func setCallQuality(_ quality: CallsSettingsViewModel.CallQuality) {

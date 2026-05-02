@@ -111,7 +111,13 @@ final class CallService {
         // W65: PRIMA cosa — configura AVAudioSession in `.voiceChat` mode
         // per attivare lo stack HW DSP di Apple (Voice Processing I/O).
         // Best-effort: se fallisce la chiamata continua comunque.
+        // W406: read CallsGate so the user's AEC/NS/AGC choice
+        // actually controls Apple's VP I/O unit. iOS bundles the three
+        // effects into a single switch — when ALL three are off,
+        // we explicitly disable VP I/O. Otherwise the previous
+        // hardcoded `setVoiceProcessingEnabled(true)` behavior holds.
         let pipeline = AudioProcessingPipeline()
+        pipeline.voiceProcessingOverride = CallsGate.anyVoiceProcessingEnabled
         do {
             try pipeline.configureForVoIP()
             self.audioPipeline = pipeline

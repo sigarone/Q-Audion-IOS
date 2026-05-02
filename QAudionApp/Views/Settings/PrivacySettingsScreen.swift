@@ -8,32 +8,51 @@ final class PrivacySettingsContainer: ObservableObject {
 
     init(store: SettingsStore = SettingsStore()) {
         self.store = store
-        self.viewModel = store.loadPrivacy()
+        // W404: read from the canonical PrivacyGate UserDefaults keys
+        // first; the SettingsStore values become a legacy fallback only
+        // if PrivacyGate has never been written. Defaults match prior
+        // production behavior so users observe no change.
+        let legacy = store.loadPrivacy()
+        self.viewModel = PrivacySettingsViewModel(
+            readReceiptsEnabled: PrivacyGate.readReceiptsEnabled,
+            typingIndicatorEnabled: PrivacyGate.typingIndicatorEnabled,
+            presenceVisibleToContacts: PrivacyGate.presenceVisibleToContacts,
+            disappearingMessagesDuration: PrivacyGate.disappearingSeconds == 0
+                ? legacy.disappearingMessagesDuration
+                : PrivacyGate.disappearingSeconds,
+            blockedUserIds: legacy.blockedUserIds,
+            torEnabled: PrivacyGate.torEnabled
+        )
     }
 
     func toggleReadReceipts(_ enabled: Bool) {
         viewModel = makeUpdated(readReceipts: enabled)
         store.savePrivacy(viewModel)
+        PrivacyGate.setReadReceiptsEnabled(enabled)
     }
 
     func toggleTypingIndicator(_ enabled: Bool) {
         viewModel = makeUpdated(typing: enabled)
         store.savePrivacy(viewModel)
+        PrivacyGate.setTypingIndicatorEnabled(enabled)
     }
 
     func togglePresence(_ enabled: Bool) {
         viewModel = makeUpdated(presence: enabled)
         store.savePrivacy(viewModel)
+        PrivacyGate.setPresenceVisibleToContacts(enabled)
     }
 
     func setDisappearingDuration(_ seconds: TimeInterval) {
         viewModel = makeUpdated(disappearing: seconds)
         store.savePrivacy(viewModel)
+        PrivacyGate.setDisappearingSeconds(seconds)
     }
 
     func toggleTor(_ enabled: Bool) {
         viewModel = makeUpdated(tor: enabled)
         store.savePrivacy(viewModel)
+        PrivacyGate.setTorEnabled(enabled)
     }
 
     private func makeUpdated(

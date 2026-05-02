@@ -8,7 +8,23 @@ final class NotificationsSettingsContainer: ObservableObject {
 
     init(store: SettingsStore = SettingsStore()) {
         self.store = store
-        self.viewModel = store.loadNotifications()
+        // W405: hydrate from NotificationsGate so the visible state
+        // matches the value the banner / scheduleLocal will read.
+        let legacy = store.loadNotifications()
+        let qhEnabled = NotificationsGate.quietHoursEnabled
+        let qhStartH = NotificationsGate.quietStartMinutes / 60
+        let qhStartM = NotificationsGate.quietStartMinutes % 60
+        let qhEndH   = NotificationsGate.quietEndMinutes / 60
+        let qhEndM   = NotificationsGate.quietEndMinutes % 60
+        self.viewModel = NotificationsSettingsViewModel(
+            ringtoneId: legacy.ringtoneId,
+            inAppSoundEnabled: NotificationsGate.inAppSoundEnabled,
+            vibrationEnabled: NotificationsGate.vibrationEnabled,
+            quietHours: NotificationsSettingsViewModel.QuietHours(
+                startHour: qhStartH, startMinute: qhStartM,
+                endHour: qhEndH, endMinute: qhEndM, enabled: qhEnabled),
+            mutedContactsCount: legacy.mutedContactsCount
+        )
     }
 
     func setRingtone(_ id: String) {
@@ -19,16 +35,23 @@ final class NotificationsSettingsContainer: ObservableObject {
     func toggleInAppSound(_ enabled: Bool) {
         viewModel = makeUpdated(inAppSound: enabled)
         store.saveNotifications(viewModel)
+        NotificationsGate.setInAppSound(enabled)
     }
 
     func toggleVibration(_ enabled: Bool) {
         viewModel = makeUpdated(vibration: enabled)
         store.saveNotifications(viewModel)
+        NotificationsGate.setVibration(enabled)
     }
 
     func setQuietHours(_ quietHours: NotificationsSettingsViewModel.QuietHours) {
         viewModel = makeUpdated(quietHours: quietHours)
         store.saveNotifications(viewModel)
+        // W405: also persist into NotificationsGate so the gate is the
+        // single source of truth at banner-render time.
+        NotificationsGate.setQuietHoursEnabled(quietHours.enabled)
+        NotificationsGate.setQuietStart(minutes: quietHours.startHour * 60 + quietHours.startMinute)
+        NotificationsGate.setQuietEnd(minutes: quietHours.endHour * 60 + quietHours.endMinute)
     }
 
     func toggleQuietHours(_ enabled: Bool) {

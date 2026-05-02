@@ -310,15 +310,23 @@ final class ChatContainer: ObservableObject {
     private var typingStopWorkItem: DispatchWorkItem?
 
     func notifyComposerInput() {
+        // W404: real gating on the typing indicator privacy flag. When
+        // the user has disabled "Indicatore di scrittura" in Privacy /
+        // Chat settings, we keep the local typingActive bookkeeping
+        // (so a future enable doesn't immediately fire a stale envelope)
+        // but skip the actual sendTypingIndicator call.
+        let typingEnabled = PrivacyGate.typingIndicatorEnabled
         guard let provider = self.appState?.liveProvider else { return }
         let peerId = peerUserId
         // Send typing=true once per "session of typing".
         if !typingActive {
             typingActive = true
-            Task {
-                try? await provider.messageApi.sendTypingIndicator(
-                    recipientId: peerId, isTyping: true
-                )
+            if typingEnabled {
+                Task {
+                    try? await provider.messageApi.sendTypingIndicator(
+                        recipientId: peerId, isTyping: true
+                    )
+                }
             }
         }
         // Reset the auto-stop timer.
@@ -326,10 +334,12 @@ final class ChatContainer: ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.typingActive = false
-            Task {
-                try? await provider.messageApi.sendTypingIndicator(
-                    recipientId: peerId, isTyping: false
-                )
+            if typingEnabled {
+                Task {
+                    try? await provider.messageApi.sendTypingIndicator(
+                        recipientId: peerId, isTyping: false
+                    )
+                }
             }
         }
         typingStopWorkItem = work
@@ -343,6 +353,10 @@ final class ChatContainer: ObservableObject {
         typingStopWorkItem?.cancel()
         guard typingActive, let provider = self.appState?.liveProvider else { return }
         typingActive = false
+        // W404: also gated. Without this the user could ship a "stop
+        // typing" without ever having shipped a "start typing" — server
+        // would just ignore but the privacy contract is still violated.
+        guard PrivacyGate.typingIndicatorEnabled else { return }
         let peerId = peerUserId
         Task {
             try? await provider.messageApi.sendTypingIndicator(
@@ -562,6 +576,13 @@ final class ChatContainer: ObservableObject {
     /// refresh notification handler intentionally does NOT call this
     /// method; it just zeros the local badge via `markConversationRead`.
     func emitReadReceipts() {
+        // W404: real gating on the read-receipts privacy flag. When
+        // the user has disabled "Conferme di lettura" in Privacy / Chat
+        // settings, we still mark the local conversation as read (badge
+        // clears) but DON'T tell the peer. Their UI keeps showing ✓✓
+        // grey instead of ✓✓ blue. Bookkeeping in `markRead()` runs
+        // unconditionally — the gate is purely on the wire envelope.
+        guard PrivacyGate.readReceiptsEnabled else { return }
         guard let provider = self.appState?.liveProvider else { return }
         let peerId = peerUserId
         let inboundServerIds = store.loadMessages(conversationId: conversationId)

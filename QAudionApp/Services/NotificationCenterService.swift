@@ -128,10 +128,20 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
                        body: String,
                        userInfo: [AnyHashable: Any] = [:],
                        delay: TimeInterval = 0.5) async {
+        // W405: respect the user's quiet-hours setting — if we're
+        // inside the configured window, drop the local notification
+        // entirely. Banner stays suppressed; the message is already
+        // persisted in the conversation store either way.
+        if NotificationsGate.isQuietNow {
+            print("[NotificationCenterService] quiet-hours active, suppressing banner")
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        // W405: gate the chime on the in-app sound toggle. Setting
+        // `sound = nil` makes APNs deliver a silent notification.
+        content.sound = NotificationsGate.inAppSoundEnabled ? .default : nil
         content.categoryIdentifier = category.rawValue
         content.userInfo = userInfo
         content.threadIdentifier = category.rawValue
@@ -175,8 +185,19 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        // Show as banner + sound when app is foreground.
-        return [.banner, .sound, .list, .badge]
+        // W405: foreground presentation respects the user's preferences.
+        // Banner suppressed if banners disabled; sound suppressed if
+        // in-app sound disabled or in quiet hours.
+        if !NotificationsGate.bannersEnabled {
+            return [.list, .badge]
+        }
+        if NotificationsGate.isQuietNow {
+            return [.list, .badge]
+        }
+        if NotificationsGate.inAppSoundEnabled {
+            return [.banner, .sound, .list, .badge]
+        }
+        return [.banner, .list, .badge]
     }
 
     nonisolated func userNotificationCenter(

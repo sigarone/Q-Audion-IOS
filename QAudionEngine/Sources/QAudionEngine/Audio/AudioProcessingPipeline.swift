@@ -104,18 +104,42 @@ public final class AudioProcessingPipeline {
     /// - Automatic gain control (AGC)
     ///
     /// Must be called BEFORE installing an input tap or starting the engine.
+    /// W406 — runtime override set by CallService before calling
+    /// `enableVoiceProcessing`. When non-nil, this takes precedence
+    /// over the internal `config.echoCancellationEnabled /
+    /// noiseCancellationEnabled` flags. Set this to `false` to honor
+    /// a user request to skip Apple's VP I/O unit (the bundled AEC +
+    /// NS + AGC chain). Apple does NOT expose per-effect toggles —
+    /// VP is all-or-nothing.
+    public var voiceProcessingOverride: Bool? = nil
+
     public func enableVoiceProcessing(on engine: AVAudioEngine) throws {
         let inputNode = engine.inputNode
 
-        if config.echoCancellationEnabled || config.noiseCancellationEnabled {
+        let shouldEnable: Bool
+        if let override = voiceProcessingOverride {
+            shouldEnable = override
+        } else {
+            shouldEnable = config.echoCancellationEnabled || config.noiseCancellationEnabled
+        }
+
+        if shouldEnable {
             // iOS 13+: setVoiceProcessingEnabled enables Apple's full VoIP DSP
             if #available(iOS 13.0, *) {
                 try inputNode.setVoiceProcessingEnabled(true)
             }
+        } else {
+            // W406: explicit user opt-out from Apple's VP I/O. The mic
+            // capture still works but without HW echo cancellation /
+            // noise suppression / AGC. Spectral subtraction in our SW
+            // path remains enabled.
+            if #available(iOS 13.0, *) {
+                try? inputNode.setVoiceProcessingEnabled(false)
+            }
         }
 
         // iOS 17+: Voice Isolation for enhanced noise cancellation
-        if config.voiceIsolation {
+        if config.voiceIsolation && shouldEnable {
             if #available(iOS 17.0, *) {
                 configureVoiceIsolation()
             }

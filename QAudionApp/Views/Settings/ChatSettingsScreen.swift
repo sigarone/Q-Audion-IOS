@@ -8,22 +8,34 @@ final class ChatSettingsContainer: ObservableObject {
 
     init(store: SettingsStore = SettingsStore()) {
         self.store = store
-        self.viewModel = store.loadChat()
+        // W404: ChatSettings duplicates 2 of the PrivacySettings flags
+        // (readReceipts, typing). Read from the same canonical
+        // PrivacyGate keys so toggling either screen updates both.
+        let legacy = store.loadChat()
+        self.viewModel = ChatSettingsViewModel(
+            readReceiptsEnabled: PrivacyGate.readReceiptsEnabled,
+            typingIndicatorsEnabled: PrivacyGate.typingIndicatorEnabled,
+            messagePreviewInNotifications: PrivacyGate.messagePreviewInNotifications
+        )
+        _ = legacy  // intentional — keep load to surface migration ref
     }
 
     func toggleReadReceipts(_ enabled: Bool) {
         viewModel = makeUpdated(readReceipts: enabled)
         store.saveChat(viewModel)
+        PrivacyGate.setReadReceiptsEnabled(enabled)
     }
 
     func toggleTypingIndicators(_ enabled: Bool) {
         viewModel = makeUpdated(typing: enabled)
         store.saveChat(viewModel)
+        PrivacyGate.setTypingIndicatorEnabled(enabled)
     }
 
     func toggleMessagePreview(_ enabled: Bool) {
         viewModel = makeUpdated(preview: enabled)
         store.saveChat(viewModel)
+        PrivacyGate.setMessagePreviewInNotifications(enabled)
     }
 
     private func makeUpdated(

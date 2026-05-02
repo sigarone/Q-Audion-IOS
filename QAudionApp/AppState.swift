@@ -1227,10 +1227,20 @@ final class AppState: ObservableObject {
             // Defaults false; when on the body is replaced with a
             // generic "Nuovo messaggio" so the lock-screen / banner
             // doesn't leak chat content to over-the-shoulder readers.
+            // W404: two-axis privacy gating on the notification body.
+            // (a) hideContent (UserDefaults qaudion.privacy.hide_notification_content)
+            //     replaces the body with a generic "Nuovo messaggio".
+            // (b) PrivacyGate.messagePreviewInNotifications: when OFF,
+            //     same effect as hideContent. ChatSettings/Privacy
+            //     toggles both flow into PrivacyGate so the user can
+            //     disable preview from either screen and the banner
+            //     respects it. (a) AND (b) are AND-ed: any one false
+            //     hides the body.
             let hideContent = (UserDefaults.standard.object(
                 forKey: "qaudion.privacy.hide_notification_content") as? Bool) ?? false
+            let previewAllowed = PrivacyGate.messagePreviewInNotifications
             let bodyText: String
-            if hideContent {
+            if hideContent || !previewAllowed {
                 bodyText = "Nuovo messaggio"
             } else if plaintext.count > 120 {
                 bodyText = String(plaintext.prefix(120)) + "…"
