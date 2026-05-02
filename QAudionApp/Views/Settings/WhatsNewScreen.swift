@@ -22,6 +22,15 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.280", date: "2026-05-02",
+              title: "Bundle metadata + GitHub tags link (W290/W291)",
+              bullets: [
+                "About → VERSIONE: 'Bundle name' + 'Bundle id' (W290)",
+                "Surface CFBundleName + CFBundleIdentifier per QA",
+                "About → ASSISTENZA: 'Tags GitHub' button (W291)",
+                "Apre github.com/sigarone/Q-Audion-IOS/tags",
+                "Cronologia release pubblica accessibile dal device"
+              ]),
         .init(id: "v1.0.279", date: "2026-05-02",
               title: "Fix Xcode 26.4 build errors (W289) + W288 TF link",
               bullets: [

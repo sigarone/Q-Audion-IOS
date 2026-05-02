@@ -63,6 +63,15 @@ struct AboutSettingsScreen: View {
                         kvRow("Build installato",
                               Self.buildInstalledLabel(buildNumber: container.viewModel.buildNumber),
                               mono: false)
+                        // W290: bundle metadata. CFBundleName is the
+                        // app's display name as Apple sees it in iTC,
+                        // CFBundleIdentifier is the canonical reverse-
+                        // DNS id. Useful when the QA tester needs to
+                        // copy these for an issue against a specific
+                        // build (also surfaces if the bundle id ever
+                        // drifts from com.qaudion.app).
+                        kvRow("Bundle name", Self.bundleDisplayName(), mono: true)
+                        kvRow("Bundle id", Self.bundleIdentifier(), mono: true)
                     }
                     section("PIATTAFORMA") {
                         kvRow("Target iOS", "iOS \(container.viewModel.iosDeploymentTarget)+", mono: true)
@@ -197,6 +206,45 @@ struct AboutSettingsScreen: View {
                                 Text("Contatta supporto")
                                     .qaudionStyle(type.bodyMedium)
                                     .foregroundStyle(scheme.onSurface)
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 52)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(scheme.surfaceVariant.opacity(0.4))
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        // W291: open the public Q-Audion-IOS GitHub
+                        // repo in browser. Useful for testers who want
+                        // to see release tags / commit history /
+                        // CHANGELOG without leaving the app.
+                        Button {
+                            #if canImport(UIKit)
+                            let url = URL(string: "https://github.com/sigarone/Q-Audion-IOS/tags")
+                            if let u = url {
+                                UIApplication.shared.open(u)
+                            }
+                            #endif
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.system(size: 17, weight: .regular))
+                                    .foregroundStyle(scheme.primary)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Tags GitHub")
+                                        .qaudionStyle(type.bodyMedium)
+                                        .foregroundStyle(scheme.onSurface)
+                                    Text("Cronologia release pubblica del progetto")
+                                        .qaudionStyle(type.labelSmall)
+                                        .foregroundStyle(scheme.onSurfaceVariant)
+                                }
                                 Spacer()
                                 Image(systemName: "arrow.up.right.square")
                                     .font(.system(size: 14, weight: .regular))
@@ -355,6 +403,21 @@ struct AboutSettingsScreen: View {
 
         return LocalDataStats(conversations: conversations,
                               messages: messages, drafts: drafts)
+    }
+
+    /// W290: app's display name from Info.plist CFBundleName. Distinct
+    /// from `CFBundleDisplayName` (which iOS uses for the home-screen
+    /// label); CFBundleName is the bare app name.
+    private static func bundleDisplayName() -> String {
+        let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+        return name ?? "?"
+    }
+
+    /// W290: bundle identifier (e.g. "com.qaudion.app"). Reverse-DNS
+    /// canonical id. Mostly stable across builds; surfaces drift if
+    /// ever changed.
+    private static func bundleIdentifier() -> String {
+        return Bundle.main.bundleIdentifier ?? "?"
     }
 
     /// W170: device model label for the PIATTAFORMA row.
