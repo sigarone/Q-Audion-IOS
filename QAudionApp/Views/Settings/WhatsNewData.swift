@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.317", date: "2026-05-02",
+              title: "🔑 SAS engine reale — niente piu parole hardcoded (W338)",
+              bullets: [
+                "ComputeSasUseCase port da Android: HKDF-SHA256 → 18 byte → 6 indici → 6 parole",
+                "PgpSasWordList: 256 parole PGP-style verbatim da feature-call/PgpSasWordList.kt",
+                "SasConstants: salt 'qaudion-sas-v1' + info 'sas-words-v1' (parità Android)",
+                "Costanti CRITICAL — drift vs Android = silent ceremony divergence",
+                "matches(_:_:) constant-time per evitare timing leak su confronto",
+                "parse(_:) tollerante (spazi, ·, -, ,)",
+                "Pinned KAT vector: sessionKey 0x00..0x1F → bookshelf,pupil,blockade,mural,drifter,snapshot",
+                "11 test inclusa parità byte-perfetta con Python hmac reference",
+                "Audit PARITY: SAS DECORATIVO → REAL ENGINE (TODO: wire in InCallScreen)"
+              ]),
         .init(id: "v1.0.316", date: "2026-05-02",
               title: "🔐 MessageRatchet engine port — v3.1 cross-platform (W337)",
               bullets: [
