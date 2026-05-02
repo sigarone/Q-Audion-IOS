@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.319", date: "2026-05-02",
+              title: "👥 GroupSenderKey primitives — magic 0xE4 (W340)",
+              bullets: [
+                "Port GroupSenderKey.kt: wire pack/unpack, HKDF derivations, AAD, AEAD",
+                "Wire layout: 0xE4 | gid_len | gid | epoch(u32) | sid_len | sid | idx(u64) | nonce(12) | ct | tag(16)",
+                "deriveInitChainKey: SK_0 = HKDF(seed, 'group-sender-init-v1', gid||0x00||sid)",
+                "deriveMsgKeys: (msg_key, nonce) via HKDF info='grp-msg-key' / 'grp-msg-nonce'",
+                "stepChain: CK_{n+1} via 'grp-ratchet-step'",
+                "AAD utf-8: 'grp:<gid_hex>:<sid>:<chain_idx_decimal>' (NOT CBOR — group-specific)",
+                "Hex helpers (lowercase, parità Buffer.toString('hex'))",
+                "13 test: pack/unpack, derivations, AEAD, hex, end-to-end mini scenario sender→recv",
+                "Foundation per GroupSession orchestration + GroupSessionVault (next)"
+              ]),
         .init(id: "v1.0.318", date: "2026-05-02",
               title: "🔌 Wire SAS engine in InCallScreen (W339)",
               bullets: [
