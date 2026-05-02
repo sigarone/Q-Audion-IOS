@@ -931,13 +931,27 @@ final class AppState: ObservableObject {
         // "(download in arrivo)" placeholder before we get to parse.
         var decryptedRaw: String = ""
         do {
-            let pt = try crypto.decrypt(
-                wireBlob: cipher,
-                psk: psk,
-                senderId: senderId,
-                recipientId: currentUserId ?? "",
-                msgId: clientMsgId ?? serverMsgId
-            )
+            // W351: route v3 (0xE3) wire blobs through the MessageRatchet
+            // engine; everything else (no magic byte / 0xE2 v2) falls
+            // back to the legacy v1 MessageCrypto path. Detection on the
+            // first byte is cheap and cross-platform-safe (both engines
+            // reject the other's format on first-byte mismatch).
+            let pt: Data
+            if MessageWireFormat.detect(cipher) == .v3 {
+                pt = try ratchetDecryptV3(
+                    wire: cipher,
+                    psk: psk,
+                    senderId: senderId,
+                    msgId: clientMsgId ?? serverMsgId)
+            } else {
+                pt = try crypto.decrypt(
+                    wireBlob: cipher,
+                    psk: psk,
+                    senderId: senderId,
+                    recipientId: currentUserId ?? "",
+                    msgId: clientMsgId ?? serverMsgId
+                )
+            }
             decryptedRaw = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
             // W78: cross-platform attachment placeholder. Desktop and
             // Android send voice notes / files via the qa_ctl:1
@@ -1780,6 +1794,39 @@ final class AppState: ObservableObject {
             result[i] = peak
         }
         return result
+    }
+}
+
+// MARK: - W351: 1:1 v3 ratchet decrypt routing
+
+extension AppState {
+
+    /// Lazy-init MessageRatchet + InMemoryRatchetVault held on a static so
+    /// per-peer sessions survive across messages. The vault is in-memory
+    /// only for now — production hardening will add a Keychain-backed
+    /// vault that persists chain keys across process death. Until then,
+    /// app relaunch resets every peer's chain to idx=0 (which on the
+    /// SEND side means a momentary "skip-ahead" on the peer; the
+    /// ratchet handles it via the skipped-keys cache).
+    private static let ratchetVault: InMemoryRatchetVault = InMemoryRatchetVault()
+    private static let ratchet: MessageRatchet = MessageRatchet(vault: ratchetVault)
+
+    /// Decrypt a v3.1 wire blob. Bootstraps the per-peer session from
+    /// `psk` if the vault has no snapshot yet. Throws on AEAD failure /
+    /// replay / wire malformation, matching the v1 path's error
+    /// behaviour so the surrounding catch can trigger auto-rekey.
+    func ratchetDecryptV3(wire: Data, psk: Data, senderId: String, msgId: String) throws -> Data {
+        let selfId = currentUserId ?? ""
+        let session = try Self.ratchet.ensureSession(
+            epochId: "v1",                  // single epoch until we wire negotiation
+            selfId: selfId,
+            peerId: senderId,
+            pskRoot: psk
+        )
+        let aad = MessageRatchet.buildMessageAD(
+            senderId: senderId, recipientId: selfId, clientMsgId: msgId)
+        return try Self.ratchet.decryptOrThrow(
+            session: session, wire: wire, aad: aad)
     }
 }
 

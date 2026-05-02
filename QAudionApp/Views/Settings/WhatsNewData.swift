@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.330", date: "2026-05-02",
+              title: "🔐 v3 ratchet routing inbound — decrypt cross-platform (W351)",
+              bullets: [
+                "AppState.handleIncomingMessage ora detect MessageWireFormat e route v3 → MessageRatchet",
+                "ratchetDecryptV3: ensureSession (PSK come pskRoot) + canonical CBOR AAD",
+                "Static InMemoryRatchetVault + MessageRatchet condivisi (epoch 'v1' singolo)",
+                "v1 path legacy (no magic) continua a funzionare — fallback automatico",
+                "v2 path (0xE2) per ora fallisce → triggers auto-rekey (force=true) come prima",
+                "Closure: 'iOS conosce solo v1 wire, Android negozia v3 di default' → CHIUSO inbound",
+                "Outbound v3 send richiede ChatMessageSendService update (next step)"
+              ]),
         .init(id: "v1.0.329", date: "2026-05-02",
               title: "🎬 HEVC-preferred video codec factories (W350)",
               bullets: [
