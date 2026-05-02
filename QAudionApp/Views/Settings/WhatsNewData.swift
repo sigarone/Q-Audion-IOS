@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.363", date: "2026-05-02",
+              title: "🛠 Fix build: stub PqcFrameEncryptor (no RTCFrameEncryptor in binary) (W386)",
+              bullets: [
+                "stasel/WebRTC 131.0.0 binary NON espone RTCFrameEncryptor / Decryptor protocols",
+                "Né frameEncryptor / frameDecryptor properties su RTCRtpSender/Receiver",
+                "Insertable-streams API stripped dal community binary",
+                "Fix: PqcFrameEncryptor / Decryptor diventano NSObject puri (no protocol conformance)",
+                "Esposte come encryptPlaintext / decryptCiphertext per non-SRTP transports",
+                "QAudionPeerConnection.installPqcSealer hold strong ref ma no-op su SRTP layer",
+                "Migration path documentata: re-add conformance quando binary aggiornato"
+              ]),
         .init(id: "v1.0.362", date: "2026-05-02",
               title: "🛠 Fix build: BiometricKeyVaultGate evaluatePolicy ambiguity (W385)",
               bullets: [

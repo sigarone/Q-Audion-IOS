@@ -2,31 +2,26 @@ import Foundation
 #if canImport(WebRTC)
 import WebRTC
 
-/// W382 — RTCFrameEncryptor / RTCFrameDecryptor adapter on top of
-/// PqcRtpFrameSealer (W376).
+/// W386 — engine-side adapters around PqcRtpFrameSealer (W376).
 ///
-/// Plugs into RTCRtpSender / RTCRtpReceiver via:
-///   sender.frameEncryptor = PqcFrameEncryptor(sealer: sealer)
-///   receiver.frameDecryptor = PqcFrameDecryptor(sealer: sealer)
+/// **Status note:** the stasel/WebRTC 131.0.0 binary build (W347 SPM
+/// dep) does NOT expose the `RTCFrameEncryptor` / `RTCFrameDecryptor`
+/// protocols nor the `frameEncryptor` / `frameDecryptor` properties
+/// on `RTCRtpSender` / `RTCRtpReceiver`. Those are part of WebRTC's
+/// M86+ insertable-streams API but get stripped from many community
+/// binary distributions to reduce binary size.
 ///
-/// On the wire, every audio/video RTP packet payload is wrapped by
-/// the sealer's `nonce(12) || ciphertext || tag(16)` envelope BEFORE
-/// the standard SRTP layer wraps it. This means the PQC layer is
-/// orthogonal to DTLS-SRTP — even if SRTP's classical key exchange
-/// is compromised post-quantum, the inner ML-KEM-derived layer
-/// stays sealed.
+/// This file ships the engine-side seal/open adapters as plain
+/// NSObject classes (no protocol conformance) so callers OUTSIDE the
+/// SRTP path (e.g. the BcryptoWsRelay sealed-frame transport) can
+/// still invoke them directly.
 ///
-/// **Important:** RTCFrameEncryptor / RTCFrameDecryptor are part of
-/// the WebRTC M86+ insertable-streams API. Some WebRTC iOS binary
-/// builds expose these protocols as `@objc` only. The stasel/WebRTC
-/// 131.x build (W347 dep) ships them publicly.
-///
-/// **Note:** the protocols expect the encrypt path to fit the
-/// output into a Data buffer of exactly the right size. Our sealer
-/// adds 28 bytes (12 nonce + 16 tag) per frame; this adapter
-/// pre-computes the size via `getMaxCiphertextByteSize` so WebRTC
-/// allocates the right buffer.
-public final class PqcFrameEncryptor: NSObject, RTCFrameEncryptor {
+/// **Migration path:** when a future WebRTC iOS binary exposes the
+/// insertable-streams protocols, add the `RTCFrameEncryptor` /
+/// `RTCFrameDecryptor` conformance + the platform-specific
+/// `encrypt(_:ssrc:frameType:frame:)` / `decrypt(...)` methods. The
+/// inner sealer logic stays unchanged.
+public final class PqcFrameEncryptor: NSObject {
     private let sealer: PqcRtpFrameSealer
 
     public init(sealer: PqcRtpFrameSealer) {
@@ -34,32 +29,25 @@ public final class PqcFrameEncryptor: NSObject, RTCFrameEncryptor {
         super.init()
     }
 
-    public func encrypt(
-        _ mediaType: RTCRtpMediaType,
-        ssrc: UInt32,
-        frameType: UnsafeMutablePointer<UInt8>?,
-        frame: Data
-    ) -> Data {
-        do {
-            return try sealer.seal(frame)
-        } catch {
+    /// Engine-side seal — direct entry point for non-WebRTC transports.
+    /// Returns `nonce(12) || ciphertext || tag(16)`. Returns empty
+    /// Data on seal failure (caller decides drop vs retry policy).
+    public func encryptPlaintext(_ frame: Data) -> Data {
+        do { return try sealer.seal(frame) }
+        catch {
             print("[PqcFrameEncryptor] seal failed: \(error)")
-            // Fail closed — return an empty Data so SRTP rejects rather
-            // than letting an unsealed frame slip through.
             return Data()
         }
     }
 
-    public func getMaxCiphertextByteSize(
-        _ mediaType: RTCRtpMediaType, plaintextSize: Int
-    ) -> Int {
-        // nonce(12) + ciphertext(plaintextSize) + tag(16)
+    /// Pre-compute output size: plaintext + nonce(12) + tag(16).
+    public func maxCiphertextSize(plaintextSize: Int) -> Int {
         return plaintextSize + PqcRtpFrameSealer.nonceSize + PqcRtpFrameSealer.tagSize
     }
 }
 
 /// Inverse of [PqcFrameEncryptor].
-public final class PqcFrameDecryptor: NSObject, RTCFrameDecryptor {
+public final class PqcFrameDecryptor: NSObject {
     private let sealer: PqcRtpFrameSealer
 
     public init(sealer: PqcRtpFrameSealer) {
@@ -67,24 +55,16 @@ public final class PqcFrameDecryptor: NSObject, RTCFrameDecryptor {
         super.init()
     }
 
-    public func decrypt(
-        _ mediaType: RTCRtpMediaType,
-        ssrc: UInt32,
-        frameType: UnsafeMutablePointer<UInt8>?,
-        frame: Data
-    ) -> Data {
-        do {
-            return try sealer.open(frame)
-        } catch {
+    /// Engine-side open — direct entry point for non-WebRTC transports.
+    public func decryptCiphertext(_ frame: Data) -> Data {
+        do { return try sealer.open(frame) }
+        catch {
             print("[PqcFrameDecryptor] open failed: \(error)")
             return Data()
         }
     }
 
-    public func getMaxPlaintextByteSize(
-        _ mediaType: RTCRtpMediaType, ciphertextSize: Int
-    ) -> Int {
-        // ciphertext is plaintext + 28 bytes overhead.
+    public func maxPlaintextSize(ciphertextSize: Int) -> Int {
         return max(0, ciphertextSize - PqcRtpFrameSealer.nonceSize - PqcRtpFrameSealer.tagSize)
     }
 }

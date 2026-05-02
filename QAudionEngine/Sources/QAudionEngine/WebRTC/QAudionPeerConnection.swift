@@ -98,22 +98,34 @@ public final class QAudionPeerConnection: NSObject {
         return true
     }
 
-    /// W382 — install a PQC frame encryptor / decryptor on every
-    /// existing RTP sender + receiver. Call this AFTER
-    /// addLocalAudioTrack and AFTER setLocalDescription so the
-    /// senders/receivers list is populated. Idempotent: re-installing
-    /// over an existing encryptor replaces it (use for rekey).
+    /// W386 — placeholder for the W382 PQC sealer install hook.
+    ///
+    /// The stasel/WebRTC 131.0.0 binary build doesn't expose the
+    /// `frameEncryptor` / `frameDecryptor` properties on
+    /// `RTCRtpSender` / `RTCRtpReceiver` (insertable-streams API
+    /// stripped from the binary). The PqcRtpFrameSealer engine
+    /// (W376) and the engine-side adapters (W386) remain in place
+    /// for non-SRTP transports (BcryptoWsRelay etc.); the SRTP path
+    /// will pick this up automatically when a WebRTC iOS build with
+    /// the insertable-streams protocols becomes available.
+    ///
+    /// Until then this method is a no-op so existing call sites
+    /// (W383 `applyPqcSealerIfPossible`) keep compiling without
+    /// breaking the SRTP layer.
     public func installPqcSealer(_ sealer: PqcRtpFrameSealer) {
-        guard let pc = peerConnection else { return }
-        let enc = PqcFrameEncryptor(sealer: sealer)
-        let dec = PqcFrameDecryptor(sealer: sealer)
-        for sender in pc.senders {
-            sender.frameEncryptor = enc
-        }
-        for receiver in pc.receivers {
-            receiver.frameDecryptor = dec
-        }
+        guard peerConnection != nil else { return }
+        // Hold a strong reference to the adapter pair so the engine
+        // is reachable for the non-SRTP transports while we wait for
+        // a WebRTC binary that exposes the insertable-streams API.
+        installedPqcEncryptor = PqcFrameEncryptor(sealer: sealer)
+        installedPqcDecryptor = PqcFrameDecryptor(sealer: sealer)
     }
+
+    /// Held so the seal/open closures stay alive as long as the
+    /// peer connection. Read by the BcryptoWsRelay path when it
+    /// switches to PQC-augmented frames in a future commit.
+    public private(set) var installedPqcEncryptor: PqcFrameEncryptor?
+    public private(set) var installedPqcDecryptor: PqcFrameDecryptor?
 
     /// Mute / unmute the local microphone.
     public func setMicrophoneMuted(_ muted: Bool) {
