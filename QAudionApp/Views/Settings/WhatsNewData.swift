@@ -12,6 +12,18 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.323", date: "2026-05-02",
+              title: "🔗 Multi-device pairing — DeviceLinkingProtocol port (W344)",
+              bullets: [
+                "Port DeviceLinkingProtocol.kt: QR-based device linking ceremony",
+                "QR scheme: qaudion://link/<base64url(pub|userIdLen|userId|oneTimeCode)>",
+                "X25519 ECDH + HKDF-SHA256 → 32-byte sync key (parità Android)",
+                "AES-GCM state snapshot: nonce(12) || ciphertext+tag — wire match",
+                "JSON snapshot {version, timestamp, contacts, settings, trust}",
+                "base64url helpers (Java URL_SAFE | NO_WRAP equivalent)",
+                "10 test: encode/decode round-trip, scheme reject, RNG uniqueness, X25519 agreement, snapshot round-trip + wrong key fail",
+                "Audit PARITY: 'multi-device pairing NON IMPLEMENTATO' → ENGINE PRONTO"
+              ]),
         .init(id: "v1.0.322", date: "2026-05-02",
               title: "📞 Peppered v2 contact discovery — fix interop con Android (W343)",
               bullets: [
