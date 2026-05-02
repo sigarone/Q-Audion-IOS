@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.321", date: "2026-05-02",
+              title: "🎥 Video frame fragmenter + VideoConstants (W342)",
+              bullets: [
+                "Port VideoFrameFragmenter.kt: NAL unit chunking + reassembly (sub-header 7B)",
+                "VideoConstants Android-aligned: maxFragmentPayload=1200, bitrate 800k default, ABR thresholds",
+                "Fragment sub-header: fragFlags(1) | frameId(u16 BE) | fragIdx | totalFrags | bitrateHint(u16 BE)",
+                "Reassembly tracker: out-of-order delivery, duplicate ignore, 150ms staleness purge",
+                "Thread-safe: NSLock-guarded pending map + frameId counter (u16 wraparound)",
+                "9 test: round-trip single/multi-frag, OoO, duplicate, stale purge, header layout",
+                "Foundation per VTCompressionSession (HEVC iOS-side encoder, prossimo step)"
+              ]),
         .init(id: "v1.0.320", date: "2026-05-02",
               title: "🛠 Fix build: RelayServer/RelayResponse → Decodable only (W341)",
               bullets: [
