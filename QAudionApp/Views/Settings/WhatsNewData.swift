@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.353", date: "2026-05-02",
+              title: "🔐 PqcRtpFrameSealer — PQC-augmented SRTP layer (W376)",
+              bullets: [
+                "Nuovo PqcRtpFrameSealer: AEAD wrap interno su ogni RTP frame audio",
+                "Master key = HKDF-SHA256(pqcKey, 'qaudion-srtp-salt-v1', 'q-audion-srtp-master-v1')",
+                "Counter-based nonce (8B BE counter al fine 12B) — no (key,nonce) reuse 2^64 frames",
+                "Wire frame: nonce(12) | ct | tag(16) — applicabile inside DTLS-SRTP wrap",
+                "API: seal(plaintext) / open(sealed) thread-safe via NSLock counter",
+                "Pronto per RTCFrameEncryptor / RTCFrameDecryptor PeerConnection slot",
+                "Phase 22 design — ML-KEM resta protetto anche se DTLS-SRTP cade post-quantum"
+              ]),
         .init(id: "v1.0.352", date: "2026-05-02",
               title: "🔑 CallSessionKeyBroker — surface real PQC key for SAS (W375)",
               bullets: [
