@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.309", date: "2026-05-02",
+              title: "🎯 AUDIT 100% AGENT-SCOPE CLOSED",
+              bullets: [
+                "TODO_AUDIT.md aggiornato con scoreboard finale",
+                "§1 Critical: 1/2 (Xcode 26 ✅, export compliance ⏳ legal)",
+                "§2 Engine TODOs: 4/4 ✅ (delete-local W326 chiuso il saga file)",
+                "§3 Stub UIs: 16/16 ✅ (W295-W325 sweep)",
+                "§6 Repo hygiene: 3/3 ✅ (W302, W309, W312)",
+                "5 di 7 sezioni 100% chiuse — restanti necessitano input umano",
+                "190+ features shipped da W137 in ~2 settimane"
+              ]),
         .init(id: "v1.0.308", date: "2026-05-02",
               title: "Wire delete-for-me — audit §2 100% closed (W326)",
               bullets: [
