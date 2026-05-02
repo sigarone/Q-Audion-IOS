@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.285", date: "2026-05-02",
+              title: "CallHistory: filtro 'Solo perse' (W296)",
+              bullets: [
+                "Schermata Chiamate: nuovo toggle 'Solo perse' in cima alla lista",
+                "Mostra il count visibile vs totale (es. '3 di 12')",
+                "Filtraggio reattivo, scopo session (non persiste)",
+                "Riduce il triage per chi cerca solo le chiamate perse"
+              ]),
         .init(id: "v1.0.284", date: "2026-05-02",
               title: "MyPhones: 'Aggiornato N minuti fa' (W295)",
               bullets: [

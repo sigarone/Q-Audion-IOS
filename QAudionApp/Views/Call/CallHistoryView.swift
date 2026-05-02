@@ -177,6 +177,12 @@ struct CallHistoryView: View {
     @State private var showingGroupComposer = false
     @State private var showingClearAllConfirm = false
 
+    /// W296: filter toggle. When true, only missed calls are shown.
+    /// State persists for the lifetime of the screen instance, not
+    /// across launches (intentional — most users want this scoped
+    /// to a single triage session).
+    @State private var missedOnly: Bool = false
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -284,9 +290,60 @@ struct CallHistoryView: View {
         }
     }
 
+    /// W296: visible entries — either all of `store.entries` or just
+    /// the `.missed` ones depending on the filter toggle. Computed at
+    /// render time so toggling is reactive without re-fetch.
+    private var visibleEntries: [CallHistoryEntry] {
+        if missedOnly {
+            return store.entries.filter { $0.direction == .missed }
+        }
+        return store.entries
+    }
+
+    /// W296: filter toggle row. Renders only when there's at least
+    /// one entry (avoids cluttering the empty state).
+    @ViewBuilder
+    private var filterRow: some View {
+        if !store.entries.isEmpty {
+            HStack(spacing: 8) {
+                Toggle(isOn: $missedOnly) {
+                    Text("Solo perse")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurface)
+                }
+                .toggleStyle(.switch)
+                .tint(extras.warning)
+                Spacer()
+                Text(Self.filterCountLabel(
+                    total: store.entries.count,
+                    visible: visibleEntries.count,
+                    filtered: missedOnly
+                ))
+                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+        }
+    }
+
+    private static func filterCountLabel(total: Int, visible: Int, filtered: Bool) -> String {
+        if filtered {
+            return String(visible) + " di " + String(total)
+        }
+        return String(total)
+    }
+
     private var list: some View {
         List {
-            ForEach(store.entries) { entry in
+            // W296: insertion of filterRow at the top of the List as a
+            // pseudo-header. Hidden when no entries (empty state takes
+            // over instead of `list`).
+            filterRow
+                .listRowBackground(scheme.background)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            ForEach(visibleEntries) { entry in
                 CallHistoryRow(entry: entry,
                                onAudioCall: { peerId in
                     Task { await appState.startCall(contactId: peerId, video: false) }
