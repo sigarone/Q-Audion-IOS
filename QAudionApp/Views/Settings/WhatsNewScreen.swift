@@ -22,6 +22,15 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.278", date: "2026-05-02",
+              title: "Audio session cat + UN auth status (W286/W287)",
+              bullets: [
+                "About → STATO SISTEMA: 'Audio session' (W286)",
+                "Mostra la AVAudioSession.category corrente (es. 'PlayAndRecord')",
+                "Notifiche → STATO: 'Autorizzazione' riga sopra Pendenti/Consegnate (W287)",
+                "Authorized · Denied · Provisional · Ephemeral · Not determined",
+                "Diagnosi rapida 'le notifiche non arrivano' (potrebbe essere denied)"
+              ]),
         .init(id: "v1.0.277", date: "2026-05-02",
               title: "Conta release nel WhatsNew intro (W285)",
               bullets: [

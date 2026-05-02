@@ -132,6 +132,12 @@ struct AboutSettingsScreen: View {
                         // it helps testers confirm the prompt was
                         // accepted (or revoked).
                         kvRow("Permesso microfono", Self.microphonePermissionLabel(), mono: false)
+                        // W286: audio session category. Voice calls
+                        // need .playAndRecord; voice notes need
+                        // .record; ringtone playback uses .playback.
+                        // Helps debug 'mic stuck on' or 'audio routes
+                        // to speakerphone unexpectedly' issues.
+                        kvRow("Audio session", Self.audioSessionLabel(), mono: true)
                     }
                     // W159: local data summary — gives the user a
                     // sense of how much chat content lives on this
@@ -545,6 +551,25 @@ struct AboutSettingsScreen: View {
         case .undetermined: return "Non richiesto"
         @unknown default: return "Sconosciuto"
         }
+        #else
+        return "?"
+        #endif
+    }
+
+    /// W286: current audio session category. AVAudioSession exposes
+    /// `category` as `AVAudioSession.Category` enum-like constant.
+    /// Friendly label format: "playAndRecord" or "playback" etc.
+    private static func audioSessionLabel() -> String {
+        #if canImport(AVFAudio)
+        let cat = AVAudioSession.sharedInstance().category
+        // .rawValue is e.g. "AVAudioSessionCategoryPlayAndRecord";
+        // strip the prefix for a friendly short name.
+        let raw: String = cat.rawValue
+        let prefix: String = "AVAudioSessionCategory"
+        if raw.hasPrefix(prefix) {
+            return String(raw.dropFirst(prefix.count))
+        }
+        return raw
         #else
         return "?"
         #endif

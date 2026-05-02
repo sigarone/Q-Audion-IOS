@@ -96,6 +96,10 @@ struct NotificationsSettingsScreen: View {
     @State private var pendingCount: Int = 0
     @State private var deliveredCount: Int = 0
 
+    /// W287: authorization status string. Populated alongside the
+    /// counts since notificationSettings() is the same-cost call.
+    @State private var authStatusLabel: String = "?"
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -167,6 +171,12 @@ struct NotificationsSettingsScreen: View {
                     // toolkit is actually doing what it claims.
                     SettingsSectionHeader("STATO")
                     VStack(spacing: 8) {
+                        // W287: UN authorization status — verifies
+                        // the user actually granted the prompt + that
+                        // settings haven't been revoked from iOS.
+                        kvRow(label: "Autorizzazione",
+                              value: authStatusLabel,
+                              mono: false)
                         kvRow(label: "Pendenti",
                               value: String(pendingCount),
                               mono: true)
@@ -405,8 +415,26 @@ struct NotificationsSettingsScreen: View {
             let center = UNUserNotificationCenter.current()
             let pending = await center.pendingNotificationRequests()
             let delivered = await center.deliveredNotifications()
+            // W287: also fetch authorization status — same call cost,
+            // surfaces in the STATO row so testers see at a glance
+            // whether the iOS prompt was accepted.
+            let settings = await center.notificationSettings()
             self.pendingCount = pending.count
             self.deliveredCount = delivered.count
+            self.authStatusLabel = Self.formatAuthStatus(settings.authorizationStatus)
+        }
+    }
+
+    /// W287: friendly label for UN authorization status. Static so the
+    /// type-checker has clean scope (CLAUDE.md §13).
+    private static func formatAuthStatus(_ status: UNAuthorizationStatus) -> String {
+        switch status {
+        case .authorized:        return "Autorizzato"
+        case .denied:            return "Negato"
+        case .notDetermined:     return "Non richiesto"
+        case .provisional:       return "Provvisorio"
+        case .ephemeral:         return "Effimero"
+        @unknown default:        return "Sconosciuto"
         }
     }
 
