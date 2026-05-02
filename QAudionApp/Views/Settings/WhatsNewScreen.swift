@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.286", date: "2026-05-02",
+              title: "Tap-to-copy commit row in About (W297)",
+              bullets: [
+                "About → VERSIONE: tap sulla riga 'Commit' copia il SHA",
+                "Icona doc.on.clipboard a destra telegrafa il gesto",
+                "Haptic feedback alla copia (HapticFeedback.messageSent)",
+                "Sister di W156/W157 — pattern tap-to-copy per metadata"
+              ]),
         .init(id: "v1.0.285", date: "2026-05-02",
               title: "CallHistory: filtro 'Solo perse' (W296)",
               bullets: [

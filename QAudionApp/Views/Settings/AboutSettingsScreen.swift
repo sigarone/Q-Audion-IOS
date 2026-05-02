@@ -49,7 +49,11 @@ struct AboutSettingsScreen: View {
                     section("VERSIONE") {
                         kvRow("App", container.viewModel.appVersion, mono: false)
                         kvRow("Build", container.viewModel.buildNumber, mono: true)
-                        kvRow("Commit", container.viewModel.gitCommitShort, mono: true)
+                        // W297: tap the commit row to copy the SHA to
+                        // clipboard. Useful when filing bug reports —
+                        // tester can paste the canonical commit hash
+                        // directly without copying from screenshots.
+                        tapCopyRow("Commit", container.viewModel.gitCommitShort)
                         // W158: capture first-launch timestamp once,
                         // then surface it as "Membro da" so the user
                         // can see how long the app has been on this
@@ -813,6 +817,41 @@ struct AboutSettingsScreen: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(scheme.surfaceVariant.opacity(0.4))
         )
+    }
+
+    /// W297: kvRow variant with tap-to-copy. Identical visuals plus a
+    /// faint clipboard icon trailing the value to telegraph the gesture.
+    /// Tapping copies `value` to UIPasteboard and shows haptic feedback.
+    /// Mono-formatted (since copyable values are usually IDs / hashes).
+    private func tapCopyRow(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Text(value)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Image(systemName: "doc.on.clipboard")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            #if canImport(UIKit)
+            UIPasteboard.general.string = value
+            HapticFeedback.messageSent()
+            #endif
+        }
     }
 
     private func statusRow(_ label: String, enabled: Bool) -> some View {
