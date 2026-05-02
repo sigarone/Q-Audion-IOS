@@ -28,6 +28,11 @@ struct GroupInfoScreen: View {
     /// `GroupChatRepository.createInvite(groupId:)` deferred — oggi
     /// genera un payload pure-locale (groupId + name).
     @State private var showingInviteQr = false
+    /// W321: timestamp dell'ultimo refresh dello state (oggi == apertura
+    /// schermata, finché GroupChatRepository.observeGroup non lo
+    /// aggiorna). Surfaced in UI come "Aggiornato N min fa" così il
+    /// tester sa quanto è fresca la lista membri.
+    @State private var lastRefreshAt: Date = Date()
     let onLeft: () -> Void
 
     init(state: GroupInfoUiState, onLeft: @escaping () -> Void = {}) {
@@ -43,6 +48,14 @@ struct GroupInfoScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         SettingsSectionHeader("MEMBRI")
+                        // W321: relative-time freshness indicator. Helps
+                        // testers tell stale data from real refresh.
+                        Text(Self.formatLastRefreshed(lastRefreshAt))
+                            .qaudionStyle(type.labelSmall)
+                            .italic()
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 6)
                         VStack(spacing: 8) {
                             ForEach(state.members) { member in
                                 memberRow(member)
@@ -186,6 +199,17 @@ struct GroupInfoScreen: View {
     }
 
     // MARK: - Helpers
+
+    /// W321: builds "Aggiornato …" relative-time string with locale
+    /// it_IT. Static so its String formatting lives outside any
+    /// @ViewBuilder closure (SWIFT6_PATTERNS rule 1).
+    private static func formatLastRefreshed(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.unitsStyle = .full
+        let rel: String = f.localizedString(for: date, relativeTo: Date())
+        return "Aggiornato " + rel
+    }
 
     private func handleLeave() {
         // Stub: simula leave (engine wiring pending).

@@ -89,12 +89,28 @@ struct GroupCallScreen: View {
                 Text("Chiamata di gruppo")
                     .qaudionStyle(type.titleLarge)
                     .foregroundStyle(scheme.onBackground)
+                // W322: live participant-count badge in the title row.
+                // Static helper formats the String outside the
+                // @ViewBuilder closure (SWIFT6_PATTERNS rule 1+3).
+                Text(Self.formatParticipantBadge(participants.count))
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onPrimary)
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                    .background(Capsule().fill(scheme.primary))
             }
             Text(String(callId.prefix(8)))
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// W322: builds the participant-count badge string. Uses
+    /// `String(describing:)` to avoid the `String(Int)` overload
+    /// trap (SWIFT6_PATTERNS rule 3).
+    private static func formatParticipantBadge(_ count: Int) -> String {
+        let n: String = String(describing: count)
+        return n + " in linea"
     }
 
     // MARK: - Participant tile

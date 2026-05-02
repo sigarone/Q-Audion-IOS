@@ -12,6 +12,24 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.305", date: "2026-05-02",
+              title: "Audit §3 stub-UI sweep batch — onboarding (W314-W316)",
+              bullets: [
+                "WelcomeScreen (W314): 'Funzione in arrivo' italic disclaimers sotto i CTA stub",
+                "PhoneEntryScreen (W315): timestamp 'Ultimo tentativo HH:mm:ss' dopo Continue",
+                "LinkNewDeviceScreen (W316): tap-to-copy fingerprint + disclaimer pairing",
+                "Tutto via static helpers, type-checker safe (SWIFT6_PATTERNS rules)",
+                "3 stub UIs polished — TODO_AUDIT.md §3 progress"
+              ]),
+        .init(id: "v1.0.304", date: "2026-05-02",
+              title: "Audit §3 stub-UI sweep batch — group screens (W319-W322)",
+              bullets: [
+                "CreateGroupScreen (W319): 'N selezionati su M' counter live",
+                "GroupChatScreen (W320): long-press titolo → copy group UUID + snackbar",
+                "GroupInfoScreen (W321): 'Aggiornato N minuti fa' relative timestamp",
+                "GroupCallScreen (W322): 'N in linea' capsule badge in titolo",
+                "4 stub UIs polished — TODO_AUDIT.md §3 progress"
+              ]),
         .init(id: "v1.0.303", date: "2026-05-02",
               title: "NetworkSimulator: stub disclaimer (W317)",
               bullets: [

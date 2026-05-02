@@ -169,7 +169,16 @@ struct CreateGroupScreen: View {
     // MARK: - Bottom bar
 
     private var bottomBar: some View {
-        HStack {
+        HStack(spacing: 12) {
+            // W319: live selection counter on the left of the bottom
+            // bar so the user always sees "N selezionati / M totali"
+            // even before tapping Crea. Uses static helper to keep
+            // String formatting outside @ViewBuilder closures.
+            Text(Self.formatSelectionCounter(
+                    selected: state.selectedMemberIds.count,
+                    total: state.contacts.count))
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
             Spacer()
             Button(action: handleCreate) {
                 HStack(spacing: 6) {
@@ -196,6 +205,16 @@ struct CreateGroupScreen: View {
         .overlay(alignment: .top) {
             Rectangle().fill(scheme.outline.opacity(0.3)).frame(height: 0.5)
         }
+    }
+
+    /// W319: builds the "N selezionati su M" string outside any
+    /// @ViewBuilder / closure context. Uses `String(describing:)` to
+    /// avoid the `String(Int)` overload trap (SWIFT6_PATTERNS §3).
+    private static func formatSelectionCounter(selected: Int,
+                                               total: Int) -> String {
+        let s: String = String(describing: selected)
+        let t: String = String(describing: total)
+        return s + " selezionati su " + t
     }
 
     private var canCreate: Bool {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Group chat detail. 1:1 port di Android
 /// `qaudion-android-new/feature/feature-chat/.../group/GroupChatScreen.kt`.
@@ -68,6 +69,9 @@ struct GroupChatScreen: View {
             .accessibilityLabel("Indietro")
 
             // Header tappabile → GroupInfoScreen
+            // W320: long-press copia il groupId nella clipboard con
+            // feedback snackbar — utile per tester che devono
+            // riferirsi a un gruppo specifico nei bug report.
             Button(action: { showingInfo = true }) {
                 HStack(spacing: 10) {
                     ZStack {
@@ -92,6 +96,10 @@ struct GroupChatScreen: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.6)
+                    .onEnded { _ in handleCopyGroupId() }
+            )
             Spacer(minLength: 8)
         }
         .padding(.horizontal, 8)
@@ -221,6 +229,24 @@ struct GroupChatScreen: View {
     }
 
     // MARK: - Handlers
+
+    /// W320: long-press handler that copies the group UUID to the
+    /// system pasteboard. Method-extracted to keep the gesture
+    /// closure trivial (SWIFT6_PATTERNS rule 4 — no closure body
+    /// deeper than `closure → Task → do/catch`).
+    private func handleCopyGroupId() {
+        let value: String = groupId.uuidString
+        UIPasteboard.general.string = value
+        let msg: String = Self.formatGroupIdCopiedMessage(prefix:
+            String(value.prefix(8)))
+        snackbar?.show(.init(text: msg, severity: .info))
+    }
+
+    /// W320: snackbar copy helper. Static so it has its own clean
+    /// type-check scope and no `@ViewBuilder` constraints.
+    private static func formatGroupIdCopiedMessage(prefix: String) -> String {
+        return "ID gruppo copiato (" + prefix + "…)"
+    }
 
     private func handleSend() {
         let trimmed = state.composerText.trimmingCharacters(in: .whitespacesAndNewlines)
