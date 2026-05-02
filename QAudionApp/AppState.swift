@@ -496,6 +496,10 @@ final class AppState: ObservableObject {
         // AppState lifetime.
         if !groupFanOutWired {
             wireGroupChatFanOut()
+            // W375: bind the PQC session-key broker so the call
+            // handshake completion path can re-seed callPqcSessionKey
+            // from the real ML-KEM shared secret once it's available.
+            CallSessionKeyBroker.shared.bind(to: self)
             groupFanOutWired = true
         }
         let config = BackendConfig(serverUrl: serverUrl, accessToken: token)

@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.355", date: "2026-05-02",
+              title: "🔌 Bind CallSessionKeyBroker on WS connect (W378)",
+              bullets: [
+                "AppState.connectPersistentSocket ora chiama CallSessionKeyBroker.shared.bind",
+                "Subito dopo wireGroupChatFanOut — stesso lifecycle once-per-session",
+                "PQC handshake completion path può ora pubblicare key real via broker",
+                "Closure end-to-end W375: wiring fatto, broker live nel processo"
+              ]),
         .init(id: "v1.0.354", date: "2026-05-02",
               title: "🧪 Tests sweep W374-W376 (W377)",
               bullets: [
