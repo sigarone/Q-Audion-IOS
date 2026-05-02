@@ -12,6 +12,14 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.354", date: "2026-05-02",
+              title: "🧪 Tests sweep W374-W376 (W377)",
+              bullets: [
+                "MessageCryptoV2Tests: parse round-trip + magic check + truncated reject + AAD/PSK fail",
+                "PqcRtpFrameSealerTests: round-trip + tampered tag + counter advance + cross-key reject",
+                "Cryptokit AES-GCM oracles per validare engine layer cross-platform",
+                "11 test totali aggiunti — KAT-style parità engine"
+              ]),
         .init(id: "v1.0.353", date: "2026-05-02",
               title: "🔐 PqcRtpFrameSealer — PQC-augmented SRTP layer (W376)",
               bullets: [

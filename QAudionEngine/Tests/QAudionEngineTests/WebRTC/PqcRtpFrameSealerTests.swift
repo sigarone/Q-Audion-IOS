@@ -1,0 +1,61 @@
+import XCTest
+@testable import QAudionEngine
+
+#if canImport(WebRTC)
+final class PqcRtpFrameSealerTests: XCTestCase {
+
+    func testRoundTripPlaintext() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+        // Receiver uses a fresh sealer (counter starts at 0 on the
+        // RX side too — every incoming wire carries its own nonce).
+        let receiver = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let pt = Data("hello pqc rtp".utf8)
+        let wire = try sealer.seal(pt)
+        XCTAssertEqual(wire.count, pt.count + 12 + 16)
+        let opened = try receiver.open(wire)
+        XCTAssertEqual(opened, pt)
+    }
+
+    func testRejectsWrongKeyLength() {
+        XCTAssertThrowsError(try PqcRtpFrameSealer(pqcSessionKey: Data(repeating: 0x01, count: 16)))
+    }
+
+    func testTamperedTagFailsOpen() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let receiver = try PqcRtpFrameSealer(pqcSessionKey: key)
+        var wire = try sealer.seal(Data("voice".utf8))
+        // Flip a bit in the tag (last byte).
+        let last = wire.endIndex - 1
+        wire[last] ^= 0xFF
+        XCTAssertThrowsError(try receiver.open(wire))
+    }
+
+    func testCounterAdvancesPerFrame() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let w1 = try sealer.seal(Data([0x01]))
+        let w2 = try sealer.seal(Data([0x01]))
+        // Same plaintext but different nonce → different ciphertext.
+        XCTAssertNotEqual(w1, w2)
+        // First 4 bytes of nonce always 0; last 8 bytes are the counter.
+        let n1 = w1.prefix(12)
+        let n2 = w2.prefix(12)
+        XCTAssertNotEqual(n1, n2)
+    }
+
+    func testTwoSealersDifferentKeysDontInterop() throws {
+        let s1 = try PqcRtpFrameSealer(pqcSessionKey: Data(repeating: 0x01, count: 32))
+        let s2 = try PqcRtpFrameSealer(pqcSessionKey: Data(repeating: 0x02, count: 32))
+        let wire = try s1.seal(Data("x".utf8))
+        XCTAssertThrowsError(try s2.open(wire))
+    }
+
+    func testTruncatedFrameRejected() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let receiver = try PqcRtpFrameSealer(pqcSessionKey: key)
+        XCTAssertThrowsError(try receiver.open(Data([0x01, 0x02, 0x03])))
+    }
+}
+#endif
