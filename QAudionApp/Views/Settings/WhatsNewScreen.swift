@@ -22,6 +22,14 @@ public struct ReleaseNote: Identifiable, Equatable {
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.277", date: "2026-05-02",
+              title: "Conta release nel WhatsNew intro (W285)",
+              bullets: [
+                "'Cosa c'è di nuovo': intro mostra il count di entries",
+                "Es. '53 entries · feature/ios-android-parity'",
+                "Aiuta i tester a vedere d'occhio quante milestone sono uscite",
+                "Static computed property — type-checker safe (CLAUDE.md §13)"
+              ]),
         .init(id: "v1.0.276", date: "2026-05-02",
               title: "'Apri Privacy iOS' deep-link in Privacy (W284)",
               bullets: [
@@ -363,6 +371,16 @@ struct WhatsNewScreen: View {
             Text("Lista delle ultime release TestFlight con i cambiamenti principali. Aggiornata manualmente a ogni tag — la versione canonica del changelog vive nel repository git su `feature/ios-android-parity`.")
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurface)
+            // W285: surface the count of release entries. Helps testers
+            // gauge how many milestones have been delivered without
+            // counting cards by hand. Pre-bound count via a static
+            // computed property — see CLAUDE.md §13.
+            HStack(spacing: 6) {
+                Text(Self.releaseCountLabel)
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .padding(.top, 4)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -370,6 +388,14 @@ struct WhatsNewScreen: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(scheme.surfaceVariant.opacity(0.5))
         )
+    }
+
+    /// W285: pre-bound count label. Computed once per screen open from
+    /// the `releaseNotes` array (a static let so it's free to read).
+    /// String concat to avoid type-checker risk.
+    private static var releaseCountLabel: String {
+        let n = ReleaseNote.releaseNotes.count
+        return String(n) + " entries · feature/ios-android-parity"
     }
 
     // MARK: - Release card
