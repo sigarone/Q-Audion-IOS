@@ -167,6 +167,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         send(type: "audio_frame", data: ["recipient_id": recipientId, "frame": frame.base64EncodedString()])
     }
 
+    public func sendVideoFrame(recipientId: String, frame: Data) {
+        send(type: "video_frame", data: ["recipient_id": recipientId, "frame": frame.base64EncodedString()])
+    }
+
     public func registerHandler(type: String, handler: @escaping MessageHandler) {
         lock.lock(); messageHandlers[type] = handler; lock.unlock()
     }

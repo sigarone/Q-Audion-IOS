@@ -12,6 +12,18 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.313", date: "2026-05-02",
+              title: "📞 Voice call wire format aligned with Android (W334)",
+              bullets: [
+                "Nuovo WireRelayFrameCodec byte-for-byte compatibile con DefaultFrameRelayTransport.kt",
+                "Audio: u8 0x01 | nonce(12) | seq(u64 BE) | ct_len(u16 BE) | ct (payload+tag)",
+                "Video: u8 0x02 | fragIdx(u16) | totalFrags(u16) | isKey(u8) | nonce | seq | ct_len | ct",
+                "BCryptoWebSocketTransport: encode via WireRelayFrameCodec invece di FrameEncoder",
+                "Fallback decode legacy iOS FrameEncoder per backward compat durante rollover",
+                "Aggiunto sendVideoFrame al WS client (mux=0x02 video path)",
+                "Test parità wire format: testAudioWireLayoutMatchesAndroid + testVideoWireLayoutMatchesAndroid",
+                "Primo passo del piano voice-media: prossimo TURN credentials client + WebRTC scaffold"
+              ]),
         .init(id: "v1.0.311", date: "2026-05-02",
               title: "🚨 6 protocol-handler fixes (W329-W333) — Agent C audit",
               bullets: [
