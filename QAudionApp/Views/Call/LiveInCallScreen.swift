@@ -108,7 +108,11 @@ struct LiveInCallScreen: View {
                 // path. While the key is nil (current state in most
                 // builds) the array is empty and the panel hides.
                 sasWords: appState.callSasWords,
-                sasVerified: false,
+                // W368: surface SAS verification persistence — if the
+                // user already confirmed coincidence with this peer
+                // for the current SAS-words fingerprint, render the
+                // panel as VERIFIED and disable the confirm button.
+                sasVerified: liveSasVerified,
                 keyInfo: nil,
                 transportMode: liveTransportMode,
                 muted: liveMuted,
@@ -140,6 +144,17 @@ struct LiveInCallScreen: View {
                 },
                 onHangup: {
                     appState.endCall()
+                },
+                onConfirmSas: {
+                    // W368: persist the SAS confirmation under the
+                    // current peer + words fingerprint so the next
+                    // call between the same pair starts pre-verified.
+                    let words = appState.callSasWords
+                    guard !words.isEmpty,
+                          let peer = appState.callContactId else { return }
+                    let fp = SasVerificationStore.fingerprint(forWords: words)
+                    SasVerificationStore.shared.recordVerified(
+                        peerUserId: peer, fingerprint: fp)
                 }
             )
     }
@@ -172,6 +187,19 @@ struct LiveInCallScreen: View {
     /// updated on tap to avoid a one-frame flicker.
     private var liveMuted: Bool {
         appState.callService.isMuted
+    }
+
+    /// W368: live SAS verification flag. Returns true iff the
+    /// SasVerificationStore has the current SAS words' fingerprint
+    /// stored under the call's peer id. Computed every TimelineView
+    /// tick — cheap (one UserDefaults string read).
+    private var liveSasVerified: Bool {
+        let words = appState.callSasWords
+        guard !words.isEmpty,
+              let peer = appState.callContactId else { return false }
+        let fp = SasVerificationStore.fingerprint(forWords: words)
+        return SasVerificationStore.shared.isVerified(
+            peerUserId: peer, currentFingerprint: fp)
     }
 
     private func resolvePeerDisplayName() {

@@ -12,6 +12,17 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.345", date: "2026-05-02",
+              title: "✅ SAS verification persistence (W368)",
+              bullets: [
+                "Nuovo SasVerificationStore: persiste (peer, fingerprint) tuple in UserDefaults",
+                "Fingerprint = FNV-1a 64-bit del SAS-words bundle UPPERCASE joined '|'",
+                "LiveInCallScreen.onConfirmSas registra verifica al tap CONFERMA COINCIDONO",
+                "liveSasVerified computed: re-render del bollino VERIFIED a ogni tick TimelineView",
+                "Una volta verificato, le call successive con stesso peer partono già VERIFICATE",
+                "Auto-invalidate su key rotation (nuovo SAS = nuovo fingerprint = unverified)",
+                "Cross-platform parità con Android SasVerificationTracker.kt"
+              ]),
         .init(id: "v1.0.344", date: "2026-05-02",
               title: "🎚 GroupCallView wires GroupCallController for real audio (W367)",
               bullets: [
