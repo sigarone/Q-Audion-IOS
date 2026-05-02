@@ -12,6 +12,22 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.326", date: "2026-05-02",
+              title: "🌐 WebRTC SPM dependency + 1:1 call controller (W347)",
+              bullets: [
+                "Aggiunta WebRTC binary framework (stasel/WebRTC v131.0.0) come SPM dep",
+                "QAudionPeerConnectionFactory: singleton lazy + RTCInitializeSSL idempotente",
+                "Default RTCConfiguration: unified-plan, max-bundle, rtcp-mux required, trickle ICE",
+                "iceServers converter da RelayServer (TURN credentials W335) → RTCIceServer",
+                "QAudionPeerConnection: high-level wrapper (offer/answer/ICE/audio track/mute)",
+                "QAudionWebRtcCallController: bridge end-to-end CallingApi ↔ PeerConnection",
+                "startOutgoingCall(recipientId): fetch ICE → factory → addAudio → createOffer → sendCallOffer",
+                "acceptIncomingCall(callerId, offerSdp): setRemoteOffer → createAnswer → sendCallAnswer",
+                "handleRemoteIce, handleRemoteAnswer, hangup → state machine (idle→connecting→connected)",
+                "RTCPeerConnectionDelegate adapter (unified-plan track callback inclusa)",
+                "Test factory singleton + default config + RelayServer→RTCIceServer conversion",
+                "IPA size impact ~150 MB (WebRTC XCFramework arm64+sim) ma necessario per cross-platform calls"
+              ]),
         .init(id: "v1.0.325", date: "2026-05-02",
               title: "📎 AttachmentEncryption — XChaCha20-Poly1305 + canonical CBOR (W346)",
               bullets: [
