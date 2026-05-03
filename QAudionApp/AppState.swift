@@ -248,15 +248,6 @@ final class AppState: ObservableObject {
             return
         }
 
-        // W417 — start the always-on telemetry pump. Idempotent. Safe
-        // to call before login: the streamer skips flushes when no
-        // bearer token is available, then catches up the first ~5000
-        // buffered lines (FIFO cap) once auth lands. Runs at .utility
-        // QoS via a detached Task per upload — does not contend with
-        // the audio + WebRTC + WS threads. See LiveLogStreamer.swift
-        // header for the full non-interference design.
-        LiveLogStreamer.shared.start(appState: self)
-
         // W94: wire chat-message notification taps to pendingDeepLinkConversationId
         // so the chat list can pick up and navigate. Idempotent — re-init
         // overwrites the closure with a fresh AppState capture.
@@ -1609,85 +1600,40 @@ final class AppState: ObservableObject {
         ws.registerHandler(type: "opaque_message") { [weak self] _, data in
             guard let senderId = data["sender_id"] as? String,
                   !senderId.isEmpty,
-                  let blobStr = data["data"] as? String else {
+                  let blobB64 = data["data"] as? String,
+                  let blob = Data(base64Encoded: blobB64) else {
                 return
             }
-
-            // Path A — base64-encoded QUAD binary frame (iOS / Desktop peers).
-            if let blob = Data(base64Encoded: blobStr),
-               let decoded = QAudionCapabilityExchange.parse(blob) {
-                switch decoded {
-                case .keyExchangeOffer(let pub):
-                    Task { await cke.handleOffer(senderId: senderId, peerPubKey: pub) }
-                case .keyExchangeAccept(let pub):
-                    Task { await cke.handleAccept(senderId: senderId, peerPubKey: pub) }
-                case .offer:
-                    // W396 — responder side. The caller shipped a PQC
-                    // OFFER. Route to the lazily-created responder
-                    // integration so encapsulate fires and the ML-KEM
-                    // shared secret is forwarded to the broker.
-                    Task { @MainActor [weak self] in
-                        self?.routeInboundPqcOffer(blob: blob, senderId: senderId)
-                    }
-                case .accept:
-                    // W396 — caller side. The responder shipped a PQC
-                    // ACCEPT. Route to the existing caller integration
-                    // (callService.callIntegration) so decapsulate fires.
-                    Task { @MainActor [weak self] in
-                        self?.routeInboundPqcAccept(blob: blob, senderId: senderId)
-                    }
-                default:
-                    // Audio / video / dcSdp* / hangup frames are handled
-                    // elsewhere or not yet first-class.
-                    break
-                }
+            // Parse the QUAD frame using the engine's capability decoder.
+            guard let decoded = QAudionCapabilityExchange.parse(blob) else {
+                print("[AppState] opaque_message from \(senderId.prefix(8))… not a valid QUAD frame")
                 return
             }
-
-            // Path B — Android wire format (interop fail-fast).
-            //
-            // 2026-05-03 — Live test A50 → iOS revealed iOS responder
-            // never replied to Android's PQC OFFER. Root cause: Android
-            // (`apps/qaudion-android-new` WsCallSignaller.kt:202) sends
-            // opaque_message.data as a LITERAL string of the form
-            // `"<callId>|<JSON>"` where the JSON is a HandshakeBundle
-            //   {"kind":"OFFER","callId":"...","pqcPublicKey":"<b64>",
-            //    "x25519PublicKey":"<b64>","dualCurvePublicKey":"<b64>",
-            //    "capabilities":{"ratchetV3":true}}
-            // The iOS QAudionCapabilityExchange engine only consumes
-            // QUAD binary frames with a single combined kemPublicKey,
-            // so the Android-format string fails base64-decode (the `|`
-            // char is not base64), Path A bails, and the iOS responder
-            // sits silent — the Android initiator then waits 35 s for
-            // the ACCEPT that never arrives, and the user manually
-            // hangs up after seeing 30 s of "ringing" with no progress.
-            //
-            // Full bridge requires engine-level work (qaudion-desktop's
-            // IOS_INTEROP_GAP.md: extend QUAD wire format to carry split
-            // PQC + classical public keys, port the Android JSON parser
-            // path, propagate dualCurvePublicKey through the responder
-            // encapsulator, etc.). Until that lands, fail FAST: detect
-            // the Android envelope shape and ship a `call_hangup` so
-            // the Android side's hangupListenerJob teardown path fires
-            // immediately with reason = "incompatible_wire_format_v1"
-            // instead of timing out silently.
-            if let pipeIndex = blobStr.firstIndex(of: "|") {
-                let payload = String(blobStr[blobStr.index(after: pipeIndex)...])
-                let isAndroidHandshake = payload.hasPrefix("{") &&
-                    payload.contains("\"kind\"") &&
-                    (payload.contains("\"OFFER\"") || payload.contains("\"ACCEPT\"")) &&
-                    payload.contains("\"pqcPublicKey\"")
-                if isAndroidHandshake {
-                    print("[AppState] interop gap: Android JSON HandshakeBundle from \(senderId.prefix(8))… — iOS engine cannot consume Android's split-key wire format yet (see qaudion-desktop/docs/IOS_INTEROP_GAP.md). Sending call_hangup so peer bails fast.")
-                    Task { @MainActor [weak self] in
-                        guard let provider = self?.liveProvider else { return }
-                        try? await provider.callingApi.sendHangup(recipientId: senderId)
-                    }
-                    return
+            switch decoded {
+            case .keyExchangeOffer(let pub):
+                Task { await cke.handleOffer(senderId: senderId, peerPubKey: pub) }
+            case .keyExchangeAccept(let pub):
+                Task { await cke.handleAccept(senderId: senderId, peerPubKey: pub) }
+            case .offer:
+                // W396 — responder side. The caller shipped a PQC
+                // OFFER. Route to the lazily-created responder
+                // integration so encapsulate fires and the ML-KEM
+                // shared secret is forwarded to the broker.
+                Task { @MainActor [weak self] in
+                    self?.routeInboundPqcOffer(blob: blob, senderId: senderId)
                 }
+            case .accept:
+                // W396 — caller side. The responder shipped a PQC
+                // ACCEPT. Route to the existing caller integration
+                // (callService.callIntegration) so decapsulate fires.
+                Task { @MainActor [weak self] in
+                    self?.routeInboundPqcAccept(blob: blob, senderId: senderId)
+                }
+            default:
+                // Audio / video / dcSdp* / hangup frames are handled
+                // elsewhere or not yet first-class.
+                break
             }
-
-            print("[AppState] opaque_message from \(senderId.prefix(8))… not a valid QUAD frame and not a recognised Android envelope (\(blobStr.count) bytes)")
         }
     }
 

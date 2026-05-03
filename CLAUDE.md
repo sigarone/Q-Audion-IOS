@@ -2,55 +2,37 @@
 
 You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-calling app. Read this file end-to-end before your first action. It captures the hard-won state of the build pipeline so you don't repeat the work.
 
-## ⚡ AUTOMATION RULE — iOS runtime log fetch (auto-pump v1.0.386+)
-
-**Build v1.0.386 (W417) added always-on auto-upload telemetry.** The
-device pumps a chunk file to `/api/v1/files/upload` every ~3 seconds
-without ANY user interaction (background QoS, throttled, single-flight,
-non-interfering with calls). The user does NOT need to open Settings,
-NOT need to tap any button — boot logs, settings logs, call logs, all
-ship automatically as long as the app is foregrounded and authenticated.
-
-**Filename convention** (so the maintainer can list / grep server-side):
-```
-qaudion-live-<userIdPrefix8>-<bootSessionUUID>-<seqZeroPad6>.log
-```
-Example: `qaudion-live-pavel123-7e4f9a01...-000042.log` = chunk #42
-of the boot session that started with UUID `7e4f9a01-...`.
+## ⚡ AUTOMATION RULE — iOS runtime log fetch
 
 **Trigger:** every time the user reports an iOS-side runtime problem
-(call doesn't start, freeze, crash, settings unresponsive, unexpected
-behaviour) you MUST AUTOMATICALLY:
+(call doesn't start, screen wedges, crash, unexpected behaviour) you
+MUST first ask: "Hai caricato il log via Settings → Diagnostica →
+Carica al server? Se sì, mandami il fileId."
 
-1. **Try `scripts/fetch-ios-live.sh` first** (lists user's recent
-   live-log chunks via the server's file-list API, downloads + concats
-   them in seq order, dumps to `.cache/ios-logs/live-<bootSession>.log`).
-2. If `fetch-ios-live.sh` is not yet wired (depends on server-side list
-   endpoint), fall back to: ask the user for ANY recent fileId he sees
-   in the LiveLogStreamer's `lastUploadedFileId` (visible in the
-   Diagnostica debug card if reachable).
-3. If neither works, fall back to the **W415 manual flow**: ask the
-   user to open Settings → Diagnostica → "Carica al server" and paste
-   the resulting fileId. Then run `scripts/fetch-ios-log.sh <fileId>`.
+**On fileId received**, AUTOMATICALLY:
+1. Run `scripts/fetch-ios-log.sh <fileId>` — pulls the dump,
+   prints header + ERROR/WARN summary + tags distribution.
+2. Read the saved file at `.cache/ios-logs/<fileId>.log` for full
+   context if the summary doesn't surface the root cause.
+3. Use `--grep <pattern>` and `--tail <N>` flags for targeted slices.
 4. Diagnose + propose fix BEFORE asking any clarifying question.
 
-**Auth:** all fetch scripts need `QAUDION_USER_TOKEN` env var = a JWT
-from any logged-in session. Default is the user's own token (file
-owner can fetch own files). For admin-bypass, use the admin's JWT.
+**Auth:** the script needs `QAUDION_USER_TOKEN` env var = a JWT from
+any logged-in session. Default is the user's own token (file owner
+can fetch own dumps). For admin-bypass, use the admin's JWT.
 
-**Why the auto-pump exists:** the user reported on 2026-05-03 that the
-Settings screen freezes the app, blocking the W415 manual upload flow.
-W417 makes telemetry independent of any UI path — even if the entire
-SwiftUI tree wedges, the LiveLogStreamer keeps shipping chunks via a
-detached Task on the .utility QoS queue. The maintainer always has a
-trail server-side, even when the device's UI is dead.
+**No log uploaded?** Tell the user to:
+1. Open the app → Settings → Diagnostica
+2. Scroll to the "LOG RUNTIME" card
+3. Tap "Carica al server"
+4. Copy the fileId shown in the card
+5. Paste it back in chat
 
-**Non-interference contract:** LiveLogStreamer is throttled to 1
-upload per 2s, max 64KB per chunk, max 256 lines per chunk, single-
-flight. Background QoS dispatch + utility-priority detached Tasks
-ensure audio + WebRTC + WS always pre-empt. Empirical ceiling: ~32
-KB/s upload — negligible vs a Q-Audion call's ~25 KB/s audio stream.
-If you ever modify LiveLogStreamer.swift, preserve those caps.
+**Why this rule exists:** the user has no Mac for USB Console.app
+debugging. The W415 RuntimeLogSink + LogExportService pipeline ships
+logs to /api/v1/files/upload so the maintainer pulls them via REST.
+Treat fileId-driven fetch as the FIRST step of any iOS-side bug
+investigation, not as an optional fallback.
 
 ## Project snapshot
 

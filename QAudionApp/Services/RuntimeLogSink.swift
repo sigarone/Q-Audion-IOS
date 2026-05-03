@@ -25,11 +25,6 @@ public final class RuntimeLogSink: ObservableObject {
 
     public struct Entry: Identifiable {
         public let id = UUID()
-        /// W417 — monotonic sequence number assigned at insert time.
-        /// LiveLogStreamer reads `entriesSince(seq:)` to get only new
-        /// entries since the previous flush, avoiding re-uploads of
-        /// content already shipped to the server.
-        public let seq: Int64
         public let timestamp: Date
         public let level: Level
         public let tag: String
@@ -53,11 +48,6 @@ public final class RuntimeLogSink: ObservableObject {
     private let lock = NSLock()
     private var entries: [Entry] = []
 
-    /// W417 — global monotonic counter incremented for every recorded
-    /// entry. Independent from `entries.count` (which shrinks on FIFO
-    /// eviction). Used by `entriesSince(seq:)` for incremental reads.
-    private var nextSeq: Int64 = 1
-
     /// Bumped every time `record` adds a new line so SwiftUI views
     /// observing this sink re-render. Cheap monotonic counter.
     @Published public private(set) var entryCount: Int = 0
@@ -70,10 +60,8 @@ public final class RuntimeLogSink: ObservableObject {
     private init() {}
 
     public func record(level: Level, tag: String, _ message: String) {
+        let entry = Entry(timestamp: Date(), level: level, tag: tag, message: message)
         lock.lock()
-        let seq = nextSeq
-        nextSeq &+= 1
-        let entry = Entry(seq: seq, timestamp: Date(), level: level, tag: tag, message: message)
         entries.append(entry)
         if entries.count > maxEntries {
             // Drop the oldest 10% in one shot so we don't pay the
@@ -114,45 +102,6 @@ public final class RuntimeLogSink: ObservableObject {
             out.append("\n")
         }
         return out
-    }
-
-    /// W417 — incremental reader for LiveLogStreamer. Returns all
-    /// entries with `seq > since`, plus the highest seq seen, so the
-    /// caller can pass that back next time and skip what was already
-    /// uploaded. O(n) scan over the in-memory ring buffer (~5000 max).
-    public struct IncrementalSnapshot {
-        public let lines: [String]
-        public let highestSeq: Int64
-        public let entryCount: Int
-    }
-
-    public func entriesSince(seq since: Int64) -> IncrementalSnapshot {
-        lock.lock()
-        let copy = entries
-        lock.unlock()
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var lines: [String] = []
-        lines.reserveCapacity(min(copy.count, 256))
-        var highest = since
-        for e in copy where e.seq > since {
-            // Skip self-emitted livelog upload chatter to avoid a
-            // feedback loop where each upload generates an entry that
-            // gets uploaded by the next chunk, ad infinitum.
-            if e.tag == "livelog" { continue }
-            var line = String()
-            line.reserveCapacity(220)
-            line.append(f.string(from: e.timestamp))
-            line.append(" ")
-            line.append(e.level.rawValue.uppercased())
-            line.append(" [")
-            line.append(e.tag)
-            line.append("] ")
-            line.append(e.message)
-            lines.append(line)
-            if e.seq > highest { highest = e.seq }
-        }
-        return IncrementalSnapshot(lines: lines, highestSeq: highest, entryCount: copy.count)
     }
 
     /// Drop everything. Used by Settings → "Pulisci log".
