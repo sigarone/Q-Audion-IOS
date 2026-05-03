@@ -102,7 +102,13 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     }
 
     public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+        // .allowBluetoothHFP requires Xcode 26 / iOS 26 SDK; on Xcode 16 fall
+        // back to deprecated .allowBluetooth (identical runtime behaviour).
+        #if compiler(>=6.2)
         try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP])
+        #else
+        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth])
+        #endif
         try? audioSession.setActive(true)
     }
 
