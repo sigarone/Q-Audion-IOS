@@ -10,10 +10,8 @@ public protocol CallingApi {
     func getRelays() async throws -> [RelayServer]
 
     // MARK: - Pre-negotiation (optional — backend-specific)
-    // Only the BCrypto backend implements these today; Signal/upstream paths
-    // route call signaling through opaque messages and don't need explicit
-    // processing/ready ACKs. Default impls are no-ops to keep the protocol
-    // additive — see CallingApi+PreNegotiation extension.
+    // The BCrypto backend implements these. Default impls are no-ops to
+    // keep the protocol additive — see CallingApi+PreNegotiation extension.
 
     /// Tell the caller we received their call_offer and are setting up PQC.
     func sendCallProcessing(callId: String, callerId: String) async throws

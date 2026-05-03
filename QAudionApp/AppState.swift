@@ -211,7 +211,7 @@ final class AppState: ObservableObject {
     /// logins; it's been wiped.
     @Published var serverUrl: String = PinnedServerHost.url
     @Published var connectionStatus: String = "not_configured"  // "connected", "connecting", "error", "not_configured"
-    @Published var backendMode: String = "dual"  // "signal_only", "dual", "bcrypto_only"
+    @Published var backendMode: String = "bcrypto_only"  // "bcrypto_only" — only the BCrypto backend is supported
 
     var engine: QAudionEngine?
     let authService = AuthService()
@@ -357,8 +357,8 @@ final class AppState: ObservableObject {
                 guard let self = self else { return }
                 await MainActor.run {
                     // User accepted incoming call from lock screen.
-                    // Signal "user accepted" so the call transitions from ringing to active.
-                    // Actual signalling (offer/answer) stays inside QAudionCallIntegration (USER WT).
+                    // Notify "user accepted" so the call transitions from ringing to active.
+                    // Actual signalling (offer/answer) stays inside QAudionCallIntegration.
                     self.isInCall = true
                     self.activeCallKitId = uuid
                 }

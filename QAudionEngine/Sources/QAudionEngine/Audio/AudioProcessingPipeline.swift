@@ -6,7 +6,7 @@ import AVFoundation
 ///
 /// Uses Apple's hardware DSP chain via `AVAudioEngine` Voice Processing I/O unit,
 /// which provides echo cancellation (AEC), noise suppression (NS), and automatic
-/// gain control (AGC) -- the same system used by FaceTime, Signal, and WhatsApp.
+/// gain control (AGC) — the standard iOS Voice-Processing I/O unit.
 ///
 /// Additionally provides software-level spectral subtraction for supplemental
 /// noise reduction and comfort noise generation for silence periods.

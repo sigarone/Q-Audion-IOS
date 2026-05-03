@@ -27,7 +27,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private let voiceAnalysis = VoiceAnalysisEngine()
     private var sendOpaque: ((Data) async throws -> Void)?
     private var resolvedBcryptoUserId: String?
-    private var bcryptoUserIdCache: [String: String] = [:]  // Signal recipientId -> BCrypto userId
+    private var bcryptoUserIdCache: [String: String] = [:]  // recipientId -> BCrypto userId
     /// Tracks whether this client is the caller (true) or responder (false) for the
     /// current call. Used to gate pre-negotiation event handling.
     private var isCaller: Bool = false
@@ -60,7 +60,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// the secret; the caller is responsible for lifecycle.
     public var onPqcSessionKeyEstablished: ((Data) -> Void)?
     /// Set a BCryptoRestClient to enable userId pre-resolution before OFFER.
-    /// Without this, OFFERs use Signal recipientId which may cause server routing failures.
+    /// Without this, OFFERs use the raw recipientId which may cause server routing failures.
     public var restClient: BCryptoRestClient?
 
     // MARK: - Pre-negotiation hooks (Android/Desktop interop)

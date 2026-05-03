@@ -90,7 +90,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ])
     }
 
-    /// Signal to the caller that the responder finished the PQC OFFER deserialisation
+    /// Notify the caller that the responder finished the PQC OFFER deserialisation
     /// and is ready to ring. Pre-negotiation step 2 — caller can now show "Ringing".
     /// See bcrypto-server pre-negotiation flow.
     public func sendCallReady(callId: String, callerId: String) async throws {

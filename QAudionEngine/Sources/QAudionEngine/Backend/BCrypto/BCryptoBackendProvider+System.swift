@@ -12,8 +12,7 @@ import Foundation
 /// onto the main provider as a `lazy var`.
 public extension BCryptoBackendProvider {
     /// System endpoints (version / health / directory-by-extension).
-    /// Not part of `BackendProvider` protocol — upstream (Signal-style)
-    /// backend has no equivalent.
+    /// Not part of `BackendProvider` protocol — BCrypto-specific.
     var systemClient: BCryptoSystemClient {
         BCryptoSystemClient(rest: getRestClient())
     }
