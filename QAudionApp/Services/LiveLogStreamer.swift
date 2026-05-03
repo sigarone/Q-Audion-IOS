@@ -134,9 +134,16 @@ public final class LiveLogStreamer {
 
     private func scheduleTimer() {
         timer?.invalidate()
-        let t = Timer(timeInterval: flushIntervalSeconds, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.flushOnce()
+        // Capture the interval as a local constant so the @Sendable
+        // Timer block doesn't need to read a @MainActor-isolated
+        // property. The block itself dispatches to MainActor via Task
+        // so flushOnce (which is implicitly @MainActor) can be called.
+        // The singleton .shared reference is Sendable (LiveLogStreamer
+        // is @MainActor → implicitly Sendable).
+        let interval = flushIntervalSeconds
+        let t = Timer(timeInterval: interval, repeats: true) { _ in
+            Task { @MainActor in
+                LiveLogStreamer.shared.flushOnce()
             }
         }
         // Use .common so the timer keeps firing during scroll / modal
@@ -201,61 +208,69 @@ public final class LiveLogStreamer {
                               String(userPrefix), bootSessionId, mySeq)
         let serverUrl = appState.serverUrl
 
-        // (7) Mark in-flight + dispatch the actual network I/O off-main.
+        // (7) Mark in-flight + dispatch the upload as a detached
+        //     async task. We keep it as a regular `Task { ... }`
+        //     (inherits @MainActor) — the await on uploadFile suspends
+        //     this task until the response arrives, but URLSession's
+        //     own network I/O runs entirely off the main thread. So
+        //     the main-thread cost reduces to building the BackendConfig
+        //     + provider object (microseconds) and the post-await
+        //     state mutations. Audio + WebRTC + WS are unaffected.
         inflight = true
         lastUploadStartedAt = now
-        Task.detached(priority: .utility) { [weak self] in
-            await self?.performUpload(
-                serverUrl: serverUrl,
-                token: token,
-                filename: filename,
-                data: data,
-                chunkBytes: chunkBytes,
-                seq: mySeq)
+        let snapshotServerUrl = serverUrl
+        let snapshotToken = token
+        let snapshotFilename = filename
+        let snapshotData = data
+        let snapshotChunkBytes = chunkBytes
+        let snapshotSeq = mySeq
+        Task { [weak self] in
+            await self?.uploadChunk(
+                serverUrl: snapshotServerUrl,
+                token: snapshotToken,
+                filename: snapshotFilename,
+                data: snapshotData,
+                chunkBytes: snapshotChunkBytes,
+                seq: snapshotSeq)
         }
     }
 
-    /// Detached task that actually POSTs. Runs at .utility QoS so the
-    /// audio + WebRTC threads always pre-empt us.
-    /// `nonisolated` so it executes entirely off the main actor —
-    /// the only main-actor work is the explicit `MainActor.run`
-    /// block at the end which mutates the @Published counters.
-    nonisolated private func performUpload(serverUrl: String,
-                                           token: String,
-                                           filename: String,
-                                           data: Data,
-                                           chunkBytes: Int,
-                                           seq: Int) async {
+    /// Performs the actual POST. Runs on the main actor (inherited
+    /// from the enclosing class) but the `await uploadFile` suspends
+    /// the task so URLSession's network I/O runs off-main internally.
+    /// The function only "uses" the main thread for prelude (provider
+    /// construction) and postlude (counter mutations) — both microsecond
+    /// scale.
+    private func uploadChunk(serverUrl: String,
+                             token: String,
+                             filename: String,
+                             data: Data,
+                             chunkBytes: Int,
+                             seq: Int) async {
         let cfg = BackendConfig(serverUrl: serverUrl, accessToken: token)
         let provider = BCryptoBackendProvider(config: cfg)
         do {
-            let fileId = try await provider.storageApi.uploadFile(data: data, filename: filename)
-            await MainActor.run { [weak self] in
-                guard let self = self else { return }
-                self.lastUploadedFileId = fileId
-                self.lastUploadedAt = Date()
-                self.totalUploadedChunks += 1
-                self.totalUploadedBytes += chunkBytes
-                self.inflight = false
-                // Use OSLog directly (no RTLog) to avoid pumping our
-                // own success line into the next chunk's payload.
-                // The "livelog" tag is filter-suppressed but going
-                // straight through OSLog also keeps Console.app in
-                // sync with what's been shipped.
-                // (We DO want the very first success visible so the
-                //  user / maintainer can confirm the pipeline works.)
-                if self.totalUploadedChunks <= 3 || self.totalUploadedChunks % 50 == 0 {
-                    RTLog.info("livelog", "chunk #\(seq) → fileId=\(fileId) bytes=\(chunkBytes)")
-                }
+            let fileId = try await provider.storageApi.uploadFile(
+                data: data, filename: filename)
+            self.lastUploadedFileId = fileId
+            self.lastUploadedAt = Date()
+            self.totalUploadedChunks += 1
+            self.totalUploadedBytes += chunkBytes
+            self.inflight = false
+            // Surface the first 3 successes + every 50th so the
+            // maintainer can confirm the pipeline is alive without
+            // spamming the buffer. The "livelog" tag is filter-
+            // suppressed in entriesSince() so this line never gets
+            // re-uploaded as part of a future chunk's payload.
+            if self.totalUploadedChunks <= 3 || self.totalUploadedChunks % 50 == 0 {
+                let line = "chunk #\(seq) → fileId=\(fileId) bytes=\(chunkBytes)"
+                RTLog.info("livelog", line)
             }
         } catch {
-            await MainActor.run { [weak self] in
-                guard let self = self else { return }
-                self.failedUploads += 1
-                self.inflight = false
-                // Don't RTLog the error (that would spam the buffer).
-                // Counter visible via debug UI is sufficient.
-            }
+            self.failedUploads += 1
+            self.inflight = false
+            // Don't RTLog the error — would create churn in the buffer.
+            // Counter visible via debug UI is sufficient.
         }
     }
 }
