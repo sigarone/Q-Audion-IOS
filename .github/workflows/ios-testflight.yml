@@ -113,16 +113,33 @@ jobs:
       - name: Install build tools
         run: |
           set -e
-          brew install xcodegen
-          # macOS runner enforces PEP 668 (externally-managed Python).
-          # Use pipx to install codemagic-cli-tools in an isolated venv
-          # that PEP 668 explicitly allows. pipx auto-injects bin paths
-          # via `pipx ensurepath`.
-          brew install pipx
-          pipx ensurepath
-          pipx install codemagic-cli-tools
-          # pipx default install location:
+          # Install xcodegen if missing — runners have it sometimes,
+          # sometimes not, depending on image rotation.
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+          # macOS runner enforces PEP 668 (externally-managed Python),
+          # so we use pipx to install codemagic-cli-tools in an isolated
+          # venv. pipx is preinstalled on macos-15+ runners — only
+          # install if missing.
+          if command -v pipx >/dev/null 2>&1; then
+            echo "pipx already installed: $(pipx --version)"
+          else
+            brew install pipx
+          fi
+
+          # pipx ensurepath emits a noisy "already in PATH" warning when
+          # rerun. Just inject the bin dir directly into GITHUB_PATH.
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+          # Install codemagic-cli-tools (idempotent: if already present
+          # pipx prints a warning we don't care about; --force ignores
+          # any existing install). We need this for keychain init,
+          # app-store-connect signing-files fetch, and xcode-project.
+          pipx install --force codemagic-cli-tools 2>&1 | grep -v "WARNING: Skipping setuptools" || true
 
       # ----------------------------------------------------------
       # 4) Generate the Xcode project from project.yml.
