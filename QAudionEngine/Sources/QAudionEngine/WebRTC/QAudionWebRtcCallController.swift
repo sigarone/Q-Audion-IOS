@@ -74,6 +74,38 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private var peerConnection: QAudionPeerConnection?
     private var recipientId: String?
 
+    /// W418 — idempotency guard for `handleRemoteAnswer`. The WS layer
+    /// has been observed dispatching `call_answer` twice in rapid
+    /// succession (timestamp-identical), spawning two `Task { ... }`
+    /// blocks that race into `setRemoteDescription`. Both read the
+    /// underlying signaling state as `.haveLocalOffer` BEFORE either
+    /// suspends; both call `setRemoteDescription`; the first succeeds
+    /// (state → .stable), the second fails with `Code=-1 "wrong state:
+    /// stable"` and surfaces as a visible error to the user.
+    ///
+    /// Fix: a synchronous flag set BEFORE the await suspension closes
+    /// the race window — when Task 2 runs the early-return branch, it
+    /// has already missed the window where it could have submitted a
+    /// duplicate `setRemoteDescription`. NSLock-protected for safety
+    /// because the controller is `@unchecked Sendable` (NOT @MainActor).
+    private let answerLock = NSLock()
+    private var _hasAppliedRemoteAnswer = false
+    private var hasAppliedRemoteAnswer: Bool {
+        get { answerLock.lock(); defer { answerLock.unlock() }; return _hasAppliedRemoteAnswer }
+        set { answerLock.lock(); _hasAppliedRemoteAnswer = newValue; answerLock.unlock() }
+    }
+    /// Atomic test-and-set: returns `true` if the caller "won" the
+    /// race and should proceed; returns `false` if another caller has
+    /// already started the apply. Both branches release the lock
+    /// before returning.
+    private func tryAcquireAnswerSlot() -> Bool {
+        answerLock.lock()
+        defer { answerLock.unlock() }
+        if _hasAppliedRemoteAnswer { return false }
+        _hasAppliedRemoteAnswer = true
+        return true
+    }
+
     public init(callingApi: CallingApi, relayProvider: RelayCredentialsProvider? = nil) {
         self.callingApi = callingApi
         self.relayProvider = relayProvider
@@ -89,6 +121,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard state == .idle || state == .disconnected else {
             throw ControllerError.wrongState(String(describing: state))
         }
+        hasAppliedRemoteAnswer = false   // W418 — fresh call, reset idempotency flag
         state = .outgoingOffering
         self.recipientId = recipientId
 
@@ -120,14 +153,33 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
 
     /// Apply the remote answer SDP that arrived on `call_answer`.
+    /// Idempotent: a duplicate `call_answer` dispatch (observed in
+    /// production via the W417 LiveLogStreamer chunks) is silently
+    /// swallowed instead of throwing the misleading "wrong state:
+    /// stable" error. See `tryAcquireAnswerSlot()` doc above.
     public func handleRemoteAnswer(sdp: String) async throws {
         guard let pc = peerConnection else {
             throw ControllerError.noPeerConnection
         }
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            pc.setRemoteAnswer(sdp: sdp) { err in
-                if let err = err { cont.resume(throwing: err) } else { cont.resume() }
+        // Synchronous test-and-set BEFORE any await — closes the race
+        // window between concurrent Task{} blocks dispatched by a
+        // duplicate WS event.
+        guard tryAcquireAnswerSlot() else {
+            // Another concurrent call already started the apply; this
+            // is a duplicate call_answer dispatch. No-op.
+            return
+        }
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                pc.setRemoteAnswer(sdp: sdp) { err in
+                    if let err = err { cont.resume(throwing: err) } else { cont.resume() }
+                }
             }
+        } catch {
+            // Apply failed — release the slot so a subsequent retry
+            // with valid SDP (different WS event) can succeed.
+            hasAppliedRemoteAnswer = false
+            throw error
         }
     }
 
@@ -137,6 +189,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard state == .idle || state == .disconnected else {
             throw ControllerError.wrongState(String(describing: state))
         }
+        hasAppliedRemoteAnswer = false   // W418 — fresh call, reset idempotency flag
         state = .incomingAnswering
         self.recipientId = callerId
 
@@ -194,6 +247,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         peerConnection?.close()
         peerConnection = nil
         recipientId = nil
+        hasAppliedRemoteAnswer = false   // W418 — reset for next call
         state = .disconnected
     }
 
