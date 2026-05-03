@@ -2,6 +2,38 @@
 
 You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-calling app. Read this file end-to-end before your first action. It captures the hard-won state of the build pipeline so you don't repeat the work.
 
+## ⚡ AUTOMATION RULE — iOS runtime log fetch
+
+**Trigger:** every time the user reports an iOS-side runtime problem
+(call doesn't start, screen wedges, crash, unexpected behaviour) you
+MUST first ask: "Hai caricato il log via Settings → Diagnostica →
+Carica al server? Se sì, mandami il fileId."
+
+**On fileId received**, AUTOMATICALLY:
+1. Run `scripts/fetch-ios-log.sh <fileId>` — pulls the dump,
+   prints header + ERROR/WARN summary + tags distribution.
+2. Read the saved file at `.cache/ios-logs/<fileId>.log` for full
+   context if the summary doesn't surface the root cause.
+3. Use `--grep <pattern>` and `--tail <N>` flags for targeted slices.
+4. Diagnose + propose fix BEFORE asking any clarifying question.
+
+**Auth:** the script needs `QAUDION_USER_TOKEN` env var = a JWT from
+any logged-in session. Default is the user's own token (file owner
+can fetch own dumps). For admin-bypass, use the admin's JWT.
+
+**No log uploaded?** Tell the user to:
+1. Open the app → Settings → Diagnostica
+2. Scroll to the "LOG RUNTIME" card
+3. Tap "Carica al server"
+4. Copy the fileId shown in the card
+5. Paste it back in chat
+
+**Why this rule exists:** the user has no Mac for USB Console.app
+debugging. The W415 RuntimeLogSink + LogExportService pipeline ships
+logs to /api/v1/files/upload so the maintainer pulls them via REST.
+Treat fileId-driven fetch as the FIRST step of any iOS-side bug
+investigation, not as an optional fallback.
+
 ## Project snapshot
 
 - **Repo:** `github.com/sigarone/Q-Audion-IOS`

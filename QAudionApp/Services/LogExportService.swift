@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import OSLog
 import QAudionEngine
 
 /// W415 — collect runtime logs + device context, optionally upload to
@@ -45,7 +46,7 @@ public final class LogExportService {
 
     /// Compose the dump payload (header + ring buffer snapshot).
     /// Returns Data ready to be uploaded or shared via UIActivityVC.
-    public func makeDumpData(appState: AppState) -> Data {
+    func makeDumpData(appState: AppState) -> Data {
         var out = String()
         out.reserveCapacity(64 * 1024)
 
@@ -72,12 +73,55 @@ public final class LogExportService {
         // ---- Ring buffer snapshot ------------------------------------
         out.append(RuntimeLogSink.shared.snapshot())
 
+        // ---- W416 OSLogStore snapshot --------------------------------
+        // Cattura entries os_log emesse da QAudionEngine (subsystem
+        // com.qaudion.app + sottosistemi vari) che NON passano per
+        // print() e quindi non sono nel ring buffer via stdout-tee.
+        // Cifrature, ratchet, WS dispatch, sealer usano os_log via
+        // Logger() — questa sezione li recupera tutti per il dump.
+        if #available(iOS 15.0, *) {
+            out.append("\n\n=== os_log entries (subsystem com.qaudion.*) ===\n\n")
+            out.append(snapshotOSLog())
+        }
+
         return out.data(using: .utf8) ?? Data()
+    }
+
+    @available(iOS 15.0, *)
+    private func snapshotOSLog() -> String {
+        do {
+            let store = try OSLogStore(scope: .currentProcessIdentifier)
+            // Pull last 5 minutes of entries.
+            let pos = store.position(date: Date().addingTimeInterval(-300))
+            let entries = try store.getEntries(at: pos)
+                .compactMap { $0 as? OSLogEntryLog }
+                .filter { $0.subsystem.hasPrefix("com.qaudion") }
+            var out = String()
+            out.reserveCapacity(64 * 1024)
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            for e in entries.suffix(2000) {
+                out.append(f.string(from: e.date))
+                out.append(" ")
+                out.append(String(describing: e.level).uppercased())
+                out.append(" [")
+                out.append(e.category)
+                out.append("] ")
+                out.append(e.composedMessage)
+                out.append("\n")
+            }
+            if entries.isEmpty {
+                out.append("(no os_log entries in the last 5 minutes for com.qaudion subsystems)\n")
+            }
+            return out
+        } catch {
+            return "(OSLogStore unavailable: \(error.localizedDescription))\n"
+        }
     }
 
     /// Write the dump to a temporary file under `Caches/qaudion-logs/`
     /// and return the URL. Caller can hand this to UIActivityViewController.
-    public func writeDumpToTempFile(appState: AppState) throws -> URL {
+    func writeDumpToTempFile(appState: AppState) throws -> URL {
         let data = makeDumpData(appState: appState)
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("qaudion-logs", isDirectory: true)
@@ -95,7 +139,7 @@ public final class LogExportService {
     /// Upload the dump to the server via the existing storage API.
     /// Returns the server-side fileId so the user can share it
     /// out-of-band with the maintainer.
-    public func uploadDump(appState: AppState) async throws -> String {
+    func uploadDump(appState: AppState) async throws -> String {
         guard let token = appState.authService.loadToken(), !token.isEmpty else {
             throw ExportError.notAuthenticated
         }

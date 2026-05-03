@@ -1879,8 +1879,10 @@ final class AppState: ObservableObject {
     }
 
     func startCall(contactId: String, video: Bool = false) async {
+        RTLog.info("call", "startCall contactId=\(contactId.prefix(8))… video=\(video)")
         guard let engine = engine else {
             errorMessage = "Engine not available"
+            RTLog.error("call", "engine not available — abort")
             return
         }
         callContactId = contactId
@@ -2113,6 +2115,7 @@ final class AppState: ObservableObject {
     }
 
     func endCall() {
+        RTLog.info("call", "endCall — peer=\(callContactId ?? "nil") state=\(callState)")
         callService.endCall()
         // W398: stop ABR loop before video pipeline teardown so the
         // controller doesn't try to set bitrate on a freed encoder.

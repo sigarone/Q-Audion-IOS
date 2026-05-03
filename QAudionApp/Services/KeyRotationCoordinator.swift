@@ -50,6 +50,7 @@ final class KeyRotationCoordinator: ObservableObject {
     /// W407 — Rotate the ephemeral keypair. Generates new X25519,
     /// **persists** into SovereignKeyVault, updates fingerprint + QR.
     func rotate() {
+        RTLog.info("keymgmt", "rotate() requested")
         Task {
             await MainActor.run { self.isRotating = true; self.errorMessage = nil }
             // Synchronous CPU-bound operation; wrap in a brief delay so UI

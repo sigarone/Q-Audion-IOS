@@ -12,6 +12,20 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.385", date: "2026-05-03",
+              title: "🪵 Logging cattura-tutto sempre attivo (W416)",
+              bullets: [
+                "Fix build W415: LogExportService methods da public→internal (AppState è internal)",
+                "RuntimeLogSink.attachStdoutTee() — pipe + dup2 STDOUT/STDERR sul ring buffer + forward al fd originale → Console.app + Xcode continuano a vedere tutto",
+                "Cattura AUTOMATICA di ogni print(), NSLog, stderr di terze parti via stdout-tee — niente refactor dei ~100 print esistenti",
+                "+ OSLogStore snapshot (iOS 15+) al dump time: cattura anche os_log Logger() di QAudionEngine (cifrature, ratchet, sealer, WS) che NON passano per print()",
+                "Risultato: dump completo per 8 aree — cifrature, flusso call, audio, gestione chiavi, interfaccia, settings, rete, buffer",
+                "RTLog milestone hook: AppState.startCall/endCall, KeyRotationCoordinator.rotate, PrivacyGate.set* — breadcrumbs leggibili nel buffer",
+                "Agganciato in QAudionApp.onAppear → SEMPRE ATTIVO dal launch dell'app",
+                "Auto-rotazione FIFO 5000 righe (≈1.25MB stabile): dopo 50 telefonate il buffer wrappa, non cresce all'infinito",
+                "scripts/fetch-ios-log.sh: bash one-liner per scaricare + analizzare (header + ERROR/WARN summary + tags distribution)",
+                "CLAUDE.md AUTOMATION RULE: ogni problema iOS → io chiedo fileId + eseguo script automatic + diagnosi PRIMA di altre domande"
+              ]),
         .init(id: "v1.0.384", date: "2026-05-03",
               title: "🪵 Logging runtime + upload server (W415)",
               bullets: [

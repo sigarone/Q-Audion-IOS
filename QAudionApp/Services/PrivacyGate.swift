@@ -73,6 +73,7 @@ public enum PrivacyGate {
 
     public static func setReadReceiptsEnabled(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: keyReadReceipts)
+        RTLog.info("settings", "PrivacyGate.readReceipts=\(value)")
     }
     public static func setTypingIndicatorEnabled(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: keyTypingIndicator)
@@ -85,6 +86,7 @@ public enum PrivacyGate {
     }
     public static func setTorEnabled(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: keyTorEnabled)
+        RTLog.info("settings", "PrivacyGate.tor=\(value)")
     }
     public static func setMessagePreviewInNotifications(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: keyMessagePreview)

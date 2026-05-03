@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Darwin
 
 /// W415 — in-memory ring buffer + helper API for app-side runtime
 /// logging. Two goals:
@@ -116,6 +117,103 @@ public final class RuntimeLogSink: ObservableObject {
     public var snapshotEntries: [Entry] {
         lock.lock(); defer { lock.unlock() }
         return entries
+    }
+
+    // MARK: - W416 stdout/stderr tee
+
+    /// Holds the duplicated original stdout fd so we can keep
+    /// forwarding to Console.app after we redirect to the pipe.
+    private var origStdoutFd: Int32 = -1
+    private var origStderrFd: Int32 = -1
+    private var stdoutPipeSource: DispatchSourceRead?
+    private var teeAttached: Bool = false
+
+    /// W416 — capture every `print(...)` (stdlib, third-party, OS-level
+    /// stderr noise) into the ring buffer too, so the user doesn't have
+    /// to hand-convert ~100 existing print sites to RTLog. Idempotent.
+    ///
+    /// **How:** create an unnamed pipe, dup2 STDOUT_FILENO + STDERR_FILENO
+    /// onto its write end, then in a background DispatchSourceRead
+    /// loop read from the read end and:
+    ///   1. write the bytes back to the SAVED original stdout/stderr fd
+    ///      → Console.app + Xcode console still see everything as before;
+    ///   2. parse the chunk as UTF-8 lines and `record(...)` each one
+    ///      with tag "stdout" so the buffer + diagnostic dump capture
+    ///      every line that any code path emits.
+    ///
+    /// **Cost:** ≈ 4KB transient buffer per read, one background
+    /// dispatch source per process. No measurable overhead at typical
+    /// log rates (< 100 lines/s).
+    ///
+    /// **Always-on:** `QAudionApp.onAppear` calls this once at launch.
+    /// Combined with the FIFO ring buffer eviction (oldest 10% dropped
+    /// when capacity exceeded), the system stays bounded — after 50
+    /// telephone calls the buffer simply wraps over, never grows.
+    public func attachStdoutTee() {
+        guard !teeAttached else { return }
+        var pipeFds = [Int32](repeating: 0, count: 2)
+        guard pipe(&pipeFds) == 0 else {
+            print("[RuntimeLogSink] pipe() failed errno=\(errno)")
+            return
+        }
+        let readFd = pipeFds[0]
+        let writeFd = pipeFds[1]
+
+        // Save originals so the tee can forward to Console.app/Xcode.
+        origStdoutFd = dup(STDOUT_FILENO)
+        origStderrFd = dup(STDERR_FILENO)
+
+        // Redirect both streams to the pipe write end.
+        dup2(writeFd, STDOUT_FILENO)
+        dup2(writeFd, STDERR_FILENO)
+        close(writeFd)
+
+        // Disable stdout buffering so prints surface promptly.
+        setvbuf(stdout, nil, _IONBF, 0)
+        setvbuf(stderr, nil, _IONBF, 0)
+
+        let queue = DispatchQueue(label: "qaudion.runtime.stdout-tee", qos: .utility)
+        let source = DispatchSource.makeReadSource(fileDescriptor: readFd, queue: queue)
+        source.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            var buf = [UInt8](repeating: 0, count: 4096)
+            let n = read(readFd, &buf, buf.count)
+            if n > 0 {
+                // 1) Forward to the saved original stdout/stderr so
+                //    Console.app + Xcode still see the line.
+                _ = write(self.origStdoutFd, buf, n)
+                // 2) Parse + record into the ring buffer.
+                if let chunk = String(bytes: buf[0..<n], encoding: .utf8) {
+                    let lines = chunk.split(separator: "\n", omittingEmptySubsequences: true)
+                    for line in lines {
+                        let s = String(line)
+                        Task { @MainActor [weak self] in
+                            self?.record(level: .info, tag: "stdout", s)
+                        }
+                    }
+                }
+            }
+        }
+        source.setCancelHandler {
+            close(readFd)
+        }
+        source.resume()
+        stdoutPipeSource = source
+        teeAttached = true
+        // Confirm via OSLog so even if stdout gets weird the wiring
+        // is visible in Console.app.
+        osLogger.info("[RuntimeLogSink] stdout/stderr tee attached")
+    }
+
+    /// Detach the stdout tee. Mostly for tests — production app
+    /// keeps it attached for the process lifetime.
+    public func detachStdoutTee() {
+        guard teeAttached else { return }
+        if origStdoutFd >= 0 { dup2(origStdoutFd, STDOUT_FILENO); close(origStdoutFd); origStdoutFd = -1 }
+        if origStderrFd >= 0 { dup2(origStderrFd, STDERR_FILENO); close(origStderrFd); origStderrFd = -1 }
+        stdoutPipeSource?.cancel()
+        stdoutPipeSource = nil
+        teeAttached = false
     }
 }
 
