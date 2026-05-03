@@ -62,11 +62,19 @@ public final class BCryptoCallingApiImpl: CallingApi {
 
     public func sendHangup(recipientId: String) async throws {
         let cid = currentCallId()
+        // W419 — log so we can correlate with bcrypto.service journalctl.
+        // The previous version had no log here, so when the Android peer
+        // got "ghost call" the maintainer had no signal that iOS even
+        // tried to send the hangup.
+        print("[BCryptoCalling] sendHangup call_id=\(cid) recipientId=\(recipientId)")
         ws.send(
             type: "call_hangup",
             data: [
-                "call_id": cid,
-                "reason":  "normal",
+                "call_id":     cid,
+                "reason":      "normal",
+                "recipient_id": recipientId,  // belt-and-braces: server uses
+                                              // call_id but explicit recipient
+                                              // gives a fallback for race cases
             ]
         )
         // Clear after hangup so the next outgoing call starts fresh.

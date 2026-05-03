@@ -300,6 +300,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     public func peerConnection(_ pc: QAudionPeerConnection,
                                  didChangeIceConnectionState s: RTCIceConnectionState) {
+        // W419 — log every ICE state transition. Crucial for diagnosing
+        // "audio drops after 30s" bugs: typically ICE goes connected →
+        // disconnected → failed when network is unstable, or stays
+        // .checking forever if relays are blocked. Without this log we
+        // had NO visibility into why audio stopped flowing.
+        let stateName: String
+        switch s {
+        case .new:          stateName = "new"
+        case .checking:     stateName = "checking"
+        case .connected:    stateName = "connected"
+        case .completed:    stateName = "completed"
+        case .failed:       stateName = "failed"
+        case .disconnected: stateName = "disconnected"
+        case .closed:       stateName = "closed"
+        case .count:        stateName = "count"
+        @unknown default:   stateName = "unknown(\(s.rawValue))"
+        }
+        print("[WebRTC] ICE state → \(stateName)")
         switch s {
         case .connected, .completed:
             state = .connected
@@ -314,7 +332,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
 
     public func peerConnection(_ pc: QAudionPeerConnection,
-                                 didChangeSignalingState s: RTCSignalingState) {}
+                                 didChangeSignalingState s: RTCSignalingState) {
+        // W419 — log signaling state transitions for end-to-end visibility
+        // into the SDP exchange flow.
+        let stateName: String
+        switch s {
+        case .stable:               stateName = "stable"
+        case .haveLocalOffer:       stateName = "haveLocalOffer"
+        case .haveLocalPrAnswer:    stateName = "haveLocalPrAnswer"
+        case .haveRemoteOffer:      stateName = "haveRemoteOffer"
+        case .haveRemotePrAnswer:   stateName = "haveRemotePrAnswer"
+        case .closed:               stateName = "closed"
+        @unknown default:           stateName = "unknown(\(s.rawValue))"
+        }
+        print("[WebRTC] signaling state → \(stateName)")
+    }
 
     public func peerConnection(_ pc: QAudionPeerConnection,
                                  didReceiveRemoteAudioTrack track: RTCAudioTrack) {

@@ -156,7 +156,23 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         ]
         guard let jsonData = try? JSONSerialization.data(withJSONObject: message),
               let jsonString = String(data: jsonData, encoding: .utf8) else { return }
-        webSocketTask?.send(.string(jsonString)) { _ in }
+        // W419 — log dispatch attempt + capture send errors. The previous
+        // `{ _ in }` swallowed every transmission failure: if the WS was
+        // suspended (app backgrounded) or already torn down, sends became
+        // silent no-ops and the server never knew a hangup was attempted.
+        // This was the root cause of the Android "ghost call" bug — iOS
+        // user pressed end, sendHangup fired into the void, server only
+        // detected the WS EOF 41s later as a generic disconnect.
+        let task = webSocketTask
+        if task == nil {
+            print("[BCryptoWS] send(\(type)) DROPPED — webSocketTask is nil (WS not connected)")
+            return
+        }
+        task?.send(.string(jsonString)) { error in
+            if let error = error {
+                print("[BCryptoWS] send(\(type)) FAILED: \(error.localizedDescription)")
+            }
+        }
     }
 
     public func sendOpaqueMessage(recipientId: String, payload: Data) {
