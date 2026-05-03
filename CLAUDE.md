@@ -15,23 +15,44 @@ qaudion-live-<userIdPrefix8>-<bootSessionUUID>-<seqZeroPad6>.log
 ```
 
 **Trigger:** every time the user reports an iOS-side runtime problem
-you MUST AUTOMATICALLY:
+you MUST AUTOMATICALLY run:
 
-1. **Try `scripts/fetch-ios-live.sh` first** (lists user's recent
-   live-log chunks via the server's file-list API, downloads + concats
-   them in seq order). [TODO: server-side list endpoint needed.]
-2. Otherwise: ask user for the latest fileId visible in
-   `LiveLogStreamer.shared.lastUploadedFileId` (debug card if reachable).
-3. Last fallback: ask user to open Settings → Diagnostica → "Carica al
-   server" and paste the fileId. Then run `scripts/fetch-ios-log.sh <id>`.
-4. Diagnose + propose fix BEFORE asking any clarifying question.
+```bash
+cd D:/users/f10379a/DEV\ APP/BCRYPTO/apps/qaudion-ios
+python scripts/fetch-ios-live.py --minutes 60 --limit 80
+```
 
-**Auth:** all fetch scripts need `QAUDION_USER_TOKEN` env var.
+The script:
+1. SSH to the IONOS VPS using credentials from
+   `apps/bcrypto-server/VPS_ACCESS.md` (root@217.160.65.35 + password)
+2. Lists files modified in the last N minutes under `/opt/bcrypto/data/files/`
+   (sharded `<id[0:2]>/<id>` layout — server discards original
+   filenames, every blob is a UUID)
+3. Downloads each candidate via SFTP, parses as UTF-8, and identifies
+   W417 chunks via heuristic (first line matches ISO8601 timestamp regex)
+4. Concatenates matching chunks in chronological order to
+   `.cache/ios-logs/live-<timestamp>.log`
+5. Prints summary: chunk count, byte total, ERROR/WARN count,
+   top tag distribution
+
+The full dump is the primary diagnostic source — every line has a
+millisecond timestamp + level + tag + message, so call/dial/crypto
+flow can be reconstructed exactly.
+
+**Auth:** the script reads `apps/bcrypto-server/VPS_ACCESS.md` for
+SSH credentials. They are in plain text in the bcrypto-server repo
+(NOT in the iOS repo). If you don't have BCrypto repo cloned, the
+fallback is the older `scripts/fetch-ios-log.sh` which uses
+`QAUDION_USER_TOKEN` env var to fetch a single fileId via REST.
 
 **Why the auto-pump exists:** user reported 2026-05-03 that the
 Settings screen freezes. W417 makes telemetry independent of any UI —
 even if SwiftUI wedges, the streamer keeps shipping chunks via Task.
 The maintainer always has a trail server-side.
+
+**Server-side list endpoint (TODO):** the proper REST way is to add
+`GET /api/v1/files/recent` server-side and use HTTP fetch instead of
+SSH. Until that's done, SSH+SFTP is the working path.
 
 ## Project snapshot
 
