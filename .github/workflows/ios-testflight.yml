@@ -40,19 +40,25 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14   # Apple Silicon, Xcode 15.x preinstalled
+    # Q-Audion requires Swift 6 (strict concurrency — see LiveLogStreamer
+    # bisect history v1.0.386→v1.0.397 and CLAUDE.md sec 6 + 16). Xcode
+    # 15.x on macos-14 runner only ships Swift 5.10 → fails with exit 74
+    # "Failed to show build settings". macos-15 (Sequoia) ships Xcode
+    # 16.x (Swift 6) by default which builds successfully.
+    #
+    # Codemagic uses Xcode 26.4. macos-26 runner with Xcode 26.x would
+    # be ideal for parity, but as of late 2025 it may not be GA on GH
+    # Actions yet. macos-15 + Xcode 16.x is the practical choice.
+    runs-on: macos-15
     timeout-minutes: 60
 
     env:
       BUNDLE_ID: com.qaudion.app
       APP_APPLE_ID: 'REDACTED_APP_ID'
       XCODE_PROJECT: QAudionApp.xcodeproj
-      # Mirror codemagic.yaml's xcode pin — adjust if a newer Xcode is
-      # required. Available versions on macos-14 runner:
-      #   /Applications/Xcode_15.4.app
-      #   /Applications/Xcode_16.0.app
-      #   etc. Run `ls /Applications | grep Xcode` in a debug step.
-      XCODE_VERSION: '15.4'
+      # Empty = use runner default (Xcode 16.x on macos-15). Pin to a
+      # specific value (e.g. '16.4') if you need a deterministic build.
+      XCODE_VERSION: ''
 
     steps:
       # ----------------------------------------------------------
@@ -71,10 +77,22 @@ jobs:
       - name: Select Xcode
         run: |
           set -e
-          if [ -d "/Applications/Xcode_${XCODE_VERSION}.app" ]; then
+          # List all Xcode installations on the runner so we know what's
+          # actually available. Useful when XCODE_VERSION pin doesn't
+          # match anything and we fall back to default.
+          echo "=== Available Xcode installations ==="
+          ls /Applications | grep -i "^Xcode" || true
+          echo ""
+          if [ -n "$XCODE_VERSION" ] && [ -d "/Applications/Xcode_${XCODE_VERSION}.app" ]; then
             sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app"
+            echo "Pinned Xcode $XCODE_VERSION"
+          else
+            echo "Using runner default Xcode (XCODE_VERSION='$XCODE_VERSION')"
           fi
+          echo ""
+          echo "=== Active Xcode ==="
           xcodebuild -version
+          xcrun swift --version 2>&1 | head -2 || true
 
       # ----------------------------------------------------------
       # 3) Install xcodegen + codemagic-cli-tools.
