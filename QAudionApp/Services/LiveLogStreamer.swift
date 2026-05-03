@@ -1,87 +1,33 @@
 import Foundation
-import UIKit
 import QAudionEngine
 
 /// W417 — Always-on real-time telemetry pump.
 ///
-/// **Why this exists:** the user reported that opening Settings →
-/// Diagnostica freezes the app, blocking the manual W415/W416
-/// "Carica al server" flow. Without an auto-push mechanism the
-/// maintainer has no way to inspect runtime behaviour during the
-/// debug period.
+/// Singleton that ships log chunks to /api/v1/files/upload every
+/// ~3 seconds without user interaction. Designed for the debug
+/// period where Settings → Diagnostica freezes the app.
 ///
-/// **What it does:** every `flushIntervalSeconds` (default 3s) the
-/// streamer reads the new entries from `RuntimeLogSink` since the
-/// last successful flush, formats them as a UTF-8 .log chunk, and
-/// POSTs to `/api/v1/files/upload` via the existing storage API
-/// using the user's bearer token. Each chunk is a standalone file
-/// named `qaudion-live-<userPrefix>-<bootSession>-<seq>.log`. The
-/// maintainer reconstructs the timeline server-side by listing
-/// uploads sorted by name (the seq is zero-padded so lexical sort
-/// matches numeric).
+/// **Non-interference budget (do NOT weaken without re-evaluating):**
+///   - ≤ 1 upload per `minSecondsBetweenUploads` (2.0s)
+///   - ≤ `maxChunkBytes` (64 KB) per chunk
+///   - ≤ `maxLinesPerChunk` (256) per chunk
+///   - Single-flight (max 1 upload concurrent)
+///   - Self-suppression: "livelog" tag entries excluded from chunks
+///   - Auth-gated: skip flush if no token (silent counter bump)
+///   - Fail-silent: network errors counted, never re-tried
 ///
-/// **Non-interference design (CRITICAL — must not affect calls):**
-///   1. Background QoS dispatch queue + URLSession with
-///      `networkServiceType = .background` so iOS's network scheduler
-///      gives audio + WS traffic priority over us.
-///   2. `waitsForConnectivity = false` — when offline we DROP the
-///      chunk rather than queue (queueing would let memory grow
-///      unbounded across a long offline window).
-///   3. Single-flight: at most ONE upload in flight. If the previous
-///      upload hasn't completed by the next tick we skip the tick,
-///      avoiding stack-up that could starve the URLSession workers.
-///   4. Hard caps: ≤ 64KB per chunk, ≤ 256 lines per chunk, ≤ 1
-///      upload per 2 seconds. Even under a log storm we won't push
-///      more than ~32 KB/s — negligible compared to a Q-Audion call's
-///      ~25 KB/s audio stream.
-///   5. Self-suppression: lines tagged "livelog" are filtered out by
-///      `RuntimeLogSink.entriesSince(...)` so each upload doesn't
-///      generate an entry that becomes the next upload's payload.
-///   6. Auth-gated, fail-silent: skip flush if no token. Network
-///      errors are counted in `failedUploads` but never re-tried —
-///      retry could double-spend the chunk and inflate server cost.
-///
-/// **Server-side discovery (manual today):**
-/// the maintainer fetches the user's recent live-log files via
-///   `curl -H "Authorization: Bearer <admin>" \
-///         https://voip.bcrypto.com/api/v1/files?owner=<userId>&prefix=qaudion-live-`
-/// (or analogous list endpoint). A future server enhancement may
-/// announce each chunk's fileId via WebSocket so the maintainer can
-/// subscribe in real-time. For now, the convention-based filename
-/// pattern is the contract.
-///
-/// **Lifetime:** singleton. Started once from `AppState.initialize()`
-/// after the engine is constructed. The flush timer runs whenever the
-/// app is foregrounded or in a CallKit-elevated background state. iOS
-/// suspends the timer when the process moves to plain background
-/// (which is desirable — no calls, no relevant logs).
+/// **Filename pattern:**
+///   `qaudion-live-<userPrefix8>-<bootSession>-<seqZeroPad6>.log`
 @MainActor
 public final class LiveLogStreamer {
 
-    public static let shared = LiveLogStreamer()
+    public static let shared: LiveLogStreamer = LiveLogStreamer()
 
-    /// Boot session UUID — same value across the entire process
-    /// lifetime. Restarting the app starts a new session, so chunks
-    /// are naturally segmented into "app run" units.
     public let bootSessionId: String = UUID().uuidString.lowercased()
 
-    /// Cadence of the upload pump. 3 seconds is the sweet spot:
-    /// short enough that a crash mid-call still leaves > 95% of the
-    /// trail server-side, long enough that we don't generate one
-    /// upload per second.
     public var flushIntervalSeconds: TimeInterval = 3.0
-
-    /// Hard cap on a single chunk's payload size. Chunks above this
-    /// are split (only the first 64KB ships; remainder waits for
-    /// next tick). Prevents pathological log bursts from creating a
-    /// single huge upload that ties up bandwidth.
     public let maxChunkBytes: Int = 64 * 1024
-
-    /// Hard cap on lines per chunk to bound JSON-encoding work even
-    /// when individual lines are short.
     public let maxLinesPerChunk: Int = 256
-
-    // MARK: - Telemetry counters (read by UI / debug card)
 
     public private(set) var lastUploadedFileId: String?
     public private(set) var lastUploadedAt: Date?
@@ -91,186 +37,173 @@ public final class LiveLogStreamer {
     public private(set) var skippedDueToInflight: Int = 0
     public private(set) var skippedDueToNoAuth: Int = 0
 
-    // MARK: - Private state
-
     private weak var appStateRef: AppState?
     private var timer: Timer?
     private var lastSeq: Int64 = 0
     private var chunkSeq: Int = 0
     private var inflight: Bool = false
-    private var lastUploadStartedAt: Date = .distantPast
-    /// Minimum gap between upload STARTS — even if the timer fires
-    /// faster, this throttles us so a transient burst doesn't open
-    /// 5 sockets in 5 seconds.
+    private var lastUploadStartedAt: Date = Date.distantPast
     private let minSecondsBetweenUploads: TimeInterval = 2.0
     private var isStarted: Bool = false
 
     private init() {}
 
-    // MARK: - Public lifecycle
-
-    /// Starts the flush pump. Idempotent.
-    /// Pass the AppState so we can read `serverUrl`, `currentUserId`,
-    /// `authService.loadToken()` lazily on each flush (auth state may
-    /// change after start-up).
     public func start(appState: AppState) {
-        guard !isStarted else { return }
+        if isStarted { return }
         isStarted = true
         appStateRef = appState
-        // Fire one flush immediately so boot logs ship within ~3 sec
-        // of process start (instead of waiting a full interval).
         scheduleTimer()
-        RTLog.info("livelog", "LiveLogStreamer started session=\(bootSessionId) interval=\(flushIntervalSeconds)s")
+        let session: String = bootSessionId
+        let interval: TimeInterval = flushIntervalSeconds
+        let intervalStr: String = String(interval)
+        let line: String = "LiveLogStreamer started session=" + session + " interval=" + intervalStr + "s"
+        RTLog.info("livelog", line)
     }
 
-    /// Stops the flush pump. Used by tests / sign-out paths.
     public func stop() {
-        timer?.invalidate(); timer = nil
+        timer?.invalidate()
+        timer = nil
         isStarted = false
-        RTLog.info("livelog", "LiveLogStreamer stopped (totalChunks=\(totalUploadedChunks) failed=\(failedUploads))")
     }
-
-    // MARK: - Internal
 
     private func scheduleTimer() {
         timer?.invalidate()
-        // Capture the interval as a local constant so the @Sendable
-        // Timer block doesn't need to read a @MainActor-isolated
-        // property. The block itself dispatches to MainActor via Task
-        // so flushOnce (which is implicitly @MainActor) can be called.
-        // The singleton .shared reference is Sendable (LiveLogStreamer
-        // is @MainActor → implicitly Sendable).
-        let interval = flushIntervalSeconds
-        let t = Timer(timeInterval: interval, repeats: true) { _ in
+        let interval: TimeInterval = flushIntervalSeconds
+        let t: Timer = Timer(timeInterval: interval, repeats: true) { _ in
             Task { @MainActor in
                 LiveLogStreamer.shared.flushOnce()
             }
         }
-        // Use .common so the timer keeps firing during scroll / modal
-        // presentation — would be tragic if telemetry stalled exactly
-        // when the user scrolls Settings looking for the freeze cause.
-        RunLoop.main.add(t, forMode: .common)
+        RunLoop.main.add(t, forMode: RunLoop.Mode.common)
         timer = t
     }
 
-    /// One pump cycle. Reads new entries → builds chunk → uploads.
-    /// All bail-out paths are silent counters, never errors.
     private func flushOnce() {
-        // (1) Single-flight gate.
         if inflight {
             skippedDueToInflight += 1
             return
         }
-        // (2) Throttle by elapsed wall-clock, independent of timer.
-        let now = Date()
-        if now.timeIntervalSince(lastUploadStartedAt) < minSecondsBetweenUploads {
-            return
-        }
-        // (3) Auth gate. AppState may not have a token yet during
-        //     the first few seconds after launch; we stay quiet and
-        //     wait — RuntimeLogSink keeps buffering meanwhile.
-        guard let appState = appStateRef,
-              let token = appState.authService.loadToken(), !token.isEmpty else {
+        let now: Date = Date()
+        let elapsed: TimeInterval = now.timeIntervalSince(lastUploadStartedAt)
+        if elapsed < minSecondsBetweenUploads { return }
+
+        guard let appState = appStateRef else {
             skippedDueToNoAuth += 1
             return
         }
-        // (4) Read new entries. If nothing new, no upload.
-        let snap = RuntimeLogSink.shared.entriesSince(seq: lastSeq)
-        guard !snap.lines.isEmpty else { return }
+        guard let tokenLocal = appState.authService.loadToken() else {
+            skippedDueToNoAuth += 1
+            return
+        }
+        if tokenLocal.isEmpty {
+            skippedDueToNoAuth += 1
+            return
+        }
 
-        // (5) Cap lines + bytes.
-        var lines = snap.lines
+        let snap = RuntimeLogSink.shared.entriesSince(seq: lastSeq)
+        if snap.lines.isEmpty { return }
+
+        // Build the chunk body. Pre-typed vars throughout.
+        var lines: [String] = snap.lines
         if lines.count > maxLinesPerChunk {
             lines = Array(lines.prefix(maxLinesPerChunk))
         }
-        var body = String()
+        var body: String = ""
         body.reserveCapacity(lines.count * 220)
-        for line in lines { body.append(line); body.append("\n") }
-        var data = body.data(using: .utf8) ?? Data()
+        for line in lines {
+            body.append(line)
+            body.append("\n")
+        }
+        var data: Data = Data()
+        if let encoded = body.data(using: String.Encoding.utf8) {
+            data = encoded
+        }
         if data.count > maxChunkBytes {
-            // Truncate mid-line — better to lose the tail than to
-            // skip the chunk entirely. Append a marker so the maintainer
-            // sees the truncation in the file.
-            data = data.prefix(maxChunkBytes - 64)
-            data.append("\n[livelog-truncated-at-\(maxChunkBytes)-bytes]\n".data(using: .utf8) ?? Data())
+            // Truncate via Data slice — explicit Range to dodge prefix overload ambiguity.
+            let cap: Int = maxChunkBytes - 64
+            let upper: Int = min(cap, data.count)
+            let head: Data = data.subdata(in: 0..<upper)
+            let markerStr: String = "\n[livelog-truncated]\n"
+            var combined: Data = head
+            if let markerData = markerStr.data(using: String.Encoding.utf8) {
+                combined.append(markerData)
+            }
+            data = combined
         }
 
-        // (6) Reserve seq numbers + filename.
         chunkSeq += 1
-        let mySeq = chunkSeq
-        let chunkBytes = data.count
-        // Update lastSeq optimistically so the next tick doesn't re-read
-        // the same lines while we're uploading. If the upload fails the
-        // chunk is lost forever — accepted trade-off (see file header).
+        let mySeq: Int = chunkSeq
+        let chunkBytes: Int = data.count
         lastSeq = snap.highestSeq
-        let userPrefix = (appState.currentUserId ?? "anon").prefix(8)
-        let filename = String(format: "qaudion-live-%@-%@-%06d.log",
-                              String(userPrefix), bootSessionId, mySeq)
-        let serverUrl = appState.serverUrl
 
-        // (7) Mark in-flight + dispatch the upload as a detached
-        //     async task. We keep it as a regular `Task { ... }`
-        //     (inherits @MainActor) — the await on uploadFile suspends
-        //     this task until the response arrives, but URLSession's
-        //     own network I/O runs entirely off the main thread. So
-        //     the main-thread cost reduces to building the BackendConfig
-        //     + provider object (microseconds) and the post-await
-        //     state mutations. Audio + WebRTC + WS are unaffected.
+        // Build filename without String(format:) variadic to avoid
+        // type-checker overload-resolution overhead.
+        let userIdRaw: String = appState.currentUserId ?? "anon"
+        let userPrefix: String = String(userIdRaw.prefix(8))
+        let seqStr: String = LiveLogStreamer.zeroPad(mySeq, width: 6)
+        let session: String = bootSessionId
+        let filename: String = "qaudion-live-" + userPrefix + "-" + session + "-" + seqStr + ".log"
+        let serverUrlLocal: String = appState.serverUrl
+
         inflight = true
         lastUploadStartedAt = now
-        let snapshotServerUrl = serverUrl
-        let snapshotToken = token
-        let snapshotFilename = filename
-        let snapshotData = data
-        let snapshotChunkBytes = chunkBytes
-        let snapshotSeq = mySeq
-        Task { [weak self] in
-            await self?.uploadChunk(
-                serverUrl: snapshotServerUrl,
-                token: snapshotToken,
-                filename: snapshotFilename,
-                data: snapshotData,
-                chunkBytes: snapshotChunkBytes,
-                seq: snapshotSeq)
+        // Strong self capture (singleton) — no [weak self] dance.
+        Task {
+            await self.uploadChunk(
+                serverUrl: serverUrlLocal,
+                token: tokenLocal,
+                filename: filename,
+                data: data,
+                chunkBytes: chunkBytes,
+                seq: mySeq)
         }
     }
 
-    /// Performs the actual POST. Runs on the main actor (inherited
-    /// from the enclosing class) but the `await uploadFile` suspends
-    /// the task so URLSession's network I/O runs off-main internally.
-    /// The function only "uses" the main thread for prelude (provider
-    /// construction) and postlude (counter mutations) — both microsecond
-    /// scale.
     private func uploadChunk(serverUrl: String,
                              token: String,
                              filename: String,
                              data: Data,
                              chunkBytes: Int,
                              seq: Int) async {
-        let cfg = BackendConfig(serverUrl: serverUrl, accessToken: token)
-        let provider = BCryptoBackendProvider(config: cfg)
+        let cfg: BackendConfig = BackendConfig(serverUrl: serverUrl, accessToken: token)
+        let provider: BCryptoBackendProvider = BCryptoBackendProvider(config: cfg)
         do {
-            let fileId = try await provider.storageApi.uploadFile(
+            let fileId: String = try await provider.storageApi.uploadFile(
                 data: data, filename: filename)
-            self.lastUploadedFileId = fileId
-            self.lastUploadedAt = Date()
-            self.totalUploadedChunks += 1
-            self.totalUploadedBytes += chunkBytes
-            self.inflight = false
-            // Surface the first 3 successes + every 50th so the
-            // maintainer can confirm the pipeline is alive without
-            // spamming the buffer. The "livelog" tag is filter-
-            // suppressed in entriesSince() so this line never gets
-            // re-uploaded as part of a future chunk's payload.
-            if self.totalUploadedChunks <= 3 || self.totalUploadedChunks % 50 == 0 {
-                let line = "chunk #\(seq) → fileId=\(fileId) bytes=\(chunkBytes)"
+            lastUploadedFileId = fileId
+            lastUploadedAt = Date()
+            totalUploadedChunks += 1
+            totalUploadedBytes += chunkBytes
+            inflight = false
+            // Surface first 3 + every 50th success so the maintainer
+            // knows the pipeline is alive without spamming the buffer.
+            let shouldLog: Bool = totalUploadedChunks <= 3 || (totalUploadedChunks % 50) == 0
+            if shouldLog {
+                let seqStr: String = String(seq)
+                let bytesStr: String = String(chunkBytes)
+                let line: String = "chunk #" + seqStr + " fileId=" + fileId + " bytes=" + bytesStr
                 RTLog.info("livelog", line)
             }
         } catch {
-            self.failedUploads += 1
-            self.inflight = false
-            // Don't RTLog the error — would create churn in the buffer.
-            // Counter visible via debug UI is sufficient.
+            failedUploads += 1
+            inflight = false
         }
+    }
+
+    /// Zero-pad an integer to a fixed width without going through
+    /// String(format:) — avoids the type-checker variadic CVarArg
+    /// overhead inside this concurrency-heavy file.
+    private static func zeroPad(_ value: Int, width: Int) -> String {
+        var s: String = String(value)
+        if s.count >= width { return s }
+        let padding: Int = width - s.count
+        var prefix: String = ""
+        prefix.reserveCapacity(padding)
+        var i: Int = 0
+        while i < padding {
+            prefix.append("0")
+            i += 1
+        }
+        return prefix + s
     }
 }
