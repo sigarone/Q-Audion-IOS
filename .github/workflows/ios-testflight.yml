@@ -40,25 +40,24 @@ on:
 
 jobs:
   build:
-    # Q-Audion requires Swift 6 (strict concurrency — see LiveLogStreamer
-    # bisect history v1.0.386→v1.0.397 and CLAUDE.md sec 6 + 16). Xcode
-    # 15.x on macos-14 runner only ships Swift 5.10 → fails with exit 74
-    # "Failed to show build settings". macos-15 (Sequoia) ships Xcode
-    # 16.x (Swift 6) by default which builds successfully.
-    #
-    # Codemagic uses Xcode 26.4. macos-26 runner with Xcode 26.x would
-    # be ideal for parity, but as of late 2025 it may not be GA on GH
-    # Actions yet. macos-15 + Xcode 16.x is the practical choice.
-    runs-on: macos-15
+    # Apple requires Xcode 26 / iOS 26 SDK for App Store submissions
+    # since 2026-04-28 (CLAUDE.md sec 12). Codemagic uses Xcode 26.4.
+    # GH Actions: macos-26 runner ships Xcode 26.x by default; macos-15
+    # often has 26.x as a non-default install path. Use macos-latest so
+    # GitHub auto-bumps as new images roll out, and pin XCODE_VERSION
+    # explicitly. Discovery step below fails fast if Xcode 26 missing.
+    runs-on: macos-latest
     timeout-minutes: 60
 
     env:
       BUNDLE_ID: com.qaudion.app
       APP_APPLE_ID: 'REDACTED_APP_ID'
       XCODE_PROJECT: QAudionApp.xcodeproj
-      # Empty = use runner default (Xcode 16.x on macos-15). Pin to a
-      # specific value (e.g. '16.4') if you need a deterministic build.
-      XCODE_VERSION: ''
+      # Pin to Xcode 26.x family — accept ANY 26.x minor version
+      # available on the runner (the discovery step picks the latest
+      # 26.x found in /Applications). Hard-pin to e.g. "26.4" if you
+      # need deterministic builds across runner image rotations.
+      XCODE_VERSION: '26'
 
     steps:
       # ----------------------------------------------------------
@@ -77,18 +76,29 @@ jobs:
       - name: Select Xcode
         run: |
           set -e
-          # List all Xcode installations on the runner so we know what's
-          # actually available. Useful when XCODE_VERSION pin doesn't
-          # match anything and we fall back to default.
-          echo "=== Available Xcode installations ==="
-          ls /Applications | grep -i "^Xcode" || true
+          echo "=== Runner OS ==="
+          sw_vers
           echo ""
-          if [ -n "$XCODE_VERSION" ] && [ -d "/Applications/Xcode_${XCODE_VERSION}.app" ]; then
-            sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app"
-            echo "Pinned Xcode $XCODE_VERSION"
-          else
-            echo "Using runner default Xcode (XCODE_VERSION='$XCODE_VERSION')"
+          echo "=== All Xcode installations ==="
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none found)"
+          echo ""
+
+          # Find the latest Xcode matching XCODE_VERSION prefix.
+          # XCODE_VERSION="26" matches Xcode_26.0, _26.1, _26.4, etc.
+          # Pick the highest version number (sort -V).
+          PIN="${XCODE_VERSION}"
+          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
+
+          if [ -z "$MATCH" ]; then
+            echo "❌ No Xcode matching '${PIN}*' found on this runner."
+            echo "Apple requires Xcode 26+ since 2026-04-28 for App Store submissions."
+            echo "Available Xcodes:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
+            exit 1
           fi
+
+          echo "Selecting: $MATCH"
+          sudo xcode-select -s "$MATCH"
           echo ""
           echo "=== Active Xcode ==="
           xcodebuild -version

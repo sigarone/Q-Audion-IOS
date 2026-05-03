@@ -74,9 +74,6 @@ public final class AudioProcessingPipeline {
 
         // Category: playAndRecord for full-duplex VoIP
         // Mode: voiceChat enables hardware AEC + AGC + noise suppression
-        // .allowBluetoothHFP requires Xcode 26 / iOS 26 SDK; on Xcode 16 (GH Actions)
-        // fall back to deprecated .allowBluetooth — identical runtime behaviour.
-        #if compiler(>=6.2)
         try session.setCategory(
             .playAndRecord,
             mode: .voiceChat,
@@ -87,18 +84,6 @@ public final class AudioProcessingPipeline {
                 .interruptSpokenAudioAndMixWithOthers
             ]
         )
-        #else
-        try session.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: [
-                .defaultToSpeaker,
-                .allowBluetooth,
-                .allowBluetoothA2DP,
-                .interruptSpokenAudioAndMixWithOthers
-            ]
-        )
-        #endif
 
         // Low-latency I/O buffer for real-time VoIP
         try session.setPreferredIOBufferDuration(config.preferredBufferDuration)
