@@ -266,10 +266,15 @@ jobs:
         run: |
           set -e
           IPA_PATH=$(find QAudionApp/build/ios/ipa -name "*.ipa" | head -1)
+          # No --beta-group: "Q-Audion testers" is an INTERNAL group and
+          # the app-store-connect API rejects explicit assignment with
+          # "Cannot add internal group to a build". Internal testers see
+          # any VALID build automatically once processed. Re-add
+          # --beta-group when/if we add an EXTERNAL group like "External
+          # beta testers".
           app-store-connect publish \
             --path "$IPA_PATH" \
-            --testflight \
-            --beta-group "Q-Audion testers"
+            --testflight
 
       # ----------------------------------------------------------
       # 10) Upload artifacts so the human can download IPA + dSYM
