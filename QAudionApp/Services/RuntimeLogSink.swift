@@ -25,6 +25,8 @@ public final class RuntimeLogSink: ObservableObject {
 
     public struct Entry: Identifiable {
         public let id = UUID()
+        /// W417 — monotonic sequence number assigned at insert time.
+        public let seq: Int64
         public let timestamp: Date
         public let level: Level
         public let tag: String
@@ -48,6 +50,10 @@ public final class RuntimeLogSink: ObservableObject {
     private let lock = NSLock()
     private var entries: [Entry] = []
 
+    /// W417 — global monotonic counter incremented for every recorded
+    /// entry. Independent from `entries.count` (FIFO eviction).
+    private var nextSeq: Int64 = 1
+
     /// Bumped every time `record` adds a new line so SwiftUI views
     /// observing this sink re-render. Cheap monotonic counter.
     @Published public private(set) var entryCount: Int = 0
@@ -60,8 +66,10 @@ public final class RuntimeLogSink: ObservableObject {
     private init() {}
 
     public func record(level: Level, tag: String, _ message: String) {
-        let entry = Entry(timestamp: Date(), level: level, tag: tag, message: message)
         lock.lock()
+        let seq = nextSeq
+        nextSeq &+= 1
+        let entry = Entry(seq: seq, timestamp: Date(), level: level, tag: tag, message: message)
         entries.append(entry)
         if entries.count > maxEntries {
             // Drop the oldest 10% in one shot so we don't pay the
