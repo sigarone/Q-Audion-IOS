@@ -12,6 +12,19 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.383", date: "2026-05-02",
+              title: "📞 DialPad: risolve extension/numero → userId prima di chiamare (W414)",
+              bullets: [
+                "Bug: digitare 175 + 'Chiama' → chiamata non parte, Android non squilla",
+                "Causa: DialPadSheet passava la stringa raw direttamente a startCall(contactId:); il server droppa il segnale perché recipient_id deve essere uno userId BCrypto, non '175' o '+39...'",
+                "AppState.dialAndCall(rawInput:): nuovo entry point che fa il triage del raw input",
+                "Short extension (solo cifre, ≤ 7 char) → GET /api/v1/directory/by-extension/{n} → UserProfile.userId",
+                "E.164 (+...) → fetchPepper + PepperedPhoneHash + discover-v2 → entry.userId",
+                "Fallback: input lungo / con trattini → assumiamo già userId e passa diretto",
+                "Errori user-facing via errorMessage + return precoce — niente UI bloccata",
+                "BCryptoAccountApi.lookupByExtension(_ ext: Int64) → UserProfile? (404 → nil)",
+                "Comportamento atteso ora: 175 → server risolve → startCall(contactId: profile.userId) → Android riceve call_offer e squilla"
+              ]),
         .init(id: "v1.0.382", date: "2026-05-02",
               title: "🔓 FastSetup QR pinning robusto (W413)",
               bullets: [

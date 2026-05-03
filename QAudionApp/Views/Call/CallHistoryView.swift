@@ -202,7 +202,15 @@ struct CallHistoryView: View {
         .sheet(isPresented: $showingDialPad) {
             DialPadSheet(onCall: { dialed in
                 showingDialPad = false
-                Task { await appState.startCall(contactId: dialed, video: false) }
+                // W414: il numero digitato non è uno user_id BCrypto —
+                // può essere una short extension PBX (es. "175") o un
+                // E.164 (+39...). Risolviamo prima a userId via
+                // /api/v1/directory/by-extension/{n} per gli interi
+                // corti, altrimenti via /contacts/discover-v2 per
+                // E.164. Senza questa risoluzione il server riceve
+                // recipient_id='175' e droppa il segnale silenziosamente
+                // (Android non squilla).
+                Task { await appState.dialAndCall(rawInput: dialed, video: false) }
             })
         }
         .sheet(isPresented: $showingGroupComposer) {

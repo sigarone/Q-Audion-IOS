@@ -1801,6 +1801,77 @@ final class AppState: ObservableObject {
         deepfakeAlert = false
     }
 
+    /// W414 — entry point dal DialPad. Risolve `rawInput` (può essere
+    /// short extension PBX, E.164, o uno user_id UUID-form) al vero
+    /// BCrypto userId tramite il server, poi chiama `startCall(contactId:)`.
+    ///
+    /// Heuristica di parsing:
+    ///   - solo cifre (con o senza '+') e ≤ 7 char → short extension,
+    ///     prova `GET /api/v1/directory/by-extension/{n}` (W414 endpoint).
+    ///   - inizia con '+' → E.164, prova fetchPepper + discover-v2.
+    ///   - 32+ char alfanumerici/trattini → presumibilmente già uno
+    ///     user_id, passa diretto a startCall (back-compat con
+    ///     callers che hanno già lo userId).
+    ///
+    /// Ogni step di rete ha errori user-facing tramite `errorMessage`
+    /// + early return così il DialPad non resta bloccato in attesa.
+    @MainActor
+    func dialAndCall(rawInput: String, video: Bool = false) async {
+        let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            errorMessage = "Numero vuoto."
+            return
+        }
+        guard let token = authService.loadToken(), !token.isEmpty else {
+            errorMessage = "Sessione non autenticata."
+            return
+        }
+        let backendConfig = BackendConfig(serverUrl: serverUrl, accessToken: token)
+        let provider = BCryptoBackendProvider(config: backendConfig)
+
+        // Step A — short extension (solo cifre, lunghezza ≤ 7).
+        let digitsOnly = trimmed.allSatisfy { $0.isNumber }
+        if digitsOnly, trimmed.count <= 7, let ext = Int64(trimmed) {
+            do {
+                guard let profile = try await provider.accountApi.lookupByExtension(ext) else {
+                    errorMessage = "Interno \(ext) non assegnato — verifica il numero e riprova."
+                    return
+                }
+                await startCall(contactId: profile.userId, video: video)
+                return
+            } catch {
+                errorMessage = "Risoluzione interno \(ext) fallita: \(error.localizedDescription)"
+                return
+            }
+        }
+
+        // Step B — E.164 (+...) → contacts/discover-v2 path.
+        if trimmed.hasPrefix("+") {
+            do {
+                let normalized = try PhoneHashHelper.normalizeE164(trimmed)
+                let v2 = BCryptoContactsDiscoverV2Client(
+                    baseUrl: URL(string: serverUrl)!,
+                    bearerTokenProvider: { [weak self] in self?.authService.loadToken() })
+                let pepper = try await v2.fetchPepper()
+                let hash = try PepperedPhoneHash.hash(phone: normalized, pepperBytes: pepper.pepperBytes)
+                let entries = try await v2.discover(alg: pepper.alg, hashes: [hash])
+                guard let entry = entries.first, let userId = entry.userId else {
+                    errorMessage = "Numero \(normalized) non risulta tra gli utenti registrati."
+                    return
+                }
+                await startCall(contactId: userId, video: video)
+                return
+            } catch {
+                errorMessage = "Risoluzione \(trimmed) fallita: \(error.localizedDescription)"
+                return
+            }
+        }
+
+        // Step C — fallback: assumiamo già uno user_id e proviamo
+        // diretto. Il server rifiuterà in modo benigno se sbagliato.
+        await startCall(contactId: trimmed, video: video)
+    }
+
     func startCall(contactId: String, video: Bool = false) async {
         guard let engine = engine else {
             errorMessage = "Engine not available"

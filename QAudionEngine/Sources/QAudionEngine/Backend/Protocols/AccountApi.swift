@@ -54,6 +54,13 @@ public protocol AccountApi {
     /// Look up a peer user's public profile by user_id.
     /// Matches Android `GET /api/v1/users/{user_id}`.
     func getPublicUser(userId: String) async throws -> PublicUser
+    /// W414 — dial-by-extension lookup. Resolves a short PBX extension
+    /// (e.g. 175) to a `UserProfile`. Returns `nil` on 404 (extension
+    /// not assigned), throws on other errors. Used by the iOS DialPad
+    /// to translate a typed number into the BCrypto userId the call
+    /// signaling layer needs.
+    /// Matches `GET /api/v1/directory/by-extension/{n}`.
+    func lookupByExtension(_ ext: Int64) async throws -> UserProfile?
 }
 
 /// Public-profile projection returned by `GET /api/v1/users/{user_id}`.

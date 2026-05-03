@@ -61,6 +61,29 @@ public final class BCryptoAccountApiImpl: AccountApi {
         return try JSONDecoder().decode(UserProfile.self, from: data)
     }
 
+    /// W414 — dial-by-extension lookup. Resolves a short PBX extension
+    /// (e.g. 175) to a `UserProfile` so the iOS DialPad can call
+    /// `startCall(contactId: profile.userId, ...)` instead of passing
+    /// the raw extension string (which the server cannot route since
+    /// `recipient_id` must be the BCrypto userId).
+    ///
+    /// Server endpoint: `GET /api/v1/directory/by-extension/{n}`.
+    /// Returns `nil` on 404 (extension not assigned), throws on other
+    /// errors (auth, network, malformed response).
+    public func lookupByExtension(_ ext: Int64) async throws -> UserProfile? {
+        let path = "/api/v1/directory/by-extension/\(ext)"
+        do {
+            let data = try await rest.get(path)
+            return try JSONDecoder().decode(UserProfile.self, from: data)
+        } catch BCryptoError.httpError(let status) where status == 404 {
+            return nil
+        } catch BCryptoError.notFound {
+            return nil
+        } catch {
+            throw error
+        }
+    }
+
     public func updateProfile(displayName: String?, statusMessage: String?, avatarUrl: String?) async throws {
         var dict: [String: Any] = [:]
         if let displayName { dict["display_name"] = displayName }

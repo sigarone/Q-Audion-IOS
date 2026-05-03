@@ -83,4 +83,12 @@ public final class UpstreamAccountApiImpl: AccountApi {
     public func getPublicUser(userId: String) async throws -> PublicUser {
         throw BCryptoError.notFound
     }
+
+    /// W414 — upstream (Signal-style) backend doesn't expose dial-by-
+    /// extension. Throws notFound for parity with the bcrypto-only
+    /// stubs above; the iOS DialPad path is gated on the BCrypto
+    /// backend at runtime.
+    public func lookupByExtension(_ ext: Int64) async throws -> UserProfile? {
+        throw BCryptoError.notFound
+    }
 }
