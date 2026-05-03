@@ -248,6 +248,15 @@ final class AppState: ObservableObject {
             return
         }
 
+        // W417 — start always-on telemetry pump. Pass primitive
+        // serverUrl + closures (NOT AppState directly — see
+        // LiveLogStreamer.swift header + CLAUDE.md "Hard-won lesson 16").
+        LiveLogStreamer.shared.start(
+            serverUrl: serverUrl,
+            getToken: { [weak self] in self?.authService.loadToken() },
+            getUserId: { [weak self] in self?.currentUserId }
+        )
+
         // W94: wire chat-message notification taps to pendingDeepLinkConversationId
         // so the chat list can pick up and navigate. Idempotent — re-init
         // overwrites the closure with a fresh AppState capture.

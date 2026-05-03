@@ -2,37 +2,36 @@
 
 You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-calling app. Read this file end-to-end before your first action. It captures the hard-won state of the build pipeline so you don't repeat the work.
 
-## ⚡ AUTOMATION RULE — iOS runtime log fetch
+## ⚡ AUTOMATION RULE — iOS runtime log fetch (auto-pump v1.0.398+)
+
+**Build v1.0.398+ (W417) ships always-on auto-upload telemetry.** The
+device pumps a chunk file to `/api/v1/files/upload` every ~3 seconds
+without user interaction (background, throttled, single-flight,
+non-interfering with calls). The user does NOT need to open Settings.
+
+**Filename pattern**:
+```
+qaudion-live-<userIdPrefix8>-<bootSessionUUID>-<seqZeroPad6>.log
+```
 
 **Trigger:** every time the user reports an iOS-side runtime problem
-(call doesn't start, screen wedges, crash, unexpected behaviour) you
-MUST first ask: "Hai caricato il log via Settings → Diagnostica →
-Carica al server? Se sì, mandami il fileId."
+you MUST AUTOMATICALLY:
 
-**On fileId received**, AUTOMATICALLY:
-1. Run `scripts/fetch-ios-log.sh <fileId>` — pulls the dump,
-   prints header + ERROR/WARN summary + tags distribution.
-2. Read the saved file at `.cache/ios-logs/<fileId>.log` for full
-   context if the summary doesn't surface the root cause.
-3. Use `--grep <pattern>` and `--tail <N>` flags for targeted slices.
+1. **Try `scripts/fetch-ios-live.sh` first** (lists user's recent
+   live-log chunks via the server's file-list API, downloads + concats
+   them in seq order). [TODO: server-side list endpoint needed.]
+2. Otherwise: ask user for the latest fileId visible in
+   `LiveLogStreamer.shared.lastUploadedFileId` (debug card if reachable).
+3. Last fallback: ask user to open Settings → Diagnostica → "Carica al
+   server" and paste the fileId. Then run `scripts/fetch-ios-log.sh <id>`.
 4. Diagnose + propose fix BEFORE asking any clarifying question.
 
-**Auth:** the script needs `QAUDION_USER_TOKEN` env var = a JWT from
-any logged-in session. Default is the user's own token (file owner
-can fetch own dumps). For admin-bypass, use the admin's JWT.
+**Auth:** all fetch scripts need `QAUDION_USER_TOKEN` env var.
 
-**No log uploaded?** Tell the user to:
-1. Open the app → Settings → Diagnostica
-2. Scroll to the "LOG RUNTIME" card
-3. Tap "Carica al server"
-4. Copy the fileId shown in the card
-5. Paste it back in chat
-
-**Why this rule exists:** the user has no Mac for USB Console.app
-debugging. The W415 RuntimeLogSink + LogExportService pipeline ships
-logs to /api/v1/files/upload so the maintainer pulls them via REST.
-Treat fileId-driven fetch as the FIRST step of any iOS-side bug
-investigation, not as an optional fallback.
+**Why the auto-pump exists:** user reported 2026-05-03 that the
+Settings screen freezes. W417 makes telemetry independent of any UI —
+even if SwiftUI wedges, the streamer keeps shipping chunks via Task.
+The maintainer always has a trail server-side.
 
 ## Project snapshot
 
@@ -398,3 +397,72 @@ with:
 ```
 
 (Already fixed at AppState.swift:1327 — see commit `d31f34e`.)
+
+### 16. NEVER take `AppState` as a direct parameter type in a NEW Swift file
+
+**Symptom:** add a brand-new Swift file with even a trivial method
+signature `func foo(appState: AppState)` and the build fails at
+"Build IPA" exit 65 with NO actionable error in xcbeautify's filtered
+console output. Step 6 "Diagnose Swift compile" succeeds (it always
+exits 0) but Step 7 fails. Searching for `error:` in the artifact
+log gives no useful match — the failure is silent.
+
+**Bisect proof (2026-05-03, v1.0.386→v1.0.397, 13 build cycles):**
+
+| Stub class body | Build |
+|---|---|
+| `func start(appState: AppState) {}` (with or without @MainActor) | ❌ |
+| `func start(serverUrl: String) {}` | ✅ |
+| `func start(getToken: @MainActor () -> String?) {}` | ✅ |
+| No method, just `static let shared = Self()` | ✅ |
+
+**Root cause hypothesis (we couldn't read the actual diag.log
+because Codemagic's artifact bundle is auth-locked behind the API
+token, and `xcode-project build-ipa` filters Swift errors through
+xcbeautify before they reach our captured output):** Swift 6's
+strict-concurrency Sendable inference walks the AppState type when
+it appears as a parameter type. AppState is ~2000 lines, has dozens
+of `@Published` properties wrapping non-Sendable Combine publishers,
+references many third-party types (RTCIceServer, BackendProvider,
+QAudionEngine internals) — the inference graph apparently exceeds
+some compiler budget and the diagnostic is then swallowed by
+xcbeautify, surfacing only as a non-zero exit.
+
+**The rule:** ANY new file that needs to interact with `AppState`
+state MUST take primitive values (`String`, `Bool`, `Int`) plus
+`@MainActor () -> T?` closures. Never the AppState type directly:
+
+```swift
+// ❌ Will silently break the build:
+public func start(appState: AppState) { ... }
+
+// ✅ Use primitives + closures:
+public typealias TokenProvider = @MainActor () -> String?
+public typealias UserIdProvider = @MainActor () -> String?
+public func start(serverUrl: String,
+                  getToken: @escaping TokenProvider,
+                  getUserId: @escaping UserIdProvider) { ... }
+```
+
+Then in AppState.initialize():
+```swift
+LiveLogStreamer.shared.start(
+    serverUrl: serverUrl,
+    getToken: { [weak self] in self?.authService.loadToken() },
+    getUserId: { [weak self] in self?.currentUserId }
+)
+```
+
+The closures capture only the specific values at call sites, never
+dragging the AppState type into the parameter signature.
+
+**Why existing files work:** files that have always referenced
+AppState (e.g. `CallService`, `ChatContainer`, `SecurityDashboard`)
+were created before some Swift toolchain update, so their AppState
+references are baked into the project's incremental compile graph in
+a way that doesn't trip the new diagnostic. Adding a NEW file with
+the same pattern is what triggers it.
+
+**Reference:** see `LiveLogStreamer.swift` (W417) for the canonical
+shape. The bisect commit chain is v1.0.386→v1.0.397 if this happens
+again — `git log --oneline v1.0.385..v1.0.398` reads like a story.

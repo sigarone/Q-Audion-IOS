@@ -112,6 +112,41 @@ public final class RuntimeLogSink: ObservableObject {
         return out
     }
 
+    /// W417 — incremental reader for LiveLogStreamer. Returns all
+    /// entries with seq > since, plus the highest seq seen, so the
+    /// caller can pass that back next time and skip what was already
+    /// uploaded. Filters out lines tagged "livelog" to avoid feedback.
+    public struct IncrementalSnapshot {
+        public let lines: [String]
+        public let highestSeq: Int64
+    }
+
+    public func entriesSince(seq since: Int64) -> IncrementalSnapshot {
+        lock.lock()
+        let copy = entries
+        lock.unlock()
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var lines: [String] = []
+        lines.reserveCapacity(min(copy.count, 256))
+        var highest: Int64 = since
+        for e in copy where e.seq > since {
+            if e.tag == "livelog" { continue }
+            var line = String()
+            line.reserveCapacity(220)
+            line.append(f.string(from: e.timestamp))
+            line.append(" ")
+            line.append(e.level.rawValue.uppercased())
+            line.append(" [")
+            line.append(e.tag)
+            line.append("] ")
+            line.append(e.message)
+            lines.append(line)
+            if e.seq > highest { highest = e.seq }
+        }
+        return IncrementalSnapshot(lines: lines, highestSeq: highest)
+    }
+
     /// Drop everything. Used by Settings → "Pulisci log".
     public func clear() {
         lock.lock()
