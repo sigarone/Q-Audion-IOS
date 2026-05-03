@@ -18,8 +18,17 @@ struct InCallView: View {
 
     private var vm: InCallViewModel { container.viewModel }
 
+    /// 2026-05-03 — local dismiss flag for the SAS verification banner.
+    /// Per user requirement: "sas verification deve essere una cosa
+    /// non bloccante ma opzionale quando ho già instaurato la chiamata".
+    /// The InCallViewModel.shouldShowSasPrompt drives whether the
+    /// banner CAN be shown; this @State lets the user hide it for the
+    /// remainder of the call without affecting the underlying VM flag
+    /// (which is owned by the call-setup pipeline).
+    @State private var sasBannerDismissed: Bool = false
+
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             backgroundGradient.ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -51,15 +60,69 @@ struct InCallView: View {
                 callControls
                     .padding(.bottom, 48)
             }
-        }
-        // (7) SAS verification — placeholder sheet (full wiring deferred to follow-on task).
-        .sheet(isPresented: .constant(vm.shouldShowSasPrompt)) {
-            Text("Verifica SAS")
-                .font(.headline)
-                .padding()
-                .presentationDetents([.medium])
+
+            // (7) SAS verification — NON-BLOCKING inline banner.
+            //
+            // 2026-05-03 — was a `.sheet(isPresented: .constant(...))`
+            // with a placeholder `Text("Verifica SAS")` body. The
+            // `.constant()` binding meant the sheet could never be
+            // dismissed (read-only binding); the placeholder body was
+            // an empty-looking square. Net effect — when iOS answered
+            // an incoming call, the user saw a stuck "Verifica SAS"
+            // sheet with no content + the End-call button hidden
+            // behind it (user report 2026-05-03: "mi vine fuori
+            // scritta verifica sas con un quadrato vuoto e anche se
+            // lo metto giù non fa nulla").
+            //
+            // The user explicitly clarified: "sas verification deve
+            // essere una cosa non bloccante ma opzionale quando ho
+            // già instaurato la chiamata". So this is now a small
+            // inline banner with a Dismiss "X". The audio + Hangup
+            // continue to work the moment the call is active.
+            if vm.shouldShowSasPrompt && !sasBannerDismissed {
+                sasBanner
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
         // (6) Video PiP — hidden in audio-only A.4 scope; vm.showVideoPip drives this.
+    }
+
+    // MARK: - SAS banner (non-blocking)
+
+    private var sasBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "lock.shield")
+                .foregroundStyle(.white.opacity(0.85))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Verifica SAS disponibile")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("Apri il dettaglio chiamata per confrontare le 6 parole con il peer")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            Spacer()
+            Button {
+                sasBannerDismissed = true
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Chiudi banner SAS")
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.black.opacity(0.55))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+        )
     }
 
     // MARK: - Peer info
