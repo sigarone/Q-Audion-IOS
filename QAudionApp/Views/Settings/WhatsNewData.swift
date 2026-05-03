@@ -12,6 +12,22 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.384", date: "2026-05-03",
+              title: "🪵 Logging runtime + upload server (W415)",
+              bullets: [
+                "Sistema di logging cross-debug per quando non hai un Mac collegato all'iPhone",
+                "Nuovo RuntimeLogSink — ring buffer in-memory 5000 righe, mirror su OSLog (Console.app) + sink osservabile da SwiftUI",
+                "Nuova API globale RTLog.info/warn/error/debug — singolo bottleneck, MainActor-safe, niente token né body messaggi nel buffer",
+                "Settings → Diagnostica nuovo pannello LOG RUNTIME con 4 azioni:",
+                "  • Mostra → sheet RuntimeLogViewerSheet con righe reverse-chrono + tag + timestamp",
+                "  • Condividi → scrive .log in Caches/qaudion-logs/ + UIActivityViewController",
+                "  • Carica al server → POST /api/v1/files/upload, restituisce fileId copiabile",
+                "  • Pulisci → svuota buffer",
+                "Workflow remoto: utente carica → riceve fileId → lo manda al maintainer → maintainer fa GET /api/v1/files/<id> con admin token",
+                "Header dump include build version, iOS version, device model, locale, free disk — niente content sensibile",
+                "RTLog hook iniziali su dialAndCall (W414): branch, lookup, errori — più hooks verranno aggiunti incrementalmente",
+                "OSLog subsystem com.qaudion.app/runtime per filtri Console.app quando il Mac è disponibile"
+              ]),
         .init(id: "v1.0.383", date: "2026-05-02",
               title: "📞 DialPad: risolve extension/numero → userId prima di chiamare (W414)",
               bullets: [

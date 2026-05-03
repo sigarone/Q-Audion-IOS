@@ -172,6 +172,15 @@ struct DiagnosticsExportScreen: View {
     @Environment(\.qaudionType) private var type
     @Environment(\.qaudionSnackbar) private var snackbar
 
+    // W415: state for the runtime-log section
+    @StateObject private var logSink = RuntimeLogSink.shared
+    @State private var showingLogSheet: Bool = false
+    @State private var showingLogShare: Bool = false
+    @State private var logShareUrl: URL? = nil
+    @State private var uploading: Bool = false
+    @State private var uploadFileId: String? = nil
+    @State private var uploadError: String? = nil
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -183,6 +192,9 @@ struct DiagnosticsExportScreen: View {
                         actionRow
                     }
                     generateButton
+                    // W415 — runtime log section (sempre visibile,
+                    // indipendente dal generate del report).
+                    runtimeLogCard
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
@@ -194,6 +206,14 @@ struct DiagnosticsExportScreen: View {
         .sheet(isPresented: $showingShareSheet) {
             DiagnosticsShareSheet(items: [container.report])
         }
+        .sheet(isPresented: $showingLogSheet) {
+            RuntimeLogViewerSheet()
+        }
+        .sheet(isPresented: $showingLogShare) {
+            if let url = logShareUrl {
+                DiagnosticsShareSheet(items: [url])
+            }
+        }
         .task {
             // Auto-generate on first appearance so the user sees content
             // immediately rather than a blank "Genera" prompt.
@@ -201,6 +221,130 @@ struct DiagnosticsExportScreen: View {
                 await container.generate(appState: appState)
             }
         }
+    }
+
+    // MARK: - W415 runtime log section
+
+    private var runtimeLogCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("LOG RUNTIME (\(logSink.entryCount) righe)")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .tracking(1.5)
+                .foregroundStyle(scheme.primary)
+            Text("Sistema RTLog cattura eventi app (call setup, WS, errori) in un buffer in-memory. Niente token, niente messaggi utente. Esportabile per debug remoto.")
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .padding(.bottom, 4)
+            HStack(spacing: 8) {
+                Button {
+                    showingLogSheet = true
+                } label: {
+                    Label("Mostra", systemImage: "doc.text.magnifyingglass")
+                        .qaudionStyle(type.labelSmall)
+                        .padding(.horizontal, 10).padding(.vertical, 8)
+                        .background(scheme.surfaceVariant.opacity(0.8))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                Button {
+                    do {
+                        let url = try LogExportService.shared.writeDumpToTempFile(appState: appState)
+                        logShareUrl = url
+                        showingLogShare = true
+                    } catch {
+                        uploadError = error.localizedDescription
+                    }
+                } label: {
+                    Label("Condividi", systemImage: "square.and.arrow.up")
+                        .qaudionStyle(type.labelSmall)
+                        .padding(.horizontal, 10).padding(.vertical, 8)
+                        .background(scheme.surfaceVariant.opacity(0.8))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                Button {
+                    uploading = true
+                    uploadFileId = nil
+                    uploadError = nil
+                    Task {
+                        do {
+                            let id = try await LogExportService.shared.uploadDump(appState: appState)
+                            await MainActor.run {
+                                self.uploadFileId = id
+                                self.uploading = false
+                            }
+                        } catch {
+                            await MainActor.run {
+                                self.uploadError = error.localizedDescription
+                                self.uploading = false
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if uploading {
+                            ProgressView().scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "icloud.and.arrow.up")
+                        }
+                        Text(uploading ? "Carico…" : "Carica al server")
+                            .qaudionStyle(type.labelSmall)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(scheme.primary.opacity(0.85))
+                    .foregroundStyle(scheme.onPrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .disabled(uploading)
+                Spacer()
+                Button {
+                    logSink.clear()
+                } label: {
+                    Image(systemName: "trash")
+                        .padding(8)
+                        .background(extras.riskHigh.opacity(0.18))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(extras.riskHigh)
+                }
+            }
+            if let id = uploadFileId {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("UPLOAD COMPLETATO — fileId:")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(extras.success)
+                    Text(id)
+                        .font(.system(size: 12, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundStyle(scheme.onSurface)
+                    Text("Copia + condividi col maintainer. Lui può scaricare il dump via:")
+                        .font(.system(size: 10))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                    Text("curl -H \"Authorization: Bearer <admin>\" \(appState.serverUrl)/api/v1/files/\(id)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .textSelection(.enabled)
+                }
+                .padding(10)
+                .background(extras.success.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            if let err = uploadError {
+                Text("Errore: \(err)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(extras.riskHigh)
+                    .padding(8)
+                    .background(extras.riskHigh.opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
+        )
     }
 
     // MARK: - Intro

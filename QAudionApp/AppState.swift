@@ -1818,8 +1818,10 @@ final class AppState: ObservableObject {
     @MainActor
     func dialAndCall(rawInput: String, video: Bool = false) async {
         let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        RTLog.info("dial", "dialAndCall raw='\(trimmed)' video=\(video)")
         guard !trimmed.isEmpty else {
             errorMessage = "Numero vuoto."
+            RTLog.warn("dial", "input vuoto, abort")
             return
         }
         guard let token = authService.loadToken(), !token.isEmpty else {
@@ -1832,15 +1834,19 @@ final class AppState: ObservableObject {
         // Step A — short extension (solo cifre, lunghezza ≤ 7).
         let digitsOnly = trimmed.allSatisfy { $0.isNumber }
         if digitsOnly, trimmed.count <= 7, let ext = Int64(trimmed) {
+            RTLog.info("dial", "branch=extension ext=\(ext)")
             do {
                 guard let profile = try await provider.accountApi.lookupByExtension(ext) else {
                     errorMessage = "Interno \(ext) non assegnato — verifica il numero e riprova."
+                    RTLog.warn("dial", "ext=\(ext) → 404 not assigned")
                     return
                 }
+                RTLog.info("dial", "ext=\(ext) → userId=\(profile.userId.prefix(8))…")
                 await startCall(contactId: profile.userId, video: video)
                 return
             } catch {
                 errorMessage = "Risoluzione interno \(ext) fallita: \(error.localizedDescription)"
+                RTLog.error("dial", "ext=\(ext) lookup error: \(error.localizedDescription)")
                 return
             }
         }
