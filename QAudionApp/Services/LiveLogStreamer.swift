@@ -1,7 +1,6 @@
 import Foundation
 
-@MainActor
-public final class LiveLogStreamer {
+public final class LiveLogStreamer: @unchecked Sendable {
     public static let shared = LiveLogStreamer()
     private init() {}
     public func start(appState: AppState) {}
