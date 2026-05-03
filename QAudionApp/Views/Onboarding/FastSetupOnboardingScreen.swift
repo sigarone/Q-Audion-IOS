@@ -142,9 +142,15 @@ struct FastSetupOnboardingScreen: View {
             return
         }
 
-        // Step 2: server pinning check
+        // Step 2: server pinning check (W413 multi-stage acceptance —
+        // hostname OR known IP allowlist OR DNS-resolved IP intersection
+        // with canonical hostname).
         guard PinnedServerHost.accepts(payload.server) else {
-            lastError = "Il server nel QR (\(payload.server)) non corrisponde a \(PinnedServerHost.host). Scansione bloccata per sicurezza."
+            lastError = "Il server nel QR (\(payload.server)) non risulta tra " +
+                "gli indirizzi noti per \(PinnedServerHost.host) " +
+                "(controllo DNS + allowlist). Verifica che il QR sia " +
+                "stato emesso dal server di produzione e riprova; se il " +
+                "problema persiste contatta l'amministratore."
             phase = .errorPending
             return
         }

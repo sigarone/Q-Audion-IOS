@@ -12,6 +12,20 @@ import Foundation
 extension ReleaseNote {
     /// Hardcoded changelog. Più recenti in alto. Aggiornare a ogni tag.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.382", date: "2026-05-02",
+              title: "🔓 FastSetup QR pinning robusto (W413)",
+              bullets: [
+                "Bug ricorrente: QR con server IP literal (es. https://217.x.x.x) era rifiutato perché PinnedServerHost confrontava solo l'hostname voip.bcrypto.com",
+                "Stesso pattern che si verifica su Android — quando il server admin emette QR con IP, il check fallisce client-side",
+                "W413 acceptance ladder a 3 stadi (first match wins):",
+                "  1. Hostname match (fast path, no DNS)",
+                "  2. Static allowlist (canonical + IP curati: 217.160.65.35 incluso)",
+                "  3. DNS resolve runtime via getaddrinfo() — accept se canonical e candidate puntano allo stesso IP set",
+                "Cache DNS per process lifetime così scan ripetuti restano fast",
+                "PinnedServerHost.url INVARIATO: traffic produzione continua a usare voip.bcrypto.com — HSTS/cert pinning intatti",
+                "Messaggio di errore aggiornato: spiega ladder + suggerisce contatto admin se persiste",
+                "Soluzione robusta = 3 livelli che gestiscono tutti i casi reali (DNS down, IP rotation, QR staging/dev)"
+              ]),
         .init(id: "v1.0.381", date: "2026-05-02",
               title: "🛠 Fix build W411 (W412)",
               bullets: [
