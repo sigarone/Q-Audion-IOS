@@ -258,7 +258,7 @@ jobs:
       # ----------------------------------------------------------
       # 9) Upload to TestFlight Internal group "Q-Audion testers".
       # ----------------------------------------------------------
-      - name: Publish to TestFlight
+      - name: Upload IPA to App Store Connect
         env:
           APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
@@ -266,15 +266,34 @@ jobs:
         run: |
           set -e
           IPA_PATH=$(find QAudionApp/build/ios/ipa -name "*.ipa" | head -1)
-          # No --beta-group: "Q-Audion testers" is an INTERNAL group and
-          # the app-store-connect API rejects explicit assignment with
-          # "Cannot add internal group to a build". Internal testers see
-          # any VALID build automatically once processed. Re-add
-          # --beta-group when/if we add an EXTERNAL group like "External
-          # beta testers".
-          app-store-connect publish \
-            --path "$IPA_PATH" \
-            --testflight
+
+          # Use Apple's altool directly instead of `app-store-connect
+          # publish --testflight`. Reason: the codemagic CLI's publish
+          # action tries to submit the build for EXTERNAL TestFlight
+          # beta review even when we only have an INTERNAL group. That
+          # submission fails on "missing test info" and breaks the
+          # workflow even though the upload + internal distribution
+          # succeeded. altool upload is exactly what we need: the build
+          # uploads, Apple processes it, internal testers see it
+          # automatically. No beta review involved.
+          #
+          # Write the .p8 to a temp file (altool needs it on disk).
+          KEY_DIR=~/.appstoreconnect/private_keys
+          mkdir -p "$KEY_DIR"
+          KEY_FILE="$KEY_DIR/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
+          printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA_PATH" \
+            --apiKey "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
+
+          echo ""
+          echo "✅ Upload complete. Build will appear in TestFlight Internal"
+          echo "   group 'Q-Audion testers' automatically once Apple"
+          echo "   finishes processing (~5-10 min)."
 
       # ----------------------------------------------------------
       # 10) Upload artifacts so the human can download IPA + dSYM
