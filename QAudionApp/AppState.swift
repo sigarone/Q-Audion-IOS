@@ -248,9 +248,6 @@ final class AppState: ObservableObject {
             return
         }
 
-        // W417 — start always-on telemetry pump. Stub for now.
-        LiveLogStreamer.shared.start(appState: self)
-
         // W94: wire chat-message notification taps to pendingDeepLinkConversationId
         // so the chat list can pick up and navigate. Idempotent — re-init
         // overwrites the closure with a fresh AppState capture.
