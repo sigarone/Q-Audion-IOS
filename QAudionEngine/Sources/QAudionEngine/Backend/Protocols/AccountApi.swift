@@ -14,6 +14,20 @@ public protocol AccountApi {
     func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair
     /// Logout (revokes all tokens).
     func logout() async throws
+
+    /// Audit P0 #2.12 — server-side GDPR data export. Returns the raw
+    /// JSON envelope containing the user's profile + device list +
+    /// identity-key bundle. The caller merges this with its local
+    /// archive into the final Art. 20 export.
+    func accountExport() async throws -> Data
+
+    /// Audit P0 #2.12 — server-side account deletion. 204 on success.
+    /// Caller MUST treat the JWT as invalidated even on error.
+    func deleteAccount() async throws
+
+    /// Audit P0 #2.11 — per-device revocation. The deviceId MUST be
+    /// linked to the authenticated user (server returns 403 otherwise).
+    func revokeDevice(deviceId: String) async throws
     /// Get current user's profile.
     func getProfile() async throws -> UserProfile
     /// Update profile. All three fields are independently optional and only
@@ -40,6 +54,13 @@ public protocol AccountApi {
     /// Look up a peer user's public profile by user_id.
     /// Matches Android `GET /api/v1/users/{user_id}`.
     func getPublicUser(userId: String) async throws -> PublicUser
+    /// W414 — dial-by-extension lookup. Resolves a short PBX extension
+    /// (e.g. 175) to a `UserProfile`. Returns `nil` on 404 (extension
+    /// not assigned), throws on other errors. Used by the iOS DialPad
+    /// to translate a typed number into the BCrypto userId the call
+    /// signaling layer needs.
+    /// Matches `GET /api/v1/directory/by-extension/{n}`.
+    func lookupByExtension(_ ext: Int64) async throws -> UserProfile?
 }
 
 /// Public-profile projection returned by `GET /api/v1/users/{user_id}`.
@@ -98,16 +119,37 @@ public struct UserProfile: Codable {
     public var displayName: String?
     public var avatarUrl: String?
     public var statusMessage: String?
+    /// SHA-256 hex of the user's phone identifier as stored on the
+    /// server. For fast-setup users this is the SHA-256 of the
+    /// `fastsetup-<uuid>` phone_id from the QR; for legacy phone
+    /// signups it's SHA-256 of the E.164 number. Surfaced so the
+    /// Account Settings screen can show the canonical identifier.
+    public var phoneHash: String?
+    /// Sequential dial-by-extension number assigned at fast-setup
+    /// time. `nil` (or 0) when the account was created via the legacy
+    /// phone-number signup path. Maps to `User.Extension` server-side.
+    public var dialExtension: Int64?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
         case displayName = "display_name"
         case avatarUrl = "avatar_url"
         case statusMessage = "status_message"
+        case phoneHash = "phone_hash"
+        case dialExtension = "extension"
     }
 
-    public init(userId: String, displayName: String? = nil, avatarUrl: String? = nil, statusMessage: String? = nil) {
-        self.userId = userId; self.displayName = displayName
-        self.avatarUrl = avatarUrl; self.statusMessage = statusMessage
+    public init(userId: String,
+                displayName: String? = nil,
+                avatarUrl: String? = nil,
+                statusMessage: String? = nil,
+                phoneHash: String? = nil,
+                dialExtension: Int64? = nil) {
+        self.userId = userId
+        self.displayName = displayName
+        self.avatarUrl = avatarUrl
+        self.statusMessage = statusMessage
+        self.phoneHash = phoneHash
+        self.dialExtension = dialExtension
     }
 }

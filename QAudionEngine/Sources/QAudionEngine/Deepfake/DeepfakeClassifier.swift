@@ -153,7 +153,7 @@ public final class DeepfakeClassifier: @unchecked Sendable {
         // Copy float buffer into NSMutableData (ORT tensor owns a view into it).
         let byteCount = waveform.count * MemoryLayout<Float>.size
         let data = NSMutableData(length: byteCount)!
-        waveform.withUnsafeBufferPointer { src in
+        _ = waveform.withUnsafeBufferPointer { src in
             memcpy(data.mutableBytes, src.baseAddress!, byteCount)
         }
 

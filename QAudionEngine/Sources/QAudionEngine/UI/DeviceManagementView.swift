@@ -1,101 +1,83 @@
 import SwiftUI
 
 /// Device Management view matching Android's DeviceManagementScreen.
-/// Shows linked devices, allows unlinking, and device key management.
+/// Shows linked devices, allows revoking, and device key management.
 public struct DeviceManagementView: View {
+    public let viewModel: DeviceManagementViewModel
+    public var onRevoke: ((String) -> Void)?
 
-    public struct DeviceInfo: Identifiable {
-        public let id: String
-        public let name: String
-        public let lastSeen: Date
-        public let isCurrent: Bool
-        public let hasPublicKey: Bool
-
-        public init(id: String, name: String, lastSeen: Date, isCurrent: Bool, hasPublicKey: Bool) {
-            self.id = id; self.name = name; self.lastSeen = lastSeen
-            self.isCurrent = isCurrent; self.hasPublicKey = hasPublicKey
-        }
+    public init(viewModel: DeviceManagementViewModel = .mock,
+                onRevoke: ((String) -> Void)? = nil) {
+        self.viewModel = viewModel
+        self.onRevoke = onRevoke
     }
 
-    @State private var devices: [DeviceInfo] = []
-    @State private var isLoading = false
-
-    public let onUnlinkDevice: (String) -> Void
-    public let onRegisterKey: () -> Void
-    public let loadDevices: () async -> [DeviceInfo]
-
-    public init(onUnlinkDevice: @escaping (String) -> Void = { _ in },
-                onRegisterKey: @escaping () -> Void = {},
-                loadDevices: @escaping () async -> [DeviceInfo] = { [] }) {
-        self.onUnlinkDevice = onUnlinkDevice
-        self.onRegisterKey = onRegisterKey
-        self.loadDevices = loadDevices
-    }
+    @State private var showingNfcPairing: Bool = false
 
     public var body: some View {
         List {
-            Section("This Device") {
-                if let current = devices.first(where: { $0.isCurrent }) {
-                    deviceRow(current)
-                }
-
-                Button(action: onRegisterKey) {
-                    Label("Register Device Key", systemImage: "key.fill")
-                }
-            }
-
-            Section("Linked Devices") {
-                if devices.filter({ !$0.isCurrent }).isEmpty {
-                    Text("No other devices linked")
-                        .foregroundColor(.secondary)
-                } else {
-                    ForEach(devices.filter { !$0.isCurrent }) { device in
-                        deviceRow(device)
-                            .swipeActions {
-                                Button("Unlink", role: .destructive) {
-                                    onUnlinkDevice(device.id)
-                                }
-                            }
-                    }
-                }
+            ForEach(viewModel.devices, id: \.deviceId) { d in
+                deviceRow(d)
             }
         }
         .navigationTitle("Devices")
-        .refreshable {
-            devices = await loadDevices()
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Link new", systemImage: "plus") {
+                    // W72: open the existing NFC pairing surface — same
+                    // path KeyManagementView uses for "Import Key via NFC".
+                    showingNfcPairing = true
+                }
+            }
         }
-        .task {
-            devices = await loadDevices()
+        .sheet(isPresented: $showingNfcPairing) {
+            NavigationStack {
+                NfcExchangeView()
+                    .navigationTitle("Link new device")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
         }
     }
 
-    private func deviceRow(_ device: DeviceInfo) -> some View {
-        HStack {
-            Image(systemName: device.isCurrent ? "iphone" : "desktopcomputer")
-                .foregroundColor(.accentColor)
-            VStack(alignment: .leading) {
+    @ViewBuilder
+    private func deviceRow(_ d: DeviceManagementViewModel.Device) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: platformIcon(d.platform))
+                .font(.title2)
+                .foregroundStyle(d.isCurrentDevice ? .green : .blue)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(device.name)
-                        .font(.body)
-                    if device.isCurrent {
-                        Text("Current")
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.green.opacity(0.2))
-                            .cornerRadius(4)
+                    Text(d.deviceName).font(.body.weight(.medium))
+                    if d.isCurrentDevice {
+                        Text("Current").font(.caption).foregroundStyle(.green)
                     }
                 }
-                Text("Last seen: \(device.lastSeen, style: .relative) ago")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text("Linked \(d.linkedAt, style: .date)")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("Last seen \(d.lastSeen, style: .relative)")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if device.hasPublicKey {
-                Image(systemName: "key.fill")
-                    .foregroundColor(.green)
-                    .font(.caption)
+            if d.canRevoke {
+                Button("Revoke", role: .destructive) {
+                    onRevoke?(d.deviceId)
+                }
+                .buttonStyle(.bordered)
             }
         }
     }
+
+    private func platformIcon(_ p: DeviceManagementViewModel.Device.Platform) -> String {
+        switch p {
+        case .iOS: return "apple.logo"
+        case .android: return "circle.grid.2x2.fill"
+        case .desktop: return "desktopcomputer"
+        case .unknown: return "questionmark.app"
+        }
+    }
+}
+
+#Preview {
+    NavigationStack { DeviceManagementView() }
 }

@@ -37,9 +37,51 @@ public final class BCryptoAccountApiImpl: AccountApi {
         _ = try await rest.delete("/api/v1/auth/logout")
     }
 
+    /// Audit P0 #2.12 — server-side GDPR data export. Returns the
+    /// raw JSON envelope; caller merges this with its local archive.
+    public func accountExport() async throws -> Data {
+        return try await rest.get("/api/v1/account/export")
+    }
+
+    /// Audit P0 #2.12 — server-side account deletion. 204 on success.
+    /// Caller MUST treat the JWT as invalidated even on error.
+    public func deleteAccount() async throws {
+        _ = try await rest.delete("/api/v1/account")
+    }
+
+    /// Audit P0 #2.11 — per-device revocation. The deviceId path
+    /// component MUST be linked to the authenticated user (server
+    /// returns 403 otherwise).
+    public func revokeDevice(deviceId: String) async throws {
+        _ = try await rest.delete("/api/v1/devices/\(deviceId)")
+    }
+
     public func getProfile() async throws -> UserProfile {
         let data = try await rest.get("/api/v1/profile")
         return try JSONDecoder().decode(UserProfile.self, from: data)
+    }
+
+    /// W414 — dial-by-extension lookup. Resolves a short PBX extension
+    /// (e.g. 175) to a `UserProfile` so the iOS DialPad can call
+    /// `startCall(contactId: profile.userId, ...)` instead of passing
+    /// the raw extension string (which the server cannot route since
+    /// `recipient_id` must be the BCrypto userId).
+    ///
+    /// Server endpoint: `GET /api/v1/directory/by-extension/{n}`.
+    /// Returns `nil` on 404 (extension not assigned), throws on other
+    /// errors (auth, network, malformed response).
+    public func lookupByExtension(_ ext: Int64) async throws -> UserProfile? {
+        let path = "/api/v1/directory/by-extension/\(ext)"
+        do {
+            let data = try await rest.get(path)
+            return try JSONDecoder().decode(UserProfile.self, from: data)
+        } catch BCryptoError.httpError(let status) where status == 404 {
+            return nil
+        } catch BCryptoError.notFound {
+            return nil
+        } catch {
+            throw error
+        }
     }
 
     public func updateProfile(displayName: String?, statusMessage: String?, avatarUrl: String?) async throws {
@@ -55,6 +97,32 @@ public final class BCryptoAccountApiImpl: AccountApi {
         let dict: [String: Any] = ["token": token, "platform": platform]
         let body = try JSONSerialization.data(withJSONObject: dict)
         _ = try await rest.post("/api/v1/account/fcm-token", body: body)
+    }
+
+    /// Registers an APNs VoIP push token (PushKit) with the bcrypto-server.
+    /// Wave 2B-3 / WIRE_SPEC §3.8.1.
+    ///
+    /// Use this in preference to ``registerPushToken(_:platform:)`` for iOS
+    /// devices that integrate `PushKit` for incoming-call wakeup. The
+    /// server stores the token in its `push_tokens` bucket alongside any
+    /// existing FCM token; the dispatcher will route call_offer events to
+    /// APNs HTTP/2 instead of FCM when this is present (commit `3ceccf4`
+    /// `FanOutCallOffer`).
+    ///
+    /// - Parameters:
+    ///   - voipTokenHex: 64-character hex string of the 32-byte device
+    ///     token returned by `PushKit` (`PKPushCredentials.token` ->
+    ///     `map { String(format: "%02x", $0) }.joined()`).
+    ///   - bundleId: typically `com.bcrypto.qaudion.voip` — must match the
+    ///     server's `BCRYPTO_APNS_BUNDLE_ID` env var when configured.
+    public func registerApnsVoipToken(_ voipTokenHex: String, bundleId: String) async throws {
+        precondition(voipTokenHex.count == 64, "voip token must be 64 hex chars (32 bytes)")
+        let dict: [String: Any] = [
+            "voip_token": voipTokenHex,
+            "bundle_id": bundleId,
+        ]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        _ = try await rest.post("/api/v1/account/apns-voip-token", body: body)
     }
 
     public func recoverySetup(recoveryHash: String) async throws -> Bool {

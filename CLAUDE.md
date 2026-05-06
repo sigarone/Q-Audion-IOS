@@ -2,6 +2,58 @@
 
 You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-calling app. Read this file end-to-end before your first action. It captures the hard-won state of the build pipeline so you don't repeat the work.
 
+## ⚡ AUTOMATION RULE — iOS runtime log fetch (auto-pump v1.0.398+)
+
+**Build v1.0.398+ (W417) ships always-on auto-upload telemetry.** The
+device pumps a chunk file to `/api/v1/files/upload` every ~3 seconds
+without user interaction (background, throttled, single-flight,
+non-interfering with calls). The user does NOT need to open Settings.
+
+**Filename pattern**:
+```
+qaudion-live-<userIdPrefix8>-<bootSessionUUID>-<seqZeroPad6>.log
+```
+
+**Trigger:** every time the user reports an iOS-side runtime problem
+you MUST AUTOMATICALLY run:
+
+```bash
+cd D:/users/f10379a/DEV\ APP/BCRYPTO/apps/qaudion-ios
+python scripts/fetch-ios-live.py --minutes 60 --limit 80
+```
+
+The script:
+1. SSH to the IONOS VPS using credentials from
+   `apps/bcrypto-server/VPS_ACCESS.md` (root@217.160.65.35 + password)
+2. Lists files modified in the last N minutes under `/opt/bcrypto/data/files/`
+   (sharded `<id[0:2]>/<id>` layout — server discards original
+   filenames, every blob is a UUID)
+3. Downloads each candidate via SFTP, parses as UTF-8, and identifies
+   W417 chunks via heuristic (first line matches ISO8601 timestamp regex)
+4. Concatenates matching chunks in chronological order to
+   `.cache/ios-logs/live-<timestamp>.log`
+5. Prints summary: chunk count, byte total, ERROR/WARN count,
+   top tag distribution
+
+The full dump is the primary diagnostic source — every line has a
+millisecond timestamp + level + tag + message, so call/dial/crypto
+flow can be reconstructed exactly.
+
+**Auth:** the script reads `apps/bcrypto-server/VPS_ACCESS.md` for
+SSH credentials. They are in plain text in the bcrypto-server repo
+(NOT in the iOS repo). If you don't have BCrypto repo cloned, the
+fallback is the older `scripts/fetch-ios-log.sh` which uses
+`QAUDION_USER_TOKEN` env var to fetch a single fileId via REST.
+
+**Why the auto-pump exists:** user reported 2026-05-03 that the
+Settings screen freezes. W417 makes telemetry independent of any UI —
+even if SwiftUI wedges, the streamer keeps shipping chunks via Task.
+The maintainer always has a trail server-side.
+
+**Server-side list endpoint (TODO):** the proper REST way is to add
+`GET /api/v1/files/recent` server-side and use HTTP fetch instead of
+SSH. Until that's done, SSH+SFTP is the working path.
+
 ## Project snapshot
 
 - **Repo:** `github.com/sigarone/Q-Audion-IOS`
@@ -152,18 +204,20 @@ bg.paste(img, mask=img.split()[-1])
 bg.save(path, 'PNG', optimize=True)
 ```
 
-### 12. Xcode 26 / iOS 26 SDK deadline
+### 12. Xcode 26 / iOS 26 SDK deadline ✅ RISOLTO
 
-Apple emits **ITMS-90725** (informational) on every upload: starting **April 28, 2026**, App Store Connect will only accept builds made with Xcode 26 / iOS 26 SDK.
+**Storico:** Apple emise **ITMS-90725** (informational) su ogni upload con build Xcode 16.2: "starting **April 28, 2026**, App Store Connect will only accept builds made with Xcode 26 / iOS 26 SDK".
 
-Today's date matters: the deadline is close. When Codemagic adds Xcode 26 to its Mac mini M2 runners, update `codemagic.yaml`:
+**Stato attuale (post W396):** il `codemagic.yaml` di entrambi i workflow specifica `xcode: 26.4`. Codemagic ha aggiunto Xcode 26 ai Mac mini M2 runner nelle finestre seguenti:
 
-```yaml
-environment:
-  xcode: 26.0   # was 16.2
-```
+- **2025-09-20** Xcode 26.0 disponibile come opt-in
+- **2025-11-24** Xcode 26.1 → default (`latest`)
+- **2026-01-11** Xcode 26.2 → default
+- **2026-04-26** Xcode 26.4 → default
 
-Check availability at https://docs.codemagic.io/specs/versions-macos/. `xcode: latest` also works but is less deterministic.
+`xcode: latest` funziona ma è non-deterministico fra build paralleli; pinning a `26.4` (il default attuale) è la scelta sicura. Il pinning va bumpato quando Codemagic ruota il default — controllare https://docs.codemagic.io/specs-macos/xcode-26-4/ (e la pagina sibling per `26-5/`, `26-6/` etc. man mano che escono).
+
+**Quindi:** la deadline 28/04/2026 NON è un problema — i build di questa repo già usano l'SDK richiesto. ITMS-90725 non viene più emesso post-W347.
 
 ## Current `codemagic.yaml` env var dependencies
 
@@ -208,3 +262,228 @@ The app is on TestFlight but has not been exercised end-to-end. Expect to debug:
 4. **Always bump the tag** for a new release (e.g. `v1.0.23`). Don't re-use old tags; don't build from branches.
 5. **Treat Apple emails after upload as canonical**. Codemagic reporting "publishing succeeded" only means the upload HTTP call returned 2xx. Apple may still reject on validation minutes later via email. Always check inbox before declaring victory.
 6. **Use `TodoWrite` for multi-step tasks** and follow the superpowers skill guidance when relevant.
+
+### 13. Swift type-checker timeout traps (Xcode 26.4)
+
+Xcode 26.4 / Swift 6's type-checker is **less forgiving** than earlier versions for multi-segment string interpolation inside `@Sendable` closures or `Task { @MainActor in ... }` blocks. Patterns to avoid:
+
+```swift
+// ❌ TYPE-CHECKER TIMEOUT (silent build failure):
+Task { @MainActor in
+    print("[X] received \(obj.field) at \(timestamp)ms (\(other.nested))")
+    snackbar?.show(.init(text: "\(a) of \(b) failed.", ...))
+}
+
+// ✅ Pre-bind locals or use String + concat:
+Task { @MainActor in
+    let a = obj.field
+    let b = timestamp
+    let c = other.nested
+    print("[X] received " + String(a) + " at " + String(b) + "ms (" + c + ")")
+    let msg: String = "\(a) of \(b) failed."
+    await MainActor.run { snackbar?.show(.init(text: msg, ...)) }
+}
+```
+
+**v1.0.253 update — pre-binding alone is NOT enough.** Even this pattern still trips the type-checker:
+
+```swift
+// ❌ STILL TIMES OUT (v1.0.251 → v1.0.252 broke on this exact line):
+let errMsg: String = error.localizedDescription
+print("[VoiceNote] start failed: " + errMsg)
+```
+
+The reason: `print` has many overloads (variadic, separator:, terminator:, to: &Output). Combined with `String + String → String` operator overloads, the type-checker explores too many resolution paths. The `+` MUST live outside the `print(...)` call:
+
+```swift
+// ✅ WORKS:
+let errMsg: String = error.localizedDescription
+let line: String = "[VoiceNote] start failed: " + errMsg
+print(line)
+```
+
+**Rule of thumb**: if a closure builds a String for `print` / `snackbar.show` / any function with overloads, build the full String into a `let line: String = ...` first, then pass that single String. Never do the concatenation or interpolation inline at the call site.
+
+**v1.0.255 update — `String(numericValue)` is also a trap.** `String(_:)` has many numeric overloads (Int, UInt, Int64, UInt64, Double, Float, NSNumber, Substring, Character, CChar, …). Inside a complex closure, even an unambiguous `Int` argument can trigger overload-resolution timeout:
+
+```swift
+// ❌ TIMES OUT (rec.durationMs is Int):
+let recDur: String = String(rec.durationMs)
+
+// ✅ WORKS — String(describing:) has a single overload:
+let recDur: String = String(describing: rec.durationMs)
+```
+
+Other safe alternatives that don't go through `String(_:)`'s overload set:
+- `"\(rec.durationMs)"` (single-segment interpolation of a primitive — usually fine)
+- `rec.durationMs.description`
+- Any explicit cast first: `let n = Int(rec.durationMs); let s = "\(n)"`
+
+**v1.0.256 update — even pre-bound `+` concat with explicit types times out.** The most stubborn variant:
+
+```swift
+// ❌ TIMES OUT, even with both sides explicitly typed as String:
+let errMsg: String = error.localizedDescription
+let line: String = "[VoiceNote] start failed: " + errMsg
+print(line)
+```
+
+The `+` operator has many overloads (String+String, Array+Array, AdditiveArithmetic, custom Self+Self conformances, …). Inside a deeply nested closure (e.g. `Task { do { try await ... } catch { ... } }` inside a SwiftUI ViewBuilder argument), the type-checker exhausts its budget exploring all `+` candidates plus all the closure's surrounding constraints.
+
+**Pragmatic rule for debug prints in nested closures**: don't build the String at all. Either:
+1. Drop the print (debug-only logs aren't load-bearing — `_ = error` to suppress unused-variable warnings)
+2. Use multiple `print()` calls with single-literal arguments (no concatenation)
+3. Move the formatting to a top-level helper function called from the closure (lifts type inference out of the nested context)
+
+Production code should use `os_log` / `Logger` anyway, never `print`.
+
+**v1.0.258 update — even trivial function calls time out at sufficient closure depth.** v1.0.256 dropped all the String construction. v1.0.257 build STILL failed:
+
+```
+ChatDetailScreen.swift:145:29: error: the compiler is unable to type-check this expression in reasonable time
+container.markFailed(messageId: UUID(), reason: .generic)
+^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```
+
+A bog-standard method call with two arguments — but inside `closure → Task → do/catch with pattern matching` it's enough to exhaust the type-checker.
+
+**The structural fix**: extract the inline closure body into a named method.
+
+```swift
+// ❌ BEFORE — 4 levels of closure constraints:
+onStartVoiceNote: {
+    HapticFeedback.recordingStart()
+    Task {
+        do {
+            try await voiceNoteRecorder.start()
+        } catch VoiceNoteRecorder.RecorderError.permissionDenied {
+            container.markFailed(messageId: UUID(), reason: .generic)  // TIMES OUT
+        } catch {
+            _ = error
+        }
+    }
+},
+
+// ✅ AFTER — closure is trivial, type-checker has clean scope per method:
+onStartVoiceNote: handleVoiceNoteStart,
+
+private func handleVoiceNoteStart() {
+    HapticFeedback.recordingStart()
+    Task { await self.startVoiceNoteAsync() }
+}
+
+private func startVoiceNoteAsync() async {
+    do {
+        try await voiceNoteRecorder.start()
+    } catch {
+        await MainActor.run {
+            container.markFailed(messageId: UUID(), reason: .generic)
+        }
+    }
+}
+```
+
+**Rule of thumb**: any inline closure body deeper than `closure → Task → do/catch` should be moved to a method. Reference the method by name in the closure-binding parameter (no `{ ... }` at the call site).
+
+Symptoms: the build console shows just `Failed to archive` with **no `error:`/`warning:` lines** — xcbeautify is consuming the diagnostic before tee can capture it.
+
+**Mitigation:** the codemagic.yaml has a "Diagnose Swift compile (raw xcodebuild)" step that runs before `xcode-project build-ipa` with `CODE_SIGNING_ALLOWED=NO`. That output goes to `diag.log` (artifact) and is grepped at the end of Step 6. Always check Step 6 in failed Codemagic builds, not just the Build IPA step.
+
+### 14. Single-file Swift compile budget
+
+`ChatDetailScreen.swift` is the largest user-facing file (~830 lines after the v1.0.225 markdown extraction). Adding more state observers or complex view-builder branches risks the type-checker timeout. **Extract any new helper > 40 lines into its own `Services/*.swift` file** — see `Services/MarkdownLiteParser.swift` (W148/W149/W127/W152) as the reference pattern.
+
+### 15. `guard let self = self` patterns in @Sendable closures
+
+Xcode 26.4 elevates `value 'self' was defined but never used` from warning to **error** in some compile modes. If the closure body doesn't actually call `self.foo`, replace:
+
+```swift
+{ [weak self] _, _ in
+    DispatchQueue.main.async {
+        guard let self = self else { return }   // ❌
+        print("...")
+    }
+}
+```
+
+with:
+
+```swift
+{ [weak self] _, _ in
+    DispatchQueue.main.async {
+        guard self != nil else { return }       // ✅
+        print("...")
+    }
+}
+```
+
+(Already fixed at AppState.swift:1327 — see commit `d31f34e`.)
+
+### 16. NEVER take `AppState` as a direct parameter type in a NEW Swift file
+
+**Symptom:** add a brand-new Swift file with even a trivial method
+signature `func foo(appState: AppState)` and the build fails at
+"Build IPA" exit 65 with NO actionable error in xcbeautify's filtered
+console output. Step 6 "Diagnose Swift compile" succeeds (it always
+exits 0) but Step 7 fails. Searching for `error:` in the artifact
+log gives no useful match — the failure is silent.
+
+**Bisect proof (2026-05-03, v1.0.386→v1.0.397, 13 build cycles):**
+
+| Stub class body | Build |
+|---|---|
+| `func start(appState: AppState) {}` (with or without @MainActor) | ❌ |
+| `func start(serverUrl: String) {}` | ✅ |
+| `func start(getToken: @MainActor () -> String?) {}` | ✅ |
+| No method, just `static let shared = Self()` | ✅ |
+
+**Root cause hypothesis (we couldn't read the actual diag.log
+because Codemagic's artifact bundle is auth-locked behind the API
+token, and `xcode-project build-ipa` filters Swift errors through
+xcbeautify before they reach our captured output):** Swift 6's
+strict-concurrency Sendable inference walks the AppState type when
+it appears as a parameter type. AppState is ~2000 lines, has dozens
+of `@Published` properties wrapping non-Sendable Combine publishers,
+references many third-party types (RTCIceServer, BackendProvider,
+QAudionEngine internals) — the inference graph apparently exceeds
+some compiler budget and the diagnostic is then swallowed by
+xcbeautify, surfacing only as a non-zero exit.
+
+**The rule:** ANY new file that needs to interact with `AppState`
+state MUST take primitive values (`String`, `Bool`, `Int`) plus
+`@MainActor () -> T?` closures. Never the AppState type directly:
+
+```swift
+// ❌ Will silently break the build:
+public func start(appState: AppState) { ... }
+
+// ✅ Use primitives + closures:
+public typealias TokenProvider = @MainActor () -> String?
+public typealias UserIdProvider = @MainActor () -> String?
+public func start(serverUrl: String,
+                  getToken: @escaping TokenProvider,
+                  getUserId: @escaping UserIdProvider) { ... }
+```
+
+Then in AppState.initialize():
+```swift
+LiveLogStreamer.shared.start(
+    serverUrl: serverUrl,
+    getToken: { [weak self] in self?.authService.loadToken() },
+    getUserId: { [weak self] in self?.currentUserId }
+)
+```
+
+The closures capture only the specific values at call sites, never
+dragging the AppState type into the parameter signature.
+
+**Why existing files work:** files that have always referenced
+AppState (e.g. `CallService`, `ChatContainer`, `SecurityDashboard`)
+were created before some Swift toolchain update, so their AppState
+references are baked into the project's incremental compile graph in
+a way that doesn't trip the new diagnostic. Adding a NEW file with
+the same pattern is what triggers it.
+
+**Reference:** see `LiveLogStreamer.swift` (W417) for the canonical
+shape. The bisect commit chain is v1.0.386→v1.0.397 if this happens
+again — `git log --oneline v1.0.385..v1.0.398` reads like a story.

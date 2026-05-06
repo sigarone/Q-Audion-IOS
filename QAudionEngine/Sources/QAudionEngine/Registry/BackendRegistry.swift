@@ -26,8 +26,4 @@ public final class BackendRegistry: @unchecked Sendable {
     public func getBCryptoProvider() -> BCryptoBackendProvider? {
         getProvider("bcrypto") as? BCryptoBackendProvider
     }
-
-    public func getUpstreamProvider() -> UpstreamBackendProvider? {
-        getProvider("upstream") as? UpstreamBackendProvider
-    }
 }

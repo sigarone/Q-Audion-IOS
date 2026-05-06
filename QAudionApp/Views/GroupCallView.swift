@@ -128,11 +128,18 @@ class GroupCallViewModel: ObservableObject {
     @Published var elapsedTime = "0:00"
 
     private let manager: BCryptoGroupCallManager
+    /// W367: optional GroupCallController (W354/W358/W366) bound to
+    /// the audio pipeline. When set, mute toggles and end-call route
+    /// through the controller so capture/playback start/stop in
+    /// lockstep with call state. Falls back to direct manager calls
+    /// if nil (legacy preview path).
+    private let controller: GroupCallController?
     private var startTime = Date()
     private var timer: Timer?
 
-    init(manager: BCryptoGroupCallManager) {
+    init(manager: BCryptoGroupCallManager, controller: GroupCallController? = nil) {
         self.manager = manager
+        self.controller = controller
 
         manager.onStateChanged = { [weak self] state in
             DispatchQueue.main.async { self?.callState = state }
@@ -152,10 +159,21 @@ class GroupCallViewModel: ObservableObject {
 
     func toggleMute() {
         isMuted = manager.toggleMute()
+        // W367: also flip the controller's mute so the audio pipeline
+        // gates outgoing PCM frames (without this, mute is UI-only and
+        // audio still streams to peers).
+        controller?.setMuted(isMuted)
     }
 
     func endCall() {
-        manager.endGroupCall()
+        // W367: stop the audio pipeline cleanly via the controller; if
+        // no controller is bound (legacy preview), fall through to the
+        // raw manager.endGroupCall().
+        if let controller = controller {
+            controller.endCallForAll()
+        } else {
+            manager.endGroupCall()
+        }
     }
 
     private func startTimer() {

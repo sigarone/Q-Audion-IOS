@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PrivacyInfo.xcprivacy — Q-Audion iOS
+
+  Apple privacy manifest for the QAudionApp target. Required to silence
+  ITMS-91061 ("Missing privacy manifest") on uploads after May 1, 2024.
+
+  Verified against:
+  - TN3183 (required-reason API codes):
+    https://developer.apple.com/documentation/technotes/tn3183-adding-required-reason-api-entries-to-your-privacy-manifest
+  - TN3184 (data collection):
+    https://developer.apple.com/documentation/technotes/tn3184-adding-data-collection-details-to-your-privacy-manifest
+
+  This manifest covers ONLY this app target. Vendored / SPM dependencies
+  (onnxruntime 1.17.0, liboqs, COpus, SILK) are required by Apple to
+  ship their own .xcprivacy. onnxruntime <1.18 lacks one — that's a
+  known gap (CLAUDE.md §4 — pinned for the iOS-13+ MinOS reason).
+
+  Declaration discipline: only entries that match what *our own code*
+  actually calls / collects. The grep below was run on QAudionApp +
+  QAudionEngine sources before this file was written — only UserDefaults
+  and FileTimestamp APIs (FileManager.fileExists → stat()) are used by
+  our Swift code; no SystemBootTime, DiskSpace, or ActiveKeyboards APIs
+  are touched.
+-->
+<plist version="1.0">
+<dict>
+    <!-- =========================================================
+         Tracking
+         =========================================================
+         Q-Audion does NOT do cross-app/website tracking, advertising
+         attribution, or user advertising profiles. -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <!-- =========================================================
+         Collected data
+         =========================================================
+         "Collected" per Apple's definition: data transmitted off the
+         device. Includes E2E-encrypted payloads that transit our own
+         relay server, even though the server can't decrypt them. -->
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array>
+        <!-- Phone Number — the user's phone is hashed (peppered SHA-256)
+             before leaving the device. The hash is sent to
+             /contacts/discover-v2 for reciprocal contact discovery and
+             is server-stored, so it counts as collected. Linked to the
+             user's identity, app-functionality only. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypePhoneNumber</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- User ID — opaque server-issued account identifier kept on
+             device and sent on every authenticated REST/WebSocket call. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeUserID</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- Name — user's display name and contact display names sent
+             to the backend in profile updates. Linked, app-functionality
+             only. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeName</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- Emails or Text Messages — chat messages. Plaintext never
+             leaves the device unencrypted (post-quantum hybrid: ML-KEM-1024
+             KEM + AES-256-GCM AEAD); the server only sees opaque
+             ciphertext relayed between peers. Apple still wants this
+             declared since the bytes flow through our infrastructure. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeEmailsOrTextMessages</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- Audio Data — voice calls. Same E2E encryption story: Opus
+             frames are AEAD-sealed before transmission; the relay
+             cannot decrypt the audio. Declared collected since the
+             ciphertext frames transit our server. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeAudioData</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- =========================================================
+         Required-reason API access (TN3183)
+         =========================================================
+         Only declare API categories our binary actually calls. Verified
+         via grep on QAudionApp + QAudionEngine sources:
+           UserDefaults: ✓ used by SettingsStore, ContactsStore,
+             ConversationStore, AuthService, KeyRotationCoordinator, …
+           FileTimestamp: ✓ FileManager.fileExists(atPath:) hits stat()
+             in BackupCoordinator.
+           SystemBootTime: ✗ no CACurrentMediaTime / mach_absolute_time
+             / CLOCK_UPTIME usage in our code.
+           DiskSpace: ✗ no volumeAvailableCapacity / fileSystemFreeSize.
+           ActiveKeyboards: ✗ none. -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!-- UserDefaults: ubiquitous across our local persistence layer.
+             CA92.1 = "Access info from same app, per documentation". -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+
+        <!-- File timestamp APIs: BackupCoordinator.localBackupExists +
+             restore() use FileManager.fileExists, which Apple lists
+             under FileTimestamp because stat() reads the timestamp.
+             C617.1 = file metadata access inside the app/group
+             container. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

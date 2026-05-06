@@ -55,7 +55,7 @@ public final class QAudionAppState: ObservableObject {
     public func register(phoneNumber: String, password: String, inviteCode: String? = nil, displayName: String? = nil) async {
         do {
             let tempBackend = BCryptoBackendProvider(config: config)
-            let userId = try await tempBackend.accountApi.register(
+            _ = try await tempBackend.accountApi.register(
                 phoneNumber: phoneNumber,
                 password: password,
                 inviteCode: inviteCode,
@@ -103,7 +103,7 @@ public final class QAudionAppState: ObservableObject {
             let (userId, challenge) = try await mgr.registerWithServer(identity: identity, rest: tempBackend.getRestClient())
             // Sign challenge
             let challengeData = Data(hex: challenge)
-            var updatedIdentity = SovereignIdentityManager.SovereignIdentity(
+            let updatedIdentity = SovereignIdentityManager.SovereignIdentity(
                 userId: userId,
                 encryptionPrivate: identity.encryptionPrivate,
                 encryptionPublic: identity.encryptionPublic,

@@ -7,8 +7,18 @@ DerivedData/
 *.xcodeproj
 .build/
 
-# Signal-iOS fork (managed separately)
-Signal-iOS/
-
 # Claude Code
 .claude/
+
+# Local cache (log fetches, build artifacts)
+.cache/
+
+# Code review tooling
+.code-review-graph/
+
+# Graphify (AST graph cache)
+graphify-out/
+
+# Local Stitch reference screenshots (not committed)
+.stitch_*.png
+.stitch_*.html

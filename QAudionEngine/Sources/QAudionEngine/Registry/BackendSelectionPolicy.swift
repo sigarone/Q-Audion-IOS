@@ -1,7 +1,7 @@
 import Foundation
 
 public final class BackendSelectionPolicy {
-    public enum Policy { case bcryptoPreferred; case upstreamOnly; case perContact }
+    public enum Policy { case bcryptoPreferred; case perContact }
 
     private var policy: Policy = .bcryptoPreferred
     private var contactOverrides: [String: String] = [:]  // contactId -> backendId
@@ -21,9 +21,7 @@ public final class BackendSelectionPolicy {
         }
         switch policy {
         case .bcryptoPreferred:
-            return BackendRegistry.shared.getBCryptoProvider() ?? BackendRegistry.shared.getUpstreamProvider()
-        case .upstreamOnly:
-            return BackendRegistry.shared.getUpstreamProvider()
+            return BackendRegistry.shared.getBCryptoProvider()
         case .perContact:
             return BackendRegistry.shared.getBCryptoProvider()
         }

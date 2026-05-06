@@ -1,0 +1,53 @@
+# Cross-platform KAT for Q-Audion iOS
+#
+# Runs the Swift+CryptoKit+liboqs implementation against canonical
+# vectors hosted in bcrypto-server/test/kat/wire_v1.0.0/.
+#
+# Status: SCAFFOLD. Test target KmsCrossPlatformKatTests.swift not yet
+# implemented (planned in 1.0 §3.5 + iOS Track B Phase A of
+# glittery-sleeping-hejlsberg.md). Until then this is a no-op stub.
+#
+# Production CI for iOS continues to run via Codemagic; this GitHub
+# workflow is the cross-platform PR-gating canary that runs only
+# the deterministic crypto KAT suite (no simulator boot needed).
+
+name: KAT cross-platform
+
+on:
+  pull_request:
+    branches: [main, release/*]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ios-kat:
+    name: iOS Swift KAT
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      # When KAT test target is implemented:
+      # - name: Pull KAT vectors
+      #   run: |
+      #     curl -sSfL https://raw.githubusercontent.com/sigarone/Bcrypto-server/<SHA>/test/kat/wire_v1.0.0/...
+      #     mkdir -p QAudionEngine/Tests/Resources/kat/
+      #     ...
+
+      - name: Run SPM tests
+        continue-on-error: true   # SCAFFOLD: enable gating once KmsCrossPlatformKatTests.swift exists
+        run: |
+          cd QAudionEngine
+          swift test --filter KmsCrossPlatformKatTests || \
+          swift test --filter QAudionEngineTests || true
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kat-ios-reports
+          path: QAudionEngine/.build/

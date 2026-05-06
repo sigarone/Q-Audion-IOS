@@ -1,16 +1,29 @@
 import SwiftUI
 
-/// Contact detail view matching Android's ContactDetailScreen.
-/// Shows contact info, trust level, and action buttons.
 public struct ContactDetailView: View {
-    public let contact: DiscoveredContact
-    public let trustLevel: TrustShieldView.TrustLevel
-    public let onCall: () -> Void
-    public let onVideoCall: () -> Void
-    public let onMessage: () -> Void
-    public let onVerify: () -> Void
-    public let onBlock: () -> Void
+    public let viewModel: ContactDetailViewModel
+    public var onCall: (() -> Void)?
+    public var onChat: (() -> Void)?
+    public var onVerifySas: (() -> Void)?
+    public var onBlock: (() -> Void)?
+    public var onDelete: (() -> Void)?
 
+    public init(viewModel: ContactDetailViewModel = .mock,
+                onCall: (() -> Void)? = nil,
+                onChat: (() -> Void)? = nil,
+                onVerifySas: (() -> Void)? = nil,
+                onBlock: (() -> Void)? = nil,
+                onDelete: (() -> Void)? = nil) {
+        self.viewModel = viewModel
+        self.onCall = onCall
+        self.onChat = onChat
+        self.onVerifySas = onVerifySas
+        self.onBlock = onBlock
+        self.onDelete = onDelete
+    }
+
+    /// Back-compat shim: existing callers that pass a `DiscoveredContact` +
+    /// `TrustShieldView.TrustLevel` continue to compile without changes.
     public init(contact: DiscoveredContact,
                 trustLevel: TrustShieldView.TrustLevel = .unknown,
                 onCall: @escaping () -> Void = {},
@@ -18,93 +31,170 @@ public struct ContactDetailView: View {
                 onMessage: @escaping () -> Void = {},
                 onVerify: @escaping () -> Void = {},
                 onBlock: @escaping () -> Void = {}) {
-        self.contact = contact
-        self.trustLevel = trustLevel
-        self.onCall = onCall; self.onVideoCall = onVideoCall
-        self.onMessage = onMessage; self.onVerify = onVerify; self.onBlock = onBlock
+        let mappedTrust: ContactDetailViewModel.TrustLevel
+        switch trustLevel {
+        case .pskBound: mappedTrust = .both
+        case .verified: mappedTrust = .sasVerified
+        case .unknown, .unverified, .tofu: mappedTrust = .unverified
+        }
+        self.viewModel = ContactDetailViewModel(
+            userId: contact.userId,
+            displayName: contact.displayName ?? contact.userId,
+            phoneHash: contact.phoneHash,
+            fingerprint: "",
+            avatarUrl: contact.avatarUrl.flatMap { URL(string: $0) },
+            trustLevel: mappedTrust,
+            isBlocked: false,
+            lastSeen: nil,
+            recentCallCount: 0,
+            unreadMessageCount: 0
+        )
+        self.onCall = onCall
+        self.onChat = onMessage
+        self.onVerifySas = onVerify
+        self.onBlock = onBlock
+        self.onDelete = nil
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                // Avatar
-                Circle()
-                    .fill(Color(.systemGray4))
-                    .frame(width: 80, height: 80)
-                    .overlay(
-                        Text(String((contact.displayName ?? "?").prefix(1)).uppercased())
-                            .font(.title)
-                            .foregroundColor(.white)
-                    )
+        Form {
+            avatarHeader
+            identitySection
+            actionsSection
+            statsSection
+            dangerSection
+        }
+        .navigationTitle(viewModel.displayName)
+    }
 
-                // Name + Trust Shield
-                VStack(spacing: 8) {
-                    Text(contact.displayName ?? contact.userId)
-                        .font(.title2.bold())
-                    TrustShieldView(trustLevel: trustLevel)
-                    if let status = contact.statusMessage {
-                        Text(status)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Action buttons
-                HStack(spacing: 24) {
-                    actionButton("phone.fill", "Call", action: onCall)
-                    actionButton("video.fill", "Video", action: onVideoCall)
-                    actionButton("message.fill", "Message", action: onMessage)
-                    actionButton("checkmark.shield", "Verify", action: onVerify)
-                }
-                .padding()
-
-                Divider()
-
-                // Info section
-                VStack(alignment: .leading, spacing: 12) {
-                    infoRow("User ID", contact.userId)
-                    infoRow("Phone Hash", String(contact.phoneHash.prefix(16)) + "...")
-                }
-                .padding()
-
-                // Block button
-                Button(role: .destructive, action: onBlock) {
-                    Label("Block Contact", systemImage: "hand.raised.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(12)
-                }
-                .padding(.horizontal)
+    @ViewBuilder
+    private var avatarHeader: some View {
+        Section {
+            HStack {
+                Spacer()
+                avatarImage
+                Spacer()
             }
-            .padding()
+            .padding(.vertical, 16)
         }
-        .navigationTitle("Contact")
+        .listRowBackground(Color.clear)
     }
 
-    private func actionButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-                    .background(Color.accentColor.opacity(0.15))
-                    .clipShape(Circle())
-                Text(label)
-                    .font(.caption2)
+    @ViewBuilder
+    private var avatarImage: some View {
+        if let url = viewModel.avatarUrl {
+            AsyncImage(url: url) { img in
+                img.resizable().scaledToFill()
+            } placeholder: {
+                placeholderAvatar
+            }
+            .frame(width: 100, height: 100)
+            .clipShape(Circle())
+        } else {
+            placeholderAvatar
+        }
+    }
+
+    private var placeholderAvatar: some View {
+        Circle()
+            .fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .frame(width: 100, height: 100)
+            .overlay(
+                Text(initials)
+                    .font(.largeTitle.bold())
+                    .foregroundStyle(.white)
+            )
+    }
+
+    private var initials: String {
+        let words = viewModel.displayName.split(separator: " ")
+        let firstChars = words.prefix(2).compactMap { $0.first }
+        return String(firstChars).uppercased()
+    }
+
+    private var identitySection: some View {
+        Section("Identity") {
+            LabeledContent("User ID") {
+                Text(viewModel.userId).font(.caption.monospaced()).lineLimit(1)
+            }
+            LabeledContent("Fingerprint") {
+                Text(viewModel.fingerprint).font(.body.monospaced())
+            }
+            HStack {
+                Text("Trust")
+                Spacer()
+                trustBadge
             }
         }
     }
 
-    private func infoRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            Spacer()
-            Text(value)
-                .font(.caption)
-                .foregroundColor(.primary)
+    private var trustBadge: some View {
+        Group {
+            switch viewModel.trustLevel {
+            case .unverified:
+                Label("Unverified", systemImage: "questionmark.circle")
+                    .foregroundStyle(.orange)
+            case .sasVerified:
+                Label("SAS verified", systemImage: "checkmark.seal.fill")
+                    .foregroundStyle(.green)
+            case .nfcPaired:
+                Label("NFC paired", systemImage: "wave.3.right")
+                    .foregroundStyle(.blue)
+            case .both:
+                Label("Fully verified", systemImage: "shield.lefthalf.filled")
+                    .foregroundStyle(.green)
+            }
+        }
+        .font(.caption.weight(.semibold))
+    }
+
+    private var actionsSection: some View {
+        Section("Actions") {
+            Button(action: { onCall?() }) {
+                Label("Call", systemImage: "phone.fill")
+            }
+            Button(action: { onChat?() }) {
+                Label("Chat", systemImage: "message.fill")
+            }
+            if viewModel.trustLevel == .unverified {
+                Button(action: { onVerifySas?() }) {
+                    Label("Verify SAS", systemImage: "lock.shield")
+                }
+            }
         }
     }
+
+    private var statsSection: some View {
+        Section("Stats") {
+            LabeledContent("Recent calls") {
+                Text("\(viewModel.recentCallCount)")
+            }
+            LabeledContent("Unread messages") {
+                Text("\(viewModel.unreadMessageCount)")
+            }
+            if let last = viewModel.lastSeen {
+                LabeledContent("Last seen") {
+                    Text(last, style: .relative)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var dangerSection: some View {
+        Section {
+            Button(role: viewModel.isBlocked ? .none : .destructive,
+                   action: { onBlock?() }) {
+                Label(viewModel.isBlocked ? "Unblock" : "Block",
+                      systemImage: viewModel.isBlocked ? "lock.open" : "hand.raised.fill")
+            }
+            Button(role: .destructive, action: { onDelete?() }) {
+                Label("Delete contact", systemImage: "trash")
+            }
+        }
+    }
+}
+
+#Preview {
+    NavigationStack { ContactDetailView() }
 }

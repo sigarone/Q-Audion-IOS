@@ -9,9 +9,23 @@ final class AuthService {
     private let deviceIdKey = "com.qaudion.auth.device_id"
 
     func login(phoneNumber: String, password: String, serverUrl: String) async throws -> AuthCredentials {
+        let phoneHash = try PhoneHash.hash(phoneNumber)
+        return try await loginWithPhoneHash(phoneHash: phoneHash, password: password, serverUrl: serverUrl)
+    }
+
+    /// Login wire shape with a PRE-COMPUTED `phone_hash` (lowercase hex
+    /// SHA-256). Mirrors Android's `LoginUseCase.invoke(phoneHash, ...)`
+    /// which receives the hash already produced by the caller (e.g.
+    /// `FastSetupUseCase` hashes the opaque `phone_id` from the QR).
+    ///
+    /// **Why this exists**: the QR `phone_id` is NOT an E.164 number, so
+    /// the regular `login(phoneNumber:)` path fails at `PhoneHash.hash`
+    /// (E.164 regex rejects hex). FastSetup MUST go through this method
+    /// so the already-derived `phone_hash` flows straight to the wire,
+    /// matching Android's behaviour byte-for-byte.
+    func loginWithPhoneHash(phoneHash: String, password: String, serverUrl: String) async throws -> AuthCredentials {
         let backendConfig = BackendConfig(serverUrl: serverUrl)
         let provider = BCryptoBackendProvider(config: backendConfig)
-        let phoneHash = try PhoneHash.hash(phoneNumber)
         let deviceName: String
         #if canImport(UIKit)
         deviceName = await UIDevice.current.name

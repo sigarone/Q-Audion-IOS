@@ -4,7 +4,11 @@ workflows:
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
-      xcode: 16.2
+      # W313: pinned to 26.4 (was 'latest', which resolved to 26.4.1).
+      # Apple ITMS-90725 deadline (April 28, 2026) requires Xcode 26+
+      # for App Store submissions — pin matches current behavior with
+      # reproducibility for future runs.
+      xcode: 26.4
     triggering:
       events:
         - push
@@ -34,7 +38,8 @@ workflows:
     max_build_duration: 30
     instance_type: mac_mini_m2
     environment:
-      xcode: 16.2
+      # W313: pinned to 26.4 (same reason as above workflow).
+      xcode: 26.4
       groups:
         - asc_credentials   # must contain APP_STORE_CONNECT_KEY_IDENTIFIER,
                             # APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_PRIVATE_KEY
@@ -42,6 +47,13 @@ workflows:
         BUNDLE_ID: "com.qaudion.app"
         XCODE_PROJECT: "QAudionApp.xcodeproj"
         XCODE_SCHEME: "QAudionApp"
+        # App Store Connect numeric "App Apple ID" — required by
+        # `app-store-connect get-latest-testflight-build-number` to fetch
+        # the current build number from TestFlight. Without it, the
+        # increment script silently fell back to `echo "0"` (because of
+        # `2>/dev/null`), leaving CFBundleVersion stuck at 1 across every
+        # tagged release. Source of truth: CLAUDE.md "Project snapshot".
+        APP_APPLE_ID: "REDACTED_APP_ID"
     triggering:
       events:
         - tag
@@ -56,13 +68,80 @@ workflows:
           xcodegen generate
           echo "=== Schemes ==="
           xcodebuild -project QAudionApp.xcodeproj -list 2>&1 | head -20
-      - name: Increment build number from TestFlight
+      - name: Bump marketing version + build number (Info.plist direct via plutil)
         script: |
+          set -e
           cd QAudionApp
-          LATEST_BUILD_NUMBER=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID" 2>/dev/null || echo "0")
+
+          # ----------------------------------------------------------------
+          # Why we DON'T rely on agvtool alone:
+          #
+          # `agvtool new-marketing-version` only writes the new value into
+          # the Xcode project's MARKETING_VERSION build setting AND into
+          # any Info.plist that uses the literal `$(MARKETING_VERSION)`
+          # substitution. Our QAudionApp/Info.plist hard-codes the values
+          # ("1.0.0" and "1") rather than referencing the build settings,
+          # so agvtool's update never reached the bundle. Apple read the
+          # literal "1.0.0 (1)" pair out of Info.plist on every upload,
+          # silently overwrote the previous build under the same TestFlight
+          # entry, and the user saw a stuck `1.0.0 (1)` for the entire
+          # v1.0.34..v1.0.47 chain.
+          #
+          # Fix: write Info.plist directly via plutil, which guarantees
+          # the literal values land in the IPA. We still call agvtool
+          # afterwards (best-effort) so the .pbxproj's build settings stay
+          # in sync for any local developer build that DOES use $(VAR)
+          # substitution. agvtool failures are non-fatal here.
+          # ----------------------------------------------------------------
+
+          # 1) Marketing version from the git tag.
+          if [ -n "$CM_TAG" ]; then
+            MARKETING_VERSION=$(echo "$CM_TAG" | sed -E 's/^v//; s/-[A-Za-z].*$//')
+          else
+            MARKETING_VERSION="1.0.0"
+          fi
+          echo "CM_TAG = $CM_TAG"
+          echo "Marketing version = $MARKETING_VERSION"
+
+          # 2) Build number from TestFlight + 1.
+          echo "APP_APPLE_ID = $APP_APPLE_ID"
+          set +e
+          LATEST_BUILD_NUMBER=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID")
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] || [ -z "$LATEST_BUILD_NUMBER" ]; then
+            echo "WARN: get-latest-testflight-build-number returned rc=$rc; falling back to 0"
+            LATEST_BUILD_NUMBER=0
+          fi
+          echo "Latest TestFlight build number = $LATEST_BUILD_NUMBER"
           NEW_BUILD_NUMBER=$(($LATEST_BUILD_NUMBER + 1))
-          echo "New build number: $NEW_BUILD_NUMBER"
-          agvtool new-version -all $NEW_BUILD_NUMBER
+          echo "New build number = $NEW_BUILD_NUMBER"
+
+          # 3) Show Info.plist BEFORE the modification so the build log
+          #    is unambiguous if the values land back at "1.0.0/1" again.
+          echo ""
+          echo "=== Info.plist BEFORE plutil ==="
+          plutil -extract CFBundleShortVersionString raw -o - Info.plist || true
+          plutil -extract CFBundleVersion             raw -o - Info.plist || true
+
+          # 4) Write directly. -replace creates the key if missing, sets
+          #    its value if present. Both keys exist in our Info.plist.
+          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" Info.plist
+          plutil -replace CFBundleVersion            -string "$NEW_BUILD_NUMBER"  Info.plist
+
+          # 5) Verify after.
+          echo ""
+          echo "=== Info.plist AFTER plutil ==="
+          plutil -extract CFBundleShortVersionString raw -o - Info.plist
+          plutil -extract CFBundleVersion             raw -o - Info.plist
+
+          # 6) Best-effort sync into the .pbxproj build settings via
+          #    agvtool. Failures are non-fatal — Info.plist is already
+          #    correct and the build will use those values regardless.
+          agvtool new-marketing-version "$MARKETING_VERSION" || \
+            echo "WARN: agvtool new-marketing-version failed (non-fatal; Info.plist already updated via plutil)"
+          agvtool new-version -all "$NEW_BUILD_NUMBER" || \
+            echo "WARN: agvtool new-version failed (non-fatal; Info.plist already updated via plutil)"
       - name: Set up signing (fetch or create Distribution cert + App Store profile)
         script: |
           set -e
@@ -100,12 +179,101 @@ workflows:
           echo ""
           echo "=== Profiles summary ==="
           ls -la ~/Library/MobileDevice/Provisioning\ Profiles/ 2>/dev/null || echo "no profiles dir"
+      - name: Diagnose Swift compile (raw xcodebuild)
+        script: |
+          # Diagnostic-only step: run a raw `xcodebuild build` against
+          # the QAudionApp scheme so the genuine Swift compiler error
+          # surfaces (xcode-project build-ipa pipes through xcbeautify
+          # which has been swallowing the diagnostic above 'Failed to
+          # archive'). Failures here are TOLERATED — the real signed
+          # archive happens in the next step. We just want the log.
+          set +e
+          cd QAudionApp
+          echo "=== which xcodebuild + version ==="
+          which xcodebuild
+          xcodebuild -version
+
+          echo ""
+          echo "=== xcodebuild build (RAW redirect, no xcbeautify pipe) ==="
+          # Redirect to file directly (no pipe) so any xcbeautify
+          # wrapper in the env can't intercept. Then cat key sections
+          # to console after.
+          xcodebuild \
+            -project QAudionApp.xcodeproj \
+            -scheme QAudionApp \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_USE_INTEGRATED_DRIVER=NO \
+            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -warn-long-function-bodies=200 -Xfrontend -warn-long-expression-type-checking=200 -Xfrontend -debug-time-function-bodies' \
+            build > diag.log 2>&1
+          DIAG_RC=$?
+          echo "xcodebuild exit code: $DIAG_RC"
+
+          echo ""
+          echo "=== diag.log size ==="
+          wc -l diag.log || true
+
+          echo ""
+          echo "=== diag.log : first 80 lines (project setup) ==="
+          head -80 diag.log || true
+
+          echo ""
+          echo "=== diag.log : grep error/warning/fatal/abort/killed ==="
+          grep -E "error:|warning:|fatal:|cannot find|killed|signal|abort|crash|long-function|long-expression|<unknown>|Segmentation|terminate|note:" diag.log | head -300 || true
+
+          echo ""
+          echo "=== diag.log : last 250 lines ==="
+          tail -250 diag.log || true
+          echo ""
+          echo "=== diag.log size ==="
+          wc -l diag.log || true
+          # Always succeed so the real Build IPA step still runs even
+          # when this dry build trips a diagnostic.
+          exit 0
       - name: Build IPA
         script: |
           cd QAudionApp
+          # First echo the diagnostic step's findings into THIS step's
+          # console so the actual Swift error surfaces here even when
+          # the operator only pastes Step 7. The diag.log from the
+          # previous step lives in QAudionApp/diag.log.
+          if [ -f diag.log ]; then
+            echo "=== diag.log : grep error/warning/long-fn (from Step 6) ==="
+            grep -E "error:|warning:|fatal:|cannot find|note:.*type-check|killed|signal|long-function|long-expression" diag.log | tail -200 || true
+            echo ""
+            echo "=== diag.log : last 150 lines ==="
+            tail -150 diag.log || true
+            echo ""
+            echo "=== diag.log size ==="
+            wc -l diag.log || true
+            echo ""
+          else
+            echo "[Build IPA] no diag.log found from Step 6 — skipping pre-print"
+          fi
+
+          # Capture full xcode-project build-ipa output to build.log so
+          # the next failed run's diagnostic is at least preserved as
+          # an artifact for download. xcbeautify still filters the
+          # in-console output but the artifact has the raw stream.
+          set -o pipefail
           xcode-project build-ipa \
             --project QAudionApp.xcodeproj \
-            --scheme QAudionApp
+            --scheme QAudionApp 2>&1 | tee build.log
+          BUILD_RC=${PIPESTATUS[0]}
+          if [ "$BUILD_RC" -ne 0 ]; then
+            echo ""
+            echo "=== build.log tail (last 200 lines) ==="
+            tail -200 build.log || true
+            echo ""
+            echo "=== Swift errors only (grep) ==="
+            grep -E "error:|warning:" build.log | tail -100 || true
+            exit "$BUILD_RC"
+          fi
       - name: Patch onnxruntime.framework MinimumOSVersion + re-sign
         script: |
           set -e
@@ -118,6 +286,28 @@ workflows:
           WORK=$(mktemp -d)
           cd "$WORK"
           unzip -q "$OLDPWD/$IPA_PATH"
+
+          # Belt-and-braces: print the actual version values that landed
+          # in the IPA's Info.plist. If we ever see "1.0.0 / 1" again here
+          # despite the plutil writes earlier, something is overwriting
+          # Info.plist mid-build (xcodebuild process-plist phase, etc.).
+          echo ""
+          echo "=== IPA Info.plist version sanity check ==="
+          APP_PLIST="Payload/QAudionApp.app/Info.plist"
+          if [ -f "$APP_PLIST" ]; then
+            BUNDLE_VERSION=$(plutil -extract CFBundleShortVersionString raw -o - "$APP_PLIST" 2>/dev/null || echo "<unset>")
+            BUILD_NUMBER=$(plutil -extract CFBundleVersion raw -o - "$APP_PLIST" 2>/dev/null || echo "<unset>")
+            echo "CFBundleShortVersionString = $BUNDLE_VERSION"
+            echo "CFBundleVersion            = $BUILD_NUMBER"
+            if [ "$BUNDLE_VERSION" = "1.0.0" ] && [ "$BUILD_NUMBER" = "1" ]; then
+              echo "ERROR: IPA shipped with stale (1.0.0, 1) version pair."
+              echo "       Apple will silently substitute the previous build under"
+              echo "       the same TestFlight entry. Failing the build to surface."
+              exit 1
+            fi
+          else
+            echo "WARN: $APP_PLIST not found in unzipped IPA"
+          fi
 
           FW="Payload/QAudionApp.app/Frameworks/onnxruntime.framework"
           if [ ! -d "$FW" ]; then
@@ -201,16 +391,46 @@ workflows:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app.dSYM
+      # Captured raw xcodebuild output — surfaces the actual Swift
+      # error when xcbeautify swallows it above 'Failed to archive'.
+      - QAudionApp/build.log
+      # Diagnostic dry-build log without code signing — produces the
+      # raw xcodebuild output that xcbeautify hides in the IPA step.
+      - QAudionApp/diag.log
     publishing:
       app_store_connect:
         api_key: $APP_STORE_CONNECT_PRIVATE_KEY
         key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
         issuer_id: $APP_STORE_CONNECT_ISSUER_ID
-        submit_to_testflight: true
+        # submit_to_testflight=false on purpose. With it true Codemagic
+        # invokes the App Store Connect API "Submit for beta review"
+        # endpoint, which is the gate for EXTERNAL TestFlight testing.
+        # Apple rejects that submission unless `Test Information` is
+        # filled (Feedback Email + Beta App Review Information: First
+        # Name, Last Name, Phone Number, Email — only configurable from
+        # the App Store Connect web UI at
+        # https://appstoreconnect.apple.com/apps/$APP_APPLE_ID/testflight/test-info).
+        # We don't ship to external testers (yet — see CLAUDE.md §7
+        # "Export compliance"). With submit_to_testflight=false the IPA
+        # upload + Apple processing still happens; Apple then auto-
+        # distributes the processed build to INTERNAL groups (incl.
+        # "Q-Audion testers") on its own. So our internal pipeline is
+        # unaffected, and we no longer red-build on the unrelated
+        # external-review gate. Flip back to true ONLY after the
+        # external Test Information form is filled out and we add
+        # external groups to beta_groups below.
+        submit_to_testflight: false
         # Do NOT list "Q-Audion testers" here: it's an INTERNAL group and
         # ASC auto-assigns every processed build to internal groups. The
         # App Store Connect API rejects explicit adds of internal groups
         # ("Cannot add internal group to a build"), which fails the
         # post-processing step even when the build itself is valid.
         # Re-add beta_groups ONLY for EXTERNAL groups.
-        expire_build_submitted_for_review: true
+        #
+        # NOTE: `expire_build_submitted_for_review: true` was here, but
+        # Codemagic's YAML schema rejects it when `submit_to_testflight`
+        # is false ("TestFlight submission is required for
+        # expire_build_submitted_for_review"). It's only meaningful in
+        # the external-review flow anyway, so it's removed for now.
+        # Re-add it together with submit_to_testflight=true the day we
+        # turn external testing on.

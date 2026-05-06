@@ -30,6 +30,8 @@
 	<string>Q-Audion uses the camera to scan QR codes for key exchange.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Q-Audion does not access your contacts. This description is required because a linked SDK references the Contacts API.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Q-Audion saves chat images you choose to keep into your Photos library.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -57,5 +59,16 @@
 		<string>voip</string>
 		<string>audio</string>
 	</array>
+	<!--
+	  Export Compliance — required by Apple to skip the manual
+	  "Provide Export Compliance Information" prompt in TestFlight.
+	  Q-Audion uses ML-KEM-1024 (NIST FIPS 203, public-domain open-
+	  source crypto) which qualifies as "exempt" under US BIS rules.
+	  Setting `false` is appropriate for TestFlight Internal testing.
+	  Revisit before App Store production submission (may need `true`
+	  + ITSEncryptionExportComplianceCode or annual CCATS filing).
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

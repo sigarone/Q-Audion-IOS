@@ -18,6 +18,11 @@ let package = Package(
         // ship with a MinimumOSVersion >= iOS 18.1 which triggers ITMS-90208.
         // 1.17.0 supports iOS 13+.
         .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.17.0"),
+        // W347: WebRTC binary framework (community-maintained build of Google's libwebrtc).
+        // stasel/WebRTC ships an XCFramework with arm64 (device) + arm64/x86_64 (simulator).
+        // Pinned to a known-good iOS 16-compatible release. The IPA size impact is
+        // significant (~150 MB) but unavoidable for cross-platform 1:1 + group calls.
+        .package(url: "https://github.com/stasel/WebRTC", exact: "131.0.0"),
     ],
     targets: [
         .target(
@@ -70,6 +75,7 @@ let package = Package(
                 "CLiboqs",
                 "COpus",
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+                .product(name: "WebRTC", package: "WebRTC"),
             ],
             path: "Sources/QAudionEngine",
             resources: [

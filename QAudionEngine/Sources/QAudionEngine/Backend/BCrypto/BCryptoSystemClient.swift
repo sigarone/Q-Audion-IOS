@@ -3,10 +3,9 @@ import Foundation
 /// System / directory endpoints exposed by the bcrypto server.
 ///
 /// Kept out of the cross-backend `AccountApi` protocol because these
-/// endpoints have no upstream (Signal-style) equivalent. Exposed as a
-/// lazy property on `BCryptoBackendProvider` for callers that specifically
-/// target the bcrypto backend (dial-by-extension, health-check,
-/// version-gate).
+/// endpoints are BCrypto-specific. Exposed as a lazy property on
+/// `BCryptoBackendProvider` for callers that specifically target the
+/// bcrypto backend (dial-by-extension, health-check, version-gate).
 ///
 /// Response DTOs match Android `VersionResponse` / `HealthResponse` /
 /// `DirectoryEntryDto` (see `DeviceDto.kt` + `ContactsDto.kt`).

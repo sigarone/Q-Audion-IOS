@@ -52,6 +52,12 @@ public final class SovereignIdentityManager {
     private static let identityVersion: UInt8 = 0x01
     private static let keychainService = "com.bcrypto.qaudion.sovereign"
 
+    /// Default initializer. Public so QAudionApp (the app target, outside
+    /// the QAudionEngine module) can construct the manager — without this,
+    /// Swift synthesises an `internal init()` and the app build fails with
+    /// "initializer is inaccessible due to 'internal' protection level".
+    public init() {}
+
     // MARK: - Generate Identity
 
     /// Generate a new sovereign identity with fresh X25519 and Ed25519 keypairs.

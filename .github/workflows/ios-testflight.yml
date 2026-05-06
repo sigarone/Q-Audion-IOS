@@ -1,0 +1,329 @@
+# GitHub Actions — Q-Audion iOS TestFlight build pipeline.
+#
+# Drop-in replacement for the Codemagic `qaudion-app-build` workflow.
+# Uses the same `codemagic-cli-tools` Python package that Codemagic
+# uses internally, so the bash steps are virtually identical to
+# codemagic.yaml. This keeps the Hard-won lessons in CLAUDE.md
+# (sec 1-15) directly applicable.
+#
+# Trigger: push of a tag matching `v*` (same as Codemagic).
+# Runner:  macos-14 (Apple Silicon) — Xcode 15.x default; pin via
+#          `sudo xcode-select -s /Applications/Xcode_X.Y.app` if needed.
+#
+# Required GitHub Secrets (mirror Codemagic asc_credentials env group):
+#   - APP_STORE_CONNECT_KEY_IDENTIFIER  : Admin-role API key ID
+#   - APP_STORE_CONNECT_ISSUER_ID       : ASC issuer UUID
+#   - APP_STORE_CONNECT_PRIVATE_KEY     : .p8 file content (full text)
+#   - CERTIFICATE_PRIVATE_KEY           : Distribution cert RSA 2048 PEM
+#
+# Configure these at:
+#   github.com/sigarone/Q-Audion-IOS/settings/secrets/actions
+#
+# Free-tier note: macOS runners cost 10x credit multiplier on private
+# repos (200 macOS minutes/month for free → ~40 builds at 5min each).
+# For unlimited free macOS minutes, make the repo public (sensitive
+# Q-Audion code is encrypted-by-design, but server URLs and bundle
+# id would become discoverable).
+
+name: TestFlight build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow manual triggers from the Actions tab for quick test runs.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v1.0.398). Leave empty to use HEAD.'
+        required: false
+
+jobs:
+  build:
+    # Apple requires Xcode 26 / iOS 26 SDK for App Store submissions
+    # since 2026-04-28 (CLAUDE.md sec 12). Codemagic uses Xcode 26.4.
+    # GH Actions: macos-26 runner ships Xcode 26.x by default; macos-15
+    # often has 26.x as a non-default install path. Use macos-latest so
+    # GitHub auto-bumps as new images roll out, and pin XCODE_VERSION
+    # explicitly. Discovery step below fails fast if Xcode 26 missing.
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    env:
+      BUNDLE_ID: com.qaudion.app
+      APP_APPLE_ID: 'REDACTED_APP_ID'
+      XCODE_PROJECT: QAudionApp.xcodeproj
+      # Pin to Xcode 26.x family — accept ANY 26.x minor version
+      # available on the runner (the discovery step picks the latest
+      # 26.x found in /Applications). Hard-pin to e.g. "26.4" if you
+      # need deterministic builds across runner image rotations.
+      XCODE_VERSION: '26'
+
+    steps:
+      # ----------------------------------------------------------
+      # 1) Checkout source. Fetch full history so the build can
+      #    inspect tags + version metadata.
+      # ----------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # ----------------------------------------------------------
+      # 2) Pin Xcode version. Adjust XCODE_VERSION env above.
+      # ----------------------------------------------------------
+      - name: Select Xcode
+        run: |
+          set -e
+          echo "=== Runner OS ==="
+          sw_vers
+          echo ""
+          echo "=== All Xcode installations ==="
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none found)"
+          echo ""
+
+          # Find the latest Xcode matching XCODE_VERSION prefix.
+          # XCODE_VERSION="26" matches Xcode_26.0, _26.1, _26.4, etc.
+          # Pick the highest version number (sort -V).
+          PIN="${XCODE_VERSION}"
+          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
+
+          if [ -z "$MATCH" ]; then
+            echo "❌ No Xcode matching '${PIN}*' found on this runner."
+            echo "Apple requires Xcode 26+ since 2026-04-28 for App Store submissions."
+            echo "Available Xcodes:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
+            exit 1
+          fi
+
+          echo "Selecting: $MATCH"
+          sudo xcode-select -s "$MATCH"
+          echo ""
+          echo "=== Active Xcode ==="
+          xcodebuild -version
+          xcrun swift --version 2>&1 | head -2 || true
+
+      # ----------------------------------------------------------
+      # 3) Install xcodegen + codemagic-cli-tools.
+      #    codemagic-cli-tools provides `app-store-connect`,
+      #    `xcode-project`, and `keychain` CLIs — same tools the
+      #    codemagic.yaml steps invoke.
+      # ----------------------------------------------------------
+      - name: Install build tools
+        run: |
+          set -e
+          # Install xcodegen if missing — runners have it sometimes,
+          # sometimes not, depending on image rotation.
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+          # macOS runner enforces PEP 668 (externally-managed Python),
+          # so we use pipx to install codemagic-cli-tools in an isolated
+          # venv. pipx is preinstalled on macos-15+ runners — only
+          # install if missing.
+          if command -v pipx >/dev/null 2>&1; then
+            echo "pipx already installed: $(pipx --version)"
+          else
+            brew install pipx
+          fi
+
+          # pipx ensurepath emits a noisy "already in PATH" warning when
+          # rerun. Just inject the bin dir directly into GITHUB_PATH.
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+          # Install codemagic-cli-tools (idempotent: if already present
+          # pipx prints a warning we don't care about; --force ignores
+          # any existing install). We need this for keychain init,
+          # app-store-connect signing-files fetch, and xcode-project.
+          pipx install --force codemagic-cli-tools 2>&1 | grep -v "WARNING: Skipping setuptools" || true
+
+      # ----------------------------------------------------------
+      # 4) Generate the Xcode project from project.yml.
+      # ----------------------------------------------------------
+      - name: Generate Xcode project
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate
+          echo "=== Schemes ==="
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      # ----------------------------------------------------------
+      # 5) Bump marketing version + build number into Info.plist.
+      #    Same pattern as codemagic.yaml — write directly via
+      #    plutil because Info.plist hard-codes the values rather
+      #    than referencing $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION).
+      # ----------------------------------------------------------
+      - name: Bump version
+        working-directory: QAudionApp
+        env:
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -e
+          # Marketing version from tag (strip leading "v" + any "-suffix").
+          GIT_TAG="${GITHUB_REF#refs/tags/}"
+          if [ -z "$GIT_TAG" ] || [ "$GIT_TAG" = "$GITHUB_REF" ]; then
+            GIT_TAG="${{ github.event.inputs.tag }}"
+          fi
+          if [ -n "$GIT_TAG" ]; then
+            MARKETING_VERSION=$(echo "$GIT_TAG" | sed -E 's/^v//; s/-[A-Za-z].*$//')
+          else
+            MARKETING_VERSION="1.0.0"
+          fi
+          echo "Marketing version = $MARKETING_VERSION"
+
+          # Build number = TestFlight latest + 1 (mirrors codemagic.yaml).
+          set +e
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID")
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] || [ -z "$LATEST" ]; then
+            echo "WARN: ASC fetch failed, falling back to commit count"
+            LATEST=$(git rev-list --count HEAD)
+          fi
+          NEW_BUILD=$((LATEST + 1))
+          echo "Build number = $NEW_BUILD"
+
+          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" Info.plist
+          plutil -replace CFBundleVersion            -string "$NEW_BUILD"        Info.plist
+
+          plutil -extract CFBundleShortVersionString raw -o - Info.plist
+          plutil -extract CFBundleVersion             raw -o - Info.plist
+
+      # ----------------------------------------------------------
+      # 6) Set up signing — fetch or create Distribution cert + App
+      #    Store provisioning profile via the ASC API. Same flow as
+      #    codemagic.yaml.
+      # ----------------------------------------------------------
+      - name: Set up signing
+        env:
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          CERTIFICATE_PRIVATE_KEY: ${{ secrets.CERTIFICATE_PRIVATE_KEY }}
+        run: |
+          set -e
+          keychain initialize
+          CERT_KEY_PATH=/tmp/dist_cert_key.pem
+          printf '%s' "$CERTIFICATE_PRIVATE_KEY" > "$CERT_KEY_PATH"
+          chmod 600 "$CERT_KEY_PATH"
+          openssl rsa -in "$CERT_KEY_PATH" -noout -check && echo "private key OK"
+
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificate-key "@file:$CERT_KEY_PATH" \
+            --strict-match-identifier
+
+          keychain add-certificates
+          xcode-project use-profiles --project "QAudionApp/$XCODE_PROJECT"
+
+      # ----------------------------------------------------------
+      # 7) Build IPA. Identical command to codemagic.yaml.
+      # ----------------------------------------------------------
+      - name: Build IPA
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme QAudionApp 2>&1 | tee build.log
+
+      # ----------------------------------------------------------
+      # 8) Patch onnxruntime.framework MinimumOSVersion + re-sign.
+      #    See CLAUDE.md sec 4 for the full story. Pinned to 1.17.0.
+      # ----------------------------------------------------------
+      - name: Patch onnxruntime + re-sign
+        run: |
+          set -e
+          IPA_PATH=$(find QAudionApp/build/ios/ipa -name "*.ipa" | head -1)
+          if [ -z "$IPA_PATH" ]; then
+            echo "IPA not found"; exit 1
+          fi
+          WORK=$(mktemp -d)
+          cd "$WORK"
+          unzip -q "$GITHUB_WORKSPACE/$IPA_PATH"
+
+          FW="Payload/QAudionApp.app/Frameworks/onnxruntime.framework"
+          if [ ! -d "$FW" ]; then
+            echo "onnxruntime.framework not in IPA — skipping patch"
+            exit 0
+          fi
+          plutil -replace MinimumOSVersion -string "16.0" "$FW/Info.plist"
+
+          IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+                     | awk -F'"' '/Apple Distribution|iPhone Distribution/ {print $2; exit}')
+          codesign --force --sign "$IDENTITY" "$FW"
+
+          ENT_FILE="$WORK/app.entitlements.plist"
+          codesign -d --entitlements :- --xml "Payload/QAudionApp.app" > "$ENT_FILE" 2>/dev/null || true
+          if [ ! -s "$ENT_FILE" ]; then
+            codesign -d --entitlements :- "Payload/QAudionApp.app" > "$ENT_FILE" 2>/dev/null || true
+          fi
+          codesign --force --sign "$IDENTITY" --entitlements "$ENT_FILE" "Payload/QAudionApp.app"
+
+          rm -f "$GITHUB_WORKSPACE/$IPA_PATH"
+          zip -qr "$GITHUB_WORKSPACE/$IPA_PATH" Payload
+          ls -lh "$GITHUB_WORKSPACE/$IPA_PATH"
+
+      # ----------------------------------------------------------
+      # 9) Upload to TestFlight Internal group "Q-Audion testers".
+      # ----------------------------------------------------------
+      - name: Upload IPA to App Store Connect
+        env:
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -e
+          IPA_PATH=$(find QAudionApp/build/ios/ipa -name "*.ipa" | head -1)
+
+          # Use Apple's altool directly instead of `app-store-connect
+          # publish --testflight`. Reason: the codemagic CLI's publish
+          # action tries to submit the build for EXTERNAL TestFlight
+          # beta review even when we only have an INTERNAL group. That
+          # submission fails on "missing test info" and breaks the
+          # workflow even though the upload + internal distribution
+          # succeeded. altool upload is exactly what we need: the build
+          # uploads, Apple processes it, internal testers see it
+          # automatically. No beta review involved.
+          #
+          # Write the .p8 to a temp file (altool needs it on disk).
+          KEY_DIR=~/.appstoreconnect/private_keys
+          mkdir -p "$KEY_DIR"
+          KEY_FILE="$KEY_DIR/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
+          printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA_PATH" \
+            --apiKey "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
+
+          echo ""
+          echo "✅ Upload complete. Build will appear in TestFlight Internal"
+          echo "   group 'Q-Audion testers' automatically once Apple"
+          echo "   finishes processing (~5-10 min)."
+
+      # ----------------------------------------------------------
+      # 10) Upload artifacts so the human can download IPA + dSYM
+      #     even when running locally / for crash symbolication.
+      # ----------------------------------------------------------
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-${{ github.run_number }}
+          path: |
+            QAudionApp/build/ios/ipa/*.ipa
+            QAudionApp/build/ios/dsym/*.zip
+            QAudionApp/build.log
+          retention-days: 14
+          if-no-files-found: warn

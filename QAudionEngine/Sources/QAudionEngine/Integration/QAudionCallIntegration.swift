@@ -1,7 +1,20 @@
 import Foundation
 
 public final class QAudionCallIntegration: @unchecked Sendable {
-    public enum CallState: String { case idle; case capabilitySent; case negotiating; case active; case fallback; case error }
+    /// Call state machine. `connecting` and `ringing` are finer-grained variants
+    /// of `outgoingOffering` from the desktop CallController — they let the UI
+    /// distinguish between "remote acked our offer" (processing) and "remote is
+    /// now ringing" (ready). See bcrypto-server pre-negotiation flow.
+    public enum CallState: String {
+        case idle
+        case capabilitySent
+        case negotiating
+        case connecting   // caller: remote sent call_processing
+        case ringing      // caller: remote sent call_ready (now ringing locally)
+        case active
+        case fallback
+        case error
+    }
 
     private let lock = NSLock()
     private var state: CallState = .idle
@@ -14,13 +27,76 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private let voiceAnalysis = VoiceAnalysisEngine()
     private var sendOpaque: ((Data) async throws -> Void)?
     private var resolvedBcryptoUserId: String?
-    private var bcryptoUserIdCache: [String: String] = [:]  // Signal recipientId -> BCrypto userId
+    private var bcryptoUserIdCache: [String: String] = [:]  // recipientId -> BCrypto userId
+    /// Tracks whether this client is the caller (true) or responder (false) for the
+    /// current call. Used to gate pre-negotiation event handling.
+    private var isCaller: Bool = false
+    /// Tracks whether the local UI/CallKit alert is already ringing for an
+    /// incoming call. Lets `onCallRingReceived` (server "we told the caller you
+    /// are ringing" ACK) fire a fallback ring only if setup was async-slow.
+    private var isLocallyRinging: Bool = false
 
     public var onStateChanged: ((CallState) -> Void)?
     public var onDeepfakeAlert: ((ConfidenceIndex.Level, Float) -> Void)?
+
+    /// W389 — fired the moment the ML-KEM-1024 PQC handshake completes
+    /// successfully on EITHER side (caller `case .accept` after
+    /// `decapsulate`, responder `case .offer` after `encapsulate`). The
+    /// 32-byte shared secret is exactly the value that
+    /// `QAudionEngine.initSession(sharedSecret:)` is initialised with —
+    /// i.e. the real session key — and is the cross-platform-stable
+    /// input the SAS computation must use for parity with Android.
+    ///
+    /// App layer is expected to forward this into
+    /// `CallSessionKeyBroker.shared.registerPqcSessionKey(_:for:)` so
+    /// `AppState.callPqcSessionKey` swaps from the W369 transitional
+    /// PSK-derived seed to the real ML-KEM secret. Once that swap
+    /// happens the SAS panel re-renders with PQC-derived words, and any
+    /// previously stored verification under the transitional fingerprint
+    /// is auto-invalidated by `SasVerificationStore` (different
+    /// fingerprint = new verification required).
+    ///
+    /// Fires at most once per call. The integration does not retain
+    /// the secret; the caller is responsible for lifecycle.
+    public var onPqcSessionKeyEstablished: ((Data) -> Void)?
     /// Set a BCryptoRestClient to enable userId pre-resolution before OFFER.
-    /// Without this, OFFERs use Signal recipientId which may cause server routing failures.
+    /// Without this, OFFERs use the raw recipientId which may cause server routing failures.
     public var restClient: BCryptoRestClient?
+
+    // MARK: - Pre-negotiation hooks (Android/Desktop interop)
+
+    /// Send `call_processing` to the caller — invoked when this client (responder)
+    /// receives a PQC OFFER. App layer wires this to BCryptoCallingApiImpl.
+    /// Signature: (callId, callerId) -> Void
+    public var sendCallProcessing: ((String, String) -> Void)?
+
+    /// Send `call_ready` to the caller — invoked after PQC OFFER deserialisation
+    /// completes on the responder side.
+    public var sendCallReady: ((String, String) -> Void)?
+
+    /// Triggered when an inbound call should start ringing locally (CallKit alert
+    /// or AVAudioSession + UI notification). The app layer is responsible for the
+    /// actual ring; this is a fallback path used when `call_ring` arrives before
+    /// the local ring has been started.
+    public var requestRingLocally: ((_ callId: String, _ callerId: String) -> Void)?
+
+    /// Caller-side error sink: invoked when the server reports `call_peer_offline`
+    /// for our outgoing call. App layer should terminate the call UI with a
+    /// "Peer offline" error.
+    public var onPeerOffline: ((_ callId: String, _ recipientId: String) -> Void)?
+
+    /// Responder-side cancel sink: invoked when the caller hangs up before we
+    /// answer (`call_cancel` from server). App layer should stop ringing.
+    public var onIncomingCallCancelled: ((_ callId: String, _ reason: String?) -> Void)?
+
+    /// Stash of in-flight call metadata so the responder can answer pre-negotiation
+    /// ACKs with the right (callId, callerId) pair. Set when call_offer arrives.
+    private var pendingResponderCallId: String?
+    private var pendingResponderCallerId: String?
+
+    /// Stash of caller's in-flight outgoing callId so peer_offline / cancel
+    /// callbacks know which call they refer to.
+    private var pendingOutgoingCallId: String?
 
     // MARK: - Desktop interop hooks (phase-2)
 
@@ -60,6 +136,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.lock()
         guard state == .idle else { lock.unlock(); throw IntegrationError.invalidState(state) }
         sendOpaque = sendOpaqueMessage
+        // Caller path — flag so pre-negotiation events are interpreted correctly.
+        isCaller = true
         lock.unlock()
 
         try engine.initialize()
@@ -88,8 +166,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guard let message = QAudionCapabilityExchange.parse(data) else { return }
 
         switch message {
-        case .offer(let remotePublicKey, _, let pskFingerprints):
-            let keyPair = pqc.generateKeyPair()
+        case .offer(let remotePublicKey, _, _):
+            // Responder path — flag and grab stashed pre-negotiation IDs.
+            lock.lock()
+            isCaller = false
+            let stashedCallId = pendingResponderCallId
+            let stashedCallerId = pendingResponderCallerId
+            lock.unlock()
+
+            // Pre-negotiation step 1: ack receipt of OFFER immediately so the
+            // caller can flip its UI to "Connecting" before our heavy PQC work
+            // runs. See bcrypto-server pre-negotiation flow.
+            if let cid = stashedCallId, let from = stashedCallerId {
+                sendCallProcessing?(cid, from)
+            }
+
+            // Note: keyPair is generated implicitly inside encapsulate via
+            // the embedded PQC stack — we don't need a local copy. (Was an
+            // unused init from a refactor leftover.)
             let result = try pqc.encapsulate(remotePublicKey: remotePublicKey)
             try engine.initialize()
             try engine.initSession(sharedSecret: result.sharedSecret)
@@ -97,13 +191,29 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             Task { try? await sendOpaqueMessage(accept) }
             lock.lock(); state = .active; lock.unlock()
             onStateChanged?(.active)
+            // W389: surface the real ML-KEM-1024 session key so the app
+            // layer can swap the W369 transitional PSK seed for the
+            // PQC-derived secret in `AppState.callPqcSessionKey`. Fired
+            // AFTER engine.initSession so the audio pipeline is already
+            // active under the same key — observers can rely on it.
+            onPqcSessionKeyEstablished?(result.sharedSecret)
 
-        case .accept(let ciphertext, let pskFingerprint):
+            // Pre-negotiation step 2: PQC OFFER fully deserialised — tell the
+            // caller we are ringing locally so its UI flips to "Ringing".
+            if let cid = stashedCallId, let from = stashedCallerId {
+                sendCallReady?(cid, from)
+            }
+
+        case .accept(let ciphertext, _):
             guard let kp = localKeyPair else { return }
             let sharedSecret = try pqc.decapsulate(ciphertext: ciphertext, privateKey: kp.privateKey)
             try engine.initSession(sharedSecret: sharedSecret)
             lock.lock(); state = .active; lock.unlock()
             onStateChanged?(.active)
+            // W389: caller side — same surface as the responder branch.
+            // After this fires, both ends hold the same 32 bytes for
+            // SAS derivation.
+            onPqcSessionKeyEstablished?(sharedSecret)
 
         case .keyExchangeOffer(let payload):
             // Peer is initiating first-contact PSK derivation.
@@ -153,8 +263,102 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public func onCallEnded() {
         engine.destroySession()
         engine.release()
-        lock.lock(); state = .idle; localKeyPair = nil; lock.unlock()
+        lock.lock()
+        state = .idle
+        localKeyPair = nil
+        isCaller = false
+        isLocallyRinging = false
+        pendingResponderCallId = nil
+        pendingResponderCallerId = nil
+        pendingOutgoingCallId = nil
+        lock.unlock()
         onStateChanged?(.idle)
+    }
+
+    // MARK: - Pre-negotiation event entry points
+    // These are invoked by the WS dispatch layer (BCryptoWebSocketClient
+    // callbacks) so the integration can drive the state machine and the UI
+    // without owning the socket directly.
+
+    /// Caller side — called right after `sendCallOffer` so the integration knows
+    /// which callId to associate with subsequent pre-negotiation events.
+    public func didSendOutgoingCallOffer(callId: String) {
+        lock.lock()
+        pendingOutgoingCallId = callId
+        isCaller = true
+        lock.unlock()
+    }
+
+    /// Responder side — called when an inbound `call_offer` envelope is parsed,
+    /// BEFORE the matching opaque PQC OFFER arrives. Stashes IDs so the OFFER
+    /// case in onCapabilityMessageReceived can emit pre-negotiation ACKs.
+    public func didReceiveIncomingCallOffer(callId: String, callerId: String) {
+        lock.lock()
+        pendingResponderCallId = callId
+        pendingResponderCallerId = callerId
+        isCaller = false
+        lock.unlock()
+    }
+
+    /// Tell the integration that the local UI/CallKit alert is now ringing for
+    /// an incoming call, so the `call_ring` server ack doesn't trigger a
+    /// duplicate fallback ring.
+    public func setLocallyRinging(_ ringing: Bool) {
+        lock.lock(); isLocallyRinging = ringing; lock.unlock()
+    }
+
+    /// Caller-side handler for inbound `call_processing`. Bumps state to
+    /// `.connecting` so the UI can show "Connecting…".
+    public func onCallProcessingReceived(callId: String, receiverId: String) {
+        lock.lock()
+        guard isCaller, callId == pendingOutgoingCallId else { lock.unlock(); return }
+        state = .connecting
+        lock.unlock()
+        onStateChanged?(.connecting)
+    }
+
+    /// Caller-side handler for inbound `call_ready`. Bumps state to `.ringing`
+    /// so the UI can show "Ringing…" and (optionally) start the local ringback tone.
+    public func onCallReadyReceived(callId: String, receiverId: String, deviceId: String?) {
+        lock.lock()
+        guard isCaller, callId == pendingOutgoingCallId else { lock.unlock(); return }
+        state = .ringing
+        lock.unlock()
+        onStateChanged?(.ringing)
+    }
+
+    /// Responder-side handler for inbound `call_ring` (server ack confirming
+    /// the caller has been told we are ringing). If the local UI hasn't already
+    /// kicked off a ring (e.g. setup ran async-slow), trigger the fallback ring.
+    public func onCallRingReceived(callId: String, callerId: String) {
+        lock.lock()
+        let alreadyRinging = isLocallyRinging
+        lock.unlock()
+        guard !alreadyRinging else { return }
+        // App layer wires CallKit / AVAudioSession ring + UI notification.
+        requestRingLocally?(callId, callerId)
+    }
+
+    /// Caller-side handler for inbound `call_peer_offline`. Surfaces an error
+    /// to the app layer so the call UI can be torn down.
+    public func onPeerOfflineReceived(callId: String, recipientId: String) {
+        lock.lock()
+        guard isCaller, callId == pendingOutgoingCallId else { lock.unlock(); return }
+        state = .error
+        lock.unlock()
+        onStateChanged?(.error)
+        onPeerOffline?(callId, recipientId)
+    }
+
+    /// Responder-side handler for inbound `call_cancel`. The caller hung up
+    /// before we picked up — stop ringing locally.
+    public func onCallCancelReceived(callId: String, reason: String?) {
+        lock.lock()
+        let isOurIncoming = !isCaller && callId == pendingResponderCallId
+        lock.unlock()
+        guard isOurIncoming else { return }
+        onIncomingCallCancelled?(callId, reason)
+        onCallEnded()
     }
 
     public func getState() -> CallState { lock.lock(); defer { lock.unlock() }; return state }
