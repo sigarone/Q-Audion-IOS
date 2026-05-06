@@ -88,7 +88,8 @@ let package = Package(
             dependencies: ["QAudionEngine"],
             path: "Tests/QAudionEngineTests",
             resources: [
-                .copy("../Resources/cross_platform_vectors.json")
+                .copy("../Resources/cross_platform_vectors.json"),
+                .copy("Video/Resources/sframe-video-kat.json")
             ]
         )
     ]
