@@ -179,6 +179,18 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         send(type: "opaque_message", data: ["recipient_id": recipientId, "data": payload.base64EncodedString()])
     }
 
+    /// Ship a LITERAL UTF-8 string verbatim in `opaque_message.data` (NOT
+    /// base64-wrapped). Used for the Android JSON HandshakeBundle wire
+    /// format which is `"<callId>|<JSON>"` — Android's WsCodec reads
+    /// `data["data"] as String` and the dispatcher splits on `|`. If we
+    /// went through `sendOpaqueMessage(payload: Data)` the Data would be
+    /// base64-encoded and Android's `dispatch()` would reject the
+    /// envelope as malformed because there is no `|` in the base64
+    /// alphabet of the wrapped payload. WIRE_SPEC.md §3.1.
+    public func sendOpaqueMessageString(recipientId: String, payload: String) {
+        send(type: "opaque_message", data: ["recipient_id": recipientId, "data": payload])
+    }
+
     public func sendAudioFrame(recipientId: String, frame: Data) {
         send(type: "audio_frame", data: ["recipient_id": recipientId, "frame": frame.base64EncodedString()])
     }

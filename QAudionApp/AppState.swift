@@ -1609,39 +1609,118 @@ final class AppState: ObservableObject {
         ws.registerHandler(type: "opaque_message") { [weak self] _, data in
             guard let senderId = data["sender_id"] as? String,
                   !senderId.isEmpty,
-                  let blobB64 = data["data"] as? String,
-                  let blob = Data(base64Encoded: blobB64) else {
+                  let blobStr = data["data"] as? String else {
                 return
             }
-            // Parse the QUAD frame using the engine's capability decoder.
-            guard let decoded = QAudionCapabilityExchange.parse(blob) else {
-                print("[AppState] opaque_message from \(senderId.prefix(8))… not a valid QUAD frame")
+
+            // Path A — base64-encoded QUAD binary frame (iOS / Desktop peers).
+            if let blob = Data(base64Encoded: blobStr),
+               let decoded = QAudionCapabilityExchange.parse(blob) {
+                switch decoded {
+                case .keyExchangeOffer(let pub):
+                    Task { await cke.handleOffer(senderId: senderId, peerPubKey: pub) }
+                case .keyExchangeAccept(let pub):
+                    Task { await cke.handleAccept(senderId: senderId, peerPubKey: pub) }
+                case .offer:
+                    Task { @MainActor [weak self] in
+                        self?.routeInboundPqcOffer(blob: blob, senderId: senderId)
+                    }
+                case .accept:
+                    Task { @MainActor [weak self] in
+                        self?.routeInboundPqcAccept(blob: blob, senderId: senderId)
+                    }
+                default:
+                    break
+                }
                 return
             }
-            switch decoded {
-            case .keyExchangeOffer(let pub):
-                Task { await cke.handleOffer(senderId: senderId, peerPubKey: pub) }
-            case .keyExchangeAccept(let pub):
-                Task { await cke.handleAccept(senderId: senderId, peerPubKey: pub) }
-            case .offer:
-                // W396 — responder side. The caller shipped a PQC
-                // OFFER. Route to the lazily-created responder
-                // integration so encapsulate fires and the ML-KEM
-                // shared secret is forwarded to the broker.
-                Task { @MainActor [weak self] in
-                    self?.routeInboundPqcOffer(blob: blob, senderId: senderId)
+
+            // Path B — Android JSON HandshakeBundle (full processing).
+            //
+            // Wire shape (WIRE_SPEC.md §3.1): literal UTF-8 string
+            // `"<callId>|<JSON>"` placed verbatim in the `data` field
+            // (NOT base64). The JSON carries split pqcPublicKey +
+            // x25519PublicKey + capabilities + pskFingerprints. iOS
+            // engine's QAudionCapabilityExchange (QUAD binary, single
+            // combined kemPublicKey) cannot consume this directly, so
+            // we decode via AndroidHandshakeEnvelope.parse() and route
+            // to QAudionCallIntegration.onAndroidBundleReceived which
+            // does the dual-hybrid encapsulate (ML-KEM-1024 + X25519)
+            // and ships the matching ACCEPT back over the same wire.
+            if let parsed = AndroidHandshakeEnvelope.parse(blobStr) {
+                switch parsed.bundle.kind {
+                case .offer:
+                    Task { @MainActor [weak self] in
+                        self?.routeInboundAndroidOffer(parsed: parsed, senderId: senderId)
+                    }
+                case .accept:
+                    Task { @MainActor [weak self] in
+                        self?.routeInboundAndroidAccept(parsed: parsed, senderId: senderId)
+                    }
                 }
-            case .accept:
-                // W396 — caller side. The responder shipped a PQC
-                // ACCEPT. Route to the existing caller integration
-                // (callService.callIntegration) so decapsulate fires.
-                Task { @MainActor [weak self] in
-                    self?.routeInboundPqcAccept(blob: blob, senderId: senderId)
-                }
-            default:
-                // Audio / video / dcSdp* / hangup frames are handled
-                // elsewhere or not yet first-class.
-                break
+                return
+            }
+
+            print("[AppState] opaque_message from \(senderId.prefix(8))… not a valid QUAD frame and not a recognised Android envelope (\(blobStr.count) bytes)")
+        }
+    }
+
+    /// Responder-side dispatch for Android JSON OFFER. Symmetric to
+    /// `routeInboundPqcOffer` but consumes the Android wire format
+    /// directly via `QAudionCallIntegration.onAndroidBundleReceived`.
+    @MainActor
+    private func routeInboundAndroidOffer(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
+        let integration = ensureResponderIntegration(forCaller: senderId)
+        let sendOpaqueRaw: (String) async throws -> Void = { [weak self] wireString in
+            guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
+            // CRITICAL: ship the wire string verbatim — NOT base64-wrapped.
+            // CallingApi.sendOpaqueMessage(data: Data) goes through
+            // BCryptoWebSocketClient.sendOpaqueMessage which calls
+            // payload.base64EncodedString() under the hood; that breaks
+            // Android's `<callId>|<json>` framing because `|` is not in
+            // the base64 alphabet so the receiver's `dispatch()` rejects
+            // the envelope as malformed.
+            try await provider.callingApi.sendOpaqueMessageString(
+                recipientId: senderId, payload: wireString)
+        }
+        Task {
+            do {
+                try await integration.onAndroidBundleReceived(
+                    bundle: parsed.bundle,
+                    callId: parsed.callId,
+                    eligiblePsks: [:],
+                    sendOpaqueRaw: sendOpaqueRaw)
+            } catch {
+                print("[AppState] routeInboundAndroidOffer failed: \(error)")
+            }
+        }
+    }
+
+    /// Caller-side dispatch for Android JSON ACCEPT. iOS originator
+    /// path currently emits QUAD only, so this branch is reached only
+    /// when iOS-originated JSON is added later (TODO). Wired now for
+    /// forward-compatibility.
+    @MainActor
+    private func routeInboundAndroidAccept(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
+        guard let integration = callService.callIntegration else {
+            print("[AppState] Android ACCEPT arrived from \(senderId) with no caller integration")
+            return
+        }
+        let sendOpaqueRaw: (String) async throws -> Void = { [weak self] wireString in
+            guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
+            let payload = wireString.data(using: .utf8) ?? Data()
+            try await provider.callingApi.sendOpaqueMessage(
+                recipientId: senderId, data: payload)
+        }
+        Task {
+            do {
+                try await integration.onAndroidBundleReceived(
+                    bundle: parsed.bundle,
+                    callId: parsed.callId,
+                    eligiblePsks: [:],
+                    sendOpaqueRaw: sendOpaqueRaw)
+            } catch {
+                print("[AppState] routeInboundAndroidAccept failed: \(error)")
             }
         }
     }

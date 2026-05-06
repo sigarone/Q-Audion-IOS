@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public final class QAudionCallIntegration: @unchecked Sendable {
     /// Call state machine. `connecting` and `ringing` are finer-grained variants
@@ -234,6 +235,197 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // TODO(desktop-interop): route callHangup to hangup handler
             break
         }
+    }
+
+    // MARK: - Android JSON HandshakeBundle interop
+
+    /// Process an Android-format JSON HandshakeBundle (the wire shape
+    /// described in `AndroidHandshakeBundle.swift`). Replaces the
+    /// previous Path-B fail-fast path in
+    /// `AppState.wireOpaqueMessageHandler` (which sent a `call_hangup`
+    /// the moment it spotted the JSON shape, just to free the Android
+    /// side from its 35 s timeout). Now we actually consume the bundle:
+    ///
+    /// - .offer (responder side):
+    ///     1. Decode the JSON public-key fields (pqcPublicKey,
+    ///        x25519PublicKey, dualCurvePublicKey?, strongBoxPublicKey?).
+    ///     2. iOS supports the dual-hybrid (PQC + X25519) primitives
+    ///        natively; X448 (`dualCurvePublicKey`) and Android
+    ///        StrongBox-bound P-256 (`strongBoxPublicKey`) are NOT yet
+    ///        wired through `HybridPqcKeyExchange`, so we silently drop
+    ///        those legs. The session key still combines ML-KEM-1024 +
+    ///        X25519, which IS the cross-platform floor.
+    ///     3. PSK fingerprint negotiation: deterministic lex-sort of
+    ///        the intersection (offerSet ∩ localEligible) and pick [0]
+    ///        (WIRE_SPEC.md §3.3). For now iOS has no SovereignKeyVault
+    ///        equivalent so the `localEligible` set is empty (passed in
+    ///        as a parameter to keep this composable for the future).
+    ///     4. Encapsulate, build the JSON ACCEPT (with `ciphertext.pqc`
+    ///        + `ciphertext.x25519` + `selectedPskFingerprint`), wrap
+    ///        in `"<callId>|<json>"` and send via the same
+    ///        `sendOpaqueMessage` closure used by the QUAD path.
+    ///     5. Fire `onPqcSessionKeyEstablished` with the combined
+    ///        shared secret so the broker swaps in the real session
+    ///        key (§5.4 same as the QUAD branch).
+    ///
+    /// - .accept (caller side, only fires when iOS originated the call
+    ///   in JSON format — not yet wired into the iOS originator path
+    ///   but the decode logic is here for symmetry).
+    ///
+    /// Throws on any decoder/crypto failure. The caller (AppState's
+    /// `routeInboundAndroidOffer`) is expected to catch and log.
+    public func onAndroidBundleReceived(
+        bundle: AndroidHandshakeBundle,
+        callId: String,
+        eligiblePsks: [String: Data] = [:],
+        sendOpaqueRaw: @escaping (String) async throws -> Void
+    ) async throws {
+
+        switch bundle.kind {
+        case .offer:
+            // 1. Decode public keys from base64.
+            guard let pqcPubB64 = bundle.pqcPublicKey,
+                  let x25519PubB64 = bundle.x25519PublicKey,
+                  let pqcPub = Data(base64Encoded: pqcPubB64),
+                  let x25519Pub = Data(base64Encoded: x25519PubB64) else {
+                throw IntegrationError.invalidState(state)
+            }
+
+            // 2. iOS dual-hybrid encapsulate — drop X448 + StrongBox legs.
+            let pqcResult = try pqc.encapsulate(remotePublicKey: pqcPub)
+            let x25519Result = try Self.x25519Encap(remotePub: x25519Pub)
+
+            // 3. Combine ML-KEM and X25519 shared secrets — byte-equal
+            // with Android `HybridPqcKeyExchange.combine` (PSK-free).
+            let hybridShared = Self.combinePqcAndX25519(pqcSs: pqcResult.sharedSecret, x25519Ss: x25519Result.sharedSecret)
+
+            // 4. Deterministic PSK fingerprint intersection (lex-sort).
+            var selectedFp: String? = nil
+            var selectedPsk: Data? = nil
+            if let advertised = bundle.pskFingerprints {
+                let intersection = advertised.filter { eligiblePsks[$0] != nil }.sorted()
+                if let first = intersection.first {
+                    selectedFp = first
+                    selectedPsk = eligiblePsks[first]
+                }
+            }
+
+            // 5. Mix PSK if negotiated — Android `PqcHandshake.kt
+            // finalize()` applies a SECOND HKDF round when a PSK was
+            // selected, with salt='q-audion-psk-mix' and IKM=hybrid||psk.
+            // We MUST mirror that or the two sides diverge silently.
+            let combined: Data
+            if let psk = selectedPsk {
+                combined = Self.mixPskIntoSession(hybridSecret: hybridShared, psk: psk)
+            } else {
+                combined = hybridShared
+            }
+
+            // 6. Build ACCEPT JSON. OFFER-only fields are nil so the
+            // encoder omits them entirely (no `"pqcPublicKey":""`).
+            let accept = AndroidHandshakeBundle(
+                kind: .accept,
+                callId: callId,
+                ciphertext: AndroidHandshakeBundle.Ciphertext(
+                    pqc: pqcResult.ciphertext.base64EncodedString(),
+                    x25519: x25519Result.ephemeralPublicKey.base64EncodedString()
+                ),
+                capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
+                selectedPskFingerprint: selectedFp
+            )
+            let wire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: accept)
+            try await sendOpaqueRaw(wire)
+
+            // 7. Initialise the audio session and fire the broker hook.
+            try engine.initialize()
+            try engine.initSession(sharedSecret: combined)
+            lock.lock(); state = .active; lock.unlock()
+            onStateChanged?(.active)
+            onPqcSessionKeyEstablished?(combined)
+
+        case .accept:
+            // Caller-side path. Not yet wired into the iOS originator
+            // (which still emits QUAD by default); decode logic kept
+            // here for symmetry once iOS-originated JSON OFFER lands.
+            guard let kp = localKeyPair, let ct = bundle.ciphertext,
+                  let pqcCt = Data(base64Encoded: ct.pqc),
+                  let _ = Data(base64Encoded: ct.x25519) else { return }
+
+            let pqcSs = try pqc.decapsulate(ciphertext: pqcCt, privateKey: kp.privateKey)
+            // x25519Decap currently throws — caller-side dual-hybrid
+            // requires extending localKeyPair to stash the X25519 priv
+            // generated alongside the ML-KEM priv at OFFER time. Until
+            // that lands the iOS-as-caller-of-Android flow is gated.
+            // Keeping the decode logic here so the unwiring is a single
+            // line change once the originator path is added.
+            print("[QAudionCallIntegration] Android ACCEPT received but caller-side X25519 decap not yet wired (pqcSs=\(pqcSs.count)B)")
+        }
+    }
+
+    /// X25519 ephemeral encapsulation (responder side): generate a
+    /// fresh X25519 keypair, ECDH against the remote pub, return both
+    /// the shared secret and the ephemeral pub the remote needs to
+    /// reproduce the same secret.
+    private static func x25519Encap(
+        remotePub: Data
+    ) throws -> (sharedSecret: Data, ephemeralPublicKey: Data) {
+        let ephPriv = Curve25519.KeyAgreement.PrivateKey()
+        let remoteKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: remotePub)
+        let secret = try ephPriv.sharedSecretFromKeyAgreement(with: remoteKey)
+        let ss = secret.withUnsafeBytes { Data($0) }
+        let pub = Data(ephPriv.publicKey.rawRepresentation)
+        return (ss, pub)
+    }
+
+    /// Combine ML-KEM and X25519 shared secrets via HKDF with the
+    /// canonical Q-Audion labels — byte-for-byte identical to the
+    /// derivation in `Android PqcHandshake.finalize()` and Desktop
+    /// `deriveSessionKey(ss, undefined)` so peers converge on the same
+    /// 32 B output regardless of which platform did encapsulate vs
+    /// decapsulate.
+    ///
+    /// IKM = pqcSs || x25519Ss
+    /// salt = "q-audion-hybrid-pqc-v1"
+    /// info = "q-audion-session-key"
+    /// L    = 32
+    private static func combinePqcAndX25519(pqcSs: Data, x25519Ss: Data) -> Data {
+        var ikm = Data(capacity: pqcSs.count + x25519Ss.count)
+        ikm.append(pqcSs)
+        ikm.append(x25519Ss)
+        let salt = HkdfLabels.hybridPqcSaltV1
+        let info = HkdfLabels.hybridPqcSessionKey
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: salt,
+            info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
+    /// Mix the negotiated PSK into the hybrid session key.
+    /// Byte-equal with Android `PqcHandshake.finalize()` PSK-mix branch:
+    ///
+    /// IKM = hybridSecret || psk
+    /// salt = "q-audion-psk-mix"
+    /// info = "q-audion-session-key"
+    /// L    = 32
+    ///
+    /// (Android uses `PSK_MIX_SALT = "q-audion-psk-mix".toByteArray()` and
+    /// `SESSION_INFO = "q-audion-session-key".toByteArray()` in PqcHandshake.kt.)
+    private static func mixPskIntoSession(hybridSecret: Data, psk: Data) -> Data {
+        var ikm = Data(capacity: hybridSecret.count + psk.count)
+        ikm.append(hybridSecret)
+        ikm.append(psk)
+        let saltBytes = "q-audion-psk-mix".data(using: .utf8)!
+        let infoBytes = HkdfLabels.hybridPqcSessionKey
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: saltBytes,
+            info: infoBytes,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
     }
 
     /// Surface a decrypted incoming chat body. If the body parses as a

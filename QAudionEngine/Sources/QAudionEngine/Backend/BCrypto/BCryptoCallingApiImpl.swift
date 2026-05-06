@@ -85,6 +85,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ws.sendOpaqueMessage(recipientId: recipientId, payload: data)
     }
 
+    /// Override the protocol default to bypass the base64 wrap that
+    /// `sendOpaqueMessage(payload: Data)` applies. Required for the
+    /// Android JSON HandshakeBundle wire format. WIRE_SPEC.md §3.1.
+    public func sendOpaqueMessageString(recipientId: String, payload: String) async throws {
+        ws.sendOpaqueMessageString(recipientId: recipientId, payload: payload)
+    }
+
     // MARK: - Pre-negotiation (Android/Desktop interop)
 
     /// Acknowledge to the caller that this device received the call_offer and is

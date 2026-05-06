@@ -6,6 +6,17 @@ public protocol CallingApi {
     func sendIceCandidate(recipientId: String, candidate: String) async throws
     func sendHangup(recipientId: String) async throws
     func sendOpaqueMessage(recipientId: String, data: Data) async throws
+
+    /// Ship a literal UTF-8 string in the `data` field of an
+    /// `opaque_message` (NOT base64-wrapped). Used for the Android JSON
+    /// HandshakeBundle wire format `"<callId>|<JSON>"` — wrapping in
+    /// base64 would hide the `|` separator and Android's `dispatch()`
+    /// would reject the envelope as malformed. WIRE_SPEC.md §3.1.
+    /// Default impl falls back to UTF-8 bytes through `sendOpaqueMessage`
+    /// for any backend that hasn't migrated yet (will be base64-wrapped
+    /// — backends supporting Android JSON interop MUST override).
+    func sendOpaqueMessageString(recipientId: String, payload: String) async throws
+
     /// Get TURN/STUN relay servers with time-limited credentials.
     func getRelays() async throws -> [RelayServer]
 
@@ -23,6 +34,17 @@ public protocol CallingApi {
 public extension CallingApi {
     func sendCallProcessing(callId: String, callerId: String) async throws { /* no-op default */ }
     func sendCallReady(callId: String, callerId: String) async throws { /* no-op default */ }
+
+    /// Default impl — falls back to UTF-8 bytes through `sendOpaqueMessage`.
+    /// Backends that base64-wrap (e.g. BCryptoCallingApi) MUST override
+    /// to ship the literal string verbatim, otherwise Android JSON
+    /// HandshakeBundle interop breaks (see protocol kdoc).
+    func sendOpaqueMessageString(recipientId: String, payload: String) async throws {
+        try await sendOpaqueMessage(
+            recipientId: recipientId,
+            data: payload.data(using: .utf8) ?? Data()
+        )
+    }
 }
 
 /// Bcrypto-server `/api/v1/calling/relays` response shape.
