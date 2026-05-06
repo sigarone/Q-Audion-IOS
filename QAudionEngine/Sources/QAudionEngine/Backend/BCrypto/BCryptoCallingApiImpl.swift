@@ -92,6 +92,44 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ws.sendOpaqueMessageString(recipientId: recipientId, payload: payload)
     }
 
+    /// Originator-side `call_offer` with an EXTERNALLY-CHOSEN callId.
+    /// Pins the supplied callId on the in-process state machine so
+    /// subsequent `sendCallAnswer` / `sendIceCandidate` / `sendHangup`
+    /// envelopes ride on the same callId, AND sends the WS frame
+    /// carrying that exact callId — keeping the WS wire, the engine
+    /// stash, and the PQC bundle's callId field all aligned.
+    /// Per OpenRouter glm-5.1 review 2026-05-06 P0 #1.
+    public func sendCallOfferWithId(callId: String, recipientId: String, sdp: String) async throws {
+        setActiveCallId(callId)
+        ws.send(
+            type: "call_offer",
+            data: [
+                "recipient_id": recipientId,
+                "call_id":      callId,
+                "sdp":          sdp,
+                "call_type":    "audio",
+            ]
+        )
+    }
+
+    /// Send a call_hangup explicitly bound to a specific callId,
+    /// bypassing the lazy `currentCallId()` fallback. Used by the
+    /// Android-originator cleanup path: when the opaque OFFER fails
+    /// after the call_offer has already woken the peer, we must
+    /// hangup against the SAME callId we just minted (not whatever
+    /// activeCallId happens to be — could be a previous call's
+    /// stale value).
+    /// Per OpenRouter glm-5.1 review 2026-05-06 P0 #3.
+    public func sendCallHangupForId(callId: String, recipientId: String) async throws {
+        ws.send(
+            type: "call_hangup",
+            data: [
+                "call_id": callId,
+                "reason":  "originator_offer_failed",
+            ]
+        )
+    }
+
     // MARK: - Pre-negotiation (Android/Desktop interop)
 
     /// Acknowledge to the caller that this device received the call_offer and is

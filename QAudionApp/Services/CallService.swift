@@ -215,6 +215,82 @@ final class CallService {
         startDurationTimer()
     }
 
+    /// Originator-side wire driver for the iOS-as-caller PQC handshake.
+    /// Closes the WIRE_SPEC §5 P0 gap that had `onCallSetupStarted` get
+    /// passed an empty closure (no OFFER bytes ever reached the wire).
+    ///
+    /// Sequence (per OpenRouter glm-5.1 review 2026-05-06):
+    ///   1. Snapshot integration to a strong local — guards against
+    ///      mid-method teardown from another concurrency domain.
+    ///   2. Send `call_offer` with the supplied callId — wakes the
+    ///      Android peer's WsCallSignaller which buffers the
+    ///      CallIncoming event per-callId for the user-accept path.
+    ///   3. Drive `integration.onAndroidCallSetupStarted` with the
+    ///      same callId. The engine generates dual-hybrid keypair,
+    ///      stashes the privs INSIDE the method body BEFORE invoking
+    ///      either send closure, then ships the JSON OFFER (literal
+    ///      string, no base64 wrap) followed by the legacy QUAD
+    ///      binary OFFER for backwards compat.
+    ///   4. On any failure mid-stream: fire `sendCallHangupForId` so
+    ///      the peer's UI doesn't sit on a phantom incoming call.
+    ///
+    /// CallId is supplied by the caller (AppState) so the WS-level
+    /// callId, the engine stash key, the PQC bundle's `callId` field,
+    /// and the eventual ACCEPT routing all converge on the same UUID.
+    func beginAndroidOutgoing(
+        callId: String,
+        recipientId: String,
+        callingApi: CallingApi
+    ) async throws {
+        // Snapshot to local strong ref — prevents use-after-free if
+        // another Task tears down callIntegration mid-await.
+        guard let integration = self.callIntegration else {
+            throw CallServiceError.noIntegration
+        }
+
+        // 1) call_offer (vestigial empty SDP — WIRE_SPEC §3 SDP-less
+        //    PQC path uses opaque_message OFFER for the actual crypto).
+        let vestigialSdp = ""
+        try await callingApi.sendCallOfferWithId(
+            callId: callId,
+            recipientId: recipientId,
+            sdp: vestigialSdp
+        )
+
+        // 2) PQC handshake OFFER pair (JSON + QUAD). Best-effort
+        //    cleanup on failure: tell the peer to dismiss the
+        //    phantom incoming call.
+        do {
+            try await integration.onAndroidCallSetupStarted(
+                callId: callId,
+                sendOpaqueRaw: { wireString in
+                    try await callingApi.sendOpaqueMessageString(
+                        recipientId: recipientId, payload: wireString)
+                },
+                sendOpaqueBinary: { data in
+                    try await callingApi.sendOpaqueMessage(
+                        recipientId: recipientId, data: data)
+                }
+            )
+        } catch is CancellationError {
+            // User cancelled the call after call_offer landed but
+            // before the OFFER bundles went out. Best-effort hangup
+            // and re-raise so AppState can transition the UI to .idle.
+            try? await callingApi.sendCallHangupForId(
+                callId: callId, recipientId: recipientId)
+            throw CancellationError()
+        } catch {
+            print("[CallService] Android originator OFFER pipeline failed for callId=\(callId.prefix(8))…: \(error)")
+            try? await callingApi.sendCallHangupForId(
+                callId: callId, recipientId: recipientId)
+            throw error
+        }
+    }
+
+    enum CallServiceError: Error {
+        case noIntegration
+    }
+
     func endCall() {
         callIntegration?.onCallEnded()
         callIntegration = nil

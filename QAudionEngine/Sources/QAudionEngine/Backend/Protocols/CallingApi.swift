@@ -17,6 +17,28 @@ public protocol CallingApi {
     /// — backends supporting Android JSON interop MUST override).
     func sendOpaqueMessageString(recipientId: String, payload: String) async throws
 
+    /// Originator-side helper that ships a `call_offer` with an
+    /// EXTERNALLY-CHOSEN callId. The default `sendCallOffer` mints a
+    /// fresh UUID internally; this variant lets AppState mint the
+    /// canonical callId and pass it through so the WS-level call_id,
+    /// the engine's `onAndroidCallSetupStarted(callId:)` and the
+    /// PQC handshake bundle's `callId` field all converge on the same
+    /// string. Per WIRE_SPEC §5 + OpenRouter glm-5.1 review 2026-05-06
+    /// (CallId mismatch P0 issue).
+    /// Default impl invokes `sendCallOffer` + best-effort
+    /// `bindIncomingCallId`-equivalent (backend-specific). Backends MUST
+    /// override to actually pin the callId on the server-side state
+    /// machine.
+    func sendCallOfferWithId(callId: String, recipientId: String, sdp: String) async throws
+
+    /// Send a call_hangup envelope explicitly bound to a specific
+    /// callId. Used by the Android-originator cleanup path when the
+    /// opaque OFFER fails after the call_offer has already woken the
+    /// peer — without this, the peer's UI sits on a phantom incoming
+    /// call. Default impl falls back to `sendHangup` (which uses the
+    /// active callId on most backends).
+    func sendCallHangupForId(callId: String, recipientId: String) async throws
+
     /// Get TURN/STUN relay servers with time-limited credentials.
     func getRelays() async throws -> [RelayServer]
 
@@ -44,6 +66,24 @@ public extension CallingApi {
             recipientId: recipientId,
             data: payload.data(using: .utf8) ?? Data()
         )
+    }
+
+    /// Default impl — fallback path for backends that don't yet
+    /// support externally-chosen callIds. Calls the legacy
+    /// sendCallOffer which mints its own UUID. Will produce the
+    /// "callId mismatch P0" bug the reviewer flagged when paired with
+    /// onAndroidCallSetupStarted; backends supporting Android interop
+    /// MUST override.
+    func sendCallOfferWithId(callId: String, recipientId: String, sdp: String) async throws {
+        try await sendCallOffer(recipientId: recipientId, sdp: sdp)
+    }
+
+    /// Default impl — fallback path for backends without per-callId
+    /// hangup. Uses the legacy sendHangup which targets the active
+    /// callId (best-effort). Backends supporting interop SHOULD
+    /// override to actually pin the supplied callId.
+    func sendCallHangupForId(callId: String, recipientId: String) async throws {
+        try await sendHangup(recipientId: recipientId)
     }
 }
 

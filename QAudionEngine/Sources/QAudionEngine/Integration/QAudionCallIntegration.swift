@@ -224,6 +224,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let pqcKp = pqc.generateKeyPair()
         let x25519Priv = Curve25519.KeyAgreement.PrivateKey()
 
+        // INVARIANT (per OpenRouter glm-5.1 review 2026-05-06 P0 #2):
+        // STASH PRIVATE KEYS BEFORE INVOKING ANY SEND CLOSURE. The
+        // ACCEPT can arrive on the WS dispatcher as soon as the OFFER
+        // bytes leave the wire — if we sent first and stashed second,
+        // the ACCEPT handler would race-lookup `localHybridKeysByCall`
+        // and find nil, then bail out on the verbose-logging guard
+        // ("ACCEPT for callId=X but no local hybrid keys stashed —
+        // was onAndroidCallSetupStarted ever called?"). The session
+        // would never be installed despite the bytes being correct.
         lock.lock()
         localKeyPair = pqcKp
         localHybridKeysByCall[callId] = HybridLocalKeys(
