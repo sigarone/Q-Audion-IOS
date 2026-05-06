@@ -80,52 +80,86 @@ QAudionEngine/       # Swift package with crypto + audio C libs
     QAudionEngine/   # Swift API layer
   Resources/
     aasist_raw_*.onnx  # Deepfake detection models (run via onnxruntime)
-codemagic.yaml       # CI — TWO workflows; qaudion-app-build is the TestFlight one
 .github/workflows/
-  engine-tests.yml   # macOS Swift test CI (informational)
+  engine-tests.yml   # macOS Swift test CI (every push)
+  ios-testflight.yml # TestFlight build pipeline (tag v*)
+  kat-cross-platform.yml  # KAT cross-platform interop tests
 ```
 
-## Build / release pipeline (CRITICAL — read before changing `codemagic.yaml`)
+> **Build platform = GitHub Actions** (decommission of Codemagic
+> 2026-05-06 per user directive — `codemagic.yaml` removed from the
+> repo, the `ios-testflight.yml` workflow is the drop-in replacement).
+> The `codemagic-cli-tools` Python package is still used inside the
+> GitHub Actions steps because it produces the same Distribution
+> cert / provisioning profile flow the Apple API expects, so the
+> hard-won lessons below transfer 1:1 to the new pipeline.
+
+## Build / release pipeline (CRITICAL — read before changing `.github/workflows/ios-testflight.yml`)
 
 ### How a release happens
 
 1. Developer pushes a git tag `v*` (e.g. `v1.0.23`) to `origin/main`.
-2. Codemagic fires workflow `qaudion-app-build` ("Q-Audion App Build (TestFlight)").
+2. GitHub Actions fires workflow `TestFlight build` (file
+   `.github/workflows/ios-testflight.yml`) on a `macos-latest` runner.
 3. XcodeGen generates `QAudionApp.xcodeproj` from `project.yml`.
-4. Code signing script creates/fetches Distribution cert + App Store profile via `app-store-connect` CLI.
+4. Code-signing script (running `app-store-connect` from the
+   `codemagic-cli-tools` Python package) creates/fetches Distribution
+   cert + App Store profile via the Apple API.
 5. `xcode-project build-ipa` produces `QAudionApp/build/ios/ipa/QAudionApp.ipa`.
-6. **Post-build patch step** (see "Known ONNX bug" below) rewrites `onnxruntime.framework/Info.plist` and re-signs the bundle.
-7. Publishing uploads the IPA to App Store Connect; internal tester group **`Q-Audion testers`** gets the build automatically.
+6. **Post-build patch step** (see "Known ONNX bug" below) rewrites
+   `onnxruntime.framework/Info.plist` and re-signs the bundle.
+7. Publishing uploads the IPA to App Store Connect; internal tester
+   group **`Q-Audion testers`** gets the build automatically.
 
 ### Trigger philosophy
 
-- **Tag push `v*`** → full TestFlight pipeline.
-- **Main branch push** → only the macOS `engine-tests.yml` on GitHub Actions (no iOS build).
-- **Never** rely on Codemagic to build from branches — always tag.
+- **Tag push `v*`** → full TestFlight pipeline (`ios-testflight.yml`).
+- **Workflow_dispatch** with optional `tag` input → ad-hoc rebuild.
+- **Main branch push** → `engine-tests.yml` (macOS Swift unit + KAT)
+  + `kat-cross-platform.yml` only (no iOS build).
+- **Never** trigger TestFlight builds from branches — always tag.
 
 ## Hard-won lessons — DO NOT REPEAT THESE MISTAKES
 
-### 1. Codemagic account type: Personal vs Team
+### 1. App Store Connect API key — managed via GitHub Secrets
 
-This repo is on a **Personal Account**. The Codemagic UI only shows an "Apple Developer Portal" integration card, not a separate "App Store Connect" one. This means:
+GitHub Actions reads the ASC credentials from repository secrets
+(`Settings → Secrets and variables → Actions`):
 
-- ❌ YAML `integrations: app_store_connect: <key_name>` **does not work** — fails with "App Store Connect integration '…' does not exist".
-- ✅ Use application-level **environment variable group `asc_credentials`** that stores API key + private key as env vars, and reference them directly in YAML (`api_key: $APP_STORE_CONNECT_PRIVATE_KEY`, etc.).
-- If the Codemagic account is ever upgraded to Team, the cleaner `integrations:` syntax becomes available — but until then, leave this alone.
+| Secret | Content |
+|---|---|
+| `APP_STORE_CONNECT_KEY_IDENTIFIER` | Key ID of the Admin ASC API Key |
+| `APP_STORE_CONNECT_ISSUER_ID`      | Issuer UUID from ASC → Users & Access → Integrations |
+| `APP_STORE_CONNECT_PRIVATE_KEY`    | Full content of the .p8 file |
+| `CERTIFICATE_PRIVATE_KEY`          | PEM content of the Distribution cert's RSA 2048 private key |
+
+The workflow exposes these as env vars to the codemagic-cli-tools
+steps using the same names — no other rewriting needed.
 
 ### 2. API key role — Admin or nothing
 
-`app-store-connect fetch-signing-files --create` needs to create a Distribution certificate and App Store provisioning profile via the Apple API. Only **Admin** role keys can do this. App Manager / Developer roles cannot.
+`app-store-connect fetch-signing-files --create` needs to create a
+Distribution certificate and App Store provisioning profile via the
+Apple API. Only **Admin** role keys can do this. App Manager /
+Developer roles cannot.
 
-The current working key is stored in Codemagic as **`QAudion ASC API Key`** (Key ID `REDACTED_KEY_ID`). If it's ever revoked, the replacement MUST be Admin-role.
+The current working key Id is `REDACTED_KEY_ID`. If it's ever revoked, the
+replacement MUST be Admin-role and the new value goes in the
+`APP_STORE_CONNECT_KEY_IDENTIFIER` GitHub secret.
 
 ### 3. Distribution cert private key must be supplied
 
-`fetch-signing-files --create` needs an RSA private key to sign the CSR. The key is stored in Codemagic env var `CERTIFICATE_PRIVATE_KEY` (PEM format, with `-----BEGIN PRIVATE KEY-----` / `-----END PRIVATE KEY-----`).
+`fetch-signing-files --create` needs an RSA private key to sign the
+CSR. GitHub Secret `CERTIFICATE_PRIVATE_KEY` stores it in PEM format
+(with `-----BEGIN PRIVATE KEY-----` / `-----END PRIVATE KEY-----`).
 
-The PEM source of truth lives OUTSIDE the repo at `D:\users\f10379a\DEV APP\BCRYPTO\cert\distribution_cert_key.pem`. **Never commit it.** If lost, a new Distribution cert must be revoked & recreated (Apple allows max 2 per team).
+The PEM source of truth lives OUTSIDE the repo at
+`D:\users\f10379a\DEV APP\BCRYPTO\cert\distribution_cert_key.pem`.
+**Never commit it.** If lost, a new Distribution cert must be revoked
+& recreated (Apple allows max 2 per team).
 
-The correct CLI flag is `--certificate-key "@file:$CERT_KEY_PATH"`, NOT `--certificate-key-path`.
+The correct CLI flag is `--certificate-key "@file:$CERT_KEY_PATH"`,
+NOT `--certificate-key-path`.
 
 ### 4. ONNX Runtime 1.17.0 has a packaging bug — DO NOT UPGRADE
 
@@ -139,7 +173,7 @@ The dependency is **pinned** in `QAudionEngine/Package.swift`:
 - 1.17.0 supports iOS 13+ (good) **BUT** ships with a broken `onnxruntime.framework/Info.plist` where `MinimumOSVersion=""` (empty string). Apple's altool rejects this with two errors: "Invalid MinimumOSVersion … is ''" and "A value for the key 'MinimumOSVersion' … is required".
 - The framework's Mach-O itself is fine (`LC_BUILD_VERSION` already declares iOS 16.0 minimum).
 
-**Workaround in `codemagic.yaml` — the "Patch onnxruntime.framework" step**:
+**Workaround in `.github/workflows/ios-testflight.yml` — the "Patch onnxruntime.framework" step**:
 1. Unzip the IPA produced by `xcode-project build-ipa`.
 2. `plutil -replace MinimumOSVersion -string "16.0" Payload/QAudionApp.app/Frameworks/onnxruntime.framework/Info.plist` — the value **must match the Mach-O's `minos` (16.0)**, not something else. Mismatch between Info.plist (e.g. 13.0) and Mach-O (16.0) ALSO triggers ITMS-90208.
 3. Re-sign the framework with `codesign --force --sign "$IDENTITY"`.
@@ -174,7 +208,7 @@ Use the string form `.iOS("18.0")` if you need iOS 18+ on the 5.9 tools version.
 
 ### 8. TestFlight beta group name
 
-The group in App Store Connect is **`Q-Audion testers`** (lowercase "t", with hyphen). The YAML `publishing.app_store_connect.beta_groups` must match exactly — Codemagic fails silently (2s step) if the group doesn't exist.
+The group in App Store Connect is **`Q-Audion testers`** (lowercase "t", with hyphen). The `app-store-connect publish --testflight --beta-group "Q-Audion testers"` step in `ios-testflight.yml` must match exactly — the publish step fails silently (2s step) if the group doesn't exist.
 
 ### 9. Apple-required Info.plist keys
 
@@ -208,29 +242,19 @@ bg.save(path, 'PNG', optimize=True)
 
 **Storico:** Apple emise **ITMS-90725** (informational) su ogni upload con build Xcode 16.2: "starting **April 28, 2026**, App Store Connect will only accept builds made with Xcode 26 / iOS 26 SDK".
 
-**Stato attuale (post W396):** il `codemagic.yaml` di entrambi i workflow specifica `xcode: 26.4`. Codemagic ha aggiunto Xcode 26 ai Mac mini M2 runner nelle finestre seguenti:
+**Stato attuale (post W396 + GH-Actions migration 2026-05-06):** il workflow `.github/workflows/ios-testflight.yml` runa su `macos-latest` (GitHub Actions automatically rolls the image as Apple ships new Xcode); the workflow has a discovery step that fails fast if Xcode 26+ isn't available so the build never silently falls back to an older SDK.
 
-- **2025-09-20** Xcode 26.0 disponibile come opt-in
-- **2025-11-24** Xcode 26.1 → default (`latest`)
-- **2026-01-11** Xcode 26.2 → default
-- **2026-04-26** Xcode 26.4 → default
+GitHub Actions Xcode availability windows on the `macos-latest` runner:
 
-`xcode: latest` funziona ma è non-deterministico fra build paralleli; pinning a `26.4` (il default attuale) è la scelta sicura. Il pinning va bumpato quando Codemagic ruota il default — controllare https://docs.codemagic.io/specs-macos/xcode-26-4/ (e la pagina sibling per `26-5/`, `26-6/` etc. man mano che escono).
+- **macos-15** ships Xcode 16.x default + Xcode 26.x as a non-default install path.
+- **macos-26** (rolling out 2026-Q3+) ships Xcode 26.x default.
 
-**Quindi:** la deadline 28/04/2026 NON è un problema — i build di questa repo già usano l'SDK richiesto. ITMS-90725 non viene più emesso post-W347.
+If GitHub Actions ever drops Xcode 26 from `macos-latest` before
+Apple raises the SDK floor again, pin the runner to a specific image
+(e.g. `runs-on: macos-15`) and use `sudo xcode-select -s /Applications/Xcode_26.4.app`
+explicitly in a step.
 
-## Current `codemagic.yaml` env var dependencies
-
-The `qaudion-app-build` workflow requires these in the Codemagic app's **Environment variables → group `asc_credentials`** (all secure):
-
-| Variable | Content |
-|---|---|
-| `APP_STORE_CONNECT_KEY_IDENTIFIER` | Key ID of the Admin ASC API Key (currently `REDACTED_KEY_ID`) |
-| `APP_STORE_CONNECT_ISSUER_ID` | Issuer UUID from App Store Connect → Users and Access → Integrations |
-| `APP_STORE_CONNECT_PRIVATE_KEY` | Full content of the .p8 file |
-| `CERTIFICATE_PRIVATE_KEY` | PEM content of the Distribution cert's RSA 2048 private key |
-
-Without these the build fails at the "Set up signing" step.
+**Quindi:** la deadline 28/04/2026 NON è un problema — i build di questa repo usano l'SDK richiesto. ITMS-90725 non viene più emesso post-W347.
 
 ## Known open issues / next debugging topics
 
@@ -258,9 +282,9 @@ The app is on TestFlight but has not been exercised end-to-end. Expect to debug:
 
 1. **Never touch code signing config** (`integrations`, `environment.ios_signing`, `auth: integration`) without re-reading sections 1–3 above — the Personal Account topology is fragile.
 2. **Never upgrade `onnxruntime-swift-package-manager` past 1.17.0** without a plan for handling its MinOS breakage — either find a version that both supports iOS 16 AND has a correct Info.plist, or change the patch step accordingly.
-3. **Never remove the "Patch onnxruntime.framework" step** in `codemagic.yaml` — the pipeline breaks silently on validation otherwise.
+3. **Never remove the "Patch onnxruntime.framework" step** in `.github/workflows/ios-testflight.yml` — the pipeline breaks silently on validation otherwise.
 4. **Always bump the tag** for a new release (e.g. `v1.0.23`). Don't re-use old tags; don't build from branches.
-5. **Treat Apple emails after upload as canonical**. Codemagic reporting "publishing succeeded" only means the upload HTTP call returned 2xx. Apple may still reject on validation minutes later via email. Always check inbox before declaring victory.
+5. **Treat Apple emails after upload as canonical**. The publish step reporting "publishing succeeded" only means the upload HTTP call returned 2xx. Apple may still reject on validation minutes later via email. Always check inbox before declaring victory.
 6. **Use `TodoWrite` for multi-step tasks** and follow the superpowers skill guidance when relevant.
 
 ### 13. Swift type-checker timeout traps (Xcode 26.4)
@@ -387,7 +411,7 @@ private func startVoiceNoteAsync() async {
 
 Symptoms: the build console shows just `Failed to archive` with **no `error:`/`warning:` lines** — xcbeautify is consuming the diagnostic before tee can capture it.
 
-**Mitigation:** the codemagic.yaml has a "Diagnose Swift compile (raw xcodebuild)" step that runs before `xcode-project build-ipa` with `CODE_SIGNING_ALLOWED=NO`. That output goes to `diag.log` (artifact) and is grepped at the end of Step 6. Always check Step 6 in failed Codemagic builds, not just the Build IPA step.
+**Mitigation:** `.github/workflows/ios-testflight.yml` has a "Diagnose Swift compile (raw xcodebuild)" step that runs before `xcode-project build-ipa` with `CODE_SIGNING_ALLOWED=NO`. That output is uploaded as the `diag.log` artifact and is grepped at the end of the build step. Always check the diagnose step in failed runs, not just the Build IPA step.
 
 ### 14. Single-file Swift compile budget
 
@@ -437,10 +461,11 @@ log gives no useful match — the failure is silent.
 | `func start(getToken: @MainActor () -> String?) {}` | ✅ |
 | No method, just `static let shared = Self()` | ✅ |
 
-**Root cause hypothesis (we couldn't read the actual diag.log
-because Codemagic's artifact bundle is auth-locked behind the API
-token, and `xcode-project build-ipa` filters Swift errors through
-xcbeautify before they reach our captured output):** Swift 6's
+**Root cause hypothesis (we couldn't always read the actual diag.log
+because `xcode-project build-ipa` filters Swift errors through
+xcbeautify before they reach our captured output; under GitHub
+Actions the diag.log is now uploaded as a normal artifact and is
+inspectable directly from the run page):** Swift 6's
 strict-concurrency Sendable inference walks the AppState type when
 it appears as a parameter type. AppState is ~2000 lines, has dozens
 of `@Published` properties wrapping non-Sendable Combine publishers,
