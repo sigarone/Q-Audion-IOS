@@ -22,6 +22,31 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private let engine = QAudionEngine()
     private let pqc = PqcKeyExchange()
     private var localKeyPair: PqcKeyExchange.KeyPair?
+
+    /// Local hybrid keys stashed for the originator path (iOS-as-caller)
+    /// of an Android JSON HandshakeBundle handshake. Holds BOTH the
+    /// ML-KEM keypair (for `pqc.decapsulate`) AND the ephemeral X25519
+    /// private key (for `Curve25519.KeyAgreement.sharedSecretFromKey...`)
+    /// so the JSON ACCEPT branch can complete the dual-hybrid combine.
+    /// Keyed by callId per OpenRouter glm-5.1 review 2026-05-06 to
+    /// avoid the race where two overlapping calls overwrite each other's
+    /// privs and the first ACCEPT decapsulates with the wrong material.
+    /// Cleared (and zeroized) after the session key is installed.
+    private struct HybridLocalKeys {
+        let pqcPair: PqcKeyExchange.KeyPair
+        let x25519Priv: Curve25519.KeyAgreement.PrivateKey
+    }
+    private var localHybridKeysByCall: [String: HybridLocalKeys] = [:]
+
+    /// Per-call double-ACCEPT guard. Pre-fix the responder might emit
+    /// BOTH a QUAD ACCEPT (legacy iOS↔iOS) AND a JSON ACCEPT (when iOS
+    /// is talking to Android via the JSON path); on the originator
+    /// side both branches would call `engine.initSession` in sequence,
+    /// the second overwriting the first with a different shared secret.
+    /// This set is consulted before `initSession` and discards
+    /// duplicates. Per OpenRouter glm-5.1 review 2026-05-06.
+    private var sessionInitializedByCall: Set<String> = []
+
     private var transportSelector: TransportSelector?
     private var capabilityExchange: QAudionCapabilityExchange?
     private let guardianMode = GuardianMode()
@@ -163,6 +188,103 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
     }
 
+    /// Originator entry point that emits the Android JSON HandshakeBundle
+    /// OFFER (literal `"<callId>|<JSON>"` string) AND the legacy QUAD
+    /// binary OFFER. Use this instead of `onCallSetupStarted` when the
+    /// outgoing call must reach an Android peer — the Android dispatch
+    /// layer rejects QUAD-only OFFERs as "malformed opaque envelope"
+    /// because no `|` separator. WIRE_SPEC.md §3.1.
+    ///
+    /// Both formats are sent because:
+    /// - Android peers parse the JSON envelope (their native format).
+    /// - Desktop peers parse EITHER (the `handleAndroidBundle` path was
+    ///   added in an earlier commit).
+    /// - iOS peers parse the QUAD via `onCapabilityMessageReceived` for
+    ///   backwards compat with older iOS builds that don't yet have the
+    ///   JSON responder; the JSON envelope is dropped silently in their
+    ///   dispatch (no `|` after base64 decode → handler returns).
+    ///
+    /// Per OpenRouter glm-5.1 review 2026-05-06:
+    /// - Send sequentially so a JSON failure surfaces (Android-critical).
+    /// - Stash the local hybrid keys keyed by callId (race-safe across
+    ///   overlapping calls; cleared on session-key install).
+    /// - Add explicit logging at every guard return in the ACCEPT path
+    ///   so cross-platform debugging isn't blind.
+    public func onAndroidCallSetupStarted(
+        callId: String,
+        sendOpaqueRaw: @escaping (String) async throws -> Void,
+        sendOpaqueBinary: @escaping (Data) async throws -> Void
+    ) async throws {
+        lock.lock()
+        guard state == .idle else { lock.unlock(); throw IntegrationError.invalidState(state) }
+        isCaller = true
+        lock.unlock()
+
+        try engine.initialize()
+        let pqcKp = pqc.generateKeyPair()
+        let x25519Priv = Curve25519.KeyAgreement.PrivateKey()
+
+        lock.lock()
+        localKeyPair = pqcKp
+        localHybridKeysByCall[callId] = HybridLocalKeys(
+            pqcPair: pqcKp,
+            x25519Priv: x25519Priv
+        )
+        state = .capabilitySent
+        lock.unlock()
+        onStateChanged?(.capabilitySent)
+
+        // Build the Android JSON HandshakeBundle OFFER.
+        let pqcRawPub = PqcKeyExchange.extractRawPublicKey(pqcKp.publicKey)
+        let x25519RawPub = Data(x25519Priv.publicKey.rawRepresentation)
+        let offerBundle = AndroidHandshakeBundle(
+            kind: .offer,
+            callId: callId,
+            pqcPublicKey: pqcRawPub.base64EncodedString(),
+            x25519PublicKey: x25519RawPub.base64EncodedString(),
+            capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
+            pskFingerprints: []  // iOS has no SovereignKeyVault yet (see WIRE_SPEC §5)
+        )
+        let jsonWire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: offerBundle)
+
+        // 1. Ship JSON OFFER FIRST so any Android-peer dispatch race
+        //    sees the parseable envelope before the QUAD bytes
+        //    (which their dispatcher rejects). Failure here propagates
+        //    back to the caller — the JSON path is the
+        //    Android-interop-critical one.
+        try await sendOpaqueRaw(jsonWire)
+
+        // 2. Ship the legacy QUAD binary OFFER for older iOS peers.
+        //    Failure here is non-fatal for Android interop (the JSON
+        //    already went out), so log and continue.
+        let quadOffer = QAudionCapabilityExchange.createOffer(
+            publicKey: pqcRawPub,
+            pskFingerprints: []
+        )
+        do {
+            try await sendOpaqueBinary(quadOffer)
+        } catch {
+            print("[QAudionCallIntegration] QUAD OFFER send failed (non-fatal — JSON OFFER already shipped): \(error)")
+        }
+
+        // Pre-handshake fallback timeout — if no ACCEPT lands in 30s
+        // (session not initialised) flip to .fallback so the UI can
+        // surface "peer non risponde" instead of waiting forever.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let alreadyDone = self.sessionInitializedByCall.contains(callId)
+            if !alreadyDone && self.state == .capabilitySent {
+                self.state = .fallback
+                self.lock.unlock()
+                print("[QAudionCallIntegration] Android JSON OFFER timeout — no ACCEPT for callId=\(callId.prefix(8))…")
+                self.onStateChanged?(.fallback)
+            } else {
+                self.lock.unlock()
+            }
+        }
+    }
+
     public func onCapabilityMessageReceived(data: Data, sendOpaqueMessage: @escaping (Data) async throws -> Void) throws {
         guard let message = QAudionCapabilityExchange.parse(data) else { return }
 
@@ -283,23 +405,29 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
         switch bundle.kind {
         case .offer:
-            // 1. Decode public keys from base64.
+            // 1. Validate callId match (loose — responder hasn't seen it
+            // yet, so we just keep the value the bundle carries).
+            // 2. Decode public keys from base64.
             guard let pqcPubB64 = bundle.pqcPublicKey,
-                  let x25519PubB64 = bundle.x25519PublicKey,
-                  let pqcPub = Data(base64Encoded: pqcPubB64),
+                  let x25519PubB64 = bundle.x25519PublicKey else {
+                print("[QAudionCallIntegration] OFFER missing pqcPublicKey or x25519PublicKey for callId=\(callId.prefix(8))…")
+                throw IntegrationError.invalidState(state)
+            }
+            guard let pqcPub = Data(base64Encoded: pqcPubB64),
                   let x25519Pub = Data(base64Encoded: x25519PubB64) else {
+                print("[QAudionCallIntegration] OFFER base64 decode failed for callId=\(callId.prefix(8))… pqcLen=\(pqcPubB64.count) x25519Len=\(x25519PubB64.count)")
                 throw IntegrationError.invalidState(state)
             }
 
-            // 2. iOS dual-hybrid encapsulate — drop X448 + StrongBox legs.
+            // 3. iOS dual-hybrid encapsulate — drop X448 + StrongBox legs.
             let pqcResult = try pqc.encapsulate(remotePublicKey: pqcPub)
             let x25519Result = try Self.x25519Encap(remotePub: x25519Pub)
 
-            // 3. Combine ML-KEM and X25519 shared secrets — byte-equal
+            // 4. Combine ML-KEM and X25519 shared secrets — byte-equal
             // with Android `HybridPqcKeyExchange.combine` (PSK-free).
             let hybridShared = Self.combinePqcAndX25519(pqcSs: pqcResult.sharedSecret, x25519Ss: x25519Result.sharedSecret)
 
-            // 4. Deterministic PSK fingerprint intersection (lex-sort).
+            // 5. Deterministic PSK fingerprint intersection (lex-sort).
             var selectedFp: String? = nil
             var selectedPsk: Data? = nil
             if let advertised = bundle.pskFingerprints {
@@ -310,10 +438,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
             }
 
-            // 5. Mix PSK if negotiated — Android `PqcHandshake.kt
+            // 6. Mix PSK if negotiated — Android `PqcHandshake.kt
             // finalize()` applies a SECOND HKDF round when a PSK was
             // selected, with salt='q-audion-psk-mix' and IKM=hybrid||psk.
-            // We MUST mirror that or the two sides diverge silently.
             let combined: Data
             if let psk = selectedPsk {
                 combined = Self.mixPskIntoSession(hybridSecret: hybridShared, psk: psk)
@@ -321,8 +448,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 combined = hybridShared
             }
 
-            // 6. Build ACCEPT JSON. OFFER-only fields are nil so the
-            // encoder omits them entirely (no `"pqcPublicKey":""`).
+            // 7. Build ACCEPT JSON.
             let accept = AndroidHandshakeBundle(
                 kind: .accept,
                 callId: callId,
@@ -336,7 +462,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let wire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: accept)
             try await sendOpaqueRaw(wire)
 
-            // 7. Initialise the audio session and fire the broker hook.
+            // 8. Initialise the audio session and fire the broker hook.
+            // Double-ACCEPT guard (see sessionInitializedByCall kdoc).
+            lock.lock()
+            let alreadyInit = sessionInitializedByCall.contains(callId)
+            if !alreadyInit { sessionInitializedByCall.insert(callId) }
+            lock.unlock()
+            if alreadyInit {
+                print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
+                return
+            }
             try engine.initialize()
             try engine.initSession(sharedSecret: combined)
             lock.lock(); state = .active; lock.unlock()
@@ -344,21 +479,85 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             onPqcSessionKeyEstablished?(combined)
 
         case .accept:
-            // Caller-side path. Not yet wired into the iOS originator
-            // (which still emits QUAD by default); decode logic kept
-            // here for symmetry once iOS-originated JSON OFFER lands.
-            guard let kp = localKeyPair, let ct = bundle.ciphertext,
-                  let pqcCt = Data(base64Encoded: ct.pqc),
-                  let _ = Data(base64Encoded: ct.x25519) else { return }
+            // Originator side — completes the dual-hybrid combine using
+            // the local hybrid privs we stashed in onAndroidCallSetupStarted.
+            guard let local = localHybridKeysByCall[callId] else {
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… but no local hybrid keys stashed — was onAndroidCallSetupStarted ever called?")
+                return
+            }
+            guard let ct = bundle.ciphertext else {
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… missing ciphertext block")
+                return
+            }
+            guard let pqcCt = Data(base64Encoded: ct.pqc) else {
+                print("[QAudionCallIntegration] ACCEPT base64-decode of ciphertext.pqc failed (\(ct.pqc.count) chars)")
+                return
+            }
+            guard let x25519EphPub = Data(base64Encoded: ct.x25519) else {
+                print("[QAudionCallIntegration] ACCEPT base64-decode of ciphertext.x25519 failed (\(ct.x25519.count) chars)")
+                return
+            }
 
-            let pqcSs = try pqc.decapsulate(ciphertext: pqcCt, privateKey: kp.privateKey)
-            // x25519Decap currently throws — caller-side dual-hybrid
-            // requires extending localKeyPair to stash the X25519 priv
-            // generated alongside the ML-KEM priv at OFFER time. Until
-            // that lands the iOS-as-caller-of-Android flow is gated.
-            // Keeping the decode logic here so the unwiring is a single
-            // line change once the originator path is added.
-            print("[QAudionCallIntegration] Android ACCEPT received but caller-side X25519 decap not yet wired (pqcSs=\(pqcSs.count)B)")
+            // 1. ML-KEM-1024 decapsulate with our local PQC priv.
+            let pqcSs = try pqc.decapsulate(ciphertext: pqcCt, privateKey: local.pqcPair.privateKey)
+
+            // 2. X25519 ECDH against the responder's ephemeral pub
+            //    (carried in `ciphertext.x25519`) using our local
+            //    long-term X25519 priv stashed at OFFER time.
+            let remoteEph: Curve25519.KeyAgreement.PublicKey
+            do {
+                remoteEph = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: x25519EphPub)
+            } catch {
+                print("[QAudionCallIntegration] ACCEPT remote X25519 pub parse failed: \(error)")
+                return
+            }
+            let x25519Secret = try local.x25519Priv.sharedSecretFromKeyAgreement(with: remoteEph)
+            let x25519Ss = x25519Secret.withUnsafeBytes { Data($0) }
+
+            // 3. Combine — byte-equal with the responder's
+            //    `combinePqcAndX25519` and Android's HKDF.
+            let hybridShared = Self.combinePqcAndX25519(pqcSs: pqcSs, x25519Ss: x25519Ss)
+
+            // 4. PSK mix if the responder selected one. iOS originator
+            //    can't materialise the local PSK material yet (no
+            //    SovereignKeyVault on iOS — WIRE_SPEC §5 P1) but the
+            //    structure is ready: when the vault lands, lookup
+            //    selectedPskFingerprint here and pass to mixPskIntoSession.
+            //    For now we treat any non-nil selectedPskFingerprint as a
+            //    diagnostic warning — the responder shouldn't have
+            //    selected one because our OFFER advertised an empty
+            //    pskFingerprints list, but log it anyway.
+            if let selected = bundle.selectedPskFingerprint, !selected.isEmpty {
+                print("[QAudionCallIntegration] ACCEPT carried selectedPskFingerprint=\(selected.prefix(16))… but iOS originator has no PSK to mix — falling back to hybrid-only secret (will diverge from peer)")
+            }
+            let combined = hybridShared
+
+            // 5. Double-ACCEPT guard.
+            lock.lock()
+            let alreadyInit = sessionInitializedByCall.contains(callId)
+            if !alreadyInit { sessionInitializedByCall.insert(callId) }
+            lock.unlock()
+            if alreadyInit {
+                print("[QAudionCallIntegration] ACCEPT duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
+                return
+            }
+
+            // 6. Initialise the audio session and fire the broker hook.
+            try engine.initSession(sharedSecret: combined)
+            lock.lock()
+            state = .active
+            // 7. Zero the stashed privs immediately — the session key is
+            //    now in the engine, the ephemeral keys are no longer
+            //    needed. Clearing the dictionary entry releases the
+            //    PqcKeyExchange.KeyPair (which has its own destroy hook)
+            //    and the Curve25519 PrivateKey (CryptoKit will deinit
+            //    the wrapped opaque handle on dealloc). Zeroing
+            //    earlier risks the second-ACCEPT branch trying to
+            //    decap with empty bytes.
+            localHybridKeysByCall.removeValue(forKey: callId)
+            lock.unlock()
+            onStateChanged?(.active)
+            onPqcSessionKeyEstablished?(combined)
         }
     }
 
