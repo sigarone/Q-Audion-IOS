@@ -1,0 +1,132 @@
+{
+  "schema": "qaudion-sas-kat:1",
+  "note": "Cross-platform SAS KAT — pinned 2026-05-06. WIRE_SPEC.md §4. Android ComputeSasUseCase, Desktop CallSas.compute, and iOS ComputeSasUseCase MUST reproduce these byte-for-byte.",
+  "algorithm": {
+    "kdf": "HKDF-SHA256",
+    "salt": "qaudion-sas-v1",
+    "info": "sas-words-v1",
+    "output_len_bytes": 18,
+    "word_count": 6,
+    "byte_layout": "6 x uint24 big-endian, then modulo wordlist size",
+    "wordlist_ref": "PGP SAS wordlist (PgpSasWordList.{kt,ts,swift})"
+  },
+  "wordlist_size": 256,
+  "vectors": [
+    {
+      "name": "all-zeros",
+      "session_key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "hkdf_out_hex": "98add75143dd9bda25d752a660efd6e3b345",
+      "indices_uint24": [
+        10005975,
+        5325789,
+        10213925,
+        14111398,
+        6352854,
+        14922565
+      ],
+      "indices_mod_wordlist_size": [
+        215,
+        221,
+        37,
+        166,
+        214,
+        69
+      ],
+      "expected_words": [
+        "stopwatch",
+        "swelter",
+        "bombast",
+        "rematch",
+        "stockman",
+        "crusade"
+      ]
+    },
+    {
+      "name": "all-ones",
+      "session_key_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "hkdf_out_hex": "43a349ce1563b4ddc2ec1f23fa8faeec4060",
+      "indices_uint24": [
+        4432713,
+        13505891,
+        11853250,
+        15474467,
+        16420782,
+        15482976
+      ],
+      "indices_mod_wordlist_size": [
+        73,
+        99,
+        194,
+        35,
+        174,
+        96
+      ],
+      "expected_words": [
+        "deckhand",
+        "flatfoot",
+        "snapshot",
+        "blowtorch",
+        "robust",
+        "facial"
+      ]
+    },
+    {
+      "name": "incremental",
+      "session_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "hkdf_out_hex": "202826c7a29a43222278c284066e4e6ecac2",
+      "indices_uint24": [
+        2107430,
+        13083290,
+        4399650,
+        7914116,
+        421454,
+        7260866
+      ],
+      "indices_mod_wordlist_size": [
+        38,
+        154,
+        34,
+        132,
+        78,
+        194
+      ],
+      "expected_words": [
+        "bookshelf",
+        "pupil",
+        "blockade",
+        "mural",
+        "drifter",
+        "snapshot"
+      ]
+    },
+    {
+      "name": "pinned-pi-bytes",
+      "session_key_hex": "243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89",
+      "hkdf_out_hex": "ca094f9f263a84b393172a34c6acf3cab78c",
+      "indices_uint24": [
+        13240655,
+        10430010,
+        8696723,
+        1518132,
+        13020403,
+        13285260
+      ],
+      "indices_mod_wordlist_size": [
+        79,
+        58,
+        147,
+        52,
+        243,
+        140
+      ],
+      "expected_words": [
+        "dropper",
+        "cleanup",
+        "playhouse",
+        "choking",
+        "upset",
+        "offload"
+      ]
+    }
+  ]
+}
