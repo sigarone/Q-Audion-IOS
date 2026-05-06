@@ -1,0 +1,87 @@
+{
+  "schema": "qaudion-psk-negotiation-kat:1",
+  "note": "Cross-platform PSK fingerprint negotiation KAT. WIRE_SPEC §3.3. Both peers (Android, Desktop, iOS) MUST produce the SAME selected fingerprint given the same (offerSet, localSet) input — independent of input order. Algorithm: selected = sort_lex_ascending(intersection)[0], or null when the intersection is empty.",
+  "algorithm": {
+    "fingerprint_format": "SHA-256 hex (64 lowercase hex chars)",
+    "rule": "selected = sort(offerSet ∩ localSet, lex-ascending)[0]",
+    "tie_break": "lexicographic-ascending",
+    "no_match_result": "null"
+  },
+  "vectors": [
+    {
+      "name": "no-intersection",
+      "offer": [
+        "fca2b46788d3417405e38904fb87e4d4f2a4ade1b87e9c8365de747f69890e2b",
+        "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00"
+      ],
+      "local": [
+        "8d42bab5e195c1288e800bcb2644b3880b354bfeae905018e84f96e30b58e31c",
+        "17809fa993e64182e7e7930d1b4b44c09096e3ca5805b857e8eac2807ebd37f5"
+      ],
+      "expected_selected": null
+    },
+    {
+      "name": "single-match",
+      "offer": [
+        "fca2b46788d3417405e38904fb87e4d4f2a4ade1b87e9c8365de747f69890e2b",
+        "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00"
+      ],
+      "local": [
+        "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00"
+      ],
+      "expected_selected": "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00"
+    },
+    {
+      "name": "lex-sort-required",
+      "offer": [
+        "fca2b46788d3417405e38904fb87e4d4f2a4ade1b87e9c8365de747f69890e2b",
+        "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00",
+        "8d42bab5e195c1288e800bcb2644b3880b354bfeae905018e84f96e30b58e31c"
+      ],
+      "local": [
+        "8d42bab5e195c1288e800bcb2644b3880b354bfeae905018e84f96e30b58e31c",
+        "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00",
+        "fca2b46788d3417405e38904fb87e4d4f2a4ade1b87e9c8365de747f69890e2b"
+      ],
+      "expected_selected": "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00"
+    },
+    {
+      "name": "reversed-offer",
+      "offer": [
+        "8d42bab5e195c1288e800bcb2644b3880b354bfeae905018e84f96e30b58e31c",
+        "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00",
+        "fca2b46788d3417405e38904fb87e4d4f2a4ade1b87e9c8365de747f69890e2b"
+      ],
+      "local": [
+        "fca2b46788d3417405e38904fb87e4d4f2a4ade1b87e9c8365de747f69890e2b",
+        "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00",
+        "8d42bab5e195c1288e800bcb2644b3880b354bfeae905018e84f96e30b58e31c"
+      ],
+      "expected_selected": "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00"
+    },
+    {
+      "name": "partial-overlap",
+      "offer": [
+        "fca2b46788d3417405e38904fb87e4d4f2a4ade1b87e9c8365de747f69890e2b",
+        "8d42bab5e195c1288e800bcb2644b3880b354bfeae905018e84f96e30b58e31c",
+        "03937e36d005ff6b9dded7ef9e763425f44a5263d72e9d0fc2893adf9b23366d"
+      ],
+      "local": [
+        "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00",
+        "8d42bab5e195c1288e800bcb2644b3880b354bfeae905018e84f96e30b58e31c",
+        "17809fa993e64182e7e7930d1b4b44c09096e3ca5805b857e8eac2807ebd37f5",
+        "03937e36d005ff6b9dded7ef9e763425f44a5263d72e9d0fc2893adf9b23366d"
+      ],
+      "expected_selected": "03937e36d005ff6b9dded7ef9e763425f44a5263d72e9d0fc2893adf9b23366d"
+    },
+    {
+      "name": "empty-offer",
+      "offer": [],
+      "local": [
+        "fca2b46788d3417405e38904fb87e4d4f2a4ade1b87e9c8365de747f69890e2b",
+        "44c3fd3855db3507b7bf7366b20e371bcd107cdaf8a4b5708e18998130770f00"
+      ],
+      "expected_selected": null
+    }
+  ]
+}
