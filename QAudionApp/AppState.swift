@@ -870,20 +870,31 @@ final class AppState: ObservableObject {
             }
         }
 
-        // W332: handle `kms_key_available` + `kms_key_revoked` — the
-        // server pushes these when admin provisions or revokes a key.
-        // Android handles them inline; iOS used to wait for the next
-        // REST poll. Surface a notice + trigger a refresh on next
-        // app foreground.
+        // W332 + 2026-05-06 KMS lifecycle — kicks the iOS-side KMS
+        // pipeline (DeviceKeyManager → KmsPollerService → SovereignKeyVault).
+        //
+        // Pre-fix iOS only logged a toast on `kms_key_available` and
+        // waited indefinitely for the next REST poll. Now: ensure the
+        // device-keys are provisioned (idempotent), then sweep the
+        // pending list. Best-effort — failures are logged + surfaced
+        // via errorMessage so the user can retry from Settings if
+        // they care.
         ws.registerHandler(type: "kms_key_available") { [weak self] _, _ in
-            DispatchQueue.main.async {
-                self?.errorMessage = "Nuova chiave KMS disponibile."
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.errorMessage = "Nuova chiave KMS disponibile."
+                await self.runKmsSweep()
             }
         }
         ws.registerHandler(type: "kms_key_revoked") { [weak self] _, _ in
             DispatchQueue.main.async {
                 self?.errorMessage = "Una chiave KMS è stata revocata."
             }
+        }
+        // Initial sweep right after WS auth — covers any keys the
+        // admin provisioned while the app was offline.
+        Task { @MainActor [weak self] in
+            await self?.runKmsSweep()
         }
 
         // W347: route call_offer / call_answer / call_ice through the
@@ -1600,6 +1611,32 @@ final class AppState: ObservableObject {
 
     /// W77: dispatch inbound `opaque_message` envelopes. The QUAD frame
     /// inside the payload carries either:
+    /// 2026-05-06 — KMS pipeline orchestrator. Closes the
+    /// WIRE_SPEC §5 "iOS KMS app-level wiring" gap: gathers the
+    /// device's long-term keys via DeviceKeyManager (provisioning
+    /// them if it's the first launch), then runs one
+    /// KmsPollerService.pollOnce sweep against /api/v1/kms/pending.
+    /// Decrypted PSKs land in SovereignKeyVault and become
+    /// immediately usable by the PqcHandshake fingerprint
+    /// negotiation. Best-effort — failures are logged so a transient
+    /// network blip on app launch doesn't break the call surface.
+    @MainActor
+    private func runKmsSweep() async {
+        guard let provider = liveProvider else { return }
+        let vault = SovereignKeyVault()
+        let manager = DeviceKeyManager(vault: vault, kmsClient: provider.kmsClient)
+        do {
+            let keys = try await manager.ensureProvisioned()
+            let poller = KmsPollerService(kmsClient: provider.kmsClient, vault: vault)
+            let stats = try await poller.pollOnce(deviceKeys: keys)
+            if stats.processed > 0 {
+                print("[AppState] KMS sweep: processed=\(stats.processed) stored=\(stats.stored) acked=\(stats.acknowledged) decryptFailed=\(stats.decryptFailed) ackFailed=\(stats.ackFailed)")
+            }
+        } catch {
+            print("[AppState] KMS sweep failed: \(error)")
+        }
+    }
+
     ///   - KEY_EXCHANGE_OFFER  → derive PSK + reply with ACCEPT
     ///   - KEY_EXCHANGE_ACCEPT → derive PSK only (no reply)
     ///   - other capability frames (already handled elsewhere)

@@ -13,6 +13,12 @@ public final class BCryptoBackendProvider: BackendProvider {
     public lazy var contactsApi: ContactsApi = BCryptoContactsApiImpl(rest: restClient)
     public lazy var storageApi: StorageApi = BCryptoStorageApiImpl(rest: restClient)
     public lazy var securityApi: SecurityApi = BCryptoSecurityApiImpl(rest: restClient)
+    /// 2026-05-06 — KMS HTTP client for the iOS pipeline
+    /// (DeviceKeyManager + KmsPollerService consume this). Mirrors the
+    /// `accountApi`/`contactsApi` pattern: lazy, lifetime-tied to the
+    /// provider, lets AppState fetch via `provider.kmsClient` without
+    /// instantiating its own RestClient.
+    public lazy var kmsClient = BCryptoKmsClient(rest: restClient)
     /// W79 — voice-note recipient capability minter / redeemer.
     /// Used by the iOS-internal `qfile` v3 send pipeline so the recipient
     /// can `GET /api/v1/files/{id}` with the 3 download-token headers.
