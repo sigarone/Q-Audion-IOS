@@ -35,6 +35,12 @@ targets:
         SWIFT_VERSION: "5.9"
         DEVELOPMENT_TEAM: 5G22P9239N
         CODE_SIGN_STYLE: Automatic
+        # Universal iOS app: 1 = iPhone, 2 = iPad. Without this explicit
+        # value XcodeGen leaves the build setting at Xcode's default,
+        # which has historically been "1,2" but is not guaranteed across
+        # toolchain rotations. Pin it so TestFlight/App Store always
+        # accepts iPad installs alongside iPhone.
+        TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
       - package: QAudionEngine
       - sdk: CoreAudio.framework
