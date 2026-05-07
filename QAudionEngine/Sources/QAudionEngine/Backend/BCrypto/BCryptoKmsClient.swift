@@ -32,7 +32,8 @@ public final class BCryptoKmsClient {
     public func registerPublicKey(
         publicKey: Data,
         mlkemEncapKey: Data? = nil,
-        keyType: String = "x25519"
+        keyType: String = "x25519",
+        ed25519PubKey: Data? = nil
     ) async throws {
         var dict: [String: Any] = [
             "public_key": publicKey.base64EncodedString(),
@@ -40,6 +41,16 @@ public final class BCryptoKmsClient {
         ]
         if let mlkemEncapKey = mlkemEncapKey {
             dict["mlkem_encapsulation_key"] = mlkemEncapKey.base64EncodedString()
+        }
+        // 2026-05-06 session-renewal Phase 2 — optional Ed25519 device
+        // signing pubkey (32 bytes base64). Server stores it under
+        // `device_ed25519_keys` and uses it to verify
+        // `/api/v1/auth/device-renew` blobs. Backwards-compat: older
+        // servers ignore the field; our server stores it under a new
+        // bucket and emits an `ed25519_stored: true` flag in the
+        // response we currently discard.
+        if let edPub = ed25519PubKey, edPub.count == 32 {
+            dict["ed25519_pubkey"] = edPub.base64EncodedString()
         }
         let body = try JSONSerialization.data(withJSONObject: dict)
         _ = try await rest.post("/api/v1/device/publickey", body: body)

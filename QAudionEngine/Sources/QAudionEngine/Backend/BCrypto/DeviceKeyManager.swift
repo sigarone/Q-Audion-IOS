@@ -46,6 +46,13 @@ public final class DeviceKeyManager {
     private static let LABEL_X25519_PUB  = "__device.x25519.pub"
     private static let LABEL_MLKEM_PRIV  = "__device.mlkem.priv"
     private static let LABEL_MLKEM_PUB   = "__device.mlkem.pub"
+    // 2026-05-06 session-renewal Phase 2 — Ed25519 device signing key
+    // for /auth/device-renew. Stored in the same SovereignKeyVault as
+    // the KMS keys; the private scalar lives under
+    // `__device.ed25519.priv` (32-byte raw seed). The public key is
+    // published via `BCryptoKmsClient.registerPublicKey(ed25519PubKey:)`.
+    private static let LABEL_ED25519_PRIV = "__device.ed25519.priv"
+    private static let LABEL_ED25519_PUB  = "__device.ed25519.pub"
     private static let DEVICE_FP_LABEL   = "device-key"
 
     private let vault: SovereignKeyVault
@@ -111,6 +118,26 @@ public final class DeviceKeyManager {
             mlkemPub  = pub
         }
 
+        // 2b. Phase 2 session-renewal — load OR generate the Ed25519
+        //     signing keypair. Stored alongside the KMS keys; never
+        //     deleted on logout (mirrors Android's Ed25519DeviceSigner
+        //     contract). Used to sign /auth/device-renew blobs.
+        let ed25519Pub: Data
+        if let existingEdPriv = try vault.loadPsk(name: Self.LABEL_ED25519_PRIV),
+           let existingEdPub  = try vault.loadPsk(name: Self.LABEL_ED25519_PUB),
+           existingEdPriv.count == 32, existingEdPub.count == 32 {
+            ed25519Pub = existingEdPub
+        } else {
+            let priv = Curve25519.Signing.PrivateKey()
+            let privData = Data(priv.rawRepresentation)
+            let pubData = Data(priv.publicKey.rawRepresentation)
+            try vault.storePsk(name: Self.LABEL_ED25519_PRIV, key: privData,
+                               fingerprint: Self.DEVICE_FP_LABEL)
+            try vault.storePsk(name: Self.LABEL_ED25519_PUB, key: pubData,
+                               fingerprint: Self.DEVICE_FP_LABEL)
+            ed25519Pub = pubData
+        }
+
         // 3. Register the public keys with the server. We re-publish
         //    even when the keys came from the vault — the server
         //    might have lost the row (bbolt rebuild, devices_pub_keys
@@ -120,7 +147,8 @@ public final class DeviceKeyManager {
             try await kmsClient.registerPublicKey(
                 publicKey: x25519Pub,
                 mlkemEncapKey: mlkemPub,
-                keyType: "x25519"
+                keyType: "x25519",
+                ed25519PubKey: ed25519Pub
             )
         } catch {
             // Non-fatal — the local keys still work for any package
@@ -154,5 +182,24 @@ public final class DeviceKeyManager {
             mlkemPub: mlkemPub,
             mlkemPriv: mlkemPriv
         )
+    }
+
+    /// 2026-05-06 session-renewal Phase 2 — Ed25519 signing accessor.
+    /// Returns the per-device 32-byte raw private seed needed to sign
+    /// /auth/device-renew blobs. The caller is responsible for keeping
+    /// the seed in memory only as long as needed. nil if the device
+    /// hasn't been provisioned yet.
+    public func currentEd25519Priv() throws -> Data? {
+        let priv = try vault.loadPsk(name: Self.LABEL_ED25519_PRIV)
+        guard let priv, priv.count == 32 else { return nil }
+        return priv
+    }
+
+    /// Public-only counterpart of `currentEd25519Priv` for places that
+    /// only need the pubkey (e.g. re-publishing on /device/publickey).
+    public func currentEd25519Pub() throws -> Data? {
+        let pub = try vault.loadPsk(name: Self.LABEL_ED25519_PUB)
+        guard let pub, pub.count == 32 else { return nil }
+        return pub
     }
 }
