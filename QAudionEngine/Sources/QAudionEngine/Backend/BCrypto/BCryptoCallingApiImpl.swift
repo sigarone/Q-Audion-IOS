@@ -22,29 +22,60 @@ public final class BCryptoCallingApiImpl: CallingApi {
     init(ws: BCryptoWebSocketClient, rest: BCryptoRestClient) { self.ws = ws; self.rest = rest }
 
     public func sendCallOffer(recipientId: String, sdp: String) async throws {
-        // Mint a fresh call_id and stash for the rest of the session.
-        let cid = UUID().uuidString
-        setActiveCallId(cid)
-        ws.send(
-            type: "call_offer",
-            data: [
-                "recipient_id": recipientId,
-                "call_id":      cid,
-                "sdp":          sdp,
-                "call_type":    "audio",  // SDP-less PQC path uses "audio"
-            ]
+        try await sendCallOffer(
+            recipientId: recipientId,
+            sdp: sdp,
+            capabilities: CallCapabilities.local
         )
     }
 
+    /// Outbound `call_offer` advertising the SFrame capability tags.
+    /// Mirrors Android `WsCommand.CallOffer.capabilities` (commit 540b79c0).
+    /// The `capabilities` JSON key is OMITTED when the list is empty so
+    /// older bcrypto-server builds that don't yet recognise the field
+    /// stay happy; the agreement is a pure end-to-end concern (the
+    /// server is a relay).
+    public func sendCallOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async throws {
+        // Mint a fresh call_id and stash for the rest of the session.
+        let cid = UUID().uuidString
+        setActiveCallId(cid)
+        var data: [String: Any] = [
+            "recipient_id": recipientId,
+            "call_id":      cid,
+            "sdp":          sdp,
+            "call_type":    "audio",  // SDP-less PQC path uses "audio"
+        ]
+        if !capabilities.isEmpty { data["capabilities"] = capabilities }
+        ws.send(type: "call_offer", data: data)
+    }
+
     public func sendCallAnswer(recipientId: String, sdp: String) async throws {
-        let cid = currentCallId()
-        ws.send(
-            type: "call_answer",
-            data: [
-                "call_id": cid,
-                "sdp":     sdp,
-            ]
+        try await sendCallAnswer(
+            recipientId: recipientId,
+            sdp: sdp,
+            capabilities: CallCapabilities.local
         )
+    }
+
+    /// Outbound `call_answer` advertising the SFrame capability tags —
+    /// see ``sendCallOffer(recipientId:sdp:capabilities:)`` for the
+    /// wire format contract. Same omitempty rule.
+    public func sendCallAnswer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async throws {
+        let cid = currentCallId()
+        var data: [String: Any] = [
+            "call_id": cid,
+            "sdp":     sdp,
+        ]
+        if !capabilities.isEmpty { data["capabilities"] = capabilities }
+        ws.send(type: "call_answer", data: data)
     }
 
     public func sendIceCandidate(recipientId: String, candidate: String) async throws {
@@ -100,16 +131,34 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// stash, and the PQC bundle's callId field all aligned.
     /// Per OpenRouter glm-5.1 review 2026-05-06 P0 #1.
     public func sendCallOfferWithId(callId: String, recipientId: String, sdp: String) async throws {
-        setActiveCallId(callId)
-        ws.send(
-            type: "call_offer",
-            data: [
-                "recipient_id": recipientId,
-                "call_id":      callId,
-                "sdp":          sdp,
-                "call_type":    "audio",
-            ]
+        try await sendCallOfferWithId(
+            callId: callId,
+            recipientId: recipientId,
+            sdp: sdp,
+            capabilities: CallCapabilities.local
         )
+    }
+
+    /// Originator-side `call_offer` with externally-chosen callId AND
+    /// the SFrame capability tags (commit 540b79c0 wire format).
+    /// `capabilities` is omitted from the JSON envelope when empty —
+    /// keeps the wire byte-identical to the legacy path for tests that
+    /// pass `[]`.
+    public func sendCallOfferWithId(
+        callId: String,
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async throws {
+        setActiveCallId(callId)
+        var data: [String: Any] = [
+            "recipient_id": recipientId,
+            "call_id":      callId,
+            "sdp":          sdp,
+            "call_type":    "audio",
+        ]
+        if !capabilities.isEmpty { data["capabilities"] = capabilities }
+        ws.send(type: "call_offer", data: data)
     }
 
     /// Send a call_hangup explicitly bound to a specific callId,
