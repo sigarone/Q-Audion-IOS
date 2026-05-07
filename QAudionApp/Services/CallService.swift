@@ -408,7 +408,7 @@ final class CallService {
 
     func processOutgoingAudio(pcmFrame: Data) throws -> Data {
         guard let integration = callIntegration else {
-            throw CallServiceError.noActiveCall
+            throw CallServiceError.noIntegration
         }
         // When muted, replace PCM plaintext with silence before encryption.
         // The AEAD ciphertext still flows to the remote peer; the plaintext is zeroed.
@@ -428,7 +428,7 @@ final class CallService {
 
     func processIncomingAudio(frame: Data) throws -> Data {
         guard let integration = callIntegration else {
-            throw CallServiceError.noActiveCall
+            throw CallServiceError.noIntegration
         }
         let pcm = try integration.processIncomingAudio(serializedFrame: frame)
 
@@ -468,17 +468,5 @@ final class CallService {
             }
         }
         return samples
-    }
-}
-
-enum CallServiceError: Error, LocalizedError {
-    case noActiveCall
-    case setupFailed
-
-    var errorDescription: String? {
-        switch self {
-        case .noActiveCall: return "No active call session"
-        case .setupFailed: return "Call setup failed"
-        }
     }
 }
