@@ -12,7 +12,11 @@ import CryptoKit
 ///   - Android   : `core-data/auth/DeviceRenewClient.kt`
 ///   - Desktop   : `src/main/transport/DeviceRenewClient.ts`
 ///   - Go server : `cmd/bcrypto-lite/device_renew_handlers.go`
-public final class BCryptoDeviceRenewClient {
+///
+/// `@unchecked Sendable` because the type is final + the only mutable
+/// state lives inside the underlying RestClient (which already
+/// serialises concurrent refresh attempts via OSAllocatedUnfairLock).
+public final class BCryptoDeviceRenewClient: @unchecked Sendable {
 
     public struct RenewedTokens: Sendable {
         public let accessToken: String
@@ -59,12 +63,14 @@ public final class BCryptoDeviceRenewClient {
         }
 
         // 2. Build canonical blob + sign with Ed25519.
-        let epochMs = UInt64(Date().timeIntervalSince1970 * 1000)
+        // Use Int64 on the wire (Go server's struct tag is `int64`).
+        // Cross-platform JSON safe: max signed 64-bit fits comfortably.
+        let epochMs = Int64(Date().timeIntervalSince1970 * 1000)
         let blob = DeviceRenewBlob.buildRenew(
             serverId: challenge.server_id,
             deviceId: deviceId,
             nonce: nonceBytes,
-            epochMs: epochMs
+            epochMs: UInt64(bitPattern: epochMs)
         )
         let priv = try Curve25519.Signing.PrivateKey(rawRepresentation: edPriv)
         let signature = try priv.signature(for: blob)
@@ -109,12 +115,12 @@ public final class BCryptoDeviceRenewClient {
             throw Error.malformedNonceHex
         }
 
-        let epochMs = UInt64(Date().timeIntervalSince1970 * 1000)
+        let epochMs = Int64(Date().timeIntervalSince1970 * 1000)
         let blob = DeviceRenewBlob.buildRevoke(
             requestingDeviceId: requestingDeviceId,
             targetDeviceId: targetDeviceId,
             nonce: nonceBytes,
-            epochMs: epochMs
+            epochMs: UInt64(bitPattern: epochMs)
         )
         let priv = try Curve25519.Signing.PrivateKey(rawRepresentation: edPriv)
         let signature = try priv.signature(for: blob)

@@ -34,7 +34,12 @@ import CryptoKit
 ///   keys have never been generated (e.g. fresh install on iOS 13
 ///   target where ML-KEM might be unavailable — currently liboqs
 ///   covers all our supported targets).
-public final class DeviceKeyManager {
+/// `@unchecked Sendable` because the type is final + reads/writes go
+/// through the `SovereignKeyVault` (Keychain-backed, thread-safe). The
+/// only mutable state is the cached keypair, mutated under the
+/// vault's lock indirectly. Safe to capture inside @Sendable closures
+/// (e.g. the device-renew fallback installed in BCryptoRestClient).
+public final class DeviceKeyManager: @unchecked Sendable {
 
     public enum Error: Swift.Error {
         case keychainCorrupt
