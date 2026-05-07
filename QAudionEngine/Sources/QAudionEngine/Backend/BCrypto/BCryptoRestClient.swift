@@ -11,9 +11,17 @@ public final class BCryptoRestClient {
     /// then bubble up the 401 as BCryptoError.unauthorized.
     public typealias TokenRefresher = @Sendable () async throws -> (accessToken: String, refreshToken: String?)
 
+    /// 2026-05-06 session-renewal Phase 2 — Ed25519 device-bound silent
+    /// re-auth fallback. Invoked when the primary `tokenRefresher`
+    /// throws (refresh token rejected or absent). On success returns
+    /// the fresh tokens and the 401-retry proceeds; on failure the
+    /// caller surfaces `BCryptoError.unauthorized`.
+    public typealias DeviceRenewFallback = @Sendable () async throws -> (accessToken: String, refreshToken: String?)
+
     private var config: BackendConfig
     private let session: URLSession
     private var tokenRefresher: TokenRefresher?
+    private var deviceRenewFallback: DeviceRenewFallback?
     /// Serialises concurrent refresh attempts so we don't fire N /auth/refresh
     /// calls when many in-flight requests simultaneously hit 401.
     private let refreshLock = OSAllocatedUnfairLock<Void>(initialState: ())
@@ -35,6 +43,16 @@ public final class BCryptoRestClient {
     /// after construction to avoid a circular init-time dependency.
     public func setTokenRefresher(_ refresher: @escaping TokenRefresher) {
         self.tokenRefresher = refresher
+    }
+
+    /// Phase 2 — install the device-bound silent re-auth fallback.
+    /// Called when the primary refresher throws OR when no refresh
+    /// token is stored. The fallback is responsible for fetching a
+    /// challenge, signing the canonical blob with the device's
+    /// Ed25519 key, POSTing /auth/device-renew, and returning the
+    /// fresh (access, refresh) pair.
+    public func setDeviceRenewFallback(_ fallback: @escaping DeviceRenewFallback) {
+        self.deviceRenewFallback = fallback
     }
 
     public func get(_ path: String, headers: [String: String] = [:]) async throws -> Data {
@@ -93,14 +111,17 @@ public final class BCryptoRestClient {
             return data
         }
 
-        // On 401, try a single refresh-and-retry cycle (if a refresher is installed
-        // and we have a refresh token to hand to it). This masks the common case
-        // of the 15-minute access token expiring during a long-lived session.
-        if status == 401,
-           tokenRefresher != nil,
-           config.refreshToken != nil,
-           // Don't loop on the refresh endpoint itself.
-           !path.hasSuffix("/auth/refresh") {
+        // On 401, try a single refresh-and-retry cycle. The cascade is:
+        //   1. primary tokenRefresher (POST /auth/refresh) — if a
+        //      refresh token is stored.
+        //   2. 2026-05-06 session-renewal Phase 2 device-renew fallback
+        //      (Ed25519 challenge-response) — fired when (1) is absent
+        //      or fails, and the request path is not one of the auth
+        //      endpoints themselves.
+        let isAuthEndpoint = path.hasSuffix("/auth/refresh")
+            || path.hasSuffix("/auth/device-renew")
+            || path.hasSuffix("/auth/device-challenge")
+        if status == 401, !isAuthEndpoint {
             let refreshed = try await tryRefreshToken()
             if refreshed {
                 let (retryData, retryStatus) = try await performRequest(method, path: path, body: body, headers: headers)
@@ -132,19 +153,46 @@ public final class BCryptoRestClient {
 
     /// Invoke the installed token refresher at most once per batch of concurrent
     /// 401-affected requests. Returns `true` if the refresh succeeded and
-    /// `config.accessToken` was updated; `false` if there was no refresher.
+    /// `config.accessToken` was updated; `false` if neither path produced
+    /// fresh tokens (caller surfaces 401).
+    ///
+    /// Cascade: primary `tokenRefresher` (POST /auth/refresh) → on
+    /// failure or absence of a refresh token, the Phase 2
+    /// `deviceRenewFallback` (Ed25519 challenge-response). Concurrent
+    /// 401 callers coalesce on the same in-flight Task so we never
+    /// fire two parallel cascades.
     private func tryRefreshToken() async throws -> Bool {
-        guard let refresher = tokenRefresher else { return false }
-
         // Read or create the in-flight task under the lock (non-async closure,
         // so OSAllocatedUnfairLock.withLock is safe here).
         let task: Task<Bool, Error> = refreshLock.withLock {
             if let existing = refreshInFlight { return existing }
+            let primary = self.tokenRefresher
+            let fallback = self.deviceRenewFallback
+            let hasRefreshToken = self.config.refreshToken != nil
             let newTask = Task<Bool, Error> {
-                let pair = try await refresher()
-                self.config.accessToken = pair.accessToken
-                if let newRefresh = pair.refreshToken { self.config.refreshToken = newRefresh }
-                return true
+                // Step 1: try the primary refresher (POST /auth/refresh).
+                if let refresher = primary, hasRefreshToken {
+                    do {
+                        let pair = try await refresher()
+                        self.config.accessToken = pair.accessToken
+                        if let newRefresh = pair.refreshToken { self.config.refreshToken = newRefresh }
+                        return true
+                    } catch {
+                        // Fall through to the device-renew fallback.
+                    }
+                }
+                // Step 2: device-bound silent re-auth (Phase 2).
+                if let fallback {
+                    do {
+                        let pair = try await fallback()
+                        self.config.accessToken = pair.accessToken
+                        if let newRefresh = pair.refreshToken { self.config.refreshToken = newRefresh }
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+                return false
             }
             refreshInFlight = newTask
             return newTask

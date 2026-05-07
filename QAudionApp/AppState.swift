@@ -1632,6 +1632,31 @@ final class AppState: ObservableObject {
             if stats.processed > 0 {
                 print("[AppState] KMS sweep: processed=\(stats.processed) stored=\(stats.stored) acked=\(stats.acknowledged) decryptFailed=\(stats.decryptFailed) ackFailed=\(stats.ackFailed)")
             }
+            // 2026-05-06 session-renewal Phase 2 — wire the Ed25519
+            // device-bound silent re-auth fallback into the REST
+            // client. From now on a 401 from /auth/refresh (or a
+            // missing refresh token) cascades to /auth/device-renew
+            // before BCryptoError.unauthorized surfaces. Mirror of the
+            // Android SessionRenewerImpl Phase-1+Phase-2 cascade.
+            let renewClient = BCryptoDeviceRenewClient(
+                rest: provider.getRestClient(),
+                deviceKeyManager: manager
+            )
+            provider.getRestClient().setDeviceRenewFallback {
+                // deviceId is persisted by AuthService at login under
+                // "com.qaudion.auth.device_id". Read it lazily so a
+                // log-in / log-out cycle picks up the new value.
+                guard let did = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+                      !did.isEmpty else {
+                    throw BCryptoError.unauthorized
+                }
+                let fresh = try await renewClient.renew(deviceId: did)
+                // Persist the rotated tokens so the next cold-launch
+                // does not replay a stale refresh token.
+                UserDefaults.standard.set(fresh.accessToken, forKey: "com.qaudion.auth.token")
+                UserDefaults.standard.set(fresh.refreshToken, forKey: "com.qaudion.auth.refresh_token")
+                return (accessToken: fresh.accessToken, refreshToken: fresh.refreshToken)
+            }
         } catch {
             print("[AppState] KMS sweep failed: \(error)")
         }
