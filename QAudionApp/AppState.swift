@@ -195,6 +195,14 @@ final class AppState: ObservableObject {
     /// header compile even on hosts where the WebRTC XCFramework
     /// hasn't been resolved yet.
     var webRtcController: Any?
+
+    /// Commit 540b79c0 parity — peer's advertised SFrame capability tags
+    /// captured from the latest `call_incoming` envelope. Forwarded to
+    /// the WebRTC controller in `handleIncomingWebRtcOffer` once the
+    /// controller is built. Reset back to `nil` when the call ends.
+    /// `nil` = legacy peer (no `capabilities` field on the wire).
+    var pendingPeerCapabilities: [String]?
+
     @Published var rekeyCount: Int = 0
     @Published var encryptionAlgo: String = "ML-KEM-1024 + AES-256-GCM"
     @Published var transportType: String = "P2P Direct"
@@ -714,6 +722,13 @@ final class AppState: ObservableObject {
             let senderId = data["sender_id"] as? String ?? "Sconosciuto"
             let callType = data["call_type"] as? String ?? "audio"
             let callUUID = UUID(uuidString: callIdStr) ?? UUID()
+            // Commit 540b79c0 parity — `call_incoming` is the responder's
+            // FIRST view of the caller's caps (the server forwards the
+            // call_offer's capabilities verbatim under this envelope).
+            // Stash them so handleIncomingWebRtcOffer can apply them on
+            // the controller as soon as it's built, and so the
+            // CallSetupHandler-equivalent code paths see the same set.
+            self.pendingPeerCapabilities = data["capabilities"] as? [String]
             // W77: bind the inbound call_id on the calling impl so the
             // subsequent `sendCallAnswer` / `sendCallHangup` envelopes
             // use the SAME id the server registered for this call.
@@ -908,12 +923,24 @@ final class AppState: ObservableObject {
                 print("[AppState] call_offer: missing sdp/caller_id")
                 return
             }
-            self.handleIncomingWebRtcOffer(callerId: callerId, sdp: sdp)
+            // Commit 540b79c0 parity — capture the peer's advertised
+            // SFrame capability tags BEFORE the controller is built.
+            // Absent field → nil → useSFrame=false (legacy peer).
+            let peerCaps = data["capabilities"] as? [String]
+            self.handleIncomingWebRtcOffer(
+                callerId: callerId,
+                sdp: sdp,
+                peerCapabilities: peerCaps
+            )
         }
         ws.registerHandler(type: "call_answer") { [weak self] _, data in
             guard let self = self else { return }
+            // Commit 540b79c0 parity — capture the peer's caps before
+            // applying the SDP so the pipeline pick has the right
+            // negotiated set when ensureVideoSealer() runs at video setup.
+            let peerCaps = data["capabilities"] as? [String]
             if let sdp = data["sdp"] as? String {
-                self.handleIncomingWebRtcAnswer(sdp: sdp)
+                self.handleIncomingWebRtcAnswer(sdp: sdp, peerCapabilities: peerCaps)
             } else {
                 print("[AppState] call_answer: no sdp field")
             }
@@ -2272,6 +2299,16 @@ final class AppState: ObservableObject {
                     controller.iceTransportPolicyOverride = .relay
                 }
                 #endif
+                // Commit 77583315 parity — wire the rotating-key SFrame
+                // sealer factory. The factory is consulted by
+                // `ensureVideoSealer()` at video-pipeline pickup time;
+                // until then keeping it set has zero side effects.
+                // The provider closure must return the CURRENT 32-byte
+                // PQC session key on every frame so audio-driven rekey
+                // rotations are picked up transparently.
+                controller.sframeVideoSealerFactory = { keyProvider in
+                    SFrameVideoSealer.forRotatingKey(keyProvider)
+                }
                 webRtcController = controller
                 Task { [weak self] in
                     do {
@@ -3168,7 +3205,11 @@ extension AppState {
     /// up a fresh QAudionWebRtcCallController for this call, applies the
     /// remote offer, and ships the answer through the existing
     /// `CallingApi.sendCallAnswer` envelope.
-    func handleIncomingWebRtcOffer(callerId: String, sdp: String) {
+    func handleIncomingWebRtcOffer(
+        callerId: String,
+        sdp: String,
+        peerCapabilities: [String]? = nil
+    ) {
         guard let provider = liveProvider else { return }
         // Spawn a controller bound to the live CallingApi + relay provider.
         let controller = QAudionWebRtcCallController(
@@ -3184,28 +3225,48 @@ extension AppState {
         if TransportGate.forcesRelay {
             controller.iceTransportPolicyOverride = .relay
         }
+        // Commit 77583315 parity — DI the rotating-key SFrame sealer
+        // factory on the responder side too. Without this, two
+        // updated peers would still pick `.legacy` because the
+        // factory is the gate inside `ensureVideoSealer()`.
+        controller.sframeVideoSealerFactory = { keyProvider in
+            SFrameVideoSealer.forRotatingKey(keyProvider)
+        }
+        // Commit 540b79c0 parity — apply the peer's caps (from this
+        // envelope OR the earlier call_incoming stash) before
+        // acceptIncomingCall builds the peer connection. The Android
+        // CallController consults peerNegotiated() at video-pipeline
+        // pickup time; iOS mirrors that contract.
+        let caps = peerCapabilities ?? pendingPeerCapabilities
         webRtcController = controller
         Task {
             do {
                 try await controller.acceptIncomingCall(callerId: callerId,
                                                          offerSdp: sdp,
                                                          audioOnly: !isVideoCall)
-                print("[AppState] WebRTC: accepted incoming call from \(callerId)")
+                controller.acceptPeerCapabilities(caps)
+                print("[AppState] WebRTC: accepted incoming call from \(callerId) (peerCaps=\(caps ?? []))")
             } catch {
                 print("[AppState] WebRTC acceptIncomingCall failed: \(error)")
             }
         }
     }
 
-    func handleIncomingWebRtcAnswer(sdp: String) {
+    func handleIncomingWebRtcAnswer(sdp: String, peerCapabilities: [String]? = nil) {
         guard let controller = webRtcController as? QAudionWebRtcCallController else {
             print("[AppState] WebRTC: ignoring call_answer (no active controller)")
             return
         }
+        // Commit 540b79c0 parity — caller side learns the peer's caps
+        // here for the first time (call_offer goes outbound from us;
+        // call_answer is the peer's first envelope back). Cache them
+        // before applying the SDP so the pipeline pick has the right
+        // negotiation state at video setup time.
+        controller.acceptPeerCapabilities(peerCapabilities)
         Task {
             do {
                 try await controller.handleRemoteAnswer(sdp: sdp)
-                print("[AppState] WebRTC: applied remote answer SDP (\(sdp.count) chars)")
+                print("[AppState] WebRTC: applied remote answer SDP (\(sdp.count) chars, peerCaps=\(peerCapabilities ?? []))")
             } catch {
                 print("[AppState] WebRTC handleRemoteAnswer failed: \(error)")
             }
@@ -3223,10 +3284,14 @@ extension AppState {
 extension AppState {
     /// WebRTC framework not available in this target — no-op stubs so the
     /// AppState handlers keep their call sites intact.
-    func handleIncomingWebRtcOffer(callerId: String, sdp: String) {
+    func handleIncomingWebRtcOffer(
+        callerId: String,
+        sdp: String,
+        peerCapabilities: [String]? = nil
+    ) {
         print("[AppState] WebRTC: call_offer received but WebRTC framework not linked")
     }
-    func handleIncomingWebRtcAnswer(sdp: String) {
+    func handleIncomingWebRtcAnswer(sdp: String, peerCapabilities: [String]? = nil) {
         print("[AppState] WebRTC: call_answer received but WebRTC framework not linked")
     }
     func handleIncomingWebRtcIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {}

@@ -69,6 +69,43 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// otherwise default `.all`.
     public var iceTransportPolicyOverride: RTCIceTransportPolicy?
 
+    /// SFrame video sealer factory — DI seam mirroring Android's
+    /// `CallController.sframeVideoSealerProvider`. The closure receives
+    /// a key provider (returns the current 32-byte PQC session key on
+    /// every call, picking up rekey rotations transparently) and
+    /// returns a fully-built `SFrameVideoSealer`.
+    ///
+    /// Set this from the app/DI layer at startup, BEFORE any call.
+    /// Leaving it `nil` keeps the controller on the legacy video
+    /// pipeline forever — useful for tests + builds where the SFrame
+    /// flip should stay disabled.
+    ///
+    /// Recommended wiring:
+    /// ```swift
+    ///   ctrl.sframeVideoSealerFactory = { keyProvider in
+    ///       SFrameVideoSealer.forRotatingKey(keyProvider)
+    ///   }
+    /// ```
+    public var sframeVideoSealerFactory: ((@escaping () -> Data) -> SFrameVideoSealer)?
+
+    /// Discriminator for the active video pipeline on this call.
+    /// Resolved at video setup time by ``ensureVideoSealer()`` based
+    /// on the peer's negotiated capabilities — once set it stays
+    /// fixed for the call's lifetime (matches Android's "construct
+    /// pipeline once" rule, NVIDIA Llama-3.3-70b reviewed).
+    public enum VideoCallSealer {
+        /// Legacy iOS video path — frames flow through the existing
+        /// audio-shape RTP frame encryptor (or plain WebRTC SRTP on
+        /// builds where the insertable-streams API is unavailable).
+        case legacy
+        /// SFrame v1 path — outbound video frames go through
+        /// ``SFrameVideoSealer/seal(plaintext:layer:keyFrame:padded:)``
+        /// before the transport ships them; inbound frames come
+        /// through ``SFrameVideoSealer/open(_:)``.
+        case sframe(SFrameVideoSealer)
+    }
+    public private(set) var videoSealer: VideoCallSealer?
+
     private let callingApi: CallingApi
     private let relayProvider: RelayCredentialsProvider?
     private var peerConnection: QAudionPeerConnection?
@@ -148,7 +185,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
         }
-        try await callingApi.sendCallOffer(recipientId: recipientId, sdp: sdp)
+        // Commit 540b79c0 parity — advertise the local SFrame caps on
+        // every outgoing call_offer. Backends/extensions that haven't
+        // yet picked up the new overload silently drop the field via
+        // the protocol-extension default impl; on BCryptoCallingApiImpl
+        // it lands on the JSON wire as "capabilities":["sframe-v1"].
+        try await callingApi.sendCallOffer(
+            recipientId: recipientId,
+            sdp: sdp,
+            capabilities: CallCapabilities.local
+        )
         state = .connecting
     }
 
@@ -223,8 +269,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
         }
-        // 3. Ship answer back.
-        try await callingApi.sendCallAnswer(recipientId: callerId, sdp: answerSdp)
+        // 3. Ship answer back. Commit 540b79c0 parity — advertise the
+        //    local SFrame caps on every outgoing call_answer.
+        try await callingApi.sendCallAnswer(
+            recipientId: callerId,
+            sdp: answerSdp,
+            capabilities: CallCapabilities.local
+        )
         state = .connecting
     }
 
@@ -248,7 +299,85 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         peerConnection = nil
         recipientId = nil
         hasAppliedRemoteAnswer = false   // W418 — reset for next call
+        videoSealer = nil                // commit 3db2cd81 parity — reset
+                                         // pipeline pick so the next call
+                                         // re-runs ensureVideoSealer().
         state = .disconnected
+    }
+
+    // MARK: - Capability handshake (commit 540b79c0 parity)
+
+    /// Forward the peer's `capabilities` array (extracted from the
+    /// raw `call_offer` / `call_answer` / `call_incoming` envelope
+    /// data dictionary) to the underlying peer connection for caching.
+    ///
+    /// `peer` is `nil` when the field is absent from the envelope —
+    /// that's a legacy peer and the negotiated `useSFrame` will be
+    /// `false` (no SFrame). Idempotent — calling twice in a row
+    /// (e.g. duplicate call_answer like W418) is a no-op semantically.
+    ///
+    /// **Wiring** (AppState side, mirrors Kotlin
+    /// `CallSetupHandler.onCallOfferEvent`):
+    /// ```swift
+    ///   ws.registerHandler(type: "call_offer") { _, data in
+    ///       let caps = data["capabilities"] as? [String]
+    ///       webRtcController.acceptPeerCapabilities(caps)
+    ///       …
+    ///   }
+    /// ```
+    public func acceptPeerCapabilities(_ peer: [String]?) {
+        peerConnection?.acceptPeerCapabilities(peer)
+    }
+
+    /// Read the current peer-negotiated capability set. Returns `nil`
+    /// when the peer has not yet been heard from (call_offer/answer
+    /// not yet processed) — callers should treat that as "not ready
+    /// to pick the video pipeline" and defer.
+    public func peerNegotiated() -> CallCapabilities.Negotiated? {
+        peerConnection?.peerNegotiated()
+    }
+
+    /// Idempotently pick the video pipeline based on the peer's
+    /// negotiated capabilities. Mirrors Android
+    /// `CallController.ensureVideoSealer()` (commit 3db2cd81):
+    ///
+    /// - If ``videoSealer`` is already set → no-op (one pick per call).
+    /// - If `peerNegotiated()` is `nil` (peer not heard from yet) →
+    ///   leaves `videoSealer` unset; caller should defer.
+    /// - If `useSFrame=true` AND ``sframeVideoSealerFactory`` is wired
+    ///   AND a 32-byte PQC session key is available → builds an
+    ///   SFrame sealer via the factory and stores `.sframe(sealer)`.
+    /// - Otherwise → stores `.legacy`, preserving today's behaviour
+    ///   for legacy peers + tests where the factory isn't wired.
+    ///
+    /// - Parameter pqcSessionKeyProvider: closure returning the
+    ///   current 32-byte PQC session key. Typically backed by
+    ///   `{ self.pqcSessionKey ?? Data() }` from the app layer.
+    ///   The closure is captured by the resulting sealer and called
+    ///   on every frame so audio-driven rekey rotations are picked
+    ///   up transparently.
+    /// - Returns: the resolved sealer, or `nil` if the peer hasn't
+    ///   been heard from yet.
+    @discardableResult
+    public func ensureVideoSealer(
+        pqcSessionKeyProvider: @escaping () -> Data
+    ) -> VideoCallSealer? {
+        if let existing = videoSealer { return existing }
+        guard let negotiated = peerNegotiated() else { return nil }
+
+        let resolved: VideoCallSealer
+        if negotiated.useSFrame,
+           let factory = sframeVideoSealerFactory,
+           pqcSessionKeyProvider().count == 32 {
+            let sealer = factory(pqcSessionKeyProvider)
+            resolved = .sframe(sealer)
+            print("[WebRtcCallController] video pipeline → SFrame v1 (peerCaps=\(negotiated.agreedTags))")
+        } else {
+            resolved = .legacy
+            print("[WebRtcCallController] video pipeline → legacy (peerCaps=\(negotiated.agreedTags), useSFrame=\(negotiated.useSFrame), factoryWired=\(sframeVideoSealerFactory != nil))")
+        }
+        videoSealer = resolved
+        return resolved
     }
 
     // MARK: - Internal

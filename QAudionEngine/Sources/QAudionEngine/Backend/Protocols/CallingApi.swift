@@ -7,6 +7,40 @@ public protocol CallingApi {
     func sendHangup(recipientId: String) async throws
     func sendOpaqueMessage(recipientId: String, data: Data) async throws
 
+    /// Outbound `call_offer` carrying the local SFrame capability tags.
+    /// Mirrors Android `WsCommand.CallOffer.capabilities` field added in
+    /// commit 540b79c0. The wire JSON key is `"capabilities"` and the
+    /// value is a list of strings (e.g. `["sframe-v1"]`). Default impl
+    /// drops the field and falls back to ``sendCallOffer(recipientId:sdp:)``
+    /// for backends that haven't migrated yet.
+    func sendCallOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async throws
+
+    /// Outbound `call_answer` carrying the local SFrame capability tags.
+    /// See ``sendCallOffer(recipientId:sdp:capabilities:)`` for the
+    /// wire format contract. Default impl drops the field and falls
+    /// back to ``sendCallAnswer(recipientId:sdp:)``.
+    func sendCallAnswer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async throws
+
+    /// Originator-side helper that ships a `call_offer` with an
+    /// EXTERNALLY-CHOSEN callId AND the local SFrame capability tags.
+    /// Mirrors Android's commit 540b79c0 wire format. Default impl
+    /// drops the capabilities and falls back to
+    /// ``sendCallOfferWithId(callId:recipientId:sdp:)``.
+    func sendCallOfferWithId(
+        callId: String,
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async throws
+
     /// Ship a literal UTF-8 string in the `data` field of an
     /// `opaque_message` (NOT base64-wrapped). Used for the Android JSON
     /// HandshakeBundle wire format `"<callId>|<JSON>"` — wrapping in
@@ -56,6 +90,39 @@ public protocol CallingApi {
 public extension CallingApi {
     func sendCallProcessing(callId: String, callerId: String) async throws { /* no-op default */ }
     func sendCallReady(callId: String, callerId: String) async throws { /* no-op default */ }
+
+    /// Default impl — drops `capabilities` and forwards to the legacy
+    /// `sendCallOffer`. Backends supporting the SFrame handshake MUST
+    /// override to actually serialise the field on the wire (see
+    /// BCryptoCallingApiImpl.sendCallOffer(... capabilities:)).
+    func sendCallOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async throws {
+        try await sendCallOffer(recipientId: recipientId, sdp: sdp)
+    }
+
+    /// Default impl — drops `capabilities` and forwards to the legacy
+    /// `sendCallAnswer`.
+    func sendCallAnswer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async throws {
+        try await sendCallAnswer(recipientId: recipientId, sdp: sdp)
+    }
+
+    /// Default impl — drops `capabilities` and forwards to the legacy
+    /// `sendCallOfferWithId(callId:recipientId:sdp:)`.
+    func sendCallOfferWithId(
+        callId: String,
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async throws {
+        try await sendCallOfferWithId(callId: callId, recipientId: recipientId, sdp: sdp)
+    }
 
     /// Default impl — falls back to UTF-8 bytes through `sendOpaqueMessage`.
     /// Backends that base64-wrap (e.g. BCryptoCallingApi) MUST override

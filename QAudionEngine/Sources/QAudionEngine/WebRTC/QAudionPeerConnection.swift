@@ -135,6 +135,41 @@ public final class QAudionPeerConnection: NSObject {
     public private(set) var installedPqcEncryptor: PqcFrameEncryptor?
     public private(set) var installedPqcDecryptor: PqcFrameDecryptor?
 
+    // MARK: - Capability handshake (commit 540b79c0 parity)
+
+    /// Capability negotiation result for THIS call, computed by
+    /// ``CallCapabilities/negotiate(local:peer:)`` at the moment the
+    /// peer's `call_offer` (responder side) or `call_answer` (caller
+    /// side) is parsed. `nil` until the peer has been heard from —
+    /// the call controller defers picking the video pipeline (legacy
+    /// vs SFrame) until this returns non-nil.
+    ///
+    /// Mirrors Kotlin
+    /// `QAudionPeerConnection.peerCallCapabilities` (`@Volatile` on
+    /// Android). On iOS we guard with `NSLock` for parity with the
+    /// other counter/answer locks in this engine.
+    private let peerCapsLock = NSLock()
+    private var peerCallCapabilities: CallCapabilities.Negotiated?
+
+    /// Read the cached negotiation result. Returns `nil` until
+    /// ``acceptPeerCapabilities(_:)`` has been called.
+    public func peerNegotiated() -> CallCapabilities.Negotiated? {
+        peerCapsLock.lock(); defer { peerCapsLock.unlock() }
+        return peerCallCapabilities
+    }
+
+    /// Run the local list against the peer's advertised tags and
+    /// store the result for ``peerNegotiated()`` to return. Idempotent
+    /// — calling twice with the same peer list is a no-op.
+    ///
+    /// `peer` is `nil` for legacy clients that didn't include the
+    /// `capabilities` field on their `call_offer`/`call_answer`; the
+    /// negotiate function downgrades that to useSFrame=false.
+    public func acceptPeerCapabilities(_ peer: [String]?) {
+        let n = CallCapabilities.negotiate(peer: peer)
+        peerCapsLock.lock(); peerCallCapabilities = n; peerCapsLock.unlock()
+    }
+
     /// Mute / unmute the local microphone.
     public func setMicrophoneMuted(_ muted: Bool) {
         localAudioTrack?.isEnabled = !muted
