@@ -172,15 +172,21 @@ jobs:
         run: |
           set -e
           # Marketing version from tag (strip leading "v" + any "-suffix").
+          # Refuse to fall back to a hard-coded "1.0.0" — historical
+          # incident 2026-05-07: a workflow_dispatch run with no `tag`
+          # input produced TestFlight build "1.0.0 (54)" which polluted
+          # the version timeline alongside proper 1.0.4xx builds and
+          # had to be expired manually. Hard-fail here so the operator
+          # gets an actionable error before the build runs.
           GIT_TAG="${GITHUB_REF#refs/tags/}"
           if [ -z "$GIT_TAG" ] || [ "$GIT_TAG" = "$GITHUB_REF" ]; then
             GIT_TAG="${{ github.event.inputs.tag }}"
           fi
-          if [ -n "$GIT_TAG" ]; then
-            MARKETING_VERSION=$(echo "$GIT_TAG" | sed -E 's/^v//; s/-[A-Za-z].*$//')
-          else
-            MARKETING_VERSION="1.0.0"
+          if [ -z "$GIT_TAG" ]; then
+            echo "::error::No tag resolved. tag-push triggers set GITHUB_REF=refs/tags/v*; workflow_dispatch must fill the 'tag' input (e.g. v1.0.415). Refusing to upload a fallback version to TestFlight." >&2
+            exit 1
           fi
+          MARKETING_VERSION=$(echo "$GIT_TAG" | sed -E 's/^v//; s/-[A-Za-z].*$//')
           echo "Marketing version = $MARKETING_VERSION"
 
           # Build number = TestFlight latest + 1 (mirrors codemagic.yaml).
