@@ -20,6 +20,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   ios-kat:
     name: iOS Swift KAT
@@ -47,7 +50,14 @@ jobs:
 
       - name: Upload test reports on failure
         if: failure()
+        # Non-fatal: a quota hit must not turn a real KAT regression
+        # into "ran out of storage" on the post-fail report upload.
+        # Reports are only useful for debugging — drop them silently
+        # if storage is full; the test failure itself is what we care
+        # about.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: kat-ios-reports
           path: QAudionEngine/.build/
+          retention-days: 7

@@ -38,6 +38,12 @@ on:
         description: 'Tag to build (e.g. v1.0.398). Leave empty to use HEAD.'
         required: false
 
+env:
+  # Opt-in to Node.js 24 for all JavaScript actions. Silences the
+  # github.blog/changelog/2025-09-19 deprecation warning ("Node.js 20
+  # actions are deprecated") and pre-empts the June 2026 forced cutover.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     # Apple requires Xcode 26 / iOS 26 SDK for App Store submissions
@@ -318,6 +324,15 @@ jobs:
       # ----------------------------------------------------------
       - name: Upload artifacts
         if: always()
+        # Non-fatal: this step runs AFTER the TestFlight altool upload
+        # (step 9 above), so the IPA is already on App Store Connect by
+        # the time we get here. A storage-quota hit must not turn an
+        # otherwise-successful TestFlight build into a red CI run —
+        # `continue-on-error: true` keeps the workflow green and lets
+        # the human download the artifacts only when storage allows.
+        # retention-days dropped 14 → 7 to be a good citizen now that
+        # we've observed the org's quota cap fill up.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ios-build-${{ github.run_number }}
@@ -325,5 +340,5 @@ jobs:
             QAudionApp/build/ios/ipa/*.ipa
             QAudionApp/build/ios/dsym/*.zip
             QAudionApp/build.log
-          retention-days: 14
+          retention-days: 7
           if-no-files-found: warn

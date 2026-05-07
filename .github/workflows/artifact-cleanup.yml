@@ -1,0 +1,75 @@
+# Daily cleanup of old GitHub Actions artifacts to keep this repo
+# under the storage quota that has caused TestFlight builds to fail
+# at the upload-artifact step (the IPA itself was already on App Store
+# Connect, but the post-build artifact archive failed and turned the
+# whole run red).
+#
+# Mirrors the same workflow on the Android repo
+# (qaudion-android-new/.github/workflows/artifact-cleanup.yml).
+
+name: Artifact cleanup
+
+on:
+  schedule:
+    # 03:23 UTC daily — off-peak.
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write   # required to delete artifacts via the REST API
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  cleanup:
+    name: Delete artifacts older than 7 days
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run REST cleanup
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = Date.now();
+            const ageThresholdMs = 7 * 24 * 60 * 60 * 1000;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            let deleted = 0;
+            let kept = 0;
+            let totalBytesFreed = 0;
+            let page = 1;
+            const perPage = 100;
+
+            while (true) {
+              const { data } = await github.rest.actions.listArtifactsForRepo({
+                owner, repo, per_page: perPage, page,
+              });
+              if (data.artifacts.length === 0) break;
+              for (const a of data.artifacts) {
+                const age = now - new Date(a.created_at).getTime();
+                if (age >= ageThresholdMs && !a.expired) {
+                  try {
+                    await github.rest.actions.deleteArtifact({
+                      owner, repo, artifact_id: a.id,
+                    });
+                    deleted += 1;
+                    totalBytesFreed += a.size_in_bytes || 0;
+                    core.info(`deleted artifact ${a.id} '${a.name}' (${a.size_in_bytes} B, ${Math.round(age / 86400000)}d old)`);
+                  } catch (e) {
+                    core.warning(`failed to delete ${a.id}: ${e.message}`);
+                  }
+                } else {
+                  kept += 1;
+                }
+              }
+              if (data.artifacts.length < perPage) break;
+              page += 1;
+            }
+
+            const freedMB = (totalBytesFreed / 1024 / 1024).toFixed(1);
+            core.summary
+              .addHeading('Artifact cleanup result')
+              .addRaw(`Deleted: **${deleted}** artifacts (≥7 days old) freeing **${freedMB} MB**.`)
+              .addRaw(`\n\nKept: ${kept} artifacts (younger than the threshold).`)
+              .write();
