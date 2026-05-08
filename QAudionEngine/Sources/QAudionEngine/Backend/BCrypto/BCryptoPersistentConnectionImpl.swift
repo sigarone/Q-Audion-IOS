@@ -10,4 +10,8 @@ public final class BCryptoPersistentConnectionImpl: PersistentConnection {
     public func disconnect() { ws.disconnect() }
     public func addStateListener(_ listener: @escaping (ConnectionState) -> Void) { ws.addStateListener(listener) }
     public func removeAllListeners() { /* ws manages listeners */ }
+
+    public func ensureAuthenticated(timeoutSec: TimeInterval) async -> Bool {
+        await ws.ensureAuthenticated(timeoutSec: timeoutSec)
+    }
 }

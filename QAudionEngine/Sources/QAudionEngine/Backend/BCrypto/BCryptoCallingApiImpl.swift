@@ -1,5 +1,23 @@
 import Foundation
 
+/// Errors surfaced by the BCrypto calling adapter. Specialised so the UI
+/// can render an Italian-localised message instead of dumping a system
+/// `URLError` in the alert body.
+public enum BCryptoCallingError: LocalizedError {
+    /// The persistent signaling WebSocket could not be (re)established
+    /// before the call setup deadline. iOS suspends `URLSessionWebSocketTask`
+    /// silently in background; this fires when the foreground recovery
+    /// path also failed (no network, server unreachable, JWT rejected).
+    case wsUnavailable
+
+    public var errorDescription: String? {
+        switch self {
+        case .wsUnavailable:
+            return "Connessione al server persa. Verifica la rete e riprova."
+        }
+    }
+}
+
 /// Wire-format adapter between the high-level `CallingApi` protocol and the
 /// `bcrypto-server` signaling envelopes (see `internal/signaling/messages.go`
 /// `CallOfferData`, `CallAnswerData`, `CallICEData`, `CallHangupData`).
@@ -51,6 +69,15 @@ public final class BCryptoCallingApiImpl: CallingApi {
         capabilities: [String],
         callerDisplay: String?
     ) async throws {
+        // Pre-flight: iOS suspends URLSessionWebSocketTask silently when the
+        // app backgrounds. If we hit `ws.send` with a dead task the envelope
+        // is logged "DROPPED" and the engine falls into invalidState, leaving
+        // the user with a sub-second CallKit flash and no error. Force a
+        // reconnect (debounced) and wait up to 5s for `MsgAuthenticated`.
+        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        if !ready {
+            throw BCryptoCallingError.wsUnavailable
+        }
         // Mint a fresh call_id and stash for the rest of the session.
         let cid = UUID().uuidString
         setActiveCallId(cid)
@@ -168,6 +195,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
         capabilities: [String],
         callerDisplay: String?
     ) async throws {
+        // Same pre-flight gate as `sendCallOffer` — see that method for the
+        // rationale. iOS-suspended-task recovery happens before any envelope
+        // hits the wire so the UI never sees a CallKit flash on a dead WS.
+        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        if !ready {
+            throw BCryptoCallingError.wsUnavailable
+        }
         setActiveCallId(callId)
         var data: [String: Any] = [
             "recipient_id": recipientId,

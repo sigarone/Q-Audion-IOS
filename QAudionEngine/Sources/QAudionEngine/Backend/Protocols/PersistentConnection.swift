@@ -8,4 +8,14 @@ public protocol PersistentConnection: AnyObject {
     func disconnect()
     func addStateListener(_ listener: @escaping (ConnectionState) -> Void)
     func removeAllListeners()
+
+    /// Block (asynchronously) until the connection is authenticated and the
+    /// underlying transport is fresh, or `timeoutSec` elapses. Returns
+    /// `true` on success. Implementations are responsible for triggering a
+    /// reconnect when the connection has gone stale (iOS suspended task,
+    /// network blip, etc.) — the caller does not need to detect that.
+    ///
+    /// Used by call setup paths to gate `sendCallOffer*` so the user never
+    /// sees a sub-second CallKit flash on a dead WebSocket.
+    func ensureAuthenticated(timeoutSec: TimeInterval) async -> Bool
 }

@@ -50,6 +50,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// If no inbound traffic arrives within this window after a ping, treat the
     /// connection as dead and tear it down so the reconnect loop picks it up.
     private let pongTimeoutSec: TimeInterval = 25
+    /// Debounce flag for `forceReconnect()`. iOS suspends URLSessionWebSocketTask
+    /// silently when the app is backgrounded; the very first send() after
+    /// foregrounding may discover task==nil and kick a reconnect. Without this
+    /// flag a burst of dropped sends (e.g. opaque PQC frames) would each spawn
+    /// a parallel reconnect — racing connect() calls and confusing the state
+    /// machine. While `reconnectInFlight == true`, additional kicks are a no-op.
+    private var reconnectInFlight: Bool = false
 
     public init(config: BackendConfig) {
         self.config = config
@@ -145,6 +152,106 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         listeners.forEach { $0(.disconnected) }
     }
 
+    /// Tear down any existing task and trigger a fresh `connect()`. Idempotent
+    /// while a reconnect is already in flight (debounced via `reconnectInFlight`)
+    /// so a burst of dropped sends does not spawn parallel connect attempts.
+    ///
+    /// Used by:
+    ///   - `send(...)` when `webSocketTask == nil` (control envelopes only)
+    ///   - `ensureAuthenticated(...)` when staleness is detected
+    ///   - `AppState.willEnterForeground` after iOS resumes the app
+    public func forceReconnect() {
+        lock.lock()
+        if reconnectInFlight {
+            lock.unlock()
+            return
+        }
+        reconnectInFlight = true
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        webSocketTask = nil
+        _state = .disconnected
+        pingTimer?.cancel()
+        pingTimer = nil
+        // Reset reconnectAttempt so the backoff in handleDisconnect is fresh.
+        reconnectAttempt = 0
+        let listeners = stateListeners
+        lock.unlock()
+        listeners.forEach { $0(.disconnected) }
+        connect()
+
+        // Failsafe (per OpenRouter glm-5.1 review 2026-05-08 Bug 1):
+        // if `connect()` opens a task that NEVER authenticates AND NEVER
+        // delivers a `receive` failure (e.g. silent TCP timeout on iOS
+        // when the carrier dropped the connection mid-DNS), neither
+        // `handleMessage("authenticated")` nor `handleDisconnect()` will
+        // fire — `reconnectInFlight` would stay true forever and brick
+        // every future reconnect attempt. Schedule a guard that clears
+        // the flag after 10 s if we haven't progressed past `.connecting`.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10) { [weak self] in
+            self?.expireReconnectGuardIfStuck()
+        }
+    }
+
+    /// Clear `reconnectInFlight` if the most recent `forceReconnect()` is
+    /// still pending after the failsafe deadline. Called from a delayed
+    /// dispatch scheduled by `forceReconnect()` itself. Idempotent.
+    private func expireReconnectGuardIfStuck() {
+        lock.lock()
+        // Only clear if we never reached .authenticated AND no other
+        // path already cleared the flag (e.g. handleDisconnect fired).
+        if reconnectInFlight && _state != .authenticated {
+            reconnectInFlight = false
+        }
+        lock.unlock()
+    }
+
+    /// Block the caller (asynchronously) until the WS is `.authenticated` AND
+    /// the underlying task is non-nil AND inbound traffic is recent. Returns
+    /// `true` on success, `false` on timeout. Safe to call from `MainActor` —
+    /// the polling Task does not require main-thread access.
+    ///
+    /// This is the gate the call-setup path (`sendCallOffer*`) uses to avoid
+    /// the silent "DROPPED" + CallKit-flash failure mode where iOS suspended
+    /// the task in background but the local state machine still believes
+    /// itself authenticated.
+    public func ensureAuthenticated(timeoutSec: TimeInterval = 5) async -> Bool {
+        // Fast path: the connection is fresh.
+        if isFreshlyAuthenticated() {
+            return true
+        }
+        // Stale or disconnected — force a clean reconnect, then poll until
+        // either the state flips to .authenticated or we time out.
+        forceReconnect()
+
+        let deadline = Date().addingTimeInterval(timeoutSec)
+        while Date() < deadline {
+            if isFreshlyAuthenticated() {
+                return true
+            }
+            // 100 ms polling — a 5 s budget covers TLS handshake + JWT auth
+            // round-trip on a slow LTE link without busy-looping.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
+    /// True iff the WS is authenticated, the task pointer is non-nil, and the
+    /// last inbound frame was within `pingIntervalSec * 2` seconds. The latter
+    /// guards against the iOS "suspended-task ghost" where state still says
+    /// authenticated but no pong has arrived for several minutes.
+    private func isFreshlyAuthenticated() -> Bool {
+        lock.lock()
+        let st = _state
+        let hasTask = (webSocketTask != nil)
+        let lastInbound = lastInboundAt
+        lock.unlock()
+        guard st == .authenticated, hasTask else { return false }
+        // lastInboundAt == 0 means we never received anything — not fresh.
+        if lastInbound == 0 { return false }
+        let age = Date().timeIntervalSinceReferenceDate - lastInbound
+        return age < (pingIntervalSec * 2)
+    }
+
     /// Send a JSON envelope matching the server's `Envelope { type, data, id }` schema
     /// (internal/signaling/messages.go). `id` is a UUID used for request/response
     /// correlation (e.g. pairing a server `pong` with the triggering `ping`).
@@ -163,15 +270,53 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // This was the root cause of the Android "ghost call" bug — iOS
         // user pressed end, sendHangup fired into the void, server only
         // detected the WS EOF 41s later as a generic disconnect.
+        //
+        // 2026-05-08 hardening (per OpenRouter glm-5.1 review Bug 2 + 3):
+        //   - read `webSocketTask` UNDER the lock (was a Swift-level
+        //     data race against forceReconnect's write path)
+        //   - kick a reconnect ALSO when the task is non-nil but stale
+        //     (no inbound traffic in pingInterval*2 — iOS suspended the
+        //     task without firing a delegate callback, so neither nil
+        //     nor a receive failure ever surfaced)
+        lock.lock()
         let task = webSocketTask
+        lock.unlock()
+        let stale = !isFreshlyAuthenticated()
         if task == nil {
             print("[BCryptoWS] send(\(type)) DROPPED — webSocketTask is nil (WS not connected)")
+            // Recovery: kick a reconnect so the NEXT send has a chance, but
+            // ONLY for control envelopes. audio_frame / video_frame run at
+            // ~50 fps and would each spawn a parallel reconnect storm — the
+            // call-setup path (sendCallOffer*) calls `ensureAuthenticated()`
+            // before this code path is reached, so a control-envelope kick
+            // here is the safety net for less critical messages.
+            if Self.shouldKickReconnect(forType: type) {
+                forceReconnect()
+            }
             return
+        }
+        if stale && Self.shouldKickReconnect(forType: type) {
+            print("[BCryptoWS] send(\(type)) STALE socket — kicking reconnect; attempting send anyway (best-effort)")
+            forceReconnect()
+            // Fall through and try the send — `task.send` will report the
+            // error in its completion if the cancelled task rejects it.
         }
         task?.send(.string(jsonString)) { error in
             if let error = error {
                 print("[BCryptoWS] send(\(type)) FAILED: \(error.localizedDescription)")
             }
+        }
+    }
+
+    /// Whitelist of message types that warrant a reconnect kick when the
+    /// task is gone. Real-time media frames (audio/video) and outbound
+    /// pings are excluded to avoid reconnect storms — those callers either
+    /// tolerate the drop or run alongside a control envelope that already
+    /// triggered recovery.
+    private static func shouldKickReconnect(forType type: String) -> Bool {
+        switch type {
+        case "audio_frame", "video_frame", "ping": return false
+        default: return true
         }
     }
 
@@ -247,6 +392,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             lock.lock()
             _state = .authenticated
             reconnectAttempt = 0
+            // Clear the debounce flag set by forceReconnect() — the recovery
+            // is complete; a future suspension can trigger another reconnect.
+            reconnectInFlight = false
             let listeners = stateListeners
             lock.unlock()
             listeners.forEach { $0(.authenticated) }
@@ -308,6 +456,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         _state = .disconnected
         reconnectAttempt += 1
         let attempt = reconnectAttempt
+        // Drop the in-flight flag — the previous reconnect attempt either
+        // finished or failed. The next forceReconnect() / send() can kick a
+        // fresh attempt without being silently debounced.
+        reconnectInFlight = false
         pingTimer?.cancel()
         pingTimer = nil
         let listeners = stateListeners

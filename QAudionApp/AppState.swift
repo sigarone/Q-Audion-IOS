@@ -281,9 +281,18 @@ final class AppState: ObservableObject {
         // to the foreground. iOS suspends URLSessionWebSocketTask while
         // backgrounded — by the time the user opens the app again the
         // socket is dead but `handleDisconnect()` may not have fired
-        // yet (no `receive` failure delivered). Forcing a connect here
-        // is idempotent: `connectPersistentSocket()` short-circuits if
-        // the WS is already in `.connecting/.connected/.authenticated`.
+        // yet (no `receive` failure delivered).
+        //
+        // 2026-05-08 hardening: the previous version only rebuilt the
+        // provider when `state == .disconnected`. iOS can suspend the
+        // task without flipping that state — the local machine still
+        // says `.authenticated` but the URLSessionWebSocketTask is
+        // dead. The next call_offer hits `task == nil`, gets DROPPED,
+        // CallKit flashes for ~1s and the user sees nothing. We now
+        // call `ensureAuthenticated(timeoutSec: 5)` which transparently
+        // forces a reconnect when the connection is stale (no inbound
+        // traffic in pingInterval*2 seconds) and waits for a fresh
+        // `MsgAuthenticated` before letting the next dial proceed.
         #if canImport(UIKit) && os(iOS)
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
@@ -298,13 +307,23 @@ final class AppState: ObservableObject {
             // when the outer closure binds `[weak self]` and forwards.
             Task { @MainActor [weak self] in
                 guard let self = self, self.isAuthenticated else { return }
-                // If the existing provider's socket is dead, drop it so
-                // `connectPersistentSocket()` rebuilds the WS.
-                if let live = self.liveProvider,
-                   live.persistentConnection.state == .disconnected {
-                    self.liveProvider = nil
+                if let live = self.liveProvider {
+                    // Drop the provider only when its WS is already known
+                    // dead — otherwise let `ensureAuthenticated` decide
+                    // whether to force-reconnect (it checks freshness via
+                    // `lastInboundAt`, not just the state enum).
+                    if live.persistentConnection.state == .disconnected {
+                        self.liveProvider = nil
+                        self.connectPersistentSocket()
+                    } else {
+                        // `ensureAuthenticated` polls with `Task.sleep` so
+                        // awaiting it from MainActor releases the main
+                        // thread between checks — no detached hop needed.
+                        _ = await live.persistentConnection.ensureAuthenticated(timeoutSec: 5)
+                    }
+                } else {
+                    self.connectPersistentSocket()
                 }
-                self.connectPersistentSocket()
             }
         }
         #endif
