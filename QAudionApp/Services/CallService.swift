@@ -240,7 +240,8 @@ final class CallService {
     func beginAndroidOutgoing(
         callId: String,
         recipientId: String,
-        callingApi: CallingApi
+        callingApi: CallingApi,
+        callerDisplay: String? = nil
     ) async throws {
         // Snapshot to local strong ref — prevents use-after-free if
         // another Task tears down callIntegration mid-await.
@@ -250,11 +251,16 @@ final class CallService {
 
         // 1) call_offer (vestigial empty SDP — WIRE_SPEC §3 SDP-less
         //    PQC path uses opaque_message OFFER for the actual crypto).
+        //    `callerDisplay` (when non-nil) is shipped as the
+        //    `caller_display` JSON field — the callee's CallKit prefers
+        //    it over the server-resolved extension.
         let vestigialSdp = ""
         try await callingApi.sendCallOfferWithId(
             callId: callId,
             recipientId: recipientId,
-            sdp: vestigialSdp
+            sdp: vestigialSdp,
+            capabilities: CallCapabilities.local,
+            callerDisplay: callerDisplay
         )
 
         // 2) PQC handshake OFFER pair (JSON + QUAD). Best-effort

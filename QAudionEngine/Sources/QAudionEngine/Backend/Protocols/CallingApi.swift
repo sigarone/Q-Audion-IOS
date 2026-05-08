@@ -13,15 +13,23 @@ public protocol CallingApi {
     /// value is a list of strings (e.g. `["sframe-v1"]`). Default impl
     /// drops the field and falls back to ``sendCallOffer(recipientId:sdp:)``
     /// for backends that haven't migrated yet.
+    ///
+    /// `callerDisplay` (when non-nil) ships as the optional `caller_display`
+    /// JSON field — the callee uses it as the CallKit caller-id when
+    /// present (highest-priority source, beats the server-assigned
+    /// extension). Pure digits expected so the callee can dial it back.
+    /// When nil, the field is omitted and the server fills it with the
+    /// caller's internal extension.
     func sendCallOffer(
         recipientId: String,
         sdp: String,
-        capabilities: [String]
+        capabilities: [String],
+        callerDisplay: String?
     ) async throws
 
     /// Outbound `call_answer` carrying the local SFrame capability tags.
-    /// See ``sendCallOffer(recipientId:sdp:capabilities:)`` for the
-    /// wire format contract. Default impl drops the field and falls
+    /// See ``sendCallOffer(recipientId:sdp:capabilities:callerDisplay:)`` for
+    /// the wire format contract. Default impl drops the field and falls
     /// back to ``sendCallAnswer(recipientId:sdp:)``.
     func sendCallAnswer(
         recipientId: String,
@@ -34,11 +42,14 @@ public protocol CallingApi {
     /// Mirrors Android's commit 540b79c0 wire format. Default impl
     /// drops the capabilities and falls back to
     /// ``sendCallOfferWithId(callId:recipientId:sdp:)``.
+    /// `callerDisplay` — see
+    /// ``sendCallOffer(recipientId:sdp:capabilities:callerDisplay:)``.
     func sendCallOfferWithId(
         callId: String,
         recipientId: String,
         sdp: String,
-        capabilities: [String]
+        capabilities: [String],
+        callerDisplay: String?
     ) async throws
 
     /// Ship a literal UTF-8 string in the `data` field of an
@@ -91,14 +102,15 @@ public extension CallingApi {
     func sendCallProcessing(callId: String, callerId: String) async throws { /* no-op default */ }
     func sendCallReady(callId: String, callerId: String) async throws { /* no-op default */ }
 
-    /// Default impl — drops `capabilities` and forwards to the legacy
-    /// `sendCallOffer`. Backends supporting the SFrame handshake MUST
-    /// override to actually serialise the field on the wire (see
-    /// BCryptoCallingApiImpl.sendCallOffer(... capabilities:)).
+    /// Default impl — drops `capabilities` + `callerDisplay` and forwards
+    /// to the legacy `sendCallOffer`. Backends supporting the SFrame
+    /// handshake AND the caller-id substitution MUST override (see
+    /// BCryptoCallingApiImpl.sendCallOffer(... capabilities:callerDisplay:)).
     func sendCallOffer(
         recipientId: String,
         sdp: String,
-        capabilities: [String]
+        capabilities: [String],
+        callerDisplay: String?
     ) async throws {
         try await sendCallOffer(recipientId: recipientId, sdp: sdp)
     }
@@ -113,13 +125,14 @@ public extension CallingApi {
         try await sendCallAnswer(recipientId: recipientId, sdp: sdp)
     }
 
-    /// Default impl — drops `capabilities` and forwards to the legacy
-    /// `sendCallOfferWithId(callId:recipientId:sdp:)`.
+    /// Default impl — drops `capabilities` + `callerDisplay` and forwards
+    /// to the legacy `sendCallOfferWithId(callId:recipientId:sdp:)`.
     func sendCallOfferWithId(
         callId: String,
         recipientId: String,
         sdp: String,
-        capabilities: [String]
+        capabilities: [String],
+        callerDisplay: String?
     ) async throws {
         try await sendCallOfferWithId(callId: callId, recipientId: recipientId, sdp: sdp)
     }

@@ -25,20 +25,31 @@ public final class BCryptoCallingApiImpl: CallingApi {
         try await sendCallOffer(
             recipientId: recipientId,
             sdp: sdp,
-            capabilities: CallCapabilities.local
+            capabilities: CallCapabilities.local,
+            callerDisplay: nil
         )
     }
 
-    /// Outbound `call_offer` advertising the SFrame capability tags.
+    /// Outbound `call_offer` advertising the SFrame capability tags AND
+    /// (optionally) the caller-supplied display string used by the
+    /// callee's CallKit caller-id.
+    ///
     /// Mirrors Android `WsCommand.CallOffer.capabilities` (commit 540b79c0).
     /// The `capabilities` JSON key is OMITTED when the list is empty so
     /// older bcrypto-server builds that don't yet recognise the field
     /// stay happy; the agreement is a pure end-to-end concern (the
     /// server is a relay).
+    ///
+    /// `callerDisplay` (optional) is shipped as the `caller_display`
+    /// JSON field. Pure digits — typically the user's locally-configured
+    /// "standard phone number" (see `LocalCallerIdSettings`). When nil
+    /// the field is omitted and the server resolves the callee-side
+    /// display string to the caller's internal extension.
     public func sendCallOffer(
         recipientId: String,
         sdp: String,
-        capabilities: [String]
+        capabilities: [String],
+        callerDisplay: String?
     ) async throws {
         // Mint a fresh call_id and stash for the rest of the session.
         let cid = UUID().uuidString
@@ -50,6 +61,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
             "call_type":    "audio",  // SDP-less PQC path uses "audio"
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
+        if let cd = callerDisplay, !cd.isEmpty {
+            data["caller_display"] = cd
+        }
         ws.send(type: "call_offer", data: data)
     }
 
@@ -135,20 +149,24 @@ public final class BCryptoCallingApiImpl: CallingApi {
             callId: callId,
             recipientId: recipientId,
             sdp: sdp,
-            capabilities: CallCapabilities.local
+            capabilities: CallCapabilities.local,
+            callerDisplay: nil
         )
     }
 
-    /// Originator-side `call_offer` with externally-chosen callId AND
-    /// the SFrame capability tags (commit 540b79c0 wire format).
-    /// `capabilities` is omitted from the JSON envelope when empty —
-    /// keeps the wire byte-identical to the legacy path for tests that
-    /// pass `[]`.
+    /// Originator-side `call_offer` with externally-chosen callId, SFrame
+    /// capability tags (commit 540b79c0 wire format) and the optional
+    /// `caller_display` substitution string. `capabilities` is omitted
+    /// from the JSON envelope when empty — keeps the wire byte-identical
+    /// to the legacy path for tests that pass `[]`. `callerDisplay` is
+    /// likewise omitted when nil/empty so the server-side extension
+    /// fallback kicks in (see protocol kdoc).
     public func sendCallOfferWithId(
         callId: String,
         recipientId: String,
         sdp: String,
-        capabilities: [String]
+        capabilities: [String],
+        callerDisplay: String?
     ) async throws {
         setActiveCallId(callId)
         var data: [String: Any] = [
@@ -158,6 +176,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
             "call_type":    "audio",
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
+        if let cd = callerDisplay, !cd.isEmpty {
+            data["caller_display"] = cd
+        }
         ws.send(type: "call_offer", data: data)
     }
 

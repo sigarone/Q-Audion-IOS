@@ -154,7 +154,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `CallingApi.sendCallOffer`. Returns once the offer has been sent;
     /// the call is connected later when the peer's answer arrives via
     /// `handleRemoteAnswer(sdp:)`.
-    public func startOutgoingCall(recipientId: String, audioOnly: Bool = true) async throws {
+    ///
+    /// `callerDisplay` (optional) — pure-digits public phone number the
+    /// caller wants the callee's CallKit caller-id to show. When nil,
+    /// the field is omitted on the wire and the server fills it with the
+    /// caller's internal extension. See `LocalCallerIdSettings`.
+    public func startOutgoingCall(
+        recipientId: String,
+        audioOnly: Bool = true,
+        callerDisplay: String? = nil
+    ) async throws {
         guard state == .idle || state == .disconnected else {
             throw ControllerError.wrongState(String(describing: state))
         }
@@ -193,7 +202,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         try await callingApi.sendCallOffer(
             recipientId: recipientId,
             sdp: sdp,
-            capabilities: CallCapabilities.local
+            capabilities: CallCapabilities.local,
+            callerDisplay: callerDisplay
         )
         state = .connecting
     }

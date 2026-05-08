@@ -11,6 +11,11 @@ final class AccountSettingsContainer: ObservableObject {
     @Published var errorMessage: String?
     @Published var draftDisplayName: String = ""
     @Published var draftStatusMessage: String = ""
+    /// Local-only "public" phone number used as caller-id substitution
+    /// on outbound calls. Pure digits — see `LocalCallerIdSettings`.
+    /// Bound to a SwiftUI TextField; persisted to UserDefaults on save
+    /// (NOT shipped to the server).
+    @Published var draftLocalPhone: String = ""
 
     private let appState: AppState
     private let avatarUploader: AvatarUploader
@@ -31,6 +36,9 @@ final class AccountSettingsContainer: ObservableObject {
         )
         self.draftDisplayName = ""
         self.draftStatusMessage = ""
+        // Read the local public phone (digits-only) from UserDefaults
+        // so the SwiftUI form pre-fills with the persisted value.
+        self.draftLocalPhone = LocalCallerIdSettings.phoneNumber() ?? ""
         self.avatarUploader = AvatarUploader(appState: appState)
     }
 
@@ -83,6 +91,14 @@ final class AccountSettingsContainer: ObservableObject {
             errorMessage = "Not signed in"
             return
         }
+        // Persist the local public phone on every save. The setter
+        // strips non-digits and clears the key when the field is empty
+        // so we never end up with garbage in UserDefaults.
+        LocalCallerIdSettings.setPhoneNumber(draftLocalPhone)
+        // Re-read so the binding shows the canonicalised digits-only form
+        // (handles the case where the user typed e.g. "+39 333 …" and we
+        // stripped the punctuation).
+        draftLocalPhone = LocalCallerIdSettings.phoneNumber() ?? ""
         Task {
             await MainActor.run { self.isLoading = true; self.errorMessage = nil }
             do {
@@ -171,10 +187,17 @@ final class AccountSettingsContainer: ObservableObject {
         }
     }
 
-    /// True when neither draft field differs from the persisted value.
+    /// True when no draft field differs from the persisted value.
+    /// Includes the local public phone so editing it alone is enough to
+    /// arm the Save button.
     var isDraftUnchanged: Bool {
-        draftDisplayName == (viewModel.displayName ?? "") &&
-        draftStatusMessage == (viewModel.statusMessage ?? "")
+        let persistedPhone = LocalCallerIdSettings.phoneNumber() ?? ""
+        let normalisedDraftPhone = draftLocalPhone
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .filter { $0.isASCII && $0.isNumber }
+        return draftDisplayName == (viewModel.displayName ?? "") &&
+               draftStatusMessage == (viewModel.statusMessage ?? "") &&
+               normalisedDraftPhone == persistedPhone
     }
 
     func uploadAvatar(image: UIImage) {
@@ -257,6 +280,24 @@ struct AccountSettingsScreen: View {
                                   value: $container.draftStatusMessage,
                                   placeholder: "es. Disponibile dalle 9 alle 18",
                                   capitalization: .sentences)
+                    }
+
+                    // Caller-id substitution. Locally-stored only —
+                    // never pushed to the server. Pure digits so the
+                    // callee's CallKit can dial it back. When unset
+                    // the server fills the call_offer's `caller_display`
+                    // field with the user's internal extension.
+                    SettingsSectionHeader("CALLER-ID")
+                    VStack(spacing: 12) {
+                        digitsOnlyField(
+                            label: "Numero telefono pubblico",
+                            value: $container.draftLocalPhone,
+                            placeholder: "es. 3331234567"
+                        )
+                        Text("Mostrato come ID chiamante alle persone che chiami. Solo cifre — nessun '+', nessun prefisso. Salvato solo su questo dispositivo.")
+                            .qaudionStyle(type.labelSmall)
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     Spacer().frame(height: 16)
@@ -404,6 +445,50 @@ struct AccountSettingsScreen: View {
             UIPasteboard.general.string = value
             HapticFeedback.messageSent()
             #endif
+        }
+    }
+
+    /// Variant of `textField` that:
+    ///   * uses the .numberPad keyboard so only digits are reachable,
+    ///   * filters input to digits-only on every keystroke (defends
+    ///     against paste of "+39 333 …" or similar formatted input),
+    ///   * caps length at 20 chars (longer than any plausible national
+    ///     dial-string but still bounded to keep the UI sane).
+    /// Used for the "Numero telefono pubblico" caller-id field.
+    private func digitsOnlyField(label: String,
+                                 value: Binding<String>,
+                                 placeholder: String) -> some View {
+        let sanitisedBinding = Binding<String>(
+            get: { value.wrappedValue },
+            set: { newValue in
+                let digits = newValue.filter { $0.isASCII && $0.isNumber }
+                value.wrappedValue = String(digits.prefix(20))
+            }
+        )
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .qaudionStyle(type.labelSmall)
+                .tracking(1.0)
+                .foregroundStyle(scheme.onSurfaceVariant)
+
+            TextField("", text: sanitisedBinding,
+                      prompt: Text(placeholder).foregroundColor(scheme.onSurfaceVariant))
+                .qaudionStyle(type.bodyMedium)
+                .foregroundColor(scheme.onSurface)
+                .tint(scheme.primary)
+                .keyboardType(.numberPad)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .disabled(container.isLoading)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(scheme.surfaceVariant.opacity(0.45))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
+                )
         }
     }
 

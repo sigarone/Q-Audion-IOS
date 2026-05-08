@@ -41,8 +41,38 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
 
     private let ws: BCryptoWebSocketClient
 
-    public init(ws: BCryptoWebSocketClient) {
+    /// Client-side caller-id resolver for group-call participants.
+    /// The server only sends UUIDs in `GroupCallStateData.participants`
+    /// (and on `group_call_invite`); we map each UUID to a human name
+    /// via the local rubrica (`ContactsStore`) here so the UI shows
+    /// "Mario Rossi" instead of `f1c5…`. Falls back to the bare UUID
+    /// if not in rubrica.
+    ///
+    /// Override the default by injecting a custom resolver in the
+    /// initialiser — handy for tests that want deterministic names.
+    private let nameResolver: (String) -> String
+
+    public init(
+        ws: BCryptoWebSocketClient,
+        nameResolver: ((String) -> String)? = nil
+    ) {
         self.ws = ws
+        if let r = nameResolver {
+            self.nameResolver = r
+        } else {
+            // Default resolver: fresh ContactsStore.load() lookup per
+            // participant build. Cheap (UserDefaults read + JSON
+            // decode of a small list); group calls are bounded to 8
+            // participants so the worst-case cost is trivial.
+            self.nameResolver = { uid in
+                let stored = ContactsStore().load()
+                if let match = stored.first(where: { $0.userId == uid }),
+                   !match.displayName.isEmpty {
+                    return match.displayName
+                }
+                return uid
+            }
+        }
         registerHandlers()
     }
 
@@ -220,7 +250,11 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             if let existing = _participants.first(where: { $0.id == uid }) {
                 return existing
             }
-            return Participant(id: uid, displayName: String(uid.prefix(8)))
+            // Server only ships UUIDs for group-call participants —
+            // resolve them client-side via the local rubrica
+            // (`nameResolver`, defaulting to ContactsStore lookup).
+            // Falls back to the bare UUID if not in the address book.
+            return Participant(id: uid, displayName: nameResolver(uid))
         }
         // created/joined/left all imply the room is active for us.
         _state = .active

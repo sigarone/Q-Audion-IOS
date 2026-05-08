@@ -722,6 +722,27 @@ final class AppState: ObservableObject {
             let senderId = data["sender_id"] as? String ?? "Sconosciuto"
             let callType = data["call_type"] as? String ?? "audio"
             let callUUID = UUID(uuidString: callIdStr) ?? UUID()
+            // Caller-id resolution priority for the CallKit display name:
+            //   1. `caller_display` from the wire envelope — server
+            //      already resolved the caller's locally-configured
+            //      public phone (or fell back to the caller's internal
+            //      extension). Highest-priority source.
+            //   2. Local rubrica (ContactsStore) lookup by sender_id —
+            //      lets the callee see "Mario Rossi" instead of a UUID
+            //      when the caller is in the address book but didn't
+            //      ship a `caller_display`.
+            //   3. Bare `sender_id` UUID as last resort.
+            let wireCallerDisplay = (data["caller_display"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedCallerName: String = {
+                if let cd = wireCallerDisplay, !cd.isEmpty { return cd }
+                let stored = ContactsStore().load()
+                if let match = stored.first(where: { $0.userId == senderId }),
+                   !match.displayName.isEmpty {
+                    return match.displayName
+                }
+                return senderId
+            }()
             // Commit 540b79c0 parity — `call_incoming` is the responder's
             // FIRST view of the caller's caps (the server forwards the
             // call_offer's capabilities verbatim under this envelope).
@@ -745,7 +766,7 @@ final class AppState: ObservableObject {
                 Task {
                     await self.callKit?.reportIncomingCall(
                         uuid: callUUID,
-                        callerName: senderId,
+                        callerName: resolvedCallerName,
                         hasVideo: callType == "video"
                     )
                     await MainActor.run {
@@ -2244,11 +2265,19 @@ final class AppState: ObservableObject {
                 // iOS-originated call to Android sat for the full
                 // 35s PqcHandshake timeout.
                 let outgoingCallId = UUID().uuidString
+                // Caller-id substitution: ship the local public phone
+                // number (digits-only, see `LocalCallerIdSettings`) as
+                // `caller_display` on the outbound call_offer when the
+                // user has configured one. Otherwise the field is
+                // omitted and the server fills it with the caller's
+                // internal extension.
+                let callerDisplay = LocalCallerIdSettings.phoneNumber()
                 do {
                     try await callService.beginAndroidOutgoing(
                         callId: outgoingCallId,
                         recipientId: contactId,
-                        callingApi: provider.callingApi
+                        callingApi: provider.callingApi,
+                        callerDisplay: callerDisplay
                     )
                 } catch is CancellationError {
                     print("[AppState] startCall cancelled mid-OFFER for callId=\(outgoingCallId.prefix(8))…")
@@ -2310,11 +2339,17 @@ final class AppState: ObservableObject {
                     SFrameVideoSealer.forRotatingKey(keyProvider)
                 }
                 webRtcController = controller
+                // Same caller-id substitution as the legacy path —
+                // both rails ship the same `caller_display` so the
+                // peer doesn't pick a different label depending on
+                // which OFFER it picks up first.
+                let webRtcCallerDisplay = LocalCallerIdSettings.phoneNumber()
                 Task { [weak self] in
                     do {
                         try await controller.startOutgoingCall(
                             recipientId: contactId,
-                            audioOnly: !video
+                            audioOnly: !video,
+                            callerDisplay: webRtcCallerDisplay
                         )
                         print("[AppState] WebRTC outgoing offer sent to \(contactId)")
                     } catch {
