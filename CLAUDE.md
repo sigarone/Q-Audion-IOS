@@ -2,6 +2,39 @@
 
 You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-calling app. Read this file end-to-end before your first action. It captures the hard-won state of the build pipeline so you don't repeat the work.
 
+## 🚨 CI / BUILD PLATFORM — READ THIS BEFORE SAYING ANYTHING ABOUT CI
+
+**iOS builds run on GitHub Actions. Not Codemagic. Not Xcode Cloud.**
+
+- **Active workflow**: `.github/workflows/ios-testflight.yml`
+- **Trigger**: push of a tag matching `v*` (e.g. `git tag v1.0.420 && git push origin v1.0.420`) or manual `workflow_dispatch`
+- **Runner**: `macos-latest` with Xcode 26.x (auto-selected by the discovery step)
+- **Output**: signed IPA uploaded to TestFlight Internal group `Q-Audion testers` via `xcrun altool` (no beta-review submission)
+- **Repository secrets** (configure at github.com/sigarone/Q-Audion-IOS/settings/secrets/actions): `APP_STORE_CONNECT_KEY_IDENTIFIER`, `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_PRIVATE_KEY`, `CERTIFICATE_PRIVATE_KEY`
+
+### Things that look like Codemagic but are NOT
+
+- `codemagic-cli-tools` — Python package (pip-installable) that wraps the App Store Connect API and keychain helpers. The GitHub Actions workflow `pipx install`s this inside the `macos-latest` runner. **It is a CLI library, not a hosted-build service.** Do not infer "Codemagic builds the iOS app" from its presence.
+- Mentions of "Codemagic" further down in this file — these are **historical context** (the GH Actions workflow was a drop-in replacement for the old `codemagic.yaml`, so the bash steps look similar). Ignore them when answering questions about the current pipeline.
+
+### Other CI-related files in this repo
+
+| Path | Status | Read it? |
+|---|---|---|
+| `.github/workflows/ios-testflight.yml` | **ACTIVE** — TestFlight build | YES, this is the pipeline |
+| `.github/workflows/engine-tests.yml` | ACTIVE — Swift package tests on every push | reference if engine tests fail |
+| `.github/workflows/kat-cross-platform.yml` | ACTIVE — KAT vector cross-platform check | reference if KAT mismatch |
+| `.github/workflows/artifact-cleanup.yml` | ACTIVE — scheduled artifact retention | leave alone |
+| `XCODE_CLOUD_MIGRATION.md` | **HISTORICAL** — proposal for Xcode Cloud, never adopted | **do not follow its instructions** |
+| `ci_scripts/` (`ci_post_clone.sh`, `ci_pre_xcodebuild.sh`, `ci_post_xcodebuild.sh`) | **DEAD SCRIPTS** — Xcode Cloud convention, NEVER executed by the active GH Actions pipeline | do not edit them when fixing CI |
+| `codemagic.yaml` | **REMOVED** 2026-05-06 — deleted from the repo when CI moved to GH Actions | n/a |
+
+### If a CI run fails
+
+1. Open the failed run on GitHub Actions: https://github.com/sigarone/Q-Audion-IOS/actions
+2. The "Diagnose Swift compile (raw xcodebuild)" step (when present) uploads `diag.log` as an artifact — read it before guessing.
+3. Do NOT push tags repeatedly to "see if it works" — Pavel pays for macOS minutes. Reproduce locally with `xcodebuild` if possible.
+
 ## ⚡ AUTOMATION RULE — iOS runtime log fetch (auto-pump v1.0.398+)
 
 **Build v1.0.398+ (W417) ships always-on auto-upload telemetry.** The

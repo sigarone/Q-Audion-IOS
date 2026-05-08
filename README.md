@@ -44,9 +44,19 @@ open QAudionApp.xcodeproj
 ## CI/CD
 
 - **GitHub Actions** (`.github/workflows/ios-testflight.yml`): full Xcode
-  build + TestFlight upload on tag push `v*`. Public repo → unlimited
-  free macOS minutes.
-- **Codemagic** (`codemagic.yaml`): kept as a fallback. Disabled by default.
+  build + TestFlight upload on tag push `v*`. Runs on `macos-latest` with
+  Xcode 26.x and uploads directly to TestFlight Internal group
+  `Q-Audion testers` via `xcrun altool`. **This is the only active iOS
+  build pipeline.**
+- ~~Codemagic~~ — decommissioned 2026-05-06; `codemagic.yaml` was removed
+  from the repo. Some bash steps in `ios-testflight.yml` still reference
+  the `codemagic-cli-tools` Python package, but that's just a CLI library
+  for App Store Connect — not a hosted build service.
+- ~~Xcode Cloud~~ — `XCODE_CLOUD_MIGRATION.md` documents an evaluated
+  migration that was **never adopted**. The `ci_scripts/` directory is
+  Xcode Cloud convention but those scripts are NOT executed by the
+  current pipeline. Do not edit them expecting CI to pick the changes
+  up.
 
 ## Protocol Compatibility
 

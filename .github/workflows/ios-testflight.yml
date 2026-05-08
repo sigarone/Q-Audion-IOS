@@ -1,10 +1,19 @@
 # GitHub Actions — Q-Audion iOS TestFlight build pipeline.
 #
-# Drop-in replacement for the Codemagic `qaudion-app-build` workflow.
-# Uses the same `codemagic-cli-tools` Python package that Codemagic
-# uses internally, so the bash steps are virtually identical to
-# codemagic.yaml. This keeps the Hard-won lessons in CLAUDE.md
-# (sec 1-15) directly applicable.
+# THIS IS THE ACTIVE iOS BUILD PIPELINE. Codemagic was decommissioned
+# 2026-05-06 (codemagic.yaml removed from the repo). Xcode Cloud was
+# evaluated (see XCODE_CLOUD_MIGRATION.md) but never adopted. The
+# ci_scripts/ directory is unused dead code — only this file is wired
+# into the runner. See CLAUDE.md § "CI / BUILD PLATFORM" for the
+# authoritative description.
+#
+# This workflow uses the `codemagic-cli-tools` Python package (a CLI
+# library for App Store Connect API + keychain helpers) inside the
+# macOS runner. That is NOT the Codemagic hosted-build service — the
+# build itself runs on GitHub Actions' macos-latest runner.
+#
+# Bash steps are intentionally close to the old codemagic.yaml so the
+# Hard-won lessons in CLAUDE.md (sec 1-15) stay directly applicable.
 #
 # Trigger: push of a tag matching `v*` (same as Codemagic).
 # Runner:  macos-14 (Apple Silicon) — Xcode 15.x default; pin via
