@@ -254,6 +254,13 @@ struct HomeView: View {
 private struct CallsTabView: View {
     @EnvironmentObject var appState: AppState
     @State private var contactId = ""
+    /// 2026-05-08 fix v1.0.417 — cache rubrica → display name so the
+    /// recents row renders the contact's friendly name instead of the
+    /// raw UUID. Loaded once `onAppear` and refreshed when the recents
+    /// list changes (keeps freshly-added contacts visible without a
+    /// full screen reload). Same priority as `CallHistoryStore`:
+    /// rubrica match → raw userId fallback.
+    @State private var contactNameByUserId: [String: String] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -313,7 +320,7 @@ private struct CallsTabView: View {
                     } else {
                         ForEach(appState.recentCalls, id: \.self) { call in
                             HStack {
-                                Label(call, systemImage: "phone.fill")
+                                Label(displayNameFor(call), systemImage: "phone.fill")
                                 Spacer()
                                 Button {
                                     Task { await appState.startCall(contactId: call, video: false) }
@@ -336,6 +343,33 @@ private struct CallsTabView: View {
                 }
             }
         }
+        .onAppear { reloadContactNameCache() }
+        .onChange(of: appState.recentCalls) { _, _ in reloadContactNameCache() }
+    }
+
+    /// Resolve the rubrica name for a given userId, falling back to the
+    /// raw userId when no rubrica match exists. Stays in sync with
+    /// `CallHistoryStore.resolvePeerDisplay` — keep them aligned if you
+    /// ever change the priority order.
+    private func displayNameFor(_ userId: String) -> String {
+        if let name = contactNameByUserId[userId], !name.isEmpty {
+            return name
+        }
+        return userId
+    }
+
+    /// Pull the latest rubrica snapshot from `ContactsStore` and rebuild
+    /// the in-memory dictionary used by `displayNameFor`. Cheap (one
+    /// UserDefaults read + one JSON decode) so safe to call on every
+    /// recents change; the alternative — looking up per-row inline —
+    /// would re-decode for every visible cell on every scroll tick.
+    private func reloadContactNameCache() {
+        let stored = ContactsStore().load()
+        var map: [String: String] = [:]
+        for c in stored where !c.displayName.isEmpty {
+            map[c.userId] = c.displayName
+        }
+        contactNameByUserId = map
     }
 }
 

@@ -49,8 +49,29 @@ final class CallHistoryStore: ObservableObject {
     /// `appState.recentCalls` (lista `[String]` di userId, no metadata).
     /// Quando l'engine wires il vero repository, questa funzione
     /// chiama il DAO + traduce in `CallHistoryEntry`.
+    ///
+    /// 2026-05-08 fix v1.0.417 — Pavel reported the call-history list
+    /// was still rendering raw UUIDs even after the v1.0.416 caller-ID
+    /// substitution fix (which only touched the inbound CallKit path).
+    /// We now resolve `peerDisplay` against the local `ContactsStore`
+    /// (rubrica) at refresh time. Same priority as the inbound handler:
+    ///   1. local rubrica display name
+    ///   2. legacy mock prefix strip (`user-mario` → "Mario")
+    ///   3. raw userId (last-resort fallback)
+    /// The peer's "public phone number" is NOT available here because
+    /// the engine repository doesn't persist call records yet, so we
+    /// only stash the rubrica match. When the engine repo lands, the
+    /// resolved `caller_display` from the wire will fold in here too.
     func refresh(from appState: AppState) {
         loading = true
+        // Pre-load contacts ONCE per refresh — `ContactsStore.load()`
+        // hits UserDefaults + JSON-decodes the full list, so resolving
+        // 20 recents inline would be 20 disk hits. Build a lookup dict.
+        let stored = ContactsStore().load()
+        var nameByUserId: [String: String] = [:]
+        for c in stored where !c.displayName.isEmpty {
+            nameByUserId[c.userId] = c.displayName
+        }
         // Best-effort: per ogni recentCalls userId, costruiamo
         // un'entry "outgoing" con startedAt = adesso − idx × 5 min,
         // duration random 30-300s. Stub fino al wiring engine.
@@ -66,9 +87,10 @@ final class CallHistoryStore: ObservableObject {
             out.append(.init(
                 id: "stub-\(idx)-\(userId)",
                 peerUserId: userId,
-                peerDisplay: userId.hasPrefix("user-")
-                    ? String(userId.dropFirst(5)).capitalized
-                    : userId,
+                peerDisplay: Self.resolvePeerDisplay(
+                    userId: userId,
+                    nameByUserId: nameByUserId
+                ),
                 direction: dir,
                 startedAt: started,
                 durationSeconds: dur,
@@ -80,6 +102,24 @@ final class CallHistoryStore: ObservableObject {
         let tombstones = Self.deletedIds
         entries = out.filter { !tombstones.contains($0.id) }
         loading = false
+    }
+
+    /// Resolve a peer's display string for the call-history row using the
+    /// same priority as the inbound `call_incoming` handler in AppState.
+    /// Pure helper so the logic stays testable independently of UserDefaults.
+    static func resolvePeerDisplay(
+        userId: String,
+        nameByUserId: [String: String]
+    ) -> String {
+        if let name = nameByUserId[userId], !name.isEmpty {
+            return name
+        }
+        // Legacy mock convention `user-<name>` — kept so existing
+        // SwiftUI previews & test fixtures still render readable.
+        if userId.hasPrefix("user-") {
+            return String(userId.dropFirst(5)).capitalized
+        }
+        return userId
     }
 
     /// Seed the store with mock entries if empty. Used by the view's
