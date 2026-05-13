@@ -344,7 +344,14 @@ private struct CallsTabView: View {
             }
         }
         .onAppear { reloadContactNameCache() }
-        .onChange(of: appState.recentCalls) { _, _ in reloadContactNameCache() }
+        // iOS 16 deployment target — must use the single-param onChange
+        // form. The two-param `{ _, _ in ... }` overload is iOS 17+ and
+        // breaks the Xcode 26 build via silent Swift type-checker
+        // timeout (xcbeautify swallows the diagnostic, Build IPA exits
+        // 65 with no actionable error — see CLAUDE.md sec 13/14).
+        // Existing onChange at line 69 already uses this single-param
+        // form for the same reason.
+        .onChange(of: appState.recentCalls) { _ in reloadContactNameCache() }
     }
 
     /// Resolve the rubrica name for a given userId, falling back to the
