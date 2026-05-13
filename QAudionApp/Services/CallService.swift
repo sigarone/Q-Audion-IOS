@@ -206,10 +206,17 @@ final class CallService {
             self.onDeepfakeScore?(level, score)
         }
 
-        try integration.onCallSetupStarted { data in
-            // Transport layer sends opaque message to remote peer.
-            // Actual network transport is handled by the signaling layer.
-        }
+        // NOTE: do NOT call `integration.onCallSetupStarted` here.
+        // That legacy entry point flipped the engine state machine into
+        // .capabilitySent with an empty send-closure (bytes → /dev/null),
+        // which then made `beginAndroidOutgoing` →
+        // `onAndroidCallSetupStarted` fail with
+        // `invalidState(.capabilitySent)` so no PQC OFFER ever reached
+        // the peer and the call attached no media (silent audio).
+        // The universal outgoing path is `beginAndroidOutgoing` for
+        // ALL peer types (iOS / Android / Desktop) — it owns the
+        // idle → capabilitySent transition itself and ships the real
+        // JSON+QUAD OFFER pair.
 
         self.callIntegration = integration
         startDurationTimer()
