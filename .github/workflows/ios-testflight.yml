@@ -279,6 +279,9 @@ jobs:
 
       # ----------------------------------------------------------
       # 7b) Build IPA. Identical command to codemagic.yaml.
+      #     On failure: print full build.log to stdout so the
+      #     error is visible in the GitHub Actions step UI without
+      #     downloading the artifact.
       # ----------------------------------------------------------
       - name: Build IPA
         working-directory: QAudionApp
@@ -286,7 +289,8 @@ jobs:
           set -o pipefail
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
-            --scheme QAudionApp 2>&1 | tee build.log
+            --scheme QAudionApp 2>&1 | tee build.log \
+          || (echo ""; echo "=== BUILD FAILED — full build.log ==="; cat build.log; exit 1)
 
       # ----------------------------------------------------------
       # 8) Patch onnxruntime.framework MinimumOSVersion + re-sign.
