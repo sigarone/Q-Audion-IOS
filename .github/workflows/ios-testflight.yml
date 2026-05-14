@@ -246,7 +246,39 @@ jobs:
           xcode-project use-profiles --project "QAudionApp/$XCODE_PROJECT"
 
       # ----------------------------------------------------------
-      # 7) Build IPA. Identical command to codemagic.yaml.
+      # 7a) Diagnose Swift compile errors BEFORE the full build.
+      #     Runs xcodebuild without code signing so Swift errors
+      #     appear in the raw output (xcbeautify filters them away
+      #     in the build-ipa step). The diag.log artifact is the
+      #     primary diagnostic source on build failures.
+      #     See CLAUDE.md sec 13 for the type-checker timeout traps.
+      # ----------------------------------------------------------
+      - name: Diagnose Swift compile (raw xcodebuild)
+        working-directory: QAudionApp
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee diag.log | grep -E 'error:|warning:|note:' || true
+          echo "--- diag.log tail ---"
+          tail -50 diag.log
+
+      - name: Upload diag.log
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-${{ github.run_number }}
+          path: QAudionApp/diag.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      # ----------------------------------------------------------
+      # 7b) Build IPA. Identical command to codemagic.yaml.
       # ----------------------------------------------------------
       - name: Build IPA
         working-directory: QAudionApp

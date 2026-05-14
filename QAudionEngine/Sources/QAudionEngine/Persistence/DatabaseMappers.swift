@@ -41,7 +41,8 @@ extension Message: FetchableRecord, PersistableRecord {
     }
     
     public init(row: Row) throws {
-        let reactions: [String: [String]]? = try row[Columns.reactionsJson].flatMap { (json: String) in
+        let reactionsJson: String? = row[Columns.reactionsJson]
+        let reactions: [String: [String]]? = reactionsJson.flatMap { json in
             guard let data = json.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode([String: [String]].self, from: data)
         }

@@ -1,65 +1,46 @@
 import Foundation
 import GRDB
 
-/// Hardened SQLite database for Q-Audion iOS.
+/// Local SQLite database for Q-Audion iOS.
 ///
-/// Implements at-rest encryption via SQLCipher and forensic hardening
-/// (secure_delete, auto_vacuum) to match the Android security posture.
+/// Uses iOS Data Protection (FileProtectionType.completeUntilFirstUserAuthentication)
+/// for at-rest encryption — the file is inaccessible until the user first unlocks
+/// the device after a reboot. Forensic hardening via PRAGMA secure_delete + auto_vacuum.
+///
+/// Note: GRDB-SQLCipher is not available as an SPM product. SQLCipher integration
+/// requires CocoaPods or a separate xcframework — deferred to a future sprint.
 public final class QAudionDatabase {
-    
+
     public static let shared = QAudionDatabase()
-    
+
     private let dbQueue: DatabaseQueue
-    private let keyStore = QAudionKeyStore()
-    private static let dbPassphraseKey = "qaudion.db.passphrase.v1"
-    
+
     private init() {
         do {
             let dbURL = try FileManager.default
                 .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
                 .appendingPathComponent("qaudion.sqlite")
-            
-            // 1. Resolve or mint the 32-byte encryption key
-            let passphrase = try QAudionDatabase.resolvePassphrase(keyStore: keyStore)
-            
-            // 2. Configure GRDB with SQLCipher
+
+            // Apply iOS Data Protection so the file is encrypted when device is locked.
+            if !FileManager.default.fileExists(atPath: dbURL.path) {
+                FileManager.default.createFile(atPath: dbURL.path, contents: nil, attributes: [
+                    .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication
+                ])
+            }
+
             var config = Configuration()
             config.prepareDatabase { db in
-                // Anti-Forensic Hardening:
-                // secure_delete = ON ensures deleted data is zeroed out immediately.
-                // auto_vacuum = FULL ensures empty pages are removed from the file.
                 try db.execute(sql: "PRAGMA secure_delete = ON")
                 try db.execute(sql: "PRAGMA auto_vacuum = FULL")
             }
-            
-            // 3. Set the encryption key (raw 32-byte key as SQLCipher hex blob x'...')
-            let hexKey = "x'" + passphrase.map { String(format: "%02x", $0) }.joined() + "'"
-            config.passphrase = hexKey
-            
+
             self.dbQueue = try DatabaseQueue(path: dbURL.path, configuration: config)
-            
-            // 4. Run migrations
+
             try migrator.migrate(dbQueue)
-            
+
         } catch {
-            fatalError("Failed to initialize secure database: \(error)")
+            fatalError("Failed to initialize database: \(error)")
         }
-    }
-    
-    private static func resolvePassphrase(keyStore: QAudionKeyStore) throws -> Data {
-        if let existing = keyStore.loadKey(identifier: dbPassphraseKey) {
-            return existing
-        }
-        // Mint a fresh 32-byte raw key
-        var key = Data(count: 32)
-        let result = key.withUnsafeMutableBytes {
-            SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!)
-        }
-        guard result == errSecSuccess else {
-            throw NSError(domain: "QAudionDatabase", code: -1, userInfo: [NSLocalizedDescriptionKey: "PRNG failure"])
-        }
-        try keyStore.storeKey(identifier: dbPassphraseKey, keyData: key)
-        return key
     }
     
     // MARK: - Migrations

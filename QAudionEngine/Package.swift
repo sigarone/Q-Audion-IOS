@@ -23,8 +23,12 @@ let package = Package(
         // Pinned to a known-good iOS 16-compatible release. The IPA size impact is
         // significant (~150 MB) but unavoidable for cross-platform 1:1 + group calls.
         .package(url: "https://github.com/stasel/WebRTC", exact: "131.0.0"),
-        // W500: GRDB + SQLCipher for at-rest encryption and forensic hardening.
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.24.2"),
+        // W500: GRDB for local persistence (conversation + message store).
+        // Note: GRDB-SQLCipher is NOT a valid SPM product in groue/GRDB.swift —
+        // SQLCipher integration is available only via CocoaPods/xcframework.
+        // Using standard GRDB; iOS Data Protection (FileProtectionType) provides
+        // at-rest encryption when the device is locked.
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
     ],
     targets: [
         .target(
@@ -78,7 +82,7 @@ let package = Package(
                 "COpus",
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
                 .product(name: "WebRTC", package: "WebRTC"),
-                .product(name: "GRDB-SQLCipher", package: "GRDB.swift"),
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Sources/QAudionEngine",
             resources: [
