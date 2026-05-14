@@ -103,14 +103,10 @@ public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
         super.init()
     }
 
-    public func setCallback(_ callback: RTCVideoDecoderCallback?) {
+    public func setCallback(_ callback: @escaping RTCVideoDecoderCallback) {
         self.callback = callback
-        if callback != nil {
-            delegate.setCallback { [weak self] frame in
-                self?.callback?(frame)
-            }
-        } else {
-            delegate.setCallback(nil)
+        delegate.setCallback { [weak self] frame in
+            self?.callback?(frame)
         }
     }
 
