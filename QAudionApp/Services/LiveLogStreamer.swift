@@ -88,7 +88,9 @@ public final class LiveLogStreamer {
         self.userIdProvider = getUserId
         
         pathMonitor.pathUpdateHandler = { [weak self] path in
-            self?.currentPath = path
+            Task { @MainActor [weak self] in
+                self?.currentPath = path
+            }
         }
         pathMonitor.start(queue: DispatchQueue.global(qos: .background))
         
