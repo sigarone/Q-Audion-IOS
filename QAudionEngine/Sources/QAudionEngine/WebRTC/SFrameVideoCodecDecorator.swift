@@ -19,14 +19,18 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
         super.init()
     }
 
-    public func setCallback(_ callback: @escaping RTCVideoEncoderCallback) {
+    public func setCallback(_ callback: RTCVideoEncoderCallback?) {
         self.callback = callback
+        guard callback != nil else {
+            delegate.setCallback(nil)
+            return
+        }
         delegate.setCallback { [weak self] (image, codecInfo) -> Bool in
-            guard let self = self, let callback = self.callback else { return false }
-            
+            guard let self = self, let cb = self.callback else { return false }
+
             // If no sealer is provided, pass through as plain WebRTC.
             guard let sealer = self.sealerProvider() else {
-                return callback(image, codecInfo)
+                return cb(image, codecInfo)
             }
 
             // Intercept and seal.
@@ -36,9 +40,9 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
                 keyFrame: image.frameType == .videoFrameKey,
                 padded: true // Match Android's 64-byte padding policy
             ) else {
-                return callback(image, codecInfo)
+                return cb(image, codecInfo)
             }
-            
+
             // Clone the image but with the encrypted buffer.
             let encryptedImage = RTCEncodedImage()
             encryptedImage.buffer = sealedData
@@ -54,9 +58,13 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
             encryptedImage.rotation = image.rotation
             encryptedImage.qp = image.qp
             encryptedImage.contentType = image.contentType
-            
-            return callback(encryptedImage, codecInfo)
+
+            return cb(encryptedImage, codecInfo)
         }
+    }
+
+    public func startEncode(with settings: RTCVideoEncoderSettings, numberOfCores: Int32) -> Int {
+        return delegate.startEncode(with: settings, numberOfCores: numberOfCores)
     }
 
     public func release() -> Int {
@@ -67,13 +75,21 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
         return delegate.encode(frame, codecSpecificInfo: codecSpecificInfo, frameTypes: frameTypes)
     }
 
-    public func setBitrate(_ bitrateKbit: UInt32, framerate: UInt32) -> Int {
+    public func setBitrate(_ bitrateKbit: UInt32, framerate: UInt32) -> Int32 {
         return delegate.setBitrate(bitrateKbit, framerate: framerate)
     }
 
     public func implementationName() -> String {
         return "SFrame(\(delegate.implementationName()))"
     }
+
+    public func scalingSettings() -> RTCVideoEncoderQpThresholds? {
+        return delegate.scalingSettings()
+    }
+
+    public var resolutionAlignment: Int { return delegate.resolutionAlignment }
+    public var applyAlignmentToAllSimulcastLayers: Bool { return delegate.applyAlignmentToAllSimulcastLayers }
+    public var supportsNativeHandle: Bool { return delegate.supportsNativeHandle }
 }
 
 public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
@@ -87,11 +103,19 @@ public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
         super.init()
     }
 
-    public func setCallback(_ callback: @escaping RTCVideoDecoderCallback) {
+    public func setCallback(_ callback: RTCVideoDecoderCallback?) {
         self.callback = callback
-        delegate.setCallback { [weak self] (frame) -> Void in
-            self?.callback?(frame)
+        if callback != nil {
+            delegate.setCallback { [weak self] frame in
+                self?.callback?(frame)
+            }
+        } else {
+            delegate.setCallback(nil)
         }
+    }
+
+    public func startDecode(withNumberOfCores numberOfCores: Int32) -> Int {
+        return delegate.startDecode(withNumberOfCores: numberOfCores)
     }
 
     public func release() -> Int {
@@ -103,11 +127,11 @@ public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
         guard let sealer = self.sealerProvider() else {
             return delegate.decode(image, missingFrames: missingFrames, codecSpecificInfo: codecSpecificInfo, renderTimeMs: renderTimeMs)
         }
-        
+
         // Intercept and open.
         do {
             let plaintext = try sealer.open(image.buffer)
-            
+
             // Clone the image but with the decrypted buffer.
             let decryptedImage = RTCEncodedImage()
             decryptedImage.buffer = plaintext
@@ -123,10 +147,10 @@ public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
             decryptedImage.rotation = image.rotation
             decryptedImage.qp = image.qp
             decryptedImage.contentType = image.contentType
-            
+
             return delegate.decode(decryptedImage, missingFrames: missingFrames, codecSpecificInfo: codecSpecificInfo, renderTimeMs: renderTimeMs)
         } catch {
-            print("[SFrameVideoDecoder] decryption failed: \(error)")
+            _ = error
             // Drop the frame — better to skip a frame than to feed garbage to the decoder.
             return 0
         }
