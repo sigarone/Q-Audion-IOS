@@ -47,12 +47,6 @@ on:
         description: 'Tag to build (e.g. v1.0.398). Leave empty to use HEAD.'
         required: false
 
-env:
-  # Opt-in to Node.js 24 for all JavaScript actions. Silences the
-  # github.blog/changelog/2025-09-19 deprecation warning ("Node.js 20
-  # actions are deprecated") and pre-empts the June 2026 forced cutover.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   build:
     # Apple requires Xcode 26 / iOS 26 SDK for App Store submissions
@@ -80,7 +74,7 @@ jobs:
       #    inspect tags + version metadata.
       # ----------------------------------------------------------
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
@@ -270,7 +264,7 @@ jobs:
       - name: Upload diag.log
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: diag-${{ github.run_number }}
           path: QAudionApp/diag.log
@@ -384,7 +378,7 @@ jobs:
         # retention-days dropped 14 → 7 to be a good citizen now that
         # we've observed the org's quota cap fill up.
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-build-${{ github.run_number }}
           path: |
