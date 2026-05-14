@@ -1,5 +1,7 @@
 import Foundation
 import QAudionEngine
+import Network
+import UIKit
 
 /// W417 — Always-on real-time telemetry pump.
 ///
@@ -68,6 +70,9 @@ public final class LiveLogStreamer {
     private var lastUploadStartedAt: Date = Date.distantPast
     private let minSecondsBetweenUploads: TimeInterval = 2.0
     private var isStarted: Bool = false
+    
+    private let pathMonitor = NWPathMonitor()
+    private var currentPath: NWPath?
 
     private init() {}
 
@@ -81,6 +86,12 @@ public final class LiveLogStreamer {
         self.serverUrl = serverUrl
         self.tokenProvider = getToken
         self.userIdProvider = getUserId
+        
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            self?.currentPath = path
+        }
+        pathMonitor.start(queue: DispatchQueue.global(qos: .background))
+        
         scheduleTimer()
         let session: String = bootSessionId
         let line: String = "LiveLogStreamer started session=" + session
@@ -90,6 +101,7 @@ public final class LiveLogStreamer {
     public func stop() {
         timer?.invalidate()
         timer = nil
+        pathMonitor.cancel()
         isStarted = false
     }
 
@@ -132,8 +144,19 @@ public final class LiveLogStreamer {
         if lines.count > maxLinesPerChunk {
             lines = Array(lines.prefix(maxLinesPerChunk))
         }
+
+        let model = UIDevice.current.model
+        let os = "ios-" + UIDevice.current.systemVersion
+        let net = getNetworkType()
+        let metered = currentPath?.isExpensive ?? false
+        let appVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+
+        let header = "{\"type\":\"header\",\"session\":\"\(bootSessionId)\",\"model\":\"\(model)\",\"brand\":\"Apple\",\"os\":\"\(os)\",\"net\":\"\(net)\",\"metered\":\(metered),\"app_ver\":\"\(appVer)\"}"
+        
         var body: String = ""
-        body.reserveCapacity(lines.count * 220)
+        body.reserveCapacity(lines.count * 220 + 256)
+        body.append(header)
+        body.append("\n")
         for line in lines {
             body.append(line)
             body.append("\n")
@@ -219,5 +242,14 @@ public final class LiveLogStreamer {
             i += 1
         }
         return prefix + s
+    }
+
+    private func getNetworkType() -> String {
+        guard let path = currentPath else { return "NONE" }
+        if path.usesInterfaceType(.wifi) { return "WIFI" }
+        if path.usesInterfaceType(.cellular) { return "CELLULAR" }
+        if path.usesInterfaceType(.wiredEthernet) { return "ETHERNET" }
+        if path.usesInterfaceType(.loopback) { return "LOOPBACK" }
+        return "OTHER"
     }
 }

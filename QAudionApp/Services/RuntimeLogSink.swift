@@ -132,19 +132,26 @@ public final class RuntimeLogSink: ObservableObject {
         var highest: Int64 = since
         for e in copy where e.seq > since {
             if e.tag == "livelog" { continue }
-            var line = String()
-            line.reserveCapacity(220)
-            line.append(f.string(from: e.timestamp))
-            line.append(" ")
-            line.append(e.level.rawValue.uppercased())
-            line.append(" [")
-            line.append(e.tag)
-            line.append("] ")
-            line.append(e.message)
-            lines.append(line)
+            
+            let ts = f.string(from: e.timestamp)
+            let lvl = e.level.rawValue.uppercased().prefix(1)
+            let tag = escapeJson(e.tag)
+            let msg = escapeJson(e.message)
+            
+            let json = "{\"ts\":\"\(ts)\",\"lvl\":\"\(lvl)\",\"tag\":\"\(tag)\",\"msg\":\"\(msg)\"}"
+            lines.append(json)
+            
             if e.seq > highest { highest = e.seq }
         }
         return IncrementalSnapshot(lines: lines, highestSeq: highest)
+    }
+
+    private func escapeJson(_ s: String) -> String {
+        return s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\t", with: "\\t")
     }
 
     /// Drop everything. Used by Settings → "Pulisci log".

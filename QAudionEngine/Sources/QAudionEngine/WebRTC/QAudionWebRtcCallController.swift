@@ -172,8 +172,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         self.recipientId = recipientId
 
         let iceServers = await fetchIceServers()
+        let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
+            if case .sframe(let sealer) = self?.videoSealer {
+                return sealer
+            }
+            return nil
+        })
         let pc = QAudionPeerConnection(
-            factory: QAudionPeerConnectionFactory.shared.factory,
+            factory: factory,
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)
@@ -250,8 +256,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         self.recipientId = callerId
 
         let iceServers = await fetchIceServers()
+        let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
+            if case .sframe(let sealer) = self?.videoSealer {
+                return sealer
+            }
+            return nil
+        })
         let pc = QAudionPeerConnection(
-            factory: QAudionPeerConnectionFactory.shared.factory,
+            factory: factory,
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)

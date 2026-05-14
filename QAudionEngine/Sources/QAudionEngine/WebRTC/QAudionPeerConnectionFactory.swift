@@ -25,19 +25,29 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     public var factory: RTCPeerConnectionFactory {
         lock.lock(); defer { lock.unlock() }
         if let f = _factory { return f }
+        let f = createFactory()
+        _factory = f
+        return f
+    }
+
+    /// Create a new factory instance, optionally decorated with an SFrame sealer provider.
+    public func createFactory(sealerProvider: @escaping () -> SFrameVideoSealer? = { nil }) -> RTCPeerConnectionFactory {
         // RTCInitializeSSL is idempotent — safe to call once on first use.
         RTCInitializeSSL()
-        // W350: prefer HEVC over H264 in SDP. Both peers fall back to
-        // H264 when one side doesn't advertise HEVC, but when both do
-        // the lower bitrate wins.
-        let encoderFactory = HevcPreferredVideoEncoderFactory()
-        let decoderFactory = HevcPreferredVideoDecoderFactory()
-        let factory = RTCPeerConnectionFactory(
+        
+        let encoderFactory = SFrameVideoEncoderFactoryDecorator(
+            delegate: HevcPreferredVideoEncoderFactory(),
+            sealerProvider: sealerProvider
+        )
+        let decoderFactory = SFrameVideoDecoderFactoryDecorator(
+            delegate: HevcPreferredVideoDecoderFactory(),
+            sealerProvider: sealerProvider
+        )
+        
+        return RTCPeerConnectionFactory(
             encoderFactory: encoderFactory,
             decoderFactory: decoderFactory
         )
-        _factory = factory
-        return factory
     }
 
     /// Tear down — only call from app-shutdown hooks.
