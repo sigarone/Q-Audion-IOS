@@ -21,14 +21,14 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
 
     public func setCallback(_ callback: @escaping RTCVideoEncoderCallback) {
         self.callback = callback
-        delegate.setCallback { [weak self] (image, codecInfo, fragmentation) -> Bool in
+        delegate.setCallback { [weak self] (image, codecInfo) -> Bool in
             guard let self = self, let callback = self.callback else { return false }
             
             // If no sealer is provided, pass through as plain WebRTC.
             guard let sealer = self.sealerProvider() else {
-                return callback(image, codecInfo, fragmentation)
+                return callback(image, codecInfo)
             }
-            
+
             // Intercept and seal.
             guard let sealedData = try? sealer.seal(
                 plaintext: image.buffer,
@@ -36,7 +36,7 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
                 keyFrame: image.frameType == .videoFrameKey,
                 padded: true // Match Android's 64-byte padding policy
             ) else {
-                return callback(image, codecInfo, fragmentation)
+                return callback(image, codecInfo)
             }
             
             // Clone the image but with the encrypted buffer.
@@ -52,32 +52,27 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
             encryptedImage.encodeFinishMs = image.encodeFinishMs
             encryptedImage.frameType = image.frameType
             encryptedImage.rotation = image.rotation
-            encryptedImage.completeFrame = image.completeFrame
             encryptedImage.qp = image.qp
             encryptedImage.contentType = image.contentType
             
-            return callback(encryptedImage, codecInfo, fragmentation)
+            return callback(encryptedImage, codecInfo)
         }
     }
 
-    public func release() -> Int32 {
+    public func release() -> Int {
         return delegate.release()
     }
 
-    public func encode(_ frame: RTCVideoFrame, codecInfo: RTCCodecSpecificInfo?, frameTypes: [NSNumber]) -> Int32 {
-        return delegate.encode(frame, codecInfo: codecInfo, frameTypes: frameTypes)
+    public func encode(_ frame: RTCVideoFrame, codecSpecificInfo: RTCCodecSpecificInfo?, frameTypes: [NSNumber]) -> Int {
+        return delegate.encode(frame, codecSpecificInfo: codecSpecificInfo, frameTypes: frameTypes)
     }
 
-    public func setBitrate(_ bitrateKbit: Int32, framerate: Int32) -> Int32 {
+    public func setBitrate(_ bitrateKbit: UInt32, framerate: UInt32) -> Int {
         return delegate.setBitrate(bitrateKbit, framerate: framerate)
     }
 
     public func implementationName() -> String {
         return "SFrame(\(delegate.implementationName()))"
-    }
-
-    public func settings() -> RTCVideoEncoderSettings {
-        return delegate.settings()
     }
 }
 
@@ -99,14 +94,14 @@ public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
         }
     }
 
-    public func release() -> Int32 {
+    public func release() -> Int {
         return delegate.release()
     }
 
-    public func decode(_ image: RTCEncodedImage, missingFrames: Bool, codecInfo: RTCCodecSpecificInfo?, renderTimeMs: Int64) -> Int32 {
+    public func decode(_ image: RTCEncodedImage, missingFrames: Bool, codecSpecificInfo: RTCCodecSpecificInfo?, renderTimeMs: Int64) -> Int {
         // If no sealer is provided, pass through as plain WebRTC.
         guard let sealer = self.sealerProvider() else {
-            return delegate.decode(image, missingFrames: missingFrames, codecInfo: codecInfo, renderTimeMs: renderTimeMs)
+            return delegate.decode(image, missingFrames: missingFrames, codecSpecificInfo: codecSpecificInfo, renderTimeMs: renderTimeMs)
         }
         
         // Intercept and open.
@@ -126,11 +121,10 @@ public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
             decryptedImage.encodeFinishMs = image.encodeFinishMs
             decryptedImage.frameType = image.frameType
             decryptedImage.rotation = image.rotation
-            decryptedImage.completeFrame = image.completeFrame
             decryptedImage.qp = image.qp
             decryptedImage.contentType = image.contentType
             
-            return delegate.decode(decryptedImage, missingFrames: missingFrames, codecInfo: codecInfo, renderTimeMs: renderTimeMs)
+            return delegate.decode(decryptedImage, missingFrames: missingFrames, codecSpecificInfo: codecSpecificInfo, renderTimeMs: renderTimeMs)
         } catch {
             print("[SFrameVideoDecoder] decryption failed: \(error)")
             // Drop the frame — better to skip a frame than to feed garbage to the decoder.

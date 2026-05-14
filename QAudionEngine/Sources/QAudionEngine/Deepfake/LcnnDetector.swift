@@ -157,11 +157,20 @@ public final class LcnnDetector: @unchecked Sendable {
     /// unconditionally and the Confidence Index simply ignores its output
     /// (`score == -1.0`) until Sprint 22 deploys the artefact.
     ///
-    /// - Parameter bundle: Bundle to search for the model. Defaults to
-    ///   ``Bundle/module`` (`QAudionEngineResources`).
+    /// Load the LCNN detector from the QAudionEngine resource bundle.
+    ///
     /// - Throws: ``LcnnError/runtimeUnavailable`` on simulator builds where
     ///   the ONNX Runtime XCFramework is not linked.
-    public init(bundle: Bundle = .module) throws {
+    public convenience init() throws {
+        try self.init(bundle: Bundle.module)
+    }
+
+    /// Load the LCNN detector from a specific bundle (for testing / custom deployments).
+    ///
+    /// - Parameter bundle: Bundle containing `lcnn_deepfake_v1_int8.onnx`.
+    /// - Throws: ``LcnnError/runtimeUnavailable`` on simulator builds where
+    ///   the ONNX Runtime XCFramework is not linked.
+    public init(bundle: Bundle) throws {
         let url = bundle.url(
             forResource: LcnnDetector.bundledResourceName,
             withExtension: "onnx"

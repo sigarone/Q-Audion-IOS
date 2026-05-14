@@ -63,10 +63,10 @@ public final class QAudionDatabase {
             
             try db.create(table: "messages") { t in
                 t.column("id", .text).primaryKey()
-                t.column("conversationId", .text).notNull().references("conversations", onDelete: .cascade)
+                t.column("conversationId", .text).notNull().references("conversations", onDelete: .cascade).indexed()
                 t.column("direction", .text).notNull()
                 t.column("plaintext", .text).notNull()
-                t.column("sentAt", .datetime).notNull()
+                t.column("sentAt", .datetime).notNull().indexed()
                 t.column("deliveredAt", .datetime)
                 t.column("readAt", .datetime)
                 t.column("status", .text).notNull()
@@ -79,21 +79,16 @@ public final class QAudionDatabase {
                 t.column("edited", .boolean)
                 t.column("deletedAt", .datetime)
                 t.column("reactionsJson", .text) // Map encoded as JSON
-                
-                t.indexed(on: "conversationId")
-                t.indexed(on: "sentAt")
             }
             
             try db.create(table: "security_events") { t in
                 t.column("id", .text).primaryKey()
                 t.column("kind", .text).notNull() // RE_KEY, THREAT, DEEPFAKE, SESSION_START
                 t.column("severity", .text).notNull() // INFO, WARNING, CRITICAL
-                t.column("timestamp", .datetime).notNull()
+                t.column("timestamp", .datetime).notNull().indexed()
                 t.column("details", .text)
                 t.column("confidenceScore", .double)
                 t.column("peerUserId", .text)
-                
-                t.indexed(on: "timestamp")
             }
         }
         
