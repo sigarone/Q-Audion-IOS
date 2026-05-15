@@ -4,6 +4,18 @@ public protocol CallingApi {
     func sendCallOffer(recipientId: String, sdp: String) async throws
     func sendCallAnswer(recipientId: String, sdp: String) async throws
     func sendIceCandidate(recipientId: String, candidate: String) async throws
+
+    /// Send an ICE candidate with the media stream identifier and m-line index
+    /// from the WebRTC stack. Android WsCodec.kt uses `sdp_mid` to route the
+    /// candidate to the correct m-line (audio vs video). Sending "" and 0
+    /// always routes to the audio m-line, silently breaking video ICE for
+    /// multi-stream calls. Default impl falls back to the sdp-less overload.
+    func sendIceCandidate(
+        recipientId: String,
+        candidate: String,
+        sdpMid: String?,
+        sdpMLineIndex: Int32
+    ) async throws
     func sendHangup(recipientId: String) async throws
     func sendOpaqueMessage(recipientId: String, data: Data) async throws
 
@@ -125,6 +137,19 @@ public protocol CallingApi {
 public extension CallingApi {
     func sendCallProcessing(callId: String, callerId: String) async throws { /* no-op default */ }
     func sendCallReady(callId: String, callerId: String) async throws { /* no-op default */ }
+
+    /// Default impl — falls back to the sdp-less overload (drops sdpMid /
+    /// sdpMLineIndex). Backends that send multi-stream ICE (audio + video)
+    /// MUST override to pass the real values or Android will route every
+    /// candidate to the audio m-line, silently breaking video ICE.
+    func sendIceCandidate(
+        recipientId: String,
+        candidate: String,
+        sdpMid: String?,
+        sdpMLineIndex: Int32
+    ) async throws {
+        try await sendIceCandidate(recipientId: recipientId, candidate: candidate)
+    }
 
     /// Default impl — drops `capabilities` + `callerDisplay` + `hasVideo`
     /// and forwards to the legacy `sendCallOffer`. Backends supporting the

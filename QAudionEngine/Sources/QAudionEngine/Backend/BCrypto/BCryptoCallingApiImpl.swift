@@ -158,16 +158,31 @@ public final class BCryptoCallingApiImpl: CallingApi {
     }
 
     public func sendIceCandidate(recipientId: String, candidate: String) async throws {
-        let cid = currentCallId()
-        ws.send(
-            type: "call_ice",
-            data: [
-                "call_id":         cid,
-                "candidate":       candidate,
-                "sdp_mid":         "",
-                "sdp_mline_index": 0,
-            ]
+        try await sendIceCandidate(
+            recipientId: recipientId,
+            candidate: candidate,
+            sdpMid: nil,
+            sdpMLineIndex: 0
         )
+    }
+
+    /// Override with real `sdp_mid` / `sdp_mline_index` from the WebRTC stack.
+    /// Android WsCodec.kt uses `sdp_mid` to route the candidate to the correct
+    /// m-line (audio vs video) — without this, video ICE silently breaks.
+    public func sendIceCandidate(
+        recipientId: String,
+        candidate: String,
+        sdpMid: String?,
+        sdpMLineIndex: Int32
+    ) async throws {
+        let cid = currentCallId()
+        var data: [String: Any] = [
+            "call_id":         cid,
+            "candidate":       candidate,
+            "sdp_mline_index": sdpMLineIndex,
+        ]
+        data["sdp_mid"] = sdpMid ?? ""
+        ws.send(type: "call_ice", data: data)
     }
 
     public func sendHangup(recipientId: String) async throws {

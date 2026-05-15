@@ -534,8 +534,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                                  sdpMid: String?,
                                  sdpMLineIndex: Int32) {
         guard let rid = recipientId else { return }
+        let mid: String? = sdpMid
+        let mlineIdx: Int32 = sdpMLineIndex
         Task {
-            try? await callingApi.sendIceCandidate(recipientId: rid, candidate: candidate)
+            try? await callingApi.sendIceCandidate(
+                recipientId: rid,
+                candidate: candidate,
+                sdpMid: mid,
+                sdpMLineIndex: mlineIdx
+            )
         }
     }
 
