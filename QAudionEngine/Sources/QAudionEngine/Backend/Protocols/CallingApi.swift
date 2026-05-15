@@ -20,6 +20,17 @@ public protocol CallingApi {
     /// extension). Pure digits expected so the callee can dial it back.
     /// When nil, the field is omitted and the server fills it with the
     /// caller's internal extension.
+    ///
+    /// `hasVideo` sets `has_video` and `call_type` on the wire. Default
+    /// impl forwards to the non-video overload (audio call).
+    func sendCallOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        callerDisplay: String?,
+        hasVideo: Bool
+    ) async throws
+
     func sendCallOffer(
         recipientId: String,
         sdp: String,
@@ -102,10 +113,27 @@ public extension CallingApi {
     func sendCallProcessing(callId: String, callerId: String) async throws { /* no-op default */ }
     func sendCallReady(callId: String, callerId: String) async throws { /* no-op default */ }
 
+    /// Default impl — drops `capabilities` + `callerDisplay` + `hasVideo`
+    /// and forwards to the legacy `sendCallOffer`. Backends supporting the
+    /// SFrame handshake AND video calls MUST override (see
+    /// BCryptoCallingApiImpl.sendCallOffer(... capabilities:callerDisplay:hasVideo:)).
+    func sendCallOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        callerDisplay: String?,
+        hasVideo: Bool
+    ) async throws {
+        try await sendCallOffer(
+            recipientId: recipientId,
+            sdp: sdp,
+            capabilities: capabilities,
+            callerDisplay: callerDisplay
+        )
+    }
+
     /// Default impl — drops `capabilities` + `callerDisplay` and forwards
-    /// to the legacy `sendCallOffer`. Backends supporting the SFrame
-    /// handshake AND the caller-id substitution MUST override (see
-    /// BCryptoCallingApiImpl.sendCallOffer(... capabilities:callerDisplay:)).
+    /// to the legacy `sendCallOffer`.
     func sendCallOffer(
         recipientId: String,
         sdp: String,

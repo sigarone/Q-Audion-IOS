@@ -1,6 +1,9 @@
 import Foundation
 #if canImport(WebRTC)
 import WebRTC
+#if os(iOS)
+import AVFoundation
+#endif
 
 /// Orchestrates a single 1:1 WebRTC call from the iOS side. Bridges the
 /// existing CallingApi signaling (call_offer / call_answer / call_ice /
@@ -110,6 +113,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private let relayProvider: RelayCredentialsProvider?
     private var peerConnection: QAudionPeerConnection?
     private var recipientId: String?
+    #if os(iOS)
+    private var localVideoCapturer: RTCCameraVideoCapturer?
+    #endif
 
     /// W418 — idempotency guard for `handleRemoteAnswer`. The WS layer
     /// has been observed dispatching `call_answer` twice in rapid
@@ -185,6 +191,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             delegate: self)
         peerConnection = pc
         pc.addLocalAudioTrack()
+        if !audioOnly {
+            // Add the local camera track before creating the offer so the
+            // SDP m=video section is populated. Mirrors Android
+            // VideoTrackManager called on the originator path.
+            if let videoSource = pc.addLocalVideoTrack() {
+                startCameraCapture(for: videoSource)
+            }
+        }
         // W383: install PQC sealer if a session key was set BEFORE
         // the call started. (Late arrivals via the
         // `pqcSessionKey` didSet also call this, but that path
@@ -201,15 +215,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             }
         }
         // Commit 540b79c0 parity — advertise the local SFrame caps on
-        // every outgoing call_offer. Backends/extensions that haven't
-        // yet picked up the new overload silently drop the field via
-        // the protocol-extension default impl; on BCryptoCallingApiImpl
-        // it lands on the JSON wire as "capabilities":["sframe-v1"].
+        // every outgoing call_offer. Pass hasVideo so the wire envelope
+        // sets call_type:"video" and has_video:true for video calls,
+        // matching Android WsCodec.kt CallOffer serialization.
+        let callHasVideo: Bool = !audioOnly
         try await callingApi.sendCallOffer(
             recipientId: recipientId,
             sdp: sdp,
             capabilities: CallCapabilities.local,
-            callerDisplay: callerDisplay
+            callerDisplay: callerDisplay,
+            hasVideo: callHasVideo
         )
         state = .connecting
     }
@@ -269,6 +284,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             delegate: self)
         peerConnection = pc
         pc.addLocalAudioTrack()
+        if !audioOnly {
+            // Add the local camera track before creating the answer so the
+            // SDP m=video section is populated. Mirrors Android
+            // PeerConnectionHolder.addVideoTrack() called on the responder path.
+            if let videoSource = pc.addLocalVideoTrack() {
+                startCameraCapture(for: videoSource)
+            }
+        }
         // W383: install PQC sealer if a session key was set BEFORE
         // the call started. (Late arrivals via the
         // `pqcSessionKey` didSet also call this, but that path
@@ -282,9 +305,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 if let err = err { cont.resume(throwing: err) } else { cont.resume() }
             }
         }
-        // 2. Build local answer.
+        // 2. Build local answer — mirror the peer's video intent.
         let answerSdp: String = try await withCheckedThrowingContinuation { cont in
-            pc.createAnswer { result in
+            pc.createAnswer(hasVideo: !audioOnly) { result in
                 switch result {
                 case .success(let sdp): cont.resume(returning: sdp)
                 case .failure(let err): cont.resume(throwing: err)
@@ -317,6 +340,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         if let rid = recipientId {
             try? await callingApi.sendHangup(recipientId: rid)
         }
+        stopCameraCapture()
         peerConnection?.close()
         peerConnection = nil
         recipientId = nil
@@ -400,6 +424,57 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         videoSealer = resolved
         return resolved
+    }
+
+    // MARK: - Camera capture
+
+    /// Start the front-facing camera, targeting 1280×720@30fps, and wire
+    /// its frames into the supplied RTCVideoSource. Gracefully picks the
+    /// closest available format when 720p is not listed. iOS-only — the
+    /// guard compiles away on macOS / Swift package unit-test targets.
+    private func startCameraCapture(for source: RTCVideoSource) {
+        #if os(iOS)
+        let devices: [AVCaptureDevice] = RTCCameraVideoCapturer.captureDevices()
+        guard let camera: AVCaptureDevice = devices.first(where: { $0.position == .front }) ?? devices.first else {
+            print("[WebRTC] startCameraCapture: no camera device found")
+            return
+        }
+        let formats: [AVCaptureDevice.Format] = RTCCameraVideoCapturer.supportedFormats(for: camera)
+        let targetW: Int32 = 1280
+        let targetH: Int32 = 720
+        let bestFormat: AVCaptureDevice.Format? = formats.min { a, b in
+            let da: CMVideoDimensions = CMVideoFormatDescriptionGetDimensions(a.formatDescription)
+            let db: CMVideoDimensions = CMVideoFormatDescriptionGetDimensions(b.formatDescription)
+            let diffA: Int32 = abs(da.width - targetW) + abs(da.height - targetH)
+            let diffB: Int32 = abs(db.width - targetW) + abs(db.height - targetH)
+            return diffA < diffB
+        }
+        guard let selectedFormat: AVCaptureDevice.Format = bestFormat else {
+            print("[WebRTC] startCameraCapture: no supported format")
+            return
+        }
+        let fps: Int = selectedFormat.videoSupportedFrameRateRanges
+            .compactMap { Int($0.maxFrameRate) }
+            .filter { $0 <= 30 }
+            .max() ?? 30
+        let capturer: RTCCameraVideoCapturer = RTCCameraVideoCapturer(delegate: source)
+        localVideoCapturer = capturer
+        capturer.startCapture(with: camera, format: selectedFormat, fps: fps) { [weak self] error in
+            if let err = error {
+                let desc: String = err.localizedDescription
+                let line: String = "[WebRTC] camera capture failed: " + desc
+                print(line)
+                self?.localVideoCapturer = nil
+            }
+        }
+        #endif
+    }
+
+    private func stopCameraCapture() {
+        #if os(iOS)
+        localVideoCapturer?.stopCapture()
+        localVideoCapturer = nil
+        #endif
     }
 
     // MARK: - Internal

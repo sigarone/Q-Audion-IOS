@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
 import SwiftUI
+import CryptoKit
 
 public struct NfcExchangeView: View {
     @StateObject private var driver = NfcExchangeDriver()
@@ -95,28 +96,102 @@ public struct NfcExchangeView: View {
 
 @MainActor
 private final class NfcExchangeDriver: ObservableObject {
-    private let service = NfcCollaborativeExchange()
     @Published private(set) var state: NfcExchangeViewModel.State = .idle
 
+    // Phase 14c (identity-bound) or anonymous fallback.
+    private var apduExchange: NfcApduExchange?
+    private var anonExchange: NfcCollaborativeExchange?
+
+    init() {
+        let idManager = SovereignIdentityManager()
+        if let identity = idManager.loadIdentity(), identity.signingPublic.count == 32 {
+            setupApduExchange(identityPub: identity.signingPublic)
+        } else {
+            setupAnonExchange()
+        }
+    }
+
+    // MARK: - Setup
+
+    private func setupApduExchange(identityPub: Data) {
+        let exchange = NfcApduExchange()
+        exchange.localIdentityPublicKey = identityPub
+        exchange.onStateChanged = { [weak self] apduState in
+            let mapped = Self.mapApduState(apduState)
+            Task { @MainActor [weak self] in
+                self?.state = mapped
+            }
+        }
+        exchange.onPskDerived = { psk, peerIdPub in
+            try Self.persistPsk(psk, peerIdPub: peerIdPub)
+        }
+        apduExchange = exchange
+    }
+
+    private func setupAnonExchange() {
+        let exchange = NfcCollaborativeExchange()
+        exchange.onPskDerivedDelegate = { psk, peerPub in
+            try Self.persistPsk(psk, peerIdPub: peerPub)
+        }
+        exchange.onStateChanged = { [weak self] newState in
+            Task { @MainActor [weak self] in
+                self?.state = newState
+            }
+        }
+        anonExchange = exchange
+    }
+
+    // MARK: - Lifecycle
+
     func start() {
-        service.start()
-        sync()
+        state = .idle
+        if let ex = apduExchange {
+            ex.start()
+        } else if let ex = anonExchange {
+            ex.start()
+            state = ex.viewModel.state
+        }
     }
 
     func cancel() {
-        service.cancel()
-        sync()
+        apduExchange?.cancel()
+        if let ex = anonExchange {
+            ex.cancel()
+            state = ex.viewModel.state
+        } else {
+            if case .waiting = state { state = .idle }
+            if case .exchanging = state { state = .idle }
+        }
     }
 
     func reset() {
-        // Drive state machine from .success back to .idle.
-        // (.success → .idle is an allowed transition in NfcExchangeViewModel.)
-        service.cancel()
-        sync()
+        cancel()
+        state = .idle
     }
 
-    private func sync() {
-        state = service.viewModel.state
+    // MARK: - Helpers (nonisolated for use in non-actor closures)
+
+    private static func mapApduState(_ s: NfcApduExchange.State) -> NfcExchangeViewModel.State {
+        switch s {
+        case .idle:                         return .idle
+        case .waiting:                      return .waiting
+        case .exchanging:                   return .exchanging
+        case .success(let peer):            return .success(peerDeviceName: peer)
+        case .error(let msg):               return .error(message: msg)
+        }
+    }
+
+    /// Persist the derived PSK into SovereignKeyVault under the peer pubkey fingerprint.
+    private static func persistPsk(_ psk: Data, peerIdPub: Data) throws {
+        let hexChars: [String] = peerIdPub.map { byte in
+            let s: String = String(format: "%02x", byte)
+            return s
+        }
+        let fingerprint: String = hexChars.joined()
+        let prefix: Substring = fingerprint.prefix(16)
+        let name: String = "nfc-" + prefix
+        let vault = SovereignKeyVault()
+        try vault.storePsk(name: name, key: psk, fingerprint: fingerprint)
     }
 }
 

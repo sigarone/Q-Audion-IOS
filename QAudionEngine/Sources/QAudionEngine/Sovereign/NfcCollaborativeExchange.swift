@@ -23,6 +23,11 @@ public final class NfcCollaborativeExchange {
     /// Closure receives `(psk: 32B, peerPubkey: 32B)`.
     public var onPskDerivedDelegate: ((Data, Data) async throws -> Void)?
 
+    /// Called whenever the internal ``viewModel`` state changes.
+    /// Fired on whatever thread/Task drives the state machine — callers
+    /// must dispatch to main if they need UI updates.
+    public var onStateChanged: ((NfcExchangeViewModel.State) -> Void)?
+
     public init() {
         self.viewModel = .mock  // starts in .idle
     }
@@ -60,6 +65,7 @@ public final class NfcCollaborativeExchange {
     /// the inner `TagReaderDelegate` directly).
     internal func transition(to state: NfcExchangeViewModel.State) {
         viewModel.transition(to: state)
+        onStateChanged?(viewModel.state)
     }
 
     // MARK: - CoreNFC integration (iOS-only)

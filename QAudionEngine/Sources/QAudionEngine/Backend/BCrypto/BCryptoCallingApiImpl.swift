@@ -67,7 +67,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
         recipientId: String,
         sdp: String,
         capabilities: [String],
-        callerDisplay: String?
+        callerDisplay: String?,
+        hasVideo: Bool
     ) async throws {
         // Pre-flight: iOS suspends URLSessionWebSocketTask silently when the
         // app backgrounds. If we hit `ws.send` with a dead task the envelope
@@ -81,18 +82,34 @@ public final class BCryptoCallingApiImpl: CallingApi {
         // Mint a fresh call_id and stash for the rest of the session.
         let cid = UUID().uuidString
         setActiveCallId(cid)
+        let callType: String = hasVideo ? "video" : "audio"
         var data: [String: Any] = [
             "recipient_id": recipientId,
             "call_id":      cid,
             "sdp":          sdp,
-            "call_type":    "audio",  // SDP-less PQC path uses "audio"
-            "has_video":    false,
+            "call_type":    callType,
+            "has_video":    hasVideo,
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         if let cd = callerDisplay, !cd.isEmpty {
             data["caller_display"] = cd
         }
         ws.send(type: "call_offer", data: data)
+    }
+
+    public func sendCallOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        callerDisplay: String?
+    ) async throws {
+        try await sendCallOffer(
+            recipientId: recipientId,
+            sdp: sdp,
+            capabilities: capabilities,
+            callerDisplay: callerDisplay,
+            hasVideo: false
+        )
     }
 
     public func sendCallAnswer(recipientId: String, sdp: String) async throws {

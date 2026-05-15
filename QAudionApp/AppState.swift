@@ -967,10 +967,20 @@ final class AppState: ObservableObject {
             // SFrame capability tags BEFORE the controller is built.
             // Absent field → nil → useSFrame=false (legacy peer).
             let peerCaps = data["capabilities"] as? [String]
+            // Extract has_video from the wire envelope. Android WsCodec.kt
+            // sends this as a Bool; fall back to call_type=="video" for
+            // servers that don't forward the field.
+            let offerHasVideo: Bool
+            if let v = data["has_video"] as? Bool {
+                offerHasVideo = v
+            } else {
+                offerHasVideo = (data["call_type"] as? String) == "video"
+            }
             self.handleIncomingWebRtcOffer(
                 callerId: callerId,
                 sdp: sdp,
-                peerCapabilities: peerCaps
+                peerCapabilities: peerCaps,
+                hasVideo: offerHasVideo
             )
         }
         ws.registerHandler(type: "call_answer") { [weak self] _, data in
@@ -3262,9 +3272,16 @@ extension AppState {
     func handleIncomingWebRtcOffer(
         callerId: String,
         sdp: String,
-        peerCapabilities: [String]? = nil
+        peerCapabilities: [String]? = nil,
+        hasVideo: Bool = false
     ) {
         guard let provider = liveProvider else { return }
+        // has_video from the wire overrides the pre-set isVideoCall flag
+        // (which comes from call_incoming / PushKit). Using the wire value
+        // directly avoids any race between the two signalling paths.
+        if hasVideo {
+            DispatchQueue.main.async { self.isVideoCall = true }
+        }
         // Spawn a controller bound to the live CallingApi + relay provider.
         let controller = QAudionWebRtcCallController(
             callingApi: provider.callingApi,
@@ -3292,14 +3309,15 @@ extension AppState {
         // CallController consults peerNegotiated() at video-pipeline
         // pickup time; iOS mirrors that contract.
         let caps = peerCapabilities ?? pendingPeerCapabilities
+        let audioOnly = !hasVideo
         webRtcController = controller
         Task {
             do {
                 try await controller.acceptIncomingCall(callerId: callerId,
                                                          offerSdp: sdp,
-                                                         audioOnly: !isVideoCall)
+                                                         audioOnly: audioOnly)
                 controller.acceptPeerCapabilities(caps)
-                print("[AppState] WebRTC: accepted incoming call from \(callerId) (peerCaps=\(caps ?? []))")
+                print("[AppState] WebRTC: accepted incoming call from \(callerId) (video=\(hasVideo), peerCaps=\(caps ?? []))")
             } catch {
                 print("[AppState] WebRTC acceptIncomingCall failed: \(error)")
             }
@@ -3341,7 +3359,8 @@ extension AppState {
     func handleIncomingWebRtcOffer(
         callerId: String,
         sdp: String,
-        peerCapabilities: [String]? = nil
+        peerCapabilities: [String]? = nil,
+        hasVideo: Bool = false
     ) {
         print("[AppState] WebRTC: call_offer received but WebRTC framework not linked")
     }
