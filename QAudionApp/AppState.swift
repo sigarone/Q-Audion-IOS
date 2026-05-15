@@ -1880,7 +1880,7 @@ final class AppState: ObservableObject {
         }
         do {
             try integration.onCapabilityMessageReceived(
-                data: blob, sendOpaqueMessage: sendOpaque)
+                data: blob, fromSenderId: senderId, sendOpaqueMessage: sendOpaque)
         } catch {
             print("[AppState] responder onCapabilityMessageReceived failed: \(error)")
         }
@@ -1904,7 +1904,7 @@ final class AppState: ObservableObject {
         }
         do {
             try integration.onCapabilityMessageReceived(
-                data: blob, sendOpaqueMessage: sendOpaque)
+                data: blob, fromSenderId: senderId, sendOpaqueMessage: sendOpaque)
         } catch {
             print("[AppState] caller onCapabilityMessageReceived failed: \(error)")
         }

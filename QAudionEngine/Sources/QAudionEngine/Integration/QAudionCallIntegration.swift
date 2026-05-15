@@ -294,7 +294,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
     }
 
-    public func onCapabilityMessageReceived(data: Data, sendOpaqueMessage: @escaping (Data) async throws -> Void) throws {
+    public func onCapabilityMessageReceived(data: Data, fromSenderId: String = "", sendOpaqueMessage: @escaping (Data) async throws -> Void) throws {
         guard let message = QAudionCapabilityExchange.parse(data) else { return }
 
         switch message {
@@ -350,16 +350,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         case .keyExchangeOffer(let payload):
             // Peer is initiating first-contact PSK derivation.
             // `payload` = peer's X25519 public key (32B).
-            // TODO(xcode): replace `""` sender with the real BCrypto userId
-            // of the opaque_message originator once the WS dispatcher
-            // threads that through to this handler.
+            // `fromSenderId` is threaded from AppState's WS dispatcher.
             if let ke = contactKeyExchange {
-                Task { await ke.handleOffer(senderId: "", peerPubKey: payload) }
+                let sid: String = fromSenderId
+                Task { await ke.handleOffer(senderId: sid, peerPubKey: payload) }
             }
 
         case .keyExchangeAccept(let payload):
             if let ke = contactKeyExchange {
-                Task { await ke.handleAccept(senderId: "", peerPubKey: payload) }
+                let sid: String = fromSenderId
+                Task { await ke.handleAccept(senderId: sid, peerPubKey: payload) }
             }
 
         case .audioData, .voiceAnalysis, .dcSdpOffer, .dcSdpAnswer, .dcIce, .callHangup:
