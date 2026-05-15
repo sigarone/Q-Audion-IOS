@@ -388,6 +388,12 @@ final class AppState: ObservableObject {
                     // Actual signalling (offer/answer) stays inside QAudionCallIntegration.
                     self.isInCall = true
                     self.activeCallKitId = uuid
+                    // Callee-side state machine: ringing → active on answer.
+                    // Guarded so a stale CallKit callback can't regress an
+                    // already-encrypted or ended call.
+                    if self.callState == .ringing {
+                        self.callState = .active
+                    }
                 }
             }
             provider.onEndCall = { [weak self] uuid in
@@ -2641,6 +2647,12 @@ extension AppState {
                 if let pipeline = self.videoPipeline {
                     pipeline.rotatePqcSealer(key)
                     print("[AppState] video pipeline PQC sealer rotated (\(key.count) bytes)")
+                }
+                // Advance the call-state machine to .encrypted now that
+                // the ML-KEM session key is live. Guards against regressing
+                // from .ended (stale notification after hangup).
+                if self.callState == .active {
+                    self.callState = .encrypted
                 }
             }
         }
