@@ -128,12 +128,30 @@ public final class BCryptoCallingApiImpl: CallingApi {
         sdp: String,
         capabilities: [String]
     ) async throws {
+        try await sendCallAnswer(
+            recipientId: recipientId,
+            sdp: sdp,
+            capabilities: capabilities,
+            hasVideo: false
+        )
+    }
+
+    /// Outbound `call_answer` that echoes the video acceptance flag back
+    /// to the caller. Android WsCodec.kt reads `has_video` from the
+    /// answer envelope — sending `false` on a video call makes it mute
+    /// remote video on its side even when the SDP carries a video track.
+    public func sendCallAnswer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        hasVideo: Bool
+    ) async throws {
         let cid = currentCallId()
         var data: [String: Any] = [
             "recipient_id": recipientId,
             "call_id":      cid,
             "sdp":          sdp,
-            "has_video":    false,
+            "has_video":    hasVideo,
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         ws.send(type: "call_answer", data: data)

@@ -48,6 +48,19 @@ public protocol CallingApi {
         capabilities: [String]
     ) async throws
 
+    /// Outbound `call_answer` that also advertises whether the callee
+    /// accepts the video track. Android WsCodec.kt reads `has_video`
+    /// from the answer to confirm the callee's camera state; sending
+    /// `false` on a video call makes Android mute remote video.
+    /// Default impl drops `hasVideo` and forwards to the non-video
+    /// overload (preserves compat for backends that haven't migrated).
+    func sendCallAnswer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        hasVideo: Bool
+    ) async throws
+
     /// Originator-side helper that ships a `call_offer` with an
     /// EXTERNALLY-CHOSEN callId AND the local SFrame capability tags.
     /// Mirrors Android's commit 540b79c0 wire format. Default impl
@@ -151,6 +164,17 @@ public extension CallingApi {
         capabilities: [String]
     ) async throws {
         try await sendCallAnswer(recipientId: recipientId, sdp: sdp)
+    }
+
+    /// Default impl — drops `hasVideo` and forwards to the legacy
+    /// `sendCallAnswer(capabilities:)`.
+    func sendCallAnswer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        hasVideo: Bool
+    ) async throws {
+        try await sendCallAnswer(recipientId: recipientId, sdp: sdp, capabilities: capabilities)
     }
 
     /// Default impl — drops `capabilities` + `callerDisplay` and forwards

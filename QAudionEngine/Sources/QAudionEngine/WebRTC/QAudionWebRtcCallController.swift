@@ -109,6 +109,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
     public private(set) var videoSealer: VideoCallSealer?
 
+    /// When `true`, `startOutgoingCall` / `acceptIncomingCall` add the
+    /// local video track to the SDP (so the m=video section is present)
+    /// but do NOT start `RTCCameraVideoCapturer`. Used when AppState's
+    /// `VideoCallPipeline` already owns the camera and will bridge its
+    /// captured frames into the `RTCVideoSource` — avoids the dual
+    /// `AVCaptureSession` conflict on outgoing video calls.
+    /// Set BEFORE `startOutgoingCall` / `acceptIncomingCall`.
+    public var useExternalVideoSource: Bool = false
+
     private let callingApi: CallingApi
     private let relayProvider: RelayCredentialsProvider?
     private var peerConnection: QAudionPeerConnection?
@@ -315,11 +324,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             }
         }
         // 3. Ship answer back. Commit 540b79c0 parity — advertise the
-        //    local SFrame caps on every outgoing call_answer.
+        //    local SFrame caps on every outgoing call_answer. Echo
+        //    hasVideo so Android WsCodec.kt knows the callee's camera
+        //    state and doesn't mute remote video on its side.
         try await callingApi.sendCallAnswer(
             recipientId: callerId,
             sdp: answerSdp,
-            capabilities: CallCapabilities.local
+            capabilities: CallCapabilities.local,
+            hasVideo: !audioOnly
         )
         state = .connecting
     }
@@ -432,7 +444,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// its frames into the supplied RTCVideoSource. Gracefully picks the
     /// closest available format when 720p is not listed. iOS-only — the
     /// guard compiles away on macOS / Swift package unit-test targets.
+    /// No-op when `useExternalVideoSource == true` (AppState's
+    /// VideoCallPipeline owns the camera on that path).
     private func startCameraCapture(for source: RTCVideoSource) {
+        guard !useExternalVideoSource else { return }
         #if os(iOS)
         let devices: [AVCaptureDevice] = RTCCameraVideoCapturer.captureDevices()
         guard let camera: AVCaptureDevice = devices.first(where: { $0.position == .front }) ?? devices.first else {

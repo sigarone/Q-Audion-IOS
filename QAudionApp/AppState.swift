@@ -2367,6 +2367,12 @@ final class AppState: ObservableObject {
                 controller.sframeVideoSealerFactory = { keyProvider in
                     SFrameVideoSealer.forRotatingKey(keyProvider)
                 }
+                // For outgoing video calls VideoCallPipeline (above)
+                // already opened the camera. Tell the controller to
+                // skip RTCCameraVideoCapturer so the two AVCaptureSessions
+                // don't conflict. The video m=video SDP section still
+                // exists so Android negotiates video correctly.
+                if video { controller.useExternalVideoSource = true }
                 webRtcController = controller
                 // Same caller-id substitution as the legacy path —
                 // both rails ship the same `caller_display` so the
