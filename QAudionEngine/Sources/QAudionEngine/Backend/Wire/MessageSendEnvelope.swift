@@ -2,34 +2,47 @@ import Foundation
 
 /// Pure-Swift codec for the `msg_send` WebSocket envelope.
 ///
-/// Wire format (frozen per spec §5.11 / Android `WsCommand.kt` reference):
+/// Wire format (frozen per Android WsCodec.kt `MsgSend` encoder / spec §5.11):
 /// ```json
 /// { "type": "msg_send", "data": {
-///   "message_id": "<uuid>",
-///   "recipient_id": "<user-uuid>",
-///   "ciphertext": "<base64>",
-///   "client_ts": <unix_ms>
+///   "recipient_id":    "<user-uuid>",
+///   "encrypted_payload": "<base64>",
+///   "msg_type":        0,
+///   "client_msg_id":   "<uuid>",
+///   "expires_in_sec":  0,
+///   "reply_to_server_msg_id": "<uuid>"  // optional
 /// }}
 /// ```
 ///
 /// Outer envelope has no top-level `id` field (lite-server contract).
-/// Decoders tolerate unknown future fields (e.g. `server_ts`).
+/// Decoders tolerate unknown future fields.
 ///
-/// This is a standalone codec — NOT coupled to BCryptoWebSocketClient (USER WT).
+/// This is a standalone codec — NOT coupled to BCryptoMessageApiImpl (USER WT).
 public struct MessageSendEnvelope: Equatable {
 
-    public let messageId: UUID
     public let recipientId: String
-    public let ciphertext: Data
-    public let clientTs: Int64  // unix milliseconds
+    public let encryptedPayload: Data
+    public let msgType: Int
+    public let clientMsgId: String
+    public let expiresInSec: Int64
+    public let replyToServerMsgId: String?
 
     public static let typeName = "msg_send"
 
-    public init(messageId: UUID, recipientId: String, ciphertext: Data, clientTs: Int64) {
-        self.messageId = messageId
+    public init(
+        recipientId: String,
+        encryptedPayload: Data,
+        msgType: Int = 0,
+        clientMsgId: String,
+        expiresInSec: Int64 = 0,
+        replyToServerMsgId: String? = nil
+    ) {
         self.recipientId = recipientId
-        self.ciphertext = ciphertext
-        self.clientTs = clientTs
+        self.encryptedPayload = encryptedPayload
+        self.msgType = msgType
+        self.clientMsgId = clientMsgId
+        self.expiresInSec = expiresInSec
+        self.replyToServerMsgId = replyToServerMsgId
     }
 
     // MARK: - Error
@@ -37,7 +50,6 @@ public struct MessageSendEnvelope: Equatable {
     public enum Error: Swift.Error, LocalizedError {
         case wrongType(String)
         case missingField(String)
-        case invalidUuid(String)
         case invalidBase64
         case malformedJson(String)
 
@@ -45,8 +57,7 @@ public struct MessageSendEnvelope: Equatable {
             switch self {
             case .wrongType(let t):    return "Expected type=msg_send, got '\(t)'"
             case .missingField(let f): return "Missing field '\(f)'"
-            case .invalidUuid(let s):  return "Bad UUID: '\(s)'"
-            case .invalidBase64:       return "ciphertext is not valid base64"
+            case .invalidBase64:       return "encrypted_payload is not valid base64"
             case .malformedJson(let m): return "Malformed JSON: \(m)"
             }
         }
@@ -55,15 +66,17 @@ public struct MessageSendEnvelope: Equatable {
     // MARK: - Encoding
 
     public func encodeAsJsonString() throws -> String {
-        let outer: [String: Any] = [
-            "type": MessageSendEnvelope.typeName,
-            "data": [
-                "message_id": messageId.uuidString.lowercased(),
-                "recipient_id": recipientId,
-                "ciphertext": ciphertext.base64EncodedString(),
-                "client_ts": clientTs
-            ] as [String: Any]
+        var inner: [String: Any] = [
+            "recipient_id":      recipientId,
+            "encrypted_payload": encryptedPayload.base64EncodedString(),
+            "msg_type":          msgType,
+            "client_msg_id":     clientMsgId,
+            "expires_in_sec":    expiresInSec,
         ]
+        if let reply = replyToServerMsgId {
+            inner["reply_to_server_msg_id"] = reply
+        }
+        let outer: [String: Any] = ["type": MessageSendEnvelope.typeName, "data": inner]
         let data = try JSONSerialization.data(withJSONObject: outer, options: [.sortedKeys])
         guard let s = String(data: data, encoding: .utf8) else {
             throw Error.malformedJson("UTF-8 encoding failed")
@@ -90,26 +103,39 @@ public struct MessageSendEnvelope: Equatable {
         guard type == typeName else { throw Error.wrongType(type) }
         guard let inner = dict["data"] as? [String: Any] else { throw Error.missingField("data") }
 
-        guard let midStr = inner["message_id"] as? String else { throw Error.missingField("message_id") }
-        guard let mid = UUID(uuidString: midStr) else { throw Error.invalidUuid(midStr) }
-
         guard let rid = inner["recipient_id"] as? String else { throw Error.missingField("recipient_id") }
 
-        guard let b64 = inner["ciphertext"] as? String else { throw Error.missingField("ciphertext") }
-        let ct: Data
+        guard let b64 = inner["encrypted_payload"] as? String else { throw Error.missingField("encrypted_payload") }
+        let payload: Data
         if b64.isEmpty {
-            ct = Data()
+            payload = Data()
         } else {
             guard let d = Data(base64Encoded: b64) else { throw Error.invalidBase64 }
-            ct = d
+            payload = d
         }
 
-        let ts: Int64
-        if let v = inner["client_ts"] as? Int64 { ts = v }
-        else if let v = inner["client_ts"] as? Int { ts = Int64(v) }
-        else if let v = inner["client_ts"] as? Double { ts = Int64(v) }
-        else { throw Error.missingField("client_ts") }
+        let msgType: Int
+        if let v = inner["msg_type"] as? Int { msgType = v }
+        else if let v = inner["msg_type"] as? NSNumber { msgType = v.intValue }
+        else { msgType = 0 }
 
-        return MessageSendEnvelope(messageId: mid, recipientId: rid, ciphertext: ct, clientTs: ts)
+        guard let clientMsgId = inner["client_msg_id"] as? String else { throw Error.missingField("client_msg_id") }
+
+        let expiresInSec: Int64
+        if let v = inner["expires_in_sec"] as? Int64 { expiresInSec = v }
+        else if let v = inner["expires_in_sec"] as? Int { expiresInSec = Int64(v) }
+        else if let v = inner["expires_in_sec"] as? Double { expiresInSec = Int64(v) }
+        else { expiresInSec = 0 }
+
+        let replyTo = inner["reply_to_server_msg_id"] as? String
+
+        return MessageSendEnvelope(
+            recipientId: rid,
+            encryptedPayload: payload,
+            msgType: msgType,
+            clientMsgId: clientMsgId,
+            expiresInSec: expiresInSec,
+            replyToServerMsgId: replyTo
+        )
     }
 }

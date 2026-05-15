@@ -38,9 +38,20 @@ public enum HkdfLabels {
     /// Attachment encryption — per-file key derivation.
     public static let fileKey: Data = "q-audion-file-key".data(using: .utf8)!
 
-    /// Recovery seed → secret (BIP-39 mnemonic-derived). Spec value;
-    /// Android implementation may differ — see Open Discrepancy §6.
+    /// Recovery seed → secret (BIP-39 mnemonic-derived).
+    ///
+    /// **KNOWN DISCREPANCY (Phase B.8, not yet implemented on either platform):**
+    /// Android uses `"bcrypto-recov-v1"` as the HKDF *salt* and
+    /// `"recovery-auth-v1"` as the *info*. This constant is the *info* label
+    /// and is correct. The *salt* (`"bcrypto-recov-v1"`) must be supplied by
+    /// the call site when this label is first used — do NOT use `nil` as salt.
+    /// Verified against Android `RecoveryKeyDerivation.kt` before shipping
+    /// Phase B.8 implementation. Do NOT use this constant until then.
     public static let recoveryAuth: Data = "recovery-auth-v1".data(using: .utf8)!
+
+    /// Recovery HKDF salt — counterpart to `recoveryAuth` info.
+    /// Mirrors Android `RecoveryKeyDerivation.kt` `SALT = "bcrypto-recov-v1"`.
+    public static let recoverySalt: Data = "bcrypto-recov-v1".data(using: .utf8)!
 
     // MARK: - Salts (UTF-8)
 
@@ -64,7 +75,7 @@ public enum HkdfLabels {
         let labels: [Data] = [
             messageKey, hybridPqcSessionKey, nfcCollaborativePsk,
             deviceLinkPsk, frameChainAudio, frameChainVideo, fileKey,
-            recoveryAuth, hybridPqcSaltV1, deviceLinkSalt
+            recoveryAuth, recoverySalt, hybridPqcSaltV1, deviceLinkSalt
         ]
         for label in labels {
             guard let s = String(data: label, encoding: .utf8),

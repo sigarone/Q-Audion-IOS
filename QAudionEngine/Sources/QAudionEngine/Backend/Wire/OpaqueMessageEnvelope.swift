@@ -2,10 +2,14 @@ import Foundation
 
 /// Pure-Swift codec for the `opaque_message` WebSocket envelope.
 ///
-/// Wire format (frozen per spec §5.8 + §5.11):
+/// Wire format (frozen per Android WsCodec.kt `OpaqueMessage` / spec §5.8):
 /// ```json
-/// { "type": "opaque_message", "data": { "recipient_id": "<uuid>", "ciphertext": "<base64>" } }
+/// { "type": "opaque_message", "data": { "recipient_id": "<uuid>", "data": "<base64|string>" } }
 /// ```
+///
+/// The inner `data` field carries either:
+/// - A base64-encoded binary payload (iOS/Desktop QUAD frames), OR
+/// - A literal UTF-8 string `"<callId>|<JSON>"` for the Android HandshakeBundle.
 ///
 /// Note: the lite-server variant does NOT consume the `id` correlation
 /// field. Encoders MUST NOT include it; decoders ignore unknown fields.
@@ -16,7 +20,7 @@ public struct OpaqueMessageEnvelope: Equatable {
 
     public let type: String          // always "opaque_message" for this struct
     public let recipientId: String
-    public let ciphertext: Data
+    public let ciphertext: Data      // decoded from the inner "data" base64 field
 
     public static let typeName = "opaque_message"
 
@@ -40,7 +44,7 @@ public struct OpaqueMessageEnvelope: Equatable {
             switch self {
             case .wrongType(let t): return "Expected type=opaque_message, got '\(t)'"
             case .missingField(let f): return "Missing required field '\(f)'"
-            case .invalidBase64: return "ciphertext is not valid base64"
+            case .invalidBase64: return "data field is not valid base64"
             case .malformedJson(let m): return "Malformed JSON: \(m)"
             }
         }
@@ -53,13 +57,13 @@ public struct OpaqueMessageEnvelope: Equatable {
             "type": type,
             "data": [
                 "recipient_id": recipientId,
-                "ciphertext": ciphertext.base64EncodedString()
+                "data": ciphertext.base64EncodedString()  // wire key is "data" (Android WsCodec)
             ]
         ]
         // Use `.sortedKeys` so output is deterministic — important for
         // KAT vectors and signature stability.
-        let data = try JSONSerialization.data(withJSONObject: outer, options: [.sortedKeys])
-        guard let s = String(data: data, encoding: .utf8) else {
+        let jsonData = try JSONSerialization.data(withJSONObject: outer, options: [.sortedKeys])
+        guard let s = String(data: jsonData, encoding: .utf8) else {
             throw Error.malformedJson("UTF-8 encoding failed")
         }
         return s
@@ -70,7 +74,7 @@ public struct OpaqueMessageEnvelope: Equatable {
             "type": type,
             "data": [
                 "recipient_id": recipientId,
-                "ciphertext": ciphertext.base64EncodedString()
+                "data": ciphertext.base64EncodedString()  // wire key is "data" (Android WsCodec)
             ]
         ]
         return try JSONSerialization.data(withJSONObject: outer, options: [.sortedKeys])
@@ -107,8 +111,9 @@ public struct OpaqueMessageEnvelope: Equatable {
         guard let recipientId = inner["recipient_id"] as? String else {
             throw Error.missingField("recipient_id")
         }
-        guard let b64 = inner["ciphertext"] as? String else {
-            throw Error.missingField("ciphertext")
+        // Wire key is "data" (Android WsCodec.kt line 140: put("data", command.data))
+        guard let b64 = inner["data"] as? String else {
+            throw Error.missingField("data")
         }
         let ct: Data
         if b64.isEmpty {

@@ -11,9 +11,11 @@ final class OpaqueMessageEnvelopeTests: XCTestCase {
         let json = try envelope.encodeAsJsonString()
         XCTAssertTrue(json.contains("\"type\":\"opaque_message\""))
         XCTAssertTrue(json.contains("\"recipient_id\":\"\(recipient)\""))
-        // Verify ciphertext is base64
-        XCTAssertTrue(json.contains("\"ciphertext\":\"\(ciphertext.base64EncodedString())\""))
-        // Verify NO id field at top level
+        // Wire key is "data" to match Android WsCodec.kt OpaqueMessage encoder.
+        XCTAssertTrue(json.contains("\"data\":\"\(ciphertext.base64EncodedString())\""))
+        // Must NOT use the old "ciphertext" key.
+        XCTAssertFalse(json.contains("\"ciphertext\""))
+        // No id field at top level (lite-server contract).
         XCTAssertFalse(json.contains("\"id\""))
     }
 
@@ -28,7 +30,7 @@ final class OpaqueMessageEnvelopeTests: XCTestCase {
 
     func test_decode_rejectsWrongType() {
         let badJson = """
-        {"type":"audio_frame","data":{"recipient_id":"x","ciphertext":"AAAA"}}
+        {"type":"audio_frame","data":{"recipient_id":"x","data":"AAAA"}}
         """
         XCTAssertThrowsError(try OpaqueMessageEnvelope.decode(jsonString: badJson)) { err in
             guard case OpaqueMessageEnvelope.Error.wrongType = err else {
@@ -39,14 +41,14 @@ final class OpaqueMessageEnvelopeTests: XCTestCase {
 
     func test_decode_rejectsMissingRecipient() {
         let badJson = """
-        {"type":"opaque_message","data":{"ciphertext":"AAAA"}}
+        {"type":"opaque_message","data":{"data":"AAAA"}}
         """
         XCTAssertThrowsError(try OpaqueMessageEnvelope.decode(jsonString: badJson))
     }
 
     func test_decode_rejectsBadBase64() {
         let badJson = """
-        {"type":"opaque_message","data":{"recipient_id":"x","ciphertext":"not_base64_!@#"}}
+        {"type":"opaque_message","data":{"recipient_id":"x","data":"not_base64_!@#"}}
         """
         XCTAssertThrowsError(try OpaqueMessageEnvelope.decode(jsonString: badJson)) { err in
             guard case OpaqueMessageEnvelope.Error.invalidBase64 = err else {
@@ -56,9 +58,8 @@ final class OpaqueMessageEnvelopeTests: XCTestCase {
     }
 
     func test_decode_toleratesExtraFields() throws {
-        // Server / future iOS client may add fields; decoder should ignore them.
         let json = """
-        {"type":"opaque_message","data":{"recipient_id":"\(recipient)","ciphertext":"\(ciphertext.base64EncodedString())","server_ts":1745000000,"unknown_future_field":42}}
+        {"type":"opaque_message","data":{"recipient_id":"\(recipient)","data":"\(ciphertext.base64EncodedString())","server_ts":1745000000,"unknown_future_field":42}}
         """
         let decoded = try OpaqueMessageEnvelope.decode(jsonString: json)
         XCTAssertEqual(decoded.recipientId, recipient)
@@ -67,6 +68,6 @@ final class OpaqueMessageEnvelopeTests: XCTestCase {
     func test_encode_emptyCiphertextIsAllowed() throws {
         let envelope = OpaqueMessageEnvelope.makeOutbound(recipientId: recipient, ciphertext: Data())
         let json = try envelope.encodeAsJsonString()
-        XCTAssertTrue(json.contains("\"ciphertext\":\"\""))
+        XCTAssertTrue(json.contains("\"data\":\"\""))
     }
 }

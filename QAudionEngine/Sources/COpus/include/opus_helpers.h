@@ -31,4 +31,8 @@ static inline int opus_helper_set_inband_fec(OpusEncoder *enc, opus_int32 fec) {
     return opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC(fec));
 }
 
+static inline int opus_helper_set_packet_loss_perc(OpusEncoder *enc, opus_int32 loss_perc) {
+    return opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC(loss_perc));
+}
+
 #endif /* OPUS_HELPERS_H */

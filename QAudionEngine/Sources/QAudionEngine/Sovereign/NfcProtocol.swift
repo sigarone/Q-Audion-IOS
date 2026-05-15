@@ -5,10 +5,33 @@ import CoreNFC
 
 /// Handles NFC-based PSK (Pre-Shared Key) exchange.
 ///
-/// On iOS the device can only **read** NDEF tags (no Host Card Emulation).
-/// The typical flow is: an Android device writes a PSK record to an NFC tag,
-/// and the iOS device reads it.  For iOS-to-iOS exchange the QR fallback is
-/// used instead (see ``generateQrPayload(name:key:)``).
+/// ## iOS vs Android NFC architecture
+///
+/// **iOS (this class):** reads passive NDEF tags via `NFCNDEFReaderSession`.
+/// The Android app can write a static PSK record (MIME type
+/// `application/x-qaudion-psk`, payload `[nameLen|name|32B key]`) to any
+/// writable NFC tag; iOS scans and imports it.
+///
+/// **Android Phase 14c+ interactive handshake:** Android also implements an
+/// APDU-based Host Card Emulation (HCE) protocol (AID `F0 BC F1 07 3A 51 00`)
+/// with commands `GET_IDENTITY_KEY (0xC4)`, `PUSH_PEER_IDENTITY (0xC5)`,
+/// `KEY_EXCHANGE (0x01)` that performs a live Ed25519-identity-bound X25519
+/// key exchange with SAS verification. **iOS cannot participate in this flow**
+/// because:
+///   - iOS has no HCE API — it cannot emulate a smart card to a reader.
+///   - `NFCTagReaderSession` can read ISO 7816 tags but only from passive
+///     hardware tags, not from another smartphone acting as a host.
+///
+/// **Consequence:** when an Android peer uses the Phase 14c interactive NFC
+/// pairing, iOS must fall back to QR code exchange. The Android app must
+/// detect that the peer is iOS (or that the APDU SELECT fails) and offer
+/// QR pairing automatically.
+///
+/// **Future fix options:**
+///   1. Add BLE-based key exchange as a universal pairing channel.
+///   2. Add server-mediated key delivery via the KMS (`/api/v1/kms/pending`).
+///   3. Have Android write a plain NDEF PSK tag as a fallback for iOS scanners
+///      (loses the Ed25519 identity binding but provides a PSK).
 ///
 /// All NFC session code is wrapped in `#if canImport(CoreNFC)` so the class
 /// compiles on macOS (used by CI / unit tests) where CoreNFC is unavailable.

@@ -34,11 +34,17 @@ public final class OpusCodec {
         encoder = opus_encoder_create(Int32(AudioConstants.sampleRate),
             Int32(AudioConstants.channels), OPUS_APPLICATION_VOIP, &error)
         if error == OPUS_OK, let enc = encoder {
-            // Set CBR mode (constant bitrate for anti-traffic-analysis)
-            // Use non-variadic C wrappers — Swift cannot call C variadic functions directly.
+            // CBR mode (constant bitrate for anti-traffic-analysis).
             opus_helper_set_vbr(enc, Int32(0))
             opus_helper_set_bitrate(enc, Int32(config.bitrate))
             opus_helper_set_complexity(enc, Int32(config.complexity))
+            // In-band FEC: encoder embeds redundancy in subsequent frames so
+            // the decoder can reconstruct a lost frame from the next one.
+            // Required for parity with Android (FEC on by default there).
+            // 10 % PLR hint lets the encoder calibrate FEC overhead (~+5 %
+            // effective bitrate) without exceeding the CBR budget.
+            opus_helper_set_inband_fec(enc, Int32(1))
+            opus_helper_set_packet_loss_perc(enc, Int32(10))
         }
 
         decoder = opus_decoder_create(Int32(AudioConstants.sampleRate),
@@ -84,7 +90,7 @@ public final class OpusCodec {
                     Int32(opusFrame.count),
                     outBuf.baseAddress!.assumingMemoryBound(to: Int16.self),
                     Int32(AudioConstants.samplesPerFrame),
-                    0)  // no FEC
+                    1)  // use FEC data when available in the frame
             }
         }
 
@@ -112,6 +118,8 @@ public final class OpusCodec {
         if let enc = encoder {
             opus_helper_set_bitrate(enc, Int32(newConfig.bitrate))
             opus_helper_set_complexity(enc, Int32(newConfig.complexity))
+            // FEC stays on across reconfigures — preserving Android parity.
+            opus_helper_set_inband_fec(enc, Int32(1))
         }
     }
 

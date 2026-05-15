@@ -86,6 +86,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
             "call_id":      cid,
             "sdp":          sdp,
             "call_type":    "audio",  // SDP-less PQC path uses "audio"
+            "has_video":    false,
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         if let cd = callerDisplay, !cd.isEmpty {
@@ -112,8 +113,10 @@ public final class BCryptoCallingApiImpl: CallingApi {
     ) async throws {
         let cid = currentCallId()
         var data: [String: Any] = [
-            "call_id": cid,
-            "sdp":     sdp,
+            "recipient_id": recipientId,
+            "call_id":      cid,
+            "sdp":          sdp,
+            "has_video":    false,
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         ws.send(type: "call_answer", data: data)
@@ -142,11 +145,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ws.send(
             type: "call_hangup",
             data: [
-                "call_id":     cid,
-                "reason":      "normal",
-                "recipient_id": recipientId,  // belt-and-braces: server uses
-                                              // call_id but explicit recipient
-                                              // gives a fallback for race cases
+                "call_id":      cid,
+                "reason":       "local_hangup",  // mirrors Android CallHangup.reason
+                "recipient_id": recipientId,     // belt-and-braces routing fallback
             ]
         )
         // Clear after hangup so the next outgoing call starts fresh.
@@ -208,6 +209,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
             "call_id":      callId,
             "sdp":          sdp,
             "call_type":    "audio",
+            "has_video":    false,
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         if let cd = callerDisplay, !cd.isEmpty {
