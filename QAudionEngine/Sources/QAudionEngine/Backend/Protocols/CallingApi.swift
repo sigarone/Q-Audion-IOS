@@ -88,6 +88,22 @@ public protocol CallingApi {
         callerDisplay: String?
     ) async throws
 
+    /// Originator-side `call_offer` with externally-chosen callId carrying
+    /// both capability tags and the `has_video` / `call_type` fields.
+    /// Required so both the PQC-signaling rail and the WebRTC rail agree on
+    /// call type: if the PQC offer says `call_type:"audio"` and the WebRTC
+    /// offer says `call_type:"video"`, Android's `WsCallSignaller` may set
+    /// up the wrong media pipeline on the first offer it processes.
+    /// Default impl drops `hasVideo` and forwards to the non-video overload.
+    func sendCallOfferWithId(
+        callId: String,
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        callerDisplay: String?,
+        hasVideo: Bool
+    ) async throws
+
     /// Ship a literal UTF-8 string in the `data` field of an
     /// `opaque_message` (NOT base64-wrapped). Used for the Android JSON
     /// HandshakeBundle wire format `"<callId>|<JSON>"` — wrapping in
@@ -210,6 +226,28 @@ public extension CallingApi {
         sdp: String,
         capabilities: [String],
         callerDisplay: String?
+    ) async throws {
+        try await sendCallOfferWithId(
+            callId: callId,
+            recipientId: recipientId,
+            sdp: sdp,
+            capabilities: capabilities,
+            callerDisplay: callerDisplay,
+            hasVideo: false
+        )
+    }
+
+    /// Default impl — drops `capabilities` + `callerDisplay` + `hasVideo` and
+    /// falls back to the legacy 3-param overload. This is the fallback leaf for
+    /// backends that haven't migrated; BCryptoCallingApiImpl MUST override to
+    /// ship the real `has_video` / `call_type` wire fields.
+    func sendCallOfferWithId(
+        callId: String,
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        callerDisplay: String?,
+        hasVideo: Bool
     ) async throws {
         try await sendCallOfferWithId(callId: callId, recipientId: recipientId, sdp: sdp)
     }

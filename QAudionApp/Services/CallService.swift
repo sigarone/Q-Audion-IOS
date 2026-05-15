@@ -248,7 +248,8 @@ final class CallService {
         callId: String,
         recipientId: String,
         callingApi: CallingApi,
-        callerDisplay: String? = nil
+        callerDisplay: String? = nil,
+        hasVideo: Bool = false
     ) async throws {
         // Snapshot to local strong ref — prevents use-after-free if
         // another Task tears down callIntegration mid-await.
@@ -258,16 +259,17 @@ final class CallService {
 
         // 1) call_offer (vestigial empty SDP — WIRE_SPEC §3 SDP-less
         //    PQC path uses opaque_message OFFER for the actual crypto).
-        //    `callerDisplay` (when non-nil) is shipped as the
-        //    `caller_display` JSON field — the callee's CallKit prefers
-        //    it over the server-resolved extension.
+        //    `callerDisplay` and `hasVideo` must match the parallel
+        //    WebRTC offer so Android's WsCallSignaller sets up the right
+        //    media pipeline regardless of which offer it processes first.
         let vestigialSdp = ""
         try await callingApi.sendCallOfferWithId(
             callId: callId,
             recipientId: recipientId,
             sdp: vestigialSdp,
             capabilities: CallCapabilities.local,
-            callerDisplay: callerDisplay
+            callerDisplay: callerDisplay,
+            hasVideo: hasVideo
         )
 
         // 2) PQC handshake OFFER pair (JSON + QUAD). Best-effort

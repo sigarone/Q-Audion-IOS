@@ -2306,7 +2306,8 @@ final class AppState: ObservableObject {
                         callId: outgoingCallId,
                         recipientId: contactId,
                         callingApi: provider.callingApi,
-                        callerDisplay: callerDisplay
+                        callerDisplay: callerDisplay,
+                        hasVideo: video
                     )
                 } catch is CancellationError {
                     print("[AppState] startCall cancelled mid-OFFER for callId=\(outgoingCallId.prefix(8))…")

@@ -216,11 +216,6 @@ public final class BCryptoCallingApiImpl: CallingApi {
     }
 
     /// Originator-side `call_offer` with an EXTERNALLY-CHOSEN callId.
-    /// Pins the supplied callId on the in-process state machine so
-    /// subsequent `sendCallAnswer` / `sendIceCandidate` / `sendHangup`
-    /// envelopes ride on the same callId, AND sends the WS frame
-    /// carrying that exact callId — keeping the WS wire, the engine
-    /// stash, and the PQC bundle's callId field all aligned.
     /// Per OpenRouter glm-5.1 review 2026-05-06 P0 #1.
     public func sendCallOfferWithId(callId: String, recipientId: String, sdp: String) async throws {
         try await sendCallOfferWithId(
@@ -228,17 +223,12 @@ public final class BCryptoCallingApiImpl: CallingApi {
             recipientId: recipientId,
             sdp: sdp,
             capabilities: CallCapabilities.local,
-            callerDisplay: nil
+            callerDisplay: nil,
+            hasVideo: false
         )
     }
 
-    /// Originator-side `call_offer` with externally-chosen callId, SFrame
-    /// capability tags (commit 540b79c0 wire format) and the optional
-    /// `caller_display` substitution string. `capabilities` is omitted
-    /// from the JSON envelope when empty — keeps the wire byte-identical
-    /// to the legacy path for tests that pass `[]`. `callerDisplay` is
-    /// likewise omitted when nil/empty so the server-side extension
-    /// fallback kicks in (see protocol kdoc).
+    /// Bridge — drops `hasVideo` (legacy callers). Forwards to the 6-param override.
     public func sendCallOfferWithId(
         callId: String,
         recipientId: String,
@@ -246,20 +236,41 @@ public final class BCryptoCallingApiImpl: CallingApi {
         capabilities: [String],
         callerDisplay: String?
     ) async throws {
-        // Same pre-flight gate as `sendCallOffer` — see that method for the
-        // rationale. iOS-suspended-task recovery happens before any envelope
-        // hits the wire so the UI never sees a CallKit flash on a dead WS.
+        try await sendCallOfferWithId(
+            callId: callId,
+            recipientId: recipientId,
+            sdp: sdp,
+            capabilities: capabilities,
+            callerDisplay: callerDisplay,
+            hasVideo: false
+        )
+    }
+
+    /// Originator-side `call_offer` with externally-chosen callId, SFrame
+    /// capability tags, `caller_display` substitution, and the `has_video` /
+    /// `call_type` fields. This is the single real implementation — all
+    /// narrower overloads bridge here so the wire format is assembled once.
+    public func sendCallOfferWithId(
+        callId: String,
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        callerDisplay: String?,
+        hasVideo: Bool
+    ) async throws {
+        // Same pre-flight gate as `sendCallOffer`.
         let ready = await ws.ensureAuthenticated(timeoutSec: 5)
         if !ready {
             throw BCryptoCallingError.wsUnavailable
         }
         setActiveCallId(callId)
+        let callType: String = hasVideo ? "video" : "audio"
         var data: [String: Any] = [
             "recipient_id": recipientId,
             "call_id":      callId,
             "sdp":          sdp,
-            "call_type":    "audio",
-            "has_video":    false,
+            "call_type":    callType,
+            "has_video":    hasVideo,
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         if let cd = callerDisplay, !cd.isEmpty {
