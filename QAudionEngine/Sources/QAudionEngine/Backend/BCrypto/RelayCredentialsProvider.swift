@@ -104,19 +104,15 @@ public actor RelayCredentialsProvider {
     // MARK: - Internal
 
     private func fetch() async throws -> RelayBundle {
-        let servers = try await api.getRelays()
+        let response = try await api.getRelaysResponse()
         let now = RelayBundle.nowMs()
-        let shortestTtl = servers
+        let shortestTtl = response.relays
             .map { Int64($0.ttl) }
             .min() ?? Self.defaultTtlSec
         return RelayBundle(
-            servers: servers,
-            // CallingApi.getRelays() flattens the response to [RelayServer].
-            // Keep the top-level wssTurnUrl / onionAddress hooks ready for
-            // when we expose a richer API method (TODO: add CallingApi
-            // .getRelaysBundle() returning RelayResponse).
-            wssTurnUrl: nil,
-            onionAddress: nil,
+            servers: response.relays,
+            wssTurnUrl: response.wssTurnUrl,
+            onionAddress: response.onionAddress,
             expiresAtEpochMs: now + shortestTtl * 1000
         )
     }

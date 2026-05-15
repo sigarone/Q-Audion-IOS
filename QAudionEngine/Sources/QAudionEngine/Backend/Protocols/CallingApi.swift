@@ -139,6 +139,12 @@ public protocol CallingApi {
     /// Get TURN/STUN relay servers with time-limited credentials.
     func getRelays() async throws -> [RelayServer]
 
+    /// Get the full relay response including the optional WS-TURN URL and
+    /// Tor onion address used by transport fallback selectors. Default impl
+    /// wraps `getRelays()` and leaves the top-level fields nil — backends
+    /// that decode a full `RelayResponse` SHOULD override to preserve them.
+    func getRelaysResponse() async throws -> RelayResponse
+
     // MARK: - Pre-negotiation (optional — backend-specific)
     // The BCrypto backend implements these. Default impls are no-ops to
     // keep the protocol additive — see CallingApi+PreNegotiation extension.
@@ -153,6 +159,15 @@ public protocol CallingApi {
 public extension CallingApi {
     func sendCallProcessing(callId: String, callerId: String) async throws { /* no-op default */ }
     func sendCallReady(callId: String, callerId: String) async throws { /* no-op default */ }
+
+    /// Default impl — wraps `getRelays()` into a `RelayResponse` with nil
+    /// top-level fields. Backends that decode the full server response SHOULD
+    /// override to preserve wssTurnUrl / onionAddress so the transport fallback
+    /// selectors can use WS-TURN and Tor paths.
+    func getRelaysResponse() async throws -> RelayResponse {
+        let servers = try await getRelays()
+        return RelayResponse(relays: servers, wssTurnUrl: nil, onionAddress: nil)
+    }
 
     /// Default impl — falls back to the sdp-less overload (drops sdpMid /
     /// sdpMLineIndex). Backends that send multi-stream ICE (audio + video)

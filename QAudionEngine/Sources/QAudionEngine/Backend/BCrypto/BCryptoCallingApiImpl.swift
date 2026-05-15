@@ -291,8 +291,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ws.send(
             type: "call_hangup",
             data: [
-                "call_id": callId,
-                "reason":  "originator_offer_failed",
+                "call_id":      callId,
+                "reason":       "originator_offer_failed",
+                "recipient_id": recipientId,   // belt-and-braces routing fallback
             ]
         )
     }
@@ -321,9 +322,12 @@ public final class BCryptoCallingApiImpl: CallingApi {
     }
 
     public func getRelays() async throws -> [RelayServer] {
+        return try await getRelaysResponse().relays
+    }
+
+    public func getRelaysResponse() async throws -> RelayResponse {
         let data = try await rest.get("/api/v1/calling/relays")
-        let response = try JSONDecoder().decode(RelayResponse.self, from: data)
-        return response.relays
+        return try JSONDecoder().decode(RelayResponse.self, from: data)
     }
 
     /// Returns the active call id, falling back to a fresh UUID if none
