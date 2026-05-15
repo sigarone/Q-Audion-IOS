@@ -229,14 +229,15 @@ public final class QAudionPeerConnection: NSObject {
         }
     }
 
-    public func createAnswer(completion: @escaping (Result<String, Error>) -> Void) {
+    public func createAnswer(hasVideo: Bool = false,
+                              completion: @escaping (Result<String, Error>) -> Void) {
         guard let pc = peerConnection else {
             completion(.failure(WebRTCError.notInitialized))
             return
         }
         let constraints = RTCMediaConstraints(
             mandatoryConstraints: ["OfferToReceiveAudio": "true",
-                                     "OfferToReceiveVideo": "false"],
+                                     "OfferToReceiveVideo": hasVideo ? "true" : "false"],
             optionalConstraints: nil)
         pc.answer(for: constraints) { [weak self] sdp, err in
             if let err = err {
