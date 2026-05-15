@@ -2140,13 +2140,7 @@ final class AppState: ObservableObject {
             // route al wsClient. Best-effort: senza token ancora non
             // facciamo wiring (chiamata continua senza network audio,
             // ma HW DSP capture+playback restano comunque attivi via W66).
-            if let token = authService.loadToken(), !token.isEmpty {
-                let backendConfig = BackendConfig(
-                    serverUrl: serverUrl,
-                    accessToken: token
-                )
-                let provider = BCryptoBackendProvider(config: backendConfig)
-                let ws = provider.getWebSocketClient()
+            if let ws = liveProvider?.getWebSocketClient() {
                 callService.wireTransport(
                     wsClient: ws,
                     peerUserId: contactId
@@ -2215,12 +2209,7 @@ final class AppState: ObservableObject {
             // pre-negotiation phases. Set immediately after callService
             // builds the integration.
             if let integration = callService.callIntegration,
-               let token = authService.loadToken(), !token.isEmpty {
-                let backendConfig = BackendConfig(
-                    serverUrl: serverUrl,
-                    accessToken: token
-                )
-                let provider = BCryptoBackendProvider(config: backendConfig)
+               let provider = liveProvider {
                 integration.sendCallProcessing = { callId, callerId in
                     // Forward via the calling API (which routes through WS).
                     Task {
@@ -3097,15 +3086,14 @@ extension AppState {
 
         let pipeline = VideoCallPipeline()
 
-        // Resolve transport (WS client). Without an authenticated
-        // session there's nowhere to ship frames; bail out gracefully.
-        guard let token = authService.loadToken(), !token.isEmpty else {
-            print("[AppState] startVideoPipeline: no auth token, skipping")
+        // Resolve transport (WS client). Reuse the already-authenticated
+        // liveProvider WS — creating a new BCryptoBackendProvider would
+        // produce a disconnected WS whose sendVideoFrame calls are all
+        // silently dropped (webSocketTask == nil → "DROPPED" log).
+        guard let ws = liveProvider?.getWebSocketClient() else {
+            print("[AppState] startVideoPipeline: no live WS provider, skipping")
             return
         }
-        let backendConfig = BackendConfig(serverUrl: serverUrl, accessToken: token)
-        let provider = BCryptoBackendProvider(config: backendConfig)
-        let ws = provider.getWebSocketClient()
 
         // W392 + W394: PQC seal/unwrap on the video transport, with
         // mid-call rekey support. The pipeline owns its own
@@ -3283,12 +3271,6 @@ extension AppState {
         hasVideo: Bool = false
     ) {
         guard let provider = liveProvider else { return }
-        // has_video from the wire overrides the pre-set isVideoCall flag
-        // (which comes from call_incoming / PushKit). Using the wire value
-        // directly avoids any race between the two signalling paths.
-        if hasVideo {
-            DispatchQueue.main.async { self.isVideoCall = true }
-        }
         // Spawn a controller bound to the live CallingApi + relay provider.
         let controller = QAudionWebRtcCallController(
             callingApi: provider.callingApi,
@@ -3310,6 +3292,11 @@ extension AppState {
         controller.sframeVideoSealerFactory = { keyProvider in
             SFrameVideoSealer.forRotatingKey(keyProvider)
         }
+        // For incoming video calls, start the VideoCallPipeline first so it
+        // owns the AVCaptureSession. Tell the WebRTC controller to skip its
+        // own RTCCameraVideoCapturer — avoids the dual AVCaptureSession
+        // conflict that mirrors the outgoing-call handling in startCall.
+        if hasVideo { controller.useExternalVideoSource = true }
         // Commit 540b79c0 parity — apply the peer's caps (from this
         // envelope OR the earlier call_incoming stash) before
         // acceptIncomingCall builds the peer connection. The Android
@@ -3318,13 +3305,24 @@ extension AppState {
         let caps = peerCapabilities ?? pendingPeerCapabilities
         let audioOnly = !hasVideo
         webRtcController = controller
-        Task {
+        let cid = callerId
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            if hasVideo {
+                self.isVideoCall = true
+                // Start the callee's WS video pipeline so that inbound
+                // video_frame envelopes are decoded + displayed and
+                // outbound frames from the camera are shipped to the peer.
+                // Mirrors the startVideoPipeline call on the caller side
+                // in startCall so both peers have symmetric transport.
+                await self.startVideoPipeline(for: cid)
+            }
             do {
-                try await controller.acceptIncomingCall(callerId: callerId,
+                try await controller.acceptIncomingCall(callerId: cid,
                                                          offerSdp: sdp,
                                                          audioOnly: audioOnly)
                 controller.acceptPeerCapabilities(caps)
-                print("[AppState] WebRTC: accepted incoming call from \(callerId) (video=\(hasVideo), peerCaps=\(caps ?? []))")
+                print("[AppState] WebRTC: accepted incoming call from \(cid) (video=\(hasVideo), peerCaps=\(caps ?? []))")
             } catch {
                 print("[AppState] WebRTC acceptIncomingCall failed: \(error)")
             }
