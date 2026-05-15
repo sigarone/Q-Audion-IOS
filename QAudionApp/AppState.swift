@@ -2022,6 +2022,11 @@ final class AppState: ObservableObject {
         // until the next service restart and "online" flickers wrong.
         liveProvider?.persistentConnection.disconnect()
         liveProvider = nil
+        // Drop the relay credentials cache so the next login creates a fresh
+        // RelayCredentialsProvider bound to the new token. Without this,
+        // ensureRelayProvider() returns the stale provider and expired
+        // cache re-fetches fail with the old (invalidated) auth token.
+        _relayProvider = nil
         wsConnectionState = .disconnected
         // W72: drop presence subscriptions + cached statuses so the next
         // login starts with a clean slate.
