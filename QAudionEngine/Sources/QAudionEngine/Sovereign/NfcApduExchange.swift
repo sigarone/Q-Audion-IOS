@@ -69,7 +69,7 @@ public final class NfcApduExchange: NSObject {
 
     // MARK: - Public interface
 
-    public private(set) var state: State = .idle {
+    public internal(set) var state: State = .idle {
         didSet { onStateChanged?(state) }
     }
 
