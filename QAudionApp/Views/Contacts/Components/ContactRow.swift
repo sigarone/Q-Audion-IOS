@@ -1,36 +1,18 @@
 import SwiftUI
 import QAudionEngine
 
-/// Single contact row used inside `ContactsScreen`. 1:1 port of Android
-/// `ContactsRow` from `qaudion-android-new/feature/feature-contacts/.../ContactsUi.kt`.
-///
-/// Layout (left → right):
-///   - 44pt `QAudionAvatar` with optional presence dot
-///   - column: display name (titleSmall) + optional "NEW" pill +
-///     extension line + trust chips inline (PQC / VOICE / ENTERPRISE)
-///   - trailing icons: `bubble.right` (chat), `phone` (call) — both
-///     tinted `scheme.primary`
-///
-/// Engine truth: `ContactsListViewModel.Item` provides `displayName`,
-/// `isOnline`, `isVerified`, `unreadMessageCount`, `avatarUrl`, `phoneHash`.
-/// Richer fields (extension number, voice-match status, enterprise tier,
-/// presence enum beyond online/offline) aren't exposed yet; the row
-/// derives sensible defaults — those become real bindings as the engine
-/// surfaces them.
 struct ContactRow: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
     let item: ContactsListViewModel.Item
-    /// Optional one-line "Int. {n}" extension caption shown under the
-    /// display name. nil hides the caption.
     let extensionLabel: String?
-    /// Optional override for the presence dot. nil falls back to the
-    /// `isOnline` heuristic.
     let presence: PresenceDot?
     let onChatTap: () -> Void
     let onCallTap: () -> Void
+
+    @State private var pulsing = false
 
     init(item: ContactsListViewModel.Item,
          extensionLabel: String? = nil,
@@ -44,14 +26,35 @@ struct ContactRow: View {
         self.onCallTap = onCallTap
     }
 
+    private var resolvedPresence: PresenceDot {
+        presence ?? (item.isOnline ? .online : .offline)
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            QAudionAvatar(
-                displayName: item.displayName,
-                imageURL: item.avatarUrl,
-                size: 44,
-                presenceDot: presence ?? (item.isOnline ? .online : .offline)
-            )
+            // Avatar + presence dot
+            ZStack(alignment: .bottomTrailing) {
+                QAudionAvatar(
+                    displayName: item.displayName,
+                    imageURL: item.avatarUrl,
+                    size: 44,
+                    presenceDot: resolvedPresence
+                )
+                // Pulse ring sui contatti online
+                if resolvedPresence == .online {
+                    Circle()
+                        .stroke(Color(hex: 0x3DD598).opacity(pulsing ? 0 : 0.5),
+                                lineWidth: pulsing ? 6 : 1)
+                        .frame(width: pulsing ? 22 : 12, height: pulsing ? 22 : 12)
+                        .offset(x: 2, y: 2)
+                        .animation(
+                            .easeOut(duration: 1.4).repeatForever(autoreverses: false),
+                            value: pulsing
+                        )
+                }
+            }
+            .onAppear { if resolvedPresence == .online { pulsing = true } }
+            .onChange(of: resolvedPresence) { newVal in pulsing = (newVal == .online) }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -59,10 +62,17 @@ struct ContactRow: View {
                         .qaudionStyle(type.titleSmall)
                         .foregroundStyle(scheme.onSurface)
                         .lineLimit(1)
-                    if item.unreadMessageCount > 0 {
-                        TrustChip("NEW", accent: extras.success)
-                    }
                     Spacer(minLength: 0)
+                    // Unread badge numerico (max 99)
+                    if item.unreadMessageCount > 0 {
+                        Text(item.unreadMessageCount > 99 ? "99+" : "\(item.unreadMessageCount)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(extras.success))
+                            .transition(.scale.combined(with: .opacity))
+                    }
                 }
                 if let ext = extensionLabel {
                     Text(ext)
@@ -97,9 +107,6 @@ struct ContactRow: View {
 
     @ViewBuilder
     private var trustPills: some View {
-        // The engine only carries `isVerified` today — show "PQC" + (if
-        // verified) "VOICE". Enterprise tier is engine-side only and
-        // not exposed to the iOS UI yet, so it doesn't render.
         HStack(spacing: 6) {
             TrustChip("PQC", accent: extras.pqcAccent)
             if item.isVerified {
@@ -108,6 +115,7 @@ struct ContactRow: View {
         }
     }
 }
+
 
 #Preview {
     VStack(spacing: 0) {

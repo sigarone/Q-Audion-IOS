@@ -583,64 +583,99 @@ private struct MonoCaption: ViewModifier {
 
 // MARK: - DialPad sheet
 
-/// Sheet "Componi numero" — input libero ID/numero + bottone "Chiama".
-/// Functional surface (non placeholder): l'input flusce direttamente in
-/// `appState.startCall(contactId:video:)` via il callback `onCall`.
+/// Sheet "Componi numero" con griglia dialpad in-app.
+/// Non usa la tastiera sistema — ogni tasto aggiunge un carattere
+/// con haptic feedback, il backspace rimuove l'ultimo.
 private struct DialPadSheet: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.dismiss) private var dismiss
     @State private var input: String = ""
-    @FocusState private var focused: Bool
     let onCall: (String) -> Void
+
+    private let keys: [[DialKey]] = [
+        [.digit("1", ""),    .digit("2", "ABC"), .digit("3", "DEF")],
+        [.digit("4", "GHI"), .digit("5", "JKL"), .digit("6", "MNO")],
+        [.digit("7", "PQRS"),.digit("8", "TUV"), .digit("9", "WXYZ")],
+        [.symbol("*"),       .digit("0", "+"),   .symbol("#")],
+    ]
 
     var body: some View {
         NavigationStack {
             ZStack {
                 scheme.background.ignoresSafeArea()
-                VStack(spacing: 20) {
-                    // Display monospace dell'input corrente o placeholder.
-                    Text(input.isEmpty ? "—" : input)
-                        .font(.system(size: 36, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(input.isEmpty ? scheme.onSurfaceVariant : scheme.onSurface)
-                        .padding(.top, 24)
-                        .frame(minHeight: 60)
-                        .animation(.easeInOut(duration: 0.15), value: input.isEmpty)
-
-                    // Input field (tastiera namePhonePad iOS gestisce
-                    // direttamente l'inserimento; nessun pad in-app).
-                    TextField("inserisci ID o numero",
-                              text: $input)
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(.namePhonePad)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .focused($focused)
-                        .padding(.horizontal, 24)
-
-                    Spacer()
-
-                    Button {
-                        let trimmed = input.trimmingCharacters(in: .whitespaces)
-                        guard !trimmed.isEmpty else { return }
-                        onCall(trimmed)
-                    } label: {
-                        Text("Chiama")
-                            .qaudionStyle(type.labelLarge)
-                            .foregroundStyle(scheme.onPrimary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 24)
-                                    .fill(input.isEmpty
-                                          ? scheme.surfaceVariant : scheme.primary)
-                            )
+                VStack(spacing: 0) {
+                    // Display numero composto
+                    ZStack {
+                        Text(input.isEmpty ? "——" : input)
+                            .font(.system(size: 38, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(input.isEmpty ? scheme.onSurfaceVariant.opacity(0.4) : scheme.onSurface)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                            .padding(.horizontal, 56)
+                        HStack {
+                            Spacer()
+                            Button {
+                                guard !input.isEmpty else { return }
+                                input.removeLast()
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Image(systemName: "delete.backward")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(input.isEmpty ? scheme.onSurfaceVariant.opacity(0.3) : scheme.onSurfaceVariant)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(input.isEmpty)
+                            .padding(.trailing, 16)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(input.isEmpty)
-                    .padding(.horizontal, 24)
-                    Spacer().frame(height: 24)
+                    .frame(height: 64)
+                    .padding(.top, 16)
+
+                    Divider()
+                        .background(scheme.outline.opacity(0.3))
+                        .padding(.vertical, 8)
+
+                    // Griglia 3×4
+                    VStack(spacing: 4) {
+                        ForEach(keys.indices, id: \.self) { row in
+                            HStack(spacing: 4) {
+                                ForEach(keys[row]) { key in
+                                    DialKeyButton(key: key, scheme: scheme, type: type) {
+                                        input.append(key.value)
+                                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+
+                    // Riga backspace + chiama
+                    HStack(spacing: 16) {
+                        Spacer()
+                        Button {
+                            let trimmed = input.trimmingCharacters(in: .whitespaces)
+                            guard !trimmed.isEmpty else { return }
+                            UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                            onCall(trimmed)
+                        } label: {
+                            Image(systemName: "phone.fill")
+                                .font(.system(size: 24))
+                                .foregroundStyle(scheme.onPrimary)
+                                .frame(width: 68, height: 68)
+                                .background(
+                                    Circle().fill(input.isEmpty ? scheme.surfaceVariant : extras.success)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(input.isEmpty)
+                        .animation(.easeInOut(duration: 0.2), value: input.isEmpty)
+                        Spacer()
+                    }
+                    .padding(.top, 8)
+                    .padding(.bottom, 24)
                 }
             }
             .navigationTitle("Componi numero")
@@ -650,8 +685,75 @@ private struct DialPadSheet: View {
                     Button("Annulla") { dismiss() }
                 }
             }
-            .onAppear { focused = true }
         }
+    }
+}
+
+private enum DialKey: Identifiable, Equatable {
+    case digit(String, String)  // main, sub-label (ABC etc.)
+    case symbol(String)
+
+    var id: String { value }
+
+    var value: String {
+        switch self {
+        case .digit(let v, _): return v
+        case .symbol(let v):   return v
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .digit(let v, _): return v
+        case .symbol(let v):   return v
+        }
+    }
+
+    var sublabel: String? {
+        switch self {
+        case .digit(_, let s): return s.isEmpty ? nil : s
+        case .symbol:          return nil
+        }
+    }
+}
+
+private struct DialKeyButton: View {
+    let key: DialKey
+    let scheme: QAudionColorScheme
+    let type: QAudionTypography
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 1) {
+                Text(key.label)
+                    .font(.system(size: 28, weight: .regular, design: .rounded))
+                    .foregroundStyle(scheme.onSurface)
+                if let sub = key.sublabel {
+                    Text(sub)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .tracking(1.5)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 72)
+        }
+        .buttonStyle(DialKeyStyle(scheme: scheme))
+    }
+}
+
+private struct DialKeyStyle: ButtonStyle {
+    let scheme: QAudionColorScheme
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(configuration.isPressed
+                          ? AnyShapeStyle(scheme.surfaceVariant)
+                          : AnyShapeStyle(Color.clear))
+            )
+            .animation(.easeInOut(duration: 0.08), value: configuration.isPressed)
     }
 }
 
