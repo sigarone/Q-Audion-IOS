@@ -2403,6 +2403,20 @@ final class AppState: ObservableObject {
                             callerDisplay: webRtcCallerDisplay
                         )
                         print("[AppState] WebRTC outgoing offer sent to \(contactId)")
+                        // After startOutgoingCall the WebRTC video source exists.
+                        // Wire VideoCallPipeline → RTCVideoSource so Android
+                        // receives real camera video over WebRTC RTP.
+                        #if os(iOS)
+                        if video, let capturer = controller.webrtcPixelBufferCapturer {
+                            await MainActor.run {
+                                self?.videoPipeline?.onCapturedPixelBuffer = {
+                                    [weak capturer] pixelBuffer, timestampNs in
+                                    capturer?.push(pixelBuffer, rotation: ._0,
+                                                   timestampNs: timestampNs)
+                                }
+                            }
+                        }
+                        #endif
                     } catch {
                         print("[AppState] WebRTC startOutgoingCall failed: \(error)")
                         await MainActor.run {
@@ -3363,6 +3377,17 @@ extension AppState {
                                                          audioOnly: audioOnly)
                 controller.acceptPeerCapabilities(caps)
                 print("[AppState] WebRTC: accepted incoming call from \(cid) (video=\(hasVideo), peerCaps=\(caps ?? []))")
+                // Wire VideoCallPipeline → RTCVideoSource (callee side) so
+                // Android sees iOS camera video over WebRTC RTP.
+                #if os(iOS)
+                if hasVideo, let capturer = controller.webrtcPixelBufferCapturer {
+                    self.videoPipeline?.onCapturedPixelBuffer = {
+                        [weak capturer] pixelBuffer, timestampNs in
+                        capturer?.push(pixelBuffer, rotation: ._0,
+                                       timestampNs: timestampNs)
+                    }
+                }
+                #endif
             } catch {
                 print("[AppState] WebRTC acceptIncomingCall failed: \(error)")
             }

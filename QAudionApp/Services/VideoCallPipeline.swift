@@ -56,6 +56,15 @@ public final class VideoCallPipeline: NSObject {
     /// after start().
     public nonisolated(unsafe) var onOutboundFragment: FragmentCallback?
 
+    /// Fired once per raw captured frame BEFORE HEVC encoding, on the
+    /// capture queue. Used by AppState to push CVPixelBuffers into the
+    /// WebRTC RTCVideoSource for Android interop (Android decodes the
+    /// WebRTC RTP track; it doesn't receive BCrypto WS HEVC fragments).
+    /// Timestamp is nanoseconds (Int64, compatible with RTCVideoFrame).
+    /// `nonisolated(unsafe)` — written from MainActor at setup time,
+    /// read from the capture queue per-frame.
+    public nonisolated(unsafe) var onCapturedPixelBuffer: ((CVPixelBuffer, Int64) -> Void)?
+
     /// Fired once per decoded inbound frame, on a non-main queue. The
     /// UI bridge must hop to MainActor before touching SwiftUI state.
     public nonisolated(unsafe) var onDecodedFrame: FrameCallback?
@@ -137,6 +146,9 @@ public final class VideoCallPipeline: NSObject {
 
     public func stop() {
         guard isRunning else { return }
+        // Drop the WebRTC bridge callback before stopping the session so
+        // no frames are pushed to a deallocated RTCVideoSource after teardown.
+        onCapturedPixelBuffer = nil
         captureSession.stopRunning()
         encoder.invalidate()
         decoder.invalidate()
@@ -379,6 +391,12 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let ns = UInt64(CMTimeGetSeconds(pts) * 1_000_000_000)
+        // Android interop bridge: push raw frame to WebRTC RTCVideoSource
+        // before HEVC encoding. Android receives video via WebRTC RTP (not
+        // BCrypto WS video_frame), so this is the only path that delivers
+        // iOS camera video to the Android peer.
+        let nsInt64 = Int64(CMTimeGetSeconds(pts) * 1_000_000_000)
+        self.onCapturedPixelBuffer?(pixelBuffer, nsInt64)
         // Encode on the capture queue so we don't bounce threads
         // unnecessarily. The encoder uses VTCompressionSession internally
         // which is thread-safe per session; our `lock` in HevcEncoder

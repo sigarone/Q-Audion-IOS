@@ -124,6 +124,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private var recipientId: String?
     #if os(iOS)
     private var localVideoCapturer: RTCCameraVideoCapturer?
+    /// Non-nil when useExternalVideoSource == true. AppState wires
+    /// VideoCallPipeline.onCapturedPixelBuffer → push() after
+    /// startOutgoingCall / acceptIncomingCall returns.
+    public private(set) var webrtcPixelBufferCapturer: WebRTCPixelBufferCapturer?
     #endif
 
     /// W418 — idempotency guard for `handleRemoteAnswer`. The WS layer
@@ -447,7 +451,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// No-op when `useExternalVideoSource == true` (AppState's
     /// VideoCallPipeline owns the camera on that path).
     private func startCameraCapture(for source: RTCVideoSource) {
-        guard !useExternalVideoSource else { return }
+        #if os(iOS)
+        if useExternalVideoSource {
+            // VideoCallPipeline owns the camera. Create a pixel-buffer
+            // capturer backed by this source so AppState can push frames
+            // from the pipeline's AVCaptureSession into the WebRTC track.
+            webrtcPixelBufferCapturer = WebRTCPixelBufferCapturer(delegate: source)
+            return
+        }
+        #endif
         #if os(iOS)
         let devices: [AVCaptureDevice] = RTCCameraVideoCapturer.captureDevices()
         guard let camera: AVCaptureDevice = devices.first(where: { $0.position == .front }) ?? devices.first else {
@@ -489,6 +501,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         #if os(iOS)
         localVideoCapturer?.stopCapture()
         localVideoCapturer = nil
+        webrtcPixelBufferCapturer = nil
         #endif
     }
 
