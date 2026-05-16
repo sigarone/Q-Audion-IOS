@@ -241,8 +241,20 @@ struct HomeView: View {
     /// root. Toggle interni (DeepfakeGuard, ReadReceipts, etc.) restano
     /// nelle rispettive sub-screen finché l'engine non espone una
     /// SettingsUiState unificata.
+    ///
+    /// W439: NavigationStack lifted OUT of SettingsScreen and placed here.
+    /// SettingsScreen used to embed its own NavigationStack, which worked
+    /// on iPhone (TabView adds no implicit navigation) but crashed on iPad:
+    /// NavigationSplitView's detail pane provides a navigation environment,
+    /// and having a second NavigationStack inside it triggers an internal
+    /// UINavigationController inconsistency that crashes on iPadOS.
+    /// Putting the NavigationStack here means both layouts share the same
+    /// pattern: NavigationStack { SettingsScreen() } — the only difference
+    /// is the outer container (TabView vs NavigationSplitView.detail).
     private var settingsTab: some View {
-        SettingsScreen()
+        NavigationStack {
+            SettingsScreen()
+        }
     }
 
     // MARK: - Active call banner

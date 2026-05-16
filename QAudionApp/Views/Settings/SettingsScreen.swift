@@ -126,70 +126,73 @@ struct SettingsScreen: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                scheme.background.ignoresSafeArea()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        topBar
-                        ProfileHeroCard(
-                            displayName: profileDisplayName,
-                            handle: profileHandle,
-                            statusMessage: "Disponibile per chiamate sicure.",
-                            avatarUrl: nil,
-                            onEditTap: { /* navigation handled via row below */ }
-                        )
+        // W439: NavigationStack removed from here — it now lives in
+        // HomeView.settingsTab so that both iPhone (TabView) and iPad
+        // (NavigationSplitView.detail) share a single, correctly-placed
+        // navigation host. Keeping a second NavigationStack here caused
+        // an iPadOS internal UINavigationController crash on first render.
+        ZStack {
+            scheme.background.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    topBar
+                    ProfileHeroCard(
+                        displayName: profileDisplayName,
+                        handle: profileHandle,
+                        statusMessage: "Disponibile per chiamate sicure.",
+                        avatarUrl: nil,
+                        onEditTap: { /* navigation handled via row below */ }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+
+                    SecurityChipsRow()
+                        .padding(.top, 8)
+
+                    accountSection
+                    sicurezzaSection
+                    privacySection
+                    datiSection
+                    infoSection
+                    sviluppatoreSection
+
+                    Spacer().frame(height: 24)
+                    signOutButton
                         .padding(.horizontal, 16)
-                        .padding(.top, 4)
-
-                        SecurityChipsRow()
-                            .padding(.top, 8)
-
-                        accountSection
-                        sicurezzaSection
-                        privacySection
-                        datiSection
-                        infoSection
-                        sviluppatoreSection
-
-                        Spacer().frame(height: 24)
-                        signOutButton
-                            .padding(.horizontal, 16)
-                            // W151: confirmation dialog before
-                            // wiping the session. Anchored to the
-                            // sign-out button so the dialog inherits
-                            // its presentation context.
-                            .confirmationDialog(
-                                "Uscire da Q-Audion?",
-                                isPresented: $showSignOutConfirm,
-                                titleVisibility: .visible
-                            ) {
-                                Button("Esci", role: .destructive) {
-                                    snackbar?.show(.init(
-                                        text: "Sessione chiusa.",
-                                        severity: .info,
-                                        durationSeconds: 3))
-                                    appState.logout()
-                                }
-                                Button("Annulla", role: .cancel) { }
-                            } message: {
-                                Text("Dovrai accedere di nuovo per usare le chat e le chiamate. I messaggi salvati su questo dispositivo non vengono cancellati.")
+                        // W151: confirmation dialog before
+                        // wiping the session. Anchored to the
+                        // sign-out button so the dialog inherits
+                        // its presentation context.
+                        .confirmationDialog(
+                            "Uscire da Q-Audion?",
+                            isPresented: $showSignOutConfirm,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Esci", role: .destructive) {
+                                snackbar?.show(.init(
+                                    text: "Sessione chiusa.",
+                                    severity: .info,
+                                    durationSeconds: 3))
+                                appState.logout()
                             }
+                            Button("Annulla", role: .cancel) { }
+                        } message: {
+                            Text("Dovrai accedere di nuovo per usare le chat e le chiamate. I messaggi salvati su questo dispositivo non vengono cancellati.")
+                        }
 
-                        // W118: app version + build number footer.
-                        // Helps testers report bugs against a specific
-                        // build without digging into TestFlight UI.
-                        // Reads from the running bundle so it's always
-                        // accurate regardless of XcodeGen's plist
-                        // injection state.
-                        versionFooter
-                            .padding(.top, 16)
-                            .padding(.bottom, 32)
-                    }
+                    // W118: app version + build number footer.
+                    // Helps testers report bugs against a specific
+                    // build without digging into TestFlight UI.
+                    // Reads from the running bundle so it's always
+                    // accurate regardless of XcodeGen's plist
+                    // injection state.
+                    versionFooter
+                        .padding(.top, 16)
+                        .padding(.bottom, 32)
                 }
             }
-            .navigationBarHidden(true)
         }
+        .navigationBarHidden(true)
     }
 
     // MARK: - Top bar
@@ -843,14 +846,21 @@ struct SettingsScreen: View {
     // MARK: - Helpers
 
     private var profileDisplayName: String {
-        // Pull display name from AppState if available, else show userId
-        // prefix or a friendly fallback. The legacy AppState exposes
-        // `currentUserId`; richer profile data lives in
-        // AccountSettingsContainer (lazy-loaded). The hero card pulls
-        // that fuller profile internally when navigated to.
+        // W439: show a short, human-readable identifier in the hero card.
+        // The full UUID (e.g. "f44fe28f-0e15-4a27-a953-da935e355d72") is
+        // not useful as a display name — truncate to the first 8 chars.
+        // AccountSettingsScreen loads the real displayName from the server
+        // (Profile → Nome visualizzato) via AccountSettingsContainer once
+        // navigated to. The hero card shows the short-id as a placeholder
+        // until the user sets a display name.
         if let userId = appState.currentUserId, !userId.isEmpty {
-            return userId.hasPrefix("user-")
-                ? String(userId.dropFirst(5)).capitalized
+            if userId.hasPrefix("user-") {
+                return String(userId.dropFirst(5)).capitalized
+            }
+            // UUID or hex id — show first 8 chars so it's recognizable
+            // without taking up the full hero card width.
+            return userId.count > 8
+                ? String(userId.prefix(8)) + "…"
                 : userId
         }
         return "Q-Audion User"
@@ -858,12 +868,14 @@ struct SettingsScreen: View {
 
     private var profileHandle: String? {
         guard let userId = appState.currentUserId else { return nil }
-        // Show first 8 + ellipsis + last 4 of the user-id (typically a
-        // sha256 hex of the phone number) so peers can fingerprint-match.
+        // Show "Int. — · <first8>…<last4>" as the mono handle line.
+        // Testers can use this to fingerprint-match across devices.
         if userId.count > 12 {
-            return "Int. — · \(userId.prefix(8))…\(userId.suffix(4))"
+            let head = String(userId.prefix(8))
+            let tail = String(userId.suffix(4))
+            return "Int. — · " + head + "…" + tail
         }
-        return "Int. — · \(userId)"
+        return "Int. — · " + userId
     }
 }
 

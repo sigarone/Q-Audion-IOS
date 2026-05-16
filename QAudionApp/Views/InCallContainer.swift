@@ -61,8 +61,22 @@ final class InCallContainer: ObservableObject {
                 let displayName = stored?.displayName ?? cid
                 let avatarUrl = stored?.avatarUrl
                 let fingerprint: String = {
-                    guard let pk = stored?.pubkey else { return "????.????.????.????" }
-                    return (try? Fingerprint.format(pubkey: pk)) ?? "????.????.????.????"
+                    // W439: When the peer is not QR-paired (no pubkey in
+                    // ContactsStore), the old placeholder "????.????.????.????"
+                    // was shown verbatim under the peer name during every call.
+                    // Instead show the abbreviated userId (first 8 + last 4)
+                    // so testers can still cross-reference the peer without
+                    // seeing a confusing row of question marks.
+                    guard let pk = stored?.pubkey else {
+                        let head = String(cid.prefix(8))
+                        let tail = String(cid.suffix(4))
+                        return head + "…" + tail
+                    }
+                    return (try? Fingerprint.format(pubkey: pk)) ?? {
+                        let head = String(cid.prefix(8))
+                        let tail = String(cid.suffix(4))
+                        return head + "…" + tail
+                    }()
                 }()
                 self.update {
                     $0.peer = InCallViewModel.PeerInfo(
@@ -94,12 +108,29 @@ final class InCallContainer: ObservableObject {
 
     private func bindCallService() {
         guard let cs = appState?.callService else { return }
-        // CallService.onDurationTick is a closure callback (not a Combine publisher).
+
+        // Primary: CallService fires onDurationTick on its timer's thread.
+        // Hop to MainActor before touching the view model.
         cs.onDurationTick = { [weak self] dur in
             Task { @MainActor [weak self] in
                 self?.update { $0.callDuration = dur }
             }
         }
+
+        // W439 fallback: CallService.startDurationTimer() uses
+        // Timer.scheduledTimer without specifying a run loop. If that
+        // method is ever called from a background thread its timer ends
+        // up on a run loop that isn't spinning, so onDurationTick never
+        // fires and the in-call timer stays frozen at 00:00.
+        // This Combine timer always fires on RunLoop.main and polls
+        // callDurationSeconds directly — one extra read per second is cheap.
+        Timer.publish(every: 1.0, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self, let cs = self.appState?.callService else { return }
+                self.update { $0.callDuration = cs.callDurationSeconds }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - User actions

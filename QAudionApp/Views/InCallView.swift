@@ -13,10 +13,16 @@ import QAudionEngine
 /// 7. SAS verification prompt (sheet — wired stub; full flow in A.4 follow-on)
 struct InCallView: View {
     @ObservedObject var container: InCallContainer
-    // AppState is read by CallSecurityBadge and WaveformPanel via @EnvironmentObject,
-    // so no explicit property needed here.
+    // AppState is read by CallSecurityBadge and WaveformPanel via @EnvironmentObject;
+    // we also read it directly for video-camera toggle.
+    @EnvironmentObject private var appState: AppState
 
     private var vm: InCallViewModel { container.viewModel }
+
+    /// W439: local camera-on state that mirrors appState.isVideoCall on appear
+    /// and lets the user toggle the camera mid-call without waiting for the full
+    /// isVideoCall publish cycle (setCamera doesn't write isVideoCall back).
+    @State private var cameraOn: Bool = false
 
     /// 2026-05-03 — local dismiss flag for the SAS verification banner.
     /// Per user requirement: "sas verification deve essere una cosa
@@ -87,6 +93,7 @@ struct InCallView: View {
             }
         }
         // (6) Video PiP — hidden in audio-only A.4 scope; vm.showVideoPip drives this.
+        .onAppear { cameraOn = appState.isVideoCall }
     }
 
     // MARK: - SAS banner (non-blocking)
@@ -191,6 +198,19 @@ struct InCallView: View {
                 label: vm.controls.isOnHold ? "Resume" : "Hold",
                 isActive: vm.controls.isOnHold,
                 action: container.tapHold
+            )
+
+            // W439: video toggle — always visible so users can upgrade an
+            // audio call to video. cameraOn mirrors appState.isVideoCall on
+            // appear and tracks local toggles; setCamera wires the pipeline.
+            InCallControlButton(
+                systemName: cameraOn ? "video.fill" : "video.slash.fill",
+                label: cameraOn ? "Video On" : "Video",
+                isActive: cameraOn,
+                action: {
+                    cameraOn.toggle()
+                    appState.setCamera(cameraOn)
+                }
             )
 
             // End-call button — always red per InCallViewModel.Controls.endCallStyle.
