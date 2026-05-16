@@ -57,6 +57,18 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// a parallel reconnect — racing connect() calls and confusing the state
     /// machine. While `reconnectInFlight == true`, additional kicks are a no-op.
     private var reconnectInFlight: Bool = false
+    /// Monotonically-increasing counter bumped on every `connect()` call.
+    /// Each `receiveLoop` and `handleDisconnect` closure captures the generation
+    /// at spawn time and silently drops its work if the current generation has
+    /// moved on. This prevents a classic zombie-connection pattern:
+    ///   1. forceReconnect() cancels old task → calls connect() → gen bumps to N+1
+    ///   2. Old task's receive closure fires (failure) → calls handleDisconnect()
+    ///   3. handleDisconnect() (gen N) sees gen N != current gen N+1 → returns
+    ///   Without this guard, step 3 would corrupt state and schedule yet another
+    ///   connect(), creating two simultaneous URLSessionWebSocketTasks that both
+    ///   authenticate — server logs "replacing stale ws device" × N, all zombie
+    ///   tasks fail ping together 50 s later.
+    private var connectionGeneration: Int = 0
 
     public init(config: BackendConfig) {
         self.config = config
@@ -117,8 +129,21 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         lock.lock()
         guard _state == .disconnected else { lock.unlock(); return }
         _state = .connecting
+        // Bump generation so any zombie receiveLoop or handleDisconnect closure
+        // that fires after this point sees a stale generation and returns early.
+        connectionGeneration &+= 1
+        let gen = connectionGeneration
+        // Capture and nil out any lingering task — this can happen when
+        // handleDisconnect fires while a previous connect() is still in flight
+        // (e.g. TLS handshake stall). The old task is cancelled below, outside
+        // the lock, to avoid lock inversion with URLSession internals.
+        let oldTask = webSocketTask
+        webSocketTask = nil
         let listeners = stateListeners
         lock.unlock()
+
+        // Cancel the old task AFTER releasing the lock.
+        oldTask?.cancel(with: .goingAway, reason: nil)
         listeners.forEach { $0(.connecting) }
 
         guard let url = URL(string: config.serverUrl.replacingOccurrences(of: "https://", with: "wss://").replacingOccurrences(of: "http://", with: "ws://") + "/ws") else { return }
@@ -146,7 +171,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         webSocketTask = task
         lock.unlock()
         task.resume()
-        receiveLoop()
+        receiveLoop(generation: gen)
 
         if let token = config.accessToken { authenticate(token: token) }
     }
@@ -372,8 +397,18 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         send(type: "authenticate", data: ["token": token])
     }
 
-    private func receiveLoop() {
-        webSocketTask?.receive { [weak self] result in
+    private func receiveLoop(generation: Int) {
+        // Guard: if a newer connect() has run since this loop was spawned, stop
+        // recursing. Without this check a zombie loop from a cancelled task would
+        // call handleDisconnect() when the task teardown finally delivers its
+        // failure result, corrupting the state machine of the newer connection.
+        lock.lock()
+        let curGen = connectionGeneration
+        let task = webSocketTask
+        lock.unlock()
+        guard curGen == generation, let task = task else { return }
+
+        task.receive { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let message):
@@ -382,9 +417,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                 case .data(let data): if let text = String(data: data, encoding: .utf8) { self.handleMessage(text) }
                 @unknown default: break
                 }
-                self.receiveLoop()
+                self.receiveLoop(generation: generation)
             case .failure:
-                self.handleDisconnect()
+                self.handleDisconnect(generation: generation)
             }
         }
     }
@@ -447,6 +482,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         lock.lock()
         let lastInbound = lastInboundAt
         let isAuthenticated = _state == .authenticated
+        let gen = connectionGeneration
         lock.unlock()
 
         guard isAuthenticated else { return }
@@ -455,16 +491,29 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // If a full ping cycle has passed without any inbound traffic, treat the
         // socket as dead and force a reconnect.
         if age > pingIntervalSec + pongTimeoutSec {
+            lock.lock()
             webSocketTask?.cancel(with: .abnormalClosure, reason: nil)
-            handleDisconnect()
+            webSocketTask = nil
+            lock.unlock()
+            handleDisconnect(generation: gen)
             return
         }
 
         send(type: "ping", data: [:])
     }
 
-    private func handleDisconnect() {
+    private func handleDisconnect(generation: Int? = nil) {
         lock.lock()
+        // Drop stale disconnect callbacks from zombie connections. This fires when
+        // a cancelled task's receive closure delivers its .failure result AFTER a
+        // newer connect() has already created a replacement task. Without the check,
+        // the zombie would overwrite _state = .disconnected and schedule a redundant
+        // connect() that creates a second concurrent WS task — the root cause of the
+        // "replacing stale ws device × N" pattern seen in server logs.
+        if let gen = generation, gen != connectionGeneration {
+            lock.unlock()
+            return
+        }
         _state = .disconnected
         reconnectAttempt += 1
         let attempt = reconnectAttempt
