@@ -215,10 +215,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         sendOpaqueRaw: @escaping (String) async throws -> Void,
         sendOpaqueBinary: @escaping (Data) async throws -> Void
     ) async throws {
-        lock.lock()
-        guard state == .idle else { lock.unlock(); throw IntegrationError.invalidState(state) }
-        isCaller = true
-        lock.unlock()
+        try lock.withLock {
+            guard state == .idle else { throw IntegrationError.invalidState(state) }
+            isCaller = true
+        }
 
         try engine.initialize()
         let pqcKp = pqc.generateKeyPair()
@@ -233,14 +233,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // ("ACCEPT for callId=X but no local hybrid keys stashed —
         // was onAndroidCallSetupStarted ever called?"). The session
         // would never be installed despite the bytes being correct.
-        lock.lock()
-        localKeyPair = pqcKp
-        localHybridKeysByCall[callId] = HybridLocalKeys(
-            pqcPair: pqcKp,
-            x25519Priv: x25519Priv
-        )
-        state = .capabilitySent
-        lock.unlock()
+        lock.withLock {
+            localKeyPair = pqcKp
+            localHybridKeysByCall[callId] = HybridLocalKeys(
+                pqcPair: pqcKp,
+                x25519Priv: x25519Priv
+            )
+            state = .capabilitySent
+        }
         onStateChanged?(.capabilitySent)
 
         // Build the Android JSON HandshakeBundle OFFER.
@@ -473,17 +473,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
             // 8. Initialise the audio session and fire the broker hook.
             // Double-ACCEPT guard (see sessionInitializedByCall kdoc).
-            lock.lock()
-            let alreadyInit = sessionInitializedByCall.contains(callId)
-            if !alreadyInit { sessionInitializedByCall.insert(callId) }
-            lock.unlock()
+            let alreadyInit = lock.withLock {
+                let r = sessionInitializedByCall.contains(callId)
+                if !r { sessionInitializedByCall.insert(callId) }
+                return r
+            }
             if alreadyInit {
                 print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
                 return
             }
             try engine.initialize()
             try engine.initSession(sharedSecret: combined)
-            lock.lock(); state = .active; lock.unlock()
+            lock.withLock { state = .active }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
 
@@ -542,10 +543,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let combined = hybridShared
 
             // 5. Double-ACCEPT guard.
-            lock.lock()
-            let alreadyInit = sessionInitializedByCall.contains(callId)
-            if !alreadyInit { sessionInitializedByCall.insert(callId) }
-            lock.unlock()
+            let alreadyInit = lock.withLock {
+                let r = sessionInitializedByCall.contains(callId)
+                if !r { sessionInitializedByCall.insert(callId) }
+                return r
+            }
             if alreadyInit {
                 print("[QAudionCallIntegration] ACCEPT duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
                 return
@@ -553,18 +555,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
             // 6. Initialise the audio session and fire the broker hook.
             try engine.initSession(sharedSecret: combined)
-            lock.lock()
-            state = .active
-            // 7. Zero the stashed privs immediately — the session key is
-            //    now in the engine, the ephemeral keys are no longer
-            //    needed. Clearing the dictionary entry releases the
-            //    PqcKeyExchange.KeyPair (which has its own destroy hook)
-            //    and the Curve25519 PrivateKey (CryptoKit will deinit
-            //    the wrapped opaque handle on dealloc). Zeroing
-            //    earlier risks the second-ACCEPT branch trying to
-            //    decap with empty bytes.
-            localHybridKeysByCall.removeValue(forKey: callId)
-            lock.unlock()
+            lock.withLock {
+                state = .active
+                // 7. Zero the stashed privs immediately — the session key is
+                //    now in the engine, the ephemeral keys are no longer
+                //    needed. Clearing the dictionary entry releases the
+                //    PqcKeyExchange.KeyPair (which has its own destroy hook)
+                //    and the Curve25519 PrivateKey (CryptoKit will deinit
+                //    the wrapped opaque handle on dealloc). Zeroing
+                //    earlier risks the second-ACCEPT branch trying to
+                //    decap with empty bytes.
+                localHybridKeysByCall.removeValue(forKey: callId)
+            }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
         }
