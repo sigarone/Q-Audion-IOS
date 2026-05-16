@@ -102,39 +102,55 @@ struct HomeView: View {
     /// `NavigationSplitView` (iOS 16+, già nel deployment target).
     private var splitLayout: some View {
         NavigationSplitView(columnVisibility: $splitVisibility) {
-            // NB: BOTH `List(data, selection:)` AND `List(selection:, content:)`
-            // sono iOS-unavailable (sono macOS/iPadOS specific). Pattern
-            // compatibile su plain iOS: `List { ForEach { Button } }` con
-            // selection manuale via `selectedTab = tab` + highlight via
-            // `.background(...)` condizionale.
             List {
+                // Profile anchor in cima alla sidebar
+                iPadSidebarHeader
+
+                Divider()
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                    .padding(.vertical, 4)
+
                 ForEach(Tab.allCases) { tab in
                     Button {
                         selectedTab = tab
                     } label: {
                         HStack(spacing: 12) {
-                            Label(tab.label, systemImage: tab.systemImage)
+                            Image(systemName: tab.systemImage)
+                                .frame(width: 24)
+                                .foregroundStyle(selectedTab == tab
+                                                 ? scheme.primary
+                                                 : scheme.onSurfaceVariant)
+                            Text(tab.label)
+                                .font(.system(size: 15, weight: selectedTab == tab ? .semibold : .regular))
                                 .foregroundStyle(selectedTab == tab
                                                  ? scheme.primary
                                                  : scheme.onSurface)
                             Spacer(minLength: 0)
+                            // Unread badge solo sulla tab Chat
+                            if tab == .chats, totalUnreadCount > 0 {
+                                Text(totalUnreadCount > 99 ? "99+" : "\(totalUnreadCount)")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(scheme.primary))
+                            }
                         }
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 6)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(
                         selectedTab == tab
-                            ? scheme.primary.opacity(0.15)
+                            ? scheme.primary.opacity(0.12)
                             : Color.clear
                     )
                 }
             }
             .navigationTitle("Q-Audion")
+            .navigationBarTitleDisplayMode(.inline)
         } detail: {
-            // Il detail renderizza la stessa view della tab attiva.
-            // SwiftUI ricostruisce la view ad ogni cambio di selectedTab,
-            // come farebbe il TabView su iPhone.
             switch selectedTab {
             case .chats:    chatsTab
             case .contacts: contactsTab
@@ -143,6 +159,37 @@ struct HomeView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+    }
+
+    /// Totale messaggi non letti da mostrare nel badge sidebar Chat.
+    private var totalUnreadCount: Int {
+        appState.conversations.reduce(0) { $0 + $1.unreadCount }
+    }
+
+    /// Header compatto con avatar + userId in cima alla sidebar iPad.
+    @ViewBuilder
+    private var iPadSidebarHeader: some View {
+        let displayName = appState.currentUserId ?? "Profilo"
+        HStack(spacing: 10) {
+            QAudionAvatar(
+                displayName: displayName,
+                imageURL: nil,
+                size: 36,
+                presenceDot: .online
+            )
+            VStack(alignment: .leading, spacing: 1) {
+                Text(displayName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(scheme.onSurface)
+                    .lineLimit(1)
+                Text("Q-Audion")
+                    .font(.system(size: 11))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 8)
+        .listRowBackground(Color.clear)
     }
 
     // MARK: - Tabs

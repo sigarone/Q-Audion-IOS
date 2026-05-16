@@ -252,6 +252,11 @@ struct CallHistoryView: View {
                 // (Android non squilla).
                 Task { await appState.dialAndCall(rawInput: dialed, video: false) }
             })
+            // Su iPad il sheet viene presentato come floating card —
+            // un'altezza fissa di 560pt lo rende compatto e centrato
+            // invece di occupare quasi tutto lo schermo.
+            .presentationDetents([.height(560)])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingGroupComposer) {
             // W45: sostituito GroupComposerPlaceholderSheet (stale) con il
