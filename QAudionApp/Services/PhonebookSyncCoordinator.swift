@@ -104,12 +104,24 @@ final class PhonebookSyncCoordinator {
     /// Scan local phonebook, normalize numbers, hash, submit to discover-v2,
     /// persist results to ContactsStore, and return resolved matches.
     ///
-    /// - Parameter onProgress: Called at start (after enumeration) and end (after
-    ///   discovery) with a ScanProgress snapshot. Safe to mutate UI from here —
-    ///   the coordinator is @MainActor and the closure is called inline.
+    /// Also registers the user's own peppered phone hashes via
+    /// `POST /api/v1/contacts/phones` before running discovery, so peers who
+    /// have our number in their address book can find us. Mirrors Android
+    /// `DiscoverContactsUseCase.runPeppered` (fire-and-forget for own phones:
+    /// a transient failure here does not abort the discovery pass).
+    ///
+    /// - Parameters:
+    ///   - onProgress: Called at start (after enumeration) and end (after
+    ///     discovery) with a ScanProgress snapshot. Safe to mutate UI from here —
+    ///     the coordinator is @MainActor and the closure is called inline.
+    ///   - ownE164Phones: The user's own E.164 phone numbers to register on the
+    ///     server for reverse-discovery. When nil, the coordinator reads from
+    ///     UserDefaults (key `com.qaudion.profile.myPhones`). Pass [] to skip
+    ///     registration explicitly.
     /// - Returns: Array of ResolvedMatch (one per Q-Audion user found in phonebook).
     func scanAndDiscover(
-        onProgress: @escaping (ScanProgress) -> Void = { _ in }
+        onProgress: @escaping (ScanProgress) -> Void = { _ in },
+        ownE164Phones: [String]? = nil
     ) async throws -> [ResolvedMatch] {
 
         // Require auth token before touching the network.
@@ -187,7 +199,28 @@ final class PhonebookSyncCoordinator {
             }
         }
 
-        // Step 4 — discover-v2.
+        // Step 4 — register our own peppered phone hashes so peers who hold
+        // our number can discover us (Android parity: DiscoverContactsUseCase
+        // calls registerPepperedPhones before the discover batch). Fire-and-
+        // forget: a failure here must not abort the discovery pass.
+        let resolvedOwnPhones: [String] = ownE164Phones
+            ?? (UserDefaults.standard.array(forKey: "com.qaudion.profile.myPhones") as? [String] ?? [])
+        if !resolvedOwnPhones.isEmpty {
+            let ownHashes = resolvedOwnPhones.compactMap { phone -> String? in
+                try? PepperedPhoneHash.hash(phone: phone, pepperBytes: pepper.pepperBytes)
+            }
+            if !ownHashes.isEmpty {
+                do {
+                    try await client.registerPepperedPhones(alg: pepper.alg, hashes: ownHashes)
+                } catch {
+                    // Best-effort: log but continue. Reverse-discovery for our number
+                    // may be stale until the next successful sync.
+                    print("[PhonebookSyncCoordinator] registerPepperedPhones failed (non-fatal): \(error.localizedDescription)")
+                }
+            }
+        }
+
+        // Step 5 — discover-v2.
         let discovered: [BCryptoContactsDiscoverV2Client.DiscoveredEntry]
         do {
             discovered = try await client.discover(alg: pepper.alg, hashes: allHashes)
@@ -195,7 +228,7 @@ final class PhonebookSyncCoordinator {
             throw Error.fetchFailed("Discover-v2 failed: \(error.localizedDescription)")
         }
 
-        // Step 5 — persist resolved contacts and build results list.
+        // Step 6 — persist resolved contacts and build results list.
         var results: [ResolvedMatch] = []
         for entry in discovered {
             guard let uid = entry.userId, let info = hashToInfo[entry.hash] else { continue }
