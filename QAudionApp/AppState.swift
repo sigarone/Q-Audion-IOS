@@ -195,6 +195,13 @@ final class AppState: ObservableObject {
     /// header compile even on hosts where the WebRTC XCFramework
     /// hasn't been resolved yet.
     var webRtcController: Any?
+    /// Remote video track delivered by the WebRTC stack when the peer
+    /// sends video via RTP (Android interop path). Typed as Any? so the
+    /// header compiles without a WebRTC import at top level. At runtime
+    /// this is always RTCVideoTrack or nil. VideoCallView reads it to
+    /// render the remote feed via WebRTCRemoteVideoView when no BCrypto
+    /// WS video pipeline is active (i.e. iOS↔Android calls).
+    @Published var remoteWebRtcVideoTrack: Any?
 
     /// Commit 540b79c0 parity — peer's advertised SFrame capability tags
     /// captured from the latest `call_incoming` envelope. Forwarded to
@@ -2375,6 +2382,14 @@ final class AppState: ObservableObject {
                 // exists so Android negotiates video correctly.
                 if video { controller.useExternalVideoSource = true }
                 webRtcController = controller
+                // Android↔iOS remote video: Android sends video via WebRTC
+                // RTP (not WS video_frame envelopes). Wire the track callback
+                // so VideoCallView can render it via WebRTCRemoteVideoView.
+                controller.onRemoteVideoTrack = { [weak self] track in
+                    Task { @MainActor [weak self] in
+                        self?.remoteWebRtcVideoTrack = track
+                    }
+                }
                 // Same caller-id substitution as the legacy path —
                 // both rails ship the same `caller_display` so the
                 // peer doesn't pick a different label depending on
@@ -2445,6 +2460,7 @@ final class AppState: ObservableObject {
         }
         #endif
         webRtcController = nil
+        remoteWebRtcVideoTrack = nil
         txWaveformSamples = []
         rxWaveformSamples = []
         cipherWaveformSamples = []
@@ -3322,6 +3338,13 @@ extension AppState {
         let caps = peerCapabilities ?? pendingPeerCapabilities
         let audioOnly = !hasVideo
         webRtcController = controller
+        // Mirror of the caller-side wiring: Android sends remote video via
+        // WebRTC RTP so the callee also needs this callback.
+        controller.onRemoteVideoTrack = { [weak self] track in
+            Task { @MainActor [weak self] in
+                self?.remoteWebRtcVideoTrack = track
+            }
+        }
         let cid = callerId
         Task { @MainActor [weak self] in
             guard let self = self else { return }

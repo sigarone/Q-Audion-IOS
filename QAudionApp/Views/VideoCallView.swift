@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(WebRTC)
+import WebRTC
+#endif
 
 // MARK: - Video Call View
 
@@ -68,25 +71,40 @@ struct VideoCallView: View {
     @ViewBuilder
     private var remoteVideoPlaceholder: some View {
         if let pipeline = pipelineRef ?? appState.videoPipeline {
-            // W391: real remote video — AVSampleBufferDisplayLayer
-            // consumes decoded CVPixelBuffers from the engine's HEVC
-            // decoder.
+            // W391: iOS↔iOS remote video — AVSampleBufferDisplayLayer
+            // consumes decoded CVPixelBuffers from the BCrypto HEVC pipeline.
             RemoteVideoDisplay(pipeline: pipeline)
                 .ignoresSafeArea()
         } else {
-            VStack(spacing: 8) {
-                Image(systemName: "video.fill")
-                    .font(.system(size: 48))
-                    .foregroundColor(.white.opacity(0.3))
-
-                Text("Video cifrato")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.3))
-
-                Text("\(appState.videoCodec) + AES-256-GCM")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.green.opacity(0.5))
+            #if canImport(WebRTC)
+            if let track = appState.remoteWebRtcVideoTrack as? RTCVideoTrack {
+                // Android↔iOS remote video — WebRTC RTP track displayed via
+                // Metal-backed RTCMTLVideoView. Shown when the peer (Android)
+                // sends video over WebRTC rather than the BCrypto WS pipeline.
+                WebRTCRemoteVideoView(track: track)
+                    .ignoresSafeArea()
+            } else {
+                remoteVideoFallback
             }
+            #else
+            remoteVideoFallback
+            #endif
+        }
+    }
+
+    private var remoteVideoFallback: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "video.fill")
+                .font(.system(size: 48))
+                .foregroundColor(.white.opacity(0.3))
+
+            Text("Video cifrato")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.3))
+
+            Text("\(appState.videoCodec) + AES-256-GCM")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.green.opacity(0.5))
         }
     }
 
