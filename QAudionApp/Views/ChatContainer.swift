@@ -281,10 +281,9 @@ final class ChatContainer: ObservableObject {
             // delivery" behaviour so previews and tests still mark messages
             // delivered. Production code paths always run after `attach`.
             if let envelopeJson = try? MessageSendEnvelope(
-                messageId: msg.id,
                 recipientId: viewModel.conversation.peerUserId,
-                ciphertext: Data(text.utf8),
-                clientTs: Int64(Date().timeIntervalSince1970 * 1000)
+                encryptedPayload: Data(text.utf8),
+                clientMsgId: msg.id.uuidString
             ).encodeAsJsonString() {
                 print("[Chat] would send envelope (no sendService attached): \(envelopeJson.prefix(120))...")
             }
