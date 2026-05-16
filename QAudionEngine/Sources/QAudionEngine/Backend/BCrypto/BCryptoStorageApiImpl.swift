@@ -35,8 +35,22 @@ public final class BCryptoStorageApiImpl: StorageApi {
     // MARK: - File Upload/Download (matches server /api/v1/files/*)
 
     public func uploadFile(data: Data, filename: String) async throws -> String {
+        // W443 — TUS resumable protocol for files > 1 MB; multipart fast-path
+        // for small payloads (voice notes ~50–200 KB, thumbnails).
+        let tusSizeThreshold = 1_048_576   // 1 MB
+        if data.count > tusSizeThreshold {
+            let capturedRest = rest
+            let tusClient = TusUploadClient(
+                session: capturedRest.urlSession,
+                serverUrl: capturedRest.serverUrl,
+                getToken: { capturedRest.accessToken }
+            )
+            return try await tusClient.upload(data: data)
+        }
+        // Existing multipart POST for small payloads.
         let boundary = "Boundary-\(UUID().uuidString)"
-        let body = createMultipartBody(boundary: boundary, fieldName: "file", fileName: filename, data: data)
+        let body = createMultipartBody(boundary: boundary, fieldName: "file",
+                                       fileName: filename, data: data)
         let headers = ["Content-Type": "multipart/form-data; boundary=\(boundary)"]
         let response = try await rest.post("/api/v1/files/upload", body: body, headers: headers)
         guard let json = try? JSONSerialization.jsonObject(with: response) as? [String: Any],

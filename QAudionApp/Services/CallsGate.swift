@@ -17,6 +17,8 @@ import Foundation
 /// to "any of three on → VP enabled").
 public enum CallsGate {
 
+    // MARK: - Audio DSP keys
+
     public static let keyAec = "qaudion.calls.aec_enabled"
     public static let keyNs  = "qaudion.calls.ns_enabled"
     public static let keyAgc = "qaudion.calls.agc_enabled"
@@ -37,6 +39,34 @@ public enum CallsGate {
     public static func setAec(_ value: Bool) { UserDefaults.standard.set(value, forKey: keyAec) }
     public static func setNs(_ value: Bool)  { UserDefaults.standard.set(value, forKey: keyNs) }
     public static func setAgc(_ value: Bool) { UserDefaults.standard.set(value, forKey: keyAgc) }
+
+    // MARK: - W443 call session security (parity with Android SettingsViewModel)
+
+    /// Controls AASIST live deepfake detection during calls.
+    /// Default ON — mirrors Android `deepfakeGuard = true`.
+    public static let keyDeepfakeGuard    = "qaudion.calls.deepfake_guard_enabled"
+    /// Controls adaptive re-keying frequency scaled by Confidence Index.
+    /// Default ON — mirrors Android `adaptiveRekeying = true`.
+    public static let keyAdaptiveRekeying = "qaudion.calls.adaptive_rekeying_enabled"
+    /// Controls constant bitrate padding to resist traffic analysis.
+    /// Default ON — mirrors Android `adaptivePadding = true`.
+    public static let keyAdaptivePadding  = "qaudion.calls.adaptive_padding_enabled"
+
+    public static var deepfakeGuardEnabled:    Bool { readBool(keyDeepfakeGuard,    default: true) }
+    public static var adaptiveRekeyingEnabled: Bool { readBool(keyAdaptiveRekeying, default: true) }
+    public static var adaptivePaddingEnabled:  Bool { readBool(keyAdaptivePadding,  default: true) }
+
+    public static func setDeepfakeGuard(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: keyDeepfakeGuard)
+    }
+    public static func setAdaptiveRekeying(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: keyAdaptiveRekeying)
+    }
+    public static func setAdaptivePadding(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: keyAdaptivePadding)
+    }
+
+    // MARK: - Helpers
 
     private static func readBool(_ key: String, default fallback: Bool) -> Bool {
         if let raw = UserDefaults.standard.object(forKey: key) as? Bool { return raw }

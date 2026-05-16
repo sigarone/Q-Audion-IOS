@@ -210,6 +210,14 @@ public final class BCryptoRestClient {
     /// The user ID from the current configuration, if authenticated.
     public var userId: String? { config.userId }
 
+    /// W443: current access token — used by TusUploadClient so it always
+    /// reads the freshest token without holding a config reference.
+    public var accessToken: String? { config.accessToken }
+
+    /// W443: underlying URLSession — shared with TusUploadClient so both
+    /// use the same TLS delegate (cert-pinning / self-signed-cert).
+    public var urlSession: URLSession { session }
+
     public func updateConfig(_ newConfig: BackendConfig) { config = newConfig }
 }
 

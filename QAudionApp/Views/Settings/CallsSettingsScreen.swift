@@ -72,6 +72,16 @@ struct CallsSettingsScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
+    // W443: call session security toggles (parity with Android Security section)
+    @AppStorage("qaudion.calls.deepfake_guard_enabled")
+    private var deepfakeGuardEnabled: Bool = true
+
+    @AppStorage("qaudion.calls.adaptive_rekeying_enabled")
+    private var adaptiveRekeyingEnabled: Bool = true
+
+    @AppStorage("qaudion.calls.adaptive_padding_enabled")
+    private var adaptivePaddingEnabled: Bool = true
+
     init(state: AppState) {
         _container = StateObject(wrappedValue: CallsSettingsContainer())
     }
@@ -130,6 +140,26 @@ struct CallsSettingsScreen: View {
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.horizontal, 14)
                         .padding(.top, 4)
+
+                    // W443: call-session security features (parity with Android Privacy section)
+                    SettingsSectionHeader("SICUREZZA CHIAMATE")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Deepfake Guard",
+                            subtitle: "Analisi deepfake live on-device durante ogni chiamata",
+                            isOn: $deepfakeGuardEnabled
+                        )
+                        SettingsToggleRow(
+                            title: "Re-keying adattivo",
+                            subtitle: "Frequenza di rinnovo chiavi scalata con il Confidence Index",
+                            isOn: $adaptiveRekeyingEnabled
+                        )
+                        SettingsToggleRow(
+                            title: "Adaptive Padding CBR",
+                            subtitle: "Bitrate costante per resistere all'analisi del traffico",
+                            isOn: $adaptivePaddingEnabled
+                        )
+                    }
 
                     Spacer().frame(height: 24)
                 }
