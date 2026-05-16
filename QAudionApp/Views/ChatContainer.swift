@@ -206,12 +206,19 @@ final class ChatContainer: ObservableObject {
         // W114: soft haptic tap so the user feels the send fire.
         HapticFeedback.messageSent()
         let outboundId = UUID()
+        // W441: derive expiresAt from the conversation's ephemeral timer.
+        // nil = no expiry (disabled or timer is 0).
+        let sentNow = Date()
+        let ephSecs = viewModel.conversation.ephemeralTimerSeconds
+        let ephExpiry: Date? = ephSecs.flatMap { s in
+            s > 0 ? sentNow.addingTimeInterval(Double(s)) : nil
+        }
         let msg = Message(
             id: outboundId,
             conversationId: conversationId,
             direction: .outgoing,
             plaintext: text,
-            sentAt: Date(),
+            sentAt: sentNow,
             deliveredAt: nil,
             readAt: nil,
             status: .sending,
@@ -219,7 +226,8 @@ final class ChatContainer: ObservableObject {
             // target this message for future edit/delete envelopes.
             // Equals id.uuidString — the same value we already pass as
             // `client_msg_id` on the msg_send WS envelope.
-            clientMsgId: outboundId.uuidString
+            clientMsgId: outboundId.uuidString,
+            expiresAt: ephExpiry
         )
         store.appendMessage(msg)
         // W83: bump conversation preview + activity for outbound text.
@@ -415,6 +423,16 @@ final class ChatContainer: ObservableObject {
             print("[ChatContainer] block failed: \(error)")
             return false
         }
+    }
+
+    // MARK: - W441 Ephemeral timer
+
+    /// Set the per-conversation ephemeral timer. `nil` or `0` disables it.
+    /// Persists to the ConversationStore so the value survives across restarts.
+    /// The next `sendMessage()` call will pick up the new value automatically.
+    func setEphemeralTimer(_ seconds: Int?) {
+        store.setEphemeralTimer(conversationId: conversationId, seconds: seconds)
+        refreshFromStore()
     }
 
     /// W90: clear the active-peer hint so inbound banners resume firing

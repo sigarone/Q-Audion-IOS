@@ -81,7 +81,8 @@ public final class ConversationStore {
                         unreadCount: incrementUnread ? conv.unreadCount + 1 : conv.unreadCount,
                         pinned: conv.pinned,
                         kind: conv.kind,
-                        muted: conv.muted
+                        muted: conv.muted,
+                        ephemeralTimerSeconds: conv.ephemeralTimerSeconds
                     )
                     try conv.save(db)
                 }
@@ -104,7 +105,8 @@ public final class ConversationStore {
                         unreadCount: 0,
                         pinned: conv.pinned,
                         kind: conv.kind,
-                        muted: conv.muted
+                        muted: conv.muted,
+                        ephemeralTimerSeconds: conv.ephemeralTimerSeconds
                     )
                     try conv.save(db)
                 }
@@ -169,7 +171,8 @@ public final class ConversationStore {
                         clientMsgId: msg.clientMsgId,
                         edited: msg.edited,
                         deletedAt: msg.deletedAt,
-                        reactions: msg.reactions
+                        reactions: msg.reactions,
+                        expiresAt: msg.expiresAt
                     )
                     try msg.save(db)
                 }
@@ -199,7 +202,8 @@ public final class ConversationStore {
                         clientMsgId: msg.clientMsgId,
                         edited: msg.edited,
                         deletedAt: msg.deletedAt,
-                        reactions: msg.reactions
+                        reactions: msg.reactions,
+                        expiresAt: msg.expiresAt
                     )
                     try msg.save(db)
                 }
@@ -225,7 +229,8 @@ public final class ConversationStore {
                         clientMsgId: msg.clientMsgId,
                         edited: msg.edited,
                         deletedAt: msg.deletedAt,
-                        reactions: msg.reactions
+                        reactions: msg.reactions,
+                        expiresAt: msg.expiresAt
                     )
                     try msg.save(db)
                 }
@@ -256,7 +261,8 @@ public final class ConversationStore {
                         clientMsgId: msg.clientMsgId,
                         edited: msg.edited,
                         deletedAt: msg.deletedAt,
-                        reactions: msg.reactions
+                        reactions: msg.reactions,
+                        expiresAt: msg.expiresAt
                     )
                     try msg.save(db)
                 }
@@ -300,7 +306,8 @@ public final class ConversationStore {
                         clientMsgId: msg.clientMsgId,
                         edited: true,
                         deletedAt: msg.deletedAt,
-                        reactions: msg.reactions
+                        reactions: msg.reactions,
+                        expiresAt: msg.expiresAt
                     )
                     try msg.save(db)
                     return true
@@ -332,7 +339,8 @@ public final class ConversationStore {
                         clientMsgId: msg.clientMsgId,
                         edited: msg.edited,
                         deletedAt: deletedAt,
-                        reactions: nil
+                        reactions: nil,
+                        expiresAt: nil  // tombstone has no expiry
                     )
                     try msg.save(db)
                     return true
@@ -380,7 +388,8 @@ public final class ConversationStore {
                     clientMsgId: msg.clientMsgId,
                     edited: msg.edited,
                     deletedAt: msg.deletedAt,
-                    reactions: dict.isEmpty ? nil : dict
+                    reactions: dict.isEmpty ? nil : dict,
+                    expiresAt: msg.expiresAt
                 )
                 try msg.save(db)
                 return added
@@ -388,6 +397,50 @@ public final class ConversationStore {
         } catch {
             print("[ConversationStore] applyReactionToggleByClientMsgId failed: \(error)")
             return nil
+        }
+    }
+
+    // MARK: - Ephemeral timers
+
+    /// Delete all messages whose `expiresAt` is non-nil and in the past.
+    /// Called by EphemeralMessageJanitor every 60 s.
+    public func deleteExpiredMessages() {
+        do {
+            let now = Date()
+            try db.writer.write { db in
+                try Message
+                    .filter(Column("expiresAt") != nil)
+                    .filter(Column("expiresAt") <= now)
+                    .deleteAll(db)
+            }
+        } catch {
+            print("[ConversationStore] deleteExpiredMessages failed: \(error)")
+        }
+    }
+
+    /// Persist the per-conversation ephemeral timer.
+    /// Pass `nil` or `0` to disable.
+    public func setEphemeralTimer(conversationId: UUID, seconds: Int?) {
+        do {
+            try db.writer.write { db in
+                if var conv = try Conversation.fetchOne(db, key: conversationId) {
+                    conv = Conversation(
+                        id: conv.id,
+                        peerUserId: conv.peerUserId,
+                        peerDisplayName: conv.peerDisplayName,
+                        lastMessagePreview: conv.lastMessagePreview,
+                        lastActivity: conv.lastActivity,
+                        unreadCount: conv.unreadCount,
+                        pinned: conv.pinned,
+                        kind: conv.kind,
+                        muted: conv.muted,
+                        ephemeralTimerSeconds: seconds
+                    )
+                    try conv.save(db)
+                }
+            }
+        } catch {
+            print("[ConversationStore] setEphemeralTimer failed: \(error)")
         }
     }
 

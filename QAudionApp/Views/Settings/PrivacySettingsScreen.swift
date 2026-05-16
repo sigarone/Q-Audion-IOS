@@ -120,6 +120,27 @@ struct PrivacySettingsScreen: View {
     @AppStorage("qaudion.haptics.enabled")
     private var hapticsEnabled: Bool = true
 
+    // MARK: - W441 device security AppStorage keys
+    // These keys mirror PrivacyGate.keyScreenshotProtection /
+    // keyAppLockEnabled / keyAppLockTimeoutMs so toggling here
+    // is immediately visible to AppLockService and QAudionApp.
+    @AppStorage("qaudion.privacy.screenshot_protection")
+    private var screenshotProtectionEnabled: Bool = false
+
+    @AppStorage("qaudion.privacy.app_lock_enabled")
+    private var appLockEnabled: Bool = false
+
+    @AppStorage("qaudion.privacy.app_lock_timeout_ms")
+    private var appLockTimeoutMs: Int = 60_000
+
+    private let appLockTimeoutOptions: [(label: String, ms: Int)] = [
+        ("1 minuto",   60_000),
+        ("2 minuti",  120_000),
+        ("5 minuti",  300_000),
+        ("10 minuti", 600_000),
+        ("30 minuti", 1_800_000)
+    ]
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -208,6 +229,24 @@ struct PrivacySettingsScreen: View {
                         }
                     }
 
+                    // W441: Screenshot protection + App lock
+                    SettingsSectionHeader("SICUREZZA DISPOSITIVO")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Protezione screenshot",
+                            subtitle: "Oscura il contenuto nell'anteprima app e avvisa se viene fatto uno screenshot",
+                            isOn: $screenshotProtectionEnabled
+                        )
+                        SettingsToggleRow(
+                            title: "Blocco app",
+                            subtitle: "Richiede Face ID / Touch ID / codice quando l'app torna in primo piano",
+                            isOn: $appLockEnabled
+                        )
+                        if appLockEnabled {
+                            appLockTimeoutRow
+                        }
+                    }
+
                     if !container.viewModel.blockedUserIds.isEmpty {
                         SettingsSectionHeader("UTENTI BLOCCATI")
                         kvRow(label: "Bloccati",
@@ -267,6 +306,37 @@ struct PrivacySettingsScreen: View {
             UIApplication.shared.open(url)
         }
         #endif
+    }
+
+    // MARK: - App lock timeout picker
+
+    private var appLockTimeoutRow: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "clock")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .frame(width: 22)
+
+            Text("Blocca dopo")
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+
+            Spacer(minLength: 6)
+
+            Picker("Blocca dopo", selection: $appLockTimeoutMs) {
+                ForEach(appLockTimeoutOptions, id: \.ms) { option in
+                    Text(option.label).tag(option.ms)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(scheme.primary)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 56)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
     }
 
     // MARK: - Duration picker

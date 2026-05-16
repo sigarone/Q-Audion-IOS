@@ -26,9 +26,14 @@ public enum PrivacyGate {
     public static let keyReadReceipts        = "qaudion.privacy.read_receipts_enabled"
     public static let keyTypingIndicator     = "qaudion.privacy.typing_indicator_enabled"
     public static let keyPresence            = "qaudion.privacy.presence_visible_to_contacts"
-    public static let keyDisappearingSeconds = "qaudion.privacy.disappearing_seconds"
-    public static let keyTorEnabled          = "qaudion.privacy.tor_enabled"
-    public static let keyMessagePreview      = "qaudion.privacy.message_preview_in_notifications"
+    public static let keyDisappearingSeconds  = "qaudion.privacy.disappearing_seconds"
+    public static let keyTorEnabled           = "qaudion.privacy.tor_enabled"
+    public static let keyMessagePreview       = "qaudion.privacy.message_preview_in_notifications"
+    /// W441 — device security
+    public static let keyScreenshotProtection = "qaudion.privacy.screenshot_protection"
+    public static let keyAppLockEnabled       = "qaudion.privacy.app_lock_enabled"
+    /// Grace period before the lock triggers, in milliseconds. Default 60 000 (1 min).
+    public static let keyAppLockTimeoutMs     = "qaudion.privacy.app_lock_timeout_ms"
 
     // MARK: - Reads (with safe defaults)
 
@@ -69,6 +74,25 @@ public enum PrivacyGate {
         return readBoolWithDefault(keyMessagePreview, default: true)
     }
 
+    /// Default OFF. When on, the app detects screenshots and applies
+    /// UIKit secure layer to block OS-level screen capture.
+    public static var screenshotProtectionEnabled: Bool {
+        return readBoolWithDefault(keyScreenshotProtection, default: false)
+    }
+
+    /// Default OFF. Prompts biometric/passcode after the grace period
+    /// elapses while in background.
+    public static var appLockEnabled: Bool {
+        return readBoolWithDefault(keyAppLockEnabled, default: false)
+    }
+
+    /// Background grace period before lock triggers, in milliseconds.
+    /// Default 60 000 (1 min).
+    public static var appLockTimeoutMs: Int {
+        let v = UserDefaults.standard.integer(forKey: keyAppLockTimeoutMs)
+        return v > 0 ? v : 60_000
+    }
+
     // MARK: - Writes
 
     public static func setReadReceiptsEnabled(_ value: Bool) {
@@ -90,6 +114,15 @@ public enum PrivacyGate {
     }
     public static func setMessagePreviewInNotifications(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: keyMessagePreview)
+    }
+    public static func setScreenshotProtectionEnabled(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: keyScreenshotProtection)
+    }
+    public static func setAppLockEnabled(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: keyAppLockEnabled)
+    }
+    public static func setAppLockTimeoutMs(_ value: Int) {
+        UserDefaults.standard.set(value, forKey: keyAppLockTimeoutMs)
     }
 
     // MARK: - Helpers

@@ -20,11 +20,18 @@ public struct Conversation: Equatable, Sendable, Hashable, Codable, Identifiable
     /// Optional Bool for Codable backward compat with v1.0.153 stored
     /// rows — older payloads decode with `nil` (treated as not muted).
     public let muted: Bool?
+    /// W441: per-conversation ephemeral timer in seconds.
+    /// 0 or nil = off.  Positive value = TTL applied to each new
+    /// outbound message (expiresAt = sentAt + ephemeralTimerSeconds).
+    /// Mirrors Android's ConversationEntity.ephemeralTimerSec.
+    /// Optional for Codable backward compat with pre-W441 stored rows.
+    public let ephemeralTimerSeconds: Int?
 
     public init(id: UUID, peerUserId: String, peerDisplayName: String,
                 lastMessagePreview: String?, lastActivity: Date,
                 unreadCount: Int, pinned: Bool, kind: Kind = .oneToOne,
-                muted: Bool? = nil) {
+                muted: Bool? = nil,
+                ephemeralTimerSeconds: Int? = nil) {
         self.id = id
         self.peerUserId = peerUserId
         self.peerDisplayName = peerDisplayName
@@ -34,5 +41,6 @@ public struct Conversation: Equatable, Sendable, Hashable, Codable, Identifiable
         self.pinned = pinned
         self.kind = kind
         self.muted = muted
+        self.ephemeralTimerSeconds = ephemeralTimerSeconds
     }
 }

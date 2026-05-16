@@ -92,6 +92,15 @@ public final class QAudionDatabase {
             }
         }
         
+        migrator.registerMigration("v2-ephemeral-timers") { db in
+            try db.alter(table: "messages") { t in
+                t.add(column: "expiresAt", .datetime)
+            }
+            try db.alter(table: "conversations") { t in
+                t.add(column: "ephemeralTimerSeconds", .integer)
+            }
+        }
+
         return migrator
     }
     

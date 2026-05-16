@@ -73,6 +73,11 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// the dict tidy. Optional for Codable backward compat with
     /// pre-W87 stored rows.
     public let reactions: [String: [String]]?
+    /// W441: UTC timestamp at which this message auto-deletes locally.
+    /// Set at send/receive time from the conversation's ephemeral timer.
+    /// nil = no expiry. Swept by EphemeralMessageJanitor every 60 s.
+    /// Optional for backward compat — older stored rows decode with nil.
+    public let expiresAt: Date?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
@@ -84,7 +89,8 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
                 clientMsgId: String? = nil,
                 edited: Bool? = nil,
                 deletedAt: Date? = nil,
-                reactions: [String: [String]]? = nil) {
+                reactions: [String: [String]]? = nil,
+                expiresAt: Date? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -102,5 +108,6 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.edited = edited
         self.deletedAt = deletedAt
         self.reactions = reactions
+        self.expiresAt = expiresAt
     }
 }

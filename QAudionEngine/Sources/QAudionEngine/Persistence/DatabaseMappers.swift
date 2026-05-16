@@ -30,7 +30,8 @@ extension Message: FetchableRecord, PersistableRecord {
         container["clientMsgId"] = clientMsgId
         container["edited"] = edited
         container["deletedAt"] = deletedAt
-        
+        container["expiresAt"] = expiresAt
+
         if let reactions = reactions,
            let data = try? JSONEncoder().encode(reactions),
            let json = String(data: data, encoding: .utf8) {
@@ -64,7 +65,8 @@ extension Message: FetchableRecord, PersistableRecord {
             clientMsgId: row["clientMsgId"],
             edited: row["edited"],
             deletedAt: row["deletedAt"],
-            reactions: reactions
+            reactions: reactions,
+            expiresAt: row["expiresAt"]
         )
     }
 }

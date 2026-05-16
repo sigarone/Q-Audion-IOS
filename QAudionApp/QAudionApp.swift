@@ -4,21 +4,75 @@ import QAudionEngine
 @main
 struct QAudionApp: App {
     @StateObject private var appState = AppState()
+    /// W441: App lock service. isLocked drives the gate overlay in body.
+    @StateObject private var lockService = AppLockService()
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// W441: reactive screenshot-protection flag — @AppStorage so the ZStack
+    /// modifier re-evaluates when the user toggles the setting in PrivacySettings.
+    @AppStorage("qaudion.privacy.screenshot_protection")
+    private var screenshotProtectionEnabled: Bool = false
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(appState)
-                .onAppear {
-                    // W416: capture every print()/stderr line into the
-                    // ring buffer FROM LAUNCH, with auto-rotation FIFO
-                    // 5000 entries (≈ 1.25MB). The user can grab the
-                    // dump anytime via Settings → Diagnostica → Carica
-                    // al server, no opt-in needed; after ~50 calls the
-                    // buffer simply wraps over and never grows further.
-                    RuntimeLogSink.shared.attachStdoutTee()
-                    appState.initialize()
+            ZStack {
+                ContentView()
+                    .environmentObject(appState)
+                    // W441: hide app content from app-switcher snapshots when
+                    // screenshot protection is on (iOS 15+ system API).
+                    .privacySensitive(screenshotProtectionEnabled)
+                    .allowsHitTesting(!lockService.isLocked)
+
+                if lockService.isLocked {
+                    AppLockGateView(lockService: lockService)
+                        .transition(.opacity)
+                        .zIndex(1)
                 }
+            }
+            .animation(.easeInOut(duration: 0.2), value: lockService.isLocked)
+            .onChange(of: scenePhase) { newPhase in
+                handleScenePhase(newPhase)
+            }
+            .onAppear {
+                // W416: ring-buffer stdout tee from launch for live telemetry.
+                RuntimeLogSink.shared.attachStdoutTee()
+                appState.initialize()
+                // W441: sweep expired messages immediately + every 60s.
+                EphemeralMessageJanitor.shared.start()
+                // W441: listen for OS screenshot events and warn in the log.
+                registerScreenshotObserver()
+            }
+        }
+    }
+
+    // MARK: - Scene phase
+
+    private func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            lockService.handleBackground()
+        case .active:
+            // Active call bypasses the lock so in-call controls stay reachable.
+            if appState.isInCall {
+                lockService.bypassForCall()
+            } else {
+                lockService.handleForeground()
+            }
+        default:
+            break
+        }
+    }
+
+    // MARK: - Screenshot detection
+
+    private func registerScreenshotObserver() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.userDidTakeScreenshotNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            guard PrivacyGate.screenshotProtectionEnabled else { return }
+            RTLog.warn("privacy", "screenshot taken while protection is active")
         }
     }
 }

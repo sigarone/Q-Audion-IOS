@@ -52,6 +52,8 @@ targets:
       - sdk: CoreNFC.framework
       - sdk: Contacts.framework
       - sdk: ContactsUI.framework
+      # W441: AppLockService uses LAContext for biometric / passcode auth.
+      - sdk: LocalAuthentication.framework
     resources:
       - path: Assets.xcassets
       # Apple privacy manifest. Placed at the root of the app bundle by
