@@ -210,7 +210,7 @@ public final class NfcApduExchange: NSObject {
 
         // Derive identity-bound PSK.
         let peerEphPub = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerEphPubBytes)
-        let psk = try deriveIdentityBoundPsk(
+        let psk = try NfcApduExchange.deriveIdentityBoundPsk(
             myEphPriv: myEphPriv,
             peerEphPub: peerEphPub,
             myIdPub: Data(myIdPub),
