@@ -43,6 +43,9 @@ struct LiveInCallScreen: View {
     @State private var muted: Bool = false
     @State private var speakerOn: Bool = false
     @State private var voiceEnhancement: Bool = false
+    /// Camera on/off state for video calls. Starts ON when the call
+    /// is a video call; user can mute/unmute the camera mid-call.
+    @State private var cameraOn: Bool = false
 
     /// Cached peer display name. Resolved once on appear / on
     /// callContactId change so the contacts-store lookup doesn't run
@@ -78,6 +81,9 @@ struct LiveInCallScreen: View {
         .onAppear {
             resolvePeerDisplayName()
             rekeyAnchorEpoch = Date().timeIntervalSince1970
+            // Seed camera state from the call type: video calls start
+            // with camera ON; audio calls hide the button entirely.
+            cameraOn = appState.isVideoCall
         }
         .onChange(of: appState.callContactId) { _ in
             // Re-resolve when the call peer changes (e.g. switching
@@ -118,6 +124,8 @@ struct LiveInCallScreen: View {
                 muted: liveMuted,
                 speakerOn: speakerOn,
                 voiceEnhancement: voiceEnhancement,
+                hasVideo: appState.isVideoCall,
+                cameraOn: cameraOn,
                 onToggleMute: {
                     // Source of truth = CallService.isMuted. We flip it
                     // via AppState.setMuted then re-read; the @State
@@ -137,6 +145,10 @@ struct LiveInCallScreen: View {
                     // Real audio-processing flag will land when the engine
                     // exposes a voice-enhancement toggle. For now this
                     // is UI-only.
+                },
+                onToggleCamera: {
+                    cameraOn.toggle()
+                    appState.setCamera(cameraOn)
                 },
                 onAddParticipant: {
                     // 1:1 call → no-op placeholder. Group calling has

@@ -123,11 +123,23 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
 
         guard let url = URL(string: config.serverUrl.replacingOccurrences(of: "https://", with: "wss://").replacingOccurrences(of: "http://", with: "ws://") + "/ws") else { return }
 
+        // VoIP-grade session configuration:
+        //   - timeoutIntervalForRequest = 0  → no read timeout (server's
+        //     keepalive governs the connection; without this the default
+        //     60 s read timeout fires on quiet calls and emits EOF).
+        //   - waitsForConnectivity = true    → queue send() calls while
+        //     transitioning between WiFi / LTE instead of failing fast.
+        //   - These settings survive iOS background network suspension
+        //     better than URLSession.shared defaults, which combine with
+        //     VoIP background mode to keep the WS alive during active calls.
+        let sessionConfig = URLSessionConfiguration.default
+        sessionConfig.timeoutIntervalForRequest = 0   // no read timeout
+        sessionConfig.waitsForConnectivity = true
         let session: URLSession
         if config.acceptSelfSignedCerts {
-            session = URLSession(configuration: .default, delegate: SelfSignedCertDelegate(), delegateQueue: nil)
+            session = URLSession(configuration: sessionConfig, delegate: SelfSignedCertDelegate(), delegateQueue: nil)
         } else {
-            session = URLSession.shared
+            session = URLSession(configuration: sessionConfig, delegate: nil, delegateQueue: nil)
         }
         let task = session.webSocketTask(with: url)
         lock.lock()

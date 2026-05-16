@@ -2125,6 +2125,15 @@ final class AppState: ObservableObject {
 
     func startCall(contactId: String, video: Bool = false) async {
         RTLog.info("call", "startCall contactId=\(contactId.prefix(8))… video=\(video)")
+        // Guard against double-tap / concurrent calls. Without this,
+        // two rapid invocations each generate a fresh UUID and each
+        // send an independent call_offer — the server creates two
+        // separate call sessions and the callee sees two incoming calls
+        // (observed 2026-05-16, iOS→Android, UUIDs C6C66915/FC3AA1BF).
+        guard !isInCall else {
+            RTLog.warn("call", "startCall ignored — already in call (isInCall=true)")
+            return
+        }
         guard let engine = engine else {
             errorMessage = "Engine not available"
             RTLog.error("call", "engine not available — abort")
@@ -2536,6 +2545,12 @@ final class AppState: ObservableObject {
 
     func setSpeaker(_ enabled: Bool) {
         // Audio routing is managed by the OS via AVAudioSession; no engine API needed.
+    }
+
+    /// Toggle the local camera for video calls. Pauses/resumes the
+    /// video capture pipeline. No-op when there is no active video call.
+    func setCamera(_ enabled: Bool) {
+        videoPipeline?.setCameraEnabled(enabled)
     }
 
     func testConnection() async {

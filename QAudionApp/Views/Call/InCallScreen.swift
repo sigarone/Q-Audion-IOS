@@ -80,9 +80,15 @@ struct InCallScreen: View {
     let muted: Bool
     let speakerOn: Bool
     let voiceEnhancement: Bool
+    /// Whether the active call has a video track — shows/hides the
+    /// camera toggle button. Mirrors Android InCallScreen `hasVideo`.
+    let hasVideo: Bool
+    /// Camera on/off state — only meaningful when `hasVideo == true`.
+    let cameraOn: Bool
     let onToggleMute: () -> Void
     let onToggleSpeaker: () -> Void
     let onToggleVoiceEnhancement: () -> Void
+    let onToggleCamera: () -> Void
     let onAddParticipant: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
@@ -103,9 +109,12 @@ struct InCallScreen: View {
          muted: Bool = false,
          speakerOn: Bool = false,
          voiceEnhancement: Bool = false,
+         hasVideo: Bool = false,
+         cameraOn: Bool = false,
          onToggleMute: @escaping () -> Void = {},
          onToggleSpeaker: @escaping () -> Void = {},
          onToggleVoiceEnhancement: @escaping () -> Void = {},
+         onToggleCamera: @escaping () -> Void = {},
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
@@ -125,9 +134,12 @@ struct InCallScreen: View {
         self.muted = muted
         self.speakerOn = speakerOn
         self.voiceEnhancement = voiceEnhancement
+        self.hasVideo = hasVideo
+        self.cameraOn = cameraOn
         self.onToggleMute = onToggleMute
         self.onToggleSpeaker = onToggleSpeaker
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
+        self.onToggleCamera = onToggleCamera
         self.onAddParticipant = onAddParticipant
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
@@ -451,6 +463,17 @@ struct InCallScreen: View {
                 background: speakerOn ? extras.success : scheme.surfaceVariant,
                 iconColor: speakerOn ? extras.onSuccess : scheme.onSurface
             )
+            // Camera toggle — only visible on video calls.
+            // Mirrors Android InCallScreen cameraButton visibility logic.
+            if hasVideo {
+                CircularAction(
+                    icon: cameraOn ? "video.fill" : "video.slash.fill",
+                    action: onToggleCamera,
+                    diameter: 48,
+                    background: cameraOn ? extras.success : scheme.surfaceVariant,
+                    iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
+                )
+            }
             CircularAction(
                 icon: "line.3.horizontal",
                 action: onToggleVoiceEnhancement,
