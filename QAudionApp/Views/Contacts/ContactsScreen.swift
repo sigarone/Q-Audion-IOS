@@ -311,41 +311,12 @@ struct ContactsScreen: View {
         .refreshable { container.refresh() }
     }
 
+    // W442 — replaced static placeholder with real device-contacts import.
     private var discoverPlaceholder: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "rectangle.and.text.magnifyingglass")
-                .font(.system(size: 56))
-                .foregroundStyle(scheme.onSurfaceVariant)
-            Text("Importa o scopri")
-                .qaudionStyle(type.titleMedium)
-                .foregroundStyle(scheme.onSurface)
-            Text("L'import della rubrica peppered hash arriverà in una versione successiva. Per ora puoi aggiungere contatti via QR / NFC.")
-                .qaudionStyle(type.bodySmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-
-            // W61: CTA inline per ergonomia. Ridirige al ContactEditor
-            // (stesso flow del bottone "+" in topBar). Quando l'engine
-            // wirerà il vero peppered-discover via /api/v1/contacts/
-            // discover-v2, sostituire la action con quella.
-            Button {
-                showingNewContact = true
-            } label: {
-                Label("Aggiungi contatto", systemImage: "person.badge.plus")
-                    .qaudionStyle(type.labelMedium)
-                    .foregroundStyle(scheme.onPrimary)
-                    .padding(.horizontal, 18).padding(.vertical, 10)
-                    .background(
-                        Capsule().fill(scheme.primary)
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
-
-            Spacer()
-        }
-        .padding(.top, 48)
+        PhoneContactImportView(
+            searchText: searchText,
+            onImported: { _ in container.refresh() }
+        )
     }
 
     private var blockedPlaceholder: some View {

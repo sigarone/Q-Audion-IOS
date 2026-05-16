@@ -11,9 +11,11 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedTab: Tab = .chats
     @State private var presentingInCall: Bool = false
-    /// W55: visibility del sidebar su iPad. Default `.automatic` lascia
-    /// SwiftUI decidere; l'utente può collapse/expand col bottone toolbar.
-    @State private var splitVisibility: NavigationSplitViewVisibility = .automatic
+    /// W55: visibility del sidebar su iPad. Default `.all` mantiene la
+    /// sidebar aperta di default su iPad — lo spazio disponibile la rende
+    /// utile per accedere rapidamente a chat, chiamate e impostazioni.
+    /// L'utente può chiuderla con il bottone toolbar se vuole più spazio.
+    @State private var splitVisibility: NavigationSplitViewVisibility = .all
 
     enum Tab: Hashable, CaseIterable, Identifiable {
         case chats
