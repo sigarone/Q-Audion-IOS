@@ -3,7 +3,8 @@ import CryptoKit
 
 /// Pairwise first-contact PSK negotiation — Desktop/Android parity.
 ///
-/// Mirrors `qaudion-desktop/src/main/calling/ContactKeyExchange.ts`.
+/// Mirrors `qaudion-desktop/src/main/calling/ContactKeyExchange.ts`
+/// and `qaudion-android-new/.../crypto/ContactKeyExchange.kt`.
 ///
 ///   PSK = HKDF-SHA256(
 ///           ikm  = X25519_ECDH(my_priv, peer_pub),
@@ -12,9 +13,18 @@ import CryptoKit
 ///           L    = 32,
 ///         )
 ///
-/// The X25519 pubkeys are exchanged over `opaque_message` via QUAD
-/// KEY_EXCHANGE_OFFER (0x09) / KEY_EXCHANGE_ACCEPT (0x0a) frames. Once
-/// exchanged, both sides store an identical PSK in the sovereign vault
+/// Wire protocol: exactly TWO frames over `opaque_message` in QUAD binary:
+///   KEY_EXCHANGE_OFFER  (0x09): initiator → responder, carries initiator's X25519 pub.
+///   KEY_EXCHANGE_ACCEPT (0x0a): responder → initiator, carries responder's X25519 pub.
+///
+/// Both sides independently run ECDH(my_priv, peer_pub) and derive the SAME
+/// PSK — no CONFIRM/DONE frames exist in this protocol. The handshake is
+/// complete after the ACCEPT is received. The receive-side dispatch in
+/// AppState.wireOpaqueMessageHandler and QAudionCallIntegration
+/// .onCapabilityMessageReceived routes both frame types correctly (verified
+/// 2026-05-16 against Android QuadCapabilityFrame + ContactKeyExchange.kt).
+///
+/// Once exchanged, both sides store an identical PSK in the sovereign vault
 /// bound to the counterparty's userId.
 public final class ContactKeyExchange: @unchecked Sendable {
 
