@@ -11,6 +11,9 @@ import QAudionEngine
 ///   3. Show list filtered by the search text from the parent.
 ///   4. Tap a row → bottom sheet to confirm alias + manual Q-Audion ID field.
 ///   5. Save to ContactsStore → contact appears in TUTTI tab immediately.
+///
+/// Deployment note: CNAuthorizationStatus.limited for Contacts requires
+/// iOS 18.0+. All uses are guarded with #available(iOS 18.0, *).
 struct PhoneContactImportView: View {
     let searchText: String
     let onImported: (_ displayName: String) -> Void
@@ -30,6 +33,17 @@ struct PhoneContactImportView: View {
         let displayName: String
         let phoneNumbers: [String]
         let thumbnailData: Data?
+    }
+
+    // MARK: - Computed
+
+    /// True when the user has granted (full or limited on iOS 18+) contacts access.
+    private var isAccessGranted: Bool {
+        if permission == .authorized { return true }
+        if #available(iOS 18.0, *) {
+            return permission == .limited
+        }
+        return false
     }
 
     private var filtered: [PhoneCandidate] {
@@ -54,7 +68,7 @@ struct PhoneContactImportView: View {
             if loading {
                 ProgressView()
                     .padding(.top, 40)
-            } else if candidates.isEmpty && permission == .authorized {
+            } else if candidates.isEmpty && isAccessGranted {
                 emptyState
             } else {
                 candidateList
@@ -63,7 +77,7 @@ struct PhoneContactImportView: View {
         .onAppear { refreshIfAuthorized() }
         .sheet(item: $selectedCandidate) { candidate in
             ImportContactSheet(candidate: candidate) { stored in
-                save(stored)
+                ContactsStore().upsert(stored)
                 selectedCandidate = nil
                 let name = stored.displayName
                 onImported(name)
@@ -125,16 +139,22 @@ struct PhoneContactImportView: View {
     }
 
     private var importCardSubtitle: String {
+        if isAccessGranted {
+            if candidates.isEmpty {
+                return "Carica i tuoi contatti per scoprire chi usa Q-Audion"
+            }
+            return "\(candidates.count) contatti trovati in rubrica"
+        }
         switch permission {
         case .notDetermined:
             return "Tocca per autorizzare l'accesso ai contatti"
         case .denied, .restricted:
             return "Accesso ai contatti negato · apri Impostazioni iOS"
-        case .authorized, .limited:
-            if candidates.isEmpty {
-                return "Carica i tuoi contatti per scoprire chi usa Q-Audion"
-            }
-            return "\(candidates.count) contatti trovati in rubrica"
+        case .authorized:
+            // Handled above by isAccessGranted.
+            return candidates.isEmpty
+                ? "Carica i tuoi contatti per scoprire chi usa Q-Audion"
+                : "\(candidates.count) contatti trovati in rubrica"
         @unknown default:
             return "Tocca per importare i contatti"
         }
@@ -222,9 +242,11 @@ struct PhoneContactImportView: View {
     // MARK: - Permission + loading
 
     private func requestImport() {
-        switch permission {
-        case .authorized, .limited:
+        if isAccessGranted {
             loadCandidates()
+            return
+        }
+        switch permission {
         case .notDetermined:
             CNContactStore().requestAccess(for: .contacts) { granted, _ in
                 DispatchQueue.main.async {
@@ -236,15 +258,15 @@ struct PhoneContactImportView: View {
             if let url = URL(string: UIApplication.openSettingsURLString) {
                 UIApplication.shared.open(url)
             }
+        case .authorized:
+            loadCandidates()
         @unknown default:
             break
         }
     }
 
     private func refreshIfAuthorized() {
-        if permission == .authorized || permission == .limited {
-            loadCandidates()
-        }
+        if isAccessGranted { loadCandidates() }
     }
 
     private func loadCandidates() {
@@ -275,7 +297,7 @@ struct PhoneContactImportView: View {
                     ))
                 }
             } catch {
-                // Permission error or no contacts — result stays empty
+                // Permission error or no contacts — result stays empty.
             }
             result.sort { $0.displayName < $1.displayName }
             DispatchQueue.main.async {
@@ -285,25 +307,13 @@ struct PhoneContactImportView: View {
             }
         }
     }
-
-    // MARK: - Save to ContactsStore
-
-    private func save(_ stored: StoredContact) {
-        ContactsStore().upsert(stored)
-    }
-
-    struct StoredContact {
-        let displayName: String
-        let userId: String
-        let phoneNumber: String
-    }
 }
 
 // MARK: - Import confirmation sheet
 
 private struct ImportContactSheet: View {
     let candidate: PhoneContactImportView.PhoneCandidate
-    let onConfirm: (PhoneContactImportView.StoredContact) -> Void
+    let onConfirm: (ContactsStore.StoredContact) -> Void
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
@@ -313,7 +323,7 @@ private struct ImportContactSheet: View {
     @State private var qaudionId: String = ""
 
     init(candidate: PhoneContactImportView.PhoneCandidate,
-         onConfirm: @escaping (PhoneContactImportView.StoredContact) -> Void) {
+         onConfirm: @escaping (ContactsStore.StoredContact) -> Void) {
         self.candidate = candidate
         self.onConfirm = onConfirm
         _alias = State(initialValue: candidate.displayName)
@@ -407,11 +417,20 @@ private struct ImportContactSheet: View {
         let trimName = alias.trimmingCharacters(in: .whitespaces)
         guard !trimName.isEmpty else { return }
         let phone = candidate.phoneNumbers.first ?? ""
-        // Use Q-Audion ID if provided, otherwise use the first phone number as provisional key
-        let userId = qaudionId.trimmingCharacters(in: .whitespaces).isEmpty
-            ? "phone:\(phone)"
-            : qaudionId.trimmingCharacters(in: .whitespaces)
-        onConfirm(.init(displayName: trimName, userId: userId, phoneNumber: phone))
+        // Use Q-Audion ID if provided; otherwise provisional key from phone number.
+        let trimId = qaudionId.trimmingCharacters(in: .whitespaces)
+        let userId = trimId.isEmpty ? "phone:" + phone : trimId
+        // phoneHash stores the raw phone number (no server-side peppered hash
+        // for locally-imported contacts — field stays as the lookup key).
+        let stored = ContactsStore.StoredContact(
+            userId: userId,
+            displayName: trimName,
+            phoneHash: phone,
+            avatarUrl: nil,
+            lastSeen: nil,
+            isVerified: false
+        )
+        onConfirm(stored)
     }
 
     private func fieldLabel(_ text: String) -> some View {
