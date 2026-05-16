@@ -119,6 +119,11 @@ final class CallHistoryStore: ObservableObject {
         if userId.hasPrefix("user-") {
             return String(userId.dropFirst(5)).capitalized
         }
+        // W440: truncate UUID-style IDs to prefix(8)…suffix(4) instead of
+        // showing the full 36-char UUID in the call history list.
+        if userId.count > 12 {
+            return String(userId.prefix(8)) + "…" + String(userId.suffix(4))
+        }
         return userId
     }
 

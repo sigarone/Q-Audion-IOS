@@ -58,7 +58,17 @@ final class InCallContainer: ObservableObject {
             .sink { [weak self] cid in
                 guard let self, let cid = cid else { return }
                 let stored = self.contactsStore.load().first(where: { $0.userId == cid })
-                let displayName = stored?.displayName ?? cid
+                // W440: when the peer is not in ContactsStore fall back to
+                // an abbreviated userId (first 8 + last 4) instead of the
+                // full UUID. Mirrors the same truncation used in
+                // SettingsScreen.profileDisplayName and fingerprint fallback.
+                let displayName: String = {
+                    if let name = stored?.displayName, !name.isEmpty { return name }
+                    if cid.count > 12 {
+                        return String(cid.prefix(8)) + "…" + String(cid.suffix(4))
+                    }
+                    return cid
+                }()
                 let avatarUrl = stored?.avatarUrl
                 let fingerprint: String = {
                     // W439: When the peer is not QR-paired (no pubkey in
