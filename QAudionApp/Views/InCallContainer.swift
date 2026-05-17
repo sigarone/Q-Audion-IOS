@@ -58,7 +58,7 @@ final class InCallContainer: ObservableObject {
             .sink { [weak self] cid in
                 guard let self, let cid = cid else { return }
                 let stored = self.contactsStore.load().first(where: { $0.userId == cid })
-                let localName: String? = stored?.displayName.flatMap { $0.isEmpty ? nil : $0 }
+                let localName: String? = (stored?.displayName).flatMap { $0.isEmpty ? nil : $0 }
                 let avatarUrl = stored?.avatarUrl
                 let fingerprint: String = {
                     guard let pk = stored?.pubkey else {
