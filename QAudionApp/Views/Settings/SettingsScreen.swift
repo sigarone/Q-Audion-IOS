@@ -868,14 +868,14 @@ struct SettingsScreen: View {
 
     private var profileHandle: String? {
         guard let userId = appState.currentUserId else { return nil }
-        // Show "Int. — · <first8>…<last4>" as the mono handle line.
-        // Testers can use this to fingerprint-match across devices.
-        if userId.count > 12 {
-            let head = String(userId.prefix(8))
-            let tail = String(userId.suffix(4))
-            return "Int. — · " + head + "…" + tail
+        // W444: prefer the real server-assigned PBX extension (e.g. "Int. 103 · …d2e9")
+        // over the hardcoded dash. Falls back to the UUID fragment when extension
+        // is not yet loaded (first launch before getProfile() returns).
+        let tail = userId.count > 4 ? "…" + String(userId.suffix(4)) : userId
+        if let ext = appState.currentUserDialExtension, !ext.isEmpty {
+            return "Int. " + ext + " · " + tail
         }
-        return "Int. — · " + userId
+        return "Int. — · " + tail
     }
 }
 

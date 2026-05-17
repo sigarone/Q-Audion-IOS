@@ -75,6 +75,14 @@ final class AccountSettingsContainer: ObservableObject {
                     )
                     self.draftDisplayName = profile.displayName ?? ""
                     self.draftStatusMessage = profile.statusMessage ?? ""
+                    // W444: propagate dialExtension to AppState so SettingsScreen
+                    // profileHandle and InCallContainer show the real short number.
+                    self.appState.currentUserDialExtension = extString
+                    if let extString = extString {
+                        UserDefaults.standard.set(extString, forKey: "currentUserDialExtension")
+                    } else {
+                        UserDefaults.standard.removeObject(forKey: "currentUserDialExtension")
+                    }
                     self.isLoading = false
                 }
             } catch {

@@ -48,6 +48,12 @@ final class AppState: ObservableObject {
     // MARK: - Auth state
     @Published var isAuthenticated: Bool = false
     @Published var currentUserId: String?
+    /// W444: server-assigned short PBX extension for the logged-in user (e.g. "103").
+    /// Persisted to UserDefaults key "currentUserDialExtension" so the SettingsScreen
+    /// hero card and caller-id display show the real short number immediately on
+    /// launch, before the next getProfile() round-trip completes.
+    /// Populated by the startup getProfile() path and by AccountSettingsContainer.loadFromServer().
+    @Published var currentUserDialExtension: String?
     @Published var errorMessage: String?
 
     /// W72: presence service — bound to the engine `BCryptoPresenceManager`
@@ -455,6 +461,14 @@ final class AppState: ObservableObject {
         #endif
 
         if let token = authService.loadToken() {
+            // W444: pre-fill userId + dialExtension from UserDefaults so
+            // SettingsScreen shows the correct handle before getProfile() returns.
+            if let cached = UserDefaults.standard.string(forKey: "currentUserId") {
+                self.currentUserId = cached
+            }
+            if let cached = UserDefaults.standard.string(forKey: "currentUserDialExtension") {
+                self.currentUserDialExtension = cached
+            }
             let backendConfig = BackendConfig(serverUrl: defaultServerUrl, accessToken: token)
             let provider = BCryptoBackendProvider(config: backendConfig)
             Task {
@@ -466,6 +480,15 @@ final class AppState: ObservableObject {
                     // background tasks) can read the userId without
                     // taking a reference to AppState.
                     UserDefaults.standard.set(profile.userId, forKey: "currentUserId")
+                    // W444: persist the short PBX extension so the SettingsScreen
+                    // hero card shows "Int. 103" immediately on next launch.
+                    if let ext = profile.dialExtension, ext > 0 {
+                        let extStr = String(ext)
+                        self.currentUserDialExtension = extStr
+                        UserDefaults.standard.set(extStr, forKey: "currentUserDialExtension")
+                    } else if let cached = UserDefaults.standard.string(forKey: "currentUserDialExtension") {
+                        self.currentUserDialExtension = cached
+                    }
                     self.isAuthenticated = true
                     self.replayPendingTrackB()
                     // W74: open the long-lived WS so the server flips
@@ -1238,10 +1261,22 @@ final class AppState: ObservableObject {
         if let e = existing {
             conv = e
         } else {
+            // W444: resolve peer display name from ContactsStore so the conversation
+            // list never shows a raw UUID. Falls back to abbreviated senderId when
+            // the peer is not yet in contacts (e.g. first-contact inbound message).
+            let contactsStore = ContactsStore()
+            let resolvedName: String = {
+                if let name = contactsStore.load().first(where: { $0.userId == senderId })?.displayName,
+                   !name.isEmpty { return name }
+                if senderId.count > 12 {
+                    return String(senderId.prefix(8)) + "…" + String(senderId.suffix(4))
+                }
+                return senderId
+            }()
             conv = Conversation(
                 id: UUID(),
                 peerUserId: senderId,
-                peerDisplayName: senderId, // resolved later via contacts lookup
+                peerDisplayName: resolvedName,
                 lastMessagePreview: plaintext,
                 lastActivity: Date(),
                 unreadCount: 1,
@@ -2040,6 +2075,8 @@ final class AppState: ObservableObject {
         presenceService.reset()
         currentUserId = nil
         UserDefaults.standard.removeObject(forKey: "currentUserId")
+        currentUserDialExtension = nil
+        UserDefaults.standard.removeObject(forKey: "currentUserDialExtension")
         isAuthenticated = false
         callState = .idle
         isInCall = false

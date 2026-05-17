@@ -49,52 +49,81 @@ final class InCallContainer: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Peer info from callContactId. Resolves displayName / avatarUrl /
-        // fingerprint from the local ContactsStore when the userId matches a
-        // QR-paired or phonebook-discovered contact; falls back to userId
-        // and the unknown-fingerprint placeholder otherwise.
+        // Peer info from callContactId. Resolution order (mirrors Android CallPeerNameViewModel):
+        //   1. Local ContactsStore by userId (QR-paired or phone-book imported)
+        //   2. Server GET /api/v1/users/{id} if not in ContactsStore
+        //   3. Abbreviated userId (first 8 + last 4) as last resort
         appState.$callContactId
             .receive(on: RunLoop.main)
             .sink { [weak self] cid in
                 guard let self, let cid = cid else { return }
                 let stored = self.contactsStore.load().first(where: { $0.userId == cid })
-                // W440: when the peer is not in ContactsStore fall back to
-                // an abbreviated userId (first 8 + last 4) instead of the
-                // full UUID. Mirrors the same truncation used in
-                // SettingsScreen.profileDisplayName and fingerprint fallback.
-                let displayName: String = {
-                    if let name = stored?.displayName, !name.isEmpty { return name }
-                    if cid.count > 12 {
-                        return String(cid.prefix(8)) + "…" + String(cid.suffix(4))
-                    }
-                    return cid
-                }()
+                let localName: String? = stored?.displayName.flatMap { $0.isEmpty ? nil : $0 }
                 let avatarUrl = stored?.avatarUrl
                 let fingerprint: String = {
-                    // W439: When the peer is not QR-paired (no pubkey in
-                    // ContactsStore), the old placeholder "????.????.????.????"
-                    // was shown verbatim under the peer name during every call.
-                    // Instead show the abbreviated userId (first 8 + last 4)
-                    // so testers can still cross-reference the peer without
-                    // seeing a confusing row of question marks.
                     guard let pk = stored?.pubkey else {
-                        let head = String(cid.prefix(8))
-                        let tail = String(cid.suffix(4))
-                        return head + "…" + tail
+                        return String(cid.prefix(8)) + "…" + String(cid.suffix(4))
                     }
-                    return (try? Fingerprint.format(pubkey: pk)) ?? {
-                        let head = String(cid.prefix(8))
-                        let tail = String(cid.suffix(4))
-                        return head + "…" + tail
-                    }()
+                    return (try? Fingerprint.format(pubkey: pk))
+                        ?? String(cid.prefix(8)) + "…" + String(cid.suffix(4))
                 }()
+                let fallbackName: String = String(cid.prefix(8)) + "…" + String(cid.suffix(4))
+
+                // Apply local result immediately so the UI is not blank.
                 self.update {
                     $0.peer = InCallViewModel.PeerInfo(
                         userId: cid,
-                        displayName: displayName,
+                        displayName: localName ?? fallbackName,
                         avatarUrl: avatarUrl,
                         fingerprint: fingerprint
                     )
+                }
+
+                // W444: if no local contact, kick off a server lookup to get
+                // the peer's real display name (mirrors Android step 4).
+                if localName == nil, let provider = self.appState?.liveProvider {
+                    // Capture primitives before entering Task — avoids type-checker
+                    // timeouts (CLAUDE.md §13) and weak-self capture complexity.
+                    let capturedCid = cid
+                    let capturedFallback = fallbackName
+                    let capturedFingerprint = fingerprint
+                    let capturedAvatar = avatarUrl
+                    Task { [weak self] in
+                        guard let self else { return }
+                        guard let pub = try? await provider.accountApi.getPublicUser(userId: capturedCid) else { return }
+                        // Pre-bind all String construction outside await/MainActor calls.
+                        let rawName: String? = pub.displayName
+                        let resolvedName: String
+                        if let n = rawName, !n.isEmpty {
+                            resolvedName = n
+                        } else {
+                            resolvedName = capturedFallback
+                        }
+                        let rawAvatarStr: String? = pub.avatarUrl
+                        let resolvedAvatar: URL? = rawAvatarStr.flatMap(URL.init(string:)) ?? capturedAvatar
+                        await MainActor.run {
+                            self.update {
+                                $0.peer = InCallViewModel.PeerInfo(
+                                    userId: capturedCid,
+                                    displayName: resolvedName,
+                                    avatarUrl: resolvedAvatar,
+                                    fingerprint: capturedFingerprint
+                                )
+                            }
+                            // Persist so future calls resolve locally without a server round-trip.
+                            if !resolvedName.isEmpty && resolvedName != capturedFallback {
+                                let contact = ContactsStore.StoredContact(
+                                    userId: capturedCid,
+                                    displayName: resolvedName,
+                                    phoneHash: "",
+                                    avatarUrl: resolvedAvatar,
+                                    lastSeen: nil,
+                                    isVerified: false
+                                )
+                                self.contactsStore.upsert(contact)
+                            }
+                        }
+                    }
                 }
             }
             .store(in: &cancellables)
