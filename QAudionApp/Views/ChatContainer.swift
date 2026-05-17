@@ -1029,6 +1029,203 @@ final class ChatContainer: ObservableObject {
         }
     }
 
+    // MARK: - W445: Forward message
+
+    /// Forward a message to another conversation. Sends the message's
+    /// plaintext to the target conversation via the normal send pipeline.
+    /// The local store for the target conversation is updated so the
+    /// forwarded message appears immediately in the target chat.
+    func forwardMessage(_ message: Message, to targetConversationId: UUID) {
+        // Find or bootstrap the target conversation's container and send.
+        // We send directly via the send service to keep the implementation
+        // self-contained — no need to spin up a full ChatContainer.
+        let text = message.plaintext
+        guard !text.isEmpty, let sendService = self.sendService else {
+            print("[ChatContainer] forwardMessage: no sendService or empty plaintext")
+            return
+        }
+        // Look up the peer for the target conversation.
+        let convs = store.loadConversations()
+        guard let targetConv = convs.first(where: { $0.id == targetConversationId }) else {
+            print("[ChatContainer] forwardMessage: target conversation not found")
+            return
+        }
+        let targetPeerId = targetConv.peerUserId
+        let msgId = UUID()
+        let local = Message(
+            id: msgId,
+            conversationId: targetConversationId,
+            direction: .outgoing,
+            plaintext: text,
+            sentAt: Date(),
+            deliveredAt: nil,
+            readAt: nil,
+            status: .sending,
+            clientMsgId: msgId.uuidString
+        )
+        store.appendMessage(local)
+        store.recordNewMessage(
+            conversationId: targetConversationId,
+            lastMessagePreview: text,
+            lastActivity: Date(),
+            incrementUnread: false
+        )
+        Task { [targetPeerId, msgId, targetConversationId, text] in
+            let outcome = await sendService.sendEncrypted(
+                messageId: msgId,
+                peerUserId: targetPeerId,
+                plaintext: text
+            )
+            await MainActor.run {
+                switch outcome {
+                case .delivered(let serverMsgId):
+                    self.store.setServerMessageId(
+                        localId: msgId,
+                        conversationId: targetConversationId,
+                        serverMessageId: serverMsgId
+                    )
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: targetConversationId,
+                        newStatus: .delivered, deliveredAt: Date()
+                    )
+                case .sent:
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: targetConversationId,
+                        newStatus: .delivered, deliveredAt: Date()
+                    )
+                case .failed(let reason):
+                    print("[ChatContainer] forwardMessage send failed: \(reason)")
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: targetConversationId,
+                        newStatus: .failed
+                    )
+                }
+                self.refreshFromStore()
+            }
+        }
+    }
+
+    // MARK: - W445: Generic file attachment
+
+    /// Send a generic file attachment selected from UIDocumentPickerViewController.
+    /// Reads the file data and sends via the existing qfile v3 upload pipeline
+    /// (same path as voice notes and images).
+    func sendFileAttachment(url: URL) {
+        let peerId = peerUserId
+        let convId = conversationId
+        let msgId = UUID()
+        let filename = url.lastPathComponent
+        // Security-scoped access for files outside the app sandbox.
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else {
+            print("[ChatContainer] sendFileAttachment: could not read \(filename)")
+            return
+        }
+        let mime = Self.mimeType(for: url)
+        let displayText: String = "📎 " + filename
+        let local = Message(
+            id: msgId,
+            conversationId: convId,
+            direction: .outgoing,
+            plaintext: displayText,
+            sentAt: Date(),
+            deliveredAt: nil,
+            readAt: nil,
+            status: .sending,
+            clientMsgId: msgId.uuidString
+        )
+        store.appendMessage(local)
+        store.recordNewMessage(
+            conversationId: convId,
+            lastMessagePreview: displayText,
+            lastActivity: Date(),
+            incrementUnread: false
+        )
+        refreshFromStore()
+        guard let sendService = self.sendService,
+              let appState = self.appState else {
+            // Preview / unit-test fallback.
+            Task { @MainActor [weak self, msgId, convId] in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                self?.store.updateMessageStatus(
+                    id: msgId, conversationId: convId,
+                    newStatus: .delivered, deliveredAt: Date()
+                )
+                self?.refreshFromStore()
+            }
+            return
+        }
+        Task { [weak self, peerId, convId, msgId, data, mime, filename] in
+            let prep = ChatVoiceNoteSender(appState: appState)
+            let markerJson: String
+            do {
+                markerJson = try await prep.prepareAttachmentMarkerJson(
+                    bytes: data,
+                    mime: mime,
+                    filename: filename,
+                    durationMs: nil,
+                    recipientUserId: peerId
+                )
+            } catch {
+                print("[ChatContainer] sendFileAttachment prep failed: \(error)")
+                await MainActor.run { self?.markFailed(messageId: msgId, reason: .uploadFailure) }
+                return
+            }
+            let outcome = await sendService.sendEncrypted(
+                messageId: msgId, peerUserId: peerId, plaintext: markerJson
+            )
+            await MainActor.run {
+                guard let self = self else { return }
+                switch outcome {
+                case .delivered(let serverMsgId):
+                    self.store.setServerMessageId(
+                        localId: msgId, conversationId: convId,
+                        serverMessageId: serverMsgId
+                    )
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: convId,
+                        newStatus: .delivered, deliveredAt: Date()
+                    )
+                case .sent:
+                    self.store.updateMessageStatus(
+                        id: msgId, conversationId: convId,
+                        newStatus: .delivered, deliveredAt: Date()
+                    )
+                case .failed(let reason):
+                    self.markFailed(messageId: msgId, reason: reason)
+                }
+                self.refreshFromStore()
+            }
+        }
+    }
+
+    /// Infer MIME type from a file URL extension. Falls back to
+    /// "application/octet-stream" for unknown extensions.
+    private static func mimeType(for url: URL) -> String {
+        let ext = url.pathExtension.lowercased()
+        switch ext {
+        case "pdf":   return "application/pdf"
+        case "doc":   return "application/msword"
+        case "docx":  return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "xls":   return "application/vnd.ms-excel"
+        case "xlsx":  return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case "ppt":   return "application/vnd.ms-powerpoint"
+        case "pptx":  return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        case "zip":   return "application/zip"
+        case "txt":   return "text/plain"
+        case "csv":   return "text/csv"
+        case "png":   return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif":   return "image/gif"
+        case "mp4":   return "video/mp4"
+        case "mov":   return "video/quicktime"
+        case "mp3":   return "audio/mpeg"
+        case "m4a":   return "audio/mp4"
+        default:      return "application/octet-stream"
+        }
+    }
+
     func refreshFromStore() {
         let messages = store.loadMessages(conversationId: conversationId)
         let conv = store.loadConversations().first { $0.id == conversationId } ?? viewModel.conversation

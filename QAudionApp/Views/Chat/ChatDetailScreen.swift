@@ -69,6 +69,18 @@ struct ChatDetailScreen: View {
     /// rather than UUID since the action is screen-scoped — there's
     /// only one history per chat detail view.
     @State private var showClearHistoryConfirm: Bool = false
+    /// W445: Screenshot lock — local user preference. Toggled from
+    /// PrivacySettingsScreen; read here to activate/deactivate on
+    /// chat open/close. Persisted via AppStorage so it survives
+    /// app restarts.
+    @AppStorage("qaudion.chat.screenshot_lock_enabled") private var screenshotLockEnabled: Bool = false
+    /// W445: Ephemeral timer picker.
+    @State private var showingEphemeralPicker: Bool = false
+    /// W445: Forward message state.
+    @State private var showingForwardPicker: Bool = false
+    @State private var forwardingMessage: Message? = nil
+    /// W445: Document picker state.
+    @State private var showingDocPicker: Bool = false
 
     // Stub values for the SessionStatusStrip until the engine wires them.
     private let stubConfidence: Double = 0.92
@@ -111,6 +123,12 @@ struct ChatDetailScreen: View {
         .background(scheme.background)
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        // W445: screenshot lock. Lock on appear when the user has enabled
+        // the setting; always unlock on disappear so other screens aren't
+        // affected. Extraction to methods keeps the closure bodies trivial
+        // (CLAUDE.md §13).
+        .onAppear(perform: handleScreenAppear)
+        .onDisappear(perform: handleScreenDisappear)
         // W38: send-failure feedback. Quando il container marca un
         // messaggio fallito (engine pipeline wires `markFailed` su
         // crypto/network error), pushiamo una snackbar error con bottone
@@ -243,6 +261,10 @@ struct ChatDetailScreen: View {
                     // body stays a single statement.
                     handleDeleteForMe(messageId: msgIdWrapper.id)
                 },
+                // W445: forward message. Find the target message and
+                // open the forward picker sheet. The closure body stays
+                // a single-statement guard to keep type-checker happy.
+                onForward: { handleForward(messageId: msgIdWrapper.id) },
                 // W141: surface the sentAt so BubbleActionSheet can
                 // hide the Modifica row past the 15-min edit window.
                 sentAt: container.viewModel.messages
@@ -307,6 +329,40 @@ struct ChatDetailScreen: View {
         } message: {
             Text("Tutti i messaggi e gli allegati di questa chat verranno rimossi solo da questo dispositivo.")
         }
+        // W445: ephemeral timer chooser. ConfirmationDialog is the
+        // lightest-weight picker on iOS — no custom UI needed.
+        .confirmationDialog(
+            "Messaggi efimeri",
+            isPresented: $showingEphemeralPicker,
+            titleVisibility: .visible
+        ) {
+            Button("Spento") { container.setEphemeralTimer(nil) }
+            Button("30 secondi") { container.setEphemeralTimer(30) }
+            Button("5 minuti") { container.setEphemeralTimer(5 * 60) }
+            Button("1 ora") { container.setEphemeralTimer(60 * 60) }
+            Button("1 giorno") { container.setEphemeralTimer(24 * 60 * 60) }
+            Button("1 settimana") { container.setEphemeralTimer(7 * 24 * 60 * 60) }
+            Button("Annulla", role: .cancel) { }
+        } message: {
+            Text("I messaggi verranno eliminati automaticamente dopo l'intervallo scelto.")
+        }
+        // W445: forward message picker sheet.
+        .sheet(isPresented: $showingForwardPicker) {
+            if let msg = forwardingMessage {
+                ForwardMessageSheet(message: msg) { targetConvId in
+                    container.forwardMessage(msg, to: targetConvId)
+                    forwardingMessage = nil
+                    showingForwardPicker = false
+                }
+            }
+        }
+        // W445: document picker sheet.
+        .sheet(isPresented: $showingDocPicker) {
+            DocumentPicker { url in
+                container.sendFileAttachment(url: url)
+                showingDocPicker = false
+            }
+        }
     }
 
     // MARK: - Top bar
@@ -349,6 +405,18 @@ struct ChatDetailScreen: View {
             Spacer(minLength: 6)
 
             PqcBadge(active: stubPqcActive)
+
+            // W445: ephemeral timer button. Tap opens the timer chooser.
+            // Icon changes to a filled variant with accent color when a
+            // timer is active so the user knows disappearing messages are on.
+            Button { showingEphemeralPicker = true } label: {
+                let timerActive = (container.viewModel.conversation.ephemeralTimerSeconds ?? 0) > 0
+                Image(systemName: timerActive ? "timer" : "timer")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(timerActive ? extras.warning : scheme.onSurface.opacity(0.6))
+                    .frame(width: 30, height: 36)
+            }
+            .accessibilityLabel("Imposta timer efimero")
 
             Button(action: startAudioCall) {
                 Image(systemName: "phone.fill")
@@ -717,6 +785,28 @@ struct ChatDetailScreen: View {
         ))
     }
 
+    // MARK: - W445: screenshot lock handlers
+
+    private func handleScreenAppear() {
+        if screenshotLockEnabled {
+            ScreenshotLockService.lock()
+        }
+    }
+
+    private func handleScreenDisappear() {
+        ScreenshotLockService.unlock()
+    }
+
+    // MARK: - W445: forward message handler
+
+    private func handleForward(messageId: UUID) {
+        guard let msg = container.viewModel.messages.first(where: { $0.id == messageId }) else {
+            return
+        }
+        forwardingMessage = msg
+        showingForwardPicker = true
+    }
+
     // MARK: - Multi-photo picker callback methods (W259)
     //
     // Extracted from .onChange(of: multiPickerItems) for the same reason
@@ -795,6 +885,8 @@ struct ChatDetailScreen: View {
             // the @ObservedObject so the row updates automatically.
             recordingElapsedSeconds: voiceNoteRecorder.elapsedSeconds,
             onAttach: { showAttachmentChoice = true },
+            // W445: file attachment callback — opens UIDocumentPickerViewController.
+            onAttachFile: { showingDocPicker = true },
             onSend: handleSend,
             onCancelEdit: { editingTarget = nil },
             onCancelReply: { replyTarget = nil },
@@ -920,6 +1012,89 @@ struct ChatDetailScreen: View {
 
 private struct MessageIdRef: Identifiable {
     let id: UUID
+}
+
+// MARK: - W445: Forward Message Sheet
+
+/// Simple "Inoltra a…" conversation picker. Shows all stored conversations
+/// except the current one, lets the user pick a destination, then calls
+/// the onSelect callback with the target conversation id.
+private struct ForwardMessageSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionType) private var type
+
+    let message: Message
+    let onSelect: (UUID) -> Void
+
+    @State private var conversations: [Conversation] = []
+
+    var body: some View {
+        NavigationStack {
+            List(conversations) { conv in
+                Button {
+                    onSelect(conv.id)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(conv.peerDisplayName)
+                            .foregroundStyle(scheme.onSurface)
+                        if let preview = conv.lastMessagePreview, !preview.isEmpty {
+                            Text(preview)
+                                .font(.caption)
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .navigationTitle("Inoltra a…")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annulla") { dismiss() }
+                }
+            }
+            .onAppear { conversations = ConversationStore().loadConversations() }
+        }
+    }
+}
+
+// MARK: - W445: Document Picker (UIDocumentPickerViewController wrapper)
+
+/// SwiftUI wrapper around UIDocumentPickerViewController for generic file
+/// attachments. Parity with Android `onPickAttachment → OpenDocument(*/*)`
+/// (see ChatDetailScreen.kt).
+struct DocumentPicker: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item])
+        picker.allowsMultipleSelection = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController,
+                                context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick)
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+
+        init(onPick: @escaping (URL) -> Void) {
+            self.onPick = onPick
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController,
+                            didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            onPick(url)
+        }
+    }
 }
 
 #Preview {

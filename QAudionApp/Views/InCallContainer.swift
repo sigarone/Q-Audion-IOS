@@ -93,14 +93,13 @@ final class InCallContainer: ObservableObject {
                         guard let pub = try? await provider.accountApi.getPublicUser(userId: capturedCid) else { return }
                         // Pre-bind all String construction outside await/MainActor calls.
                         let rawName: String? = pub.displayName
-                        let resolvedName: String
-                        if let n = rawName, !n.isEmpty {
-                            resolvedName = n
-                        } else {
-                            resolvedName = capturedFallback
-                        }
+                        // NIM-fix2b: sanitise displayName — trim whitespace, strip RTL/LTR
+                        // override codepoints (U+202A–202E, U+2066–2069), cap at 100 chars.
+                        let resolvedName: String = Self.sanitiseDisplayName(rawName, fallback: capturedFallback)
+                        // NIM-fix2c: only accept https:// avatar URLs;
+                        // reject file://, data://, javascript: and other dangerous schemes.
                         let rawAvatarStr: String? = pub.avatarUrl
-                        let resolvedAvatar: URL? = rawAvatarStr.flatMap(URL.init(string:)) ?? capturedAvatar
+                        let resolvedAvatar: URL? = Self.sanitiseAvatarUrl(rawAvatarStr, fallback: capturedAvatar)
                         await MainActor.run {
                             self.update {
                                 $0.peer = InCallViewModel.PeerInfo(
@@ -111,11 +110,16 @@ final class InCallContainer: ObservableObject {
                                 )
                             }
                             // Persist so future calls resolve locally without a server round-trip.
+                            // OR-fix4: preserve existing phoneHash — server /users/{id} doesn't
+                            // return it for privacy; overwriting with "" would erase a QR-paired
+                            // or phone-book-imported contact's hash.
                             if !resolvedName.isEmpty && resolvedName != capturedFallback {
+                                let existingHash: String = self.contactsStore.load()
+                                    .first(where: { $0.userId == capturedCid })?.phoneHash ?? ""
                                 let contact = ContactsStore.StoredContact(
                                     userId: capturedCid,
                                     displayName: resolvedName,
-                                    phoneHash: "",
+                                    phoneHash: existingHash,
                                     avatarUrl: resolvedAvatar,
                                     lastSeen: nil,
                                     isVerified: false
@@ -240,6 +244,34 @@ final class InCallContainer: ObservableObject {
         var m = viewModel.toMutable()
         mutate(&m)
         viewModel = m.toImmutable()
+    }
+
+    // MARK: - NIM security helpers
+
+    /// NIM-fix2b: Sanitise a server-supplied display name.
+    /// Trims whitespace, strips Unicode bidirectional override codepoints
+    /// (U+202A–202E, U+2066–2069) that can spoof UI text direction, and
+    /// caps at 100 characters. Returns `fallback` when the result is empty.
+    private static func sanitiseDisplayName(_ raw: String?, fallback: String) -> String {
+        guard let raw, !raw.isEmpty else { return fallback }
+        var trimmed: String = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Filter out bidirectional override scalars.
+        let bidiRange1: ClosedRange<UInt32> = 0x202A...0x202E
+        let bidiRange2: ClosedRange<UInt32> = 0x2066...0x2069
+        trimmed = trimmed.unicodeScalars
+            .filter { !bidiRange1.contains($0.value) && !bidiRange2.contains($0.value) }
+            .reduce(into: "") { $0 += String($1) }
+        let capped: String = String(trimmed.prefix(100))
+        return capped.isEmpty ? fallback : capped
+    }
+
+    /// NIM-fix2c: Accept only https:// URLs for peer avatars.
+    /// Rejects file://, data://, javascript: and any other scheme that
+    /// could trigger unintended I/O or ImageIO parsing of attacker bytes.
+    private static func sanitiseAvatarUrl(_ raw: String?, fallback: URL?) -> URL? {
+        guard let raw, let url = URL(string: raw) else { return fallback }
+        guard url.scheme == "https" else { return fallback }
+        return url
     }
 }
 

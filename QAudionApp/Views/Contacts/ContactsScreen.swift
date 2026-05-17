@@ -34,6 +34,9 @@ struct ContactsScreen: View {
     /// W58: ordinamento corrente della lista TUTTI. Persisted in
     /// UserDefaults così la scelta sopravvive ai riavvi.
     @State private var sortMode: SortMode = SortMode.loadFromDefaults()
+    /// Locally persisted blocked contact IDs — refreshed on .onAppear
+    /// and after each block/unblock action.
+    @State private var blockedIds: Set<String> = BlockedContactsStore.loadBlockedIds()
 
     @Environment(\.qaudionSnackbar) private var snackbar
 
@@ -104,14 +107,17 @@ struct ContactsScreen: View {
                     switch selectedTab {
                     case .all:      allList
                     case .discover: discoverPlaceholder
-                    case .blocked:  blockedPlaceholder
+                    case .blocked:  blockedTab
                     }
                 }
                 .frame(maxHeight: .infinity)
             }
         }
         .navigationBarHidden(true)
-        .onAppear { container.attach(appState: appState) }
+        .onAppear {
+            container.attach(appState: appState)
+            blockedIds = BlockedContactsStore.loadBlockedIds()
+        }
         .onChange(of: searchText) { newValue in
             container.setSearchQuery(newValue)
         }
@@ -319,22 +325,61 @@ struct ContactsScreen: View {
         )
     }
 
-    private var blockedPlaceholder: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "circle.slash")
-                .font(.system(size: 56))
-                .foregroundStyle(scheme.onSurfaceVariant)
-            Text("Nessun contatto bloccato")
-                .qaudionStyle(type.titleMedium)
-                .foregroundStyle(scheme.onSurface)
-            Text("I contatti che blocchi appariranno qui. Puoi sbloccarli in qualsiasi momento dal loro dettaglio.")
-                .qaudionStyle(type.bodySmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            Spacer()
+    private var blockedTab: some View {
+        let allItems = container.viewModel.items
+        let blocked = allItems.filter { blockedIds.contains($0.userId) }
+        return Group {
+            if blocked.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "circle.slash")
+                        .font(.system(size: 56))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                    Text("Nessun contatto bloccato")
+                        .qaudionStyle(type.titleMedium)
+                        .foregroundStyle(scheme.onSurface)
+                    Text("I contatti che blocchi appariranno qui. Puoi sbloccarli in qualsiasi momento dal loro dettaglio.")
+                        .qaudionStyle(type.bodySmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                    Spacer()
+                }
+                .padding(.top, 48)
+            } else {
+                List(blocked, id: \.userId) { item in
+                    HStack(spacing: 12) {
+                        QAudionAvatar(displayName: item.displayName,
+                                      imageURL: item.avatarUrl,
+                                      size: 40,
+                                      presenceDot: nil)
+                        Text(item.displayName)
+                            .qaudionStyle(type.bodyMedium)
+                            .foregroundStyle(scheme.onSurface)
+                        Spacer()
+                        Button("Sblocca") { unblockContact(item) }
+                            .qaudionStyle(type.labelSmall)
+                            .foregroundStyle(scheme.primary)
+                            .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 4)
+                    .listRowBackground(scheme.background)
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(scheme.background)
+            }
         }
-        .padding(.top, 48)
+    }
+
+    private func unblockContact(_ item: ContactsListViewModel.Item) {
+        BlockedContactsStore.remove(item.userId)
+        blockedIds = BlockedContactsStore.loadBlockedIds()
+        let uid: String = item.userId
+        let name: String = item.displayName
+        if let provider = appState.liveProvider {
+            Task { try? await provider.contactsApi.unblockContact(userId: uid) }
+        }
+        snackbar?.show(.init(text: name + " sbloccato.", severity: .info))
     }
 
     private var emptyAll: some View {

@@ -2,6 +2,78 @@ import Foundation
 import Combine
 import QAudionEngine
 
+/// W445: Extended presence states matching Android ContactRowUi.Presence.
+/// Maps from raw server status strings (`BCryptoPresenceManager.Status`)
+/// to typed states understood by the iOS UI layer.
+///
+/// The engine only exposes `.online` / `.offline` / `.unknown`.
+/// `inCall` is inferred client-side from `AppState.$isInCall` /
+/// `AppState.$callContactId` via `observeCallState(_:)`.
+public enum ExtendedPresence: Equatable, Sendable {
+    case online
+    case offline
+    case inCall
+    case doNotDisturb
+    case invisible  // appears offline but flagged in metadata
+    case unknown
+
+    /// Map from `BCryptoPresenceManager.Status` + optional raw status
+    /// string. If the engine ever forwards the raw server string
+    /// (e.g. "in_call"), the raw path kicks in for finer-grained
+    /// states. Without raw strings the server-side nuances are inferred
+    /// client-side (see `observeCallState(_:)` in `PresenceService`).
+    static func from(
+        status: BCryptoPresenceManager.Status,
+        raw: String? = nil
+    ) -> ExtendedPresence {
+        switch status {
+        case .online:
+            guard let raw = raw else { return .online }
+            if raw == "in_call" || raw == "incall" { return .inCall }
+            if raw == "dnd" || raw == "do_not_disturb" { return .doNotDisturb }
+            if raw == "invisible" { return .invisible }
+            return .online
+        case .offline:
+            return .offline
+        default:
+            return .unknown
+        }
+    }
+
+    /// Localised label shown in presence labels and detail screens.
+    var label: String {
+        switch self {
+        case .online:        return "Online"
+        case .offline:       return "Offline"
+        case .inCall:        return "In chiamata"
+        case .doNotDisturb:  return "Non disturbare"
+        case .invisible:     return "Non visibile"
+        case .unknown:       return ""
+        }
+    }
+
+    /// Semantic color key used to drive presence dot color in views.
+    var semanticColor: PresenceColorKey {
+        switch self {
+        case .online:                          return .success
+        case .inCall:                          return .pqcAccent
+        case .doNotDisturb:                    return .warning
+        case .offline, .invisible, .unknown:   return .muted
+        }
+    }
+}
+
+/// Semantic color role for a presence indicator dot.
+/// Views resolve this to a concrete `Color` via the design-system extras.
+public enum PresenceColorKey {
+    case success
+    case pqcAccent
+    case warning
+    case muted
+}
+
+// MARK: -
+
 /// Thin Observable wrapper around `BCryptoPresenceManager` so the
 /// SwiftUI layer can render online/offline dots without poking the
 /// engine directly.
@@ -17,11 +89,10 @@ import QAudionEngine
 ///    they have loaded the visible userIds.
 ///  - `status(for:)` is a read-through for views that need a single dot
 ///    without subscribing the whole map.
-///
-/// Engine parity: matches the Android `PresenceRepository` and Desktop
-/// `PresenceStore`. Wire shape:
-///   client → server: `{ "type": "presence_subscribe", "data": { "user_ids": [...] } }`
-///   server → client: `{ "type": "presence_update",   "data": { "user_id", "status" } }`
+///  - `extendedPresence(for:)` is the W445 extended read-through.
+///  - `observeCallState(_:)` wires Combine to infer `.inCall` from
+///    `AppState.$isInCall` + `AppState.$callContactId` without the engine
+///    needing to expose "in_call" as a raw status string.
 @MainActor
 final class PresenceService: ObservableObject {
 
@@ -30,8 +101,18 @@ final class PresenceService: ObservableObject {
     /// default to `.unknown` via `status(for:)`.
     @Published private(set) var statuses: [String: BCryptoPresenceManager.Status] = [:]
 
+    /// W445: Extended presence states derived from `statuses` + call-state
+    /// inference. Views should prefer this over `statuses` for any UI that
+    /// needs to distinguish InCall / DND / Invisible from plain Online.
+    @Published private(set) var extendedStatuses: [String: ExtendedPresence] = [:]
+
     private var manager: BCryptoPresenceManager?
     private var subscribed: Set<String> = []
+
+    /// Cancellables for the Combine subscription to AppState call state.
+    private var callStateCancellables: Set<AnyCancellable> = []
+
+    // MARK: - Engine binding
 
     /// Bind to the live engine. Idempotent — calling with the same
     /// provider replaces the manager and re-subscribes any tracked ids
@@ -43,7 +124,22 @@ final class PresenceService: ObservableObject {
         // we still hop to MainActor to satisfy `@MainActor` isolation.
         mgr.statusChanged = { [weak self] snapshot in
             DispatchQueue.main.async {
-                self?.statuses = snapshot
+                guard let self else { return }
+                self.statuses = snapshot
+                // W445: map engine statuses → extended presence.
+                // Preserve any .inCall overrides set via observeCallState.
+                var ext: [String: ExtendedPresence] = [:]
+                for (userId, engineStatus) in snapshot {
+                    // Don't overwrite a client-inferred .inCall with a
+                    // stale .online from the server — the call is still
+                    // active if observeCallState already set it.
+                    if self.extendedStatuses[userId] == .inCall, engineStatus == .online {
+                        ext[userId] = .inCall
+                    } else {
+                        ext[userId] = ExtendedPresence.from(status: engineStatus)
+                    }
+                }
+                self.extendedStatuses = ext
                 // W142: stamp "last seen" for every userId observed
                 // online. The tracker throttles internally so a noisy
                 // presence stream doesn't thrash UserDefaults.
@@ -59,6 +155,8 @@ final class PresenceService: ObservableObject {
             mgr.subscribe(userIds: Array(subscribed))
         }
     }
+
+    // MARK: - Subscription management
 
     /// Replace the tracked set. Server treats this as authoritative.
     /// Drops cached statuses for users no longer tracked so the UI
@@ -77,6 +175,7 @@ final class PresenceService: ObservableObject {
         let set = Set(userIds.filter { !$0.isEmpty })
         subscribed = set
         statuses = statuses.filter { set.contains($0.key) }
+        extendedStatuses = extendedStatuses.filter { set.contains($0.key) }
         guard PrivacyGate.presenceVisibleToContacts else {
             // Off → don't subscribe; presence dots stay grey.
             return
@@ -84,7 +183,10 @@ final class PresenceService: ObservableObject {
         manager?.subscribe(userIds: Array(set))
     }
 
+    // MARK: - Read helpers
+
     /// Convenience helper for views that only need a single dot.
+    /// Retained for backwards compatibility.
     func isOnline(_ userId: String) -> Bool {
         return (statuses[userId] ?? .unknown) == .online
     }
@@ -93,6 +195,55 @@ final class PresenceService: ObservableObject {
         return statuses[userId] ?? .unknown
     }
 
+    /// W445: Extended presence for a single userId. Prefers the
+    /// client-inferred extended state over the raw engine state.
+    func extendedPresence(for userId: String) -> ExtendedPresence {
+        return extendedStatuses[userId] ?? .unknown
+    }
+
+    // MARK: - Call-state inference (W445)
+
+    /// Override a single userId's extended presence to `.inCall` (or
+    /// revert to the last known engine status when the call ends).
+    /// Called by `observeCallState(_:)` via Combine.
+    func setInCall(userId: String, inCall: Bool) {
+        if inCall {
+            extendedStatuses[userId] = .inCall
+        } else {
+            let base = statuses[userId] ?? .unknown
+            extendedStatuses[userId] = ExtendedPresence.from(status: base)
+        }
+    }
+
+    /// Wire Combine to infer the peer's `.inCall` state from AppState
+    /// published properties. Call once from a view's `.onAppear` (e.g.
+    /// `ContactsListView`). Idempotent — duplicate calls replace the
+    /// prior subscription rather than stacking.
+    ///
+    /// Rule 16 CLAUDE.md: PresenceService.swift is an EXISTING file so
+    /// taking `AppState` as a parameter is safe (no new-file build failure).
+    func observeCallState(_ appState: AppState) {
+        callStateCancellables.removeAll()
+        Publishers.CombineLatest(appState.$callContactId, appState.$isInCall)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] contactId, inCall in
+                guard let self else { return }
+                if let uid = contactId, inCall {
+                    self.setInCall(userId: uid, inCall: true)
+                } else {
+                    // Call ended — revert all .inCall statuses to their
+                    // last known engine state.
+                    for (uid, presence) in self.extendedStatuses where presence == .inCall {
+                        let base = self.statuses[uid] ?? .unknown
+                        self.extendedStatuses[uid] = ExtendedPresence.from(status: base)
+                    }
+                }
+            }
+            .store(in: &callStateCancellables)
+    }
+
+    // MARK: - Teardown
+
     /// Clear local state on logout. Also drops the manager reference so
     /// the next auth-success builds a fresh one bound to the new WS.
     func reset() {
@@ -100,5 +251,7 @@ final class PresenceService: ObservableObject {
         manager = nil
         subscribed.removeAll()
         statuses.removeAll()
+        extendedStatuses.removeAll()
+        callStateCancellables.removeAll()
     }
 }

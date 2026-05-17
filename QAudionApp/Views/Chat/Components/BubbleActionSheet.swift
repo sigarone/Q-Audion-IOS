@@ -28,6 +28,9 @@ struct BubbleActionSheet: View {
     let onCopy: () -> Void
     let onDeleteForAll: () -> Void
     let onDeleteForMe: () -> Void
+    /// W445: forward message to another conversation. Default no-op so
+    /// existing call sites without forward wiring continue to compile.
+    var onForward: () -> Void = {}
     /// W141: edit eligibility window. When the message was sent more
     /// than `editWindowSeconds` ago, "Modifica" is hidden — Telegram
     /// uses 48h, WhatsApp 15min; we follow WhatsApp by default.
@@ -87,6 +90,13 @@ struct BubbleActionSheet: View {
                               danger: false,
                               action: { onCopy(); dismiss() })
                 }
+                // W445: forward action — always visible (own and peer messages
+                // can both be forwarded). Parity with Android ChatDetailScreen.kt
+                // commented-out ActionRow for "Inoltra".
+                actionRow(label: "Inoltra",
+                          icon: "arrowshape.turn.up.right.fill",
+                          danger: false,
+                          action: { onForward(); dismiss() })
                 if isOwn {
                     actionRow(label: "Elimina per tutti",
                               icon: "trash",

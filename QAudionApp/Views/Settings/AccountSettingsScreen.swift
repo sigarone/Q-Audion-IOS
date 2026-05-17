@@ -16,8 +16,15 @@ final class AccountSettingsContainer: ObservableObject {
     /// Bound to a SwiftUI TextField; persisted to UserDefaults on save
     /// (NOT shipped to the server).
     @Published var draftLocalPhone: String = ""
+    /// W445: Read-only snapshot of the phone list managed by MyPhonesScreen.
+    /// Loaded from the same UserDefaults key that MyPhonesContainer writes
+    /// (`com.qaudion.profile.myPhones`). Refreshed on appear so the section
+    /// stays in sync after the user returns from MyPhonesScreen.
+    @Published private(set) var publicPhones: [String] = []
 
-    private let appState: AppState
+    // OR-fix1: weak to avoid retain cycle AppState → View → Container → AppState
+    // (mirrors InCallContainer which already uses weak var appState: AppState?)
+    private weak var appState: AppState?
     private let avatarUploader: AvatarUploader
 
     init(appState: AppState) {
@@ -40,6 +47,47 @@ final class AccountSettingsContainer: ObservableObject {
         // so the SwiftUI form pre-fills with the persisted value.
         self.draftLocalPhone = LocalCallerIdSettings.phoneNumber() ?? ""
         self.avatarUploader = AvatarUploader(appState: appState)
+        self.publicPhones = Self.loadPublicPhones()
+    }
+
+    // MARK: - W445: Multi-phone helpers
+
+    private static let myPhonesKey = "com.qaudion.profile.myPhones"
+
+    private static func loadPublicPhones() -> [String] {
+        UserDefaults.standard.array(forKey: myPhonesKey) as? [String] ?? []
+    }
+
+    func refreshPublicPhones() {
+        publicPhones = Self.loadPublicPhones()
+    }
+
+    // MARK: - W445: Handle
+
+    /// Derived handle: '@' + first 8 chars of userId.
+    /// The server does not yet expose a dedicated handle field — this is
+    /// the placeholder shown until the backend surfaces one.
+    var handle: String {
+        let uid = viewModel.userId
+        guard uid.count >= 8 else { return uid.isEmpty ? "" : "@" + uid }
+        let prefix: Substring = uid.prefix(8)
+        let prefixStr: String = String(prefix)
+        return "@" + prefixStr
+    }
+
+    // MARK: - W445: Icon avatar
+
+    func setIconAvatar(_ iconName: String) {
+        let url: String = "sficon://" + iconName
+        UserDefaults.standard.set(url, forKey: "qaudion.profile.iconAvatar")
+        viewModel = AccountSettingsViewModel(
+            userId: viewModel.userId,
+            phoneHash: viewModel.phoneHash,
+            displayName: viewModel.displayName,
+            statusMessage: viewModel.statusMessage,
+            avatarUrl: URL(string: url),
+            dialExtension: viewModel.dialExtension
+        )
     }
 
     func loadFromServer() {
@@ -77,7 +125,7 @@ final class AccountSettingsContainer: ObservableObject {
                     self.draftStatusMessage = profile.statusMessage ?? ""
                     // W444: propagate dialExtension to AppState so SettingsScreen
                     // profileHandle and InCallContainer show the real short number.
-                    self.appState.currentUserDialExtension = extString
+                    self.appState?.currentUserDialExtension = extString
                     if let extString = extString {
                         UserDefaults.standard.set(extString, forKey: "currentUserDialExtension")
                     } else {
@@ -224,7 +272,8 @@ final class AccountSettingsContainer: ObservableObject {
     }
 
     private func makeProvider() -> BCryptoBackendProvider? {
-        guard let token = appState.authService.loadToken(), !token.isEmpty else { return nil }
+        guard let appState,
+              let token = appState.authService.loadToken(), !token.isEmpty else { return nil }
         let config = BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
         return BCryptoBackendProvider(config: config)
     }
@@ -237,6 +286,8 @@ final class AccountSettingsContainer: ObservableObject {
 struct AccountSettingsScreen: View {
     @ObservedObject var container: AccountSettingsContainer
     @State private var selectedItem: PhotosPickerItem?
+    /// W445: shows AvatarIconPicker sheet.
+    @State private var showingIconPicker = false
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -276,6 +327,14 @@ struct AccountSettingsScreen: View {
                                   value: ext,
                                   mono: true)
                         }
+                        // W445: handle display — '@' + first 8 chars of userId.
+                        // Server does not yet expose a dedicated handle field;
+                        // using uuid8 prefix as a stable placeholder.
+                        if !container.handle.isEmpty {
+                            kvRow(label: "Handle",
+                                  value: container.handle,
+                                  mono: true)
+                        }
                     }
 
                     SettingsSectionHeader("PROFILO")
@@ -308,6 +367,12 @@ struct AccountSettingsScreen: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
+                    // W445: NUMERI PUBBLICI — read-only snapshot from
+                    // MyPhonesScreen's UserDefaults store. Manage via the
+                    // "I miei numeri" entry in the main settings list.
+                    SettingsSectionHeader("NUMERI PUBBLICI")
+                    publicPhonesSection
+
                     Spacer().frame(height: 16)
                     saveButton
                     Spacer().frame(height: 24)
@@ -316,7 +381,13 @@ struct AccountSettingsScreen: View {
             }
         }
         .navigationTitle("Profilo")
-        .onAppear { container.loadFromServer() }
+        .onAppear {
+            container.loadFromServer()
+            container.refreshPublicPhones()
+        }
+        .sheet(isPresented: $showingIconPicker) {
+            AvatarIconPicker { icon in container.setIconAvatar(icon) }
+        }
         .onChange(of: selectedItem) { newItem in
             Task {
                 guard let item = newItem,
@@ -350,6 +421,17 @@ struct AccountSettingsScreen: View {
                         Capsule().stroke(scheme.primary.opacity(0.6), lineWidth: 1)
                     )
                 }
+                .disabled(container.isLoading)
+
+                // W445: icon avatar alternative (no camera/library needed).
+                Button {
+                    showingIconPicker = true
+                } label: {
+                    Label("Scegli icona", systemImage: "person.crop.square")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.primary)
+                }
+                .buttonStyle(.plain)
                 .disabled(container.isLoading)
 
                 if container.isLoading {
@@ -389,6 +471,48 @@ struct AccountSettingsScreen: View {
                                         ? container.viewModel.userId
                                         : container.draftDisplayName,
                           size: 64)
+        }
+    }
+
+    // MARK: - Public phones section (W445)
+
+    /// Read-only list from MyPhonesScreen's UserDefaults store, plus a
+    /// navigation hint so the user knows where to manage them.
+    @ViewBuilder
+    private var publicPhonesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if container.publicPhones.isEmpty {
+                Text("Nessun numero registrato. Gestiscili da \"I miei numeri\".")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(scheme.surfaceVariant.opacity(0.4))
+                    )
+            } else {
+                ForEach(container.publicPhones.indices, id: \.self) { idx in
+                    let phone: String = container.publicPhones[idx]
+                    HStack {
+                        Text(phone)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(scheme.onSurface)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(scheme.surfaceVariant.opacity(0.4))
+                    )
+                }
+            }
+            Text("Per aggiungere o rimuovere numeri vai su Impostazioni > I miei numeri.")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

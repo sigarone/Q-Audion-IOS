@@ -235,6 +235,8 @@ struct ContactsListView: View {
             // backend provider). Without this, init() builds a service-less
             // container and refresh() silently no-ops.
             container.attach(appState: appState)
+            // W445: infer InCall from AppState.$isInCall + $callContactId.
+            appState.presenceService.observeCallState(appState)
         }
         .overlay(alignment: .top) {
             if let progress = container.scanProgress, container.isRefreshing {
@@ -375,9 +377,10 @@ struct ContactsListView: View {
                             .foregroundStyle(.green)
                     }
                 }
-                Text(item.isOnline ? "Online" : "Offline")
-                    .font(.caption)
-                    .foregroundStyle(item.isOnline ? .green : .secondary)
+                // W445: extended presence label — shows "In chiamata",
+                // "Non disturbare", etc. when the server or call-state
+                // inference provides a richer state than binary online/offline.
+                presenceLabel(for: item)
             }
             Spacer()
             if item.unreadMessageCount > 0 {
@@ -392,8 +395,60 @@ struct ContactsListView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - W445 extended presence helpers (CLAUDE.md §13: pre-bind locals)
+
+    @ViewBuilder
+    private func presenceLabel(for item: ContactsListViewModel.Item) -> some View {
+        let p = appState.presenceService.extendedPresence(for: item.userId)
+        let text: String = presenceLabelText(p, isOnline: item.isOnline)
+        let color: Color = presenceLabelColor(p, isOnline: item.isOnline)
+        Text(text).font(.caption).foregroundStyle(color)
+    }
+
+    private func presenceLabelText(_ p: ExtendedPresence, isOnline: Bool) -> String {
+        if p == .unknown { return isOnline ? "Online" : "Offline" }
+        return p.label.isEmpty ? (isOnline ? "Online" : "Offline") : p.label
+    }
+
+    private func presenceLabelColor(_ p: ExtendedPresence, isOnline: Bool) -> Color {
+        switch p {
+        case .online:        return .green
+        case .inCall:        return Color(hex: 0xB388FF)
+        case .doNotDisturb:  return Color(hex: 0xF2B73A)
+        case .unknown:       return isOnline ? .green : .secondary
+        default:             return .secondary
+        }
+    }
+
+    @ViewBuilder
+    private func presenceDot(for item: ContactsListViewModel.Item) -> some View {
+        let p = appState.presenceService.extendedPresence(for: item.userId)
+        switch p {
+        case .online:
+            Circle().fill(Color.green).frame(width: 10, height: 10)
+                .overlay(Circle().stroke(.white, lineWidth: 2))
+        case .inCall:
+            ZStack {
+                Circle().fill(Color(hex: 0xB388FF)).frame(width: 12, height: 12)
+                    .overlay(Circle().stroke(.white, lineWidth: 2))
+                Image(systemName: "phone.fill")
+                    .font(.system(size: 6, weight: .bold)).foregroundStyle(.white)
+            }
+        case .doNotDisturb:
+            ZStack {
+                Circle().fill(Color(hex: 0xF2B73A)).frame(width: 12, height: 12)
+                    .overlay(Circle().stroke(.white, lineWidth: 2))
+                Image(systemName: "moon.fill")
+                    .font(.system(size: 5, weight: .bold)).foregroundStyle(.white)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
     private func avatar(_ item: ContactsListViewModel.Item) -> some View {
-        Group {
+        let blocked = BlockedContactsStore.isBlocked(item.userId)
+        return Group {
             if let url = item.avatarUrl {
                 AsyncImage(url: url) { img in
                     img.resizable().scaledToFill()
@@ -406,12 +461,18 @@ struct ContactsListView: View {
                 placeholder(item)
             }
         }
+        .opacity(blocked ? 0.4 : 1.0)
         .overlay(alignment: .bottomTrailing) {
-            if item.isOnline {
-                Circle()
-                    .fill(.green)
-                    .frame(width: 10, height: 10)
-                    .overlay(Circle().stroke(.white, lineWidth: 2))
+            if blocked {
+                Image(systemName: "circle.slash.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .background(Circle().fill(.white).padding(-1))
+            } else {
+                // W445: extended presence dot. Only shown when there is
+                // a visible state (.online / .inCall / .doNotDisturb).
+                // .offline / .unknown / .invisible render no dot.
+                presenceDot(for: item)
             }
         }
     }

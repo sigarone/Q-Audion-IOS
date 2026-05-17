@@ -256,6 +256,11 @@ final class AppState: ObservableObject {
     /// Currently-active CallKit call UUID (one at a time).
     private(set) var activeCallKitId: UUID?
 
+    /// UUID string of the PersistentCallRecord for the current call.
+    /// Set in startCall (outgoing) and wireIncomingCallHandlers (incoming).
+    /// Cleared after endCall() writes the end timestamp.
+    var activeOutgoingRecordId: String?
+
     private var defaultServerUrl: String { serverUrl }
 
     func initialize() {
@@ -486,8 +491,12 @@ final class AppState: ObservableObject {
                         let extStr = String(ext)
                         self.currentUserDialExtension = extStr
                         UserDefaults.standard.set(extStr, forKey: "currentUserDialExtension")
-                    } else if let cached = UserDefaults.standard.string(forKey: "currentUserDialExtension") {
-                        self.currentUserDialExtension = cached
+                    } else {
+                        // OR-fix3: server returned nil/0 — clear stale cached extension
+                        // so a user migrated to an account without an extension stops
+                        // showing the old "Int. 103" indefinitely.
+                        self.currentUserDialExtension = nil
+                        UserDefaults.standard.removeObject(forKey: "currentUserDialExtension")
                     }
                     self.isAuthenticated = true
                     self.replayPendingTrackB()
@@ -830,6 +839,17 @@ final class AppState: ObservableObject {
                         self.isVideoCall = (callType == "video")
                         self.callState = .ringing
                         self.isInCall = true
+                        // PersistentCallRecord — register incoming call.
+                        let incomingRecordId = callUUID.uuidString
+                        let isVid: Bool = (callType == "video")
+                        self.activeOutgoingRecordId = incomingRecordId
+                        PersistentCallRecordStore.shared.beginCall(
+                            id: incomingRecordId,
+                            peerUserId: senderId,
+                            peerDisplayName: resolvedCallerName,
+                            direction: .incoming,
+                            isVideo: isVid
+                        )
                         // W396: pre-create the responder integration
                         // so the early PQC OFFER (which arrives
                         // immediately after the call_incoming envelope
@@ -855,9 +875,17 @@ final class AppState: ObservableObject {
                 case "error":     reason = .failed("error")
                 default:          reason = .remoteEnded
                 }
+                // If the call was still ringing when the hangup arrived the
+                // callee never answered — mark the record as missed.
+                let wasRinging = self.callState == .ringing
+                let missedRecordId = self.activeOutgoingRecordId
                 Task {
                     await self.callKit?.reportCallEnded(uuid: uuid, reason: reason)
                     await MainActor.run {
+                        if wasRinging, let rid = missedRecordId {
+                            PersistentCallRecordStore.shared.markMissed(id: rid)
+                            self.activeOutgoingRecordId = nil
+                        }
                         self.endCall()
                     }
                 }
@@ -2180,6 +2208,29 @@ final class AppState: ObservableObject {
         callState = .connecting
         isInCall = true
         isVideoCall = video
+        // PersistentCallRecord — register outgoing call. Use activeCallKitId if
+        // already set, otherwise mint a placeholder id that endCall will match.
+        // The id is updated to the real outgoingCallId once beginAndroidOutgoing
+        // runs below; here we use a stable per-session key derived from contactId
+        // + startedAt so the record can be matched by endCall(id:).
+        let _outgoingRecordId: String = UUID().uuidString
+        let _outgoingPeerDisplay: String = {
+            let stored = ContactsStore().load()
+            var nameMap: [String: String] = [:]
+            for c in stored where !c.displayName.isEmpty {
+                nameMap[c.userId] = c.displayName
+            }
+            return PersistentCallRecordStore.resolveDisplayName(
+                userId: contactId, wireDisplay: nil, nameByUserId: nameMap)
+        }()
+        activeOutgoingRecordId = _outgoingRecordId
+        PersistentCallRecordStore.shared.beginCall(
+            id: _outgoingRecordId,
+            peerUserId: contactId,
+            peerDisplayName: _outgoingPeerDisplay,
+            direction: .outgoing,
+            isVideo: video
+        )
         confidenceLevel = "green"
         confidenceScore = 0.97
         rekeyCount = 0
@@ -2486,7 +2537,16 @@ final class AppState: ObservableObject {
     }
 
     func endCall() {
-        RTLog.info("call", "endCall — peer=\(callContactId ?? "nil") state=\(callState)")
+        // NIM-fix1: log the call-session UUID, not the raw peer userId, to
+        // avoid leaking the social graph through auto-uploaded VPS telemetry.
+        let callLogId: String = activeOutgoingRecordId ?? "none"
+        RTLog.info("call", "endCall — callId=" + callLogId + " state=\(callState)")
+        // Persist call end time. Use the stable record id registered in startCall
+        // or wireIncomingCallHandlers. Works for both outgoing and incoming paths.
+        if let rid = activeOutgoingRecordId {
+            PersistentCallRecordStore.shared.endCall(id: rid)
+            activeOutgoingRecordId = nil
+        }
         callService.endCall()
         // W398: stop ABR loop before video pipeline teardown so the
         // controller doesn't try to set bitrate on a freed encoder.

@@ -27,6 +27,9 @@ struct MessageComposer: View {
     let editingTarget: EditingTarget?
     let replyTarget: ReplyTarget?
     let onAttach: () -> Void
+    /// W445: generic file attachment callback. Opens UIDocumentPickerViewController
+    /// via the parent screen. Default no-op preserves all existing call sites.
+    var onAttachFile: (() -> Void)? = nil
     let onSend: () -> Void
     let onCancelEdit: () -> Void
     let onCancelReply: () -> Void
@@ -53,6 +56,7 @@ struct MessageComposer: View {
          replyTarget: ReplyTarget? = nil,
          recordingElapsedSeconds: TimeInterval = 0,
          onAttach: @escaping () -> Void = {},
+         onAttachFile: (() -> Void)? = nil,
          onSend: @escaping () -> Void = {},
          onCancelEdit: @escaping () -> Void = {},
          onCancelReply: @escaping () -> Void = {},
@@ -64,6 +68,7 @@ struct MessageComposer: View {
         self.replyTarget = replyTarget
         self.recordingElapsedSeconds = recordingElapsedSeconds
         self.onAttach = onAttach
+        self.onAttachFile = onAttachFile
         self.onSend = onSend
         self.onCancelEdit = onCancelEdit
         self.onCancelReply = onCancelReply
@@ -247,12 +252,24 @@ struct MessageComposer: View {
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             Button(action: onAttach) {
-                Image(systemName: "paperclip")
+                Image(systemName: "photo.on.rectangle")
                     .font(.system(size: 20, weight: .regular))
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
             }
-            .accessibilityLabel("Allega")
+            .accessibilityLabel("Allega foto o video")
+            // W445: generic file attachment button. Only rendered when
+            // the parent wires onAttachFile (ChatDetailScreen does so).
+            // Keeps the composer layout unchanged for callers that don't.
+            if let attachFile = onAttachFile {
+                Button(action: attachFile) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .frame(width: 30, height: 36)
+                }
+                .accessibilityLabel("Allega file")
+            }
 
             // Multi-line text field. iOS 16+ TextField with axis: .vertical
             // grows up to N lines then scrolls — exactly what Android's

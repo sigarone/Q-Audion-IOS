@@ -38,150 +38,92 @@ public struct CallHistoryEntry: Equatable, Identifiable {
     }
 }
 
-/// Storage stub per la call-history. Sostituire con
-/// `CallHistoryRepository` (engine) quando esposto iOS-side.
+/// Call history store backed by `PersistentCallRecordStore`.
+///
+/// Primary source: `PersistentCallRecordStore.shared.records` —
+/// real per-call data with accurate timestamps, duration, and direction.
+/// Fallback: `appState.recentCalls` — backwards-compat on first launch
+/// after upgrade (no metadata, displayed as outgoing stubs so the list
+/// isn't empty immediately post-update).
 @MainActor
 final class CallHistoryStore: ObservableObject {
     @Published private(set) var entries: [CallHistoryEntry] = []
     @Published private(set) var loading: Bool = false
 
-    /// Refresh dalle fonti disponibili. Oggi: degrada a
-    /// `appState.recentCalls` (lista `[String]` di userId, no metadata).
-    /// Quando l'engine wires il vero repository, questa funzione
-    /// chiama il DAO + traduce in `CallHistoryEntry`.
-    ///
-    /// 2026-05-08 fix v1.0.417 — Pavel reported the call-history list
-    /// was still rendering raw UUIDs even after the v1.0.416 caller-ID
-    /// substitution fix (which only touched the inbound CallKit path).
-    /// We now resolve `peerDisplay` against the local `ContactsStore`
-    /// (rubrica) at refresh time. Same priority as the inbound handler:
-    ///   1. local rubrica display name
-    ///   2. legacy mock prefix strip (`user-mario` → "Mario")
-    ///   3. raw userId (last-resort fallback)
-    /// The peer's "public phone number" is NOT available here because
-    /// the engine repository doesn't persist call records yet, so we
-    /// only stash the rubrica match. When the engine repo lands, the
-    /// resolved `caller_display` from the wire will fold in here too.
+    /// Refresh from PersistentCallRecordStore. Falls back to
+    /// `appState.recentCalls` stubs when the persistent store is empty
+    /// (first launch after upgrade from pre-persistent build).
     func refresh(from appState: AppState) {
         loading = true
-        // Pre-load contacts ONCE per refresh — `ContactsStore.load()`
-        // hits UserDefaults + JSON-decodes the full list, so resolving
-        // 20 recents inline would be 20 disk hits. Build a lookup dict.
-        let stored = ContactsStore().load()
-        var nameByUserId: [String: String] = [:]
-        for c in stored where !c.displayName.isEmpty {
-            nameByUserId[c.userId] = c.displayName
+        let persistedRecords = PersistentCallRecordStore.shared.records
+        if !persistedRecords.isEmpty {
+            entries = persistedRecords.map { Self.toEntry($0) }
+        } else {
+            // Backwards-compat stub path: builds display-name-resolved
+            // outgoing entries from the legacy recentCalls list.
+            // Pre-load ContactsStore once to avoid N disk hits.
+            let stored = ContactsStore().load()
+            var nameMap: [String: String] = [:]
+            for c in stored where !c.displayName.isEmpty {
+                nameMap[c.userId] = c.displayName
+            }
+            let recents = appState.recentCalls
+            let now = Date()
+            var out: [CallHistoryEntry] = []
+            for (idx, userId) in recents.enumerated() {
+                let started = now.addingTimeInterval(-Double(idx) * 300)
+                let display = PersistentCallRecordStore.resolveDisplayName(
+                    userId: userId, wireDisplay: nil, nameByUserId: nameMap)
+                out.append(.init(
+                    id: "stub-\(idx)-\(userId)",
+                    peerUserId: userId,
+                    peerDisplay: display,
+                    direction: .outgoing,
+                    startedAt: started,
+                    durationSeconds: nil,
+                    isVideo: false,
+                    peerExtension: nil
+                ))
+            }
+            entries = out
         }
-        // Best-effort: per ogni recentCalls userId, costruiamo
-        // un'entry "outgoing" con startedAt = adesso − idx × 5 min,
-        // duration random 30-300s. Stub fino al wiring engine.
-        let recents = appState.recentCalls
-        let now = Date()
-        var out: [CallHistoryEntry] = []
-        for (idx, userId) in recents.enumerated() {
-            let started = now.addingTimeInterval(-Double(idx) * 300)
-            let dur = (idx % 3 == 0) ? nil : Int.random(in: 30...300)
-            let dir: CallHistoryEntry.Direction = (idx % 3 == 0) ? .missed
-                                                : (idx % 2 == 0) ? .outgoing
-                                                : .incoming
-            out.append(.init(
-                id: "stub-\(idx)-\(userId)",
-                peerUserId: userId,
-                peerDisplay: Self.resolvePeerDisplay(
-                    userId: userId,
-                    nameByUserId: nameByUserId
-                ),
-                direction: dir,
-                startedAt: started,
-                durationSeconds: dur,
-                isVideo: idx % 4 == 0,
-                peerExtension: nil
-            ))
-        }
-        // W68: filter out tombstoned IDs (deletions survived restart).
-        let tombstones = Self.deletedIds
-        entries = out.filter { !tombstones.contains($0.id) }
         loading = false
     }
 
-    /// Resolve a peer's display string for the call-history row using the
-    /// same priority as the inbound `call_incoming` handler in AppState.
-    /// Pure helper so the logic stays testable independently of UserDefaults.
-    static func resolvePeerDisplay(
-        userId: String,
-        nameByUserId: [String: String]
-    ) -> String {
-        if let name = nameByUserId[userId], !name.isEmpty {
-            return name
+    /// Convert a persisted record to the UI model used by CallHistoryRow.
+    private static func toEntry(_ record: CallRecord) -> CallHistoryEntry {
+        let dir: CallHistoryEntry.Direction
+        switch record.direction {
+        case .incoming: dir = .incoming
+        case .outgoing: dir = .outgoing
+        case .missed:   dir = .missed
         }
-        // Legacy mock convention `user-<name>` — kept so existing
-        // SwiftUI previews & test fixtures still render readable.
-        if userId.hasPrefix("user-") {
-            return String(userId.dropFirst(5)).capitalized
-        }
-        // W440: truncate UUID-style IDs to prefix(8)…suffix(4) instead of
-        // showing the full 36-char UUID in the call history list.
-        if userId.count > 12 {
-            return String(userId.prefix(8)) + "…" + String(userId.suffix(4))
-        }
-        return userId
+        return CallHistoryEntry(
+            id: record.id,
+            peerUserId: record.peerUserId,
+            peerDisplay: record.peerDisplayName,
+            direction: dir,
+            startedAt: record.startedAt,
+            durationSeconds: record.durationSeconds,
+            isVideo: record.isVideo,
+            peerExtension: record.peerExtension
+        )
     }
 
-    /// Seed the store with mock entries if empty. Used by the view's
-    /// onAppear to provide a friendly first-run / TestFlight QA state
-    /// when the engine repository hasn't wired in yet. Encapsulated as
-    /// a method so callers don't poke the `private(set)` `entries`
-    /// directly — preserves the invariant that all writes go through
-    /// the store.
-    func seedWithMockIfEmpty() {
-        // W73: the user explicitly asked to remove fake "Mario Rossi"
-        // history entries — empty state stays empty until the engine
-        // wires real CallHistoryRepository -> server pull. The
-        // `mockData` array below is kept (zero refs) for SwiftUI
-        // previews only; it will be deleted once the engine repo lands.
-        _ = Self.deletedIds  // silence unused warning during rollout
-    }
+    /// No-op — kept for call-site compatibility. Real seeding is handled
+    /// by PersistentCallRecordStore during actual calls.
+    func seedWithMockIfEmpty() {}
 
-    /// W68: tombstone set persisted to UserDefaults così le deletions
-    /// sopravvivono ai riavvi. La engine repository non esiste ancora
-    /// iOS-side, quindi facciamo persistence App-layer: ogni `deleteEntry`
-    /// aggiunge l'ID al set, e `refresh(from:)` filtra gli ID nel set.
-    private static let tombstoneKey = "com.qaudion.callHistory.deletedIds"
-
-    private static var deletedIds: Set<String> {
-        get {
-            (UserDefaults.standard.array(forKey: tombstoneKey) as? [String])
-                .map { Set($0) } ?? []
-        }
-        set {
-            UserDefaults.standard.set(Array(newValue), forKey: tombstoneKey)
-        }
-    }
-
-    /// Delete a single entry from the history. W68 wiring (App-layer):
-    /// l'ID viene aggiunto al tombstone set in UserDefaults così
-    /// `refresh(from:)` lo filtra al prossimo reload (anche post-restart).
-    /// Engine repository wiring pending — quando lands, sostituire con
-    /// `repository.delete(entryId:)` e ritirare il tombstone set.
+    /// Delete a single entry. Delegates to PersistentCallRecordStore so
+    /// the deletion survives restarts without a separate tombstone set.
     func deleteEntry(_ entryId: String) {
         entries.removeAll { $0.id == entryId }
-        var t = Self.deletedIds
-        t.insert(entryId)
-        Self.deletedIds = t
+        PersistentCallRecordStore.shared.deleteRecord(entryId)
     }
 
-    /// Wipe the entire call history. W68 persistence: aggiunge TUTTI
-    /// gli ID correnti al tombstone set + `appState.recentCalls`-derived
-    /// stub IDs (così il refresh non li ri-popola).
+    /// Clear all history. Delegates to PersistentCallRecordStore.
     func clearAll() {
-        var t = Self.deletedIds
-        for entry in entries {
-            t.insert(entry.id)
-        }
-        // Anche eventuali stub IDs futuri da recentCalls (il pattern è
-        // "stub-<idx>-<userId>"), così il filter regge anche al prossimo
-        // refresh che ricostruisce da appState.recentCalls.
-        Self.deletedIds = t
+        PersistentCallRecordStore.shared.clearAll()
         entries.removeAll()
     }
 
@@ -213,6 +155,9 @@ final class CallHistoryStore: ObservableObject {
 struct CallHistoryView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var store = CallHistoryStore()
+    /// Observe the shared persistent store so the list refreshes
+    /// automatically when a call ends and `records` changes.
+    @ObservedObject private var persistedStore = PersistentCallRecordStore.shared
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -239,10 +184,13 @@ struct CallHistoryView: View {
         .navigationBarHidden(true)
         .onAppear {
             store.refresh(from: appState)
-            // Pre-popola con mock se nessuna recentCalls esiste — UX
-            // ergonomica per nuovi utenti / TestFlight QA. La logica
-            // sta dentro lo store (rispetta `private(set) entries`).
             store.seedWithMockIfEmpty()
+        }
+        // Reactive refresh: when PersistentCallRecordStore.shared.records
+        // changes (e.g. a call just ended and got its endedAt stamped),
+        // re-derive the entry list so duration/direction update in-place.
+        .onChange(of: persistedStore.records.count) { _ in
+            store.refresh(from: appState)
         }
         .sheet(isPresented: $showingDialPad) {
             DialPadSheet(onCall: { dialed in

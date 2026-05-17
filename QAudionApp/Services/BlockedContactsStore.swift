@@ -1,0 +1,45 @@
+import Foundation
+
+/// Lightweight UserDefaults-backed persistence for locally blocked contact IDs.
+///
+/// The server is the canonical source of truth (`ContactsApi.blockContact` /
+/// `ContactsApi.unblockContact`), but the local set provides instant UI
+/// feedback (blocked tab, row indicators) without a network round-trip.
+///
+/// All methods are safe to call from any thread; UserDefaults.standard
+/// serialises access internally.
+struct BlockedContactsStore {
+
+    private static let key = "qaudion.contacts.blocked"
+
+    // MARK: - Read
+
+    static func loadBlockedIds() -> Set<String> {
+        let array = UserDefaults.standard.stringArray(forKey: key) ?? []
+        return Set(array)
+    }
+
+    static func isBlocked(_ userId: String) -> Bool {
+        loadBlockedIds().contains(userId)
+    }
+
+    // MARK: - Write
+
+    static func add(_ userId: String) {
+        var current = loadBlockedIds()
+        current.insert(userId)
+        persist(current)
+    }
+
+    static func remove(_ userId: String) {
+        var current = loadBlockedIds()
+        current.remove(userId)
+        persist(current)
+    }
+
+    // MARK: - Private
+
+    private static func persist(_ ids: Set<String>) {
+        UserDefaults.standard.set(Array(ids), forKey: key)
+    }
+}

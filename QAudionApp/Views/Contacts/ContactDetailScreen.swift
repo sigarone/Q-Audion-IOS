@@ -36,6 +36,11 @@ struct ContactDetailScreen: View {
     /// W51: payload pronto per il share sheet vCard. Non-nil triggers
     /// `.sheet(item:)` con `UIActivityViewController` (mail/messaggi/etc).
     @State private var sharingVCard: VCardShareItem? = nil
+    /// Local block state — initialised from BlockedContactsStore on .onAppear.
+    @State private var isBlocked: Bool = false
+    /// Internal extension number extracted from displayName (#NNN pattern),
+    /// or nil when absent.
+    @State private var peerExtension: String? = nil
 
     @Environment(\.qaudionSnackbar) private var snackbar
 
@@ -59,6 +64,10 @@ struct ContactDetailScreen: View {
         }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            isBlocked = BlockedContactsStore.isBlocked(item.userId)
+            peerExtension = Self.extractExtension(from: item.displayName)
+        }
         .alert("Eliminare il contatto?", isPresented: $showingDeleteConfirm) {
             Button("Annulla", role: .cancel) {}
             Button("Elimina", role: .destructive) {
@@ -225,13 +234,56 @@ struct ContactDetailScreen: View {
                 .italic()
                 .foregroundStyle(scheme.onSurface)
                 .multilineTextAlignment(.center)
-            Text(item.isOnline
-                 ? "online · \(item.isVerified ? "verified voice" : "voice non verificata")"
-                 : "offline")
+            // W445: extended presence label — shows InCall / DND icons
+            // and localised text. Falls back to binary online/offline
+            // when extended state is .unknown (no presence update yet).
+            heroPresenceLabel
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// W445: presence sub-label for the hero section. Extracted to a
+    /// computed property so the SwiftUI type-checker operates in a clean
+    /// scope (CLAUDE.md §13 — avoid inline expression complexity).
+    @ViewBuilder
+    private var heroPresenceLabel: some View {
+        let presence = appState.presenceService.extendedPresence(for: item.userId)
+        let isOnline = item.isOnline
+        switch presence {
+        case .unknown:
+            // No extended update yet — fall back to binary isOnline flag.
+            let fallbackText = isOnline
+                ? "online · " + (item.isVerified ? "verified voice" : "voice non verificata")
+                : "offline"
+            Text(fallbackText)
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        case .online:
+            let onlineText = "online · " + (item.isVerified ? "verified voice" : "voice non verificata")
+            Text(onlineText)
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(extras.success)
+        case .inCall:
+            HStack(spacing: 4) {
+                Image(systemName: "phone.fill")
+                    .font(.caption)
+                Text(ExtendedPresence.inCall.label)
+                    .qaudionStyle(type.labelMedium)
+            }
+            .foregroundStyle(extras.pqcAccent)
+        case .doNotDisturb:
+            HStack(spacing: 4) {
+                Image(systemName: "moon.fill")
+                    .font(.caption)
+                Text(ExtendedPresence.doNotDisturb.label)
+                    .qaudionStyle(type.labelMedium)
+            }
+            .foregroundStyle(extras.warning)
+        case .offline, .invisible:
+            Text("offline")
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(scheme.onSurfaceVariant)
         }
-        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Trust badges row
@@ -301,40 +353,10 @@ struct ContactDetailScreen: View {
             actionButton(icon: "shield.lefthalf.filled",
                          caption: "SAS",
                          tint: extras.warning) { showingSasSheet = true }
-            actionButton(icon: "circle.slash",
-                         caption: "Blocca",
+            actionButton(icon: isBlocked ? "circle.slash.fill" : "circle.slash",
+                         caption: isBlocked ? "Sblocca" : "Blocca",
                          tint: extras.riskHigh) {
-                // W72: server-side block via BCryptoContactsApi.
-                // Best-effort: snackbar feedback regardless. Actual
-                // contact-list dimming is engine-side WT (ContactsStore
-                // doesn't expose `isBlocked` yet).
-                let userId = item.userId
-                let displayName = item.displayName
-                Task {
-                    guard let token = appState.authService.loadToken(),
-                          !token.isEmpty else { return }
-                    let backendConfig = BackendConfig(
-                        serverUrl: appState.serverUrl,
-                        accessToken: token
-                    )
-                    let provider = BCryptoBackendProvider(config: backendConfig)
-                    do {
-                        try await provider.contactsApi.blockContact(userId: userId)
-                        await MainActor.run {
-                            snackbar?.show(.init(
-                                text: "\(displayName) bloccato.",
-                                severity: .info
-                            ))
-                        }
-                    } catch {
-                        await MainActor.run {
-                            snackbar?.show(.init(
-                                text: "Blocco non riuscito. Riprova.",
-                                severity: .error
-                            ))
-                        }
-                    }
-                }
+                if isBlocked { performUnblock() } else { performBlock() }
             }
         }
     }
@@ -493,6 +515,8 @@ struct ContactDetailScreen: View {
 
             metaRow("USERID", value: item.userId)
             metaDivider
+            metaRow("INTERNO", value: peerExtension ?? "—")
+            metaDivider
             metaRow("PHONE HASH", value: phoneHashShort)
             metaDivider
             metaRow("PRIMA VISTA", value: "—")
@@ -581,6 +605,45 @@ struct ContactDetailScreen: View {
             }
             Spacer(minLength: 0)
         }
+    }
+
+    // MARK: - Block / Unblock
+
+    private func performBlock() {
+        BlockedContactsStore.add(item.userId)
+        isBlocked = true
+        let uid: String = item.userId
+        let name: String = item.displayName
+        if let provider = appState.liveProvider {
+            Task { try? await provider.contactsApi.blockContact(userId: uid) }
+        }
+        let msg: String = name + " bloccato."
+        snackbar?.show(.init(text: msg, severity: .info))
+    }
+
+    private func performUnblock() {
+        BlockedContactsStore.remove(item.userId)
+        isBlocked = false
+        let uid: String = item.userId
+        let name: String = item.displayName
+        if let provider = appState.liveProvider {
+            Task { try? await provider.contactsApi.unblockContact(userId: uid) }
+        }
+        let msg: String = name + " sbloccato."
+        snackbar?.show(.init(text: msg, severity: .info))
+    }
+
+    // MARK: - Extension extraction
+
+    /// Extracts a dial extension from a displayName containing a "#NNN" suffix.
+    /// Returns nil when no such pattern is present.
+    private static func extractExtension(from displayName: String) -> String? {
+        guard let range = displayName.range(of: #"#(\d+)"#, options: .regularExpression) else {
+            return nil
+        }
+        // Drop the leading '#'.
+        let match = String(displayName[range])
+        return String(match.dropFirst())
     }
 
     /// W294: build the guidance snackbar text via static method to keep
