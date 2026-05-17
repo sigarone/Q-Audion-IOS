@@ -427,6 +427,13 @@ final class AppState: ObservableObject {
                     if self.callState == .ringing {
                         self.callState = .active
                     }
+                    // W450: boot audio pipeline for incoming call.
+                    // Outgoing calls do this inside startCall(contactId:) →
+                    // callService.startCall(engine:contactId:). For incoming
+                    // calls that path is never taken (isInCall guard blocks it).
+                    // We must start capture+playback here, when the user
+                    // explicitly accepts, so there is actual audio in the call.
+                    self.startIncomingCallAudioOnAnswer()
                 }
             }
             provider.onEndCall = { [weak self] uuid in
@@ -842,6 +849,16 @@ final class AppState: ObservableObject {
             // CallKit must run from MainActor — its CXProvider state
             // machine refuses cross-thread mutations.
             DispatchQueue.main.async {
+                // W450-dedup: server can echo both `call_offer` AND
+                // `call_incoming` for the same call (confirmed by Android
+                // WsCallSignaller comment). Without this guard a second
+                // call_incoming arrives before `isInCall` is set inside
+                // the Task below → two reportIncomingCall → two system
+                // call UIs (the "doppia chiamata" bug).
+                guard self.callState == .idle, self.activeCallKitId == nil else {
+                    print("[AppState] call_incoming: dup dropped callId=\(callIdStr.prefix(8))… state=\(self.callState)")
+                    return
+                }
                 Task {
                     await self.callKit?.reportIncomingCall(
                         uuid: callUUID,
@@ -2048,6 +2065,41 @@ final class AppState: ObservableObject {
         }
         responderCallIntegration = integration
         return integration
+    }
+
+    /// W450: boot the audio capture/playback stack for an incoming call
+    /// the moment the user accepts it via CallKit.
+    ///
+    /// Outgoing calls do this inside `startCall(contactId:video:)` →
+    /// `callService.startCall(engine:contactId:)`. For incoming calls
+    /// that path is never taken because `isInCall` is already true
+    /// (set by the `call_incoming` WS handler before the user answers).
+    /// This method fills that gap: wires WS transport and activates
+    /// AudioCapture + AudioPlayback on the existing responder integration
+    /// so the callee actually hears and speaks once they accept.
+    ///
+    /// Must be called on the main thread (@MainActor).
+    @MainActor
+    private func startIncomingCallAudioOnAnswer() {
+        guard let eng = engine,
+              let intg = responderCallIntegration,
+              let cid = callContactId else {
+            print("[AppState] startIncomingCallAudioOnAnswer: missing engine/integration/contactId — audio not started")
+            return
+        }
+        // Wire WS transport so audio_frame handler routes inbound audio
+        // to handleIncomingEncryptedFrame, and TX frames are sent to peer.
+        if let ws = liveProvider?.getWebSocketClient() {
+            callService.wireTransport(wsClient: ws, peerUserId: cid)
+        }
+        // Activate capture + playback. Reuses the existing responder
+        // integration so the PQC session key negotiated during ringing
+        // is the same one the audio codec uses — no re-keying needed.
+        do {
+            try callService.activateIncomingCallAudio(engine: eng, integration: intg)
+        } catch {
+            print("[AppState] startIncomingCallAudioOnAnswer: audio activation failed: \(error)")
+        }
     }
 
     /// W77: public hook to trigger the first-contact PSK handshake with a

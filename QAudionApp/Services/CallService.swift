@@ -222,6 +222,74 @@ final class CallService {
         startDurationTimer()
     }
 
+    /// W450: incoming-call counterpart of `startCall(engine:contactId:)`.
+    ///
+    /// For incoming calls `startCall(engine:contactId:)` is never invoked
+    /// because `AppState.isInCall` is already true (set by the
+    /// `call_incoming` WS handler). This method fills that gap: it sets up
+    /// the same AudioCapture + AudioPlayback stack and wires them to an
+    /// EXISTING integration created by `AppState.ensureResponderIntegration`.
+    ///
+    /// Unlike `startCall`, it does NOT create a new QAudionCallIntegration —
+    /// the PQC handshake has already started on the provided integration and
+    /// we must not discard that state.
+    ///
+    /// - Parameters:
+    ///   - engine: The shared QAudionEngine instance (unused directly here;
+    ///     kept symmetric with `startCall` for future use).
+    ///   - integration: The responder integration built during ringing.
+    func activateIncomingCallAudio(engine: QAudionEngine,
+                                   integration: QAudionCallIntegration) throws {
+        // Defensive cleanup: stop any leftover capture from a previous call.
+        teardownAudioStack()
+
+        let pipeline = AudioProcessingPipeline()
+        pipeline.voiceProcessingOverride = CallsGate.anyVoiceProcessingEnabled
+        do {
+            try pipeline.configureForVoIP()
+        } catch {
+            print("[CallService] activateIncomingCallAudio: AVAudioSession config failed: \(error.localizedDescription)")
+        }
+        self.audioPipeline = pipeline
+
+        let capture = AudioCapture(audioPipeline: pipeline)
+        let playback = AudioPlayback()
+
+        // TX path: mic → VP DSP → encrypt → WS send (same as outgoing).
+        capture.onFrame = { [weak self] pcmFrame in
+            guard let self else { return }
+            if !NetworkConditionSimulator.shared.isPassthrough() {
+                if NetworkConditionSimulator.shared.shouldDropOutbound() { return }
+                Task { [weak self] in
+                    await NetworkConditionSimulator.shared.delayOutbound()
+                    self?.processAndSendEncryptedFrame(
+                        pcmFrame: pcmFrame, integration: integration)
+                }
+                return
+            }
+            self.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
+        }
+
+        do {
+            try playback.start()
+            self.audioPlayback = playback
+        } catch {
+            print("[CallService] activateIncomingCallAudio: playback start failed: \(error.localizedDescription)")
+        }
+
+        do {
+            try capture.start()
+            self.audioCapture = capture
+        } catch {
+            print("[CallService] activateIncomingCallAudio: capture start failed: \(error.localizedDescription)")
+        }
+
+        // Bind the integration so handleIncomingEncryptedFrame can decrypt
+        // inbound audio_frame packets.
+        self.callIntegration = integration
+        startDurationTimer()
+    }
+
     /// Originator-side wire driver for the iOS-as-caller PQC handshake.
     /// Closes the WIRE_SPEC §5 P0 gap that had `onCallSetupStarted` get
     /// passed an empty closure (no OFFER bytes ever reached the wire).
