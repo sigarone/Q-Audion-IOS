@@ -133,7 +133,7 @@ final class ChatVoiceNoteSender {
               let senderId = appState.currentUserId, !senderId.isEmpty else {
             throw Error.uploadFailed("non autenticato")
         }
-        let backendConfig = BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
+        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
         // No `provider.initialize()` — `uploadFile` and `issueToken` are
         // REST-only; a fresh provider with the auth token is sufficient.

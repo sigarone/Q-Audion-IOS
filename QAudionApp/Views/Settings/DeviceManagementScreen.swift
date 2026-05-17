@@ -137,7 +137,7 @@ final class DeviceManagementContainer: ObservableObject {
         let serverUrl = appState.serverUrl
         Task { [weak self] in
             do {
-                let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
+                let config = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
                 let provider = BCryptoBackendProvider(config: config)
                 _ = try await provider.getRestClient().delete("/api/v1/devices/\(deviceId)")
                 print("[DeviceManagementContainer] revoke OK for \(deviceId)")
@@ -164,7 +164,7 @@ final class DeviceManagementContainer: ObservableObject {
         let serverUrl = appState.serverUrl
         Task { [weak self] in
             do {
-                let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
+                let config = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
                 let provider = BCryptoBackendProvider(config: config)
                 let data = try await provider.getRestClient().get("/api/v1/devices/")
                 // The server response shape (devices: [...]) is intentionally

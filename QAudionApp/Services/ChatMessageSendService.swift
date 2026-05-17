@@ -135,10 +135,7 @@ final class ChatMessageSendService {
         // Ship via the BCrypto WS transport. The provider is built per
         // call to keep this service stateless — token refresh /
         // reconnect logic lives upstream in the WS client.
-        let backendConfig = BackendConfig(
-            serverUrl: appState.serverUrl,
-            accessToken: token
-        )
+        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         do {
             let provider = BCryptoBackendProvider(config: backendConfig)
             try await provider.initialize()

@@ -6,11 +6,15 @@ import Foundation
 /// `ContactsApi.unblockContact`), but the local set provides instant UI
 /// feedback (blocked tab, row indicators) without a network round-trip.
 ///
-/// All methods are safe to call from any thread; UserDefaults.standard
-/// serialises access internally.
+/// Thread safety (NIM-MINOR-2): all read-modify-write sequences are
+/// serialised on a private serial DispatchQueue. Without this, two
+/// concurrent `add()` calls can both read the same base set, each insert a
+/// different userId, and the second write overwrites the first entry.
 struct BlockedContactsStore {
 
     private static let key = "qaudion.contacts.blocked"
+    /// Serial queue that serialises every load-modify-persist cycle.
+    private static let queue = DispatchQueue(label: "com.qaudion.blocked", attributes: [])
 
     // MARK: - Read
 
@@ -26,15 +30,19 @@ struct BlockedContactsStore {
     // MARK: - Write
 
     static func add(_ userId: String) {
-        var current = loadBlockedIds()
-        current.insert(userId)
-        persist(current)
+        queue.sync {
+            var current = loadBlockedIds()
+            current.insert(userId)
+            persist(current)
+        }
     }
 
     static func remove(_ userId: String) {
-        var current = loadBlockedIds()
-        current.remove(userId)
-        persist(current)
+        queue.sync {
+            var current = loadBlockedIds()
+            current.remove(userId)
+            persist(current)
+        }
     }
 
     // MARK: - Private

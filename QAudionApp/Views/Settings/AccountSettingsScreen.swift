@@ -274,7 +274,7 @@ final class AccountSettingsContainer: ObservableObject {
     private func makeProvider() -> BCryptoBackendProvider? {
         guard let appState,
               let token = appState.authService.loadToken(), !token.isEmpty else { return nil }
-        let config = BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
+        let config = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         return BCryptoBackendProvider(config: config)
     }
 }

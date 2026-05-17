@@ -103,7 +103,7 @@ final class ChatAttachAnnounceSender {
         }
 
         // 4. Upload ciphertext.
-        let backendConfig = BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
+        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
         let fileId: String
         do {

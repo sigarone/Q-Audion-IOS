@@ -1,8 +1,10 @@
 import Foundation
+import CryptoKit
+import Security
 
 // MARK: - CallRecord
 
-/// A single persisted call record. Codable for UserDefaults storage.
+/// A single persisted call record. Codable for encrypted file storage.
 /// Sendable-safe: all stored properties are value types.
 public struct CallRecord: Codable, Identifiable, Sendable {
     public let id: String               // UUID string minted at beginCall
@@ -26,9 +28,58 @@ public struct CallRecord: Codable, Identifiable, Sendable {
     }
 }
 
+// MARK: - Keychain helpers (file-private, synchronous)
+
+private enum CallHistoryKeychain {
+    private static let service = "com.qaudion.callhistory"
+    private static let account = "aes-key"
+
+    /// Load the AES-256 key from Keychain, or generate + store a new one.
+    static func loadOrCreateKey() -> SymmetricKey {
+        if let existing = loadKey() { return existing }
+        let key = SymmetricKey(size: .bits256)
+        storeKey(key)
+        return key
+    }
+
+    private static func loadKey() -> SymmetricKey? {
+        let query: [CFString: Any] = [
+            kSecClass:            kSecClassGenericPassword,
+            kSecAttrService:      service,
+            kSecAttrAccount:      account,
+            kSecReturnData:       true,
+            kSecMatchLimit:       kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return SymmetricKey(data: data)
+    }
+
+    private static func storeKey(_ key: SymmetricKey) {
+        let keyData = key.withUnsafeBytes { Data($0) }
+        let attrs: [CFString: Any] = [
+            kSecClass:                   kSecClassGenericPassword,
+            kSecAttrService:             service,
+            kSecAttrAccount:             account,
+            kSecAttrAccessible:          kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            kSecValueData:               keyData
+        ]
+        // Delete any stale entry first, then add.
+        SecItemDelete(attrs as CFDictionary)
+        SecItemAdd(attrs as CFDictionary, nil)
+    }
+}
+
 // MARK: - PersistentCallRecordStore
 
-/// UserDefaults-backed store for call history records.
+/// AES-GCM encrypted file-backed store for call history records.
+///
+/// Storage layout:
+///   - Encrypted file: Application Support/qaudion/call_history.enc
+///   - File protection: .completeUnlessOpen
+///   - Encryption: CryptoKit AES.GCM (256-bit key)
+///   - Key storage: iOS Keychain, accessibility .whenUnlockedThisDeviceOnly
 ///
 /// CONSTRAINT (CLAUDE.md §16): this class MUST NOT take AppState as a
 /// parameter anywhere. All integration points must pass primitive values
@@ -39,30 +90,93 @@ public final class PersistentCallRecordStore: ObservableObject {
 
     @Published public private(set) var records: [CallRecord] = []
 
-    private static let storageKey = "qaudion.callHistory.v2"
+    // Legacy UserDefaults key — used only during one-time migration.
+    private static let legacyStorageKey = "qaudion.callHistory.v2"
     private static let maxRecords = 200
 
     public init() {
         load()
     }
 
-    // MARK: Private persistence
+    // MARK: - Encrypted file URL
+
+    private static var encryptedFileURL: URL {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        let dir = appSupport.appendingPathComponent("qaudion", isDirectory: true)
+        // Create directory if needed; ignore errors (idempotent).
+        try? FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true, attributes: nil
+        )
+        return dir.appendingPathComponent("call_history.enc")
+    }
+
+    // MARK: - Private persistence
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: Self.storageKey) else { return }
-        let decoded = (try? JSONDecoder().decode([CallRecord].self, from: data)) ?? []
-        records = decoded
+        migrateFromUserDefaultsIfNeeded()
+        let key = CallHistoryKeychain.loadOrCreateKey()
+        let url = Self.encryptedFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        guard let combined = try? Data(contentsOf: url) else {
+            print("[CallHistory] warn: could not read encrypted file")
+            return
+        }
+        do {
+            let sealedBox = try AES.GCM.SealedBox(combined: combined)
+            let plaintext = try AES.GCM.open(sealedBox, using: key)
+            records = (try? JSONDecoder().decode([CallRecord].self, from: plaintext)) ?? []
+        } catch {
+            print("[CallHistory] warn: decryption failed — starting empty")
+            records = []
+        }
     }
 
     private func save() {
-        // Cap before encoding so the UserDefaults blob doesn't grow unbounded.
         let capped = Array(records.prefix(Self.maxRecords))
         records = capped
-        guard let data = try? JSONEncoder().encode(capped) else { return }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        guard let plaintext = try? JSONEncoder().encode(capped) else { return }
+        let key = CallHistoryKeychain.loadOrCreateKey()
+        do {
+            let sealedBox = try AES.GCM.seal(plaintext, using: key)
+            let combined = sealedBox.combined!
+            let url = Self.encryptedFileURL
+            try combined.write(to: url, options: .atomic)
+            // Apply file protection so the OS encrypts at rest when device is locked.
+            try FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.completeUnlessOpen],
+                ofItemAtPath: url.path
+            )
+        } catch {
+            print("[CallHistory] warn: failed to save encrypted file")
+        }
     }
 
-    // MARK: Public API
+    // MARK: - Migration from UserDefaults
+
+    private func migrateFromUserDefaultsIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard let legacyData = defaults.data(forKey: Self.legacyStorageKey) else { return }
+        let migrated = (try? JSONDecoder().decode([CallRecord].self, from: legacyData)) ?? []
+        // Encrypt and write to the new file before clearing UserDefaults.
+        let key = CallHistoryKeychain.loadOrCreateKey()
+        if let plaintext = try? JSONEncoder().encode(migrated),
+           let sealedBox = try? AES.GCM.seal(plaintext, using: key),
+           let combined = sealedBox.combined {
+            let url = Self.encryptedFileURL
+            if (try? combined.write(to: url, options: .atomic)) != nil {
+                try? FileManager.default.setAttributes(
+                    [.protectionKey: FileProtectionType.completeUnlessOpen],
+                    ofItemAtPath: url.path
+                )
+            }
+        }
+        defaults.removeObject(forKey: Self.legacyStorageKey)
+        print("[CallHistory] migrated legacy UserDefaults records to encrypted file")
+    }
+
+    // MARK: - Public API
 
     /// Register a call that is starting. Call from the outgoing or incoming
     /// call setup path. Parameters are all primitives — no AppState reference.
@@ -83,18 +197,8 @@ public final class PersistentCallRecordStore: ObservableObject {
         peerExtension: Int? = nil
     ) {
         // Deduplicate: if the same callId was already registered (e.g.
-        // double-tap guard fired too late) just update the existing record
-        // in-place rather than inserting a duplicate.
-        if let idx = records.firstIndex(where: { $0.id == id }) {
-            // Only update mutable fields — direction/display should stay.
-            var updated = records[idx]
-            records.remove(at: idx)
-            // Re-insert mutated copy at top.
-            records.insert(updated, at: 0)
-            _ = updated  // silence unused warning
-            // Nothing actually changed if we hit this branch — just return.
-            return
-        }
+        // double-tap guard fired too late) just return without inserting a duplicate.
+        if records.firstIndex(where: { $0.id == id }) != nil { return }
         let record = CallRecord(
             id: id,
             peerUserId: peerUserId,
@@ -161,7 +265,7 @@ public final class PersistentCallRecordStore: ObservableObject {
         save()
     }
 
-    // MARK: Display name helper
+    // MARK: - Display name helper
 
     /// Resolve a display name for a peer userId using the same priority
     /// as the inbound call_incoming handler in AppState:
@@ -172,7 +276,7 @@ public final class PersistentCallRecordStore: ObservableObject {
     ///   5. Raw userId fallback
     ///
     /// Static so callers don't need an instance reference and the logic
-    /// stays unit-testable without touching UserDefaults.
+    /// stays unit-testable without touching persistence.
     public static func resolveDisplayName(
         userId: String,
         wireDisplay: String?,

@@ -263,6 +263,21 @@ final class AppState: ObservableObject {
 
     private var defaultServerUrl: String { serverUrl }
 
+    /// Build a BackendConfig for `serverUrl` with cert pinning enabled.
+    /// All production network paths MUST use this helper (IMPORTANT-2a).
+    /// Pins Let's Encrypt E8 + ISRG Root X1 — survives leaf cert rotation.
+    private func pinnedConfig(token: String? = nil,
+                               refreshToken: String? = nil,
+                               userId: String? = nil) -> BackendConfig {
+        BackendConfig(
+            serverUrl: serverUrl,
+            accessToken: token,
+            refreshToken: refreshToken,
+            userId: userId,
+            certPinSha256B64: PinnedServerHost.certChainPins
+        )
+    }
+
     func initialize() {
         let config = EngineConfig.production()
         let engine = QAudionEngine(config: config)
@@ -474,7 +489,7 @@ final class AppState: ObservableObject {
             if let cached = UserDefaults.standard.string(forKey: "currentUserDialExtension") {
                 self.currentUserDialExtension = cached
             }
-            let backendConfig = BackendConfig(serverUrl: defaultServerUrl, accessToken: token)
+            let backendConfig = pinnedConfig(token: token)
             let provider = BCryptoBackendProvider(config: backendConfig)
             Task {
                 do {
@@ -609,7 +624,7 @@ final class AppState: ObservableObject {
             wireSasReadyToController()
             groupFanOutWired = true
         }
-        let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
+        let config = pinnedConfig(token: token)
         let provider = BCryptoBackendProvider(config: config)
         self.liveProvider = provider
         // W74: register inbound call handlers BEFORE the WS lands. The
@@ -879,6 +894,12 @@ final class AppState: ObservableObject {
                 // callee never answered — mark the record as missed.
                 let wasRinging = self.callState == .ringing
                 let missedRecordId = self.activeOutgoingRecordId
+                // NIM-MINOR-4: if we reach ringing state without a record id, the
+                // missed call will not appear in history. Log a warning so this
+                // regression is visible in telemetry if it ever happens.
+                if wasRinging && missedRecordId == nil {
+                    RTLog.info("call", "WARN hangup-while-ringing but activeOutgoingRecordId=nil — missed call will not be recorded")
+                }
                 Task {
                     await self.callKit?.reportCallEnded(uuid: uuid, reason: reason)
                     await MainActor.run {
@@ -2066,7 +2087,7 @@ final class AppState: ObservableObject {
             provider = live
         } else {
             guard let token = authService.loadToken(), !token.isEmpty else { return }
-            let config = BackendConfig(serverUrl: serverUrl, accessToken: token)
+            let config = pinnedConfig(token: token)
             provider = BCryptoBackendProvider(config: config)
         }
         presenceService.attach(provider: provider)
@@ -2138,7 +2159,7 @@ final class AppState: ObservableObject {
             errorMessage = "Sessione non autenticata."
             return
         }
-        let backendConfig = BackendConfig(serverUrl: serverUrl, accessToken: token)
+        let backendConfig = pinnedConfig(token: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
 
         // Step A — short extension (solo cifre, lunghezza ≤ 7).
@@ -2652,7 +2673,7 @@ final class AppState: ObservableObject {
 
     func testConnection() async {
         connectionStatus = "connecting"
-        let config = BackendConfig(serverUrl: serverUrl)
+        let config = pinnedConfig()
         let rest = BCryptoRestClient(config: config)
         do {
             _ = try await rest.get("/api/v1/health")
@@ -2696,7 +2717,7 @@ final class AppState: ObservableObject {
             payload.append(encrypted.ciphertext)
             payload.append(encrypted.tag)
 
-            let backendConfig = BackendConfig(serverUrl: serverUrl, accessToken: authService.loadToken())
+            let backendConfig = pinnedConfig(token: authService.loadToken())
             let provider = BCryptoBackendProvider(config: backendConfig)
             try await provider.initialize()
             _ = try await provider.messageApi.sendMessage(recipientId: contactId, content: payload)

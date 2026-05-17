@@ -236,36 +236,49 @@ public enum BCryptoError: Error {
 // MARK: - Certificate Pinning Delegate
 
 private class CertPinningDelegate: NSObject, URLSessionDelegate {
-    private let pinnedSPKIHash: Data?
+    /// Set of pinned DER SHA-256 hashes (base64-decoded). Multiple pins are
+    /// supported: `pinB64` is a comma-separated list of base64 strings.
+    /// A TLS handshake succeeds iff at least one cert in the server's chain
+    /// has a DER SHA-256 that appears in this set.
+    ///
+    /// Design rationale: pinning the chain (not just the leaf) means
+    /// the app survives Let's Encrypt 90-day leaf rotation as long as the
+    /// intermediate CA hash is included. See `PinnedServerHost.certChainPins`.
+    private let pinnedHashes: Set<Data>
 
     init(pinB64: String) {
-        self.pinnedSPKIHash = Data(base64Encoded: pinB64)
+        var hashes = Set<Data>()
+        for token in pinB64.split(separator: ",") {
+            let trimmed = token.trimmingCharacters(in: .whitespaces)
+            if let d = Data(base64Encoded: trimmed) {
+                hashes.insert(d)
+            }
+        }
+        self.pinnedHashes = hashes
     }
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        guard let serverTrust = challenge.protectionSpace.serverTrust,
-              let pinnedHash = pinnedSPKIHash else {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = challenge.protectionSpace.serverTrust,
+              !pinnedHashes.isEmpty else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
 
-        // Get the server's leaf certificate
-        guard SecTrustGetCertificateCount(serverTrust) > 0 else {
+        // Walk every cert in the server's TLS chain; accept if ANY cert's
+        // DER SHA-256 matches one of the pinned hashes.
+        guard let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
+              !chain.isEmpty else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
 
-        // Use SecTrustCopyCertificateChain for iOS 15+
-        if let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
-           let serverCert = chain.first {
-            let serverCertData = SecCertificateCopyData(serverCert) as Data
-            // Hash the SPKI (Subject Public Key Info)
-            // For simplicity, hash the whole cert DER and compare
+        for cert in chain {
+            let derData = SecCertificateCopyData(cert) as Data
             var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-            serverCertData.withUnsafeBytes { _ = CC_SHA256($0.baseAddress, CC_LONG(serverCertData.count), &hash) }
-            let serverHash = Data(hash)
-            if serverHash == pinnedHash {
+            derData.withUnsafeBytes { _ = CC_SHA256($0.baseAddress, CC_LONG(derData.count), &hash) }
+            if pinnedHashes.contains(Data(hash)) {
                 completionHandler(.useCredential, URLCredential(trust: serverTrust))
                 return
             }

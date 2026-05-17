@@ -24,7 +24,7 @@ final class AuthService {
     /// so the already-derived `phone_hash` flows straight to the wire,
     /// matching Android's behaviour byte-for-byte.
     func loginWithPhoneHash(phoneHash: String, password: String, serverUrl: String) async throws -> AuthCredentials {
-        let backendConfig = BackendConfig(serverUrl: serverUrl)
+        let backendConfig = BackendConfig.pinned(serverUrl: serverUrl)
         let provider = BCryptoBackendProvider(config: backendConfig)
         let deviceName: String
         #if canImport(UIKit)
@@ -38,7 +38,7 @@ final class AuthService {
     }
 
     func register(phoneNumber: String, password: String, inviteCode: String?, serverUrl: String) async throws -> String {
-        let backendConfig = BackendConfig(serverUrl: serverUrl)
+        let backendConfig = BackendConfig.pinned(serverUrl: serverUrl)
         let provider = BCryptoBackendProvider(config: backendConfig)
         let userId = try await provider.accountApi.register(
             phoneNumber: phoneNumber,

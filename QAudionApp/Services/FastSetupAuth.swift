@@ -69,7 +69,7 @@ final class FastSetupAuth {
         let resolvedName = payload.resolvedDisplayName
         if let token = appState.authService.loadToken() {
             let backend = BCryptoBackendProvider(
-                config: BackendConfig(serverUrl: PinnedServerHost.url, accessToken: token)
+                config: BackendConfig.pinned(serverUrl: PinnedServerHost.url, accessToken: token)
             )
             do {
                 try await backend.accountApi.updateProfile(

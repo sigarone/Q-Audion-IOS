@@ -68,7 +68,7 @@ final class ChatAttachAnnounceReceiver {
         }
 
         // 1. Download ciphertext.
-        let backendConfig = BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
+        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
         let ciphertext: Data
         do {

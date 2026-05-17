@@ -44,6 +44,34 @@ public enum PinnedServerHost {
     /// Source of truth (per user 2026-04-29): `https://voip.bcrypto.com`.
     public static let url: String = "https://voip.bcrypto.com"
 
+    // MARK: - Certificate pinning (IMPORTANT-2a)
+    //
+    // We pin two certs from the chain, NOT the leaf cert (which Let's Encrypt
+    // rotates every ~90 days and would break the app on automatic renewal):
+    //
+    //   [0] Let's Encrypt E8 intermediate  — expires 2027-03-13
+    //       SHA-256(DER): g2JP0zjI2bAjwYpny3qcBRnaQ9EXdbTGy9rUXD2ZfFI=
+    //
+    //   [1] ISRG Root X1 (Let's Encrypt root) — expires 2035-06-04
+    //       SHA-256(DER): lrzsBiZJdvN0YHeazyjFp8/oo8Cq4RqP/O4FwL3fCMY=
+    //
+    // CertPinningDelegate in BCryptoRestClient checks all certs in the server's
+    // TLS chain. A connection succeeds iff at least one cert's DER SHA-256 is
+    // in this list. This design:
+    //   - survives leaf cert rotation (E8 or Root X1 will still match)
+    //   - blocks a MITM with a cert from a different CA (no match in chain)
+    //   - requires no app update when Let's Encrypt issues a new leaf cert
+    //
+    // **Rotation:** if Let's Encrypt switches from E8 to a new intermediate,
+    // update `certChainPins[0]` before the old intermediate expires (2027-03-13).
+    // The ISRG Root X1 is a multi-decade anchor — only changes if ISRG revokes it.
+    //
+    // Computed on 2026-05-17 from the live chain at voip.bcrypto.com:443.
+    public static let certChainPins: String = [
+        "g2JP0zjI2bAjwYpny3qcBRnaQ9EXdbTGy9rUXD2ZfFI=",  // Let's Encrypt E8 (2027-03-13)
+        "lrzsBiZJdvN0YHeazyjFp8/oo8Cq4RqP/O4FwL3fCMY=",  // ISRG Root X1 (2035-06-04)
+    ].joined(separator: ",")
+
     /// Host portion of `url`. Returns `voip.bcrypto.com`.
     public static var host: String {
         URL(string: url)?.host ?? "voip.bcrypto.com"

@@ -65,7 +65,7 @@ final class ChatVoiceNoteReceiver {
 
         // Build a fresh provider per fetch — REST-only, no WS overhead.
         let provider = BCryptoBackendProvider(
-            config: BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
+            config: BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         )
 
         // Capture the claim in the closure so FileTransfer.download's

@@ -209,7 +209,7 @@ public final class LiveLogStreamer {
                              data: Data,
                              chunkBytes: Int,
                              seq: Int) async {
-        let cfg: BackendConfig = BackendConfig(serverUrl: serverUrl, accessToken: token)
+        let cfg: BackendConfig = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
         let provider: BCryptoBackendProvider = BCryptoBackendProvider(config: cfg)
         do {
             let fileId: String = try await provider.storageApi.uploadFile(

@@ -45,7 +45,7 @@ final class RecoverySeedContainer: ObservableObject {
     /// used in AppState.sendMessage. Returns nil if no token is available.
     private func makeProvider() -> BCryptoBackendProvider? {
         guard let token = appState.authService.loadToken() else { return nil }
-        let config = BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
+        let config = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         return BCryptoBackendProvider(config: config)
     }
 

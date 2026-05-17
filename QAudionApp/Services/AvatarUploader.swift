@@ -37,7 +37,7 @@ final class AvatarUploader {
             throw Error.imageEncodingFailed
         }
 
-        let config = BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
+        let config = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         let provider = BCryptoBackendProvider(config: config)
         // BCryptoStorageApiImpl.uploadFile(data:filename:) is not part of StorageApi
         // protocol, so we cast to the concrete impl.

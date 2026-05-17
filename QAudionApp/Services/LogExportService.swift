@@ -144,7 +144,7 @@ public final class LogExportService {
             throw ExportError.notAuthenticated
         }
         let data = makeDumpData(appState: appState)
-        let backendConfig = BackendConfig(serverUrl: appState.serverUrl, accessToken: token)
+        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
         let stamp = Int(Date().timeIntervalSince1970)
         let userPrefix = (appState.currentUserId ?? "anon").prefix(8)

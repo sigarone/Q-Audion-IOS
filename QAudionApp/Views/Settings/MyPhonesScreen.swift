@@ -108,7 +108,7 @@ final class MyPhonesContainer: ObservableObject {
             self.error = "Sessione non attiva — numeri salvati solo localmente."
             return
         }
-        let config = BackendConfig(serverUrl: appState.serverUrl,
+        let config = BackendConfig.pinned(serverUrl: appState.serverUrl,
                                    accessToken: token)
         let provider = BCryptoBackendProvider(config: config)
         let rest = provider.getRestClient()
