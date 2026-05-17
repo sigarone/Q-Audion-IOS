@@ -53,9 +53,20 @@ public enum HkdfLabels {
     /// Mirrors Android `RecoveryKeyDerivation.kt` `SALT = "bcrypto-recov-v1"`.
     public static let recoverySalt: Data = "bcrypto-recov-v1".data(using: .utf8)!
 
+    /// HMAC-SHA256 key (domain-separation label) used to bind the ML-KEM
+    /// ciphertext into the hybrid session-key HKDF `info`. The corrected
+    /// construction folds `HMAC-SHA256(this, pqcCiphertext)` into `info`
+    /// so a MITM cannot substitute a re-encapsulating ciphertext (the
+    /// prior 2-leg combine had NO ciphertext binding — schema :1, now
+    /// superseded). MUST be byte-identical to firmware `LABEL_CT_BIND`,
+    /// Android `HYBRID_CT_BIND_LABEL`, Desktop `HYBRID_CT_BIND`.
+    /// Spec: apps/qaudion-firmware/docs/CROSS_PLATFORM_HYBRID_KDF.md.
+    public static let hybridCtBindV1: Data = "q-audion-ct-bind-v1".data(using: .utf8)!
+
     // MARK: - Salts (UTF-8)
 
-    /// Hybrid PQC session key salt.
+    /// Hybrid PQC session key salt (used as the HKDF Extract salt when no
+    /// PSK is present; the PSK replaces it when one is negotiated).
     public static let hybridPqcSaltV1: Data = "q-audion-hybrid-pqc-v1".data(using: .utf8)!
 
     /// Device-link PSK salt (counterpart to `deviceLinkPsk` info).
@@ -75,7 +86,8 @@ public enum HkdfLabels {
         let labels: [Data] = [
             messageKey, hybridPqcSessionKey, nfcCollaborativePsk,
             deviceLinkPsk, frameChainAudio, frameChainVideo, fileKey,
-            recoveryAuth, recoverySalt, hybridPqcSaltV1, deviceLinkSalt
+            recoveryAuth, recoverySalt, hybridPqcSaltV1, hybridCtBindV1,
+            deviceLinkSalt
         ]
         for label in labels {
             guard let s = String(data: label, encoding: .utf8),

@@ -383,7 +383,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     ///     2. iOS supports the dual-hybrid (PQC + X25519) primitives
     ///        natively; X448 (`dualCurvePublicKey`) and Android
     ///        StrongBox-bound P-256 (`strongBoxPublicKey`) are NOT yet
-    ///        wired through `HybridPqcKeyExchange`, so we silently drop
+    ///        wired into `deriveHybridSessionKey`, so we silently drop
     ///        those legs. The session key still combines ML-KEM-1024 +
     ///        X25519, which IS the cross-platform floor.
     ///     3. PSK fingerprint negotiation: deterministic lex-sort of
@@ -432,11 +432,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let pqcResult = try pqc.encapsulate(remotePublicKey: pqcPub)
             let x25519Result = try Self.x25519Encap(remotePub: x25519Pub)
 
-            // 4. Combine ML-KEM and X25519 shared secrets — byte-equal
-            // with Android `HybridPqcKeyExchange.combine` (PSK-free).
-            let hybridShared = Self.combinePqcAndX25519(pqcSs: pqcResult.sharedSecret, x25519Ss: x25519Result.sharedSecret)
-
-            // 5. Deterministic PSK fingerprint intersection (lex-sort).
+            // 4. Deterministic PSK fingerprint intersection (lex-sort).
+            // Selected BEFORE deriving the session key: the PSK is the
+            // HKDF Extract salt of the single corrected derivation, not a
+            // separate post-mix (schema :2).
             var selectedFp: String? = nil
             var selectedPsk: Data? = nil
             if let advertised = bundle.pskFingerprints {
@@ -447,15 +446,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
             }
 
-            // 6. Mix PSK if negotiated — Android `PqcHandshake.kt
-            // finalize()` applies a SECOND HKDF round when a PSK was
-            // selected, with salt='q-audion-psk-mix' and IKM=hybrid||psk.
-            let combined: Data
-            if let psk = selectedPsk {
-                combined = Self.mixPskIntoSession(hybridSecret: hybridShared, psk: psk)
-            } else {
-                combined = hybridShared
-            }
+            // 5. Corrected single ct-bound derivation (schema :2). The
+            // ML-KEM ciphertext (pqcResult.ciphertext) is bound via the
+            // HKDF info; the negotiated PSK (if any) is the HKDF salt.
+            // Byte-identical to Android / iOS / Desktop / firmware.
+            let combined = Self.deriveHybridSessionKey(
+                pqcSs: pqcResult.sharedSecret,
+                x25519Ss: x25519Result.sharedSecret,
+                pqcCiphertext: pqcResult.ciphertext,
+                psk: selectedPsk
+            )
 
             // 7. Build ACCEPT JSON.
             let accept = AndroidHandshakeBundle(
@@ -524,23 +524,26 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let x25519Secret = try local.x25519Priv.sharedSecretFromKeyAgreement(with: remoteEph)
             let x25519Ss = x25519Secret.withUnsafeBytes { Data($0) }
 
-            // 3. Combine — byte-equal with the responder's
-            //    `combinePqcAndX25519` and Android's HKDF.
-            let hybridShared = Self.combinePqcAndX25519(pqcSs: pqcSs, x25519Ss: x25519Ss)
+            // 3. Corrected single ct-bound derivation (schema :2) —
+            //    byte-equal with the responder's deriveHybridSessionKey
+            //    and Android / Desktop / firmware. The ML-KEM ciphertext
+            //    we just decapsulated (pqcCt) is bound via the HKDF info.
 
-            // 4. PSK mix if the responder selected one. iOS originator
-            //    can't materialise the local PSK material yet (no
-            //    SovereignKeyVault on iOS — WIRE_SPEC §5 P1) but the
-            //    structure is ready: when the vault lands, lookup
-            //    selectedPskFingerprint here and pass to mixPskIntoSession.
-            //    For now we treat any non-nil selectedPskFingerprint as a
-            //    diagnostic warning — the responder shouldn't have
-            //    selected one because our OFFER advertised an empty
-            //    pskFingerprints list, but log it anyway.
+            // 4. iOS originator can't materialise the local PSK material
+            //    yet (no SovereignKeyVault on iOS — WIRE_SPEC §5 P1). When
+            //    the vault lands, look up selectedPskFingerprint and pass
+            //    it as `psk:` below (it becomes the HKDF salt). For now a
+            //    non-nil selectedPskFingerprint is a diagnostic warning:
+            //    the peer mixed a PSK we can't reproduce, so keys diverge.
             if let selected = bundle.selectedPskFingerprint, !selected.isEmpty {
-                print("[QAudionCallIntegration] ACCEPT carried selectedPskFingerprint=\(selected.prefix(16))… but iOS originator has no PSK to mix — falling back to hybrid-only secret (will diverge from peer)")
+                print("[QAudionCallIntegration] ACCEPT carried selectedPskFingerprint=\(selected.prefix(16))… but iOS originator has no PSK — deriving without it (will diverge from peer)")
             }
-            let combined = hybridShared
+            let combined = Self.deriveHybridSessionKey(
+                pqcSs: pqcSs,
+                x25519Ss: x25519Ss,
+                pqcCiphertext: pqcCt,
+                psk: nil
+            )
 
             // 5. Double-ACCEPT guard.
             let alreadyInit = lock.withLock {
@@ -587,52 +590,61 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return (ss, pub)
     }
 
-    /// Combine ML-KEM and X25519 shared secrets via HKDF with the
-    /// canonical Q-Audion labels — byte-for-byte identical to the
-    /// derivation in `Android PqcHandshake.finalize()` and Desktop
-    /// `deriveSessionKey(ss, undefined)` so peers converge on the same
-    /// 32 B output regardless of which platform did encapsulate vs
-    /// decapsulate.
+    /// Corrected cross-platform hybrid session-key derivation (schema :2).
     ///
-    /// IKM = pqcSs || x25519Ss
-    /// salt = "q-audion-hybrid-pqc-v1"
-    /// info = "q-audion-session-key"
-    /// L    = 32
-    private static func combinePqcAndX25519(pqcSs: Data, x25519Ss: Data) -> Data {
+    /// Byte-identical to firmware `qa_session_handshake_complete` (hybrid
+    /// path), Android `HybridPqcKeyExchange.deriveSessionKey` and Desktop
+    /// `deriveHybridSessionKey`. Pinned by
+    /// tools/kat/hybrid-combine/hybrid-combine-kat.json; spec in
+    /// apps/qaudion-firmware/docs/CROSS_PLATFORM_HYBRID_KDF.md.
+    ///
+    ///   ct_bind = HMAC-SHA256("q-audion-ct-bind-v1", pqcCiphertext)  [32B]
+    ///   ikm     = pqcSs(32) || x25519Ss(32)                          [64B]
+    ///   salt    = psk            if (psk != nil && !psk.isEmpty)
+    ///             else "q-audion-hybrid-pqc-v1"                      [22B]
+    ///   info    = "q-audion-session-key"(20) || ct_bind(32)          [52B]
+    ///   key     = HKDF-SHA256(ikm, salt, info, 32)
+    ///
+    /// Folding the ciphertext-binding HMAC into `info` closes the
+    /// ciphertext-substitution / re-encapsulation MITM that the prior
+    /// 2-leg combine (no binding, schema :1) was vulnerable to. The PSK
+    /// is the HKDF Extract salt (never a secret KEM output) —
+    /// independently security-reviewed (NVIDIA Nemotron + DeepSeek):
+    /// NIST SP 800-56C Rev.2 compliant, strictly stronger.
+    /// `internal` (not `private`) so the cross-platform KAT can exercise
+    /// this exact production path via `@testable import`.
+    static func deriveHybridSessionKey(
+        pqcSs: Data,
+        x25519Ss: Data,
+        pqcCiphertext: Data,
+        psk: Data?
+    ) -> Data {
+        let ctBind = Data(
+            HMAC<SHA256>.authenticationCode(
+                for: pqcCiphertext,
+                using: SymmetricKey(data: HkdfLabels.hybridCtBindV1)
+            )
+        )
+
         var ikm = Data(capacity: pqcSs.count + x25519Ss.count)
         ikm.append(pqcSs)
         ikm.append(x25519Ss)
-        let salt = HkdfLabels.hybridPqcSaltV1
-        let info = HkdfLabels.hybridPqcSessionKey
+
+        let salt: Data
+        if let psk = psk, !psk.isEmpty {
+            salt = psk
+        } else {
+            salt = HkdfLabels.hybridPqcSaltV1
+        }
+
+        var info = Data(capacity: HkdfLabels.hybridPqcSessionKey.count + ctBind.count)
+        info.append(HkdfLabels.hybridPqcSessionKey)
+        info.append(ctBind)
+
         let key = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: ikm),
             salt: salt,
             info: info,
-            outputByteCount: 32
-        )
-        return key.withUnsafeBytes { Data($0) }
-    }
-
-    /// Mix the negotiated PSK into the hybrid session key.
-    /// Byte-equal with Android `PqcHandshake.finalize()` PSK-mix branch:
-    ///
-    /// IKM = hybridSecret || psk
-    /// salt = "q-audion-psk-mix"
-    /// info = "q-audion-session-key"
-    /// L    = 32
-    ///
-    /// (Android uses `PSK_MIX_SALT = "q-audion-psk-mix".toByteArray()` and
-    /// `SESSION_INFO = "q-audion-session-key".toByteArray()` in PqcHandshake.kt.)
-    private static func mixPskIntoSession(hybridSecret: Data, psk: Data) -> Data {
-        var ikm = Data(capacity: hybridSecret.count + psk.count)
-        ikm.append(hybridSecret)
-        ikm.append(psk)
-        let saltBytes = "q-audion-psk-mix".data(using: .utf8)!
-        let infoBytes = HkdfLabels.hybridPqcSessionKey
-        let key = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: ikm),
-            salt: saltBytes,
-            info: infoBytes,
             outputByteCount: 32
         )
         return key.withUnsafeBytes { Data($0) }

@@ -22,10 +22,10 @@ import QAudionEngine
 ///      (W368 SasVerificationStore).
 ///
 /// **Security note:** the broker doesn't compute keys — it just
-/// pipes them. The actual derivation lives in HybridPqcKeyExchange
-/// (ML-KEM-1024 + X25519 + Secure Enclave triple-DH) which is the
-/// security-critical path. The broker is a "bind result to UI"
-/// adapter.
+/// pipes them. The actual derivation lives in
+/// `QAudionCallIntegration.deriveHybridSessionKey` (ML-KEM-1024 +
+/// X25519, schema :2) which is the security-critical path. The
+/// broker is a "bind result to UI" adapter.
 @MainActor
 public final class CallSessionKeyBroker {
 
@@ -44,8 +44,8 @@ public final class CallSessionKeyBroker {
     }
 
     /// Call this from the PQC handshake completion path with the
-    /// freshly-derived session key (output of HKDF over the triple-DH
-    /// inputs — `HybridPqcKeyExchange.deriveSessionKey`).
+    /// freshly-derived session key (output of
+    /// `QAudionCallIntegration.deriveHybridSessionKey`).
     ///
     /// - Parameters:
     ///   - sharedSecret: 32-byte ML-KEM-derived session key.
