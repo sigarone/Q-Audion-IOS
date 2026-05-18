@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.450</string>
+	<string>1.0.451</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
@@ -60,7 +60,7 @@
 		<string>audio</string>
 	</array>
 	<!--
-	  Export Compliance â€” required by Apple to skip the manual
+	  Export Compliance Ã¢â‚¬â€ required by Apple to skip the manual
 	  "Provide Export Compliance Information" prompt in TestFlight.
 	  Q-Audion uses ML-KEM-1024 (NIST FIPS 203, public-domain open-
 	  source crypto) which qualifies as "exempt" under US BIS rules.
