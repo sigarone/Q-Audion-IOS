@@ -163,6 +163,79 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         } catch { /* fallback: use signalRecipientId */ }
     }
 
+    // MARK: - Task #11 — pre-warmed ephemeral ML-KEM keypair
+    //
+    // `pqc.generateKeyPair()` (ML-KEM-1024) is the single heaviest op on
+    // the call-start critical path — the user-perceived "handshake is
+    // slow". The keypair is a FRESH ephemeral key used exactly once per
+    // handshake, so generating it AHEAD of the tap (in the background) is
+    // cryptographically identical to generating it at the tap, just
+    // earlier in time. We keep one warm keypair, consume it once at call
+    // setup, then regenerate in the background for the next call.
+    // No wire/KDF change — the bytes on the wire are unchanged.
+    private let warmLock = NSLock()
+    private var warmPqcKeyPair: PqcKeyExchange.KeyPair?
+    private var warmInFlight = false
+
+    public init() {
+        // Head-start: the reused responder integration and any caller
+        // integration created with lead time get a keypair for free.
+        prewarmKeyMaterial()
+    }
+
+    /// Best-effort, non-throwing background pre-generation. Safe to call
+    /// repeatedly; coalesces (one in-flight gen at a time).
+    public func prewarmKeyMaterial() {
+        warmLock.lock()
+        if warmPqcKeyPair != nil || warmInFlight {
+            warmLock.unlock()
+            return
+        }
+        warmInFlight = true
+        warmLock.unlock()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let t0 = DispatchTime.now()
+            let kp = try? self.pqc.generateKeyPair()
+            let ns = DispatchTime.now().uptimeNanoseconds &- t0.uptimeNanoseconds
+            self.warmLock.lock()
+            self.warmInFlight = false
+            if let kp { self.warmPqcKeyPair = kp }
+            self.warmLock.unlock()
+            self.logTiming("mlkem-prewarm", msInt: Int(ns / 1_000_000), ok: kp != nil)
+        }
+    }
+
+    /// Returns the warm keypair if one is ready (and kicks a background
+    /// re-warm for the next call); otherwise generates inline (timed).
+    private func consumeOrGenerateKeyPair() throws -> PqcKeyExchange.KeyPair {
+        warmLock.lock()
+        if let warm = warmPqcKeyPair {
+            warmPqcKeyPair = nil
+            warmLock.unlock()
+            logTiming("mlkem-warmhit", msInt: 0, ok: true)
+            prewarmKeyMaterial()
+            return warm
+        }
+        warmLock.unlock()
+        let t0 = DispatchTime.now()
+        let kp = try pqc.generateKeyPair()
+        let ns = DispatchTime.now().uptimeNanoseconds &- t0.uptimeNanoseconds
+        logTiming("mlkem-coldpath", msInt: Int(ns / 1_000_000), ok: true)
+        prewarmKeyMaterial()
+        return kp
+    }
+
+    /// Timing log built at function-body scope (NOT in a closure) per
+    /// CLAUDE.md §13 — the call-start latency shows up in device
+    /// telemetry (re-enabled for TestFlight builds).
+    private func logTiming(_ label: String, msInt: Int, ok: Bool) {
+        let okStr: String = ok ? "ok" : "FAIL"
+        let msStr: String = String(describing: msInt)
+        let line: String = "[CallTiming] " + label + " " + msStr + "ms " + okStr
+        print(line)
+    }
+
     public func onCallSetupStarted(sendOpaqueMessage: @escaping (Data) async throws -> Void) throws {
         lock.lock()
         guard state == .idle else { lock.unlock(); throw IntegrationError.invalidState(state) }
@@ -172,7 +245,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.unlock()
 
         try engine.initialize()
-        let keyPair = try pqc.generateKeyPair()
+        let keyPair = try consumeOrGenerateKeyPair()
         lock.lock()
         localKeyPair = keyPair
         state = .capabilitySent
@@ -237,7 +310,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
 
         try engine.initialize()
-        let pqcKp = try pqc.generateKeyPair()
+        let pqcKp = try consumeOrGenerateKeyPair()
         let x25519Priv = Curve25519.KeyAgreement.PrivateKey()
 
         // INVARIANT (per OpenRouter glm-5.1 review 2026-05-06 P0 #2):
