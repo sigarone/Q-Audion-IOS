@@ -63,10 +63,31 @@ public final class LiveLogStreamer {
     /// Settings toggle flips it through `setEnabled(_:)`.
     public static let consentKey: String = "qaudion.diagnostics.liveStreamEnabled"
 
-    /// SECURITY C-10 — current consent state. Defaults to `false`
-    /// when the key has never been written.
+    /// SECURITY C-10 — current consent state.
+    ///
+    /// An EXPLICIT user choice (Settings toggle → `setEnabled`) always
+    /// wins. When the user has never chosen, the default is build-channel
+    /// aware:
+    ///   • public App Store build → OFF (GDPR / C-10 intent for end users)
+    ///   • TestFlight / sandbox / dev → ON (it is a testing channel where
+    ///     diagnostics are expected; this also restores the maintainer
+    ///     trail when the app is otherwise undebuggable — e.g. a Settings
+    ///     crash means the in-app toggle is unreachable).
     public static var isEnabled: Bool {
-        return UserDefaults.standard.bool(forKey: consentKey)
+        if let explicit = UserDefaults.standard.object(forKey: consentKey) as? Bool {
+            return explicit
+        }
+        return !isAppStoreBuild
+    }
+
+    /// True only for the public App Store receipt ("receipt").
+    /// TestFlight/sandbox receipts are "sandboxReceipt"; dev/simulator
+    /// has no receipt URL → both treated as non-App-Store (debuggable).
+    private static var isAppStoreBuild: Bool {
+        guard let name = Bundle.main.appStoreReceiptURL?.lastPathComponent else {
+            return false
+        }
+        return name == "receipt"
     }
 
     /// SECURITY C-10 — flip the consent flag. When disabled we also

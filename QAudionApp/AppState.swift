@@ -2729,7 +2729,18 @@ final class AppState: ObservableObject {
     /// keep the wiring closures shallow (Swift 6 type-checker depth).
     @MainActor
     private func handleIceTermination() {
-        guard self.isInCall else { return }
+        // F-1 (2nd-pass regression): C-3 made `isInCall` stay false until
+        // the call is ANSWERED. So an ICE / connection failure DURING
+        // setup (outgoing `.connecting`, incoming `.ringing`) — i.e. the
+        // "can't even connect" case — was swallowed by the old
+        // `guard isInCall` and left the call UI / CallKit wedged forever.
+        // Tear down on any non-terminal call state, not just answered.
+        switch callState {
+        case .idle, .ended:
+            return
+        case .connecting, .ringing, .active, .encrypted:
+            break
+        }
         self.endCall()
     }
 
