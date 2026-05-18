@@ -136,6 +136,13 @@ public enum FastSetupQrCode {
               let serverUrl = URL(string: serverStr) else {
             throw Error.missingField("server")
         }
+        // SECURITY M-26 — reject any non-HTTPS server URL. An http://
+        // (or custom-scheme) server field would let a malicious QR
+        // downgrade onboarding traffic to cleartext / an arbitrary
+        // handler. Pinning + TLS only protect the canonical https host.
+        guard serverUrl.scheme?.lowercased() == "https" else {
+            throw Error.missingField("server must be https")
+        }
 
         return Payload(
             version: v, userId: userId, dialExtension: dialExt,

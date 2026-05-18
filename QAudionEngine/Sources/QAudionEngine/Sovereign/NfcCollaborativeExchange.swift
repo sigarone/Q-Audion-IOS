@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Security
 #if canImport(CoreNFC) && os(iOS)
 import CoreNFC
 #endif
@@ -68,6 +69,20 @@ public final class NfcCollaborativeExchange {
         onStateChanged?(viewModel.state)
     }
 
+    /// SECURITY H-8 — CSPRNG-backed random bytes via
+    /// `SecRandomCopyBytes`; CryptoKit `SymmetricKey` (also CSPRNG)
+    /// only as a fallback. Never the non-crypto `UInt8.random` path.
+    static func secureRandomBytes(_ count: Int) -> Data {
+        var buf = Data(count: count)
+        let status: Int32 = buf.withUnsafeMutableBytes { ptr -> Int32 in
+            guard let base = ptr.baseAddress else { return errSecParam }
+            return SecRandomCopyBytes(kSecRandomDefault, count, base)
+        }
+        if status == errSecSuccess { return buf }
+        let k = SymmetricKey(size: SymmetricKeySize(bitCount: count * 8))
+        return k.withUnsafeBytes { Data($0) }
+    }
+
     // MARK: - CoreNFC integration (iOS-only)
 
     #if canImport(CoreNFC) && os(iOS)
@@ -129,7 +144,19 @@ public final class NfcCollaborativeExchange {
         // Generate our 64-byte payload: 32B X25519 ephemeral pubkey + 32B random entropy.
         let myPriv = Curve25519.KeyAgreement.PrivateKey()
         let myPub = myPriv.publicKey.rawRepresentation
-        let entropy = Data((0..<32).map { _ in UInt8.random(in: 0...UInt8.max) })
+        // SECURITY H-8 — this 32B `entropy` is transmitted but is
+        // NOT folded into the PSK KDF (`NfcPskDerivation.derivePsk`
+        // uses only the X25519 shared secret). It is security
+        // theater today. We do NOT alter the transmitted bytes
+        // (Android exchanges the same field; changing/removing it is
+        // a wire-breaking change needing a coordinated v2). Minimal
+        // hardening: source it from the system CSPRNG instead of the
+        // non-crypto `UInt8.random`.
+        //
+        // TODO (SECURITY H-8 v2, coordinated with Android): include
+        // both peers' entropy in the HKDF IKM so the field actually
+        // strengthens the PSK.
+        let entropy = NfcCollaborativeExchange.secureRandomBytes(32)
         let myPayload = myPub + entropy
         precondition(myPayload.count == 64, "Payload must be exactly 64B (32B pubkey + 32B entropy)")
 

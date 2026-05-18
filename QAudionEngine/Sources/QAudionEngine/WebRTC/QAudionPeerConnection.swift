@@ -120,13 +120,29 @@ public final class QAudionPeerConnection: NSObject {
     /// Until then this method is a no-op so existing call sites
     /// (W383 `applyPqcSealerIfPossible`) keep compiling without
     /// breaking the SRTP layer.
+    ///
+    /// ⚠️ SECURITY (C-1) — THIS METHOD DOES NOT PROVIDE PQC MEDIA
+    /// PROTECTION. It is intentionally a no-op for the SRTP path: the
+    /// WebRTC binary linked here ships WITHOUT the insertable-streams
+    /// `frameEncryptor`/`frameDecryptor` slots, so there is nowhere to
+    /// attach the sealer. It only retains the adapter pair so the
+    /// non-SRTP BcryptoWsRelay transport can reach the engine. Callers
+    /// MUST NOT log or display "PQC sealer installed" — media on the
+    /// SRTP path is protected by DTLS-SRTP only until a WebRTC build
+    /// exposing the insertable-streams protocols is adopted.
     public func installPqcSealer(_ sealer: PqcRtpFrameSealer) {
         guard peerConnection != nil else { return }
         // Hold a strong reference to the adapter pair so the engine
         // is reachable for the non-SRTP transports while we wait for
         // a WebRTC binary that exposes the insertable-streams API.
+        // M-13: never share one PqcRtpFrameSealer between the
+        // encryptor (seal/counter-advancing) and the decryptor
+        // (open/counter-reflecting). Use an independent sibling that
+        // shares the master key but keeps its own counter so the two
+        // directions can never collide on (key, nonce).
+        let recvSealer = sealer.makeSibling()
         installedPqcEncryptor = PqcFrameEncryptor(sealer: sealer)
-        installedPqcDecryptor = PqcFrameDecryptor(sealer: sealer)
+        installedPqcDecryptor = PqcFrameDecryptor(sealer: recvSealer)
     }
 
     /// Held so the seal/open closures stay alive as long as the

@@ -24,7 +24,12 @@ struct BlockedContactsStore {
     }
 
     static func isBlocked(_ userId: String) -> Bool {
-        loadBlockedIds().contains(userId)
+        // SECURITY M-30: this is called from the WS call-signalling
+        // path on a non-main thread concurrently with add()/remove()
+        // (which mutate on `queue`). Reading UserDefaults outside the
+        // serial queue races a concurrent persist() and can observe a
+        // torn / stale set. Serialise the read on the same queue.
+        return queue.sync { loadBlockedIds().contains(userId) }
     }
 
     // MARK: - Write

@@ -139,6 +139,21 @@ public final class ContactKeyExchange: @unchecked Sendable {
         let pub = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerPub)
         let shared = try priv.sharedSecretFromKeyAgreement(with: pub)
 
+        // SECURITY M-23: the HKDF salt is the STATIC label
+        // "qaudion-pairwise-v1" (CryptoConstants.HKDF_SALT_PAIRWISE).
+        // This is intentional and load-bearing: Android and Desktop
+        // derive the pairwise PSK with the identical static salt, so the
+        // value MUST NOT change here or cross-platform first-contact
+        // breaks. Consequence: the PSK is a deterministic function of the
+        // identity-key pair only — it has NO per-session/OFFER binding,
+        // so re-running the exchange between the same two identities
+        // always yields the same PSK (no freshness, replayable OFFER).
+        // The OFFER frame today carries ONLY the X25519 public key
+        // (QAudionCapabilityExchange.createKeyExchangeOffer) — there is
+        // no spare nonce field to fold into the salt without a wire
+        // change. FIX DEFERRED to a coordinated protocol v2: add an
+        // explicit OFFER nonce and mix it into the salt on all platforms
+        // simultaneously. Comment-only here to preserve interop.
         // PSK = HKDF-SHA256(shared, salt="qaudion-pairwise-v1", info="psk-first-contact", 32)
         let pskKey = shared.hkdfDerivedSymmetricKey(
             using: SHA256.self,

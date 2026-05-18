@@ -112,6 +112,19 @@ final class AppState: ObservableObject {
     @Published var isVideoCall: Bool = false
     @Published var callState: CallState = .idle
     @Published var callContactId: String?
+    /// H-6 — re-entrancy guard for endCall(). A second endCall() (e.g.
+    /// CallKit onEndCall + remote call_hangup racing) while teardown is
+    /// already running would double-hangup and leak the
+    /// RTCPeerConnection. AppState is @MainActor so this needs no lock.
+    private var isEndingCall = false
+    /// M-32 — set true the first time the deepfake classifier runs for
+    /// a call so endCall() only releases the ONNX model when it was
+    /// actually loaded.
+    var deepfakeClassifierUsed = false
+    /// M-14 — token for the CallSessionKeyBroker.sasReadyNotification
+    /// observer registered by wireSasReadyToController(). Held so
+    /// logout() can remove it; nil until first registration.
+    private var sasReadyObserverToken: NSObjectProtocol?
     @Published var deepfakeAlert: Bool = false
     @Published var recentCalls: [String] = []
 
@@ -159,6 +172,14 @@ final class AppState: ObservableObject {
     /// `SasConstants.infoWords = "sas-words-v1"`. Drift here would
     /// silently diverge the two-peer ceremony.
     @Published var callPqcSessionKey: Data?
+    /// M-10 — provenance of the key currently feeding the SAS panel.
+    /// `.psk` while the SAS is seeded from the TRANSITIONAL per-pair
+    /// PSK (pre-handshake); `.mlKem` once the real ML-KEM-1024 session
+    /// key has overwritten it. The UI can show a "verifying…" state
+    /// while `.psk` so the user doesn't trust pre-handshake words as
+    /// post-quantum-authenticated.
+    enum CallSasKeySource { case none, psk, mlKem }
+    @Published var callSasKeySource: CallSasKeySource = .none
     /// W366: GroupCallController bound to the live audio pipeline.
     /// Lazy-init via `ensureGroupCallController(_:)` — one controller
     /// per AppState, reused across calls.
@@ -370,6 +391,9 @@ final class AppState: ObservableObject {
         callService.onDeepfakeScore = { [weak self] level, score in
             Task { @MainActor in
                 guard let self else { return }
+                // M-32: a score arrived ⇒ the ONNX model was loaded
+                // and run on this call; mark it so endCall() releases it.
+                self.deepfakeClassifierUsed = true
                 self.confidenceScore = score
                 switch level {
                 case .red:
@@ -467,7 +491,8 @@ final class AppState: ObservableObject {
                 //   { "voip_token": "<64 hex>", "bundle_id": "com.qaudion.app" }
                 let hex = token.map { String(format: "%02hhx", $0) }.joined()
                 await MainActor.run {
-                    print("[Q-Audion] PushKit VoIP token: \(hex.prefix(16))...")
+                    // C-10: never log any portion of the VoIP token —
+                    // the stdout tee is uploaded as telemetry.
                     self?.registerVoipPushToken(hex: hex)
                 }
             },
@@ -762,7 +787,8 @@ final class AppState: ObservableObject {
                 let (_, resp) = try await URLSession.shared.data(for: req)
                 if let http = resp as? HTTPURLResponse {
                     if (200..<300).contains(http.statusCode) {
-                        print("[AppState] PushKit VoIP token registered (\(hex.prefix(16))…)")
+                        // C-10: token registered OK — do NOT log any
+                        // portion of the token material.
                         await MainActor.run {
                             // Only clear if cache still holds THIS token.
                             // If a second PushKit emit raced ahead the
@@ -811,6 +837,11 @@ final class AppState: ObservableObject {
             guard let self = self else { return }
             let callIdStr = data["call_id"] as? String ?? ""
             let senderId = data["sender_id"] as? String ?? "Sconosciuto"
+            // C-4: drop calls from blocked contacts BEFORE any CallKit
+            // report, responder-integration provisioning, or PQC setup.
+            // A blocked caller must not be able to ring the device or
+            // trigger key-exchange side effects.
+            if BlockedContactsStore.isBlocked(senderId) { return }
             let callType = data["call_type"] as? String ?? "audio"
             let callUUID = UUID(uuidString: callIdStr) ?? UUID()
             // Caller-id resolution priority for the CallKit display name:
@@ -823,8 +854,17 @@ final class AppState: ObservableObject {
             //      when the caller is in the address book but didn't
             //      ship a `caller_display`.
             //   3. Bare `sender_id` UUID as last resort.
-            let wireCallerDisplay = (data["caller_display"] as? String)?
+            let rawWireCallerDisplay = (data["caller_display"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            // H-15: the wire `caller_display` is attacker-controlled
+            // (it comes from the peer's call envelope) and is shown
+            // verbatim by CallKit. Sanitise it the same way contact
+            // display names are sanitised — strip control chars,
+            // bidi/RTL overrides, excessive length, etc. Empty
+            // fallback so the tier-2/tier-3 resolution below still runs
+            // when the wire value sanitises away to nothing.
+            let sanitisedWireDisplay = StringSanitiser.displayName(rawWireCallerDisplay, fallback: "")
+            let wireCallerDisplay: String? = sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay
             let resolvedCallerName: String = {
                 if let cd = wireCallerDisplay, !cd.isEmpty { return cd }
                 let stored = ContactsStore().load()
@@ -875,7 +915,13 @@ final class AppState: ObservableObject {
                         self.callContactId = senderId
                         self.isVideoCall = (callType == "video")
                         self.callState = .ringing
-                        self.isInCall = true
+                        // C-3: do NOT set isInCall here. Setting it on
+                        // call ARRIVAL (before the user answers) blocks
+                        // startCall() (guards !isInCall) and a spurious
+                        // or replayed call_incoming could lock the
+                        // device permanently. isInCall is now set only
+                        // when the user actually answers — see
+                        // CallKitProvider.onAnswerCall.
                         // PersistentCallRecord — register incoming call.
                         let incomingRecordId = callUUID.uuidString
                         let isVid: Bool = (callType == "video")
@@ -902,36 +948,44 @@ final class AppState: ObservableObject {
         }
         ws.registerHandler(type: "call_hangup") { [weak self] _, data in
             guard let self = self else { return }
+            let reasonString = data["reason"] as? String ?? "normal"
             DispatchQueue.main.async {
-                guard let uuid = self.activeCallKitId else { return }
-                let reasonString = data["reason"] as? String ?? "normal"
-                let reason: CallEndReason
-                switch reasonString {
-                case "busy":      reason = .declined
-                case "timeout":   reason = .unanswered
-                case "error":     reason = .failed("error")
-                default:          reason = .remoteEnded
+                self.handleRemoteCallHangup(reasonString: reasonString)
+            }
+        }
+    }
+
+    /// C-3 — remote hangup / decline / timeout teardown. Runs the full
+    /// state reset UNCONDITIONALLY (the old code bailed when
+    /// `activeCallKitId == nil`, leaving isInCall/callState stuck on a
+    /// not-yet-answered spurious call). The CallKit notification is the
+    /// only part gated on having a live UUID.
+    private func handleRemoteCallHangup(reasonString: String) {
+        let reason: CallEndReason
+        switch reasonString {
+        case "busy":      reason = .declined
+        case "timeout":   reason = .unanswered
+        case "error":     reason = .failed("error")
+        default:          reason = .remoteEnded
+        }
+        // If the call was still ringing when the hangup arrived the
+        // callee never answered — mark the record as missed.
+        let wasRinging = self.callState == .ringing
+        let missedRecordId = self.activeOutgoingRecordId
+        if wasRinging && missedRecordId == nil {
+            RTLog.info("call", "WARN hangup-while-ringing but activeOutgoingRecordId=nil — missed call will not be recorded")
+        }
+        let uuid = self.activeCallKitId
+        Task {
+            if let uuid = uuid {
+                await self.callKit?.reportCallEnded(uuid: uuid, reason: reason)
+            }
+            await MainActor.run {
+                if wasRinging, let rid = missedRecordId {
+                    PersistentCallRecordStore.shared.markMissed(id: rid)
+                    self.activeOutgoingRecordId = nil
                 }
-                // If the call was still ringing when the hangup arrived the
-                // callee never answered — mark the record as missed.
-                let wasRinging = self.callState == .ringing
-                let missedRecordId = self.activeOutgoingRecordId
-                // NIM-MINOR-4: if we reach ringing state without a record id, the
-                // missed call will not appear in history. Log a warning so this
-                // regression is visible in telemetry if it ever happens.
-                if wasRinging && missedRecordId == nil {
-                    RTLog.info("call", "WARN hangup-while-ringing but activeOutgoingRecordId=nil — missed call will not be recorded")
-                }
-                Task {
-                    await self.callKit?.reportCallEnded(uuid: uuid, reason: reason)
-                    await MainActor.run {
-                        if wasRinging, let rid = missedRecordId {
-                            PersistentCallRecordStore.shared.markMissed(id: rid)
-                            self.activeOutgoingRecordId = nil
-                        }
-                        self.endCall()
-                    }
-                }
+                self.endCall()
             }
         }
     }
@@ -2047,6 +2101,15 @@ final class AppState: ObservableObject {
             let peerId = callerId
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
+                // M-9: reject an all-zero / empty shared secret — a
+                // degenerate key must never be registered as a call's
+                // PQC session key.
+                guard sharedSecret.contains(where: { $0 != 0 }) else { return }
+                // M-9: only register if this key belongs to the call
+                // currently in progress (callContactId == peerId),
+                // otherwise a stale/cross-call handshake completion
+                // could race a different call's key into the broker.
+                guard self.callContactId == peerId else { return }
                 CallSessionKeyBroker.shared.bind(to: self)
                 CallSessionKeyBroker.shared.registerPqcSessionKey(
                     sharedSecret, for: peerId)
@@ -2187,6 +2250,14 @@ final class AppState: ObservableObject {
         callState = .idle
         isInCall = false
         deepfakeAlert = false
+        // M-14: remove the CallSessionKeyBroker.sasReadyNotification
+        // observer registered by wireSasReadyToController() so it
+        // doesn't leak across logout/login cycles (and can't fire into
+        // a stale AppState after re-auth).
+        if let token = sasReadyObserverToken {
+            NotificationCenter.default.removeObserver(token)
+            sasReadyObserverToken = nil
+        }
     }
 
     /// W414 — entry point dal DialPad. Risolve `rawInput` (può essere
@@ -2326,6 +2397,10 @@ final class AppState: ObservableObject {
             selfId: currentUserId ?? "",
             peerId: contactId)
         pskActive = !(callPqcSessionKey?.isEmpty ?? true)
+        // M-10: SAS words shown now are seeded from the transitional
+        // PSK, NOT the ML-KEM handshake. Flip to .mlKem only when the
+        // broker's real key overwrites it (see wireSasReadyToController).
+        callSasKeySource = pskActive ? .psk : .none
         do {
             // W67: wire WebSocket transport PRIMA di startCall così il
             // handler "audio_frame" è già registrato quando il peer
@@ -2454,6 +2529,11 @@ final class AppState: ObservableObject {
                     let weakSelf = self  // re-capture for Task scope
                     Task { @MainActor in
                         guard let strongSelf = weakSelf else { return }
+                        // M-9: reject an all-zero / empty shared secret.
+                        guard sharedSecret.contains(where: { $0 != 0 }) else { return }
+                        // M-9: only register the key for the call that
+                        // is actually in progress for this peer.
+                        guard strongSelf.callContactId == peerId else { return }
                         // Bind broker on first use; idempotent.
                         CallSessionKeyBroker.shared.bind(to: strongSelf)
                         CallSessionKeyBroker.shared.registerPqcSessionKey(
@@ -2565,6 +2645,33 @@ final class AppState: ObservableObject {
                         self?.remoteWebRtcVideoTrack = track
                     }
                 }
+                // If ICE fails / drops mid-call (network change, TURN
+                // unreachable) the controller flips to .failed/.disconnected
+                // but nothing tore down AppState — isInCall stayed true and
+                // the UI was wedged on the call screen forever. Drive
+                // endCall() off the controller's terminal state. Guarded by
+                // isInCall so it can't double-teardown with the normal
+                // hangup path.
+                controller.onStateChange = { [weak self] newState in
+                    switch newState {
+                    case .failed, .disconnected:
+                        Task { @MainActor [weak self] in
+                            self?.handleIceTermination()
+                        }
+                    default:
+                        break
+                    }
+                }
+                controller.onIceConnectionState = { [weak self] iceState in
+                    switch iceState {
+                    case .failed, .disconnected, .closed:
+                        Task { @MainActor [weak self] in
+                            self?.handleIceTermination()
+                        }
+                    default:
+                        break
+                    }
+                }
                 // Same caller-id substitution as the legacy path —
                 // both rails ship the same `caller_display` so the
                 // peer doesn't pick a different label depending on
@@ -2614,7 +2721,25 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// C-2 — terminate the call when WebRTC reports a fatal ICE /
+    /// connection state (`.failed` / `.disconnected` / `.closed`).
+    /// Without this the controller's onStateChange/onIceConnectionState
+    /// callbacks were never assigned, so a dropped media path left the
+    /// call UI up forever. Extracted into its own @MainActor method to
+    /// keep the wiring closures shallow (Swift 6 type-checker depth).
+    @MainActor
+    private func handleIceTermination() {
+        guard self.isInCall else { return }
+        self.endCall()
+    }
+
     func endCall() {
+        // H-6: idempotency — a second endCall() while teardown is
+        // already in flight (CallKit onEndCall racing a remote
+        // call_hangup) must be a no-op, otherwise we double-hangup the
+        // controller and leak the RTCPeerConnection.
+        guard !isEndingCall else { return }
+        isEndingCall = true
         // NIM-fix1: log the call-session UUID, not the raw peer userId, to
         // avoid leaking the social graph through auto-uploaded VPS telemetry.
         let callLogId: String = activeOutgoingRecordId ?? "none"
@@ -2649,21 +2774,39 @@ final class AppState: ObservableObject {
         // would otherwise let one call's verified SAS appear on the
         // next, unverified call.
         callPqcSessionKey = nil
-        // W347: tear down the WebRTC bridge for this call. The
-        // controller's own deinit / hangup() closes the underlying
-        // RTCPeerConnection.
+        // M-10: reset SAS provenance so the next call starts from
+        // .none and doesn't inherit this call's .mlKem trust state.
+        callSasKeySource = .none
+        // W347 / H-6: tear down the WebRTC bridge for this call.
+        // Close the RTCPeerConnection SYNCHRONOUSLY before dropping the
+        // controller reference so a double endCall() can't leak it
+        // while the fire-and-forget hangup() Task is still in flight.
+        // The async hangup() is still issued (best-effort) only to send
+        // the network call_hangup signal — closeSynchronously() is
+        // idempotent so the duplicate teardown inside it is a no-op.
         #if canImport(WebRTC)
         if let ctrl = webRtcController as? QAudionWebRtcCallController {
+            ctrl.closeSynchronously()
             Task { await ctrl.hangup() }
         }
         #endif
         webRtcController = nil
         remoteWebRtcVideoTrack = nil
+        // M-32: free the ≈150 MB ONNX deepfake model if it was used on
+        // this call so it isn't held resident between calls.
+        if deepfakeClassifierUsed {
+            DeepfakeClassifier.shared.releaseModel()
+            deepfakeClassifierUsed = false
+        }
         txWaveformSamples = []
         rxWaveformSamples = []
         cipherWaveformSamples = []
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            self?.callState = .idle
+            guard let self = self else { return }
+            self.callState = .idle
+            // H-6: clear the re-entrancy guard once teardown has fully
+            // settled so the next call's endCall() runs normally.
+            self.isEndingCall = false
         }
     }
 
@@ -2847,7 +2990,11 @@ extension AppState {
     /// Decryptor on every RTP sender/receiver of the active peer
     /// connection, lighting up the PQC SRTP layer mid-call.
     func wireSasReadyToController() {
-        NotificationCenter.default.addObserver(
+        // M-14: guard against double-registration — a second call to
+        // this method would add a duplicate observer that is never
+        // balanced, leaking it for the AppState lifetime.
+        guard sasReadyObserverToken == nil else { return }
+        sasReadyObserverToken = NotificationCenter.default.addObserver(
             forName: CallSessionKeyBroker.sasReadyNotification,
             object: nil,
             queue: .main
@@ -2859,6 +3006,10 @@ extension AppState {
             Task { @MainActor [weak self] in
                 guard let self = self,
                       let key = self.callPqcSessionKey else { return }
+                // M-10: the broker has now overwritten callPqcSessionKey
+                // with the REAL ML-KEM-1024 session key — the SAS words
+                // are post-quantum authenticated from this point on.
+                self.callSasKeySource = .mlKem
                 #if canImport(WebRTC)
                 if let ctrl = self.webRtcController as? QAudionWebRtcCallController {
                     ctrl.pqcSessionKey = key
@@ -3547,6 +3698,30 @@ extension AppState {
         controller.onRemoteVideoTrack = { [weak self] track in
             Task { @MainActor [weak self] in
                 self?.remoteWebRtcVideoTrack = track
+            }
+        }
+        // Mirror of the caller-side teardown: a mid-call ICE failure on
+        // the responder side would otherwise leave isInCall == true and
+        // the UI stuck on the call screen. Guarded by isInCall to avoid
+        // double-teardown with the normal hangup path.
+        controller.onStateChange = { [weak self] newState in
+            switch newState {
+            case .failed, .disconnected:
+                Task { @MainActor [weak self] in
+                    self?.handleIceTermination()
+                }
+            default:
+                break
+            }
+        }
+        controller.onIceConnectionState = { [weak self] iceState in
+            switch iceState {
+            case .failed, .disconnected, .closed:
+                Task { @MainActor [weak self] in
+                    self?.handleIceTermination()
+                }
+            default:
+                break
             }
         }
         let cid = callerId

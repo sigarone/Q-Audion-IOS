@@ -32,9 +32,9 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
         return try? RatchetSnapshotCodec.decode(blob)
     }
 
-    public func save(epochId: String, peerId: String, snapshot: RatchetSnapshot) {
+    public func save(epochId: String, peerId: String, snapshot: RatchetSnapshot) throws {
         let blob = RatchetSnapshotCodec.encode(snapshot)
-        writeBlob(account: Self.account(epochId: epochId, peerId: peerId), blob: blob)
+        try writeBlob(account: Self.account(epochId: epochId, peerId: peerId), blob: blob)
     }
 
     public func delete(epochId: String, peerId: String) {
@@ -62,7 +62,14 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
         return item as? Data
     }
 
-    private func writeBlob(account: String, blob: Data) {
+    // SECURITY C-7: the write path now propagates Keychain failures.
+    // The RatchetVault contract requires a durable flush BEFORE the
+    // caller transmits the ciphertext; swallowing a failed write would
+    // re-introduce the catastrophic nonce-reuse hazard (spec §6) — on a
+    // crash we could resend a frame whose CK_{n+1} never persisted and
+    // reuse a deterministic GCM nonce. `MessageRatchet.encrypt` treats a
+    // throw here as fatal and never returns the wire blob.
+    private func writeBlob(account: String, blob: Data) throws {
         let baseAttrs: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -73,17 +80,21 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
         addAttrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
 
         let addStatus = SecItemAdd(addAttrs as CFDictionary, nil)
-        if addStatus == errSecDuplicateItem {
-            let updateAttrs: [String: Any] = [
-                kSecValueData as String: blob,
-            ]
-            _ = SecItemUpdate(baseAttrs as CFDictionary, updateAttrs as CFDictionary)
+        if addStatus == errSecSuccess {
+            return
         }
-        // We deliberately do NOT throw on errors — the engine treats
-        // persistence as best-effort because in-memory state is the
-        // source of truth within a process. A persistence failure
-        // means we lose chain state on crash; legitimate decrypts in
-        // the same process keep working.
+        guard addStatus == errSecDuplicateItem else {
+            throw VaultError.persistFailed(addStatus)
+        }
+        // Item already present — overwrite in place. The update MUST
+        // succeed or the persisted chain state is stale.
+        let updateAttrs: [String: Any] = [
+            kSecValueData as String: blob,
+        ]
+        let updateStatus = SecItemUpdate(baseAttrs as CFDictionary, updateAttrs as CFDictionary)
+        guard updateStatus == errSecSuccess else {
+            throw VaultError.persistFailed(updateStatus)
+        }
     }
 
     private func deleteBlob(account: String) {

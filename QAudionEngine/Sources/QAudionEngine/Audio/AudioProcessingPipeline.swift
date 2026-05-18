@@ -113,6 +113,12 @@ public final class AudioProcessingPipeline {
     /// VP is all-or-nothing.
     public var voiceProcessingOverride: Bool? = nil
 
+    /// L-15 — cached voice-processing state. Updated by
+    /// enable/disableVoiceProcessing so `getStats()` no longer has to
+    /// allocate a throwaway `AVAudioEngine()` on every call just to
+    /// read `inputNode.isVoiceProcessingEnabled`.
+    private var voiceProcessingActive = false
+
     public func enableVoiceProcessing(on engine: AVAudioEngine) throws {
         let inputNode = engine.inputNode
 
@@ -128,6 +134,7 @@ public final class AudioProcessingPipeline {
             if #available(iOS 13.0, *) {
                 try inputNode.setVoiceProcessingEnabled(true)
             }
+            voiceProcessingActive = true
         } else {
             // W406: explicit user opt-out from Apple's VP I/O. The mic
             // capture still works but without HW echo cancellation /
@@ -136,6 +143,7 @@ public final class AudioProcessingPipeline {
             if #available(iOS 13.0, *) {
                 try? inputNode.setVoiceProcessingEnabled(false)
             }
+            voiceProcessingActive = false
         }
 
         // iOS 17+: Voice Isolation for enhanced noise cancellation
@@ -152,6 +160,7 @@ public final class AudioProcessingPipeline {
         if #available(iOS 13.0, *) {
             try? inputNode.setVoiceProcessingEnabled(false)
         }
+        voiceProcessingActive = false
     }
 
     /// Deactivate the audio session when the call ends.
@@ -228,10 +237,9 @@ public final class AudioProcessingPipeline {
     /// Get current audio processing statistics.
     public func getStats() -> AudioProcessingStats {
         let session = AVAudioSession.sharedInstance()
-        var vpEnabled = false
-        if #available(iOS 13.0, *) {
-            vpEnabled = AVAudioEngine().inputNode.isVoiceProcessingEnabled
-        }
+        // L-15 — read the cached state instead of allocating a
+        // throwaway AVAudioEngine() on every getStats() call.
+        let vpEnabled = voiceProcessingActive
 
         return AudioProcessingStats(
             voiceProcessingEnabled: vpEnabled,

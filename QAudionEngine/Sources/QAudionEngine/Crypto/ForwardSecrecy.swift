@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import os.log
 
 /// Enhanced forward secrecy layer that augments SessionManager's HKDF
 /// ratchet with per-epoch X25519 Diffie-Hellman key agreements.
@@ -29,6 +30,11 @@ public final class ForwardSecrecy: @unchecked Sendable {
     private var remotePublicKey: Curve25519.KeyAgreement.PublicKey?
     private var chainSecret: SecureBytes?
     private var pendingErasure: [(SecureBytes, Date)] = []
+    /// SECURITY H-12: the epoch for which a DH has already been completed.
+    /// Guards against a replayed OLD-epoch `receiveRemotePublic` (or a
+    /// duplicate same-epoch one) overwriting a fresher `chainSecret`.
+    private var dhCompletedEpoch: UInt64?
+    private static let log = OSLog(subsystem: "com.qaudion.app", category: "ForwardSecrecy")
 
     /// Callback fired every time a new ephemeral public key is generated.
     /// The transport layer must send this to the remote peer.
@@ -48,14 +54,37 @@ public final class ForwardSecrecy: @unchecked Sendable {
     }
 
     /// Feed the remote peer's ephemeral public key to complete the DH.
+    ///
+    /// SECURITY H-12: only complete a DH for a NEW epoch (or the current
+    /// epoch if its DH has not run yet). A `>=` check allowed a replayed
+    /// stale-epoch public key to re-run the DH and overwrite a fresher
+    /// `chainSecret`, undoing post-compromise recovery. We now require
+    /// `epoch > currentEpoch`, OR `epoch == currentEpoch` with no DH yet
+    /// completed for that epoch. `performDH` errors are no longer
+    /// swallowed — on failure the previous good `chainSecret` is kept
+    /// intact and the failure is logged (never silently zeroed).
     public func receiveRemotePublic(_ key: Data, epoch: UInt64) throws {
         let pub = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: key)
         lock.lock()
+        defer { lock.unlock() }
         remotePublicKey = pub
-        if epoch >= currentEpoch {
-            try? performDH()
+
+        let isNewerEpoch = epoch > currentEpoch
+        let isCurrentEpochFirstDH = (epoch == currentEpoch) && (dhCompletedEpoch != currentEpoch)
+        guard isNewerEpoch || isCurrentEpochFirstDH else {
+            os_log("receiveRemotePublic: ignoring stale/duplicate epoch %{public}llu (current %{public}llu)",
+                   log: Self.log, type: .info, epoch, currentEpoch)
+            return
         }
-        lock.unlock()
+
+        do {
+            try performDH()
+            dhCompletedEpoch = epoch > currentEpoch ? epoch : currentEpoch
+        } catch {
+            // Keep the previous good chainSecret; do NOT zero it.
+            os_log("receiveRemotePublic: performDH failed, retaining previous chain secret",
+                   log: Self.log, type: .error)
+        }
     }
 
     /// Derive the frame key for the next frame, rotating the DH epoch
@@ -97,6 +126,10 @@ public final class ForwardSecrecy: @unchecked Sendable {
     public func forceRotation() {
         lock.lock()
         rotateEphemeralKey()
+        // SECURITY M-16: post-compromise erasure must be immediate. Run
+        // the erasure sweep under the lock so superseded chain secrets
+        // are scrubbed now, not lazily on the next `deriveFrameKey`.
+        scheduleErasure()
         lock.unlock()
     }
 
@@ -110,6 +143,8 @@ public final class ForwardSecrecy: @unchecked Sendable {
         localPrivateKey = Curve25519.KeyAgreement.PrivateKey()
         frameInEpoch = 0
         currentEpoch += 1
+        // SECURITY H-12: the epoch advanced — its DH has not run yet.
+        dhCompletedEpoch = nil
         let pub = EphemeralPublic(epoch: currentEpoch,
                                   publicKey: Data(localPrivateKey.publicKey.rawRepresentation))
         let callback = onEphemeralKey
@@ -117,14 +152,36 @@ public final class ForwardSecrecy: @unchecked Sendable {
         DispatchQueue.global(qos: .utility).async { callback?(pub) }
 
         // Immediately attempt a DH if we already have the remote key.
-        try? performDH()
+        // SECURITY H-12: failure keeps the previous good chainSecret;
+        // it is logged, never silently dropped.
+        do {
+            try performDH()
+            dhCompletedEpoch = currentEpoch
+        } catch {
+            os_log("rotateEphemeralKey: performDH failed, retaining previous chain secret",
+                   log: Self.log, type: .error)
+        }
+
+        // SECURITY M-16: erase superseded chain secrets immediately on
+        // every rotation (called under the existing lock).
+        scheduleErasure()
     }
 
     private func performDH() throws {
         guard let remote = remotePublicKey else { return }
         let shared = try localPrivateKey.sharedSecretFromKeyAgreement(with: remote)
-        let derived = shared.withUnsafeBytes { Data($0) }
+        // SECURITY H-19: ideally the raw X25519 secret would never leave
+        // corecrypto (use `shared.hkdfDerivedSymmetricKey`). Here, though,
+        // `chainSecret` is fed as the HKDF *salt* in `deriveFrameKey`, and
+        // the equivalent Android `ForwardSecrecy` mixes the raw DH bytes
+        // the same way — running an extra HKDF on this side would change
+        // the derived frame key and break cross-platform call audio.
+        // Conservative fix (no wire change): copy the bytes straight into
+        // a locked, auto-zeroed `SecureBytes`, then scrub the transient
+        // `Data` so the raw secret does not linger on the heap.
+        var derived = shared.withUnsafeBytes { Data($0) }
         chainSecret = SecureBytes(data: derived)
+        CryptoConstants.zeroize(&derived)
     }
 
     /// Wipe chain secrets whose erasure delay has expired.

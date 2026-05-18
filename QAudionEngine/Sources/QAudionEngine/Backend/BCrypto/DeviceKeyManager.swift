@@ -112,9 +112,9 @@ public final class DeviceKeyManager: @unchecked Sendable {
             // pqc.generateKeyPair returns (pubKey, privKey) per the
             // PqcKeyExchange.KeyPair contract documented in that
             // file's header.
-            let kp = pqc.generateKeyPair()
+            let kp = try pqc.generateKeyPair()
             let priv = kp.privateKey
-            let pub  = PqcKeyExchange.extractRawPublicKey(kp.publicKey)
+            let pub  = try PqcKeyExchange.extractRawPublicKey(kp.publicKey)
             try vault.storePsk(name: Self.LABEL_MLKEM_PRIV, key: priv,
                                fingerprint: Self.DEVICE_FP_LABEL)
             try vault.storePsk(name: Self.LABEL_MLKEM_PUB, key: pub,

@@ -282,17 +282,15 @@ public final class PersistentCallRecordStore: ObservableObject {
         wireDisplay: String?,
         nameByUserId: [String: String]
     ) -> String {
-        // NIM-fix3: sanitise server-supplied wireDisplay — trim whitespace,
-        // cap at 100 chars, strip Unicode bidi override codepoints.
+        // NIM-fix3 / SECURITY H-16 / H-15: sanitise server-supplied
+        // wireDisplay via the central StringSanitiser (also strips the
+        // previously-missed zero-width / direction-mark codepoints
+        // U+200B–U+200F and U+FEFF in addition to the bidi families).
+        // Pass an empty fallback here so we fall through to the local
+        // resolution chain below when sanitisation yields nothing.
         if let wd = wireDisplay, !wd.isEmpty {
-            let bidiRange1: ClosedRange<UInt32> = 0x202A...0x202E
-            let bidiRange2: ClosedRange<UInt32> = 0x2066...0x2069
-            var clean: String = wd.trimmingCharacters(in: .whitespacesAndNewlines)
-            clean = clean.unicodeScalars
-                .filter { !bidiRange1.contains($0.value) && !bidiRange2.contains($0.value) }
-                .reduce(into: "") { $0 += String($1) }
-            let capped: String = String(clean.prefix(100))
-            if !capped.isEmpty { return capped }
+            let cleaned: String = StringSanitiser.displayName(wd, fallback: "")
+            if !cleaned.isEmpty { return cleaned }
         }
         if let name = nameByUserId[userId], !name.isEmpty { return name }
         if userId.hasPrefix("user-") {

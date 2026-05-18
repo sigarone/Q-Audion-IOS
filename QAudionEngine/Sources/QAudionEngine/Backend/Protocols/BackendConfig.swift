@@ -6,6 +6,13 @@ public struct BackendConfig: Codable {
     public var refreshToken: String?
     public var userId: String?
     public var deviceId: String?
+    // SECURITY M-4: dead fields — not applied to URLSession. Do not wire
+    // without host allowlist + cert-pin exclusion. Retained (not removed)
+    // only because `BCryptoRestClientTests.testBackendConfig` asserts on
+    // `config.proxyEnabled`; deleting the fields would break that test.
+    // No code path reads proxyHost/proxyPort/proxyType. If a validated
+    // proxy is ever implemented it MUST refuse to proxy the pinned host
+    // (cert pinning + an attacker-chosen proxy = MITM).
     public var proxyEnabled: Bool
     public var proxyHost: String?
     public var proxyPort: Int?

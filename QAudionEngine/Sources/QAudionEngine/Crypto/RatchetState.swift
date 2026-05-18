@@ -60,6 +60,17 @@ public final class RatchetSession {
 
 /// A single message-key cached because the corresponding `chain_idx`
 /// arrived later than expected (skip-ahead) or out of order.
+///
+/// SECURITY L-11: `key` is a live 32-byte AES-256-GCM message key held
+/// in plain `Data`. At-rest exposure is covered by the Keychain-backed
+/// vault (`KeychainRatchetVault`, `WhenUnlockedThisDeviceOnly`), so the
+/// snapshot itself is encrypted on disk. In-memory hygiene is handled
+/// by `MessageRatchet`'s eviction path: on TTL expiry / LRU overflow it
+/// scrubs the evicted `key`/`nonce` buffers via the hardened
+/// `CryptoConstants.zeroize` before the entry is dropped (see
+/// `MessageRatchet.zeroizeRemovedSkipped`). We keep this as `Data`
+/// (not `SecureBytes`) so `RatchetSnapshotCodec` serialization and the
+/// cross-platform snapshot wire format stay byte-identical to Android.
 public struct SkippedKey: Equatable {
     public let key: Data         // 32-byte AES-256-GCM message key
     public let nonce: Data       // 12-byte deterministic GCM nonce

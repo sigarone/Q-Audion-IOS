@@ -47,6 +47,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// duplicates. Per OpenRouter glm-5.1 review 2026-05-06.
     private var sessionInitializedByCall: Set<String> = []
 
+    /// M-15 — handle for the 15s capability-exchange fallback timer so
+    /// it can be cancelled when the call ends (otherwise it fires on a
+    /// stale/unrelated subsequent call and forces it into `.fallback`).
+    private var capabilityTimeoutWorkItem: DispatchWorkItem?
+
     private var transportSelector: TransportSelector?
     private var capabilityExchange: QAudionCapabilityExchange?
     private let guardianMode = GuardianMode()
@@ -167,7 +172,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.unlock()
 
         try engine.initialize()
-        let keyPair = pqc.generateKeyPair()
+        let keyPair = try pqc.generateKeyPair()
         lock.lock()
         localKeyPair = keyPair
         state = .capabilitySent
@@ -175,17 +180,28 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         onStateChanged?(.capabilitySent)
 
         // Use raw public key (no ASN.1) for cross-platform compat with Android
-        let rawPublicKey = PqcKeyExchange.extractRawPublicKey(keyPair.publicKey)
+        let rawPublicKey = try PqcKeyExchange.extractRawPublicKey(keyPair.publicKey)
         let offer = QAudionCapabilityExchange.createOffer(publicKey: rawPublicKey, pskFingerprints: [])
         Task { try? await sendOpaqueMessage(offer) }
 
-        // Timeout after 15s
-        DispatchQueue.global().asyncAfter(deadline: .now() + 15) { [weak self] in
+        // M-15 — cancellable 15s capability-exchange fallback. The
+        // previous fire-and-forget asyncAfter kept firing after the
+        // call ended (or on the wrong subsequent call); store the
+        // work item so onCallEnded() can cancel it.
+        capabilityTimeoutWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.lock.lock()
-            if self.state == .capabilitySent { self.state = .fallback; self.lock.unlock(); self.onStateChanged?(.fallback) }
-            else { self.lock.unlock() }
+            if self.state == .capabilitySent {
+                self.state = .fallback
+                self.lock.unlock()
+                self.onStateChanged?(.fallback)
+            } else {
+                self.lock.unlock()
+            }
         }
+        capabilityTimeoutWorkItem = work
+        DispatchQueue.global().asyncAfter(deadline: .now() + 15, execute: work)
     }
 
     /// Originator entry point that emits the Android JSON HandshakeBundle
@@ -221,7 +237,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
 
         try engine.initialize()
-        let pqcKp = pqc.generateKeyPair()
+        let pqcKp = try pqc.generateKeyPair()
         let x25519Priv = Curve25519.KeyAgreement.PrivateKey()
 
         // INVARIANT (per OpenRouter glm-5.1 review 2026-05-06 P0 #2):
@@ -244,7 +260,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         onStateChanged?(.capabilitySent)
 
         // Build the Android JSON HandshakeBundle OFFER.
-        let pqcRawPub = PqcKeyExchange.extractRawPublicKey(pqcKp.publicKey)
+        let pqcRawPub = try PqcKeyExchange.extractRawPublicKey(pqcKp.publicKey)
         let x25519RawPub = Data(x25519Priv.publicKey.rawRepresentation)
         let offerBundle = AndroidHandshakeBundle(
             kind: .offer,
@@ -677,6 +693,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public func onCallEnded() {
         engine.destroySession()
         engine.release()
+        // M-15 — cancel any pending capability-exchange fallback so it
+        // cannot fire on a later, unrelated call.
+        capabilityTimeoutWorkItem?.cancel()
+        capabilityTimeoutWorkItem = nil
         lock.lock()
         state = .idle
         localKeyPair = nil
@@ -685,6 +705,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         pendingResponderCallId = nil
         pendingResponderCallerId = nil
         pendingOutgoingCallId = nil
+        // M-11 — a reused integration instance must not skip PQC on a
+        // later call: clear all per-callId state so the next call
+        // re-runs key generation + session init from scratch.
+        sessionInitializedByCall.removeAll()
+        localHybridKeysByCall.removeAll()
         lock.unlock()
         onStateChanged?(.idle)
     }

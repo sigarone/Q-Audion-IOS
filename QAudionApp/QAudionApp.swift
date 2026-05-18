@@ -53,8 +53,13 @@ struct QAudionApp: App {
             lockService.handleBackground()
         case .active:
             // Active call bypasses the lock so in-call controls stay reachable.
+            // SECURITY M-25/L-7: pass the real callState so the bypass only
+            // applies to an answered/established call (.active/.encrypted),
+            // NOT a mere .ringing (pre-answer) state — otherwise anyone
+            // holding the device could dismiss the lock by triggering an
+            // incoming call without answering it.
             if appState.isInCall {
-                lockService.bypassForCall()
+                lockService.bypassForCall(callState: appState.callState)
             } else {
                 lockService.handleForeground()
             }

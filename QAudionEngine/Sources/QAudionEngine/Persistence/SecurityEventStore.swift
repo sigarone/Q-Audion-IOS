@@ -50,9 +50,28 @@ public final class SecurityEventStore {
     }
     
     public func logEvent(_ event: SecurityEvent) {
+        // SECURITY M-18 — never persist the full peer user id in the
+        // local SQLite security log. Truncate to the first 8 chars
+        // (the codebase-wide `prefix(8)` identifier convention) so a
+        // device compromise can't recover the complete peer identity
+        // from deepfake / threat history rows. Schema unchanged.
+        let sanitized: SecurityEvent
+        if let pid = event.peerUserId {
+            let shortPid: String = String(pid.prefix(8))
+            sanitized = SecurityEvent(
+                id: event.id,
+                kind: event.kind,
+                severity: event.severity,
+                timestamp: event.timestamp,
+                details: event.details,
+                confidenceScore: event.confidenceScore,
+                peerUserId: shortPid)
+        } else {
+            sanitized = event
+        }
         do {
             try db.writer.write { db in
-                try event.save(db)
+                try sanitized.save(db)
             }
         } catch {
             print("[SecurityEventStore] logEvent failed: \(error)")

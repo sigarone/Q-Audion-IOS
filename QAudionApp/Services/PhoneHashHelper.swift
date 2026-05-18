@@ -14,11 +14,49 @@ import CryptoKit
 ///   - Strip whitespace, NBSP, dots, parens, dashes, slashes (typical
 ///     separators pasted from contacts / OCR).
 ///   - Leading `00` → `+` (international trunk prefix convention).
-///   - If no `+` after stripping, prepend `defaultCountry` (default `+39`).
+///   - If no `+` after stripping, prepend `defaultCountry` (SECURITY/UX
+///     L-9: default now derived from `Locale.current` region, falling
+///     back to `+39` only for unknown regions; inputs already carrying
+///     `+`/`00` are unaffected).
 ///   - Result MUST match `^\+[1-9]\d{7,14}$` or we throw.
 ///
 /// Output format: lowercase hex SHA-256 of the UTF-8 E.164 string.
 public enum PhoneHashHelper {
+
+    // MARK: - SECURITY/UX L-9 — configurable default country
+
+    /// SECURITY/UX L-9: the previous code hardcoded `+39` (Italy) as the
+    /// default calling code for inputs without a leading `+`. A non-IT
+    /// user typing a local number would get a wrong, IT-prefixed
+    /// `phone_hash` that never matches their real contacts. Derive a
+    /// sensible default from the device region instead; fall back to
+    /// `+39` only when the region is unknown / unmapped (preserves the
+    /// historical behavior for that case). Inputs that already carry a
+    /// `+` (or `00` trunk) are unaffected — the default is only applied
+    /// when no country is present.
+    public static func defaultCallingCode() -> String {
+        let region: String?
+        if #available(iOS 16, *) {
+            region = Locale.current.region?.identifier
+        } else {
+            region = Locale.current.regionCode
+        }
+        guard let region = region,
+              let code = callingCodeByRegion[region.uppercased()] else {
+            return "+39"
+        }
+        return code
+    }
+
+    /// Minimal ISO-3166 alpha-2 → E.164 calling-code map covering the
+    /// regions Q-Audion ships to. Unmapped regions fall back to `+39`.
+    private static let callingCodeByRegion: [String: String] = [
+        "IT": "+39", "FR": "+33", "DE": "+49", "GB": "+44", "ES": "+34",
+        "US": "+1",  "CA": "+1",  "CH": "+41", "AT": "+43", "BE": "+32",
+        "NL": "+31", "PT": "+351","CZ": "+420","PL": "+48", "SE": "+46",
+        "NO": "+47", "DK": "+45", "FI": "+358","IE": "+353","GR": "+30",
+        "RU": "+7",  "UA": "+380","RO": "+40", "HU": "+36", "SK": "+421"
+    ]
 
     /// E.164 grammar pinned by Android. + then country digit 1-9, then
     /// 7-14 more digits (total 8-15 digits after +).
@@ -63,7 +101,7 @@ public enum PhoneHashHelper {
     /// Normalise a user-typed phone number to canonical E.164 form.
     /// Throws if the result does not match E.164.
     public static func normalizeE164(_ raw: String,
-                                     defaultCountry: String = "+39") throws -> String {
+                                     defaultCountry: String = PhoneHashHelper.defaultCallingCode()) throws -> String {
         guard defaultCountry.hasPrefix("+") else {
             throw Error.defaultCountryMustStartWithPlus(defaultCountry)
         }
@@ -119,14 +157,14 @@ public enum PhoneHashHelper {
 
     /// Convenience: normalise + hash in one call.
     public static func hashPhone(_ raw: String,
-                                 defaultCountry: String = "+39") throws -> String {
+                                 defaultCountry: String = PhoneHashHelper.defaultCallingCode()) throws -> String {
         let e164 = try normalizeE164(raw, defaultCountry: defaultCountry)
         return sha256Hex(e164)
     }
 
     /// Lightweight, non-throwing validation for UI enablement.
     public static func isValid(_ raw: String,
-                               defaultCountry: String = "+39") -> Bool {
+                               defaultCountry: String = PhoneHashHelper.defaultCallingCode()) -> Bool {
         return (try? normalizeE164(raw, defaultCountry: defaultCountry)) != nil
     }
 }

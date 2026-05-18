@@ -55,8 +55,14 @@ public final class LogExportService {
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         out.append("=== Q-Audion iOS runtime log dump ===\n")
         out.append("generated_at  : \(f.string(from: Date()))\n")
-        out.append("user_id       : \(appState.currentUserId ?? "<not signed in>")\n")
-        out.append("server_url    : \(appState.serverUrl)\n")
+        // SECURITY M-17 — only the first 8 chars of the user id
+        // (matches the upload-filename prefix convention) so the
+        // dump body cannot tie a log to a full account identity.
+        // server_url is intentionally REMOVED: the server already
+        // knows its own URL and embedding it leaks deployment topology.
+        let uidFull: String = appState.currentUserId ?? "<not signed in>"
+        let uidShort: String = String(uidFull.prefix(8))
+        out.append("user_id       : \(uidShort)\n")
         let bundle = Bundle.main
         let appVer = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let buildN = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "?"

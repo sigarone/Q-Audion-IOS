@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Security
 #if canImport(CoreNFC) && os(iOS)
 import CoreNFC
 #endif
@@ -83,6 +84,24 @@ public final class NfcApduExchange: NSObject {
     /// Local Ed25519 identity public key (32 bytes). Must be set before ``start()``.
     /// Typically sourced from ``SovereignIdentityManager``.
     public var localIdentityPublicKey: Data?
+
+    /// SECURITY M-6 — optional pinned peer identity for re-pairing.
+    ///
+    /// On the FIRST pairing this is nil (TOFU). The integration layer
+    /// SHOULD persist the peer's Ed25519 identity pub into
+    /// SovereignKeyVault keyed by the peer, and on any SUBSEQUENT
+    /// pairing with the same peer set this property to the stored
+    /// value. When set, `runPhase14cExchange` rejects the exchange
+    /// (constant-time compare) if the tag presents a DIFFERENT
+    /// identity key — defending against a key-substitution / MITM
+    /// swap on re-pair. When nil, behaviour is unchanged (TOFU).
+    ///
+    /// TODO (SECURITY M-6, integration layer): wire this from the
+    /// caller — look up `SovereignKeyVault.identityKey(forPeer:)`,
+    /// pass it here before `start()`, and on mismatch surface a
+    /// prominent "this device's key changed — possible attack" alert
+    /// instead of silently re-trusting.
+    public var expectedPeerIdentityPub: Data?
 
     // MARK: - Init
 
@@ -181,6 +200,18 @@ public final class NfcApduExchange: NSObject {
         }
         let peerIdentityPub = idKeyResp
 
+        // SECURITY M-6 — pinned-key check on re-pairing. If the
+        // caller supplied a previously-stored identity for this peer
+        // and the tag now presents a different one, abort: this is a
+        // key-substitution attempt or a genuine key rotation the
+        // user must explicitly re-confirm out of band.
+        if let pinned = expectedPeerIdentityPub {
+            let match = NfcApduExchange.constantTimeEquals(pinned, peerIdentityPub)
+            guard match else {
+                throw ExchangeError.peerIdentityMismatch
+            }
+        }
+
         // Step 3: PUSH_PEER_IDENTITY (0xC5) — send our Ed25519 identity pub
         let pushIdApdu = NFCISO7816APDU(
             instructionClass: 0x00, instructionCode: 0xC5,
@@ -196,7 +227,23 @@ public final class NfcApduExchange: NSObject {
         //         receive peer's ephemeral X25519 pub (32 bytes)
         let myEphPriv = Curve25519.KeyAgreement.PrivateKey()
         let myEphPub = myEphPriv.publicKey.rawRepresentation
-        let entropy = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        // SECURITY H-8 — this 32B `entropy` is transmitted on the
+        // wire but is NOT currently folded into the PSK KDF (see
+        // `deriveIdentityBoundPsk`, which derives only from the
+        // X25519 shared secret + sorted identity salt). It is
+        // therefore security theater today. We do NOT change the
+        // transmitted bytes here (Android also exchanges this field;
+        // altering its meaning or removing it is a wire-breaking
+        // change requiring a coordinated v2). Minimal hardening:
+        // generate it from the system CSPRNG (`SecRandomCopyBytes`)
+        // instead of `UInt8.random`, which is not guaranteed to be
+        // cryptographically secure for key material.
+        //
+        // TODO (SECURITY H-8 v2, coordinated with Android): fold
+        // `entropy` (both peers' values) into the HKDF IKM so the
+        // field actually contributes to the PSK:
+        //   ikm = sharedSecret ‖ myEntropy ‖ peerEntropy
+        let entropy = NfcApduExchange.secureRandomBytes(32)
         let kePayload = myEphPub + entropy   // 64 bytes
         let keyExchangeApdu = NFCISO7816APDU(
             instructionClass: 0x00, instructionCode: 0x01,
@@ -265,12 +312,30 @@ public final class NfcApduExchange: NSObject {
         return Data(SHA256.hash(data: pair))
     }
 
+    /// SECURITY H-8 — CSPRNG-backed random bytes. Uses
+    /// `SecRandomCopyBytes`; falls back to CryptoKit's `SymmetricKey`
+    /// generator (also CSPRNG) only if the Security call fails, so
+    /// the result is never the non-crypto `UInt8.random` path.
+    static func secureRandomBytes(_ count: Int) -> Data {
+        var buf = Data(count: count)
+        let status: Int32 = buf.withUnsafeMutableBytes { ptr -> Int32 in
+            guard let base = ptr.baseAddress else { return errSecParam }
+            return SecRandomCopyBytes(kSecRandomDefault, count, base)
+        }
+        if status == errSecSuccess { return buf }
+        let k = SymmetricKey(size: SymmetricKeySize(bitCount: count * 8))
+        return k.withUnsafeBytes { Data($0) }
+    }
+
     // MARK: - Errors
 
     public enum ExchangeError: Error, LocalizedError {
         case identityKeyMissing
         case apduFailed(String, UInt8, UInt8)
         case invalidResponse(String)
+        /// SECURITY M-6 — re-pair presented a different peer identity
+        /// key than the pinned one.
+        case peerIdentityMismatch
 
         public var errorDescription: String? {
             switch self {
@@ -280,8 +345,25 @@ public final class NfcApduExchange: NSObject {
                 return "\(cmd) failed: SW=\(String(format: "%02X%02X", sw1, sw2))"
             case .invalidResponse(let msg):
                 return "Invalid APDU response: \(msg)"
+            case .peerIdentityMismatch:
+                return "Peer identity key changed since last pairing — aborting (possible attack)"
             }
         }
+    }
+
+    /// SECURITY M-6 — length-checked constant-time byte compare so
+    /// the pin check does not leak via timing.
+    static func constantTimeEquals(_ a: Data, _ b: Data) -> Bool {
+        guard a.count == b.count else { return false }
+        let av = Array(a)
+        let bv = Array(b)
+        var diff: UInt8 = 0
+        var i: Int = 0
+        while i < av.count {
+            diff |= av[i] ^ bv[i]
+            i += 1
+        }
+        return diff == 0
     }
 }
 

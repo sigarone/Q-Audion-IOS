@@ -2,21 +2,35 @@ import Foundation
 import QAudionEngine
 import Network
 import UIKit
+import CryptoKit
 
-/// W417 — Always-on real-time telemetry pump.
+/// W417 — Opt-in real-time telemetry pump (SECURITY C-10).
+///
+/// **Consent gate (SECURITY C-10):** this streamer uploads runtime
+/// log chunks to the server. Doing that without explicit user consent
+/// is a privacy violation. `start(...)` therefore checks the
+/// UserDefaults bool `qaudion.diagnostics.liveStreamEnabled` and does
+/// NOTHING (no tee, no upload, no timer) unless the user has
+/// explicitly opted in. The key DEFAULTS TO FALSE when absent — the
+/// pump is OFF until a Settings toggle flips it via
+/// `LiveLogStreamer.setEnabled(true)`. Disabling it calls `stop()`
+/// which fully tears down the timer + network path monitor.
 ///
 /// **Why this exists:** the user reported on 2026-05-03 that opening
 /// Settings → Diagnostica freezes the app, blocking the W415/W416
-/// manual "Carica al server" flow. Without an auto-push mechanism the
-/// maintainer has no way to inspect runtime behaviour.
+/// manual "Carica al server" flow. When the user has consented, an
+/// auto-push mechanism lets the maintainer inspect runtime behaviour.
 ///
-/// **What it does:** every `flushIntervalSeconds` (default 3s) the
-/// streamer reads new entries from `RuntimeLogSink` since the last
-/// successful flush, formats them as a UTF-8 .log chunk, and POSTs to
-/// `/api/v1/files/upload`. Each chunk's filename is:
-///   `qaudion-live-<userPrefix8>-<bootSession>-<seqZeroPad6>.log`
+/// **What it does (only when consented):** every `flushIntervalSeconds`
+/// (default 3s) the streamer reads new entries from `RuntimeLogSink`
+/// since the last successful flush, formats them as a UTF-8 .log
+/// chunk, and POSTs to `/api/v1/files/upload`. Each chunk's filename
+/// is:
+///   `qaudion-live-<sessionHmac8>-<bootSession>-<seqZeroPad6>.log`
 /// The maintainer reconstructs the timeline by listing files
-/// matching the prefix sorted by name.
+/// matching the prefix sorted by name. The user-id prefix is an
+/// HMAC (SECURITY L-6) so the server cannot enumerate logs by raw
+/// user id.
 ///
 /// **API design — IMPORTANT:** `start()` takes PRIMITIVE values plus
 /// `@MainActor` closures, NEVER an `AppState` parameter directly. The
@@ -43,6 +57,26 @@ import UIKit
 public final class LiveLogStreamer {
 
     public static let shared = LiveLogStreamer()
+
+    /// SECURITY C-10 — UserDefaults bool that gates ALL telemetry
+    /// upload. Absent / false ⇒ the pump is fully inert. A future
+    /// Settings toggle flips it through `setEnabled(_:)`.
+    public static let consentKey: String = "qaudion.diagnostics.liveStreamEnabled"
+
+    /// SECURITY C-10 — current consent state. Defaults to `false`
+    /// when the key has never been written.
+    public static var isEnabled: Bool {
+        return UserDefaults.standard.bool(forKey: consentKey)
+    }
+
+    /// SECURITY C-10 — flip the consent flag. When disabled we also
+    /// tear the running pump down so consent withdrawal is immediate.
+    public static func setEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: consentKey)
+        if !enabled {
+            LiveLogStreamer.shared.stop()
+        }
+    }
 
     public let bootSessionId: String = UUID().uuidString.lowercased()
     public var flushIntervalSeconds: TimeInterval = 3.0
@@ -81,6 +115,10 @@ public final class LiveLogStreamer {
     public func start(serverUrl: String,
                       getToken: @escaping TokenProvider,
                       getUserId: @escaping UserIdProvider) {
+        // SECURITY C-10 — consent gate. No consent ⇒ no tee, no
+        // upload, no timer, no path monitor. Returns BEFORE any
+        // side effect. Default is false (key absent ⇒ false).
+        guard LiveLogStreamer.isEnabled else { return }
         if isStarted { return }
         isStarted = true
         self.serverUrl = serverUrl
@@ -100,10 +138,16 @@ public final class LiveLogStreamer {
         RTLog.info("livelog", line)
     }
 
+    /// Fully tear down the pump. Safe to call when not started.
+    /// SECURITY C-10 — invoked on consent withdrawal so no timer or
+    /// network monitor survives after the user opts out.
     public func stop() {
         timer?.invalidate()
         timer = nil
-        pathMonitor.cancel()
+        if isStarted {
+            pathMonitor.cancel()
+        }
+        inflight = false
         isStarted = false
     }
 
@@ -185,7 +229,14 @@ public final class LiveLogStreamer {
         lastSeq = snap.highestSeq
 
         let userIdRaw: String = getUserId() ?? "anon"
-        let userPrefix: String = String(userIdRaw.prefix(8))
+        // SECURITY L-6 — do NOT leak the raw user-id prefix in the
+        // filename (server-side enumeration). Use an HMAC-SHA256 of
+        // the user id keyed by the per-boot session UUID, hex-
+        // truncated to 8 chars. Stable within a session so the
+        // maintainer's pattern-based log fetch still groups chunks;
+        // unlinkable across sessions and not reversible to the id.
+        let userPrefix: String = LiveLogStreamer.sessionScopedTag(userId: userIdRaw,
+                                                                  sessionKey: bootSessionId)
         let seqStr: String = LiveLogStreamer.zeroPad(mySeq, width: 6)
         let session: String = bootSessionId
         let filename: String = "qaudion-live-" + userPrefix + "-" + session + "-" + seqStr + ".log"
@@ -230,6 +281,26 @@ public final class LiveLogStreamer {
             failedUploads += 1
             inflight = false
         }
+    }
+
+    /// SECURITY L-6 — HMAC-SHA256(userId) keyed by the per-boot
+    /// session UUID, hex, first 8 chars. Stable per session so the
+    /// server-side `qaudion-live-<tag>-<session>-<seq>` grep still
+    /// groups a session's chunks, but the tag reveals nothing about
+    /// the user id and differs every boot.
+    private static func sessionScopedTag(userId: String, sessionKey: String) -> String {
+        let keyData: Data = Data(sessionKey.utf8)
+        let msgData: Data = Data(userId.utf8)
+        let mac = HMAC<SHA256>.authenticationCode(for: msgData,
+                                                  using: SymmetricKey(data: keyData))
+        var hex: String = ""
+        hex.reserveCapacity(16)
+        for byte in mac {
+            let b: UInt8 = byte
+            hex.append(String(format: "%02x", b))
+            if hex.count >= 8 { break }
+        }
+        return String(hex.prefix(8))
     }
 
     private static func zeroPad(_ value: Int, width: Int) -> String {

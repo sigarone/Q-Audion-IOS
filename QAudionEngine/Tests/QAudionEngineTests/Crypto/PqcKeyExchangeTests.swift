@@ -2,16 +2,16 @@ import XCTest
 @testable import QAudionEngine
 
 final class PqcKeyExchangeTests: XCTestCase {
-    func testGenerateKeyPair() {
+    func testGenerateKeyPair() throws {
         let pqc = PqcKeyExchange()
-        let kp = pqc.generateKeyPair()
+        let kp = try pqc.generateKeyPair()
         XCTAssertEqual(kp.publicKey.count, 1568)
         XCTAssertEqual(kp.privateKey.count, 3168)
     }
 
     func testEncapsulateDecapsulate() throws {
         let pqc = PqcKeyExchange()
-        let kp = pqc.generateKeyPair()
+        let kp = try pqc.generateKeyPair()
         let result = try pqc.encapsulate(remotePublicKey: kp.publicKey)
         XCTAssertEqual(result.sharedSecret.count, 32)
         XCTAssertFalse(result.ciphertext.isEmpty)

@@ -43,4 +43,30 @@ public final class QAudionKeyStore {
             kSecAttrService as String: Self.service, kSecAttrAccount as String: identifier]
         SecItemDelete(query as CFDictionary)
     }
+
+    /// SECURITY L-5 — optional biometric/passcode-gated read. Adds
+    /// `kSecUseOperationPrompt` so iOS presents a user-presence
+    /// authentication sheet before the protected item is returned.
+    /// The item itself is still stored without an access-control
+    /// flag (default path unchanged), so this only adds an
+    /// interactive confirmation for callers that explicitly opt in;
+    /// it does NOT alter how keys are written or the silent
+    /// `loadKey(identifier:)` path.
+    public func loadKeyWithUserPresence(identifier: String, reason: String) -> Data? {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: identifier,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseOperationPrompt as String: reason
+        ]
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        return status == errSecSuccess ? item as? Data : nil
+        #else
+        return nil
+        #endif
+    }
 }

@@ -3,10 +3,37 @@ import UIKit
 import QAudionEngine
 
 final class AuthService {
+    // SECURITY C-5 + M-2 — access/refresh tokens now live in the iOS
+    // Keychain via `TokenVault`, not UserDefaults. These string keys are
+    // kept ONLY for the one-time migration (and because AppState's
+    // device-renew fallback still writes the raw UserDefaults keys; the
+    // migration on the next load path sweeps them into the Keychain).
     private let tokenKey = "com.qaudion.auth.token"
     private let refreshTokenKey = "com.qaudion.auth.refresh_token"
     private let userIdKey = "com.qaudion.auth.user_id"
     private let deviceIdKey = "com.qaudion.auth.device_id"
+
+    /// One-time (idempotent) sweep: if the Keychain has no access token
+    /// but the legacy UserDefaults keys do, copy them into the Keychain
+    /// and erase the plaintext UserDefaults copies. Also catches tokens
+    /// written by AppState's device-renew fallback (which still pokes the
+    /// raw UserDefaults keys) so a cold start never reloads a stale
+    /// plaintext token.
+    private func migrateTokensToKeychainIfNeeded() {
+        let ud = UserDefaults.standard
+        if TokenVault.loadAccessToken() == nil,
+           let legacyAccess = ud.string(forKey: tokenKey), !legacyAccess.isEmpty {
+            TokenVault.saveAccessToken(legacyAccess)
+        }
+        if TokenVault.loadRefreshToken() == nil,
+           let legacyRefresh = ud.string(forKey: refreshTokenKey), !legacyRefresh.isEmpty {
+            TokenVault.saveRefreshToken(legacyRefresh)
+        }
+        // Remove the plaintext copies regardless — the Keychain is now
+        // authoritative for both tokens.
+        ud.removeObject(forKey: tokenKey)
+        ud.removeObject(forKey: refreshTokenKey)
+    }
 
     func login(phoneNumber: String, password: String, serverUrl: String) async throws -> AuthCredentials {
         let phoneHash = try PhoneHash.hash(phoneNumber)
@@ -50,18 +77,37 @@ final class AuthService {
     }
 
     func saveCredentials(_ creds: AuthCredentials) {
-        UserDefaults.standard.set(creds.accessToken, forKey: tokenKey)
-        UserDefaults.standard.set(creds.refreshToken, forKey: refreshTokenKey)
+        // SECURITY C-5 — tokens → Keychain; userId/deviceId stay in
+        // UserDefaults (not credentials; deviceId is read directly by
+        // AppState's device-renew fallback under deviceIdKey).
+        TokenVault.saveAccessToken(creds.accessToken)
+        if let refresh = creds.refreshToken, !refresh.isEmpty {
+            TokenVault.saveRefreshToken(refresh)
+        }
         UserDefaults.standard.set(creds.userId, forKey: userIdKey)
         UserDefaults.standard.set(creds.deviceId, forKey: deviceIdKey)
     }
 
     func saveToken(_ token: String) {
-        UserDefaults.standard.set(token, forKey: tokenKey)
+        TokenVault.saveAccessToken(token)
+    }
+
+    /// SECURITY H-2 — persist a refreshed token pair so a cold start
+    /// never reloads a stale token from the Keychain.
+    func saveRefreshToken(_ token: String) {
+        TokenVault.saveRefreshToken(token)
     }
 
     func loadToken() -> String? {
-        UserDefaults.standard.string(forKey: tokenKey)
+        // Sweep any legacy plaintext token into the Keychain before the
+        // first read so callers always get the authoritative value.
+        migrateTokensToKeychainIfNeeded()
+        return TokenVault.loadAccessToken()
+    }
+
+    func loadRefreshToken() -> String? {
+        migrateTokensToKeychainIfNeeded()
+        return TokenVault.loadRefreshToken()
     }
 
     func loadUserId() -> String? {
@@ -69,6 +115,7 @@ final class AuthService {
     }
 
     func clearToken() {
+        TokenVault.clear()
         UserDefaults.standard.removeObject(forKey: tokenKey)
         UserDefaults.standard.removeObject(forKey: refreshTokenKey)
         UserDefaults.standard.removeObject(forKey: userIdKey)

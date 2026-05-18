@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// W406 — single source of truth for VoIP audio DSP gates.
 ///
@@ -52,18 +53,24 @@ public enum CallsGate {
     /// Default ON — mirrors Android `adaptivePadding = true`.
     public static let keyAdaptivePadding  = "qaudion.calls.adaptive_padding_enabled"
 
-    public static var deepfakeGuardEnabled:    Bool { readBool(keyDeepfakeGuard,    default: true) }
-    public static var adaptiveRekeyingEnabled: Bool { readBool(keyAdaptiveRekeying, default: true) }
-    public static var adaptivePaddingEnabled:  Bool { readBool(keyAdaptivePadding,  default: true) }
+    // SECURITY M-8: these three are call-session security flags
+    // (deepfake detection, adaptive re-keying, traffic-analysis
+    // padding). They are now backed by the Keychain instead of
+    // UserDefaults so they cannot be silently downgraded by anything
+    // with plist/backup access. Default-true semantics are preserved
+    // when the key is absent; public API is unchanged.
+    public static var deepfakeGuardEnabled:    Bool { readSecureBool(keyDeepfakeGuard,    default: true) }
+    public static var adaptiveRekeyingEnabled: Bool { readSecureBool(keyAdaptiveRekeying, default: true) }
+    public static var adaptivePaddingEnabled:  Bool { readSecureBool(keyAdaptivePadding,  default: true) }
 
     public static func setDeepfakeGuard(_ value: Bool) {
-        UserDefaults.standard.set(value, forKey: keyDeepfakeGuard)
+        writeSecureBool(keyDeepfakeGuard, value)
     }
     public static func setAdaptiveRekeying(_ value: Bool) {
-        UserDefaults.standard.set(value, forKey: keyAdaptiveRekeying)
+        writeSecureBool(keyAdaptiveRekeying, value)
     }
     public static func setAdaptivePadding(_ value: Bool) {
-        UserDefaults.standard.set(value, forKey: keyAdaptivePadding)
+        writeSecureBool(keyAdaptivePadding, value)
     }
 
     // MARK: - Helpers
@@ -71,5 +78,62 @@ public enum CallsGate {
     private static func readBool(_ key: String, default fallback: Bool) -> Bool {
         if let raw = UserDefaults.standard.object(forKey: key) as? Bool { return raw }
         return fallback
+    }
+
+    // MARK: - SECURITY M-8 Keychain-backed security flags
+
+    private static let keychainService = "com.qaudion.calls"
+
+    /// Read a security flag from the Keychain. On first access, performs
+    /// a one-time migration of any pre-existing UserDefaults value so
+    /// users who previously toggled the flag keep their choice. When no
+    /// value exists in either store, returns `fallback` (default true).
+    private static func readSecureBool(_ key: String, default fallback: Bool) -> Bool {
+        if let v = keychainGetBool(key) { return v }
+        // One-time migration from legacy UserDefaults.
+        if let legacy = UserDefaults.standard.object(forKey: key) as? Bool {
+            keychainSetBool(key, legacy)
+            UserDefaults.standard.removeObject(forKey: key)
+            return legacy
+        }
+        return fallback
+    }
+
+    private static func writeSecureBool(_ key: String, _ value: Bool) {
+        keychainSetBool(key, value)
+        // Drop any stale legacy value so it can't shadow the secure one.
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    private static func keychainSetBool(_ account: String, _ value: Bool) {
+        let data = Data([value ? 1 : 0])
+        let base: [CFString: Any] = [
+            kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: keychainService,
+            kSecAttrAccount: account
+        ]
+        SecItemDelete(base as CFDictionary)
+        var add = base
+        add[kSecValueData] = data
+        add[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    private static func keychainGetBool(_ account: String) -> Bool? {
+        let query: [CFString: Any] = [
+            kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: keychainService,
+            kSecAttrAccount: account,
+            kSecReturnData:  true,
+            kSecMatchLimit:  kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let first = data.first else {
+            return nil
+        }
+        return first != 0
     }
 }

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// Cryptographic constants for Q-Audion. All values match Android `CryptoConstants.kt` exactly.
 public enum CryptoConstants {
@@ -89,10 +92,18 @@ public enum CryptoConstants {
     public static let enclaveKeyTag = "com.qaudion.identity.sep"
 
     // MARK: - Triple Hybrid KEM (ML-KEM + X25519 + X448 — matches Android)
+    // SECURITY M-34: the info label was the non-namespaced "session-key",
+    // which risks HKDF context collision with any other "session-key"
+    // derivation. Triple-hybrid is NOT yet wired on either platform (no
+    // active callers — verified by Grep), so it is safe to namespace and
+    // version both label and salt now, BEFORE the format is frozen on the
+    // wire. When triple-hybrid is implemented it MUST use these exact
+    // byte strings on iOS AND Android together. Both are now `Data` so
+    // they feed HKDF directly without per-call `.utf8` re-encoding.
     /// HKDF salt for triple-hybrid: ML-KEM-1024 + X25519 + X448.
-    public static let tripleHybridKdfSalt = "qaudion-triple-hybrid-v1"
+    public static let tripleHybridKdfSalt = Data("q-audion-triple-hybrid-v1".utf8)
     /// HKDF info for triple-hybrid session key derivation.
-    public static let tripleHybridKdfInfo = "session-key"
+    public static let tripleHybridKdfInfo = Data("q-audion-triple-hybrid-session-key-v1".utf8)
     /// Enable dual-curve (X25519 + X448) key agreement when available.
     public static let dualCurveEnabled = true
     /// Triple-hybrid combined secret size: 64 bytes (512-bit).
@@ -106,12 +117,26 @@ public enum CryptoConstants {
     /// Alert threshold for unexpected gaps in the sequence counter.
     public static let maxSequenceGap: UInt32 = 1000
 
-    /// Securely zeroize data to prevent memory leaks of sensitive material.
+    /// Securely zeroize data to prevent recovery of sensitive material.
+    ///
+    /// SECURITY H-11 / L-10: a plain `memset` of a soon-to-be-released
+    /// buffer is a textbook dead-store the optimiser may eliminate in
+    /// Release builds, so the secret survives on the heap. On Darwin we
+    /// use `memset_s` (C11 Annex K — guaranteed not to be optimised
+    /// away); elsewhere we route the write through a `@convention(c)`
+    /// function pointer the compiler cannot prove is `memset`, defeating
+    /// dead-store elimination. `withUnsafeMutableBytes` on an `inout
+    /// Data` also forces copy-on-write uniqueness so we scrub the live
+    /// backing store, not a throwaway copy.
     public static func zeroize(_ data: inout Data) {
         data.withUnsafeMutableBytes { buffer in
-            if let baseAddress = buffer.baseAddress {
-                memset(baseAddress, 0, buffer.count)
-            }
+            guard let baseAddress = buffer.baseAddress, buffer.count > 0 else { return }
+            #if canImport(Darwin)
+            memset_s(baseAddress, buffer.count, 0, buffer.count)
+            #else
+            let volatileMemset: @convention(c) (UnsafeMutableRawPointer?, Int32, Int) -> UnsafeMutableRawPointer? = memset
+            _ = volatileMemset(baseAddress, 0, buffer.count)
+            #endif
         }
     }
 

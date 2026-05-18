@@ -248,21 +248,13 @@ final class InCallContainer: ObservableObject {
 
     // MARK: - NIM security helpers
 
-    /// NIM-fix2b: Sanitise a server-supplied display name.
-    /// Trims whitespace, strips Unicode bidirectional override codepoints
-    /// (U+202A–202E, U+2066–2069) that can spoof UI text direction, and
-    /// caps at 100 characters. Returns `fallback` when the result is empty.
+    /// NIM-fix2b / SECURITY H-16 / H-15: Sanitise a server-supplied
+    /// display name. Delegates to the central `StringSanitiser` which
+    /// also strips the previously-missed zero-width / direction-mark
+    /// codepoints (U+200B–U+200F, U+FEFF) on top of the explicit and
+    /// isolate bidi families. Signature kept stable for existing callers.
     private static func sanitiseDisplayName(_ raw: String?, fallback: String) -> String {
-        guard let raw, !raw.isEmpty else { return fallback }
-        var trimmed: String = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Filter out bidirectional override scalars.
-        let bidiRange1: ClosedRange<UInt32> = 0x202A...0x202E
-        let bidiRange2: ClosedRange<UInt32> = 0x2066...0x2069
-        trimmed = trimmed.unicodeScalars
-            .filter { !bidiRange1.contains($0.value) && !bidiRange2.contains($0.value) }
-            .reduce(into: "") { $0 += String($1) }
-        let capped: String = String(trimmed.prefix(100))
-        return capped.isEmpty ? fallback : capped
+        return StringSanitiser.displayName(raw, fallback: fallback)
     }
 
     /// NIM-fix2c: Accept only https:// URLs for peer avatars.

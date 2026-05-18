@@ -1,4 +1,5 @@
 import Foundation
+import os.log
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -91,10 +92,25 @@ public final class SecureBytes: @unchecked Sendable {
     // MARK: - Memory locking
 
     /// Pin the allocation so the OS does not swap it to disk.
+    ///
+    /// SECURITY M-35: a failed `mlock` previously failed silently, so
+    /// key material could be paged to disk/swap with no signal. We now
+    /// log a warning (and leave `locked = false` so `deinit` does not
+    /// call `munlock` on an unpinned region). We deliberately do NOT
+    /// crash in Release — `mlock` can legitimately fail under RLIMIT_
+    /// MEMLOCK pressure and a hard abort would be a worse outcome than a
+    /// degraded-but-functional secure buffer.
     private func lockMemory() {
         #if canImport(Darwin)
         if Darwin.mlock(pointer, byteCount) == 0 {
             locked = true
+        } else {
+            locked = false
+            let err = errno
+            os_log("SecureBytes.mlock failed (errno=%{public}d) — %{public}d bytes may be swappable",
+                   log: OSLog(subsystem: "com.qaudion.app", category: "SecureMemory"),
+                   type: .error, err, byteCount)
+            assertionFailure("SecureBytes: mlock failed (errno=\(err))")
         }
         #endif
     }

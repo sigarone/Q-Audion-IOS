@@ -788,8 +788,11 @@ struct SettingsScreen: View {
     private func runPqcSelfTest() {
         let pqc = PqcKeyExchange()
         let t0: TimeInterval = ProcessInfo.processInfo.systemUptime
-        let kp = pqc.generateKeyPair()
         do {
+            // C-9: generateKeyPair() now throws (no silent random fallback);
+            // moved inside the do/catch so a KEM-unavailable error surfaces
+            // as a "PQC FAIL" alert instead of breaking the build.
+            let kp = try pqc.generateKeyPair()
             let enc = try pqc.encapsulate(remotePublicKey: kp.publicKey)
             let dec = try pqc.decapsulate(ciphertext: enc.ciphertext,
                                           privateKey: kp.privateKey)

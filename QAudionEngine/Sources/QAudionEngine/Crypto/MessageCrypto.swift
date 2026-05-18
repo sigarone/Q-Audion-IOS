@@ -105,10 +105,16 @@ public final class MessageCrypto {
 
     // MARK: - Legacy passthrough (pre-existing API kept for source compatibility)
 
+    // SECURITY M-24: these legacy APIs encrypt with NO associated data,
+    // so a ciphertext is not bound to sender/recipient/msgId and can be
+    // replayed across contexts. Kept (not deleted) for source compat with
+    // any remaining callers; new code MUST use the AAD-bound API.
+    @available(*, deprecated, message: "Use AAD-bound encrypt(plaintext:psk:senderId:recipientId:msgId:)")
     public func encrypt(message: Data, key: Data) throws -> AeadCipher.CipherOutput {
         try cipher.encrypt(plaintext: message, key: key)
     }
 
+    @available(*, deprecated, message: "Use AAD-bound encrypt(plaintext:psk:senderId:recipientId:msgId:)")
     public func decrypt(cipherOutput: AeadCipher.CipherOutput, key: Data) throws -> Data {
         try cipher.decrypt(cipherOutput: cipherOutput, key: key)
     }

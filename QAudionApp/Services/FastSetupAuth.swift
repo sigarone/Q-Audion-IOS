@@ -59,14 +59,35 @@ final class FastSetupAuth {
         // 1:1 parity with Android's `FastSetupUseCase` which calls
         // `loginUseCase(phoneHash = phoneHash, ...)` directly.
         appState.errorMessage = nil
-        await appState.loginWithPhoneHash(phoneHash: phoneHash, credential: payload.password)
+        // SECURITY H-3 — work on a mutable local copy of the plaintext
+        // credential so we can scrub it immediately after the login
+        // call. The QR-embedded password is a reusable secret; minimise
+        // its in-memory lifetime. (Swift `String` does not guarantee
+        // in-place zeroing of its backing buffer, but overwriting the
+        // local drops our last strong reference to the original
+        // characters as soon as the next allocation reuses the page —
+        // a real fix needs the server OTP endpoint, see FastSetupPayload.)
+        // NEVER log `credential` / `payload.password`.
+        var credential = payload.password
+        await appState.loginWithPhoneHash(phoneHash: phoneHash, credential: credential)
+        credential = String(repeating: "0", count: credential.count)
+        _ = credential
         if let err = appState.errorMessage {
             return err
         }
 
         // Best-effort profile push so peers see a friendly name.
         // Failure is non-fatal — local login is already complete.
-        let resolvedName = payload.resolvedDisplayName
+        // SECURITY L-2 — the QR `display_name` is attacker-controllable
+        // (the admin panel / a forged QR sets it). Sanitise before it is
+        // pushed to the server and later rendered in every peer's UI:
+        // trim, strip control + bidi-override + zero-width scalars, then
+        // cap at 64 chars. (Inline because the shared
+        // `StringSanitiser.displayName(_:fallback:)` helper — created by
+        // another agent in QAudionApp/Services/StringSanitiser.swift — is
+        // not guaranteed present at this build; if it lands, this block
+        // can be replaced with `StringSanitiser.displayName(...)`.)
+        let resolvedName = Self.sanitizeDisplayName(payload.resolvedDisplayName)
         if let token = appState.authService.loadToken() {
             let backend = BCryptoBackendProvider(
                 config: BackendConfig.pinned(serverUrl: PinnedServerHost.url, accessToken: token)
@@ -89,6 +110,31 @@ final class FastSetupAuth {
         }
 
         return nil
+    }
+
+    /// SECURITY L-2 — defensive display-name sanitiser. Strips Unicode
+    /// scalars that enable spoofing in peer UIs:
+    ///   - C0/C1 control + DEL,
+    ///   - bidi overrides/isolates U+202A…U+202E, U+2066…U+2069,
+    ///   - zero-width / directional marks U+200B…U+200F,
+    ///   - BOM U+FEFF,
+    /// then trims whitespace and caps at 64 characters. Falls back to a
+    /// stable label if the result is empty.
+    private static func sanitizeDisplayName(_ raw: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for s in raw.unicodeScalars {
+            let v = s.value
+            if v < 0x20 || v == 0x7F { continue }                 // C0 + DEL
+            if v >= 0x80 && v <= 0x9F { continue }                // C1
+            if v >= 0x202A && v <= 0x202E { continue }            // bidi override
+            if v >= 0x2066 && v <= 0x2069 { continue }            // bidi isolate
+            if v >= 0x200B && v <= 0x200F { continue }            // ZW + marks
+            if v == 0xFEFF { continue }                           // BOM
+            scalars.append(s)
+        }
+        let cleaned = String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
+        let capped = String(cleaned.prefix(64))
+        return capped.isEmpty ? "Q-Audion user" : capped
     }
 
     // Note: Android passes a `deviceName` to `LoginUseCase.invoke(...)`.

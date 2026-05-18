@@ -79,11 +79,16 @@ public final class RuntimeLogSink: ObservableObject {
         lock.unlock()
         // Mirror to OSLog for Console.app + retain the formatted
         // form so a future os_log_store snapshot picks it up too.
+        // SECURITY M-20 — `.private` so Apple sysdiagnose / device
+        // log captures redact tag+message as <private>, while a
+        // developer attached via Console.app (or the in-app dump)
+        // still sees the full text. Prevents inadvertent leak of
+        // app-authored diagnostics through OS-level log collection.
         switch level {
-        case .debug: osLogger.debug("[\(tag, privacy: .public)] \(message, privacy: .public)")
-        case .info:  osLogger.info("[\(tag, privacy: .public)] \(message, privacy: .public)")
-        case .warn:  osLogger.warning("[\(tag, privacy: .public)] \(message, privacy: .public)")
-        case .error: osLogger.error("[\(tag, privacy: .public)] \(message, privacy: .public)")
+        case .debug: osLogger.debug("[\(tag, privacy: .private)] \(message, privacy: .private)")
+        case .info:  osLogger.info("[\(tag, privacy: .private)] \(message, privacy: .private)")
+        case .warn:  osLogger.warning("[\(tag, privacy: .private)] \(message, privacy: .private)")
+        case .error: osLogger.error("[\(tag, privacy: .private)] \(message, privacy: .private)")
         }
         // Bump observable count on main (we're already @MainActor).
         entryCount &+= 1
@@ -199,6 +204,39 @@ public final class RuntimeLogSink: ObservableObject {
     /// Combined with the FIFO ring buffer eviction (oldest 10% dropped
     /// when capacity exceeded), the system stays bounded — after 50
     /// telephone calls the buffer simply wraps over, never grows.
+    /// SECURITY H-2 — best-effort secret scrubber for the
+    /// stdout/stderr tee. Masks bearer tokens, `token=`/`token:`
+    /// values, Authorization headers, and any long hex/base64 run
+    /// (>= 24 chars, which catches raw keys / JWTs / hashes). Not a
+    /// substitute for not logging secrets, but stops the common
+    /// leak paths from reaching the uploadable ring buffer.
+    ///
+    /// Compiled once; the regexes are static-let so the per-line
+    /// hot path only does `stringByReplacingMatches`.
+    private static let redactPlaceholder: String = "***REDACTED***"
+
+    private static let redactRegexes: [NSRegularExpression] = {
+        // Patterns are compile-time constants; force-try is safe.
+        let secretPrefixed = try! NSRegularExpression(
+            pattern: #"(?i)(bearer|authorization|token|secret|api[-_]?key|password)([\"'\s:=]+)\S+"#)
+        let longBlob = try! NSRegularExpression(
+            pattern: #"[A-Za-z0-9+/=_-]{24,}"#)
+        return [secretPrefixed, longBlob]
+    }()
+
+    private static func redact(_ line: String) -> String {
+        var working: String = line
+        for rx in redactRegexes {
+            let full = NSRange(working.startIndex..<working.endIndex, in: working)
+            let template: String = redactPlaceholder
+            working = rx.stringByReplacingMatches(in: working,
+                                                  options: [],
+                                                  range: full,
+                                                  withTemplate: template)
+        }
+        return working
+    }
+
     public func attachStdoutTee() {
         guard !teeAttached else { return }
         var pipeFds = [Int32](repeating: 0, count: 2)
@@ -236,9 +274,13 @@ public final class RuntimeLogSink: ObservableObject {
                 if let chunk = String(bytes: buf[0..<n], encoding: .utf8) {
                     let lines = chunk.split(separator: "\n", omittingEmptySubsequences: true)
                     for line in lines {
-                        let s = String(line)
+                        // SECURITY H-2 — scrub obvious secrets out of
+                        // captured stdout/stderr BEFORE they enter the
+                        // ring buffer (which can be uploaded by the
+                        // diagnostics dump). Redaction runs off-main.
+                        let safe: String = RuntimeLogSink.redact(String(line))
                         Task { @MainActor [weak self] in
-                            self?.record(level: .info, tag: "stdout", s)
+                            self?.record(level: .info, tag: "stdout", safe)
                         }
                     }
                 }

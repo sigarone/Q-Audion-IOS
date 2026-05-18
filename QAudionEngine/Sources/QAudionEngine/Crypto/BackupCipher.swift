@@ -100,6 +100,12 @@ public enum BackupCipher {
     ///
     /// Uses RFC 7914 scrypt (N=131072, r=8, p=1, dkLen=32) — Android QAUD
     /// parameters adopted by iOS per user directive 2026-04-28 (§10 unblock).
+    ///
+    /// SECURITY M-21 — the salt is supplied by the caller, NOT
+    /// generated here. The container salt size (16B v1 read-only,
+    /// 32B v2 written) is owned by `BackupContainer`; this function
+    /// derives a key for whatever salt length it is given, so the
+    /// M-21 v2 upgrade required no change on this code path.
     public static func deriveKey(password: String, salt: Data) throws -> SymmetricKey {
         do {
             let bytes = try Scrypt.deriveKey(

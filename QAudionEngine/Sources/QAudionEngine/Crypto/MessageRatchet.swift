@@ -158,7 +158,7 @@ public final class MessageRatchet {
             lastSeenRecvIdx: nil,
             skippedKeys: []
         )
-        persist(session)
+        try persist(session)
         return session
     }
 
@@ -187,9 +187,13 @@ public final class MessageRatchet {
         // Step the chain BEFORE persisting so we save CK_{n+1}.
         let ckNext = Self.hkdf(ikm: session.ckSend, salt: Self.emptySalt,
                                 info: Self.infoRatchetStep, length: Self.keyLen)
-        session.ckSend = ckNext
+        // SECURITY C-8: scrub the superseded CK_n before reassignment.
+        Self.zeroizing(&session.ckSend, replaceWith: ckNext)
         session.nextSendIdx = chainIdx &+ 1
-        persist(session)
+        // SECURITY C-7: persist must durably flush BEFORE we hand the
+        // ciphertext to the caller. If it throws, the wire blob is never
+        // returned — no transmit, no nonce-reuse window on crash.
+        try persist(session)
 
         return wire
     }
@@ -240,7 +244,7 @@ public final class MessageRatchet {
                     ciphertextWithTag: parsed.ciphertextWithTag,
                     aad: aad
                 )
-                persist(session)
+                try persist(session)
                 return pt
             } catch {
                 // Re-insert so a corrupted frame doesn't burn the cached key.
@@ -266,7 +270,8 @@ public final class MessageRatchet {
                                     info: Self.infoRatchetStep, length: Self.keyLen)
                 j &+= 1
             }
-            session.ckRecv = cursor
+            // SECURITY C-8: scrub the superseded receive chain key.
+            Self.zeroizing(&session.ckRecv, replaceWith: cursor)
             evictExpired(session: session, nowMs: now)
             evictLruOverflow(session: session)
         }
@@ -284,31 +289,51 @@ public final class MessageRatchet {
         }
         let ckNext = Self.hkdf(ikm: session.ckRecv, salt: Self.emptySalt,
                                 info: Self.infoRatchetStep, length: Self.keyLen)
-        session.ckRecv = ckNext
+        // SECURITY C-8: scrub the superseded receive chain key.
+        Self.zeroizing(&session.ckRecv, replaceWith: ckNext)
         session.lastSeenRecvIdx = incoming
-        persist(session)
+        try persist(session)
         return pt
     }
 
     /// Garbage-collect expired skipped-key entries.
-    public func gc(session: RatchetSession, nowMs: Int64? = nil) {
+    ///
+    /// SECURITY C-7: `throws` because it persists the pruned snapshot and
+    /// a silent persistence failure must surface to the caller.
+    public func gc(session: RatchetSession, nowMs: Int64? = nil) throws {
         let now = nowMs ?? Int64(Date().timeIntervalSince1970 * 1000)
         let before = session.skippedKeys.count
         evictExpired(session: session, nowMs: now)
         evictLruOverflow(session: session)
         if session.skippedKeys.count != before {
-            persist(session)
+            try persist(session)
         }
     }
 
     // MARK: - Internal helpers
 
-    private func persist(_ session: RatchetSession) {
-        vault.save(
+    // SECURITY C-7: persistence failure is fatal on the encrypt path —
+    // the wire blob must NOT be returned/transmitted if CK_{n+1} did not
+    // durably flush (nonce-reuse hazard, spec §6). Propagate the throw.
+    private func persist(_ session: RatchetSession) throws {
+        try vault.save(
             epochId: session.epochId,
             peerId: session.peerId,
             snapshot: Self.toSnapshot(session)
         )
+    }
+
+    // SECURITY C-8: ARC does not zero-fill released buffers. Before a
+    // chain key (`ckSend`/`ckRecv`) is overwritten with `CK_{n+1}`, the
+    // old `Data` is explicitly scrubbed with the hardened, optimiser-
+    // proof `CryptoConstants.zeroize` (memset_s on Darwin — see H-11/L-10)
+    // so the superseded key cannot be recovered from freed heap pages.
+    // We keep the field typed as `Data` (not `SecureBytes`) to avoid any
+    // risk to the byte-for-byte Android wire/HKDF compatibility; an
+    // explicit scrub of the old buffer is the conservative equivalent.
+    private static func zeroizing(_ old: inout Data, replaceWith next: Data) {
+        CryptoConstants.zeroize(&old)
+        old = next
     }
 
     private func removeSkipped(session: RatchetSession, idx: UInt64) -> SkippedKey? {
@@ -317,13 +342,48 @@ public final class MessageRatchet {
         return entry
     }
 
+    // SECURITY L-11: a skipped key is a live 32-byte AES-256-GCM message
+    // key. On eviction (TTL expiry or LRU overflow) scrub the key/nonce
+    // buffers with the hardened zeroize. The entry MUST already be
+    // removed from `session.skippedKeys` before this runs: `Data` is
+    // copy-on-write, so the buffer is only uniquely owned (and therefore
+    // actually scrubbed in place) once no other `SkippedKey` references
+    // it — otherwise `withUnsafeMutableBytes` would COW-copy and zero a
+    // throwaway. ARC does not zero-fill freed pages, hence the explicit
+    // scrub. Best-effort: residual COW copies inside `Data`'s allocator
+    // are out of our control; this clears the canonical buffer.
+    private func zeroizeRemovedSkipped(_ removed: [(UInt64, SkippedKey)]) {
+        for (_, sk) in removed {
+            var k = sk.key
+            var n = sk.nonce
+            CryptoConstants.zeroize(&k)
+            CryptoConstants.zeroize(&n)
+        }
+    }
+
     private func evictExpired(session: RatchetSession, nowMs: Int64) {
-        session.skippedKeys.removeAll { $0.1.expiresAtMs <= nowMs }
+        var removed: [(UInt64, SkippedKey)] = []
+        var kept: [(UInt64, SkippedKey)] = []
+        kept.reserveCapacity(session.skippedKeys.count)
+        for entry in session.skippedKeys {
+            if entry.1.expiresAtMs <= nowMs {
+                removed.append(entry)
+            } else {
+                kept.append(entry)
+            }
+        }
+        guard !removed.isEmpty else { return }
+        session.skippedKeys = kept
+        zeroizeRemovedSkipped(removed)
     }
 
     private func evictLruOverflow(session: RatchetSession) {
+        var removed: [(UInt64, SkippedKey)] = []
         while session.skippedKeys.count > Self.skippedKeysCacheMax {
-            session.skippedKeys.removeFirst()
+            removed.append(session.skippedKeys.removeFirst())
+        }
+        if !removed.isEmpty {
+            zeroizeRemovedSkipped(removed)
         }
     }
 
@@ -357,6 +417,19 @@ public final class MessageRatchet {
         ck: Data, chainIdx: UInt64
     ) throws -> (key: Data, nonce: Data) {
         let msgKey = hkdf(ikm: ck, salt: emptySalt, info: infoMsgKey, length: keyLen)
+        // SECURITY L-16: the nonce IKM folds in only the LOW BYTE of
+        // chain_idx (`chainIdx & 0xFF`), not the full 64-bit index. This
+        // is wire-load-bearing — Android's MessageRatchet derives the
+        // nonce byte-for-byte the same way, so widening it here would
+        // silently break every cross-platform decrypt. It is NOT a nonce-
+        // reuse bug at the protocol level: the nonce's primary entropy is
+        // the full 32-byte chain key `CK_n`, which advances (HKDF "ratchet
+        // -step") on EVERY send/receive, so two different messages never
+        // share the same (CK_n, idx-low-byte) pair within a chain. The
+        // low byte is only a cheap extra domain separator. Using the
+        // full-width chain_idx in the nonce IKM would be cleaner defence-
+        // in-depth but requires a coordinated cross-platform wire bump
+        // (v3.2) — DO NOT change unilaterally. Comment-only.
         let idxLowByte = UInt8(chainIdx & 0xFF)
         var nonceIkm = Data(capacity: ck.count + 1)
         nonceIkm.append(ck)

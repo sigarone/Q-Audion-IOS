@@ -18,6 +18,19 @@ import UIKit
 /// NIM-fix1 (MINOR-1): switched from integer-tag sentinel (tag 99999, collision
 /// risk with third-party SDKs) to a static weak reference. `lock()` is
 /// idempotent — no-op when `secureField` is already installed.
+///
+/// SECURITY H-18: the screenshot-lock preference
+/// (`qaudion.chat.screenshot_lock_enabled`) now defaults to `true`
+/// (changed in ChatDetailScreen) so chat content is FLAG_SECURE by
+/// default instead of opt-in. This service holds no default-read of
+/// the preference itself (it is a pure lock()/unlock() mechanism), so
+/// no default needs flipping here.
+///
+/// TODO SECURITY H-18: extend secure-window protection to the other
+/// content-sensitive screens (call screen, identity QR, key-export /
+/// device-link, settings showing PSK material). Currently only
+/// ChatDetailScreen installs the secure field, leaving those screens
+/// screenshot-/recording-capturable. Out of scope for this change set.
 @MainActor
 public enum ScreenshotLockService {
 

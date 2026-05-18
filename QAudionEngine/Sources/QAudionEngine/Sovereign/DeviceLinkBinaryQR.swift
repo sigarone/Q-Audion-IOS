@@ -111,6 +111,13 @@ public enum DeviceLinkBinaryQR {
                      (UInt32(lengthBytes[2]) << 8)  |
                       UInt32(lengthBytes[3])
 
+        // SECURITY M-27: a malicious QR can declare a userId length up
+        // to 4 GiB (UInt32 max). Without an upper bound the subdata /
+        // String allocation below is an attacker-controlled OOM. A
+        // userId is a short identifier; 1 KiB is far above any legitimate
+        // value. Reject before any allocation.
+        guard length <= 1024 else { throw Error.lengthMismatch }
+
         let userIdStart = pubkeyLength + lengthFieldBytes
         let userIdEnd = userIdStart + Int(length)
         let authStart = userIdEnd

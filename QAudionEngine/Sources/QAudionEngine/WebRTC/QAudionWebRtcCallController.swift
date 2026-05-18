@@ -356,6 +356,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         if let rid = recipientId {
             try? await callingApi.sendHangup(recipientId: rid)
         }
+        closeSynchronously()
+    }
+
+    /// H-6 — synchronous teardown of the local media stack. Closes the
+    /// RTCPeerConnection and clears per-call state WITHOUT the async
+    /// `sendHangup` network round-trip. Idempotent: a second call is a
+    /// no-op once `peerConnection` is already nil. AppState.endCall()
+    /// calls this directly (before dropping its controller reference)
+    /// so a double endCall can't leak the RTCPeerConnection while a
+    /// fire-and-forget `hangup()` Task is still in flight.
+    public func closeSynchronously() {
+        guard peerConnection != nil else {
+            state = .disconnected
+            return
+        }
         stopCameraCapture()
         peerConnection?.close()
         peerConnection = nil
@@ -517,9 +532,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         do {
             let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
             pc.installPqcSealer(sealer)
-            print("[WebRtcCallController] PQC sealer installed (key.count=\(key.count))")
+            // C-1: installPqcSealer is intentionally a no-op on this
+            // WebRTC binary (no RTCFrameEncryptor/Decryptor) — do NOT
+            // claim PQC media protection. Media on the SRTP path is
+            // protected by DTLS-SRTP only.
+            let line: String = "[WebRtcCallController] PQC frame sealing UNAVAILABLE on this WebRTC build — media uses DTLS-SRTP only"
+            print(line)
         } catch {
-            print("[WebRtcCallController] PQC sealer install failed: \(error)")
+            let edesc: String = error.localizedDescription
+            let eline: String = "[WebRtcCallController] PQC sealer construction failed: " + edesc
+            print(eline)
         }
     }
 

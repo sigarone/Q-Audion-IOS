@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 
 /// Server URL that the app is **pinned** to. Single source of truth for
 /// every network call and the security gate for fast-setup QR validation.
@@ -11,19 +10,23 @@ import Darwin
 /// failed the check, blocking onboarding for users whose server-side
 /// admin panel emitted IP-form invites (production-staging, demo, dev).
 ///
-/// **W413 acceptance ladder** (first match wins):
+/// **Acceptance ladder** (first match wins):
 ///   1. Hostname match — `candidate.host` lowercases to `host` (fast path).
 ///   2. Static allowlist — `candidate.host` is one of `knownAddresses`
 ///      (canonical hostname + admin-curated IP fallbacks). Useful when
 ///      DNS is unavailable (offline scan, CGNAT DNS poisoning).
-///   3. DNS-resolved match — resolve both the canonical hostname and
-///      the candidate to their A/AAAA records and accept if the IP sets
-///      intersect. This handles the IP-literal QR case without a static
-///      allowlist update.
 ///
-/// All three checks are local and synchronous. The DNS resolver is
-/// `getaddrinfo(3)` from Darwin; cache lives for the process lifetime
-/// to keep repeated scans fast.
+/// SECURITY H-4 + L-1 — the former step 3 (DNS-resolved match via
+/// `getaddrinfo`) was REMOVED. Resolving an attacker-controlled
+/// `server` field turned the QR scanner into an SSRF + DNS-rebinding
+/// oracle (H-4), and the unbounded process-lifetime resolve cache was
+/// a slow memory leak (L-1). Acceptance is now purely a static,
+/// offline string comparison against the canonical host + the
+/// admin-curated `knownAddresses` allowlist. To onboard a new backend
+/// IP, add it to `knownAddresses` (a reviewed code change), never via
+/// runtime DNS.
+///
+/// Both checks are local, synchronous, and perform no network I/O.
 ///
 /// **Why pin instead of letting the user type a server URL:**
 ///   - prevents redirect attacks (a malicious fast-setup QR cannot send
@@ -93,7 +96,9 @@ public enum PinnedServerHost {
     ]
 
     /// True if `candidate` (the `server` field from a scanned QR payload)
-    /// is acceptable. Runs the W413 acceptance ladder above.
+    /// is acceptable. SECURITY H-4 + L-1 — static, offline string match
+    /// only; NO DNS resolution (the DNS step was an SSRF / DNS-rebinding
+    /// vector and its cache leaked memory).
     public static func accepts(_ candidate: String) -> Bool {
         guard let candidateUrl = URL(string: candidate),
               let rawHost = candidateUrl.host else {
@@ -102,95 +107,24 @@ public enum PinnedServerHost {
         let candidateHost = rawHost.lowercased()
         let canonicalHost = host.lowercased()
 
-        // 1) Hostname match (fast path, no DNS).
+        // 1) Hostname match (fast path).
         if candidateHost == canonicalHost {
             return true
         }
-        // 2) Static allowlist (admin-curated IP fallbacks).
+        // 2) Static allowlist (admin-curated IP fallbacks). This is the
+        //    ONLY way a non-canonical host is accepted — extend
+        //    `knownAddresses` via a reviewed code change, never via a
+        //    runtime DNS lookup of the untrusted QR `server` field.
         if knownAddresses.map({ $0.lowercased() }).contains(candidateHost) {
-            return true
-        }
-        // 3) DNS-resolved match. Resolve canonical → IP set; if
-        //    candidateHost itself is an IP, check membership directly.
-        //    Else resolve candidateHost too and intersect.
-        let canonicalIPs = resolveAddresses(canonicalHost)
-        if canonicalIPs.contains(candidateHost) {
-            return true
-        }
-        let candidateIPs = resolveAddresses(candidateHost)
-        if !canonicalIPs.intersection(candidateIPs).isEmpty {
             return true
         }
         return false
     }
 
-    // MARK: - DNS resolution (cached)
-
-    private static var resolveCache: [String: Set<String>] = [:]
-    private static let resolveCacheLock = NSLock()
-
-    /// `getaddrinfo` wrapper returning the union of A + AAAA literal
-    /// strings for `host`. Cached for the process lifetime so the
-    /// FastSetup scan path stays fast across repeated attempts.
-    /// Returns empty set on resolve failure (offline / NXDOMAIN).
-    private static func resolveAddresses(_ host: String) -> Set<String> {
-        resolveCacheLock.lock()
-        if let cached = resolveCache[host] {
-            resolveCacheLock.unlock()
-            return cached
-        }
-        resolveCacheLock.unlock()
-
-        var hints = addrinfo(
-            ai_flags: AI_NUMERICSERV,
-            ai_family: AF_UNSPEC,
-            ai_socktype: SOCK_STREAM,
-            ai_protocol: IPPROTO_TCP,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
-        var infoOpt: UnsafeMutablePointer<addrinfo>? = nil
-        let rc = host.withCString { cHost in
-            getaddrinfo(cHost, nil, &hints, &infoOpt)
-        }
-        guard rc == 0, let firstInfo = infoOpt else {
-            resolveCacheLock.lock()
-            resolveCache[host] = []
-            resolveCacheLock.unlock()
-            return []
-        }
-        defer { freeaddrinfo(infoOpt) }
-
-        var ips: Set<String> = []
-        var current: UnsafeMutablePointer<addrinfo>? = firstInfo
-        while let cur = current {
-            let info = cur.pointee
-            var nameBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let niRc = getnameinfo(
-                info.ai_addr, info.ai_addrlen,
-                &nameBuffer, socklen_t(nameBuffer.count),
-                nil, 0,
-                NI_NUMERICHOST)
-            if niRc == 0 {
-                let ip = String(cString: nameBuffer).lowercased()
-                if !ip.isEmpty { ips.insert(ip) }
-            }
-            current = info.ai_next
-        }
-
-        resolveCacheLock.lock()
-        resolveCache[host] = ips
-        resolveCacheLock.unlock()
-        return ips
-    }
-
-    /// Test/diagnostics helper — drops the resolve cache so the next
-    /// `accepts(...)` re-queries DNS. Not used in production paths.
+    /// SECURITY H-4 + L-1 — retained as an inert no-op so any external
+    /// or test reference to this symbol still links. The DNS resolve
+    /// cache it used to flush no longer exists.
     public static func clearResolveCache() {
-        resolveCacheLock.lock()
-        resolveCache.removeAll()
-        resolveCacheLock.unlock()
+        // No-op: DNS resolution removed (SSRF / DNS-rebinding + leak).
     }
 }

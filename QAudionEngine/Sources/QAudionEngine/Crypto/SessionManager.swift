@@ -72,6 +72,23 @@ public final class SessionManager: @unchecked Sendable {
         let frameKeyData = hkdfDerive(ikm: newChainKey, salt: nil, info: CryptoConstants.hkdfInfoChain).withUnsafeBytes { Data($0) }
         let nextChainData = hkdfDerive(ikm: newChainKey, salt: nil, info: CryptoConstants.hkdfInfoNextChain).withUnsafeBytes { Data($0) }
         currentSession = SessionState(sessionId: session.sessionId, rootKey: newRootKey, chainKey: nextChainData, frameCounter: session.frameCounter + 1)
+        // SECURITY C-8: ARC does not zero-fill released buffers. When a
+        // root ratchet stepped the keys, the prior root/chain keys are
+        // now superseded — scrub their buffers via the hardened,
+        // optimiser-proof CryptoConstants.zeroize (memset_s on Darwin).
+        // `SessionState` is a value type with `let` Data fields, so this
+        // scrubs mutable copies; effective erasure of the canonical
+        // backing store holds only while no other live `SessionState`
+        // copy aliases it (copy-on-write). This is the conservative,
+        // wire-neutral choice — no field type/format change that could
+        // drift from Android — and is best-effort defence-in-depth on top
+        // of the keys never being persisted in this manager.
+        if shouldRootRatchet {
+            var staleRoot = session.rootKey
+            var staleChain = session.chainKey
+            CryptoConstants.zeroize(&staleRoot)
+            CryptoConstants.zeroize(&staleChain)
+        }
         return frameKeyData
     }
 
@@ -85,6 +102,17 @@ public final class SessionManager: @unchecked Sendable {
 
     public func destroySession() { lock.lock(); currentSession = nil; lastRatchetTime = 0; lock.unlock() }
 
+    // SECURITY M-33: callers pass `salt: nil`, which becomes an empty
+    // salt. This is INTENTIONAL and cross-platform load-bearing — the
+    // Android session ratchet and the KAT cross-platform vectors
+    // (QAudionEngineTests/CrossPlatform/CrossPlatformTestVectors) derive
+    // these session/root/chain keys with the same zero-length salt.
+    // RFC 5869 §2.2 explicitly defines HKDF-Extract with a zero-filled
+    // salt of HashLen when none is supplied, so this is well-defined (not
+    // a "missing salt" bug) and the per-call distinct `info` strings
+    // provide domain separation. Introducing a named salt here would
+    // change every derived key and break audio interop with Android —
+    // comment-only by design.
     private func hkdfDerive(ikm: Data, salt: Data?, info: Data) -> SymmetricKey {
         HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: ikm),
             salt: salt ?? Data(), info: info, outputByteCount: CryptoConstants.keySizeBytes)

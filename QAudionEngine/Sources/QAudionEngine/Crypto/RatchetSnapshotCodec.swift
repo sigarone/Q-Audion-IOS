@@ -30,6 +30,11 @@ public enum RatchetSnapshotCodec {
         case versionMismatch(UInt8)
         case truncated(Int, expected: Int)
         case stringTooLong(Int)
+        /// SECURITY L-13: a length-prefixed binary blob exceeded the
+        /// 64 KiB sanity bound. Distinct from `stringTooLong` so a
+        /// caller can tell a malformed key/nonce field from a UTF-8
+        /// field.
+        case blobTooLong(Int)
         case skippedCountOutOfRange(Int)
     }
 
@@ -147,7 +152,9 @@ public enum RatchetSnapshotCodec {
 
     private static func readBlob(_ data: Data, _ off: inout Int) throws -> Data {
         let len = Int(try readUInt32BE(data, &off))
-        guard len >= 0, len <= 64 * 1024 else { throw CodecError.stringTooLong(len) }
+        // SECURITY L-13: report a binary-blob overrun as `blobTooLong`,
+        // not the misleading `stringTooLong`.
+        guard len >= 0, len <= 64 * 1024 else { throw CodecError.blobTooLong(len) }
         try ensure(data, off, len)
         let b = data.subdata(in: off..<(off + len))
         off += len

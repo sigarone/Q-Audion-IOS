@@ -88,6 +88,19 @@ public enum MessageCryptoV2 {
 
     /// Open the AEAD with the supplied PSK. Returns nil on AEAD
     /// failure (caller's signal to try the next PSK candidate).
+    ///
+    /// SECURITY M-22: callers iterate this over a list of candidate PSKs
+    /// ("PSK trial"). It MUST present a single, uniform failure path so a
+    /// peer cannot use it as an oracle for which derivation/AEAD step
+    /// failed (which would leak whether a given PSK is bound):
+    ///  - exactly one HKDF derive + one AES-GCM open, no early branching
+    ///    that depends on the PSK before the single `catch`;
+    ///  - every failure class (bad nonce, malformed box, auth failure)
+    ///    collapses to the same `nil`;
+    ///  - the trial index / which candidate failed is NEVER logged here
+    ///    (no timing-variable logging). Keep this function side-effect and
+    ///    log free; the caller decides how many PSKs to try and must not
+    ///    leak the count or order over the wire/timing either.
     public static func openWithPsk(parsed: ParsedV2, psk: Data, aad: Data) -> Data? {
         let key = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: psk),
@@ -102,6 +115,7 @@ public enum MessageCryptoV2 {
                                               tag: parsed.tag)
             return try AES.GCM.open(box, using: key, authenticating: aad)
         } catch {
+            // Uniform failure path — do not distinguish the failing step.
             return nil
         }
     }

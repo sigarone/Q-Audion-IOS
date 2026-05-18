@@ -29,6 +29,12 @@ public final class BCryptoRestClient {
 
     public init(config: BackendConfig) {
         self.config = config
+        // SECURITY H-1 — `acceptSelfSignedCerts` is honoured ONLY in
+        // DEBUG builds (local dev / unit tests against a self-signed
+        // staging box). Release builds NEVER instantiate
+        // `SelfSignedCertDelegate`; they fall through to cert pinning
+        // (if a pin is configured) or the system default TLS chain.
+        #if DEBUG
         if config.acceptSelfSignedCerts {
             self.session = URLSession(configuration: .default, delegate: SelfSignedCertDelegate(), delegateQueue: nil)
         } else if let pin = config.certPinSha256B64 {
@@ -36,6 +42,13 @@ public final class BCryptoRestClient {
         } else {
             self.session = URLSession.shared
         }
+        #else
+        if let pin = config.certPinSha256B64 {
+            self.session = URLSession(configuration: .default, delegate: CertPinningDelegate(pinB64: pin), delegateQueue: nil)
+        } else {
+            self.session = URLSession.shared
+        }
+        #endif
     }
 
     /// Install the callback that knows how to perform a token refresh. The
@@ -170,6 +183,16 @@ public final class BCryptoRestClient {
             let fallback = self.deviceRenewFallback
             let hasRefreshToken = self.config.refreshToken != nil
             let newTask = Task<Bool, Error> {
+                // SECURITY H-2 — release the in-flight slot ONLY after
+                // the new tokens have been written to `config`. The old
+                // code cleared `refreshInFlight` in an outer `defer`
+                // that ran around `task.value`, so a 3rd concurrent 401
+                // could observe a nil slot, see the not-yet-written
+                // stale `config.accessToken`, and spawn a *second*
+                // refresh with the stale token. Holding the slot for
+                // the full refresh + config-update window and clearing
+                // it here makes the release atomic with the token swap.
+                defer { self.refreshLock.withLock { self.refreshInFlight = nil } }
                 // Step 1: try the primary refresher (POST /auth/refresh).
                 if let refresher = primary, hasRefreshToken {
                     do {
@@ -198,9 +221,14 @@ public final class BCryptoRestClient {
             return newTask
         }
 
-        defer {
-            refreshLock.withLock { refreshInFlight = nil }
-        }
+        // NOTE (H-2): no outer `defer` clearing `refreshInFlight` here —
+        // the slot is owned and released by the Task's own `defer`
+        // above, AFTER `config` is updated, so the release is atomic
+        // with the token swap. Persisting the refreshed tokens to the
+        // Keychain (TokenVault) is done at the app layer: the installed
+        // `tokenRefresher` / `deviceRenewFallback` closures (AppState)
+        // write the new pair, and `AuthService.loadToken()` sweeps any
+        // plaintext copy into the Keychain on the next cold start.
         return try await task.value
     }
 
@@ -235,7 +263,10 @@ public enum BCryptoError: Error {
 
 // MARK: - Certificate Pinning Delegate
 
-private class CertPinningDelegate: NSObject, URLSessionDelegate {
+// SECURITY C-6 — internal (not `private`) so `BCryptoWebSocketClient`
+// in the same module reuses this exact DER-SHA256 pinning logic for
+// the WS `URLSession` instead of running with no pinning at all.
+final class CertPinningDelegate: NSObject, URLSessionDelegate {
     /// Set of pinned DER SHA-256 hashes (base64-decoded). Multiple pins are
     /// supported: `pinB64` is a comma-separated list of base64 strings.
     /// A TLS handshake succeeds iff at least one cert in the server's chain
@@ -290,6 +321,11 @@ private class CertPinningDelegate: NSObject, URLSessionDelegate {
 
 // MARK: - Self-Signed Cert Delegate
 
+// SECURITY H-1 — DEBUG-only. This delegate blindly trusts any server
+// cert; compiling it into a Release build would be a permanent MITM
+// backdoor. The `#if DEBUG` guard guarantees Release binaries cannot
+// even reference it.
+#if DEBUG
 private class SelfSignedCertDelegate: NSObject, URLSessionDelegate {
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
@@ -298,3 +334,4 @@ private class SelfSignedCertDelegate: NSObject, URLSessionDelegate {
         } else { completionHandler(.performDefaultHandling, nil) }
     }
 }
+#endif

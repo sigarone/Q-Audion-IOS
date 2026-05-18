@@ -1,6 +1,14 @@
 import Foundation
 import LocalAuthentication
 
+extension Notification.Name {
+    /// SECURITY H-14 — posted when app-lock is enabled but the device
+    /// has no biometry AND no passcode set, so the policy cannot be
+    /// evaluated. UI should advise the user to set a device passcode;
+    /// the app stays LOCKED rather than silently unlocking.
+    static let appLockUnavailable = Notification.Name("qaudion.appLock.unavailable")
+}
+
 /// W441 — App lock service. Mirrors Android's AppLockGate / BiometricPrompt flow.
 ///
 /// Lifecycle:
@@ -17,28 +25,50 @@ final class AppLockService: ObservableObject {
 
     @Published private(set) var isLocked: Bool = false
 
-    /// When the app last entered background. nil = app was never backgrounded.
-    private var backgroundedAt: Date?
+    /// SECURITY H-13 — UserDefaults key persisting the wall-clock time
+    /// the app last entered background. Survives process death so a
+    /// cold start (app killed in background, relaunched) still locks:
+    /// an in-memory-only timestamp was lost on kill, bypassing the lock.
+    private static let backgroundedAtKey = "qaudion.lock.backgroundedAt"
 
     // MARK: - Scene phase callbacks
 
     func handleBackground() {
-        backgroundedAt = Date()
+        // SECURITY H-13: persist to disk, not just memory, so a kill +
+        // relaunch still sees a background timestamp.
+        UserDefaults.standard.set(Date().timeIntervalSince1970,
+                                  forKey: Self.backgroundedAtKey)
     }
 
     func handleForeground() {
         guard PrivacyGate.appLockEnabled else {
             isLocked = false
+            // Consume any stale timestamp so a later enable starts clean.
+            UserDefaults.standard.removeObject(forKey: Self.backgroundedAtKey)
             return
         }
         let graceMs = PrivacyGate.appLockTimeoutMs
         let graceSec = Double(graceMs) / 1000.0
-        if let bg = backgroundedAt, Date().timeIntervalSince(bg) < graceSec {
-            // Within grace window — don't lock.
-            backgroundedAt = nil
+
+        // SECURITY H-13: read persisted timestamp. Absent → distantPast
+        // so a first launch (or post-kill cold start) with appLock
+        // enabled LOCKS instead of bypassing.
+        let defaults = UserDefaults.standard
+        let backgroundedAt: Date
+        if defaults.object(forKey: Self.backgroundedAtKey) != nil {
+            backgroundedAt = Date(timeIntervalSince1970:
+                defaults.double(forKey: Self.backgroundedAtKey))
+        } else {
+            backgroundedAt = Date.distantPast
+        }
+        // Consume the persisted key after reading it.
+        defaults.removeObject(forKey: Self.backgroundedAtKey)
+
+        let elapsed = Date().timeIntervalSince(backgroundedAt)
+        if elapsed < graceSec {
+            // Within grace window — don't lock (e.g. quick task switch).
             return
         }
-        backgroundedAt = nil
         isLocked = true
         Task { await evaluatePolicy() }
     }
@@ -50,8 +80,12 @@ final class AppLockService: ObservableObject {
         let context = LAContext()
         var nsError: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &nsError) else {
-            // No biometry and no passcode set — unlock silently.
-            isLocked = false
+            // SECURITY H-14: no biometry AND no passcode set. DO NOT
+            // auto-unlock (the previous behavior defeated the lock for
+            // any user without a device passcode). Stay locked and tell
+            // the UI so it can advise the user to set a passcode.
+            isLocked = true
+            NotificationCenter.default.post(name: .appLockUnavailable, object: nil)
             return
         }
         do {
@@ -69,8 +103,34 @@ final class AppLockService: ObservableObject {
 
     // MARK: - Call bypass
 
-    /// Call-active bypass: the lock screen must not obstruct in-call controls.
-    func bypassForCall() {
+    /// Call-active bypass: the lock screen must not obstruct in-call
+    /// controls. The bypass MUST be limited to a genuinely *active*
+    /// call — `isInCall` is also true at `.ringing` (pre-answer), and
+    /// bypassing the lock there lets anyone holding the device dismiss
+    /// the lock simply by triggering / receiving a ringing call without
+    /// ever answering it.
+    ///
+    /// SECURITY M-25 / L-7: gate the bypass on `callState == .active`
+    /// (or the post-key-exchange `.encrypted`). When the caller can
+    /// supply the state we enforce it here; when it cannot (`nil`) we
+    /// fall back to the legacy permissive behavior and flag the gap.
+    ///
+    /// - Parameter callState: the current `AppState.callState`. Pass it
+    ///   from the scene-phase handler. `nil` = caller couldn't supply
+    ///   state (legacy path, see TODO below).
+    func bypassForCall(callState: CallState? = nil) {
+        if let callState = callState {
+            // Only an answered/established call may suppress the lock.
+            guard callState == .active || callState == .encrypted else { return }
+            isLocked = false
+            return
+        }
+        // TODO SECURITY M-25: the production call site
+        // (QAudionApp.handleScenePhase) currently invokes this without a
+        // callState argument, gated only on `appState.isInCall`, which is
+        // true at `.ringing` too. Rewire that call to pass
+        // `appState.callState` so the `guard` above applies. Until then
+        // this preserves prior behavior to avoid wedging in-call UX.
         isLocked = false
     }
 }

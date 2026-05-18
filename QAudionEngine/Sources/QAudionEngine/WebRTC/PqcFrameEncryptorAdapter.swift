@@ -29,15 +29,31 @@ public final class PqcFrameEncryptor: NSObject {
         super.init()
     }
 
-    /// Engine-side seal — direct entry point for non-WebRTC transports.
-    /// Returns `nonce(12) || ciphertext || tag(16)`. Returns empty
-    /// Data on seal failure (caller decides drop vs retry policy).
-    public func encryptPlaintext(_ frame: Data) -> Data {
+    /// M-31 — Engine-side seal. Returns `nonce(12) || ciphertext ||
+    /// tag(16)` on success, or `nil` on seal failure so callers can
+    /// distinguish a genuine empty frame from a crypto failure (and
+    /// MUST drop the frame rather than transmit plaintext).
+    public func sealFrame(_ frame: Data) -> Data? {
         do { return try sealer.seal(frame) }
         catch {
-            print("[PqcFrameEncryptor] seal failed: \(error)")
+            let edesc: String = error.localizedDescription
+            let line: String = "[PqcFrameEncryptor] seal failed: " + edesc
+            print(line)
+            return nil
+        }
+    }
+
+    /// M-31 compat shim — preserves the original non-optional API for
+    /// callers outside the owned set (e.g. VideoCallPipeline). Maps a
+    /// seal failure to empty `Data` AND logs. New code should call
+    /// ``sealFrame(_:)`` and treat `nil` as "drop the frame".
+    public func encryptPlaintext(_ frame: Data) -> Data {
+        guard let sealed = sealFrame(frame) else {
+            let line: String = "[PqcFrameEncryptor] encryptPlaintext: seal failure mapped to empty Data (legacy compat) — frame must be dropped, NOT sent as plaintext"
+            print(line)
             return Data()
         }
+        return sealed
     }
 
     /// Pre-compute output size: plaintext + nonce(12) + tag(16).

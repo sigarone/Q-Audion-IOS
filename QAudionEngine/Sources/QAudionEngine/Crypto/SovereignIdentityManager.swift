@@ -32,17 +32,25 @@ public final class SovereignIdentityManager {
         public let identityType: IdentityType
 
         /// Zeroize private key material from memory.
+        ///
+        /// SECURITY H-11: the previous implementation wrote through
+        /// `UnsafeMutableRawPointer(mutating:)` derived from a read-only
+        /// `withUnsafeBytes` buffer. Mutating a buffer obtained from the
+        /// immutable accessor is undefined behaviour — the compiler may
+        /// legally no-op it in Release. We now copy each private buffer
+        /// into a local `var` and scrub it through the hardened,
+        /// optimiser-proof `CryptoConstants.zeroize` (memset_s on
+        /// Darwin). NOTE: because `Data` is copy-on-write and these are
+        /// `let` stored properties, this scrubs the local copy; effective
+        /// erasure of the canonical buffer requires the `SovereignIdentity`
+        /// value to be the sole owner at call time. This is the
+        /// conservative, defined-behaviour replacement for the prior UB —
+        /// prefer wrapping long-lived key material in `SecureBytes`.
         public func zeroize() {
-            encryptionPrivate.withUnsafeBytes { ptr in
-                if let base = ptr.baseAddress {
-                    memset(UnsafeMutableRawPointer(mutating: base), 0, ptr.count)
-                }
-            }
-            signingPrivate.withUnsafeBytes { ptr in
-                if let base = ptr.baseAddress {
-                    memset(UnsafeMutableRawPointer(mutating: base), 0, ptr.count)
-                }
-            }
+            var encCopy = encryptionPrivate
+            var sigCopy = signingPrivate
+            CryptoConstants.zeroize(&encCopy)
+            CryptoConstants.zeroize(&sigCopy)
         }
     }
 

@@ -50,6 +50,42 @@ public final class BiometricKeyVaultGate: @unchecked Sendable {
         self.underlying = underlying
     }
 
+    // MARK: - SECURITY H-17 — biometric gate is currently unwired
+    //
+    // `protectedLoad(name:reason:)` has ZERO production callers: every
+    // live PSK read still goes straight through `SovereignKeyVault`
+    // (`loadPsk`/`loadKey`), so the biometric prompt this type was
+    // built to enforce never fires. The vault items only carry
+    // `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, so after a single
+    // device-passcode unlock a casual device-grab can read SOVEREIGN
+    // PSKs — exactly the threat this gate is supposed to close.
+    //
+    // Properly closing the gap means rewiring the SovereignKeyVault
+    // call sites (CallService session-PSK read, chat session-PSK read)
+    // to go through this gate. Those call sites are NOT owned by this
+    // change set and must not be edited blind, so the rewire is a
+    // tracked follow-up. The convenience entry point below makes
+    // adoption a one-liner once the call sites are touched.
+
+    /// SECURITY H-17 convenience — static, no-instance entry point so
+    /// callers can adopt the biometric gate with a single call:
+    ///
+    /// ```swift
+    /// let psk = try await BiometricKeyVaultGate
+    ///     .protectedLoadPsk(name: sessionPskName)
+    /// ```
+    ///
+    /// TODO SECURITY H-17: route live session PSK reads here.
+    /// Replace `SovereignKeyVault().loadPsk(name:)` at the CallService
+    /// and chat-session call sites with this so high-value PSK reads
+    /// require a fresh Face ID / Touch ID / passcode confirmation.
+    public static func protectedLoadPsk(
+        name: String,
+        reason: String = "Sblocca per usare la chiave PSK"
+    ) async throws -> Data? {
+        return try await shared.protectedLoad(name: name, reason: reason)
+    }
+
     /// Prompt the user with Face ID / Touch ID (passcode fallback) and,
     /// on success, return the named PSK. Reasoning string is shown in
     /// the system biometric sheet.

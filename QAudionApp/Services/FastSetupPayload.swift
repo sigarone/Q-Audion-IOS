@@ -27,6 +27,28 @@ import Foundation
 /// The scanner validates `kind == "bcrypto-fast-setup"` AND `version == 1`
 /// AND `server` matches the pinned host before handing the payload to
 /// `FastSetupAuth.run(...)`.
+///
+/// ============================================================
+/// SECURITY H-3 — PLAINTEXT CREDENTIAL IN QR
+/// ============================================================
+/// The `password` field below is the user's account password carried
+/// **in cleartext inside the QR code**. Anyone who photographs / shoulder-
+/// surfs / screen-records the QR obtains a permanent credential. This
+/// is a protocol-level weakness that CANNOT be fixed client-side alone:
+/// the bcrypto-server admin panel emits this shape and the iOS client
+/// must decode it byte-for-byte to stay wire-compatible with Android.
+///
+/// REQUIRED SERVER-SIDE FOLLOW-UP (tracked, out of scope here):
+///   - Replace the embedded password with a single-use, short-TTL OTP /
+///     enrolment token (`/auth/fast-setup-otp`) that the device exchanges
+///     for real credentials over TLS, so the QR never carries a reusable
+///     secret. Until that endpoint exists this struct keeps the field.
+///
+/// Client-side mitigations already applied (see `FastSetupAuth`):
+///   - `password` is NEVER logged.
+///   - the local copy is overwritten/zeroed in memory immediately after
+///     the login call returns.
+/// ============================================================
 public struct FastSetupPayload: Codable, Equatable {
 
     public let version: Int
@@ -34,6 +56,9 @@ public struct FastSetupPayload: Codable, Equatable {
     public let server: String
     public let extensionNumber: Int64
     public let phoneId: String
+    // SECURITY H-3: plaintext credential in QR — server OTP endpoint
+    // required (see struct doc block). Never log this; the consumer
+    // (`FastSetupAuth`) zeroes its local copy post-login.
     public let password: String
     public let displayName: String
 

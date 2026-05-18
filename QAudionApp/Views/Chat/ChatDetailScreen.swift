@@ -73,7 +73,7 @@ struct ChatDetailScreen: View {
     /// PrivacySettingsScreen; read here to activate/deactivate on
     /// chat open/close. Persisted via AppStorage so it survives
     /// app restarts.
-    @AppStorage("qaudion.chat.screenshot_lock_enabled") private var screenshotLockEnabled: Bool = false
+    @AppStorage("qaudion.chat.screenshot_lock_enabled") private var screenshotLockEnabled: Bool = true
     /// W445: Ephemeral timer picker.
     @State private var showingEphemeralPicker: Bool = false
     /// W445: Forward message state.

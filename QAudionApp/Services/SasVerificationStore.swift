@@ -1,4 +1,6 @@
 import Foundation
+import CryptoKit
+import Security
 
 /// W368 — persistence for the in-call SAS ceremony.
 ///
@@ -8,38 +10,67 @@ import Foundation
 /// (no need to re-do the ceremony for every call).
 ///
 /// **Cross-platform parity:** mirrors Android's
-/// `SasVerificationTracker.kt` — both store a SHA-256 of the
-/// peerUserId + the SAS-words bundle so a tampered chain key (which
-/// would change the SAS) auto-invalidates the verification.
+/// `SasVerificationTracker.kt` — both store a hash of the peerUserId
+/// + the SAS-words bundle so a tampered chain key (which would change
+/// the SAS) auto-invalidates the verification.
 ///
-/// **Storage:** UserDefaults keyed by
-/// `qaudion.sas.verified.<peerUserId>` with the fingerprint as
-/// value. UserDefaults is fine here because:
-/// - The fingerprint isn't a secret (it's hex of a hash anyway).
-/// - Persistence is informational, not security-load-bearing — even
-///   a tampered store can only make a verified peer appear
-///   unverified, not the other way around (the SAS computation is
-///   re-run on every call).
+/// **SECURITY M-7 — format + storage change (invalidates old data):**
+/// - Fingerprint is now SHA-256 truncated to 16 bytes (32 hex chars)
+///   instead of a 64-bit FNV-1a (16 hex chars). FNV is non-cryptographic
+///   and trivially collidable, so an attacker who could write the store
+///   could forge a fingerprint that matches a tampered SAS. Switching to
+///   SHA-256 closes that and removes the FNV collision surface.
+///   *Existing stored fingerprints are FNV-format and no longer match —
+///   affected users simply re-verify the SAS once.*
+/// - Comparison is constant-time (byte-wise, no early return) to remove
+///   the timing side-channel on the previous `==` String compare.
+/// - Storage moved from UserDefaults to the iOS Keychain
+///   (`kSecClassGenericPassword`, service `com.qaudion.sas`,
+///   accessibility `AfterFirstUnlockThisDeviceOnly`) so the
+///   verification record is not world-readable in a plist backup.
+///
+/// Method names (`isVerified`, `recordVerified`, `fingerprint`,
+/// `storedFingerprint`, `clear`) are unchanged so callers
+/// (LiveInCallScreen etc.) compile without modification.
 public final class SasVerificationStore {
 
     public static let shared = SasVerificationStore()
 
+    /// Keychain service (M-7). Account is `prefix + peerUserId`.
+    private static let keychainService = "com.qaudion.sas"
     private let prefix = "qaudion.sas.verified."
 
     public init() {}
+
+    // MARK: - Public API (stable)
 
     /// Persist that `peerUserId` confirmed SAS coincidence under
     /// `fingerprint`. Replaces any previous fingerprint for the
     /// same peer (e.g. after a key rotation that produces a new SAS).
     public func recordVerified(peerUserId: String, fingerprint: String) {
-        UserDefaults.standard.set(fingerprint, forKey: prefix + peerUserId)
+        Self.keychainSet(account: prefix + peerUserId,
+                         value: fingerprint)
     }
 
     /// Returns the previously-stored fingerprint, or nil if the user
     /// has never confirmed an SAS for this peer (or the store was
-    /// reset).
+    /// reset). SECURITY M-7: reads from Keychain; falls back to a
+    /// one-time UserDefaults migration of any legacy value.
     public func storedFingerprint(peerUserId: String) -> String? {
-        return UserDefaults.standard.string(forKey: prefix + peerUserId)
+        let account = prefix + peerUserId
+        if let v = Self.keychainGet(account: account) {
+            return v
+        }
+        // One-time migration: a legacy FNV fingerprint may still sit in
+        // UserDefaults. Note it is FNV-format and will NOT match the new
+        // SHA-256 fingerprint() output, so it forces a benign re-verify.
+        let defaults = UserDefaults.standard
+        if let legacy = defaults.string(forKey: account) {
+            Self.keychainSet(account: account, value: legacy)
+            defaults.removeObject(forKey: account)
+            return legacy
+        }
+        return nil
     }
 
     /// Convenience: returns true if `currentFingerprint` matches the
@@ -50,30 +81,88 @@ public final class SasVerificationStore {
         guard let stored = storedFingerprint(peerUserId: peerUserId) else {
             return false
         }
-        return stored == currentFingerprint
+        // SECURITY M-7: constant-time comparison (no early exit).
+        return Self.constantTimeEquals(stored, currentFingerprint)
     }
 
     /// Forget the verification for a peer — used when the user
     /// explicitly resets a contact, or when key material rotates
     /// in a way that invalidates the historical fingerprint.
     public func clear(peerUserId: String) {
-        UserDefaults.standard.removeObject(forKey: prefix + peerUserId)
+        let account = prefix + peerUserId
+        Self.keychainDelete(account: account)
+        // Also clear any not-yet-migrated legacy value.
+        UserDefaults.standard.removeObject(forKey: account)
     }
 
     /// Compute the canonical fingerprint for a SAS-words bundle.
-    /// The fingerprint is what gets persisted — derived from the
-    /// SAS rather than the raw session key so a manual reset by the
-    /// user (UserDefaults clear) doesn't expose any secret material.
+    /// SECURITY M-7: SHA-256 truncated to 16 bytes (32 hex chars),
+    /// replacing the previous 64-bit FNV-1a. The fingerprint is what
+    /// gets persisted — derived from the SAS rather than the raw
+    /// session key so a manual reset doesn't expose secret material.
     public static func fingerprint(forWords words: [String]) -> String {
-        let joined = words.map { $0.uppercased() }.joined(separator: "|")
-        let utf8 = Data(joined.utf8)
-        // Lightweight 64-bit FNV-1a hash; we don't need cryptographic
-        // strength here (the SAS itself is the security primitive).
-        var h: UInt64 = 0xcbf29ce484222325
-        for b in utf8 {
-            h ^= UInt64(b)
-            h = h &* 0x100000001b3
+        let joined: String = words.map { $0.uppercased() }.joined(separator: "|")
+        let digest = SHA256.hash(data: Data(joined.utf8))
+        let truncated = Array(digest.prefix(16))
+        return truncated.map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - Constant-time comparison
+
+    /// Byte-wise comparison with no data-dependent early return.
+    /// Length mismatch still short-circuits (lengths are not secret —
+    /// both inputs are hex of a fixed-size hash).
+    private static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
+        let ab = Array(a.utf8)
+        let bb = Array(b.utf8)
+        if ab.count != bb.count { return false }
+        var diff: UInt8 = 0
+        for i in 0..<ab.count {
+            diff |= ab[i] ^ bb[i]
         }
-        return String(format: "%016llx", h)
+        return diff == 0
+    }
+
+    // MARK: - Keychain helpers (M-7)
+
+    private static func keychainSet(account: String, value: String) {
+        let data = Data(value.utf8)
+        let base: [CFString: Any] = [
+            kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: keychainService,
+            kSecAttrAccount: account
+        ]
+        SecItemDelete(base as CFDictionary)
+        var add = base
+        add[kSecValueData] = data
+        add[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    private static func keychainGet(account: String) -> String? {
+        let query: [CFString: Any] = [
+            kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: keychainService,
+            kSecAttrAccount: account,
+            kSecReturnData:  true,
+            kSecMatchLimit:  kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let str = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return str
+    }
+
+    private static func keychainDelete(account: String) {
+        let query: [CFString: Any] = [
+            kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: keychainService,
+            kSecAttrAccount: account
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }

@@ -7,6 +7,17 @@ import Security
 /// TLS certificate pinning for BCrypto server connections.
 /// Pins the SHA-256 hash of the server certificate's Subject Public Key Info (SPKI)
 /// and rejects any connection whose certificate does not match a known pin.
+///
+/// SECURITY M-3 — **UNUSED in production.** The live pinning path is
+/// `CertPinningDelegate` in `BCryptoRestClient.swift`, which pins the
+/// **DER SHA-256 of certs in the chain**, NOT the **SPKI SHA-256** this
+/// type computes. The two pin formats are NOT interchangeable: a pin
+/// minted for one will never match the other. This class has zero
+/// production callers; it is retained only so historical references /
+/// experiments compile. Do NOT wire it into any `URLSession` without
+/// first aligning the pin format with `PinnedServerHost.certChainPins`
+/// (DER) — using it as-is would reject every legitimate connection.
+@available(*, deprecated, message: "Unused — live pinning is CertPinningDelegate (DER SHA-256) in BCryptoRestClient. Do not use without aligning pin format. SECURITY M-3")
 public final class CertificatePinning: NSObject, URLSessionDelegate, @unchecked Sendable {
 
     /// SHA-256 hashes of pinned SPKI data (base64-encoded).

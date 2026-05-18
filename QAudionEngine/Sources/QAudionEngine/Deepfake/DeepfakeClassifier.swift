@@ -118,12 +118,22 @@ public final class DeepfakeClassifier: @unchecked Sendable {
     }
 
     #if !targetEnvironment(simulator)
-    private lazy var directEnv: ORTEnv? = {
-        try? ORTEnv(loggingLevel: .warning)
-    }()
+    // M-32 — these were `lazy var` (≈150 MB resident, never freed). Now
+    // plain optionals lazily built by the helpers below so
+    // `releaseModel()` can drop them after a call and reclaim memory.
+    private var directEnv: ORTEnv?
+    private var directSession: ORTSession?
 
-    private lazy var directSession: ORTSession? = {
-        guard let env = directEnv else { return nil }
+    private func ensureDirectEnv() -> ORTEnv? {
+        if let e = directEnv { return e }
+        let e = try? ORTEnv(loggingLevel: .warning)
+        directEnv = e
+        return e
+    }
+
+    private func ensureDirectSession() -> ORTSession? {
+        if let s = directSession { return s }
+        guard let env = ensureDirectEnv() else { return nil }
         // Prefer whichever tier ModelManager selected. If not loaded, try base then small.
         let candidates: [ModelManager.ModelTier] = [
             modelManager.activeTier ?? .base,
@@ -137,16 +147,28 @@ public final class DeepfakeClassifier: @unchecked Sendable {
                 let opts = try ORTSessionOptions()
                 try opts.setIntraOpNumThreads(tier == .small ? 2 : 4)
                 try opts.setGraphOptimizationLevel(.all)
-                return try ORTSession(env: env, modelPath: url.path, sessionOptions: opts)
+                let s = try ORTSession(env: env, modelPath: url.path, sessionOptions: opts)
+                directSession = s
+                return s
             } catch {
                 continue
             }
         }
         return nil
-    }()
+    }
+
+    /// M-32 — release the ONNX env + session so the ≈150 MB resident
+    /// footprint is reclaimed between calls. Safe to call repeatedly;
+    /// the next inference re-builds them lazily via the ensure* helpers.
+    public func releaseModel() {
+        lock.lock()
+        directSession = nil
+        directEnv = nil
+        lock.unlock()
+    }
 
     private func runDirectInference(waveform: [Float]) throws -> (bonafide: Float, spoof: Float) {
-        guard let session = directSession else {
+        guard let session = ensureDirectSession() else {
             throw DeepfakeError.modelNotLoaded
         }
 
@@ -202,6 +224,10 @@ public final class DeepfakeClassifier: @unchecked Sendable {
         }
         return (bonafide: b, spoof: s)
     }
+    #else
+    /// M-32 — simulator builds have no ONNX session to free; no-op so
+    /// AppState's teardown call compiles on every target.
+    public func releaseModel() {}
     #endif
 
     /// Numerically stable 2-class softmax.

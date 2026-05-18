@@ -32,6 +32,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     public var onCallCancel: ((_ callId: String, _ reason: String?) -> Void)?
 
     private var webSocketTask: URLSessionWebSocketTask?
+    /// SECURITY C-6 / H-5 — strong ref to the session delegate so it
+    /// survives the lifetime of the `URLSession` (URLSession only holds
+    /// its delegate weakly via the configuration; without this the
+    /// pinning + open-callback delegate would be deallocated immediately
+    /// after `connect()` returns and the TLS challenge / open frame
+    /// would fall back to default handling).
+    private var sessionDelegate: WSSessionDelegate?
     private let lock = NSLock()
     private var _state: ConnectionState = .disconnected
     private var config: BackendConfig
@@ -160,26 +167,59 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let sessionConfig = URLSessionConfiguration.default
         sessionConfig.timeoutIntervalForRequest = 0   // no read timeout
         sessionConfig.waitsForConnectivity = true
-        let session: URLSession
+
+        // SECURITY C-6 / H-1 / H-5 — pick the TLS-challenge mode the same
+        // way BCryptoRestClient does, and route the WS-open event so the
+        // auth token is sent ONLY after the upgrade completes (H-5):
+        //   - DEBUG + acceptSelfSignedCerts → trust-all (local dev only)
+        //   - certPinSha256B64 set          → reuse the REST client's
+        //     DER-SHA256 CertPinningDelegate (was: NO pinning at all)
+        //   - otherwise                     → system default TLS chain
+        let challengeMode: WSSessionDelegate.ChallengeMode
+        #if DEBUG
         if config.acceptSelfSignedCerts {
-            session = URLSession(configuration: sessionConfig, delegate: SelfSignedCertDelegate(), delegateQueue: nil)
+            challengeMode = .trustAll
+        } else if let pin = config.certPinSha256B64 {
+            challengeMode = .pinned(CertPinningDelegate(pinB64: pin))
         } else {
-            session = URLSession(configuration: sessionConfig, delegate: nil, delegateQueue: nil)
+            challengeMode = .systemDefault
         }
-        let task = session.webSocketTask(with: url)
+        #else
+        if let pin = config.certPinSha256B64 {
+            challengeMode = .pinned(CertPinningDelegate(pinB64: pin))
+        } else {
+            challengeMode = .systemDefault
+        }
+        #endif
+
+        // H-5: send the auth frame from the open callback, not right
+        // after resume(). The previous code called authenticate() before
+        // the WS upgrade completed, so the `authenticate` frame could be
+        // queued on (or dropped by) a socket that had not finished the
+        // HTTP→WS handshake — the server then saw an unauthenticated
+        // socket and silently dropped subsequent frames.
+        let pendingToken = config.accessToken
+        let delegate = WSSessionDelegate(mode: challengeMode) { [weak self] in
+            guard let self = self, let token = pendingToken else { return }
+            self.authenticate(token: token)
+        }
+        let session = URLSession(configuration: sessionConfig, delegate: delegate, delegateQueue: nil)
+
         lock.lock()
+        sessionDelegate = delegate
+        let task = session.webSocketTask(with: url)
         webSocketTask = task
         lock.unlock()
         task.resume()
         receiveLoop(generation: gen)
-
-        if let token = config.accessToken { authenticate(token: token) }
     }
 
     public func disconnect() {
         lock.lock()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
+        // Release the session delegate — a fresh one is built per connect().
+        sessionDelegate = nil
         _state = .disconnected
         reconnectAttempt = 0
         pingTimer?.cancel()
@@ -535,13 +575,65 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     }
 }
 
-private class SelfSignedCertDelegate: NSObject, URLSessionDelegate {
-    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+/// SECURITY C-6 / H-1 / H-5 — the WS session's single delegate. It
+/// (a) handles the TLS server-trust challenge with the same DER-SHA256
+/// pinning the REST client uses, and (b) fires `onOpen` exactly when
+/// the WebSocket upgrade completes so the auth token is never sent
+/// before the socket is actually open.
+final class WSSessionDelegate: NSObject, URLSessionWebSocketDelegate {
+
+    enum ChallengeMode {
+        /// Reuse the REST client's DER-SHA256 chain pinning.
+        case pinned(CertPinningDelegate)
+        /// System default TLS chain validation (CA-signed certs).
+        case systemDefault
+        #if DEBUG
+        /// DEBUG-only: trust any server cert (local self-signed box).
+        case trustAll
+        #endif
+    }
+
+    private let mode: ChallengeMode
+    private let onOpen: () -> Void
+    /// Guard so a reconnect on the same delegate instance can't double-fire.
+    private var didOpen = false
+    private let openLock = NSLock()
+
+    init(mode: ChallengeMode, onOpen: @escaping () -> Void) {
+        self.mode = mode
+        self.onOpen = onOpen
+        super.init()
+    }
+
+    func urlSession(_ session: URLSession,
+                    didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        if let trust = challenge.protectionSpace.serverTrust {
-            completionHandler(.useCredential, URLCredential(trust: trust))
-        } else {
+        switch mode {
+        case .pinned(let pinDelegate):
+            // Delegate the exact REST pinning logic (chain DER-SHA256).
+            pinDelegate.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+        case .systemDefault:
             completionHandler(.performDefaultHandling, nil)
+        #if DEBUG
+        case .trustAll:
+            if let trust = challenge.protectionSpace.serverTrust {
+                completionHandler(.useCredential, URLCredential(trust: trust))
+            } else {
+                completionHandler(.performDefaultHandling, nil)
+            }
+        #endif
         }
+    }
+
+    func urlSession(_ session: URLSession,
+                    webSocketTask: URLSessionWebSocketTask,
+                    didOpenWithProtocol protocol: String?) {
+        openLock.lock()
+        let firstOpen = !didOpen
+        didOpen = true
+        openLock.unlock()
+        guard firstOpen else { return }
+        // H-5: the HTTP→WS upgrade is now complete — safe to authenticate.
+        onOpen()
     }
 }

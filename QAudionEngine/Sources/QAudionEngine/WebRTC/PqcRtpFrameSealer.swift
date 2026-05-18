@@ -42,6 +42,21 @@ import WebRTC
 /// `RTCRtpSender` / `RTCRtpReceiver`. Future commit will plug
 /// `PqcRtpFrameSealer` into those slots; this commit ships the
 /// engine surface so the wiring change can stay surgical.
+/// ⚠️ SECURITY (M-13) — COUNTER STATE IS PER-INSTANCE AND DIRECTIONAL.
+///
+/// A single `PqcRtpFrameSealer` owns ONE monotonic `counter` that is
+/// advanced by `seal(_:)` (the open path reflects the peer's counter
+/// off the wire and never touches ours). Therefore **one instance
+/// must be used seal-only OR open-only, never both** — sharing an
+/// instance for inbound and outbound mixes two independent counter
+/// spaces and risks (key, nonce) reuse, which is catastrophic for
+/// AES-GCM confidentiality.
+///
+/// To protect both directions of a call build two independent
+/// instances that share the same derived master key but keep
+/// separate counters: construct the send sealer with
+/// `init(pqcSessionKey:)` and the recv sealer with
+/// ``makeSibling()`` (see `QAudionPeerConnection.installPqcSealer`).
 public final class PqcRtpFrameSealer: @unchecked Sendable {
 
     public static let nonceSize = 12
@@ -73,6 +88,21 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
             outputByteCount: Self.masterKeySize
         )
         self.masterKey = derived
+    }
+
+    /// Private designated init reusing an already-derived master key —
+    /// used by ``makeSibling()`` so the recv direction shares the key
+    /// material but keeps an independent `counter` (M-13).
+    private init(reusingMasterKey key: SymmetricKey) {
+        self.masterKey = key
+    }
+
+    /// M-13 — produce an independent sealer that shares this sealer's
+    /// derived master key but has its own fresh counter (starts at 0).
+    /// Use the original for one direction (seal) and the sibling for
+    /// the other (open) so the two counter spaces never collide.
+    public func makeSibling() -> PqcRtpFrameSealer {
+        return PqcRtpFrameSealer(reusingMasterKey: masterKey)
     }
 
     /// Seal one RTP payload. Counter-based nonce so calling repeatedly
