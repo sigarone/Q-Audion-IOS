@@ -143,6 +143,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     public init() {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
+        // Task #11 — head-start the ephemeral ML-KEM keypair off the
+        // call-start critical path (the reused responder integration and
+        // any caller integration created with lead time get it for free).
+        prewarmKeyMaterial()
     }
 
     /// Resolve BCrypto userId for a contact. Call before onCallSetupStarted.
@@ -176,12 +180,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private let warmLock = NSLock()
     private var warmPqcKeyPair: PqcKeyExchange.KeyPair?
     private var warmInFlight = false
-
-    public init() {
-        // Head-start: the reused responder integration and any caller
-        // integration created with lead time get a keypair for free.
-        prewarmKeyMaterial()
-    }
 
     /// Best-effort, non-throwing background pre-generation. Safe to call
     /// repeatedly; coalesces (one in-flight gen at a time).
