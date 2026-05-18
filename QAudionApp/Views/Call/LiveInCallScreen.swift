@@ -241,17 +241,24 @@ struct LiveInCallScreen: View {
     }
 
     /// Live samples for the SessionStatusStrip mini-spark inside InCallScreen.
-    /// Prefers the engine's `txWaveform` feed when populated; falls back to
-    /// a 5-point sparkline derived from `confidenceScore` so the panel
-    /// renders something meaningful even before any audio is captured.
+    /// Prefers the engine's `txWaveformSamples` feed when populated; falls back
+    /// to a confidence-derived sparkline so the strip renders something
+    /// meaningful even before any audio packet has arrived.
+    ///
+    /// NOTE: `appState.txWaveform` (128-element array) is intentionally NOT
+    /// used here — it is initialised to `Array(repeating: 0, count: 128)` so
+    /// it is never empty, causing the old code to always pass 128 zeros to
+    /// MiniSpark → flat line drawn at y=0.  `txWaveformSamples` starts empty
+    /// and only receives real samples once the audio engine delivers frames,
+    /// so the empty-check correctly gates the fallback sparkline.
     private var liveSamples: [Float] {
-        let tx = appState.txWaveform
+        let tx = appState.txWaveformSamples
         if !tx.isEmpty {
-            // Downsample / take the last 16 points for the strip.
-            let suffix = tx.suffix(16)
-            return Array(suffix)
+            // Take the last 16 points for the strip.
+            return Array(tx.suffix(16))
         }
-        // Confidence-derived stub series (slowly drifts ±5%).
+        // Confidence-derived stub series (slowly drifts ±5%) shown while
+        // audio hasn't started yet or when the call is muted.
         let c = max(0.05, min(1.0, appState.confidenceScore))
         return [c, c * 0.98, c * 1.02, c * 0.99, c, c * 1.03, c * 0.97, c]
     }

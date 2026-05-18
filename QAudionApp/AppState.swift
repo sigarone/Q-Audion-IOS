@@ -606,14 +606,19 @@ final class AppState: ObservableObject {
     /// IS the lifetime of the user's online status.
     private func connectPersistentSocket() {
         guard let token = authService.loadToken(), !token.isEmpty else { return }
-        // Reuse the live provider when its WS is already connecting /
-        // connected. Recreate when previously torn down or token rotated.
-        if let existing = liveProvider {
-            let s = existing.persistentConnection.state
-            if s == .connecting || s == .connected || s == .authenticated {
-                return
-            }
-        }
+        // Guard: if liveProvider is already set, a connection is either in-flight
+        // or live. Do NOT create a second provider regardless of its current state.
+        //
+        // Previous version checked `state != .disconnected` — but BCryptoBackendProvider
+        // starts in `.disconnected` before initialize() runs (which is async in a Task).
+        // Two rapid calls (e.g. from login-success path + willEnterForeground) would
+        // both see `.disconnected` and each create their own BCryptoBackendProvider,
+        // causing the server to log "replacing stale ws device" and ultimately dropping
+        // the call the moment the callee answers (both WS close with EOF at that
+        // instant). Callers that explicitly want a new connection MUST set
+        // `self.liveProvider = nil` first (the willEnterForeground handler already does
+        // this when state == .disconnected).
+        if liveProvider != nil { return }
         // W372: subscribe (idempotent — NotificationCenter accepts
         // duplicate observers of the same selector but our use case
         // sends one fan-out per send, which keeps the closure list

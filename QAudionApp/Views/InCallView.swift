@@ -178,13 +178,19 @@ struct InCallView: View {
     // MARK: - Call controls (5)
 
     private var callControls: some View {
-        HStack(spacing: 44) {
+        // Each button claims equal horizontal space so the row always fits
+        // within the screen width regardless of device size (iPhone SE 375pt
+        // up to Pro Max 430pt). Fixed spacing of 44pt per button caused a
+        // 476pt total on a 390pt screen — the End-call button was clipped
+        // and the user could only tap a sliver of it.
+        HStack(spacing: 0) {
             InCallControlButton(
                 systemName: vm.controls.isMuted ? "mic.slash.fill" : "mic.fill",
                 label: vm.controls.isMuted ? "Unmute" : "Mute",
                 isActive: vm.controls.isMuted,
                 action: container.tapMute
             )
+            .frame(maxWidth: .infinity)
 
             InCallControlButton(
                 systemName: vm.controls.isSpeakerOn ? "speaker.wave.3.fill" : "speaker.fill",
@@ -192,6 +198,7 @@ struct InCallView: View {
                 isActive: vm.controls.isSpeakerOn,
                 action: container.tapSpeaker
             )
+            .frame(maxWidth: .infinity)
 
             InCallControlButton(
                 systemName: "pause.fill",
@@ -199,6 +206,7 @@ struct InCallView: View {
                 isActive: vm.controls.isOnHold,
                 action: container.tapHold
             )
+            .frame(maxWidth: .infinity)
 
             // W439: video toggle — always visible so users can upgrade an
             // audio call to video. cameraOn mirrors appState.isVideoCall on
@@ -212,6 +220,7 @@ struct InCallView: View {
                     appState.setCamera(cameraOn)
                 }
             )
+            .frame(maxWidth: .infinity)
 
             // End-call button — always red per InCallViewModel.Controls.endCallStyle.
             Button(action: container.tapEnd) {
@@ -227,7 +236,9 @@ struct InCallView: View {
                         .foregroundStyle(.white.opacity(0.7))
                 }
             }
+            .frame(maxWidth: .infinity)
         }
+        .padding(.horizontal, 8)
     }
 }
 
