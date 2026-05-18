@@ -125,12 +125,10 @@ final class AppLockService: ObservableObject {
             isLocked = false
             return
         }
-        // TODO SECURITY M-25: the production call site
-        // (QAudionApp.handleScenePhase) currently invokes this without a
-        // callState argument, gated only on `appState.isInCall`, which is
-        // true at `.ringing` too. Rewire that call to pass
-        // `appState.callState` so the `guard` above applies. Until then
-        // this preserves prior behavior to avoid wedging in-call UX.
+        // Legacy/defensive fallback: only reached if a caller passes
+        // `nil`. The production call site (QAudionApp.swift) DOES pass
+        // `appState.callState`, so the `guard` above is the live
+        // enforcement — `.ringing` no longer bypasses the lock.
         isLocked = false
     }
 }

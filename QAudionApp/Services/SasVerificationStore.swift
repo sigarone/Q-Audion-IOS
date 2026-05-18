@@ -125,6 +125,15 @@ public final class SasVerificationStore {
 
     // MARK: - Keychain helpers (M-7)
 
+    /// SECURITY F-2: atomic write. The previous `SecItemDelete` then
+    /// `SecItemAdd` (ignoring status) could silently lose the
+    /// `AfterFirstUnlockThisDeviceOnly` accessibility flag if the add
+    /// failed (e.g. `errSecInteractionNotAllowed` while the device is
+    /// locked) — leaving the verification record absent (= benign,
+    /// forces re-verify) but, worse, a partial write could downgrade
+    /// protection. Mirrors `TokenVault.save`: update-first, add when
+    /// absent, delete+add only as a last resort, and the terminal
+    /// OSStatus is checked + logged instead of swallowed.
     private static func keychainSet(account: String, value: String) {
         let data = Data(value.utf8)
         let base: [CFString: Any] = [
@@ -132,11 +141,41 @@ public final class SasVerificationStore {
             kSecAttrService: keychainService,
             kSecAttrAccount: account
         ]
+        let attributes: [CFString: Any] = [
+            kSecValueData:      data,
+            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+
+        let updateStatus = SecItemUpdate(base as CFDictionary,
+                                         attributes as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        if updateStatus == errSecItemNotFound {
+            var add = base
+            for (k, v) in attributes { add[k] = v }
+            let addStatus = SecItemAdd(add as CFDictionary, nil)
+            logIfFailed("add", account: account, status: addStatus)
+            return
+        }
+        // Any other status (e.g. duplicate after a race): hard-reset
+        // the item so the value is never left stale.
         SecItemDelete(base as CFDictionary)
         var add = base
-        add[kSecValueData] = data
-        add[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        for (k, v) in attributes { add[k] = v }
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        logIfFailed("reset", account: account, status: addStatus)
+    }
+
+    /// SECURITY F-2: do not silently swallow a failed keychain write.
+    /// The log string is built into a single `let line: String`
+    /// outside any closure (CLAUDE.md Swift-6 type-checker trap).
+    private static func logIfFailed(_ op: String,
+                                    account: String,
+                                    status: OSStatus) {
+        if status == errSecSuccess { return }
+        let statusText: String = String(describing: status)
+        let line: String = "SasVerificationStore keychain "
+            + op + " failed status=" + statusText
+        RTLog.error("security", line)
     }
 
     private static func keychainGet(account: String) -> String? {

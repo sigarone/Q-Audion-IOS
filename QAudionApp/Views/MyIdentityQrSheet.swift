@@ -86,6 +86,12 @@ struct MyIdentityQrSheet: View {
                     }
                 }
             }
+            // SECURITY F-3: this sheet shows the identity QR +
+            // fingerprint. Mirror ChatDetailScreen's secure-window
+            // lifecycle so the QR cannot be screenshotted / recorded
+            // / AirPlay-mirrored while presented.
+            .onAppear { ScreenshotLockService.lock() }
+            .onDisappear { ScreenshotLockService.unlock() }
         }
     }
 

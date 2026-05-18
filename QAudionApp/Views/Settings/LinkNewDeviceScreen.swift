@@ -93,9 +93,15 @@ struct LinkNewDeviceScreen: View {
             }
         }
         .onAppear {
+            // SECURITY F-3: device-link QR carries pairing key material.
+            // Mirror ChatDetailScreen's secure-window lifecycle so it
+            // cannot be screenshotted / recorded / AirPlay-mirrored.
+            ScreenshotLockService.lock()
             if ephemeralPrivateKey == nil { regenerate() }
         }
         .onDisappear {
+            // SECURITY F-3: release the secure window on unmount.
+            ScreenshotLockService.unlock()
             // Wipe ephemeral key on disappear: nessun materiale segreto
             // sopravvive alla chiusura della view.
             ephemeralPrivateKey = nil

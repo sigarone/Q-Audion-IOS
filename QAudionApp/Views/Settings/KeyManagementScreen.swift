@@ -91,6 +91,12 @@ struct KeyManagementScreen: View {
             }
         }
         .navigationTitle("Gestione chiavi")
+        // SECURITY F-3: this screen shows the identity QR + fingerprint
+        // and supports clipboard export of identity material. Mirror
+        // ChatDetailScreen's secure-window lifecycle so it cannot be
+        // screenshotted / recorded / AirPlay-mirrored while presented.
+        .onAppear { ScreenshotLockService.lock() }
+        .onDisappear { ScreenshotLockService.unlock() }
         .alert("Ruotare le chiavi?", isPresented: $showingRotateConfirm) {
             Button("Annulla", role: .cancel) { }
             Button("Ruota", role: .destructive) {

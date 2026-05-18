@@ -105,6 +105,16 @@ public enum CallsGate {
         UserDefaults.standard.removeObject(forKey: key)
     }
 
+    /// SECURITY F-2: atomic write. The old `SecItemDelete` then
+    /// `SecItemAdd` (status ignored) could lose the
+    /// `AfterFirstUnlockThisDeviceOnly` accessibility class if the add
+    /// silently failed (e.g. `errSecInteractionNotAllowed` while the
+    /// device is locked), which would silently downgrade these
+    /// call-session security flags. Mirrors `TokenVault.save`:
+    /// update-first, add when absent, delete+add as a last resort, and
+    /// the terminal OSStatus is checked + logged, never swallowed.
+    /// Default-true semantics on absence are unchanged (a failed write
+    /// just means the key stays absent → `readSecureBool` default).
     private static func keychainSetBool(_ account: String, _ value: Bool) {
         let data = Data([value ? 1 : 0])
         let base: [CFString: Any] = [
@@ -112,11 +122,39 @@ public enum CallsGate {
             kSecAttrService: keychainService,
             kSecAttrAccount: account
         ]
+        let attributes: [CFString: Any] = [
+            kSecValueData:      data,
+            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+
+        let updateStatus = SecItemUpdate(base as CFDictionary,
+                                         attributes as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        if updateStatus == errSecItemNotFound {
+            var add = base
+            for (k, v) in attributes { add[k] = v }
+            let addStatus = SecItemAdd(add as CFDictionary, nil)
+            logIfFailed("add", account: account, status: addStatus)
+            return
+        }
         SecItemDelete(base as CFDictionary)
         var add = base
-        add[kSecValueData] = data
-        add[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        for (k, v) in attributes { add[k] = v }
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        logIfFailed("reset", account: account, status: addStatus)
+    }
+
+    /// SECURITY F-2: surface a failed keychain write instead of
+    /// swallowing it. Log string built into a single `let line: String`
+    /// outside any closure (CLAUDE.md Swift-6 type-checker trap).
+    private static func logIfFailed(_ op: String,
+                                    account: String,
+                                    status: OSStatus) {
+        if status == errSecSuccess { return }
+        let statusText: String = String(describing: status)
+        let line: String = "CallsGate keychain "
+            + op + " failed status=" + statusText
+        RTLog.error("security", line)
     }
 
     private static func keychainGetBool(_ account: String) -> Bool? {

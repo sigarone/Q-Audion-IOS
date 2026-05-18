@@ -22,7 +22,21 @@ import Foundation
 enum StringSanitiser {
 
     /// Filtered scalar ranges (inclusive) plus the standalone BOM.
+    ///
+    /// SECURITY F-4: `trimmingCharacters(.whitespacesAndNewlines)` only
+    /// strips *edge* whitespace — embedded C0 (U+0001–U+0008, U+000B,
+    /// U+000C, U+000E–U+001F) and C1 (U+0080–U+009F) control characters
+    /// passed straight through into CallKit display labels / contact
+    /// rows, where they can corrupt or spoof rendered text. They are
+    /// now filtered with the same range check as the bidi/zero-width
+    /// scalars. 0x09 (TAB), 0x0A (LF) and 0x0D (CR) are intentionally
+    /// NOT blocked here — they are ordinary whitespace already handled
+    /// by the edge trim and carry no spoofing capability mid-string.
     private static let blockedRanges: [ClosedRange<UInt32>] = [
+        0x0001...0x0008,   // C0 controls (excl. TAB/LF/CR/null)
+        0x000B...0x000C,   // VT FF        (C0 controls)
+        0x000E...0x001F,   // C0 controls  (SO..US)
+        0x0080...0x009F,   // C1 controls  (incl. NEL, CSI…)
         0x202A...0x202E,   // LRE RLE PDF LRO RLO  (explicit bidi)
         0x2066...0x2069,   // LRI RLI FSI PDI      (bidi isolates)
         0x200B...0x200F    // ZWSP ZWNJ ZWJ LRM RLM (zero-width / marks)

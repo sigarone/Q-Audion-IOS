@@ -79,11 +79,22 @@ struct LiveInCallScreen: View {
                 .padding(.trailing, 12)
         }
         .onAppear {
+            // SECURITY F-3: the in-call screen renders the SAS words +
+            // peer identity. Mirror ChatDetailScreen's secure-window
+            // lifecycle so screenshots / screen recording / AirPlay
+            // mirroring of that material are blocked while it is up.
+            ScreenshotLockService.lock()
             resolvePeerDisplayName()
             rekeyAnchorEpoch = Date().timeIntervalSince1970
             // Seed camera state from the call type: video calls start
             // with camera ON; audio calls hide the button entirely.
             cameraOn = appState.isVideoCall
+        }
+        .onDisappear {
+            // SECURITY F-3: release the secure window when the call
+            // surface unmounts (same unconditional unlock pattern as
+            // ChatDetailScreen.handleScreenDisappear).
+            ScreenshotLockService.unlock()
         }
         .onChange(of: appState.callContactId) { _ in
             // Re-resolve when the call peer changes (e.g. switching
