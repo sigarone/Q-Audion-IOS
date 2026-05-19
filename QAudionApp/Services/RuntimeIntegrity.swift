@@ -2,6 +2,9 @@ import Foundation
 #if canImport(Darwin)
 import Darwin
 #endif
+#if canImport(MachO)
+import MachO   // _dyld_image_count / _dyld_get_image_name (Frida-dylib probe)
+#endif
 
 /// Best-effort, **advisory-only** runtime environment probe.
 ///
