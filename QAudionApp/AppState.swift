@@ -561,6 +561,38 @@ final class AppState: ObservableObject {
                 }
             }
         }
+
+        // ADVISORY-ONLY runtime integrity probe. Fully fail-soft:
+        // detached low-priority Task, NOT on the launch / call path,
+        // logs an INFO security event for fleet visibility and does
+        // NOTHING else (no enforcement, no blocking, no exit). Gated
+        // behind a UserDefaults kill-switch (default ON). See
+        // RuntimeIntegrity.swift — it takes no AppState reference.
+        let integrityKey: String = "qaudion.security.integrityProbe"
+        if UserDefaults.standard.object(forKey: integrityKey) == nil {
+            UserDefaults.standard.set(true, forKey: integrityKey)
+        }
+        let integrityEnabled: Bool =
+            UserDefaults.standard.bool(forKey: integrityKey)
+        if integrityEnabled {
+            Task.detached(priority: .background) {
+                // Delay so this never competes with launch or an
+                // incoming call; purely a quiet idle observation.
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                let snap = RuntimeIntegrity.snapshot()
+                let summary: String = RuntimeIntegrity.summaryLine(snap)
+                let flagged: Bool = RuntimeIntegrity.anyFlag(snap)
+                let sev: SecurityEvent.Severity =
+                    flagged ? .warning : .info
+                let detail: String = "integrity " + summary
+                let event = SecurityEvent(
+                    kind: .threat,
+                    severity: sev,
+                    details: detail)
+                // logEvent already swallows all errors internally.
+                SecurityEventStore(db: .shared).logEvent(event)
+            }
+        }
     }
 
     func login(userId: String, credential: String) async {

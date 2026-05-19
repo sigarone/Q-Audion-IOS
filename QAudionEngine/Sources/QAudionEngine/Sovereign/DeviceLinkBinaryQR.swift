@@ -100,7 +100,14 @@ public enum DeviceLinkBinaryQR {
     }
 
     /// Decode raw blob → Decoded triple.
-    public static func decodeBlob(_ blob: Data) throws -> Decoded {
+    public static func decodeBlob(_ rawBlob: Data) throws -> Decoded {
+        // ROBUSTNESS: `Data` slices from upstream (`prefix`, `dropFirst`,
+        // CoreNFC) may carry a non-zero `startIndex`. Every offset below
+        // (`subdata(in:)`, `prefix`, integer index math) assumes a
+        // zero-based buffer; an absolute-index slice would read OOB or
+        // decode garbage. Normalize to a fresh zero-based copy first —
+        // same defensive pattern as `NfcProtocol.parsePskPayload`.
+        let blob = Data(rawBlob)
         let minSize = pubkeyLength + lengthFieldBytes + authCodeLength
         guard blob.count >= minSize else { throw Error.tooShort }
 

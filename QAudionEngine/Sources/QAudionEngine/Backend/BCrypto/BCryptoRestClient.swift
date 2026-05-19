@@ -159,6 +159,19 @@ public final class BCryptoRestClient {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = config.accessToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         for (key, value) in headers { req.setValue(value, forHTTPHeaderField: key) }
+        // TODO attest: when App Attest (DCAppAttestService) is wired,
+        // attach an OPTIONAL `X-Device-Attest` header HERE for the
+        // `/api/v1/register` and `/api/v1/auth/login` paths only. It
+        // MUST stay purely additive — the server has to work fine
+        // without it (no client lockout, no behavior change if attest
+        // generation fails). DEFERRED 2026-05-19: this builder is
+        // shared by every endpoint incl. the token-refresh /
+        // device-renew / device-challenge cascade (the explicitly
+        // fragile auth path), so the attestation key/keyId lifecycle
+        // and async generation must be plumbed via an injected
+        // `@Sendable () async -> String?` closure on `config` (NOT
+        // inline here) to avoid blocking or perturbing refresh. Left
+        // unwired to protect the auth flow per directive.
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw BCryptoError.httpError(0) }
         return (data, http.statusCode)

@@ -125,7 +125,19 @@ public enum FastSetupQrCode {
         let expiresAt: Int64
         if let v = dict["expires_at"] as? Int64 { expiresAt = v }
         else if let v = dict["expires_at"] as? Int { expiresAt = Int64(v) }
-        else if let v = dict["expires_at"] as? Double { expiresAt = Int64(v) }
+        else if let v = dict["expires_at"] as? Double {
+            // ROBUSTNESS: a malicious QR can carry `expires_at` as a JSON
+            // number that maps to a non-finite or out-of-range Double
+            // (e.g. 1e400 → +inf, NaN). `Int64(Double)` TRAPS on those,
+            // turning a malformed-input case into a hard crash. Guard the
+            // conversion and reject cleanly instead.
+            guard v.isFinite,
+                  v >= -9_223_372_036_854_775_808.0,
+                  v < 9_223_372_036_854_775_808.0 else {
+                throw Error.malformedJson("expires_at out of range")
+            }
+            expiresAt = Int64(v)
+        }
         else { throw Error.missingField("expires_at") }
 
         // Reject expired payloads.
