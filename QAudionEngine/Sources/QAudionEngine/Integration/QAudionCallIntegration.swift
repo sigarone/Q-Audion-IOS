@@ -316,16 +316,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // ACCEPT can arrive on the WS dispatcher as soon as the OFFER
         // bytes leave the wire — if we sent first and stashed second,
         // the ACCEPT handler would race-lookup `localHybridKeysByCall`
-        // and find nil, then bail out on the verbose-logging guard
-        // ("ACCEPT for callId=X but no local hybrid keys stashed —
-        // was onAndroidCallSetupStarted ever called?"). The session
-        // would never be installed despite the bytes being correct.
+        // and find nil, then bail out on the verbose-logging guard.
+        //
+        // W461: also stash under the lowercase variant of callId.
+        // iOS UUID().uuidString generates uppercase ("550E8400-…") but
+        // Android echoes the callId lowercased ("550e8400-…") in the
+        // ACCEPT wire prefix. Without the lowercase alias the lookup
+        // at onAndroidBundleReceived(.accept) fails silently → the
+        // 30s fallback fires even though A50 sent a valid ACCEPT.
         lock.withLock {
             localKeyPair = pqcKp
-            localHybridKeysByCall[callId] = HybridLocalKeys(
-                pqcPair: pqcKp,
-                x25519Priv: x25519Priv
-            )
+            let keys = HybridLocalKeys(pqcPair: pqcKp, x25519Priv: x25519Priv)
+            localHybridKeysByCall[callId] = keys
+            let lc = callId.lowercased()
+            if lc != callId { localHybridKeysByCall[lc] = keys }
             state = .capabilitySent
         }
         onStateChanged?(.capabilitySent)
@@ -364,19 +368,25 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
 
         // Pre-handshake fallback timeout — if no ACCEPT lands in 30s
-        // (session not initialised) flip to .fallback so the UI can
-        // surface "peer non risponde" instead of waiting forever.
+        // (session not initialised) flip to .fallback. CallService used to
+        // call endCall() on .fallback which caused the exact 30s drop bug;
+        // W461 changed that handler to just log, so the call continues.
+        // W461: check both original and lowercase callId (Android echo case).
         DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak self] in
             guard let self else { return }
             self.lock.lock()
+            let lc = callId.lowercased()
             let alreadyDone = self.sessionInitializedByCall.contains(callId)
-            if !alreadyDone && self.state == .capabilitySent {
+                           || self.sessionInitializedByCall.contains(lc)
+            let currentState = self.state
+            if !alreadyDone && currentState == .capabilitySent {
                 self.state = .fallback
                 self.lock.unlock()
-                print("[QAudionCallIntegration] Android JSON OFFER timeout — no ACCEPT for callId=\(callId.prefix(8))…")
+                print("[QAudionCallIntegration] Android JSON OFFER 30s timeout — no ACCEPT for callId=\(callId.prefix(8))… stashedKeys=\(self.localHybridKeysByCall.keys.map { $0.prefix(8) }.joined(separator:","))")
                 self.onStateChanged?(.fallback)
             } else {
                 self.lock.unlock()
+                print("[QAudionCallIntegration] 30s timer: skipped (alreadyDone=\(alreadyDone) state=\(currentState.rawValue)) for callId=\(callId.prefix(8))…")
             }
         }
     }
@@ -559,10 +569,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try await sendOpaqueRaw(wire)
 
             // 8. Initialise the audio session and fire the broker hook.
-            // Double-ACCEPT guard (see sessionInitializedByCall kdoc).
+            // Double-ACCEPT guard — normalise to lowercase for case-insensitive match.
+            let normalizedOId = callId.lowercased()
             let alreadyInit = lock.withLock {
-                let r = sessionInitializedByCall.contains(callId)
-                if !r { sessionInitializedByCall.insert(callId) }
+                let r = sessionInitializedByCall.contains(normalizedOId)
+                if !r { sessionInitializedByCall.insert(normalizedOId) }
                 return r
             }
             if alreadyInit {
@@ -578,8 +589,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         case .accept:
             // Originator side — completes the dual-hybrid combine using
             // the local hybrid privs we stashed in onAndroidCallSetupStarted.
-            guard let local = localHybridKeysByCall[callId] else {
-                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… but no local hybrid keys stashed — was onAndroidCallSetupStarted ever called?")
+            // W461: look up with both original and lowercase callId because
+            // Android may echo a lowercase UUID even when iOS sent uppercase.
+            let localKeys = localHybridKeysByCall[callId]
+                         ?? localHybridKeysByCall[callId.lowercased()]
+            guard let local = localKeys else {
+                let stashed: String = localHybridKeysByCall.keys.map { String($0.prefix(8)) }.joined(separator: ",")
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… but no local hybrid keys stashed (stashedCallIds=[\(stashed)]) — was onAndroidCallSetupStarted ever called?")
                 return
             }
             guard let ct = bundle.ciphertext else {
@@ -632,16 +648,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 psk: nil
             )
 
-            // 5. Double-ACCEPT guard.
+            // 5. Double-ACCEPT guard — normalise to lowercase so both the
+            //    original-case and lowercase-echo paths converge on one key.
+            let normalizedId = callId.lowercased()
             let alreadyInit = lock.withLock {
-                let r = sessionInitializedByCall.contains(callId)
-                if !r { sessionInitializedByCall.insert(callId) }
+                let r = sessionInitializedByCall.contains(normalizedId)
+                if !r { sessionInitializedByCall.insert(normalizedId) }
                 return r
             }
             if alreadyInit {
                 print("[QAudionCallIntegration] ACCEPT duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
                 return
             }
+            print("[QAudionCallIntegration] ACCEPT accepted for callId=\(callId.prefix(8))… — initialising session")
 
             // 6. Initialise the audio session and fire the broker hook.
             try engine.initSession(sharedSecret: combined)

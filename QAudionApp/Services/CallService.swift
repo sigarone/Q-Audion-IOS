@@ -185,9 +185,16 @@ final class CallService {
             guard let self else { return }
             switch state {
             case .active:
-                break
-            case .error, .fallback:
+                print("[CallService] PQC handshake complete — session active")
+            case .error:
                 self.endCall()
+            case .fallback:
+                // W461: PQC handshake timed out. WebRTC DTLS audio may still be
+                // flowing — do NOT tear down the call here. The 30s fallback is
+                // purely a "handshake slow" signal. Ending the call here caused
+                // the exact 30s drop bug (iPad→A50 calls always dropped at :30).
+                // The call will end normally when either side hangs up.
+                print("[CallService] PQC handshake fallback — keeping call alive, audio continues via WebRTC DTLS. Diagnose: check Android ACCEPT routing and callId case match.")
             default:
                 break
             }

@@ -199,6 +199,13 @@ struct SettingsScreen: View {
         // on every Settings-tab tap. .toolbar(.hidden) is functionally
         // identical but uses the modern visibility model that iOS 26 expects.
         .toolbar(.hidden, for: .navigationBar)
+        // W461: pre-crash diagnostic logging. If Settings crashes after this
+        // onAppear log but before a sub-screen's onAppear, the crash is in
+        // SettingsScreen.body itself. If a sub-screen logs appear then crash,
+        // the culprit is that sub-screen's init.
+        .onAppear {
+            print("[Settings] SettingsScreen appeared — userId=\(appState.currentUserId?.prefix(8) ?? "nil")… ext=\(appState.currentUserDialExtension ?? "nil") isInCall=\(appState.isInCall)")
+        }
     }
 
     // MARK: - Top bar
@@ -247,7 +254,9 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("ACCOUNT")
             NavigationLink {
+                let _ = print("[Settings] opening AccountSettingsScreen")
                 AccountSettingsScreen(appState: appState)
+                    .onAppear { print("[Settings] AccountSettingsScreen appeared") }
             } label: {
                 SettingsRow(icon: "person",
                             iconColor: scheme.primary,
@@ -869,9 +878,8 @@ struct SettingsScreen: View {
             if userId.hasPrefix("user-") {
                 return String(userId.dropFirst(5)).capitalized
             }
-            return userId.count > 8
-                ? String(userId.prefix(8)) + "…"
-                : userId
+            // W461: always truncate — never show the full UUID regardless of length.
+            return String(userId.prefix(8)) + (userId.count > 8 ? "…" : "")
         }
         return "Q-Audion User"
     }

@@ -534,6 +534,10 @@ final class AppState: ObservableObject {
                     UserDefaults.standard.set(profile.userId, forKey: "currentUserId")
                     // W444: persist the short PBX extension so the SettingsScreen
                     // hero card shows "Int. 103" immediately on next launch.
+                    // W461: log what the server actually returns so we can diagnose
+                    // "still showing long ID" — if dialExtension is nil/0 every
+                    // launch the cached extension gets cleared and UUID is shown.
+                    print("[AppState] getProfile userId=\(profile.userId.prefix(8))… dialExtension=\(String(describing: profile.dialExtension))")
                     if let ext = profile.dialExtension, ext > 0 {
                         let extStr = String(ext)
                         self.currentUserDialExtension = extStr
@@ -542,6 +546,7 @@ final class AppState: ObservableObject {
                         // OR-fix3: server returned nil/0 — clear stale cached extension
                         // so a user migrated to an account without an extension stops
                         // showing the old "Int. 103" indefinitely.
+                        print("[AppState] getProfile: dialExtension nil/0 — clearing cached extension, will show UUID prefix in Settings")
                         self.currentUserDialExtension = nil
                         UserDefaults.standard.removeObject(forKey: "currentUserDialExtension")
                     }
@@ -2047,9 +2052,13 @@ final class AppState: ObservableObject {
     @MainActor
     private func routeInboundAndroidAccept(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
         guard let integration = callService.callIntegration else {
-            print("[AppState] Android ACCEPT arrived from \(senderId) with no caller integration")
+            print("[AppState] Android ACCEPT arrived from \(senderId.prefix(8))… but callService.callIntegration is nil — call already ended or ACCEPT arrived after teardown")
             return
         }
+        // W461: diagnostic — log the callId as received so we can detect
+        // case mismatches (iOS uppercase UUID vs Android lowercase echo).
+        let intState: String = String(describing: integration.getState())
+        print("[AppState] Android ACCEPT callId=\(parsed.callId.prefix(8))… from \(senderId.prefix(8))… integration.state=\(intState)")
         let sendOpaqueRaw: (String) async throws -> Void = { [weak self] wireString in
             guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
             let payload = wireString.data(using: .utf8) ?? Data()
@@ -2452,15 +2461,16 @@ final class AppState: ObservableObject {
                 // BCryptoWebSocketClient.swift (onCallProcessing /
                 // onCallReady / onCallRing / onCallPeerOffline /
                 // onCallCancel).
-                ws.onCallProcessing = { [weak self] _, _ in
+                ws.onCallProcessing = { [weak self] callId, receiverId in
                     DispatchQueue.main.async {
-                        // Bail out if AppState was deallocated mid-flight.
-                        // No need to bind self — the closure body doesn't
-                        // touch any instance state, just logs.
-                        guard self != nil else { return }
-                        // Already `.connecting` by default — no transition
-                        // needed but log so devs see the WS arrived.
-                        print("[AppState] call_processing received — peer ack'd offer")
+                        guard let self = self else { return }
+                        // W461: route to the integration so it advances from
+                        // .capabilitySent → .connecting. Without this the
+                        // 30s fallback timer checked state == .capabilitySent
+                        // and fired endCall() even though the peer ack'd.
+                        print("[AppState] call_processing callId=\(callId.prefix(8))… from \(receiverId.prefix(8))… — advancing integration to .connecting")
+                        self.callService.callIntegration?.onCallProcessingReceived(
+                            callId: callId, receiverId: receiverId)
                     }
                 }
                 ws.onCallReady = { [weak self] _, _, _ in
