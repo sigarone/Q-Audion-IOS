@@ -28,7 +28,10 @@ let package = Package(
         // SQLCipher integration is available only via CocoaPods/xcframework.
         // Using standard GRDB; iOS Data Protection (FileProtectionType) provides
         // at-rest encryption when the device is locked.
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),
+        // GRDB 7.x requires swift-tools-version 6.1.0 (Xcode 16.3+); CI runner has
+        // Xcode 16.2 (Swift tools 6.0) which is incompatible. Pin to 6.x until CI
+        // upgrades to Xcode 16.3+.
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
     ],
     targets: [
         .target(
