@@ -1,5 +1,7 @@
 import SwiftUI
 import AVFoundation
+import PhotosUI
+import Vision
 
 /// Fast-setup onboarding (QR scan → automatic login).
 ///
@@ -20,6 +22,12 @@ import AVFoundation
 ///      button, and dismiss back to onboarding root on success (parent
 ///      ContentView routes to HomeView automatically when isAuthenticated
 ///      flips).
+///
+/// In addition to the live-camera path, a **"Carica immagine QR"** button
+/// lets the user pick a screenshot or photo from their library. The QR is
+/// decoded offline via `Vision.VNDetectBarcodesRequest` (no network, same
+/// payload-validation path as the camera).  Mirrors the Desktop
+/// `Onboarding.svelte` "Carica immagine QR" button (jsQR equivalent).
 struct FastSetupOnboardingScreen: View {
 
     let appState: AppState
@@ -27,6 +35,11 @@ struct FastSetupOnboardingScreen: View {
 
     @State private var phase: Phase = .scanning
     @State private var lastError: String?
+    /// Bound to `PhotosPicker`; set to nil after each use so the same image
+    /// can be re-selected if needed.
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    /// True while Vision is decoding the picked image (shows a spinner label).
+    @State private var isDecodingPhoto = false
 
     private enum Phase: Equatable {
         case scanning           // camera open
@@ -65,10 +78,18 @@ struct FastSetupOnboardingScreen: View {
 
                 switch phase {
                 case .scanning:
-                    QrScannerView(
-                        onScanned: handleScannedString,
-                        onCancel: onCancel
-                    )
+                    // Camera scanner fills remaining space; photo-import button
+                    // is overlaid at the bottom so the viewfinder stays full-size.
+                    ZStack(alignment: .bottom) {
+                        QrScannerView(
+                            onScanned: handleScannedString,
+                            onCancel: onCancel
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        photoImportButton
+                            .padding(.bottom, 32)
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 case .loggingIn:
@@ -127,6 +148,92 @@ struct FastSetupOnboardingScreen: View {
             }
             .padding(.horizontal, 24)
         }
+    }
+
+    // MARK: - Photo import (QR from library)
+
+    /// "Carica immagine QR" button — mirrors Desktop `Onboarding.svelte`.
+    /// Uses `PhotosPicker` (PhotosUI, iOS 16+) so the app never needs the
+    /// full photo-library `NSPhotoLibraryUsageDescription`; iOS shows a
+    /// limited-selection picker that only requests access to the chosen image.
+    @ViewBuilder
+    private var photoImportButton: some View {
+        PhotosPicker(
+            selection: $selectedPhotoItem,
+            matching: .images,
+            photoLibrary: .shared()
+        ) {
+            Label(
+                isDecodingPhoto ? "Analisi in corso…" : "Carica immagine QR",
+                systemImage: isDecodingPhoto ? "hourglass" : "photo.on.rectangle.angled"
+            )
+            .font(.body.weight(.medium))
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .foregroundStyle(.white)
+            .background(.black.opacity(0.55))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(.white.opacity(0.25), lineWidth: 1)
+            )
+        }
+        .disabled(isDecodingPhoto)
+        .padding(.horizontal, 24)
+        // iOS 16-compatible single-arg onChange (deprecated in 17 but still supported)
+        .onChange(of: selectedPhotoItem) { newItem in
+            guard let newItem else { return }
+            Task { await decodeQrFromPhoto(newItem) }
+        }
+    }
+
+    /// Decode a QR code from a photo picked via `PhotosPicker`.
+    /// Uses `Vision.VNDetectBarcodesRequest` (offline, no network).
+    /// On success calls `handleScannedString` — identical path to camera.
+    private func decodeQrFromPhoto(_ item: PhotosPickerItem) async {
+        isDecodingPhoto = true
+        defer {
+            isDecodingPhoto = false
+            // Reset so the same image can be re-picked if needed.
+            selectedPhotoItem = nil
+        }
+
+        // 1. Load raw image data from the picker item.
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let uiImage = UIImage(data: data),
+              let ciImage = CIImage(image: uiImage) else {
+            await MainActor.run {
+                lastError = "Impossibile caricare l'immagine selezionata."
+                phase = .errorPending
+            }
+            return
+        }
+
+        // 2. Run Vision QR detector (synchronous on current task).
+        let request = VNDetectBarcodesRequest()
+        request.symbologies = [.qr]
+        let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            await MainActor.run {
+                lastError = "Errore analisi immagine: \(error.localizedDescription)"
+                phase = .errorPending
+            }
+            return
+        }
+
+        guard let observation = request.results?.first as? VNBarcodeObservation,
+              let payload = observation.payloadStringValue else {
+            await MainActor.run {
+                lastError = "Nessun QR trovato nell'immagine. Assicurati che il " +
+                            "codice QR sia visibile e ben a fuoco."
+                phase = .errorPending
+            }
+            return
+        }
+
+        // 3. Hand off to the same validation + login path as the camera.
+        await MainActor.run { handleScannedString(payload) }
     }
 
     // MARK: - Scan handler
