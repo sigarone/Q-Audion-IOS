@@ -113,7 +113,8 @@ struct ContactsScreen: View {
                 .frame(maxHeight: .infinity)
             }
         }
-        .navigationBarHidden(true)
+        // W460: same fix as SettingsScreen — replace deprecated API.
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             container.attach(appState: appState)
             blockedIds = BlockedContactsStore.loadBlockedIds()

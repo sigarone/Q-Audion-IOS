@@ -192,7 +192,13 @@ struct SettingsScreen: View {
                 }
             }
         }
-        .navigationBarHidden(true)
+        // W460: replaced deprecated .navigationBarHidden(true) with the
+        // iOS-16+ API. The old API triggered a UINavigationController
+        // internal assertion on iOS 26 (beta) when transitioning from the
+        // default Chats tab (inline nav bar) to this tab, causing a crash
+        // on every Settings-tab tap. .toolbar(.hidden) is functionally
+        // identical but uses the modern visibility model that iOS 26 expects.
+        .toolbar(.hidden, for: .navigationBar)
     }
 
     // MARK: - Top bar
@@ -508,7 +514,10 @@ struct SettingsScreen: View {
                             subtitle: cacheUsageSubtitle)
             }
             .buttonStyle(.plain)
-            .id(cacheUsageRefreshTrigger)
+            // W460: unique id per sibling view — sharing the same id value
+            // with other siblings in the same builder is a SwiftUI anti-pattern
+            // that confuses view-identity reconciliation on iOS 26.
+            .id("cache-row-\(cacheUsageRefreshTrigger)")
             // W165: confirmationDialog anchored to the cache row.
             .confirmationDialog(
                 "Svuotare la cache degli allegati?",
@@ -545,7 +554,7 @@ struct SettingsScreen: View {
                             subtitle: Self.draftsSubtitle())
             }
             .buttonStyle(.plain)
-            .id(cacheUsageRefreshTrigger)
+            .id("drafts-row-\(cacheUsageRefreshTrigger)")
 
             // W163: combined reset of all small per-device metadata
             // accumulated by W137 / W142 / W158 / W162 (drafts,
@@ -600,7 +609,7 @@ struct SettingsScreen: View {
                             subtitle: Self.lastSeenSubtitle())
             }
             .buttonStyle(.plain)
-            .id(cacheUsageRefreshTrigger)
+            .id("lastseen-row-\(cacheUsageRefreshTrigger)")
 
             // W268: PQC self-test. Synchronously runs ML-KEM-1024
             // keygen + encap + decap and verifies the shared secret

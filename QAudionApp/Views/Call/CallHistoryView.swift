@@ -181,7 +181,8 @@ struct CallHistoryView: View {
                 content
             }
         }
-        .navigationBarHidden(true)
+        // W460: same fix as SettingsScreen — replace deprecated API.
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             store.refresh(from: appState)
             store.seedWithMockIfEmpty()
