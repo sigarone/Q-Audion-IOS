@@ -14,21 +14,21 @@ let package = Package(
         )
     ],
     dependencies: [
-        // Pinned to 1.17.0 (not 'from:') because newer onnxruntime XCFrameworks
-        // ship with a MinimumOSVersion >= iOS 18.1 which triggers ITMS-90208.
-        // 1.17.0 supports iOS 13+.
-        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.17.0"),
+        // Pinned exact because onnxruntime XCFrameworks have historically shipped
+        // with elevated MinimumOSVersion (e.g. iOS 18.1) that triggers ITMS-90208.
+        // 1.24.2 declares iOS 15+ in its Package.swift — safe for our iOS 16 target.
+        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.24.2"),
         // W347: WebRTC binary framework (community-maintained build of Google's libwebrtc).
         // stasel/WebRTC ships an XCFramework with arm64 (device) + arm64/x86_64 (simulator).
         // Pinned to a known-good iOS 16-compatible release. The IPA size impact is
         // significant (~150 MB) but unavoidable for cross-platform 1:1 + group calls.
-        .package(url: "https://github.com/stasel/WebRTC", exact: "131.0.0"),
+        .package(url: "https://github.com/stasel/WebRTC", exact: "147.0.0"),
         // W500: GRDB for local persistence (conversation + message store).
         // Note: GRDB-SQLCipher is NOT a valid SPM product in groue/GRDB.swift —
         // SQLCipher integration is available only via CocoaPods/xcframework.
         // Using standard GRDB; iOS Data Protection (FileProtectionType) provides
         // at-rest encryption when the device is locked.
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),
     ],
     targets: [
         .target(
