@@ -849,19 +849,17 @@ struct SettingsScreen: View {
     // MARK: - Helpers
 
     private var profileDisplayName: String {
-        // W439: show a short, human-readable identifier in the hero card.
-        // The full UUID (e.g. "f44fe28f-0e15-4a27-a953-da935e355d72") is
-        // not useful as a display name — truncate to the first 8 chars.
-        // AccountSettingsScreen loads the real displayName from the server
-        // (Profile → Nome visualizzato) via AccountSettingsContainer once
-        // navigated to. The hero card shows the short-id as a placeholder
-        // until the user sets a display name.
+        // W459: prefer the server-assigned PBX extension (e.g. "Interno 103")
+        // over the UUID fragment. getProfile() populates currentUserDialExtension
+        // on every launch; UUID fallback applies only on first-frame before the
+        // profile round-trip completes (or if server returns dialExtension == 0).
+        if let ext = appState.currentUserDialExtension, !ext.isEmpty {
+            return "Interno \(ext)"
+        }
         if let userId = appState.currentUserId, !userId.isEmpty {
             if userId.hasPrefix("user-") {
                 return String(userId.dropFirst(5)).capitalized
             }
-            // UUID or hex id — show first 8 chars so it's recognizable
-            // without taking up the full hero card width.
             return userId.count > 8
                 ? String(userId.prefix(8)) + "…"
                 : userId

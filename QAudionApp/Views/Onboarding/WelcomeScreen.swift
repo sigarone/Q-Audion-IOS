@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import Vision
 
 /// Onboarding landing screen. Visual + copy replica of the Android
 /// canonical source `qaudion-android-new/feature/feature-auth/ui/WelcomeScreen.kt`.
@@ -34,10 +36,21 @@ struct WelcomeScreen: View {
     let onStartFastSetup: () -> Void
     let onStartRegister: () -> Void
     let onStartLogin: () -> Void
+    /// W459 — mirrors Android's `onGalleryQrDecoded` callback. When
+    /// non-nil a "Carica immagine QR" PhotosPicker button is shown
+    /// directly on this screen (above the secondary CTA). The caller
+    /// (OnboardingRoot) navigates to FastSetupOnboardingScreen with the
+    /// decoded QR text so payload validation happens in one place.
+    /// Nil in previews / test hosts where no gallery is wired.
+    var onGalleryQrDecoded: ((String) -> Void)? = nil
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+
+    @State private var selectedGalleryItem: PhotosPickerItem?
+    @State private var galleryBusy = false
+    @State private var galleryError: String?
 
     var body: some View {
         ZStack {
@@ -82,6 +95,37 @@ struct WelcomeScreen: View {
                             label: "Configurazione rapida (QR)",
                             variant: .primary
                         )
+                        // W459 — gallery QR shortcut, shown only when
+                        // OnboardingRoot wires onGalleryQrDecoded.
+                        // Uses PhotosPicker (no full library permission).
+                        if onGalleryQrDecoded != nil {
+                            PhotosPicker(
+                                selection: $selectedGalleryItem,
+                                matching: .images,
+                                photoLibrary: .shared()
+                            ) {
+                                Label(
+                                    galleryBusy ? "Analisi in corso…" : "Carica immagine QR",
+                                    systemImage: galleryBusy ? "hourglass" : "photo.on.rectangle.angled"
+                                )
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(extras.pqcAccent)
+                                .frame(maxWidth: .infinity, minHeight: 48)
+                            }
+                            .disabled(galleryBusy)
+                            .onChange(of: selectedGalleryItem) { newItem in
+                                guard let newItem else { return }
+                                galleryBusy = true
+                                galleryError = nil
+                                Task { await decodeGalleryQr(from: newItem) }
+                            }
+                            if let err = galleryError {
+                                Text(err)
+                                    .qaudionStyle(type.bodySmall)
+                                    .foregroundStyle(scheme.error)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
                         QAudionButton(
                             action: onStartRegister,
                             label: "Inizia con un codice invito",
@@ -120,6 +164,39 @@ struct WelcomeScreen: View {
                 .padding(.vertical, 32)
             }
         }
+    }
+
+    // MARK: - Gallery QR decode (Vision)
+
+    /// Decode a QR code from a photo selected via PhotosPicker.
+    /// Mirrors `FastSetupOnboardingScreen.decodeQrFromPhoto(_:)`.
+    /// Uses Vision's `VNDetectBarcodesRequest` — offline, no network.
+    private func decodeGalleryQr(from item: PhotosPickerItem) async {
+        defer {
+            galleryBusy = false
+            selectedGalleryItem = nil
+        }
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let uiImage = UIImage(data: data),
+              let ciImage = CIImage(image: uiImage) else {
+            galleryError = "Impossibile caricare l'immagine selezionata."
+            return
+        }
+        let request = VNDetectBarcodesRequest()
+        request.symbologies = [.qr]
+        let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            galleryError = "Errore analisi immagine: \(error.localizedDescription)"
+            return
+        }
+        guard let observation = request.results?.first as? VNBarcodeObservation,
+              let payload = observation.payloadStringValue else {
+            galleryError = "Nessun QR trovato nell'immagine. Assicurati che il codice QR sia visibile e ben a fuoco."
+            return
+        }
+        onGalleryQrDecoded?(payload)
     }
 }
 

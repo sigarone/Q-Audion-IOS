@@ -19,6 +19,10 @@ import SwiftUI
 struct OnboardingRoot: View {
     @EnvironmentObject var appState: AppState
     @State private var route: Route = .welcome
+    /// W459 — holds the QR text pre-decoded on WelcomeScreen (gallery path).
+    /// Forwarded to FastSetupOnboardingScreen via `initialQrText` so
+    /// payload validation happens in a single shared code path.
+    @State private var fastSetupInitialQrText: String = ""
 
     private enum Route: Equatable {
         case welcome
@@ -34,12 +38,23 @@ struct OnboardingRoot: View {
                 WelcomeScreen(
                     onStartFastSetup: { route = .fastSetup },
                     onStartRegister: { route = .phoneEntry(.register) },
-                    onStartLogin: { route = .phoneEntry(.login) }
+                    onStartLogin: { route = .phoneEntry(.login) },
+                    // W459: pre-decode QR on WelcomeScreen itself, then
+                    // jump straight to FastSetup carrying the raw text so
+                    // payload validation + login happen in one shared path.
+                    onGalleryQrDecoded: { text in
+                        fastSetupInitialQrText = text
+                        route = .fastSetup
+                    }
                 )
             case .fastSetup:
                 FastSetupOnboardingScreen(
                     appState: appState,
-                    onCancel: { route = .welcome }
+                    onCancel: {
+                        fastSetupInitialQrText = ""
+                        route = .welcome
+                    },
+                    initialQrText: fastSetupInitialQrText
                 )
             case .phoneEntry(let mode):
                 PhoneEntryScreen(

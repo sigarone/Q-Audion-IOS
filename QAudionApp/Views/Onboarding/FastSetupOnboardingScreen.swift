@@ -32,6 +32,11 @@ struct FastSetupOnboardingScreen: View {
 
     let appState: AppState
     let onCancel: () -> Void
+    /// W459 — pre-decoded QR text forwarded from WelcomeScreen's gallery
+    /// picker. When non-empty the screen skips the camera scanner and
+    /// processes the payload immediately on first appearance (same
+    /// validation + login path as the live-camera scan).
+    var initialQrText: String = ""
 
     @State private var phase: Phase = .scanning
     @State private var lastError: String?
@@ -119,6 +124,13 @@ struct FastSetupOnboardingScreen: View {
                     .padding(.horizontal, 24)
                     .padding(.bottom, 24)
                 }
+            }
+        }
+        // W459: if OnboardingRoot already decoded the QR (gallery path
+        // from WelcomeScreen), skip the camera and process it immediately.
+        .onAppear {
+            if !initialQrText.isEmpty {
+                handleScannedString(initialQrText)
             }
         }
     }
