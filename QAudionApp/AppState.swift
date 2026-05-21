@@ -1155,10 +1155,22 @@ final class AppState: ObservableObject {
         // The bridge is opt-in per call (AppState.webRtcController) so
         // builds without the WebRTC framework available still compile.
         ws.registerHandler(type: "call_offer") { [weak self] _, data in
+            // W462-iOS: The iOS PQC path sends a vestigial call_offer with
+            // sdp:"" so the server creates a call session and wakes the
+            // callee's CallKit (via call_incoming). WebRTC is NOT needed for
+            // that envelope — creating a WebRTC controller with empty SDP
+            // causes RTCPeerConnection.setRemoteDescription to fail, and the
+            // resulting ICE-failure callback fires handleIceTermination →
+            // endCall, killing the call before the user can speak.
+            // Guard: skip WebRTC setup entirely for empty-SDP offers.
             guard let self = self,
-                  let sdp = data["sdp"] as? String,
+                  let sdp = data["sdp"] as? String, !sdp.isEmpty,
                   let callerId = (data["sender_id"] as? String) ?? (data["caller_id"] as? String) else {
-                print("[AppState] call_offer: missing sdp/caller_id")
+                if let s = data["sdp"] as? String, s.isEmpty {
+                    print("[AppState] call_offer: empty SDP (PQC-only offer) — skip WebRTC setup")
+                } else {
+                    print("[AppState] call_offer: missing sdp/caller_id")
+                }
                 return
             }
             // Commit 540b79c0 parity — capture the peer's advertised
@@ -2513,6 +2525,13 @@ final class AppState: ObservableObject {
 
             try callService.startCall(engine: engine, contactId: contactId)
 
+            // W462-iOS: canonical callId shared across PQC and WebRTC rails.
+            // Declared here (outer do scope) so the WebRTC Task below can
+            // capture it without re-minting a second UUID that creates a
+            // duplicate server call-session and ghost call_incoming events.
+            // Set to the real UUID inside the `if let integration` block.
+            var sharedOutgoingCallId: String = ""
+
             // W72: integration responder-side wiring. When THIS device is
             // the responder receiving a call, the engine emits these
             // closures for us to relay over WS so the caller sees the
@@ -2598,6 +2617,7 @@ final class AppState: ObservableObject {
                 // iOS-originated call to Android sat for the full
                 // 35s PqcHandshake timeout.
                 let outgoingCallId = UUID().uuidString
+                sharedOutgoingCallId = outgoingCallId  // expose to WebRTC Task below
                 // Caller-id substitution: ship the local public phone
                 // number (digits-only, see `LocalCallerIdSettings`) as
                 // `caller_display` on the outbound call_offer when the
@@ -2719,12 +2739,22 @@ final class AppState: ObservableObject {
                 // peer doesn't pick a different label depending on
                 // which OFFER it picks up first.
                 let webRtcCallerDisplay = LocalCallerIdSettings.phoneNumber()
+                // W462-iOS: thread the canonical PQC callId into the
+                // WebRTC controller so both rails share ONE server
+                // call-session. `sharedOutgoingCallId` was minted inside
+                // the integration block and already used by `beginAndroidOutgoing`.
+                // If the integration block was skipped (no integration yet),
+                // sharedOutgoingCallId is "" and startOutgoingCall falls
+                // back to minting its own UUID (old behaviour, harmless for
+                // pure-WebRTC peers).
+                let webRtcCallId: String? = sharedOutgoingCallId.isEmpty ? nil : sharedOutgoingCallId
                 Task { [weak self] in
                     do {
                         try await controller.startOutgoingCall(
                             recipientId: contactId,
                             audioOnly: !video,
-                            callerDisplay: webRtcCallerDisplay
+                            callerDisplay: webRtcCallerDisplay,
+                            callId: webRtcCallId
                         )
                         print("[AppState] WebRTC outgoing offer sent to \(contactId)")
                         // After startOutgoingCall the WebRTC video source exists.

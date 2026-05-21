@@ -178,10 +178,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// caller wants the callee's CallKit caller-id to show. When nil,
     /// the field is omitted on the wire and the server fills it with the
     /// caller's internal extension. See `LocalCallerIdSettings`.
+    /// W462-iOS ghost-call fix: when a `callId` is supplied the WebRTC
+    /// offer reuses the SAME server call-session UUID that the PQC path
+    /// already registered via `sendCallOfferWithId`. This prevents the
+    /// server from creating a second call session and the callee from
+    /// receiving a duplicate `call_incoming` that confuses the state
+    /// machine. Defaults to nil (mints a fresh UUID) for backwards
+    /// compatibility with callers that have no PQC session running.
     public func startOutgoingCall(
         recipientId: String,
         audioOnly: Bool = true,
-        callerDisplay: String? = nil
+        callerDisplay: String? = nil,
+        callId: String? = nil
     ) async throws {
         guard state == .idle || state == .disconnected else {
             throw ControllerError.wrongState(String(describing: state))
@@ -231,14 +239,29 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // every outgoing call_offer. Pass hasVideo so the wire envelope
         // sets call_type:"video" and has_video:true for video calls,
         // matching Android WsCodec.kt CallOffer serialization.
+        // W462-iOS: if a canonical callId was supplied (from the PQC
+        // path), reuse it via sendCallOfferWithId so only ONE server
+        // call session is created. Without this, the WebRTC rail minted
+        // its own UUID and the callee received two call_incoming events.
         let callHasVideo: Bool = !audioOnly
-        try await callingApi.sendCallOffer(
-            recipientId: recipientId,
-            sdp: sdp,
-            capabilities: CallCapabilities.local,
-            callerDisplay: callerDisplay,
-            hasVideo: callHasVideo
-        )
+        if let cid = callId {
+            try await callingApi.sendCallOfferWithId(
+                callId: cid,
+                recipientId: recipientId,
+                sdp: sdp,
+                capabilities: CallCapabilities.local,
+                callerDisplay: callerDisplay,
+                hasVideo: callHasVideo
+            )
+        } else {
+            try await callingApi.sendCallOffer(
+                recipientId: recipientId,
+                sdp: sdp,
+                capabilities: CallCapabilities.local,
+                callerDisplay: callerDisplay,
+                hasVideo: callHasVideo
+            )
+        }
         state = .connecting
     }
 

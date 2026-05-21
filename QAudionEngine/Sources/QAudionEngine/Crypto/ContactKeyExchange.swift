@@ -164,6 +164,16 @@ public final class ContactKeyExchange: @unchecked Sendable {
         let pskData = pskKey.withUnsafeBytes { Data($0) }
 
         // Fingerprint = hex(SHA256(psk)).
+        //
+        // SECURITY (WS-3 / HIGH-4) — a plain SHA-256 fingerprint is sound:
+        // `pskData` is always 256-bit high-entropy material (here an
+        // HKDF-SHA256 output; elsewhere an NFC ML-KEM secret, a QR import or
+        // a KMS key) — never a low-entropy passphrase. SHA-256 of a uniform
+        // 256-bit secret is not invertible or grindable, so a keyed PRF
+        // would add no real security. This full 64-hex string is a
+        // CROSS-PLATFORM WIRE IDENTIFIER: iOS, Android and Desktop must
+        // compute it byte-identically (WIRE_SPEC.md §3.3) or PSK negotiation
+        // diverges and calls fail. Do NOT switch to HMAC unilaterally.
         let fingerprint = SHA256.hash(data: pskData)
             .map { String(format: "%02x", $0) }
             .joined()
