@@ -473,6 +473,24 @@ final class AppState: ObservableObject {
                     self.setMuted(muted)
                 }
             }
+            // W464 — CallKit owns the shared AVAudioSession. The audio
+            // engines (mic capture + speaker playback) MUST NOT start
+            // until CallKit activates it: starting AVAudioEngine before
+            // `didActivate` throws "Session activation failed" and the
+            // call connects (WebRTC ICE + PQC handshake OK) but has no
+            // audio in either direction. These two bridges hand the
+            // activation signal to CallService, which then starts /
+            // stops its AVAudioEngine capture/playback at the right time.
+            provider.onAudioSessionActivated = { [weak self] in
+                Task { @MainActor in
+                    self?.callService.handleAudioSessionActivated()
+                }
+            }
+            provider.onAudioSessionDeactivated = { [weak self] in
+                Task { @MainActor in
+                    self?.callService.handleAudioSessionDeactivated()
+                }
+            }
         }
 
         // MARK: PushKit VoIP push registration

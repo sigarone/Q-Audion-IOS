@@ -69,6 +69,22 @@ public final class AudioProcessingPipeline {
     ///
     /// `.voiceChat` mode enables Apple's built-in AEC, AGC, and noise suppression
     /// at the hardware/DSP level. This must be called before starting AVAudioEngine.
+    ///
+    /// W464 — DO NOT hard-activate the session here. Q-Audion calls are
+    /// managed by CallKit (`CXProvider`), which OWNS the shared
+    /// `AVAudioSession`: it activates the session itself and notifies the
+    /// app via `provider(_:didActivate:)`. If the app calls
+    /// `setActive(true)` before CallKit's `didActivate` fires, iOS
+    /// rejects it with "Session activation failed" — and then every
+    /// subsequent `AVAudioEngine.start()` fails too, so the call connects
+    /// (WebRTC ICE + PQC handshake) but has NO audio in either direction.
+    /// Setting the category/mode/preferred-buffer is allowed at any time
+    /// and is the correct app responsibility; activation is CallKit's.
+    /// The `setActive(true)` below is kept only as a best-effort `try?`
+    /// for non-CallKit edges (interruption resume, simulator) — when it
+    /// fails because CallKit hasn't handed over yet, the failure is
+    /// swallowed and the real activation arrives via `didActivate`, which
+    /// then drives `CallService.startAudioIOIfReady()`.
     public func configureForVoIP() throws {
         let session = AVAudioSession.sharedInstance()
 
@@ -91,7 +107,10 @@ public final class AudioProcessingPipeline {
         // Match engine sample rate
         try session.setPreferredSampleRate(config.preferredSampleRate)
 
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
+        // W464: best-effort only — CallKit is the authoritative activator.
+        // A failure here is EXPECTED when CallKit hasn't yet called
+        // didActivate; it must not abort configuration or throw upward.
+        try? session.setActive(true, options: .notifyOthersOnDeactivation)
 
         isConfigured = true
     }

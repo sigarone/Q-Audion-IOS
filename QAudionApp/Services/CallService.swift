@@ -58,6 +58,16 @@ final class CallService {
     /// type, quindi de-register è no-op (ma resettiamo wsClient così
     /// future incoming frames non triggherano playback senza session).
 
+    /// W464 — true once CallKit has activated the shared AVAudioSession.
+    /// `AVAudioEngine.start()` (inside AudioCapture/AudioPlayback) REQUIRES
+    /// an active session; starting it before CallKit's `didActivate`
+    /// throws "Session activation failed" and the call ends up with NO
+    /// audio in either direction even though WebRTC + the PQC handshake
+    /// succeed. We therefore create the capture/playback objects in
+    /// `startCall` / `activateIncomingCallAudio` but DEFER their
+    /// `.start()` until `handleAudioSessionActivated()` fires.
+    private var audioSessionActive = false
+
     // MARK: - Mute / Hold
 
     /// When true, processOutgoingAudio returns silent (zero-padded) ciphertext.
@@ -165,19 +175,21 @@ final class CallService {
             self.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
         }
 
-        do {
-            try playback.start()
-            self.audioPlayback = playback
-        } catch {
-            print("[CallService] AudioPlayback start failed: \(error.localizedDescription)")
-        }
-
-        do {
-            try capture.start()
-            self.audioCapture = capture
-        } catch {
-            print("[CallService] AudioCapture start failed: \(error.localizedDescription) — chiamata continua senza HW VP")
-        }
+        // W464 — store the capture/playback refs UNCONDITIONALLY (before
+        // any .start()) so the start can be (re)driven later.
+        self.audioPlayback = playback
+        self.audioCapture = capture
+        // W464 — OUTGOING calls are NOT reported to CallKit's CXProvider
+        // (AppState.startCall(contactId:) never calls
+        // `callKit.startOutgoingCall`), so `provider(_:didActivate:)`
+        // never fires for them. For the outgoing path the app itself owns
+        // session activation: `configureForVoIP()` above already issued a
+        // best-effort `setActive(true)`, so we mark the session active and
+        // start the engines now. (INCOMING calls take the opposite path —
+        // see `activateIncomingCallAudio`, where CallKit owns activation
+        // and the start is deferred until `handleAudioSessionActivated`.)
+        audioSessionActive = true
+        startAudioIOIfReady()
 
         let integration = QAudionCallIntegration()
 
@@ -277,19 +289,21 @@ final class CallService {
             self.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
         }
 
-        do {
-            try playback.start()
-            self.audioPlayback = playback
-        } catch {
-            print("[CallService] activateIncomingCallAudio: playback start failed: \(error.localizedDescription)")
-        }
-
-        do {
-            try capture.start()
-            self.audioCapture = capture
-        } catch {
-            print("[CallService] activateIncomingCallAudio: capture start failed: \(error.localizedDescription)")
-        }
+        // W464 — INCOMING calls ARE driven by CallKit's CXProvider
+        // (reportIncomingCall + CXAnswerCallAction). CallKit OWNS the
+        // AVAudioSession and activates it itself, then calls
+        // `provider(_:didActivate:)`. `activateIncomingCallAudio` runs
+        // from the answer handler BEFORE that callback, so the session is
+        // NOT yet active here: store the refs and DEFER the engine start.
+        // `audioSessionActive` stays false (teardownAudioStack reset it)
+        // and `handleAudioSessionActivated()` — wired to
+        // `CallKitProvider.onAudioSessionActivated` — performs the real
+        // start once CallKit hands the session over. Calling
+        // `startAudioIOIfReady()` now is a deliberate no-op that also
+        // covers the race where `didActivate` somehow already fired.
+        self.audioPlayback = playback
+        self.audioCapture = capture
+        startAudioIOIfReady()
 
         // Bind the integration so handleIncomingEncryptedFrame can decrypt
         // inbound audio_frame packets.
@@ -440,12 +454,69 @@ final class CallService {
         audioPipeline = nil
         framesEncryptedTx = 0
         framesDecryptedRx = 0
+        // W464 — drop the session-active flag so the NEXT call starts
+        // from a clean slate and waits for its own CallKit `didActivate`.
+        audioSessionActive = false
         // W67: reset transport binding. Nota: NON disconnect-iamo il
         // wsClient (può restare connesso per signaling / chat / contacts).
         // Solo facciamo nil-out i riferimenti così future audio frames
         // non triggherano send/playback.
         wsClient = nil
         peerUserId = nil
+    }
+
+    // MARK: - W464 — CallKit audio-session lifecycle
+
+    /// W464 — start the capture + playback `AVAudioEngine`s, but ONLY once
+    /// CallKit has activated the shared `AVAudioSession`.
+    ///
+    /// `AudioCapture.start()` / `AudioPlayback.start()` both guard on an
+    /// internal `isRunning` flag, so this is idempotent: it is safe to
+    /// call from `startCall` / `activateIncomingCallAudio` (where the
+    /// session is usually NOT yet active → no-op) AND from
+    /// `handleAudioSessionActivated()` (where it actually starts the
+    /// engines). Whichever runs last with `audioSessionActive == true`
+    /// performs the real start.
+    private func startAudioIOIfReady() {
+        guard audioSessionActive else {
+            print("[CallService] audio I/O deferred — waiting for CallKit didActivate")
+            return
+        }
+        if let playback = audioPlayback {
+            do {
+                try playback.start()
+            } catch {
+                // CLAUDE.md §13 — build the String before the print call.
+                let desc: String = error.localizedDescription
+                let line: String = "[CallService] AudioPlayback start failed: " + desc
+                print(line)
+            }
+        }
+        if let capture = audioCapture {
+            do {
+                try capture.start()
+            } catch {
+                let desc: String = error.localizedDescription
+                let line: String = "[CallService] AudioCapture start failed: " + desc + " — chiamata continua senza HW VP"
+                print(line)
+            }
+        }
+    }
+
+    /// W464 — CallKit activated the shared `AVAudioSession`. This is the
+    /// only safe moment to spin up the mic-capture / speaker-playback
+    /// `AVAudioEngine`s. Wired from `AppState` to
+    /// `CallKitProvider.onAudioSessionActivated`. Runs on the main thread.
+    public func handleAudioSessionActivated() {
+        audioSessionActive = true
+        startAudioIOIfReady()
+    }
+
+    /// W464 — CallKit released the audio session (call ending or
+    /// interrupted). Future audio-engine starts must wait for the next
+    /// `didActivate`. Wired from `CallKitProvider.onAudioSessionDeactivated`.
+    public func handleAudioSessionDeactivated() {
+        audioSessionActive = false
     }
 
     /// W69 helper: encrypt + waveform-update + network-send routine

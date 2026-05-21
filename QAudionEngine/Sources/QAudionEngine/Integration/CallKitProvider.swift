@@ -10,6 +10,16 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     public var onAnswerCall: ((UUID) async -> Void)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
+    /// W464 — fired when CallKit has activated the shared AVAudioSession.
+    /// This is the ONLY safe moment to start `AVAudioEngine` (mic capture
+    /// + speaker playback). Starting the engine before this point throws
+    /// "Session activation failed" and the call has no audio. AppState
+    /// wires this to `CallService.handleAudioSessionActivated()`.
+    public var onAudioSessionActivated: (() -> Void)?
+    /// W464 — fired when CallKit released the audio session (call ended
+    /// or interrupted). AppState wires this to
+    /// `CallService.handleAudioSessionDeactivated()`.
+    public var onAudioSessionDeactivated: (() -> Void)?
 
     public override init() {
         let cfg = CXProviderConfiguration()
@@ -102,12 +112,29 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     }
 
     public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP])
+        // W464 — keep these options in sync with
+        // AudioProcessingPipeline.configureForVoIP(): if CallKit installs
+        // a poorer category (e.g. no .defaultToSpeaker) it silently
+        // downgrades the routing the app just configured.
+        try? audioSession.setCategory(
+            .playAndRecord,
+            mode: .voiceChat,
+            options: [
+                .defaultToSpeaker,
+                .allowBluetoothHFP,
+                .allowBluetoothA2DP,
+                .interruptSpokenAudioAndMixWithOthers
+            ]
+        )
         try? audioSession.setActive(true)
+        // W464 — the session is now active: this is the moment
+        // CallService may safely start its AVAudioEngine capture/playback.
+        onAudioSessionActivated?()
     }
 
     public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         // System took the audio session — engine should pause mic capture.
+        onAudioSessionDeactivated?()
     }
 }
 #endif

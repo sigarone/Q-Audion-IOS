@@ -132,6 +132,14 @@ struct SettingsScreen: View {
         // navigation host. Keeping a second NavigationStack here caused
         // an iPadOS internal UINavigationController crash on first render.
         ZStack {
+            // W464 — body-eval marker. The W461 `.onAppear` log fires only
+            // AFTER the body renders successfully; if Settings crashes
+            // during body evaluation (e.g. an eager NavigationLink
+            // destination init) `.onAppear` never logs and the telemetry
+            // shows only a crash-loop with no Settings line. This marker
+            // logs at the START of body eval: if it appears but the
+            // `.onAppear` line does not, the crash is inside this body.
+            let _ = print("[Settings] body eval start")
             scheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
