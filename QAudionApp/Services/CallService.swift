@@ -66,6 +66,19 @@ final class CallService {
     private var loggedFirstRxDecrypt = false
     private var loggedRxNoPlayback = false
 
+    // MARK: - W469 — cross-platform audio wire format
+    //
+    // The engine's `processOutgoingAudio` always serialises the
+    // iOS-native `FrameEncoder` container. Android peers on the
+    // BcryptoWsRelay can only decode the compact `WireRelayFrameCodec`
+    // audio envelope — telemetry of an iPad↔A50 call showed the iPad
+    // rejecting 2250+ Android frames at header parsing. The toggle
+    // mirrors the video path's UserDefault (default ON → cross-platform).
+    private var loggedFirstTxWire = false
+    private lazy var androidAudioWireCompat: Bool =
+        (UserDefaults.standard.object(
+            forKey: "qaudion.video.android_wire_compat") as? Bool) ?? true
+
     /// W67: WebSocket transport binding. Quando setato via
     /// `wireTransport(wsClient:peerUserId:)`, il loop chiude:
     ///   TX: capture.onFrame → encrypt → wsClient.sendAudioFrame
@@ -252,6 +265,26 @@ final class CallService {
 
         self.callIntegration = integration
         startDurationTimer()
+
+        // W469 — CallKit `didActivate` fallback for OUTGOING calls.
+        // The W467 path defers the audio-engine start to
+        // `provider(_:didActivate:)`. Telemetry of an iPad→A50 call
+        // showed the iPad relaying ZERO TX frames: the mic never
+        // started because CallKit's `didActivate` was not observed and
+        // `audioSessionActive` stayed false forever, making
+        // `startAudioIOIfReady()` a permanent no-op. If the session is
+        // still not active after a short grace period, self-activate so
+        // the call has working audio. `configureForVoIP()` already ran
+        // above (best-effort `setActive(true)`); this only flips the
+        // flag and starts the (idempotent) capture/playback engines. If
+        // CallKit DOES fire `didActivate` first, this closure sees
+        // `audioSessionActive == true` and does nothing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self = self else { return }
+            guard !self.audioSessionActive, self.callIntegration != nil else { return }
+            print("[CallService] W469 — CallKit didActivate not seen after 1.5s; self-activating audio session (fallback)")
+            self.handleAudioSessionActivated()
+        }
     }
 
     /// W450: incoming-call counterpart of `startCall(engine:contactId:)`.
@@ -580,6 +613,21 @@ final class CallService {
         audioSessionActive = false
     }
 
+    /// W469 — convert the engine's `FrameEncoder` output to the wire
+    /// format the peer can decode. With the Android-wire toggle ON
+    /// (default) this re-wraps the frame as a `WireRelayFrameCodec`
+    /// audio envelope, which Android relay peers decode and iOS peers
+    /// auto-detect. The audio AEAD carries no AAD, so re-containerising
+    /// changes only header bytes — never the ciphertext/tag. On a parse
+    /// failure it returns the original bytes unchanged (fail-safe).
+    private func encodeAudioForWire(_ frameEncoderBytes: Data) -> Data {
+        guard androidAudioWireCompat else { return frameEncoderBytes }
+        guard let fe = try? FrameEncoder.deserialize(frameEncoderBytes) else {
+            return frameEncoderBytes
+        }
+        return WireRelayFrameCodec.encodeAudio(fe)
+    }
+
     /// W69 helper: encrypt + waveform-update + network-send routine
     /// extracted from `capture.onFrame` per essere call-able sia dal
     /// fast path (NetworkSim Off) che dal task-isolated delay path
@@ -611,7 +659,23 @@ final class CallService {
                 self?.onCipherWaveformUpdate?(cipherSamples)
             }
             if let ws = wsClient, let peer = peerUserId {
-                ws.sendAudioFrame(recipientId: peer, frame: encrypted)
+                // W469 — emit the cross-platform wire format. The engine's
+                // `processOutgoingAudio` always serialises the iOS-native
+                // `FrameEncoder` container; Android peers on the relay can
+                // only decode the compact `WireRelayFrameCodec` audio
+                // envelope. `encodeAudioForWire` re-containerises it (the
+                // receiving iOS side auto-detects either format, so this is
+                // also correct for iOS↔iOS).
+                let wireFrame = encodeAudioForWire(encrypted)
+                ws.sendAudioFrame(recipientId: peer, frame: wireFrame)
+                if !loggedFirstTxWire {
+                    loggedFirstTxWire = true
+                    let fmt: String = androidAudioWireCompat ? "WireRelayFrameCodec" : "FrameEncoder"
+                    let a: String = encrypted.count.description
+                    let b: String = wireFrame.count.description
+                    let line: String = "[CallService] TX: wire format = " + fmt + " (" + a + "->" + b + " bytes)"
+                    print(line)
+                }
                 if framesEncryptedTx % 250 == 0 {
                     let n: String = framesEncryptedTx.description
                     let line: String = "[CallService] TX heartbeat: " + n + " frames encrypted+sent"

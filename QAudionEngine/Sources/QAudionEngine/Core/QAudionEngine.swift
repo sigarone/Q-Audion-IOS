@@ -73,7 +73,26 @@ public final class QAudionEngine: @unchecked Sendable {
         guard let sm = sessionManager, let cipher = aeadCipher else {
             throw QAudionEngineError.notInitialized
         }
-        let frame = try FrameEncoder.deserialize(serializedFrame)
+        // W469 — cross-platform RX. iOS peers send the native
+        // `FrameEncoder` container (29-byte header: version|flags|seq|
+        // ts|nonceLen|nonce|payloadLen). Android peers, over the
+        // BcryptoWsRelay, send the compact `WireRelayFrameCodec` audio
+        // envelope (mux|nonce|seq|ctLen). Before this fix iOS always ran
+        // `FrameEncoder.deserialize`, which rejected every Android frame
+        // at the flags/nonceLen byte (`invalidFlags`/`invalidNonceLength`)
+        // — telemetry showed 2250+ consecutive RX failures on an
+        // iPad↔A50 call. `FrameEncoder.isValid` is a strong check
+        // (version byte + nonceLen byte @14 == 12); a WireRelay frame's
+        // byte 14 is a seq byte (≈0 for any real call), so the two
+        // formats are unambiguously distinguishable. The audio AEAD uses
+        // NO additional-authenticated-data, so the container format does
+        // not affect decryption — only nonce/ciphertext/tag matter.
+        let frame: EncryptedFrame
+        if FrameEncoder.isValid(serializedFrame) {
+            frame = try FrameEncoder.deserialize(serializedFrame)
+        } else {
+            frame = try WireRelayFrameCodec.decode(serializedFrame).frame
+        }
         let frameKey = try sm.ratchet()
         let cipherOutput = AeadCipher.CipherOutput(
             nonce: frame.nonce, ciphertext: frame.payload, tag: frame.tag
