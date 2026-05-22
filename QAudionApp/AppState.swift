@@ -1025,6 +1025,28 @@ final class AppState: ObservableObject {
                 self.handleRemoteCallHangup(reasonString: reasonString)
             }
         }
+        // W474 — wire `onCallCancel` on the INCOMING path. The server
+        // emits `call_cancel` when the caller bails BEFORE the callee
+        // answers. Previously this closure was assigned ONLY inside
+        // startCall() (the outgoing path), so a device that had not
+        // made an outgoing call this session had no `call_cancel`
+        // handler at all: a cancelled un-answered incoming call left
+        // `callState` stuck at `.ringing` forever, and the
+        // `call_incoming` dedup guard (`guard callState == .idle`) then
+        // silently dropped EVERY subsequent incoming call — the device
+        // simply stopped ringing. Route `call_cancel` through the same
+        // `handleRemoteCallHangup` teardown as `call_hangup`; it runs
+        // the full state reset and records the missed call correctly.
+        // startCall() may later overwrite this closure with its
+        // outgoing-call variant — also a valid full state reset.
+        ws.onCallCancel = { [weak self] _, reason in
+            guard let self = self else { return }
+            let r: String = reason ?? ""
+            let reasonString: String = r.isEmpty ? "timeout" : r
+            DispatchQueue.main.async {
+                self.handleRemoteCallHangup(reasonString: reasonString)
+            }
+        }
     }
 
     /// C-3 — remote hangup / decline / timeout teardown. Runs the full
