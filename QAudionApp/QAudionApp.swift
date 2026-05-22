@@ -13,6 +13,15 @@ struct QAudionApp: App {
     @AppStorage("qaudion.privacy.screenshot_protection")
     private var screenshotProtectionEnabled: Bool = false
 
+    init() {
+        // W472 — install the native-crash catcher as the very first
+        // thing, before any code that could crash. It persists a
+        // backtrace on a signal / NSException; the report is flushed to
+        // the W417 telemetry on the NEXT launch (see `flushPendingReport`
+        // in `.onAppear`, which must run AFTER the stdout tee attaches).
+        CrashReporter.installHandlers()
+    }
+
     var body: some Scene {
         WindowGroup {
             ZStack {
@@ -36,6 +45,10 @@ struct QAudionApp: App {
             .onAppear {
                 // W416: ring-buffer stdout tee from launch for live telemetry.
                 RuntimeLogSink.shared.attachStdoutTee()
+                // W472 — flush any crash report from the previous launch.
+                // MUST be after attachStdoutTee() so the prints are
+                // captured by the W417 telemetry and shipped to the server.
+                CrashReporter.flushPendingReport()
                 appState.initialize()
                 // W441: sweep expired messages immediately + every 60s.
                 EphemeralMessageJanitor.shared.start()
