@@ -263,8 +263,13 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("ACCOUNT")
             NavigationLink {
+                // W467-fix — LazyView's closure is a plain `() -> Content`,
+                // NOT a @ViewBuilder. A `let _ = print(...)` debug line here
+                // makes it a multi-statement closure, killing implicit
+                // return so Content infers as `()` ("type '()' cannot
+                // conform to 'View'"). Keep it single-expression; the
+                // .onAppear print already provides the telemetry marker.
                 LazyView {
-                    let _ = print("[Settings] opening AccountSettingsScreen")
                     AccountSettingsScreen(appState: appState)
                         .onAppear { print("[Settings] AccountSettingsScreen appeared") }
                 }
