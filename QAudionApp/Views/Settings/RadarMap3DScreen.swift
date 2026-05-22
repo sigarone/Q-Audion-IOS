@@ -725,13 +725,17 @@ struct AnimatedBreathingWave: View {
             let date = timeline.date
             let rpm = Double(breathRpm)
             
-            // Map RPM to rotation speed. Fallback to a slow wave if presence but no rpm
-            let speed: Double
-            if isPresence {
-                speed = rpm > 0 ? (rpm / 60.0) * 2.0 * .pi : 1.2
-            } else {
-                speed = 0.3
-            }
+            // Map RPM to rotation speed. Fallback to a slow wave if presence
+            // but no rpm.
+            // W470-fix — this closure is `TimelineView`'s @ViewBuilder
+            // content. A statement-level `if/else` here is parsed as a
+            // conditional VIEW; its branches do assignment and return `()`,
+            // so `Content` cannot be inferred ("generic parameter 'Content'
+            // could not be inferred"). A single ternary keeps it a plain
+            // `let` declaration, which a ViewBuilder accepts.
+            let speed: Double = isPresence
+                ? (rpm > 0 ? (rpm / 60.0) * 2.0 * .pi : 1.2)
+                : 0.3
             
             let phase = date.timeIntervalSince1970 * speed
             

@@ -444,7 +444,7 @@ struct P3ControlScreen: View {
                 Spacer().frame(height: 8)
                 
                 HStack(alignment: .bottom, spacing: 2) {
-                    ForEach(0..<rf.bins, id: \.self) { b in
+                    ForEach(0..<QaP3RfScan.bins, id: \.self) { b in
                         let energy = Double(rf.activity[b]) / 100.0
                         let heightFraction = max(0.02, min(1.0, energy))
                         let isSuspect = rf.isSuspect(b)
