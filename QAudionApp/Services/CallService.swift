@@ -46,6 +46,26 @@ final class CallService {
     public private(set) var framesEncryptedTx: Int64 = 0
     public private(set) var framesDecryptedRx: Int64 = 0
 
+    // MARK: - W466 — audio-pipeline diagnostics
+    //
+    // The user reported "call connects but no voice/video" and asked for
+    // instrumentation to tell whether the break is in CAPTURE, ENCRYPT,
+    // NETWORK, DECRYPT or PLAYBACK. The frame loop runs ~50x/sec, so the
+    // logging is rate-limited: a one-shot marker for the FIRST occurrence
+    // of each milestone, plus a periodic heartbeat every 250 frames
+    // (~5 s). The previously-silent encrypt catch is now surfaced too —
+    // it used to hide every Opus/AEAD failure.
+    private var framesReceivedRx: Int64 = 0   // audio_frame envelopes off the WS, pre-decrypt
+    private var txEncryptErrorCount: Int64 = 0
+    private var rxDecryptErrorCount: Int64 = 0
+    private var loggedFirstTxCapture = false
+    private var loggedFirstTxEncrypt = false
+    private var loggedTxNoTransport = false
+    private var loggedFirstRxReceive = false
+    private var loggedRxNoIntegration = false
+    private var loggedFirstRxDecrypt = false
+    private var loggedRxNoPlayback = false
+
     /// W67: WebSocket transport binding. Quando setato via
     /// `wireTransport(wsClient:peerUserId:)`, il loop chiude:
     ///   TX: capture.onFrame → encrypt → wsClient.sendAudioFrame
@@ -428,16 +448,52 @@ final class CallService {
         // Dispatch to main per coerenza con TX path (Task { @MainActor })
         // e per evitare race su framesDecryptedRx counter.
         DispatchQueue.main.async { [weak self] in
-            guard let self = self,
-                  let integration = self.callIntegration else { return }
+            guard let self = self else { return }
+            // W466 — count EVERY audio_frame off the WS, before decrypt,
+            // so the telemetry distinguishes "peer never sent" from
+            // "received but decrypt failed".
+            self.framesReceivedRx &+= 1
+            if !self.loggedFirstRxReceive {
+                self.loggedFirstRxReceive = true
+                let bytes: String = serializedFrame.count.description
+                let line: String = "[CallService] RX: first audio_frame received from peer (" + bytes + " bytes)"
+                print(line)
+            }
+            guard let integration = self.callIntegration else {
+                if !self.loggedRxNoIntegration {
+                    self.loggedRxNoIntegration = true
+                    print("[CallService] RX: audio_frame DROPPED — no callIntegration bound (call not fully set up?)")
+                }
+                return
+            }
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: serializedFrame)
                 self.framesDecryptedRx &+= 1
-                self.audioPlayback?.playFrame(pcm)
+                if !self.loggedFirstRxDecrypt {
+                    self.loggedFirstRxDecrypt = true
+                    print("[CallService] RX: first frame DECRYPTED ok — AEAD+Opus decode live")
+                }
+                if let pb = self.audioPlayback {
+                    pb.playFrame(pcm)
+                } else if !self.loggedRxNoPlayback {
+                    self.loggedRxNoPlayback = true
+                    print("[CallService] RX: decrypted frame but audioPlayback is nil — not audible")
+                }
+                if self.framesDecryptedRx % 250 == 0 {
+                    let n: String = self.framesDecryptedRx.description
+                    let line: String = "[CallService] RX heartbeat: " + n + " frames decrypted+played"
+                    print(line)
+                }
                 let rxSamples = self.updateWaveformSamples(from: pcm)
                 self.onRxWaveformUpdate?(rxSamples)
             } catch {
-                print("[CallService] processIncomingAudio failed: \(error.localizedDescription)")
+                self.rxDecryptErrorCount &+= 1
+                if self.rxDecryptErrorCount == 1 || self.rxDecryptErrorCount % 250 == 0 {
+                    let desc: String = error.localizedDescription
+                    let cnt: String = self.rxDecryptErrorCount.description
+                    let line: String = "[CallService] RX decrypt FAILED (x" + cnt + "): " + desc
+                    print(line)
+                }
             }
         }
     }
@@ -454,6 +510,18 @@ final class CallService {
         audioPipeline = nil
         framesEncryptedTx = 0
         framesDecryptedRx = 0
+        // W466 — reset the per-call diagnostic counters/markers so the
+        // next call's telemetry starts from a clean slate.
+        framesReceivedRx = 0
+        txEncryptErrorCount = 0
+        rxDecryptErrorCount = 0
+        loggedFirstTxCapture = false
+        loggedFirstTxEncrypt = false
+        loggedTxNoTransport = false
+        loggedFirstRxReceive = false
+        loggedRxNoIntegration = false
+        loggedFirstRxDecrypt = false
+        loggedRxNoPlayback = false
         // W464 — drop the session-active flag so the NEXT call starts
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
@@ -525,9 +593,24 @@ final class CallService {
     /// (NetworkSim HighLatency/Satellite).
     private func processAndSendEncryptedFrame(pcmFrame: Data,
                                                integration: QAudionCallIntegration) {
+        // W466 — TX-path instrumentation: prove whether the mic produces
+        // frames, whether encryption succeeds, and whether frames hit the
+        // wire. Rate-limited (first occurrence + 250-frame heartbeat).
+        if !loggedFirstTxCapture {
+            loggedFirstTxCapture = true
+            let bytes: String = pcmFrame.count.description
+            let line: String = "[CallService] TX: first mic frame reached encrypt stage (" + bytes + " bytes PCM)"
+            print(line)
+        }
         do {
             let encrypted = try integration.processOutgoingAudio(pcmFrame: pcmFrame)
             framesEncryptedTx &+= 1
+            if !loggedFirstTxEncrypt {
+                loggedFirstTxEncrypt = true
+                let bytes: String = encrypted.count.description
+                let line: String = "[CallService] TX: first frame ENCRYPTED ok (" + bytes + " bytes) — Opus+AEAD pipeline live"
+                print(line)
+            }
             let txSamples = updateWaveformSamples(from: pcmFrame)
             let cipherSamples = updateCipherSamples(from: encrypted)
             Task { @MainActor [weak self] in
@@ -536,9 +619,28 @@ final class CallService {
             }
             if let ws = wsClient, let peer = peerUserId {
                 ws.sendAudioFrame(recipientId: peer, frame: encrypted)
+                if framesEncryptedTx % 250 == 0 {
+                    let n: String = framesEncryptedTx.description
+                    let line: String = "[CallService] TX heartbeat: " + n + " frames encrypted+sent"
+                    print(line)
+                }
+            } else if !loggedTxNoTransport {
+                loggedTxNoTransport = true
+                print("[CallService] TX: encrypted frames NOT sent — WS transport not bound (wsClient/peerUserId nil)")
             }
         } catch {
-            // Silent: pre-session-active errors sono attesi durante handshake.
+            // W466 — previously a SILENT catch that hid every Opus/AEAD
+            // failure. Pre-handshake errors ARE expected for the first
+            // ~second (session key not derived yet); log the first one
+            // and then every 250th so the telemetry shows whether they
+            // stop (handshake completed) or continue (real crypto bug).
+            txEncryptErrorCount &+= 1
+            if txEncryptErrorCount == 1 || txEncryptErrorCount % 250 == 0 {
+                let desc: String = error.localizedDescription
+                let cnt: String = txEncryptErrorCount.description
+                let line: String = "[CallService] TX encrypt FAILED (x" + cnt + "): " + desc
+                print(line)
+            }
         }
     }
 

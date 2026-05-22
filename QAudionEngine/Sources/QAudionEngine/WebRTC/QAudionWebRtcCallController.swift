@@ -530,6 +530,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 let line: String = "[WebRTC] camera capture failed: " + desc
                 print(line)
                 self?.localVideoCapturer = nil
+            } else {
+                // W466 — confirm the camera actually started so the
+                // telemetry distinguishes "no video frames captured"
+                // from "captured but not rendered/sent".
+                print("[WebRTC] camera capture started ok — front camera streaming")
             }
         }
         #endif
@@ -656,11 +661,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     public func peerConnection(_ pc: QAudionPeerConnection,
                                  didReceiveRemoteAudioTrack track: RTCAudioTrack) {
+        // W466 — confirm the remote audio track arrived. If this never
+        // logs, the peer never published audio (or SDP m-line missing).
+        print("[WebRTC] remote AUDIO track received — enabled=\(track.isEnabled)")
         onRemoteAudioTrack?(track)
     }
 
     public func peerConnection(_ pc: QAudionPeerConnection,
                                  didReceiveRemoteVideoTrack track: RTCVideoTrack) {
+        // W466 — confirm the remote video track arrived.
+        print("[WebRTC] remote VIDEO track received — enabled=\(track.isEnabled)")
         onRemoteVideoTrack?(track)
     }
 }

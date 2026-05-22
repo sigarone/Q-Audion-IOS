@@ -103,6 +103,10 @@ public final class QAudionPeerConnection: NSObject {
         track.isEnabled = true
         pc.add(track, streamIds: [stableStreamId])
         localAudioTrack = track
+        // W466 — confirm the local mic track was plumbed into the peer
+        // connection. If this never logs, the WebRTC call has no
+        // outgoing audio m-line and the peer hears nothing.
+        print("[WebRTC] local AUDIO track added to peer connection")
         return true
     }
 
@@ -208,6 +212,9 @@ public final class QAudionPeerConnection: NSObject {
             // Hook the capturer's frames to the source.
             capturer.delegate = source
         }
+        // W466 — confirm the local camera track was plumbed into the
+        // peer connection.
+        print("[WebRTC] local VIDEO track added to peer connection")
         return source
     }
 

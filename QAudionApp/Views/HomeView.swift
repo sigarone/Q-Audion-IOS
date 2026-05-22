@@ -168,10 +168,13 @@ struct HomeView: View {
         appState.conversations.reduce(0) { $0 + $1.unreadCount }
     }
 
-    /// Header compatto con avatar + userId in cima alla sidebar iPad.
+    /// Header compatto con avatar + numero corto in cima alla sidebar iPad.
     @ViewBuilder
     private var iPadSidebarHeader: some View {
-        let displayName = appState.currentUserId ?? "Profilo"
+        // W466 — show the SHORT account label ("Interno 234") instead of
+        // the raw 36-char UUID. The user reported the long UID as
+        // unreadable in the main-screen top-left.
+        let displayName = appState.displayAccountLabel
         HStack(spacing: 10) {
             QAudionAvatar(
                 displayName: displayName,

@@ -56,6 +56,23 @@ final class AppState: ObservableObject {
     @Published var currentUserDialExtension: String?
     @Published var errorMessage: String?
 
+    /// W466 — short, human-readable label for the logged-in account,
+    /// for the iPad sidebar header (and any other "this is you" chip).
+    /// Prefers the server-assigned PBX extension ("Interno 234") over the
+    /// raw 36-char UUID, which the user reported as unreadably long in
+    /// the main-screen top-left. Falls back to a truncated UUID, then a
+    /// generic label, mirroring `SettingsScreen.profileDisplayName`.
+    var displayAccountLabel: String {
+        if let ext = currentUserDialExtension, !ext.isEmpty {
+            return "Interno " + ext
+        }
+        if let uid = currentUserId, !uid.isEmpty {
+            let head: String = String(uid.prefix(8))
+            return uid.count > 8 ? head + "…" : head
+        }
+        return "Q-Audion User"
+    }
+
     /// W72: presence service — bound to the engine `BCryptoPresenceManager`
     /// after auth-success so the contacts list / conversations / chat
     /// header can render online/offline dots reactively. Always non-nil
