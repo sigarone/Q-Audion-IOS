@@ -53,9 +53,15 @@ public final class QAudionEngine: @unchecked Sendable {
         }
         let frameKey = try sm.ratchet()
         let opus = audioProcessor?.processOutgoing(pcmFrame: pcmFrame) ?? pcmFrame
-        let encrypted = try cipher.encrypt(plaintext: opus, key: frameKey)
+        // W473 — bind the frame sequence number into the AEAD as AAD,
+        // byte-identical to Android `SecureAudioPipeline.buildAad`.
+        // Before this, iOS used NO AAD while Android bound seq||timestamp,
+        // so every cross-platform decrypt failed with a GCM tag mismatch.
+        let seq = UInt32(truncatingIfNeeded: sm.frameCounter)
+        let encrypted = try cipher.encrypt(plaintext: opus, key: frameKey,
+                                           associatedData: Self.frameAAD(seq))
         let frame = EncryptedFrame(
-            sequenceNumber: UInt32(truncatingIfNeeded: sm.frameCounter),
+            sequenceNumber: seq,
             timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
             nonce: encrypted.nonce,
             payload: encrypted.ciphertext,
@@ -97,10 +103,27 @@ public final class QAudionEngine: @unchecked Sendable {
         let cipherOutput = AeadCipher.CipherOutput(
             nonce: frame.nonce, ciphertext: frame.payload, tag: frame.tag
         )
-        let opus = try cipher.decrypt(cipherOutput: cipherOutput, key: frameKey)
+        // W473 — reconstruct the AEAD AAD from the frame's sequence
+        // number (see `frameAAD`). Must match what the sender bound.
+        let opus = try cipher.decrypt(cipherOutput: cipherOutput, key: frameKey,
+                                      associatedData: Self.frameAAD(frame.sequenceNumber))
         let pcm = audioProcessor?.processIncoming(opusFrame: opus) ?? opus
         stats.framesRx += 1
         return pcm
+    }
+
+    /// W473 — per-frame AEAD additional-authenticated-data: the 32-bit
+    /// frame sequence number, big-endian, exactly 4 bytes. Byte-identical
+    /// to Android `SecureAudioPipeline.buildAad` (post-W473). Android
+    /// previously appended an 8-byte timestamp, but the
+    /// `WireRelayFrameCodec` relay envelope used for iOS<->Android calls
+    /// carries no timestamp field, so a seq||timestamp AAD could never be
+    /// reconstructed by the relay receiver and every cross-platform
+    /// decrypt failed with a GCM tag mismatch. Sequence-based replay
+    /// detection already provides frame freshness.
+    private static func frameAAD(_ seq: UInt32) -> Data {
+        var be = seq.bigEndian
+        return withUnsafeBytes(of: &be) { Data($0) }
     }
 
     public func destroySession() {
