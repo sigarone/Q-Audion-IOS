@@ -27,7 +27,17 @@ public struct ScannedBoard: Identifiable, Equatable {
 }
 
 @MainActor
-public final class QaP3GattManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+// W469-fix — the BLE feature (v1.0.469) broke the iOS build under
+// Xcode 26 / Swift 6: a `@MainActor` method cannot statically satisfy
+// the `nonisolated` requirements of CBCentralManagerDelegate /
+// CBPeripheralDelegate ("main actor-isolated instance method cannot
+// satisfy nonisolated requirement"). The CBCentralManager is created
+// with `queue: nil`, so CoreBluetooth delivers every delegate callback
+// on the MAIN queue — `@MainActor` isolation is therefore runtime-
+// correct. `@preconcurrency` on the conformances tells the Swift 6
+// type-checker to accept the main-actor methods (it inserts a
+// main-actor runtime check, which always passes here).
+public final class QaP3GattManager: NSObject, ObservableObject, @preconcurrency CBCentralManagerDelegate, @preconcurrency CBPeripheralDelegate {
     
     @Published public var connState: QaP3ConnState = .idle
     @Published public var scanned: [ScannedBoard] = []
