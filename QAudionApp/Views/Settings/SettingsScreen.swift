@@ -476,6 +476,16 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("SVILUPPATORE")
             NavigationLink {
+                LazyView { P3ControlScreen() }
+            } label: {
+                SettingsRow(icon: "cable.connector",
+                            iconColor: .orange,
+                            title: "P3 Simboard Control",
+                            subtitle: "BLE client · radar 3D · telemetria · console")
+            }
+            .buttonStyle(.plain)
+
+            NavigationLink {
                 LazyView { CallDesignShowcase() }
             } label: {
                 SettingsRow(icon: "paintbrush.fill",

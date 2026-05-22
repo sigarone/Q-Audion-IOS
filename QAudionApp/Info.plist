@@ -32,6 +32,10 @@
 	<string>Q-Audion does not access your contacts. This description is required because a linked SDK references the Contacts API.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Q-Audion saves chat images you choose to keep into your Photos library.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Q-Audion richiede il Bluetooth per connettersi e comunicare con il simulatore hardware P3.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Q-Audion richiede il Bluetooth per connettersi e comunicare con il simulatore hardware P3.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
