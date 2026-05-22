@@ -25,7 +25,9 @@ public final class AudioCapture {
         guard !isRunning else { return }
 
         // 1. Configure AVAudioSession for VoIP (hardware AEC, AGC, NS)
-        try audioPipeline.configureForVoIP()
+        if !audioPipeline.isActive {
+            try audioPipeline.configureForVoIP()
+        }
 
         // 2. Create the audio engine
         let engine = AVAudioEngine()

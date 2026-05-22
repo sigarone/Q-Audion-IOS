@@ -90,6 +90,22 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // System reset — pending calls are gone.
     }
 
+    public func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+        let audioSession = AVAudioSession.sharedInstance()
+        try? audioSession.setCategory(
+            .playAndRecord,
+            mode: .voiceChat,
+            options: [
+                .defaultToSpeaker,
+                .allowBluetoothHFP,
+                .allowBluetoothA2DP,
+                .interruptSpokenAudioAndMixWithOthers
+            ]
+        )
+        provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
+        action.fulfill()
+    }
+
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         Task {
             await onAnswerCall?(action.callUUID)

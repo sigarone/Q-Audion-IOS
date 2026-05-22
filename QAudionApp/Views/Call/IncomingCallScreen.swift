@@ -26,6 +26,9 @@ struct IncomingCallScreen: View {
     let avatarUrl: URL?
     let callType: CallType
     let confidence: Double
+    /// Numero interno PBX del chiamante (es. "103").
+    /// Priorità assoluta nel cerchietto dell'avatar.
+    let peerShortNumber: String?
     let onAccept: () -> Void
     let onReject: () -> Void
     let onReplyWithMessage: () -> Void
@@ -34,6 +37,7 @@ struct IncomingCallScreen: View {
          avatarUrl: URL? = nil,
          callType: CallType = .audio,
          confidence: Double = 0.94,
+         peerShortNumber: String? = nil,
          onAccept: @escaping () -> Void,
          onReject: @escaping () -> Void,
          onReplyWithMessage: @escaping () -> Void = {}) {
@@ -41,6 +45,7 @@ struct IncomingCallScreen: View {
         self.avatarUrl = avatarUrl
         self.callType = callType
         self.confidence = confidence
+        self.peerShortNumber = peerShortNumber
         self.onAccept = onAccept
         self.onReject = onReject
         self.onReplyWithMessage = onReplyWithMessage
@@ -63,7 +68,8 @@ struct IncomingCallScreen: View {
                     AvatarHalo(color: extras.pqcAccent,  diameter: 200)
                     QAudionAvatar(displayName: peerDisplayName,
                                   imageURL: avatarUrl,
-                                  size: 160)
+                                  size: 160,
+                                  shortNumber: peerShortNumber)
                 }
                 .frame(width: 240, height: 240)
                 .padding(.bottom, 28)

@@ -149,6 +149,7 @@ struct SettingsScreen: View {
                         handle: profileHandle,
                         statusMessage: "Disponibile per chiamate sicure.",
                         avatarUrl: nil,
+                        shortNumber: appState.currentUserDialExtension,
                         onEditTap: { /* navigation handled via row below */ }
                     )
                     .padding(.horizontal, 16)
@@ -262,9 +263,11 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("ACCOUNT")
             NavigationLink {
-                let _ = print("[Settings] opening AccountSettingsScreen")
-                AccountSettingsScreen(appState: appState)
-                    .onAppear { print("[Settings] AccountSettingsScreen appeared") }
+                LazyView {
+                    let _ = print("[Settings] opening AccountSettingsScreen")
+                    AccountSettingsScreen(appState: appState)
+                        .onAppear { print("[Settings] AccountSettingsScreen appeared") }
+                }
             } label: {
                 SettingsRow(icon: "person",
                             iconColor: scheme.primary,
@@ -274,7 +277,7 @@ struct SettingsScreen: View {
             .buttonStyle(.plain)
 
             NavigationLink {
-                DeviceManagementScreen(state: appState)
+                LazyView { DeviceManagementScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "iphone",
                             iconColor: scheme.primary,
@@ -289,7 +292,7 @@ struct SettingsScreen: View {
             // raggiungono via uno qualsiasi (engine wiring per
             // POST /contacts/phones pending).
             NavigationLink {
-                MyPhonesScreen()
+                LazyView { MyPhonesScreen() }
             } label: {
                 SettingsRow(icon: "phone.badge.plus",
                             iconColor: scheme.primary,
@@ -305,7 +308,7 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("SICUREZZA")
             NavigationLink {
-                SecurityDashboardScreen(state: appState)
+                LazyView { SecurityDashboardScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "shield.lefthalf.filled",
                             iconColor: scheme.primary,
@@ -315,7 +318,7 @@ struct SettingsScreen: View {
             .buttonStyle(.plain)
 
             NavigationLink {
-                KeyManagementScreen(state: appState)
+                LazyView { KeyManagementScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "key.fill",
                             iconColor: extras.pqcAccent,
@@ -325,7 +328,7 @@ struct SettingsScreen: View {
             .buttonStyle(.plain)
 
             NavigationLink {
-                VoiceEnrollmentScreen()
+                LazyView { VoiceEnrollmentScreen() }
             } label: {
                 SettingsRow(icon: "waveform.badge.mic",
                             iconColor: extras.pqcAccent,
@@ -335,7 +338,7 @@ struct SettingsScreen: View {
             .buttonStyle(.plain)
 
             NavigationLink {
-                TransportSettingsScreen(state: appState)
+                LazyView { TransportSettingsScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "arrow.left.arrow.right",
                             iconColor: scheme.primary,
@@ -351,7 +354,7 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("PRIVACY E COMUNICAZIONI")
             NavigationLink {
-                PrivacySettingsScreen(state: appState)
+                LazyView { PrivacySettingsScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "hand.raised.fill",
                             iconColor: scheme.primary,
@@ -361,7 +364,7 @@ struct SettingsScreen: View {
             .buttonStyle(.plain)
 
             NavigationLink {
-                CallsSettingsScreen(state: appState)
+                LazyView { CallsSettingsScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "phone.fill",
                             iconColor: scheme.primary,
@@ -371,7 +374,7 @@ struct SettingsScreen: View {
             .buttonStyle(.plain)
 
             NavigationLink {
-                ChatSettingsScreen(state: appState)
+                LazyView { ChatSettingsScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "bubble.right",
                             iconColor: scheme.primary,
@@ -381,7 +384,7 @@ struct SettingsScreen: View {
             .buttonStyle(.plain)
 
             NavigationLink {
-                NotificationsSettingsScreen(state: appState)
+                LazyView { NotificationsSettingsScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "bell.fill",
                             iconColor: scheme.primary,
@@ -394,7 +397,7 @@ struct SettingsScreen: View {
             // Lives under "Conversazioni" so testers can find it next to
             // the chat-related settings.
             NavigationLink {
-                CrossPlatformBetaScreen()
+                LazyView { CrossPlatformBetaScreen() }
             } label: {
                 SettingsRow(icon: "arrow.triangle.2.circlepath",
                             iconColor: scheme.primary,
@@ -410,7 +413,7 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("DATI")
             NavigationLink {
-                BackupSettingsScreen(state: appState)
+                LazyView { BackupSettingsScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "externaldrive.fill",
                             iconColor: scheme.primary,
@@ -426,7 +429,7 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("INFO")
             NavigationLink {
-                AboutSettingsScreen(state: appState)
+                LazyView { AboutSettingsScreen(state: appState) }
             } label: {
                 SettingsRow(icon: "info.circle",
                             iconColor: scheme.primary,
@@ -439,7 +442,7 @@ struct SettingsScreen: View {
             // l'engine wirerà il vero fetch + Ed25519 verify quando lands.
             // 1:1 visual port di Android `OtaUpdateScreen.kt`.
             NavigationLink {
-                OtaUpdateScreen()
+                LazyView { OtaUpdateScreen() }
             } label: {
                 SettingsRow(icon: "arrow.triangle.2.circlepath.icloud",
                             iconColor: extras.pqcAccent,
@@ -452,7 +455,7 @@ struct SettingsScreen: View {
             // Lista hardcoded delle release con bullet di feature, così
             // un tester sa cosa testare in ogni nuova versione.
             NavigationLink {
-                WhatsNewScreen()
+                LazyView { WhatsNewScreen() }
             } label: {
                 SettingsRow(icon: "sparkles",
                             iconColor: scheme.primary,
@@ -468,7 +471,7 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("SVILUPPATORE")
             NavigationLink {
-                CallDesignShowcase()
+                LazyView { CallDesignShowcase() }
             } label: {
                 SettingsRow(icon: "paintbrush.fill",
                             iconColor: .orange,
@@ -481,7 +484,7 @@ struct SettingsScreen: View {
             // wire to engine `NetworkConditionSimulator` when surfaced
             // on iOS. 1:1 port of Android `NetworkSimulatorScreen.kt`.
             NavigationLink {
-                NetworkSimulatorScreen()
+                LazyView { NetworkSimulatorScreen() }
             } label: {
                 SettingsRow(icon: "antenna.radiowaves.left.and.right",
                             iconColor: .orange,
@@ -494,7 +497,7 @@ struct SettingsScreen: View {
             // Utile per QA TestFlight per ripartire pulito senza
             // reinstallare l'app o forzare logout.
             NavigationLink {
-                DevResetScreen()
+                LazyView { DevResetScreen() }
             } label: {
                 SettingsRow(icon: "trash.slash.fill",
                             iconColor: .orange,
@@ -507,7 +510,7 @@ struct SettingsScreen: View {
             // bug-report. Sister di W46 DevReset; insieme formano la
             // QA toolkit. Nessun token / private-key nel report.
             NavigationLink {
-                DiagnosticsExportScreen()
+                LazyView { DiagnosticsExportScreen() }
             } label: {
                 SettingsRow(icon: "doc.text.magnifyingglass",
                             iconColor: .orange,
@@ -902,6 +905,16 @@ struct SettingsScreen: View {
             return "Int. " + ext + " · " + tail
         }
         return "Int. — · " + tail
+    }
+}
+
+struct LazyView<Content: View>: View {
+    private let build: () -> Content
+    init(_ build: @escaping () -> Content) {
+        self.build = build
+    }
+    var body: Content {
+        build()
     }
 }
 

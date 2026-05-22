@@ -438,7 +438,8 @@ private struct CallHistoryRow: View {
         HStack(alignment: .center, spacing: 12) {
             QAudionAvatar(displayName: entry.peerDisplay,
                           imageURL: nil,
-                          size: 48)
+                          size: 48,
+                          shortNumber: entry.peerExtension.map(String.init))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.peerDisplay)

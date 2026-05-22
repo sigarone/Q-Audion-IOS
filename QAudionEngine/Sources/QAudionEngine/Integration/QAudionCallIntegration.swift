@@ -326,6 +326,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // 30s fallback fires even though A50 sent a valid ACCEPT.
         lock.withLock {
             localKeyPair = pqcKp
+            pendingOutgoingCallId = callId
             let keys = HybridLocalKeys(pqcPair: pqcKp, x25519Priv: x25519Priv)
             localHybridKeysByCall[callId] = keys
             let lc = callId.lowercased()
@@ -840,7 +841,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `.connecting` so the UI can show "Connecting…".
     public func onCallProcessingReceived(callId: String, receiverId: String) {
         lock.lock()
-        guard isCaller, callId == pendingOutgoingCallId else { lock.unlock(); return }
+        guard isCaller, callId.lowercased() == pendingOutgoingCallId?.lowercased() else { lock.unlock(); return }
         state = .connecting
         lock.unlock()
         onStateChanged?(.connecting)
@@ -850,7 +851,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// so the UI can show "Ringing…" and (optionally) start the local ringback tone.
     public func onCallReadyReceived(callId: String, receiverId: String, deviceId: String?) {
         lock.lock()
-        guard isCaller, callId == pendingOutgoingCallId else { lock.unlock(); return }
+        guard isCaller, callId.lowercased() == pendingOutgoingCallId?.lowercased() else { lock.unlock(); return }
         state = .ringing
         lock.unlock()
         onStateChanged?(.ringing)
@@ -872,7 +873,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// to the app layer so the call UI can be torn down.
     public func onPeerOfflineReceived(callId: String, recipientId: String) {
         lock.lock()
-        guard isCaller, callId == pendingOutgoingCallId else { lock.unlock(); return }
+        guard isCaller, callId.lowercased() == pendingOutgoingCallId?.lowercased() else { lock.unlock(); return }
         state = .error
         lock.unlock()
         onStateChanged?(.error)
@@ -883,7 +884,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// before we picked up — stop ringing locally.
     public func onCallCancelReceived(callId: String, reason: String?) {
         lock.lock()
-        let isOurIncoming = !isCaller && callId == pendingResponderCallId
+        let isOurIncoming = !isCaller && callId.lowercased() == pendingResponderCallId?.lowercased()
         lock.unlock()
         guard isOurIncoming else { return }
         onIncomingCallCancelled?(callId, reason)

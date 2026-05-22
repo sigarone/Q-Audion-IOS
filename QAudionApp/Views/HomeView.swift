@@ -180,7 +180,8 @@ struct HomeView: View {
                 displayName: displayName,
                 imageURL: nil,
                 size: 36,
-                presenceDot: .online
+                presenceDot: .online,
+                shortNumber: appState.currentUserDialExtension
             )
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayName)

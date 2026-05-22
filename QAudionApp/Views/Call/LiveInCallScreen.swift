@@ -53,6 +53,10 @@ struct LiveInCallScreen: View {
     /// the disk I/O on the main thread). Fallback to "Sconosciuto"
     /// when no peer is bound (e.g. between calls).
     @State private var cachedPeerDisplayName: String = "Sconosciuto"
+    /// Numero interno PBX del peer risolto dalla stessa lookup di
+    /// ContactsStore. nil quando il contatto è sconosciuto o non ha
+    /// ancora un'estensione registrata — l'avatar ricade su initials().
+    @State private var cachedPeerShortNumber: String? = nil
 
     /// Reference timestamp (UNIX epoch seconds) used to derive a
     /// counting-down rekey clock until the engine surfaces a real
@@ -137,6 +141,7 @@ struct LiveInCallScreen: View {
                 voiceEnhancement: voiceEnhancement,
                 hasVideo: appState.isVideoCall,
                 cameraOn: cameraOn,
+                peerShortNumber: cachedPeerShortNumber,
                 onToggleMute: {
                     // Source of truth = CallService.isMuted. We flip it
                     // via AppState.setMuted then re-read; the @State
@@ -228,16 +233,34 @@ struct LiveInCallScreen: View {
     private func resolvePeerDisplayName() {
         guard let id = appState.callContactId else {
             cachedPeerDisplayName = "Sconosciuto"
+            cachedPeerShortNumber = nil
             return
         }
         let stored = contactsStore.load()
         if let match = stored.first(where: { $0.userId == id }) {
             cachedPeerDisplayName = match.displayName
+            // Estrai il numero interno dal displayName del contatto usando
+            // la stessa logica di QAudionAvatar.initials() — cerca token
+            // puramente numerici (es. "103" in "Interno 103").
+            // Se il displayName ha già un token numerico, questo diventa
+            // shortNumber e l'avatar lo mostra direttamente senza derivazioni.
+            let tokens = match.displayName
+                .trimmingCharacters(in: .whitespaces)
+                .split(whereSeparator: { $0.isWhitespace })
+                .map(String.init)
+            if let numTok = tokens.first(where: { $0.allSatisfy({ $0.isNumber }) }) {
+                cachedPeerShortNumber = String(numTok.prefix(3))
+            } else if let hashTok = tokens.first(where: { $0.hasPrefix("#") }) {
+                cachedPeerShortNumber = String(hashTok.dropFirst().prefix(3))
+            } else {
+                cachedPeerShortNumber = nil
+            }
         } else {
             // Fallback: trim "user-" prefix if present.
             cachedPeerDisplayName = id.hasPrefix("user-")
                 ? String(id.dropFirst(5)).capitalized
                 : id
+            cachedPeerShortNumber = nil
         }
     }
 

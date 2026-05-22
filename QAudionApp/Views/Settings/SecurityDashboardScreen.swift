@@ -178,7 +178,14 @@ struct SecurityDashboardScreen: View {
             }
         }
         .onAppear { container.loadLocalState() }
-        .alert("Errore", isPresented: .constant(container.errorMessage != nil)) {
+        .alert("Errore", isPresented: Binding<Bool>(
+            get: { container.errorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    container.errorMessage = nil
+                }
+            }
+        )) {
             Button("OK") { container.errorMessage = nil }
         } message: {
             Text(container.errorMessage ?? "")

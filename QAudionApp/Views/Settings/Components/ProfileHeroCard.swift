@@ -22,16 +22,21 @@ struct ProfileHeroCard: View {
     let statusMessage: String?
     let avatarUrl: URL?
     let onEditTap: () -> Void
+    /// Numero interno PBX (es. "103") da mostrare nel cerchietto.
+    /// Quando valorizzato sovrascrive le iniziali derivate dal displayName.
+    let shortNumber: String?
 
     init(displayName: String,
          handle: String? = nil,
          statusMessage: String? = nil,
          avatarUrl: URL? = nil,
+         shortNumber: String? = nil,
          onEditTap: @escaping () -> Void = {}) {
         self.displayName = displayName
         self.handle = handle
         self.statusMessage = statusMessage
         self.avatarUrl = avatarUrl
+        self.shortNumber = shortNumber
         self.onEditTap = onEditTap
     }
 
@@ -39,7 +44,8 @@ struct ProfileHeroCard: View {
         HStack(alignment: .center, spacing: 16) {
             QAudionAvatar(displayName: displayName,
                           imageURL: avatarUrl,
-                          size: 72)
+                          size: 72,
+                          shortNumber: shortNumber)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(displayName)

@@ -191,7 +191,7 @@ final class DeviceManagementContainer: ObservableObject {
 /// header hint + CTA "COLLEGA NUOVO DISPOSITIVO" + Italian copy
 /// uppercase + revoke confirm dialog.
 struct DeviceManagementScreen: View {
-    @ObservedObject var container: DeviceManagementContainer
+    @StateObject var container: DeviceManagementContainer
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -202,8 +202,7 @@ struct DeviceManagementScreen: View {
     @State private var showingLinkNew: Bool = false
 
     init(state: AppState) {
-        let c = DeviceManagementContainer()
-        self._container = ObservedObject(wrappedValue: c)
+        self._container = StateObject(wrappedValue: DeviceManagementContainer(appState: state))
     }
 
     var body: some View {

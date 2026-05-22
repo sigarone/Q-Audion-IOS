@@ -24,7 +24,7 @@ final class AboutSettingsContainer: ObservableObject {
 /// status colors). Functionally unchanged: same fields, same update
 /// checker plumbing.
 struct AboutSettingsScreen: View {
-    @ObservedObject var container: AboutSettingsContainer
+    @StateObject var container: AboutSettingsContainer
     @StateObject private var updateChecker: AppUpdateChecker
     /// W167: live WS connection state so the diagnostic status row
     /// updates in real time as connect / disconnect events fire.
@@ -35,8 +35,7 @@ struct AboutSettingsScreen: View {
     @Environment(\.qaudionType) private var type
 
     init(state: AppState) {
-        let c = AboutSettingsContainer()
-        self._container = ObservedObject(wrappedValue: c)
+        self._container = StateObject(wrappedValue: AboutSettingsContainer())
         self._appState = ObservedObject(wrappedValue: state)
         _updateChecker = StateObject(wrappedValue: AppUpdateChecker(appState: state))
     }

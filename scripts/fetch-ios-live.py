@@ -138,7 +138,7 @@ def main():
                 continue
             first_line = txt.split("\n", 1)[0] if txt else ""
             iso_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
-            if not iso_re.match(first_line):
+            if not (iso_re.match(first_line) or first_line.startswith('{"type":"header"') or first_line.startswith('{"ts"')):
                 continue  # not a W417 chunk
             if args.user_prefix and args.user_prefix not in txt:
                 continue

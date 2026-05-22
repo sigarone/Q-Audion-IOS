@@ -284,7 +284,7 @@ final class AccountSettingsContainer: ObservableObject {
 /// avatar upload via PhotosPicker, draftDisplayName + draftStatusMessage
 /// edits, saveProfile() submission, server load on appear.
 struct AccountSettingsScreen: View {
-    @ObservedObject var container: AccountSettingsContainer
+    @StateObject var container: AccountSettingsContainer
     @State private var selectedItem: PhotosPickerItem?
     /// W445: shows AvatarIconPicker sheet.
     @State private var showingIconPicker = false
@@ -295,7 +295,7 @@ struct AccountSettingsScreen: View {
     @Environment(\.qaudionSnackbar) private var snackbar
 
     init(appState: AppState) {
-        self._container = ObservedObject(
+        self._container = StateObject(
             wrappedValue: AccountSettingsContainer(appState: appState)
         )
     }
@@ -470,7 +470,8 @@ struct AccountSettingsScreen: View {
             QAudionAvatar(displayName: container.draftDisplayName.isEmpty
                                         ? container.viewModel.userId
                                         : container.draftDisplayName,
-                          size: 64)
+                          size: 64,
+                          shortNumber: container.viewModel.dialExtension)
         }
     }
 

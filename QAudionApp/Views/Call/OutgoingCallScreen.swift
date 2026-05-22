@@ -38,6 +38,9 @@ struct OutgoingCallScreen: View {
     let state: State
     let elapsedSeconds: Int
     let errorMessage: String?
+    /// Numero interno PBX del destinatario (es. "103").
+    /// Priorità assoluta nel cerchietto dell'avatar.
+    let peerShortNumber: String?
     let onHangup: () -> Void
 
     init(peerDisplayName: String,
@@ -45,12 +48,14 @@ struct OutgoingCallScreen: View {
          state: State = .dialing,
          elapsedSeconds: Int = 0,
          errorMessage: String? = nil,
+         peerShortNumber: String? = nil,
          onHangup: @escaping () -> Void) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
         self.state = state
         self.elapsedSeconds = elapsedSeconds
         self.errorMessage = errorMessage
+        self.peerShortNumber = peerShortNumber
         self.onHangup = onHangup
     }
 
@@ -72,7 +77,8 @@ struct OutgoingCallScreen: View {
                         AvatarHalo(color: extras.pqcAccent, diameter: 240)
                         QAudionAvatar(displayName: peerDisplayName,
                                       imageURL: avatarUrl,
-                                      size: 160)
+                                      size: 160,
+                                      shortNumber: peerShortNumber)
                     }
                     .frame(width: 240, height: 240)
                     .padding(.bottom, 24)

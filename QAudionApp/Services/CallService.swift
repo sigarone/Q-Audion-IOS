@@ -199,17 +199,10 @@ final class CallService {
         // any .start()) so the start can be (re)driven later.
         self.audioPlayback = playback
         self.audioCapture = capture
-        // W464 — OUTGOING calls are NOT reported to CallKit's CXProvider
-        // (AppState.startCall(contactId:) never calls
-        // `callKit.startOutgoingCall`), so `provider(_:didActivate:)`
-        // never fires for them. For the outgoing path the app itself owns
-        // session activation: `configureForVoIP()` above already issued a
-        // best-effort `setActive(true)`, so we mark the session active and
-        // start the engines now. (INCOMING calls take the opposite path —
-        // see `activateIncomingCallAudio`, where CallKit owns activation
-        // and the start is deferred until `handleAudioSessionActivated`.)
-        audioSessionActive = true
-        startAudioIOIfReady()
+        // W464 — OUTGOING calls are now driven by CallKit's CXProvider
+        // (AppState.startCall(contactId:) calls `callKit.startOutgoingCall`),
+        // which triggers `provider(_:didActivate:)`. We defer starting the
+        // audio engines until `handleAudioSessionActivated()` is fired by CallKit.
 
         let integration = QAudionCallIntegration()
 

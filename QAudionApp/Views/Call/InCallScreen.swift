@@ -85,6 +85,10 @@ struct InCallScreen: View {
     let hasVideo: Bool
     /// Camera on/off state — only meaningful when `hasVideo == true`.
     let cameraOn: Bool
+    /// Numero interno PBX del peer (es. "103").
+    /// Priorità assoluta nel cerchietto dell'avatar. Port di Android
+    /// `AvatarImage.kt` `shortNumber` param.
+    let peerShortNumber: String?
     let onToggleMute: () -> Void
     let onToggleSpeaker: () -> Void
     let onToggleVoiceEnhancement: () -> Void
@@ -111,6 +115,7 @@ struct InCallScreen: View {
          voiceEnhancement: Bool = false,
          hasVideo: Bool = false,
          cameraOn: Bool = false,
+         peerShortNumber: String? = nil,
          onToggleMute: @escaping () -> Void = {},
          onToggleSpeaker: @escaping () -> Void = {},
          onToggleVoiceEnhancement: @escaping () -> Void = {},
@@ -136,6 +141,7 @@ struct InCallScreen: View {
         self.voiceEnhancement = voiceEnhancement
         self.hasVideo = hasVideo
         self.cameraOn = cameraOn
+        self.peerShortNumber = peerShortNumber
         self.onToggleMute = onToggleMute
         self.onToggleSpeaker = onToggleSpeaker
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
@@ -174,7 +180,8 @@ struct InCallScreen: View {
                     AvatarHalo(color: confidenceColor, diameter: 220)
                     QAudionAvatar(displayName: peerDisplayName,
                                   imageURL: avatarUrl,
-                                  size: 160)
+                                  size: 160,
+                                  shortNumber: peerShortNumber)
                 }
                 .frame(width: 240, height: 240)
 

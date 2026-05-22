@@ -156,7 +156,7 @@ private struct PasswordSheet: View {
 
 /// Backup settings sub-screen. W31 design-token refactor.
 struct BackupSettingsScreen: View {
-    @ObservedObject var container: BackupSettingsContainer
+    @StateObject var container: BackupSettingsContainer
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -164,7 +164,7 @@ struct BackupSettingsScreen: View {
     @Environment(\.qaudionSnackbar) private var snackbar
 
     init(state: AppState) {
-        self._container = ObservedObject(wrappedValue: BackupSettingsContainer(appState: state))
+        self._container = StateObject(wrappedValue: BackupSettingsContainer(appState: state))
     }
 
     private var lastBackupText: String {

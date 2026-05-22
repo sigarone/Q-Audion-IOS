@@ -1,9 +1,13 @@
 import SwiftUI
 
 /// Reusable circular avatar. 1:1 port of Android
-/// `qaudion-android-new/core/core-ui/.../components/QAudionAvatar.kt`.
+/// `qaudion-android-new/core/core-ui/.../components/AvatarImage.kt`.
 ///
-/// Three rendering modes (in priority order):
+/// Four rendering modes (in priority order):
+///   0. `shortNumber` non-nil → shown verbatim inside the gradient circle
+///      (e.g. "103" for a PBX extension).  Has absolute priority so
+///      the real short identity always beats any display-name derivation.
+/// Three rendering modes (in priority order) when shortNumber is nil:
 ///   1. `imageURL` non-nil + load succeeds → remote image.
 ///   2. otherwise → solid gradient circle with up-to-2-letter initials.
 ///   3. group conversation → 3 stacked person silhouettes (system icon).
@@ -31,17 +35,23 @@ struct QAudionAvatar: View {
     let kind: Kind
     let size: CGFloat
     let presenceDot: PresenceDot?
+    /// Priorità assoluta rispetto a `initials(displayName)`. Pass "103"
+    /// per forzare il numero interno PBX nel cerchietto. 1:1 port del
+    /// parametro `shortNumber` di Android `AvatarImage.kt`.
+    let shortNumber: String?
 
     init(displayName: String,
          imageURL: URL? = nil,
          kind: Kind = .person,
          size: CGFloat = 44,
-         presenceDot: PresenceDot? = nil) {
+         presenceDot: PresenceDot? = nil,
+         shortNumber: String? = nil) {
         self.displayName = displayName
         self.imageURL = imageURL
         self.kind = kind
         self.size = min(240, max(20, size))
         self.presenceDot = presenceDot
+        self.shortNumber = shortNumber
     }
 
     var body: some View {
@@ -90,8 +100,15 @@ struct QAudionAvatar: View {
                         .font(.system(size: size * 0.42, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.95))
                 } else {
-                    Text(initials(displayName))
-                        .font(.system(size: size * 0.40, weight: .semibold))
+                    // shortNumber ha priorità assoluta (1:1 con Android AvatarImage.kt)
+                    let label = shortNumber.map { $0.isEmpty ? initials(displayName) : $0 }
+                        ?? initials(displayName)
+                    // Riduci font del 30% per 3+ caratteri (es. "103") — stesso
+                    // moltiplicatore 0.7 di Android `AvatarImage.kt` L55.
+                    let fontMultiplier: CGFloat = label.count > 2 ? 0.7 : 1.0
+                    Text(label)
+                        .font(.system(size: size * 0.40 * fontMultiplier,
+                                      weight: .semibold))
                         .foregroundStyle(.white)
                 }
             }
@@ -119,15 +136,51 @@ struct QAudionAvatar: View {
 
     // MARK: - Initials
 
-    /// Up to 2 uppercase letters from the first 2 whitespace-separated
-    /// words. Falls back to "?" for an empty / whitespace-only name so
-    /// the avatar is never blank.
+    /// Port di `initialsFor(name)` da Android `AvatarImage.kt`.
+    ///
+    /// Regole (in ordine):
+    ///   1. Zero token → "?"
+    ///   2. Un singolo token che inizia con "#" → rimuovi "#" e prendi le
+    ///      prime 3 cifre (es. "#103" → "103").
+    ///   3. Un singolo token composto solo da cifre → restituiscilo (fino a 3).
+    ///   4. Un singolo token alfanumerico → iniziale maiuscola.
+    ///   5. Più token → cerca il primo token che inizia con "#" (extension)
+    ///      oppure il primo composto solo da cifre (es. "103" in "Interno 103");
+    ///      se trovato restituisce quello (max 3 char, senza "#").
+    ///   6. Nessun token numerico → prima iniziale + ultima iniziale maiuscole.
+    ///
+    /// Questo risolve il bug "Interno 103" → "I1" (vecchio) → "103" (nuovo).
     private func initials(_ name: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return "?" }
-        let words = trimmed.split(whereSeparator: { $0.isWhitespace })
-        let letters = words.prefix(2).compactMap { $0.first }
-        return String(letters).uppercased()
+        let tokens = trimmed.split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return "?" }
+
+        if tokens.count == 1 {
+            let tok = tokens[0]
+            if tok.hasPrefix("#") {
+                return String(tok.dropFirst().prefix(3))
+            }
+            if tok.allSatisfy({ $0.isNumber }) {
+                return String(tok.prefix(3))
+            }
+            return String(tok.prefix(1)).uppercased()
+        }
+
+        // Cerca prima un token "#NNN", poi un token tutto-cifre.
+        if let hashTok = tokens.first(where: { $0.hasPrefix("#") }) {
+            return String(hashTok.dropFirst().prefix(3))
+        }
+        if let numTok = tokens.first(where: { $0.allSatisfy({ $0.isNumber }) }) {
+            return String(numTok.prefix(3))
+        }
+
+        // Nessun token numerico → prima+ultima iniziale.
+        let first = String(tokens.first!.prefix(1))
+        let last  = String(tokens.last!.prefix(1))
+        return (first + last).uppercased()
     }
 
     // MARK: - Stable per-name gradient
