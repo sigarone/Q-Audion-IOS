@@ -85,12 +85,12 @@ final class VpnService: ObservableObject {
                 nodeId: node.id
             )
 
-            // Step 4 — Build wg-quick config and start the extension.
-            let wgQuickConf = try buildWgQuickConfig(
+            // Step 4 — Pass raw crypto params to the extension.
+            try await startTunnel(
+                node: node,
                 privateKeyB64: privateKeyB64,
                 wgConfig: wgConfig
             )
-            try await startTunnel(node: node, wgQuickConf: wgQuickConf)
 
             // State transitions to .connected when NEVPNStatus fires.
             // Store node so the status handler can set it.
@@ -129,51 +129,33 @@ final class VpnService: ObservableObject {
         }
     }
 
-    /// Builds a `wg-quick`-style config string for the extension.
-    private func buildWgQuickConfig(
-        privateKeyB64: String,
-        wgConfig: WgConfigResponse
-    ) throws -> String {
-        let ip4Bare = wgConfig.assignedIp4
-            .components(separatedBy: "/").first ?? wgConfig.assignedIp4
-        let ip6Bare = wgConfig.assignedIp6
-            .components(separatedBy: "/").first ?? wgConfig.assignedIp6
-
-        var conf = "[Interface]\n"
-        conf += "PrivateKey = \(privateKeyB64)\n"
-        conf += "Address = \(ip4Bare)/32"
-        if !ip6Bare.isEmpty {
-            conf += ", \(ip6Bare)/128"
-        }
-        conf += "\n"
-        let dns = wgConfig.dns.isEmpty ? ["1.1.1.1", "9.9.9.9"] : wgConfig.dns
-        conf += "DNS = \(dns.joined(separator: ", "))\n"
-        conf += "\n"
-        conf += "[Peer]\n"
-        conf += "PublicKey = \(wgConfig.serverPubkey)\n"
-        if !wgConfig.psk.isEmpty {
-            conf += "PresharedKey = \(wgConfig.psk)\n"
-        }
-        conf += "Endpoint = \(wgConfig.serverEndpoint)\n"
-        conf += "AllowedIPs = 0.0.0.0/0"
-        if !ip6Bare.isEmpty {
-            conf += ", ::/0"
-        }
-        conf += "\n"
-        conf += "PersistentKeepalive = 25\n"
-        return conf
-    }
-
     /// Configures and starts the NETunnelProviderManager.
-    private func startTunnel(node: VpnNode, wgQuickConf: String) async throws {
+    ///
+    /// Stores individual WireGuard parameters in `providerConfiguration` so the
+    /// `PacketTunnelProvider` extension can build a `TunnelConfiguration` using
+    /// the public WireGuardKit API without the private wg-quick string parser.
+    private func startTunnel(node: VpnNode, privateKeyB64: String, wgConfig: WgConfigResponse) async throws {
         guard let mgr = manager else { throw NSError(domain: "VpnService", code: -1) }
+
+        let ip4Bare = wgConfig.assignedIp4.components(separatedBy: "/").first ?? wgConfig.assignedIp4
+        let ip6Bare = wgConfig.assignedIp6.components(separatedBy: "/").first ?? wgConfig.assignedIp6
+
+        var clientAddresses = "\(ip4Bare)/32"
+        if !ip6Bare.isEmpty { clientAddresses += ",\(ip6Bare)/128" }
+
+        let dnsServers = wgConfig.dns.isEmpty ? ["1.1.1.1", "9.9.9.9"] : wgConfig.dns
 
         let proto = NETunnelProviderProtocol()
         proto.providerBundleIdentifier = kVpnExtensionBundleId
         proto.serverAddress = node.quicAddr // shown in iOS VPN Settings
         proto.providerConfiguration = [
-            WgProviderKey.wgConfig:   wgQuickConf,
-            WgProviderKey.serverCity: node.city,
+            WgProviderKey.privateKeyB64:   privateKeyB64,
+            WgProviderKey.serverPubKeyB64: wgConfig.serverPubkey,
+            WgProviderKey.pskB64:          wgConfig.psk,
+            WgProviderKey.clientAddresses: clientAddresses,
+            WgProviderKey.serverEndpoint:  wgConfig.serverEndpoint,
+            WgProviderKey.dns:             dnsServers.joined(separator: ","),
+            WgProviderKey.serverCity:      node.city,
         ]
 
         mgr.protocolConfiguration = proto

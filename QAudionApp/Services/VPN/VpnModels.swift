@@ -111,9 +111,22 @@ enum VpnState: Equatable {
 
 /// Keys used in `NETunnelProviderProtocol.providerConfiguration` to pass the
 /// WireGuard config from the main app to the `PacketTunnelProvider` extension.
+/// Keys used in `NETunnelProviderProtocol.providerConfiguration` to pass the
+/// WireGuard parameters from the main app to the `PacketTunnelProvider` extension.
+///
+/// Values are individual strings (not a wg-quick blob) so `PacketTunnelProvider`
+/// can build `TunnelConfiguration` using the public WireGuardKit API
+/// (`TunnelConfiguration.init(name:interface:peers:)`) without needing the
+/// private wg-quick parser that is not in the SPM target.
+///
+/// NOTE: The same key strings are hardcoded in `PacketTunnelProvider.swift`
+/// (the extension cannot import files from the main app target).
 enum WgProviderKey {
-    /// The full `wg-quick`-style config string written to the interface.
-    static let wgConfig = "wg_config"
-    /// Human-readable tunnel description (for logs).
-    static let serverCity = "server_city"
+    static let privateKeyB64    = "wg_private_key_b64"    // client private key (base64)
+    static let serverPubKeyB64  = "wg_server_pub_key_b64" // server public key (base64)
+    static let pskB64           = "wg_psk_b64"            // pre-shared key (base64, may be "")
+    static let clientAddresses  = "wg_client_addresses"   // "10.x.x.x/32[,fd00::1/128]"
+    static let serverEndpoint   = "wg_server_endpoint"    // "host:port"
+    static let dns              = "wg_dns"                // "1.1.1.1,9.9.9.9"
+    static let serverCity       = "server_city"           // human-readable city name
 }
