@@ -30,6 +30,22 @@ public final class QAudionEngine: @unchecked Sendable {
     private var sessionInfo: SessionInfo?
     private var sessionStartTime: Date?
 
+    // W479 — Android-compatible audio mode.
+    // When `useAdaptivePadding` is true, processOutgoingAudio and
+    // processIncomingAudio use the AdaptivePaddingController scheme
+    // byte-identical to Android FrameRelayTransport:
+    //   TX: static sessionKey + NO AAD + 2-byte len header + 120-byte padding
+    //   RX: static sessionKey + NO AAD + strip 2-byte len header
+    // This is set automatically by QAudionCallIntegration when the peer
+    // handshakes via the Android JSON bundle path (onAndroidBundleReceived).
+    // iOS↔iOS calls keep useAdaptivePadding = false (ratchet path, W477+W473).
+    // Flag is reset in initialize() so each call starts clean.
+    private var useAdaptivePadding: Bool = false
+    private var sessionKey: Data?          // raw 32-byte key for adaptive path
+    private var txSeqAdaptive: UInt64 = 0  // monotonic TX counter for adaptive path
+    private static let adaptiveTarget = 120   // target padded plaintext size (bytes)
+    private static let adaptiveHeader = 2    // 2-byte big-endian length prefix
+
     public init(config: EngineConfig = .production()) { self.config = config }
 
     public func initialize() throws {
@@ -45,10 +61,19 @@ public final class QAudionEngine: @unchecked Sendable {
             codec: OpusCodec(config: .secure()),
             jitterBufferCapacity: AudioConstants.jitterBufferFramesWsRelay
         )
+        // W479 — reset adaptive-padding state so each call starts clean.
+        useAdaptivePadding = false
+        sessionKey = nil
+        txSeqAdaptive = 0
         state = .initialized
     }
 
-    public func initSession(sharedSecret: Data, psk: Data? = nil) throws {
+    /// W479 — `adaptivePadding: true` switches audio to the
+    /// AdaptivePaddingController-compatible scheme (static session key,
+    /// no AAD, 2-byte len header + 120-byte fixed-size padding).
+    /// Set this when the peer handshaked via the Android JSON bundle path.
+    public func initSession(sharedSecret: Data, psk: Data? = nil,
+                            adaptivePadding: Bool = false) throws {
         lock.lock(); defer { lock.unlock() }
         guard state == .initialized || state == .sessionActive else {
             throw QAudionEngineError.invalidStateTransition(from: state, to: .sessionActive)
@@ -64,6 +89,12 @@ public final class QAudionEngine: @unchecked Sendable {
         sessionInfo = SessionInfo(sessionId: sessionState.sessionId, isActive: true)
         sessionStartTime = Date()
         stats = EngineStats()
+        // W479 — store the raw session key and adaptive-padding flag.
+        // Must be set atomically with state = .sessionActive so
+        // processOutgoingAudio never reads a half-initialised flag.
+        useAdaptivePadding = adaptivePadding
+        sessionKey = adaptivePadding ? sharedSecret : nil
+        txSeqAdaptive = 0
         state = .sessionActive
     }
 
@@ -71,6 +102,41 @@ public final class QAudionEngine: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard state == .sessionActive || state == .processing else {
             throw QAudionEngineError.noActiveSession
+        }
+        // W479 — Android-compat path: static key, no AAD, adaptive padding.
+        if useAdaptivePadding {
+            guard let key = sessionKey, let cipher = aeadCipher else {
+                throw QAudionEngineError.notInitialized
+            }
+            let opus = audioProcessor?.processOutgoing(pcmFrame: pcmFrame) ?? pcmFrame
+            // Build 2-byte-len-header + opus + random tail padded to targetLen bytes.
+            // targetLen = max(120, opus+2) so oversized frames still encode correctly
+            // (Android openAudio uses the 2-byte header to extract, any size decodes).
+            let targetLen = max(Self.adaptiveTarget, opus.count + Self.adaptiveHeader)
+            var rng = SystemRandomNumberGenerator()
+            let hi = UInt8((opus.count >> 8) & 0xFF)
+            let lo = UInt8(opus.count & 0xFF)
+            let tailLen = targetLen - Self.adaptiveHeader - opus.count
+            let tail: [UInt8] = tailLen > 0
+                ? (0..<tailLen).map { _ in UInt8.random(in: .min ... .max, using: &rng) }
+                : []
+            var padded = Data(capacity: targetLen)
+            padded.append(hi); padded.append(lo)
+            padded.append(contentsOf: opus)
+            padded.append(contentsOf: tail)
+            // AES-256-GCM with static session key and NO AAD (nil = no authenticating: param).
+            let encrypted = try cipher.encrypt(plaintext: padded, key: key, associatedData: nil)
+            let seq = UInt32(truncatingIfNeeded: txSeqAdaptive)
+            txSeqAdaptive &+= 1
+            let frame = EncryptedFrame(
+                sequenceNumber: seq,
+                timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+                nonce: encrypted.nonce,
+                payload: encrypted.ciphertext,
+                tag: encrypted.tag
+            )
+            stats.framesTx += 1
+            return FrameEncoder.serialize(frame)
         }
         guard let txSm = txSessionManager, let cipher = aeadCipher else {
             throw QAudionEngineError.notInitialized
@@ -101,28 +167,39 @@ public final class QAudionEngine: @unchecked Sendable {
         guard state == .sessionActive || state == .processing else {
             throw QAudionEngineError.noActiveSession
         }
-        guard let rxSm = rxSessionManager, let cipher = aeadCipher else {
-            throw QAudionEngineError.notInitialized
-        }
-        // W469 — cross-platform RX. iOS peers send the native
-        // `FrameEncoder` container (29-byte header: version|flags|seq|
-        // ts|nonceLen|nonce|payloadLen). Android peers, over the
-        // BcryptoWsRelay, send the compact `WireRelayFrameCodec` audio
-        // envelope (mux|nonce|seq|ctLen). Before this fix iOS always ran
-        // `FrameEncoder.deserialize`, which rejected every Android frame
-        // at the flags/nonceLen byte (`invalidFlags`/`invalidNonceLength`)
-        // — telemetry showed 2250+ consecutive RX failures on an
-        // iPad↔A50 call. `FrameEncoder.isValid` is a strong check
-        // (version byte + nonceLen byte @14 == 12); a WireRelay frame's
-        // byte 14 is a seq byte (≈0 for any real call), so the two
-        // formats are unambiguously distinguishable. The audio AEAD uses
-        // NO additional-authenticated-data, so the container format does
-        // not affect decryption — only nonce/ciphertext/tag matter.
+        // W469 — cross-platform wire format detection (common to both paths).
         let frame: EncryptedFrame
         if FrameEncoder.isValid(serializedFrame) {
             frame = try FrameEncoder.deserialize(serializedFrame)
         } else {
             frame = try WireRelayFrameCodec.decode(serializedFrame).frame
+        }
+        // W479 — Android-compat path: static session key, no AAD, strip 2-byte padding header.
+        if useAdaptivePadding {
+            guard let key = sessionKey, let cipher = aeadCipher else {
+                throw QAudionEngineError.notInitialized
+            }
+            let cipherOutput = AeadCipher.CipherOutput(
+                nonce: frame.nonce, ciphertext: frame.payload, tag: frame.tag
+            )
+            // AES-256-GCM with static session key and NO AAD — mirrors
+            // Android AdaptivePaddingController.openAudio(frame, sessionKey).
+            let padded = try cipher.decrypt(cipherOutput: cipherOutput, key: key,
+                                            associatedData: nil)
+            guard padded.count >= Self.adaptiveHeader else {
+                throw QAudionEngineError.malformedFrame("adaptive padding too short: \(padded.count)")
+            }
+            let len = (Int(padded[0]) << 8) | Int(padded[1])
+            guard len >= 0, Self.adaptiveHeader + len <= padded.count else {
+                throw QAudionEngineError.malformedFrame("adaptive length header invalid: len=\(len) padded=\(padded.count)")
+            }
+            let opusBytes = padded.subdata(in: Self.adaptiveHeader..<(Self.adaptiveHeader + len))
+            let pcm = audioProcessor?.processIncoming(opusFrame: opusBytes) ?? opusBytes
+            stats.framesRx += 1
+            return pcm
+        }
+        guard let rxSm = rxSessionManager, let cipher = aeadCipher else {
+            throw QAudionEngineError.notInitialized
         }
         // W477 — RX uses the rxSessionManager only; TX has its own.
         let frameKey = try rxSm.ratchet()
@@ -131,6 +208,7 @@ public final class QAudionEngine: @unchecked Sendable {
         )
         // W473 — reconstruct the AEAD AAD from the frame's sequence
         // number (see `frameAAD`). Must match what the sender bound.
+        // Note: the W469 comment "no AAD" above is stale (pre-W473). AAD IS used.
         let opus = try cipher.decrypt(cipherOutput: cipherOutput, key: frameKey,
                                       associatedData: Self.frameAAD(frame.sequenceNumber))
         let pcm = audioProcessor?.processIncoming(opusFrame: opus) ?? opus
@@ -160,6 +238,10 @@ public final class QAudionEngine: @unchecked Sendable {
         if let start = sessionStartTime {
             stats.sessionDurationMs = Int64(Date().timeIntervalSince(start) * 1000)
         }
+        // W479 — zeroize the raw session key when the session ends.
+        sessionKey = nil
+        useAdaptivePadding = false
+        txSeqAdaptive = 0
         if state.canTransitionTo(.initialized) { state = .initialized }
     }
 
@@ -182,12 +264,15 @@ public enum QAudionEngineError: Error, CustomStringConvertible {
     case invalidStateTransition(from: EngineState, to: EngineState)
     case notInitialized
     case noActiveSession
+    /// W479 — adaptive-padding frame failed structural validation (bad length header etc.).
+    case malformedFrame(String)
 
     public var description: String {
         switch self {
         case .invalidStateTransition(let from, let to): return "Cannot transition from \(from) to \(to)"
         case .notInitialized: return "Engine not initialized"
         case .noActiveSession: return "No active session"
+        case .malformedFrame(let reason): return "Malformed frame: \(reason)"
         }
     }
 }

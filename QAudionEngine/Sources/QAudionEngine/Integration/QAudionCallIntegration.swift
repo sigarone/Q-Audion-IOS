@@ -582,7 +582,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 return
             }
             try engine.initialize()
-            try engine.initSession(sharedSecret: combined)
+            // W479 — Android peer: use AdaptivePaddingController-compatible
+            // audio scheme (static session key, no AAD, 2-byte len + 120B padding).
+            // Byte-identical to Android FrameRelayTransport.send/decode +
+            // AdaptivePaddingController.sealAudio/openAudio.
+            try engine.initSession(sharedSecret: combined, adaptivePadding: true)
             lock.withLock { state = .active }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
@@ -664,7 +668,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             print("[QAudionCallIntegration] ACCEPT accepted for callId=\(callId.prefix(8))… — initialising session")
 
             // 6. Initialise the audio session and fire the broker hook.
-            try engine.initSession(sharedSecret: combined)
+            // W479 — Android peer (caller side): same AdaptivePadding scheme.
+            try engine.initSession(sharedSecret: combined, adaptivePadding: true)
             lock.withLock {
                 state = .active
                 // 7. Zero the stashed privs immediately — the session key is
