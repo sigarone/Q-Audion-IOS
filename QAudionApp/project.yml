@@ -130,14 +130,30 @@ targets:
           #!/bin/sh
           set -eu
 
-          # Locate WireGuardKitGo source inside the SPM checkout.
-          # BUILD_DIR  = .../DerivedData/<name>/Build/Products
-          # Checkouts  = .../DerivedData/<name>/SourcePackages/checkouts
-          WG_GO_SRC="${BUILD_DIR}/../../SourcePackages/checkouts/wireguard-apple/Sources/WireGuardKitGo"
-          WG_GO_SRC=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$WG_GO_SRC")
+          # Locate SourcePackages inside DerivedData.
+          #
+          # BUILD_DIR during `xcodebuild build`   = .../DerivedData/<n>/Build/Products
+          # BUILD_DIR during `xcodebuild archive`  = .../DerivedData/<n>/Build/Intermediates.noindex/ArchiveIntermediates/.../<deep path>
+          #
+          # The simple "../../SourcePackages" heuristic breaks during archive because
+          # BUILD_DIR is several extra levels deep. Walk up from BUILD_DIR until we
+          # find the DerivedData root that actually contains SourcePackages/.
+          SP_ROOT="$BUILD_DIR"
+          while [ "$SP_ROOT" != "/" ] && [ ! -d "$SP_ROOT/SourcePackages" ]; do
+            SP_ROOT=$(dirname "$SP_ROOT")
+          done
+
+          if [ ! -d "$SP_ROOT/SourcePackages" ]; then
+            echo "error: SourcePackages not found (searched ancestors of BUILD_DIR=$BUILD_DIR)"
+            echo "note:  Resolve the wireguard-apple SPM package first."
+            exit 1
+          fi
+
+          WG_GO_SRC="$SP_ROOT/SourcePackages/checkouts/wireguard-apple/Sources/WireGuardKitGo"
 
           if [ ! -d "$WG_GO_SRC" ]; then
             echo "error: WireGuardKitGo source not found at: $WG_GO_SRC"
+            echo "note:  SourcePackages root found at: $SP_ROOT"
             echo "note:  Resolve the wireguard-apple SPM package first."
             exit 1
           fi
