@@ -86,6 +86,29 @@ final class CallService {
     /// Quando nil, le encrypted bytes restano locali (counter only).
     private var wsClient: BCryptoWebSocketClient?
     private var peerUserId: String?
+    /// W476 — lazy fallback providers. Wired ONCE by AppState at login.
+    /// `wireTransport(wsClient:peerUserId:)` is supposed to bind the two
+    /// fields above at call setup, but both call sites in AppState gate
+    /// the binding on `if let ws = liveProvider?.getWebSocketClient()` —
+    /// when `liveProvider` is nil at that exact moment (or for a callee
+    /// whose answer path never ran `startIncomingCallAudioOnAnswer`) the
+    /// binding is silently SKIPPED, and every encrypted TX frame after
+    /// that is dropped on the floor: capture+encrypt run normally
+    /// (waveforms visibly move) but the server logs zero
+    /// `audio relay from=<us>` and the peer hears nothing. These
+    /// closures let `processAndSendEncryptedFrame` recover at TX time by
+    /// fetching the live WS + current peer id directly. They follow the
+    /// CLAUDE.md §16 pattern (no AppState param — closures capture only
+    /// what they need, weakly).
+    // Best-effort getters: read non-isolated because the TX path runs on
+    // the AVFAudio tap thread, not main. AppState only sets `liveProvider`
+    // and `callContactId` from main, but a stale read across threads is
+    // acceptable for this fallback (worst case: drops the very first
+    // frame and binds on the second). They MUST stay nullary `() -> ...`.
+    public typealias WsClientProvider = () -> BCryptoWebSocketClient?
+    public typealias PeerIdProvider = () -> String?
+    public var getWsClient: WsClientProvider?
+    public var getPeerId: PeerIdProvider?
     /// Token usato per de-registrare il handler "audio_frame" su endCall
     /// — assumiamo che `registerHandler` sostituisca il precedente per
     /// type, quindi de-register è no-op (ma resettiamo wsClient così
@@ -658,7 +681,19 @@ final class CallService {
                 self?.onTxWaveformUpdate?(txSamples)
                 self?.onCipherWaveformUpdate?(cipherSamples)
             }
-            if let ws = wsClient, let peer = peerUserId {
+            // W476 — fall back to the lazy providers (set once by AppState
+            // at login) when `wireTransport` never bound these eagerly.
+            // Without this every encrypted TX frame was silently dropped
+            // for any call where `liveProvider` was nil at startCall
+            // /answer time — the local waveforms moved but the server
+            // logged zero `audio relay from=<us>` and the peer heard
+            // silence. Persist on first successful recovery so subsequent
+            // frames in the call skip the closure call.
+            let effectiveWs = wsClient ?? getWsClient?()
+            let effectivePeer = peerUserId ?? getPeerId?()
+            if let ws = effectiveWs, let peer = effectivePeer {
+                if wsClient == nil { wsClient = ws }
+                if peerUserId == nil { peerUserId = peer }
                 // W469 — emit the cross-platform wire format. The engine's
                 // `processOutgoingAudio` always serialises the iOS-native
                 // `FrameEncoder` container; Android peers on the relay can

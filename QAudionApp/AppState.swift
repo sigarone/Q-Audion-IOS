@@ -736,6 +736,21 @@ final class AppState: ObservableObject {
         let config = pinnedConfig(token: token)
         let provider = BCryptoBackendProvider(config: config)
         self.liveProvider = provider
+        // W476 — wire CallService's lazy WS / peer-id fallback providers
+        // ONCE, here at login. The TX path falls back to these when
+        // `wireTransport(wsClient:peerUserId:)` never bound the eager
+        // fields — see CallService.WsClientProvider for the full
+        // explanation. Without this fallback, every encrypted TX frame
+        // is silently dropped whenever `liveProvider` was nil at call
+        // setup time. Closures capture self weakly and read non-isolated
+        // — `liveProvider`/`callContactId` are only set from main, but a
+        // cross-thread read is acceptable here (best-effort).
+        callService.getWsClient = { [weak self] in
+            self?.liveProvider?.getWebSocketClient()
+        }
+        callService.getPeerId = { [weak self] in
+            self?.callContactId
+        }
         // W74: register inbound call handlers BEFORE the WS lands. The
         // server relays Android→iOS calls as `call_incoming`, NOT
         // `call_offer` (see bcrypto-server signaling/messages.go
