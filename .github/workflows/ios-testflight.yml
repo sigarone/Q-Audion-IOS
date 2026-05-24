@@ -265,67 +265,99 @@ jobs:
           #   "requires a provisioning profile with the App Groups and
           #    Network Extensions features"
           #
-          # Fix: enable the capabilities on the Bundle ID resource BEFORE
-          # creating the profile; delete any stale profile (created without
-          # capabilities) so the next fetch creates a fresh one.
+          # Fix:
+          #   Phase 1 — run fetch-signing-files to create/find the Bundle ID
+          #             and (stale) profile; capture output to extract IDs.
+          #   Phase 2 — enable APP_GROUPS + NETWORK_EXTENSIONS on the Bundle ID.
+          #   Phase 3 — delete the stale profile (no capabilities) so --create
+          #             makes a fresh one with capabilities in Phase 4.
+          #   Phase 4 — re-run fetch-signing-files; new profile includes caps.
           EXT_BID="com.qaudion.app.packet-tunnel"
 
-          # Step A: resolve the Bundle ID resource ID (create if missing)
-          EXT_RESOURCE_ID=$(app-store-connect bundle-ids list \
-            --identifier "$EXT_BID" --platform IOS 2>&1 \
-            | grep -oP '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
-
-          if [ -z "$EXT_RESOURCE_ID" ]; then
-            echo "Bundle ID $EXT_BID not found — creating..."
-            EXT_RESOURCE_ID=$(app-store-connect bundle-ids create \
-              --identifier "$EXT_BID" \
-              --name "Q-Audion VPN Extension" \
-              --platform IOS 2>&1 \
-              | grep -oP '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
-          fi
-          echo "Extension Bundle ID resource: ${EXT_RESOURCE_ID:-UNKNOWN}"
-
-          # Step B: enable App Groups + Network Extensions on the Bundle ID.
-          # Idempotent: re-adding an already-enabled capability is a no-op
-          # or returns a benign conflict error (handled by || true).
-          if [ -n "$EXT_RESOURCE_ID" ]; then
-            echo "Enabling App Groups capability..."
-            app-store-connect bundle-ids add-capability \
-              "$EXT_RESOURCE_ID" APP_GROUPS 2>&1 \
-              && echo "  APP_GROUPS: enabled" \
-              || echo "  APP_GROUPS: WARN (may already be enabled or command unsupported)"
-
-            echo "Enabling Network Extensions capability..."
-            app-store-connect bundle-ids add-capability \
-              "$EXT_RESOURCE_ID" NETWORK_EXTENSIONS 2>&1 \
-              && echo "  NETWORK_EXTENSIONS: enabled" \
-              || echo "  NETWORK_EXTENSIONS: WARN (may already be enabled or command unsupported)"
-
-            # Step C: delete any stale profile that was created before the
-            # capabilities were enabled. fetch-signing-files --create reuses
-            # ACTIVE profiles, so the old capabilityless profile must be
-            # removed to force fresh creation.
-            echo "Removing stale extension profiles (if any)..."
-            STALE_PROFILES=$(app-store-connect profiles list \
-              --bundle-id-identifier "$EXT_BID" \
-              --profile-type IOS_APP_STORE \
-              --profile-state ACTIVE 2>&1 \
-              | grep -oP '\([A-Z0-9]{10}\)' | tr -d '()' || echo "")
-            for PROF_ID in $STALE_PROFILES; do
-              echo "  Deleting stale profile $PROF_ID..."
-              app-store-connect profiles delete "$PROF_ID" 2>&1 || true
-            done
-          fi
-
-          # Step D: fetch/create fresh extension signing files. Now that the
-          # Bundle ID has the right capabilities, the newly-created profile
-          # will satisfy the entitlements and xcodebuild archive will accept it.
+          # Phase 1: run first fetch so Bundle ID definitely exists; capture output.
+          # We capture via a temp file because $() swallows ANSI colour codes
+          # while still allowing tee to print to the step console.
+          EXT_FETCH_TMP=$(mktemp)
           app-store-connect fetch-signing-files "$EXT_BID" \
             --type IOS_APP_STORE \
             --create \
             --platform IOS \
             --certificate-key "@file:$CERT_KEY_PATH" \
-            --strict-match-identifier
+            --strict-match-identifier 2>&1 | tee "$EXT_FETCH_TMP" || true
+          EXT_FETCH_OUT=$(cat "$EXT_FETCH_TMP")
+          rm -f "$EXT_FETCH_TMP"
+
+          # Strip ANSI codes so greps below see plain text regardless of
+          # whether codemagic-cli-tools colourises its output.
+          PLAIN=$(printf '%s\n' "$EXT_FETCH_OUT" | sed 's/\x1b\[[0-9;]*m//g')
+
+          # Extract Bundle ID resource ID — two possible formats:
+          #   new:      "Created Bundle ID XXXXXXXXXX"
+          #   existing: "- Name identifier (XXXXXXXXXX)"
+          EXT_BID_RES=$(printf '%s\n' "$PLAIN" \
+            | grep -oE 'Created Bundle ID [A-Z0-9]{10}|Bundle ID [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$EXT_BID_RES" ]; then
+            EXT_BID_RES=$(printf '%s\n' "$PLAIN" \
+              | grep -F "com.qaudion.app.packet-tunnel" \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Extension Bundle ID res-id: ${EXT_BID_RES:-UNKNOWN}"
+
+          # Extract Profile resource ID — two possible formats:
+          #   new:      "Created Profile XXXXXXXXXX"
+          #   reused:   "- IOS_APP_STORE ... (XXXXXXXXXX)"
+          EXT_PROF_RES=$(printf '%s\n' "$PLAIN" \
+            | grep -oE 'Created Profile [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$EXT_PROF_RES" ]; then
+            EXT_PROF_RES=$(printf '%s\n' "$PLAIN" \
+              | grep -E '^- IOS_APP_STORE' \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Extension Profile res-id: ${EXT_PROF_RES:-UNKNOWN}"
+
+          # Phase 2: enable capabilities (idempotent — safe to re-run).
+          # Diagnostic: print available bundle-ids subcommands on first run so
+          # we can verify 'add-capability' exists if the command fails below.
+          if [ -n "$EXT_BID_RES" ]; then
+            echo "=== app-store-connect bundle-ids help (diagnostic) ==="
+            app-store-connect bundle-ids --help 2>&1 | head -20 || true
+
+            echo "Enabling APP_GROUPS on $EXT_BID_RES..."
+            app-store-connect bundle-ids add-capability \
+              "$EXT_BID_RES" APP_GROUPS 2>&1 \
+              && echo "  APP_GROUPS: done" \
+              || echo "  APP_GROUPS: WARN (check bundle-ids help above)"
+
+            echo "Enabling NETWORK_EXTENSIONS on $EXT_BID_RES..."
+            app-store-connect bundle-ids add-capability \
+              "$EXT_BID_RES" NETWORK_EXTENSIONS 2>&1 \
+              && echo "  NETWORK_EXTENSIONS: done" \
+              || echo "  NETWORK_EXTENSIONS: WARN"
+
+            # Phase 3: delete stale profile (no capabilities) to force
+            # fresh creation in Phase 4.
+            if [ -n "$EXT_PROF_RES" ]; then
+              echo "Deleting stale profile $EXT_PROF_RES (created without capabilities)..."
+              app-store-connect profiles delete "$EXT_PROF_RES" 2>&1 \
+                && echo "  Profile deleted." \
+                || echo "  Profile delete WARN (may already be gone)"
+            fi
+
+            # Phase 4: re-create extension signing files. The profile will
+            # now include APP_GROUPS + NETWORK_EXTENSIONS, satisfying the
+            # entitlements file and allowing xcodebuild archive to proceed.
+            echo "Re-creating extension signing files with capabilities..."
+            app-store-connect fetch-signing-files "$EXT_BID" \
+              --type IOS_APP_STORE \
+              --create \
+              --platform IOS \
+              --certificate-key "@file:$CERT_KEY_PATH" \
+              --strict-match-identifier
+          else
+            echo "WARNING: could not resolve Extension Bundle ID resource — archive may fail."
+          fi
 
           keychain add-certificates
           xcode-project use-profiles --project "QAudionApp/$XCODE_PROJECT"
