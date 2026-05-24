@@ -83,6 +83,11 @@ final class MockCallKitManager: CallKitManaging, @unchecked Sendable {
         if let error = setOnHoldError { throw error }
     }
 
+    func answerCall(uuid: UUID) async throws {
+        // W478 — no-op stub; tests that exercise in-app answer can subclass
+        // or observe via records if needed.
+    }
+
     // MARK: - Helpers
 
     private func append(_ action: CallRecord.Action) {

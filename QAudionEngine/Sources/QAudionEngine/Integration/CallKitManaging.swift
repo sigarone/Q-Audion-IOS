@@ -21,6 +21,12 @@ public protocol CallKitManaging: AnyObject, Sendable {
 
     /// Put the call on hold or take it off hold.
     func setOnHold(uuid: UUID, isOnHold: Bool) async throws
+
+    /// W478 — answer an incoming call programmatically via CXCallController.
+    /// Used by the in-app incoming-call banner as a fallback when CallKit's
+    /// system UI was suppressed (Focus mode / Silence Unknown Callers).
+    /// Equivalent to the user tapping "Answer" on the system sheet.
+    func answerCall(uuid: UUID) async throws
 }
 
 /// Reason a call was ended. Maps to `CXCallEndedReason` in the iOS-only adapter.

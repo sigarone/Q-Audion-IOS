@@ -44,8 +44,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         do {
             try await provider.reportNewIncomingCall(with: uuid, update: update)
         } catch {
-            // Server emitted incoming-call but iOS rejected (e.g. Focus mode).
-            // Silently drop — do NOT throw upward; CallService will time out separately.
+            // W478 — log instead of silently dropping. If CallKit rejects
+            // the incoming call (Focus mode, Silence Unknown Callers, DnD,
+            // max-calls-per-group, etc.) the in-app ringing banner still
+            // appears because `callState` is set to `.ringing` AFTER this
+            // call returns, regardless of success/failure.
+            print("[CallKitProvider] reportNewIncomingCall rejected: \(error)")
         }
     }
 
@@ -81,6 +85,16 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
 
     public func setOnHold(uuid: UUID, isOnHold: Bool) async throws {
         let action = CXSetHeldCallAction(call: uuid, onHold: isOnHold)
+        try await controller.request(CXTransaction(action: action))
+    }
+
+    /// W478 — answer an incoming call via the CallKit CXCallController.
+    /// This path is triggered by the in-app answer button; it fires the same
+    /// CXAnswerCallAction that the system UI button would fire, ensuring the
+    /// `provider(_:perform:CXAnswerCallAction)` delegate callback runs and
+    /// transitions the call to `.active` (same as tapping Answer on lock screen).
+    public func answerCall(uuid: UUID) async throws {
+        let action = CXAnswerCallAction(call: uuid)
         try await controller.request(CXTransaction(action: action))
     }
 
