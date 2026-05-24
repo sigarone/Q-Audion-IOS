@@ -138,12 +138,20 @@ public struct FastSetupPayload: Codable, Equatable {
         return payload
     }
 
-    /// Resolved display name. Mirrors Android logic:
-    /// `payload.displayName.ifBlank { "Phone #${extension}" }`.
-    /// Used after the login completes to push the profile name to the server
-    /// so peers calling THIS user see "Phone #100" instead of the raw UUID.
+    /// Resolved display name. Used after login to push the profile name to
+    /// the server so peers see the extension number instead of the raw UUID.
+    ///
+    /// W497 — changed fallback from "Phone #N" to just "N".
+    /// The "Phone #" prefix was an Android-side artefact that leaked into
+    /// iOS via the Kotlin comment in the source-of-truth struct. Showing
+    /// bare "235" is cleaner in CallKit and in the in-app call screen; the
+    /// prefix added no information and changed visibly when FastSetupAuth
+    /// first ran and pushed the profile to the server (before that push the
+    /// server returned the raw extension "235"; afterwards "Phone #235").
+    /// If the QR payload carries an explicit display_name it is used as-is
+    /// (no prefix added) — that case was correct before and after.
     public var resolvedDisplayName: String {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Phone #\(extensionNumber)" : trimmed
+        return trimmed.isEmpty ? "\(extensionNumber)" : trimmed
     }
 }
