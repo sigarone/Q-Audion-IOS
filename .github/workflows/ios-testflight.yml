@@ -151,6 +151,20 @@ jobs:
           pipx install --force codemagic-cli-tools 2>&1 | grep -v "WARNING: Skipping setuptools" || true
 
       # ----------------------------------------------------------
+      # 3b) Set up Go for WireGuard CGO cross-compilation.
+      #     The QAudionPacketTunnel preBuildScript calls the
+      #     WireGuardKitGo Makefile, which compiles api-apple.go into
+      #     libwg-go.a using `CGO_ENABLED=1 GOOS=ios go build`. That
+      #     requires a working Go toolchain in PATH at xcodebuild time.
+      #     Go 1.21+ is required for iOS cross-compilation support.
+      # ----------------------------------------------------------
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: false
+
+      # ----------------------------------------------------------
       # 4) Generate the Xcode project from project.yml.
       # ----------------------------------------------------------
       - name: Generate Xcode project

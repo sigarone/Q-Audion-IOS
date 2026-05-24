@@ -108,3 +108,60 @@ targets:
       # NetworkExtension and os.log (both are Apple system frameworks).
       - package: WireGuardKit
         product: WireGuardKit
+    preBuildScripts:
+      # Build WireGuard Go runtime library (libwg-go.a) from the SPM checkout
+      # BEFORE the link phase runs.
+      #
+      # Why needed: WireGuardKitGo's Package.swift has
+      #   linkerSettings: [.linkedLibrary("wg-go")]
+      # so the linker passes -lwg-go and expects libwg-go.a in
+      # $CONFIGURATION_BUILD_DIR. The library is NOT in git — it is compiled
+      # from Sources/WireGuardKitGo/api-apple.go via the Makefile using Go
+      # CGO cross-compilation (GOOS=ios).
+      #
+      # Environment variables PLATFORM_NAME, ARCHS, SDKROOT, and
+      # CONFIGURATION_BUILD_DIR are set automatically by Xcode in every Run
+      # Script phase — the Makefile reads them directly.
+      - name: Build WireGuard Go (libwg-go.a)
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(CONFIGURATION_BUILD_DIR)/libwg-go.a
+        script: |
+          #!/bin/sh
+          set -eu
+
+          # Locate WireGuardKitGo source inside the SPM checkout.
+          # BUILD_DIR  = .../DerivedData/<name>/Build/Products
+          # Checkouts  = .../DerivedData/<name>/SourcePackages/checkouts
+          WG_GO_SRC="${BUILD_DIR}/../../SourcePackages/checkouts/wireguard-apple/Sources/WireGuardKitGo"
+          WG_GO_SRC=$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$WG_GO_SRC")
+
+          if [ ! -d "$WG_GO_SRC" ]; then
+            echo "error: WireGuardKitGo source not found at: $WG_GO_SRC"
+            echo "note:  Resolve the wireguard-apple SPM package first."
+            exit 1
+          fi
+
+          echo "Building libwg-go.a"
+          echo "  Source:                 $WG_GO_SRC"
+          echo "  PLATFORM_NAME:          ${PLATFORM_NAME}"
+          echo "  ARCHS:                  ${ARCHS}"
+          echo "  SDKROOT:                ${SDKROOT}"
+          echo "  CONFIGURATION_BUILD_DIR:${CONFIGURATION_BUILD_DIR}"
+
+          # Ensure Go is in PATH. setup-go installs to /usr/local/go/bin on
+          # GitHub Actions runners; Homebrew uses /opt/homebrew/bin on Apple Silicon.
+          for GO_DIR in /usr/local/go/bin /opt/homebrew/bin /usr/bin; do
+            if [ -x "$GO_DIR/go" ]; then
+              export PATH="$GO_DIR:$PATH"
+              break
+            fi
+          done
+
+          if ! command -v go > /dev/null 2>&1; then
+            echo "error: 'go' not found in PATH. Add a setup-go step in the CI workflow."
+            exit 1
+          fi
+          echo "  Go: $(go version)"
+
+          make -C "$WG_GO_SRC" build
