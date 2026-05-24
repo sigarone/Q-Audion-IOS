@@ -3011,9 +3011,18 @@ final class AppState: ObservableObject {
         txWaveformSamples = []
         rxWaveformSamples = []
         cipherWaveformSamples = []
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        // W481 — reset callState to .idle IMMEDIATELY (not after 1s).
+        // The 1-second delay was causing every subsequent call_incoming
+        // that arrived within 1s of a hangup to be silently dropped by
+        // the dedup guard (guard callState == .idle). Typical scenario:
+        // caller hangs up → callee endCall() → callState=.ended →
+        // caller retries within 1s → call_incoming arrives while
+        // callState=.ended → dropped → device never rings again.
+        // isEndingCall still clears after a short delay to preserve the
+        // H-6 re-entrancy guard against the rapid double-endCall race.
+        callState = .idle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self = self else { return }
-            self.callState = .idle
             // H-6: clear the re-entrancy guard once teardown has fully
             // settled so the next call's endCall() runs normally.
             self.isEndingCall = false

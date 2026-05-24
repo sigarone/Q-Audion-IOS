@@ -66,6 +66,17 @@ final class CallService {
     private var loggedFirstRxDecrypt = false
     private var loggedRxNoPlayback = false
 
+    // W481 — pre-bind RX frame buffer.
+    // The PQC handshake and callIntegration binding are async; audio frames
+    // from the peer can arrive in the 200-600 ms window before binding
+    // completes. Silently dropping them advances the peer's TX ratchet
+    // WITHOUT advancing our RX ratchet, causing a permanent off-by-one
+    // that makes every subsequent decrypt fail (CryptoKitError error 3).
+    // We buffer up to kRxPreBufferCap frames and drain them immediately
+    // after callIntegration is set. Cap = 20 ≈ 400 ms at 20 ms/frame.
+    private var rxPreBuffer: [Data] = []
+    private static let rxPreBufferCap = 20
+
     // MARK: - W469 — cross-platform audio wire format
     //
     // The engine's `processOutgoingAudio` always serialises the
@@ -287,6 +298,7 @@ final class CallService {
         // JSON+QUAD OFFER pair.
 
         self.callIntegration = integration
+        drainRxPreBuffer()  // W481 — replay any frames that arrived before binding
         startDurationTimer()
 
         // W469 — CallKit `didActivate` fallback for OUTGOING calls.
@@ -377,6 +389,7 @@ final class CallService {
         // Bind the integration so handleIncomingEncryptedFrame can decrypt
         // inbound audio_frame packets.
         self.callIntegration = integration
+        drainRxPreBuffer()  // W481 — replay any frames that arrived before binding
         startDurationTimer()
     }
 
@@ -478,6 +491,27 @@ final class CallService {
         teardownAudioStack()
     }
 
+    /// W481 — drain frames buffered before callIntegration was bound.
+    /// Call immediately after `self.callIntegration = integration` on the
+    /// main thread. Processes each frame through processIncomingAudio so
+    /// the RX ratchet advances in step with the peer's TX ratchet.
+    private func drainRxPreBuffer() {
+        guard !rxPreBuffer.isEmpty, let integration = callIntegration else { return }
+        let frames = rxPreBuffer
+        rxPreBuffer.removeAll()
+        let n: String = frames.count.description
+        print("[CallService] RX W481: draining " + n + " pre-buffered frame(s)")
+        for frame in frames {
+            do {
+                let pcm = try integration.processIncomingAudio(serializedFrame: frame)
+                framesDecryptedRx &+= 1
+                audioPlayback?.playFrame(pcm)
+            } catch {
+                rxDecryptErrorCount &+= 1
+            }
+        }
+    }
+
     /// W66+W67: ingresso per il RX path. Chiamato dal handler "audio_frame"
     /// del `BCryptoWebSocketClient` quando il server inoltra un frame
     /// del peer. Esegue decrypt + playback + UI updates.
@@ -509,9 +543,17 @@ final class CallService {
                 print(line)
             }
             guard let integration = self.callIntegration else {
+                // W481 — buffer instead of drop. Dropping silently advances
+                // the peer's TX ratchet without advancing our RX ratchet,
+                // causing a permanent off-by-one (CryptoKitError on EVERY
+                // subsequent frame). Buffer up to rxPreBufferCap frames;
+                // drainRxPreBuffer() replays them once callIntegration binds.
+                if self.rxPreBuffer.count < Self.rxPreBufferCap {
+                    self.rxPreBuffer.append(serializedFrame)
+                }
                 if !self.loggedRxNoIntegration {
                     self.loggedRxNoIntegration = true
-                    print("[CallService] RX: audio_frame DROPPED — no callIntegration bound (call not fully set up?)")
+                    print("[CallService] RX W481: callIntegration nil — buffering frame (will drain on bind)")
                 }
                 return
             }
@@ -571,6 +613,7 @@ final class CallService {
         loggedRxNoIntegration = false
         loggedFirstRxDecrypt = false
         loggedRxNoPlayback = false
+        rxPreBuffer.removeAll()  // W481
         // W464 — drop the session-active flag so the NEXT call starts
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
