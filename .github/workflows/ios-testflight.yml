@@ -67,6 +67,12 @@ jobs:
       # 26.x found in /Applications). Hard-pin to e.g. "26.4" if you
       # need deterministic builds across runner image rotations.
       XCODE_VERSION: '26'
+      # Opt into Node.js 24 for JavaScript actions (setup-go etc.) to
+      # silence the Node.js 20 deprecation warning. Node.js 20 support
+      # on GH Actions runners ends 2026-09-16. Once upstream actions
+      # (setup-go@v5, upload-artifact@v7 …) ship native Node 24 builds,
+      # this env var can be removed.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
     steps:
       # ----------------------------------------------------------
@@ -251,11 +257,70 @@ jobs:
             --certificate-key "@file:$CERT_KEY_PATH" \
             --strict-match-identifier
 
-          # VPN extension profile (App Groups + Network Extensions).
-          # QAudionPacketTunnel has bundle ID com.qaudion.app.packet-tunnel;
-          # it needs its own IOS_APP_STORE profile. xcode-project use-profiles
-          # matches it to the QAudionPacketTunnel target automatically.
-          app-store-connect fetch-signing-files "com.qaudion.app.packet-tunnel" \
+          # ── VPN extension: App Groups + Network Extensions ───────────────────
+          # QAudionPacketTunnel.entitlements requires both capabilities.
+          # fetch-signing-files --create creates the Bundle ID but NOT the
+          # capabilities — the profile it produces has no entitlements, and
+          # xcodebuild archive rejects it immediately (~3s failure) with:
+          #   "requires a provisioning profile with the App Groups and
+          #    Network Extensions features"
+          #
+          # Fix: enable the capabilities on the Bundle ID resource BEFORE
+          # creating the profile; delete any stale profile (created without
+          # capabilities) so the next fetch creates a fresh one.
+          EXT_BID="com.qaudion.app.packet-tunnel"
+
+          # Step A: resolve the Bundle ID resource ID (create if missing)
+          EXT_RESOURCE_ID=$(app-store-connect bundle-ids list \
+            --identifier "$EXT_BID" --platform IOS 2>&1 \
+            | grep -oP '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+
+          if [ -z "$EXT_RESOURCE_ID" ]; then
+            echo "Bundle ID $EXT_BID not found — creating..."
+            EXT_RESOURCE_ID=$(app-store-connect bundle-ids create \
+              --identifier "$EXT_BID" \
+              --name "Q-Audion VPN Extension" \
+              --platform IOS 2>&1 \
+              | grep -oP '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Extension Bundle ID resource: ${EXT_RESOURCE_ID:-UNKNOWN}"
+
+          # Step B: enable App Groups + Network Extensions on the Bundle ID.
+          # Idempotent: re-adding an already-enabled capability is a no-op
+          # or returns a benign conflict error (handled by || true).
+          if [ -n "$EXT_RESOURCE_ID" ]; then
+            echo "Enabling App Groups capability..."
+            app-store-connect bundle-ids add-capability \
+              "$EXT_RESOURCE_ID" APP_GROUPS 2>&1 \
+              && echo "  APP_GROUPS: enabled" \
+              || echo "  APP_GROUPS: WARN (may already be enabled or command unsupported)"
+
+            echo "Enabling Network Extensions capability..."
+            app-store-connect bundle-ids add-capability \
+              "$EXT_RESOURCE_ID" NETWORK_EXTENSIONS 2>&1 \
+              && echo "  NETWORK_EXTENSIONS: enabled" \
+              || echo "  NETWORK_EXTENSIONS: WARN (may already be enabled or command unsupported)"
+
+            # Step C: delete any stale profile that was created before the
+            # capabilities were enabled. fetch-signing-files --create reuses
+            # ACTIVE profiles, so the old capabilityless profile must be
+            # removed to force fresh creation.
+            echo "Removing stale extension profiles (if any)..."
+            STALE_PROFILES=$(app-store-connect profiles list \
+              --bundle-id-identifier "$EXT_BID" \
+              --profile-type IOS_APP_STORE \
+              --profile-state ACTIVE 2>&1 \
+              | grep -oP '\([A-Z0-9]{10}\)' | tr -d '()' || echo "")
+            for PROF_ID in $STALE_PROFILES; do
+              echo "  Deleting stale profile $PROF_ID..."
+              app-store-connect profiles delete "$PROF_ID" 2>&1 || true
+            done
+          fi
+
+          # Step D: fetch/create fresh extension signing files. Now that the
+          # Bundle ID has the right capabilities, the newly-created profile
+          # will satisfy the entitlements and xcodebuild archive will accept it.
+          app-store-connect fetch-signing-files "$EXT_BID" \
             --type IOS_APP_STORE \
             --create \
             --platform IOS \
