@@ -7,6 +7,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
 
     private let provider: CXProvider
     private let controller: CXCallController
+
+    /// W495 — UUIDs for which CallKit rejected reportNewIncomingCall
+    /// (Focus/DnD/block-list). When the user taps Answer on the in-app
+    /// banner for these calls we bypass CXCallController (which would
+    /// also fail) and answer directly, manually activating the audio session.
+    private var callKitRejectedUUIDs: Set<UUID> = []
     public var onAnswerCall: ((UUID) async -> Void)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
@@ -50,10 +56,15 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // appears because `callState` is set to `.ringing` AFTER this
             // call returns, regardless of success/failure.
             print("[CallKitProvider] reportNewIncomingCall rejected: \(error)")
+            // W495 — track rejected UUIDs so answerCall() can fall back to
+            // a direct in-app answer path that bypasses CXCallController.
+            callKitRejectedUUIDs.insert(uuid)
         }
     }
 
     public func reportCallEnded(uuid: UUID, reason: CallEndReason) async {
+        // W495 — clean up rejected-UUID tracking on call end.
+        callKitRejectedUUIDs.remove(uuid)
         let cxReason: CXCallEndedReason
         switch reason {
         case .userEnded: cxReason = .remoteEnded
@@ -93,7 +104,33 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// CXAnswerCallAction that the system UI button would fire, ensuring the
     /// `provider(_:perform:CXAnswerCallAction)` delegate callback runs and
     /// transitions the call to `.active` (same as tapping Answer on lock screen).
+    ///
+    /// W495 — if CallKit previously rejected reportNewIncomingCall for this
+    /// UUID (Focus/DnD), CXCallController.request would also fail because
+    /// CallKit never registered the call. In that case we fall back to a
+    /// direct answer: manually activate AVAudioSession, fire
+    /// onAudioSessionActivated, and call onAnswerCall directly — identical
+    /// to what CXProviderDelegate would do on a successful CallKit path.
     public func answerCall(uuid: UUID) async throws {
+        if callKitRejectedUUIDs.contains(uuid) {
+            callKitRejectedUUIDs.remove(uuid)
+            // Manually replicate what CXProviderDelegate fires on a normal answer.
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: [
+                    .defaultToSpeaker,
+                    .allowBluetoothHFP,
+                    .allowBluetoothA2DP,
+                    .interruptSpokenAudioAndMixWithOthers
+                ]
+            )
+            try? session.setActive(true)
+            onAudioSessionActivated?()
+            await onAnswerCall?(uuid)
+            return
+        }
         let action = CXAnswerCallAction(call: uuid)
         try await controller.request(CXTransaction(action: action))
     }

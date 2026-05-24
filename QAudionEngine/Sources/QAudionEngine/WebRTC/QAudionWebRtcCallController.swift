@@ -405,6 +405,26 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         state = .disconnected
     }
 
+    /// W495 — send WS call_hangup THEN close the peer connection.
+    ///
+    /// Problem fixed: the old AppState.endCall() pattern was:
+    ///   closeSynchronously()        // sets recipientId = nil
+    ///   Task { await ctrl.hangup() } // reads recipientId — already nil!
+    /// → call_hangup was NEVER sent → remote waited for ICE timeout (~3s)
+    ///   before ending the call.
+    ///
+    /// This method captures recipientId BEFORE closeSynchronously() clears
+    /// it, closes the peer connection synchronously (no leak), then fires
+    /// the WS hangup on a detached Task (unblocked by MainActor teardown).
+    public func sendHangupAndClose() {
+        let rid = recipientId          // capture BEFORE closeSynchronously
+        closeSynchronously()           // closes peer connection, clears fields
+        guard let r = rid else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            try? await self?.callingApi.sendHangup(recipientId: r)
+        }
+    }
+
     // MARK: - Capability handshake (commit 540b79c0 parity)
 
     /// Forward the peer's `capabilities` array (extracted from the

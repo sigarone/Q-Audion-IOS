@@ -2988,16 +2988,15 @@ final class AppState: ObservableObject {
         // .none and doesn't inherit this call's .mlKem trust state.
         callSasKeySource = .none
         // W347 / H-6: tear down the WebRTC bridge for this call.
-        // Close the RTCPeerConnection SYNCHRONOUSLY before dropping the
-        // controller reference so a double endCall() can't leak it
-        // while the fire-and-forget hangup() Task is still in flight.
-        // The async hangup() is still issued (best-effort) only to send
-        // the network call_hangup signal — closeSynchronously() is
-        // idempotent so the duplicate teardown inside it is a no-op.
+        // W495 — send WS call_hangup BEFORE closing the peer connection.
+        // Old pattern (closeSynchronously THEN Task { hangup() }) was broken:
+        // closeSynchronously() sets recipientId = nil; by the time the Task
+        // runs, recipientId is nil so call_hangup was never sent. The remote
+        // then waited for ICE disconnect timeout (~3s) to end the call.
+        // sendHangupAndClose() captures recipientId first, then closes sync.
         #if canImport(WebRTC)
         if let ctrl = webRtcController as? QAudionWebRtcCallController {
-            ctrl.closeSynchronously()
-            Task { await ctrl.hangup() }
+            ctrl.sendHangupAndClose()
         }
         #endif
         webRtcController = nil
