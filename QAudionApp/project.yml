@@ -17,7 +17,7 @@ packages:
   # The fork bumps swift-tools-version to 5.5 — no other changes.
   WireGuardKit:
     url: https://github.com/sigarone/wireguard-apple
-    from: "1.0.17"
+    from: "1.0.18"
 
 targets:
   QAudionApp:
