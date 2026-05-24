@@ -5,32 +5,31 @@ import WebRTC
 
 // MARK: - Video Call View
 
-/// Full-screen video call UI with encrypted video feed placeholders.
-/// Provides camera, mic, speaker, and flip controls over a dark canvas.
-/// Designed as a UI-ready scaffold; video capture is integrated at runtime.
+/// Full-screen video call UI. Remote feed fills the screen; local
+/// camera is a PiP in the bottom-right corner. SAS verification panel
+/// overlays the bottom-left so the user can confirm words without
+/// leaving the call. Mirrors Android InCallScreen (videoActive mode):
+/// transparent mesh background replaced by real video, info minimized.
 struct VideoCallView: View {
     @EnvironmentObject var appState: AppState
 
     @State private var isMuted = false
     @State private var isCameraOn = true
-    @State private var isRearCamera = false
     @State private var isSpeaker = true
     @State private var showControls = true
-    /// W391 — local pipeline reference. Held by AppState (lifecycle
-    /// bound to the active call). When non-nil, the placeholders are
-    /// replaced by real LocalCameraPreview / RemoteVideoDisplay views.
-    @State private var pipelineRef: VideoCallPipeline?
+    @State private var showSas = false
+
+    // Resolved display name (same lookup pattern as LiveInCallScreen).
+    @State private var peerDisplayName: String = ""
+    private let contactsStore = ContactsStore()
 
     var body: some View {
         ZStack {
-            // Full-screen dark background (remote video placeholder)
             Color.black.ignoresSafeArea()
 
-            // Remote video placeholder
-            remoteVideoPlaceholder
+            remoteVideoLayer
 
-            VStack {
-                // Top bar: contact info + security badge
+            VStack(spacing: 0) {
                 if showControls {
                     topBar
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -38,18 +37,22 @@ struct VideoCallView: View {
 
                 Spacer()
 
-                // Local camera preview (picture-in-picture)
-                if isCameraOn {
-                    localPreview
+                HStack(alignment: .bottom) {
+                    // SAS panel anchored bottom-left (shown only when
+                    // SAS words are available + user tapped the lock icon).
+                    if showSas && appState.callSasWords.count == 6 {
+                        sasMiniPanel
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                            .padding(.leading, 12)
+                    }
+
+                    Spacer()
+
+                    if isCameraOn {
+                        localPreview
+                    }
                 }
 
-                // Waveform overlay (if enabled during video call)
-                if appState.waveformEnabled {
-                    WaveformPanel()
-                        .padding(.bottom, 8)
-                }
-
-                // Bottom controls
                 if showControls {
                     bottomControls
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -63,24 +66,30 @@ struct VideoCallView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: showControls)
+        .animation(.easeInOut(duration: 0.25), value: showSas)
         .statusBarHidden(!showControls)
+        .onAppear {
+            ScreenshotLockService.lock()
+            resolveDisplayName()
+        }
+        .onDisappear {
+            ScreenshotLockService.unlock()
+        }
+        .onChange(of: appState.callContactId) { _ in
+            resolveDisplayName()
+        }
     }
 
-    // MARK: - Remote Video Placeholder
+    // MARK: - Remote video
 
     @ViewBuilder
-    private var remoteVideoPlaceholder: some View {
-        if let pipeline = pipelineRef ?? appState.videoPipeline {
-            // W391: iOS↔iOS remote video — AVSampleBufferDisplayLayer
-            // consumes decoded CVPixelBuffers from the BCrypto HEVC pipeline.
+    private var remoteVideoLayer: some View {
+        if let pipeline = appState.videoPipeline {
             RemoteVideoDisplay(pipeline: pipeline)
                 .ignoresSafeArea()
         } else {
             #if canImport(WebRTC)
             if let track = appState.remoteWebRtcVideoTrack as? RTCVideoTrack {
-                // Android↔iOS remote video — WebRTC RTP track displayed via
-                // Metal-backed RTCMTLVideoView. Shown when the peer (Android)
-                // sends video over WebRTC rather than the BCrypto WS pipeline.
                 WebRTCRemoteVideoView(track: track)
                     .ignoresSafeArea()
             } else {
@@ -97,23 +106,21 @@ struct VideoCallView: View {
             Image(systemName: "video.fill")
                 .font(.system(size: 48))
                 .foregroundColor(.white.opacity(0.3))
-
             Text("Video cifrato")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.3))
-
-            Text("\(appState.videoCodec) + AES-256-GCM")
+            Text(appState.videoCodecLabel + " + AES-256-GCM")
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(.green.opacity(0.5))
         }
     }
 
-    // MARK: - Top Bar
+    // MARK: - Top bar
 
     private var topBar: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(appState.callContactId ?? "Videochiamata")
+                Text(peerDisplayName.isEmpty ? (appState.callContactId ?? "Videochiamata") : peerDisplayName)
                     .font(.headline)
                     .foregroundColor(.white)
 
@@ -122,7 +129,7 @@ struct VideoCallView: View {
                         .font(.system(size: 9))
                         .foregroundColor(.green)
 
-                    Text("Cifrato \u{2022} \(appState.videoCodecLabel)")
+                    Text("Cifrato · " + appState.videoCodecLabel)
                         .font(.caption2)
                         .foregroundColor(.gray)
                 }
@@ -130,75 +137,124 @@ struct VideoCallView: View {
 
             Spacer()
 
+            // SAS lock button — tapping shows/hides the SAS mini panel.
+            if appState.callSasWords.count == 6 {
+                Button {
+                    withAnimation { showSas.toggle() }
+                } label: {
+                    Image(systemName: sasVerified ? "checkmark.seal.fill" : "lock.shield")
+                        .font(.system(size: 20))
+                        .foregroundColor(sasVerified ? .green : .white)
+                }
+                .padding(.trailing, 8)
+            }
+
             CallSecurityBadge()
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
     }
 
-    // MARK: - Local Camera Preview (PiP)
+    // MARK: - SAS mini panel (bottom-left overlay)
+
+    private var sasMiniPanel: some View {
+        let words = appState.callSasWords
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 4) {
+                Image(systemName: sasVerified ? "checkmark.seal.fill" : "lock.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(sasVerified ? .green : .cyan)
+                Text(sasVerified ? "SAS VERIFICATO" : "CONFRONTA PAROLE")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundColor(sasVerified ? .green : .cyan)
+            }
+
+            if words.count == 6 {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        sasWord(words[0]); sasWord(words[1]); sasWord(words[2])
+                    }
+                    HStack(spacing: 8) {
+                        sasWord(words[3]); sasWord(words[4]); sasWord(words[5])
+                    }
+                }
+            }
+
+            if !sasVerified {
+                Button(action: confirmSas) {
+                    Text("CONFERMO")
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(1.0)
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.green))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.75))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke((sasVerified ? Color.green : Color.cyan).opacity(0.6), lineWidth: 1)
+        )
+    }
+
+    private func sasWord(_ word: String) -> some View {
+        Text(word)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundColor(.white)
+    }
+
+    // MARK: - Local camera preview (PiP)
 
     @ViewBuilder
     private var localPreview: some View {
-        HStack {
-            Spacer()
-            ZStack {
-                if let pipeline = pipelineRef ?? appState.videoPipeline {
-                    // W391: real local camera — AVCaptureVideoPreview
-                    // Layer attached to the pipeline's session.
-                    LocalCameraPreview(pipeline: pipeline)
-                        .frame(width: 120, height: 160)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                } else {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(white: 0.15))
-                        .frame(width: 120, height: 160)
-                        .overlay(
-                            VStack(spacing: 6) {
-                                Image(systemName: "person.fill")
-                                    .font(.title)
-                                    .foregroundColor(.gray)
-                                Text("Tu")
-                                    .font(.caption2)
-                                    .foregroundColor(.gray)
-                            }
-                        )
-                }
-            }
-            .overlay(
+        ZStack {
+            if let pipeline = appState.videoPipeline {
+                LocalCameraPreview(pipeline: pipeline)
+                    .frame(width: 120, height: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else {
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
-            .padding(.trailing, 16)
-            .padding(.bottom, 8)
+                    .fill(Color(white: 0.15))
+                    .frame(width: 120, height: 160)
+                    .overlay(
+                        Image(systemName: "person.fill")
+                            .font(.title)
+                            .foregroundColor(.gray)
+                    )
+            }
         }
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
+        .padding(.trailing, 16)
+        .padding(.bottom, 8)
     }
 
-    // MARK: - Bottom Controls
+    // MARK: - Bottom controls
 
     private var bottomControls: some View {
         HStack(spacing: 24) {
-            videoButton(
-                icon: "camera.rotate.fill",
-                label: "Inverti"
-            ) {
-                isRearCamera.toggle()
-                // W393: real flip via the pipeline (front ↔ back).
+            videoButton(icon: "camera.rotate.fill", label: "Inverti") {
                 appState.videoFlipCamera()
             }
-
             videoButton(
                 icon: isCameraOn ? "video.fill" : "video.slash.fill",
                 label: isCameraOn ? "Cam ON" : "Cam OFF",
                 isActive: !isCameraOn
             ) {
                 isCameraOn.toggle()
-                // W393: pause/resume the AVCaptureSession without
-                // tearing down encoder / fragmenter / transport.
                 appState.videoSetCameraEnabled(isCameraOn)
             }
-
             videoButton(
                 icon: isMuted ? "mic.slash.fill" : "mic.fill",
                 label: isMuted ? "Riattiva" : "Muto",
@@ -207,15 +263,9 @@ struct VideoCallView: View {
                 isMuted.toggle()
                 appState.setMuted(isMuted)
             }
-
-            videoButton(
-                icon: "phone.down.fill",
-                label: "Termina",
-                isEndCall: true
-            ) {
+            videoButton(icon: "phone.down.fill", label: "Termina", isEndCall: true) {
                 appState.endCall()
             }
-
             videoButton(
                 icon: isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
                 label: "Altoparlante",
@@ -227,7 +277,7 @@ struct VideoCallView: View {
         }
     }
 
-    // MARK: - Video Control Button
+    // MARK: - Video control button helper
 
     private func videoButton(
         icon: String,
@@ -242,8 +292,7 @@ struct VideoCallView: View {
                     .font(.system(size: 20))
                     .frame(width: 50, height: 50)
                     .background(
-                        isEndCall
-                            ? Color.red
+                        isEndCall ? Color.red
                             : (isActive ? Color.blue : Color.white.opacity(0.15))
                     )
                     .clipShape(Circle())
@@ -253,6 +302,34 @@ struct VideoCallView: View {
                     .font(.system(size: 9))
                     .foregroundColor(.gray)
             }
+        }
+    }
+
+    // MARK: - Derived state
+
+    private var sasVerified: Bool {
+        let words = appState.callSasWords
+        guard !words.isEmpty, let peer = appState.callContactId else { return false }
+        let fp = SasVerificationStore.fingerprint(forWords: words)
+        return SasVerificationStore.shared.isVerified(peerUserId: peer, currentFingerprint: fp)
+    }
+
+    private func confirmSas() {
+        let words = appState.callSasWords
+        guard !words.isEmpty, let peer = appState.callContactId else { return }
+        let fp = SasVerificationStore.fingerprint(forWords: words)
+        SasVerificationStore.shared.recordVerified(peerUserId: peer, fingerprint: fp)
+    }
+
+    private func resolveDisplayName() {
+        guard let id = appState.callContactId else { peerDisplayName = ""; return }
+        let contacts = contactsStore.load()
+        if let match = contacts.first(where: { $0.userId == id }) {
+            peerDisplayName = match.displayName
+        } else {
+            peerDisplayName = id.hasPrefix("user-")
+                ? String(id.dropFirst(5)).capitalized
+                : id
         }
     }
 }
