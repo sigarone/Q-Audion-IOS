@@ -325,14 +325,14 @@ jobs:
             app-store-connect bundle-ids --help 2>&1 | head -20 || true
 
             echo "Enabling APP_GROUPS on $EXT_BID_RES..."
-            app-store-connect bundle-ids add-capability \
-              "$EXT_BID_RES" APP_GROUPS 2>&1 \
+            app-store-connect bundle-ids enable-capabilities \
+              "$EXT_BID_RES" --capabilities APP_GROUPS 2>&1 \
               && echo "  APP_GROUPS: done" \
-              || echo "  APP_GROUPS: WARN (check bundle-ids help above)"
+              || echo "  APP_GROUPS: WARN (may already be enabled)"
 
             echo "Enabling NETWORK_EXTENSIONS on $EXT_BID_RES..."
-            app-store-connect bundle-ids add-capability \
-              "$EXT_BID_RES" NETWORK_EXTENSIONS 2>&1 \
+            app-store-connect bundle-ids enable-capabilities \
+              "$EXT_BID_RES" --capabilities NETWORK_EXTENSIONS 2>&1 \
               && echo "  NETWORK_EXTENSIONS: done" \
               || echo "  NETWORK_EXTENSIONS: WARN"
 
