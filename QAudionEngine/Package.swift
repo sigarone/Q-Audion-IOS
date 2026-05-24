@@ -32,13 +32,6 @@ let package = Package(
         // Xcode 16.2 (Swift tools 6.0) which is incompatible. Pin to 6.x until CI
         // upgrades to Xcode 16.3+.
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
-        // VPN: WireGuardKit — official WireGuard iOS library.
-        // NOTE: This entry is here so Xcode resolves the package once.
-        // WireGuardKit is NOT used by QAudionEngine itself; it is linked
-        // only to the QAudionPacketTunnel extension target in Xcode.
-        // After adding this package in Xcode (File > Add Package Dependencies),
-        // link WireGuardKit to QAudionPacketTunnel in its "Frameworks and Libraries".
-        .package(url: "https://github.com/WireGuard/wireguard-apple", from: "1.0.15-26"),
     ],
     targets: [
         .target(
