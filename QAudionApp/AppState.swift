@@ -1603,7 +1603,7 @@ final class AppState: ObservableObject {
         // so cross-platform attachments don't leak raw JSON to the list.
         // W89: muted conversations skip the unread bump so the badge
         // stays clean (the message still lands and re-orders the list).
-        let isMuted = conv.muted ?? false
+        let isMuted = conv.muted
         store.recordNewMessage(
             conversationId: conv.id,
             lastMessagePreview: plaintext,

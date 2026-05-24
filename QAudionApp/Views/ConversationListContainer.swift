@@ -37,7 +37,7 @@ final class ConversationListContainer: ObservableObject {
                 unreadCount: unread,
                 pinned: conv.pinned,
                 kind: conv.kind,
-                muted: conv.muted ?? false
+                muted: conv.muted
             )
         }
         viewModel = ConversationListViewModel(items: items, searchQuery: searchText)
@@ -106,7 +106,7 @@ final class ConversationListContainer: ObservableObject {
         var convs = store.loadConversations()
         guard let idx = convs.firstIndex(where: { $0.id == conversationId }) else { return }
         let old = convs[idx]
-        let nowMuted = !(old.muted ?? false)
+        let nowMuted = !old.muted
         convs[idx] = Conversation(
             id: old.id,
             peerUserId: old.peerUserId,

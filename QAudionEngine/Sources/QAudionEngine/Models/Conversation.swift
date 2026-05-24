@@ -17,9 +17,10 @@ public struct Conversation: Equatable, Sendable, Hashable, Codable, Identifiable
     public let kind: Kind
     /// W89: muted conversations don't trigger banner / sound on inbound
     /// messages and skip the unread-bump (their badge stays clean).
-    /// Optional Bool for Codable backward compat with v1.0.153 stored
-    /// rows — older payloads decode with `nil` (treated as not muted).
-    public let muted: Bool?
+    /// W498: changed from Bool? to Bool — nil was being serialised as NULL
+    /// by GRDB, violating the NOT NULL constraint on conversations.muted and
+    /// dropping every new conversation created from an incoming message.
+    public let muted: Bool
     /// W441: per-conversation ephemeral timer in seconds.
     /// 0 or nil = off.  Positive value = TTL applied to each new
     /// outbound message (expiresAt = sentAt + ephemeralTimerSeconds).
@@ -30,7 +31,7 @@ public struct Conversation: Equatable, Sendable, Hashable, Codable, Identifiable
     public init(id: UUID, peerUserId: String, peerDisplayName: String,
                 lastMessagePreview: String?, lastActivity: Date,
                 unreadCount: Int, pinned: Bool, kind: Kind = .oneToOne,
-                muted: Bool? = nil,
+                muted: Bool = false,
                 ephemeralTimerSeconds: Int? = nil) {
         self.id = id
         self.peerUserId = peerUserId

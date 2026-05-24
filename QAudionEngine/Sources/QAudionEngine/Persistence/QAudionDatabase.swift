@@ -101,6 +101,13 @@ public final class QAudionDatabase {
             }
         }
 
+        // W498: Conversation.muted was Bool? — GRDB wrote NULL for nil, violating
+        // NOT NULL constraint and silently dropping every new conversation created
+        // from an incoming message. Coerce any surviving NULLs to false.
+        migrator.registerMigration("v3-muted-not-null") { db in
+            try db.execute(sql: "UPDATE conversations SET muted = 0 WHERE muted IS NULL")
+        }
+
         return migrator
     }
     
