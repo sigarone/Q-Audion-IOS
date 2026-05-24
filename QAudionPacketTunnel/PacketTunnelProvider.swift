@@ -43,30 +43,32 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         log.info("Starting WireGuard tunnel → \(city, privacy: .public)")
 
         // Parse the wg-quick config string into WireGuardKit types.
-        let parseResult = TunnelConfiguration.from(wgQuickString: wgQuickConf, name: "Q-Audion VPN")
-        switch parseResult {
-        case .failure(let err):
-            log.error("WireGuard config parse failed: \(err, privacy: .public)")
-            completionHandler(TunnelError.badConfig(err.localizedDescription))
+        // TunnelConfiguration(fromWgQuickConfig:called:) is the correct WireGuardKit API
+        // (throwing initializer declared in TunnelConfiguration+WgQuickConfig.swift).
+        let tunnelConfig: TunnelConfiguration
+        do {
+            tunnelConfig = try TunnelConfiguration(fromWgQuickConfig: wgQuickConf, called: city)
+        } catch {
+            log.error("WireGuard config parse failed: \(error, privacy: .public)")
+            completionHandler(TunnelError.badConfig(error.localizedDescription))
             return
+        }
 
-        case .success(let tunnelConfig):
-            let wgAdapter = WireGuardAdapter(with: self) { [weak self] logLevel, message in
-                switch logLevel {
-                case .verbose: self.map { _ in log.debug("\(message, privacy: .public)") }
-                case .error:   log.error("\(message, privacy: .public)")
-                }
+        let wgAdapter = WireGuardAdapter(with: self) { logLevel, message in
+            switch logLevel {
+            case .verbose: log.debug("\(message, privacy: .public)")
+            case .error:   log.error("\(message, privacy: .public)")
             }
-            self.adapter = wgAdapter
+        }
+        self.adapter = wgAdapter
 
-            wgAdapter.start(tunnelConfiguration: tunnelConfig) { err in
-                if let err {
-                    log.error("WireGuardAdapter.start failed: \(err, privacy: .public)")
-                    completionHandler(err)
-                } else {
-                    log.info("WireGuard tunnel up (\(city, privacy: .public))")
-                    completionHandler(nil)
-                }
+        wgAdapter.start(tunnelConfiguration: tunnelConfig) { err in
+            if let err {
+                log.error("WireGuardAdapter.start failed: \(err, privacy: .public)")
+                completionHandler(err)
+            } else {
+                log.info("WireGuard tunnel up (\(city, privacy: .public))")
+                completionHandler(nil)
             }
         }
     }
