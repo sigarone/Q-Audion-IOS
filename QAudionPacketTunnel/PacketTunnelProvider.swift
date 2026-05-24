@@ -18,7 +18,7 @@ import NetworkExtension
 import WireGuardKit
 import os.log
 
-private let log = Logger(subsystem: "com.bcrypto.qaudion.packet-tunnel", category: "tunnel")
+private let log = Logger(subsystem: "com.qaudion.app.packet-tunnel", category: "tunnel")
 
 // Mirrors WgProviderKey in VpnModels.swift (main app target — not importable here).
 private enum ProviderKey {

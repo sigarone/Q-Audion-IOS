@@ -95,7 +95,7 @@ targets:
       base:
         INFOPLIST_FILE: ../QAudionPacketTunnel/Info.plist
         CODE_SIGN_ENTITLEMENTS: ../QAudionPacketTunnel/QAudionPacketTunnel.entitlements
-        PRODUCT_BUNDLE_IDENTIFIER: com.bcrypto.qaudion.packet-tunnel
+        PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app.packet-tunnel
         PRODUCT_NAME: QAudionPacketTunnel
         SWIFT_VERSION: "5.9"
         DEVELOPMENT_TEAM: 5G22P9239N

@@ -34,7 +34,9 @@ import CryptoKit // for SHA256/random bytes only
 let kVpnAppGroup = "group.com.bcrypto.qaudion.vpn"
 
 /// Bundle ID of the QAudionPacketTunnel extension.
-let kVpnExtensionBundleId = "com.bcrypto.qaudion.packet-tunnel"
+/// Must be prefixed with the parent app's bundle ID (com.qaudion.app)
+/// per Apple's embedded-extension naming requirement.
+let kVpnExtensionBundleId = "com.qaudion.app.packet-tunnel"
 
 @MainActor
 final class VpnService: ObservableObject {
