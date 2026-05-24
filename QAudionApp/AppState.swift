@@ -129,6 +129,10 @@ final class AppState: ObservableObject {
     @Published var isVideoCall: Bool = false
     @Published var callState: CallState = .idle
     @Published var callContactId: String?
+    /// W478 — display name of the incoming caller, set when `call_incoming`
+    /// is processed. Shown in the in-app ringing banner as a fallback when
+    /// CallKit's system UI is suppressed (Focus / Silence Unknown Callers).
+    @Published var incomingCallerName: String = ""
     /// H-6 — re-entrancy guard for endCall(). A second endCall() (e.g.
     /// CallKit onEndCall + remote call_hangup racing) while teardown is
     /// already running would double-hangup and leak the
@@ -276,6 +280,14 @@ final class AppState: ObservableObject {
     let authService = AuthService()
     let callService = CallService()
     let messageCrypto = MessageCrypto()
+    /// VPN service — manages WireGuard tunnel lifecycle via NetworkExtension.
+    /// Bare `let` because `VpnService` is itself `ObservableObject`; HomeView
+    /// passes it directly to `VpnToggleChip(@ObservedObject)` so the chip
+    /// subscribes to VpnService.objectWillChange without going through AppState.
+    let vpnService = VpnService()
+
+    /// The current session access token, for use by VPN sub-operations.
+    var currentAccessToken: String? { authService.loadToken() }
 
     // MARK: - CallKit / PushKit
 
@@ -1000,6 +1012,7 @@ final class AppState: ObservableObject {
                     await MainActor.run {
                         self.activeCallKitId = callUUID
                         self.callContactId = senderId
+                        self.incomingCallerName = resolvedCallerName
                         self.isVideoCall = (callType == "video")
                         self.callState = .ringing
                         // C-3: do NOT set isInCall here. Setting it on
@@ -2909,6 +2922,21 @@ final class AppState: ObservableObject {
         self.endCall()
     }
 
+    /// W478 — answer an incoming call from the in-app ringing banner.
+    /// Uses CXCallController so the same `provider(_:perform:CXAnswerCallAction)`
+    /// delegate path fires as when the user taps Answer on the system sheet.
+    func answerIncomingCall() {
+        guard let uuid = activeCallKitId else { return }
+        Task { try? await callKit?.answerCall(uuid: uuid) }
+    }
+
+    /// W478 — decline an incoming call from the in-app ringing banner.
+    /// Delegates to endCall() which sends call_hangup to the server and
+    /// reports the call ended to CallKit with `.declined` reason.
+    func declineIncomingCall() {
+        endCall()
+    }
+
     func endCall() {
         // H-6: idempotency — a second endCall() while teardown is
         // already in flight (CallKit onEndCall racing a remote
@@ -2949,6 +2977,7 @@ final class AppState: ObservableObject {
         isVideoCall = false
         deepfakeAlert = false
         callContactId = nil
+        incomingCallerName = ""
         activeCallKitId = nil
         // W339: drop the PQC session key so the SAS panel hides on the
         // next call setup. Holding stale key material across calls

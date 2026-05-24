@@ -61,7 +61,15 @@ struct HomeView: View {
         // anche al sidebar selection highlight su iPad.
         .tint(scheme.primary)
         .overlay(alignment: .top) {
-            if appState.isInCall && !presentingInCall {
+            // W478 — two-tier call overlay:
+            //   1. incomingCallBanner: shown when state == .ringing (before answer).
+            //      Fallback for when CallKit's system UI is suppressed (Focus mode,
+            //      Silence Unknown Callers, DnD). Always visible in foreground.
+            //   2. inCallBanner: shown when isInCall (after answer, mid-call).
+            //      Allows navigating back to the in-call screen.
+            if appState.callState == .ringing && !appState.isInCall {
+                incomingCallBanner
+            } else if appState.isInCall && !presentingInCall {
                 inCallBanner
             }
         }
@@ -152,6 +160,7 @@ struct HomeView: View {
             }
             .navigationTitle("Q-Audion")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar { vpnToolbarItem() }
         } detail: {
             switch selectedTab {
             case .chats:    chatsTab
@@ -198,6 +207,21 @@ struct HomeView: View {
         .listRowBackground(Color.clear)
     }
 
+    // MARK: - VPN chip helper
+
+    /// Trailing toolbar item that appears in each tab's root navigation bar.
+    /// The `currentAccessToken ?? ""` fallback means the chip renders but
+    /// any tap while unauthenticated will fail fast inside VpnApiService.
+    @ToolbarContentBuilder
+    private func vpnToolbarItem() -> some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            VpnToggleChip(
+                vpnService: appState.vpnService,
+                accessToken: appState.currentAccessToken ?? ""
+            )
+        }
+    }
+
     // MARK: - Tabs
 
     private var chatsTab: some View {
@@ -210,6 +234,7 @@ struct HomeView: View {
         // pin / delete / new-conversation flows keep working.
         NavigationStack {
             ChatListScreen()
+                .toolbar { vpnToolbarItem() }
         }
     }
 
@@ -223,6 +248,7 @@ struct HomeView: View {
         // non li portiamo alla nuova UI.
         NavigationStack {
             ContactsScreen()
+                .toolbar { vpnToolbarItem() }
         }
     }
 
@@ -234,6 +260,7 @@ struct HomeView: View {
     private var callsTab: some View {
         NavigationStack {
             CallHistoryView()
+                .toolbar { vpnToolbarItem() }
         }
     }
 
@@ -260,7 +287,57 @@ struct HomeView: View {
     private var settingsTab: some View {
         NavigationStack {
             SettingsScreen()
+                .toolbar { vpnToolbarItem() }
         }
+    }
+
+    // MARK: - Incoming call banner (W478 fallback when CallKit UI is suppressed)
+
+    /// Shown when `callState == .ringing` — i.e. a call_incoming has been
+    /// processed but the user has not yet answered. This banner fires even
+    /// when the CallKit system sheet is suppressed by Focus mode, Silence
+    /// Unknown Callers, or Do Not Disturb so the user can still answer from
+    /// within the foreground app.
+    private var incomingCallBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "phone.fill")
+                .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Chiamata in arrivo")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                let name: String = appState.incomingCallerName.isEmpty
+                    ? (appState.callContactId ?? "Sconosciuto")
+                    : appState.incomingCallerName
+                Text(name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+            Spacer()
+            // Decline button
+            Button(action: { appState.declineIncomingCall() }) {
+                Image(systemName: "phone.down.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.white)
+                    .padding(10)
+                    .background(Circle().fill(Color.red))
+            }
+            .buttonStyle(.plain)
+            // Answer button
+            Button(action: { appState.answerIncomingCall() }) {
+                Image(systemName: "phone.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.white)
+                    .padding(10)
+                    .background(Circle().fill(Color.green))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(0.85))
     }
 
     // MARK: - Active call banner

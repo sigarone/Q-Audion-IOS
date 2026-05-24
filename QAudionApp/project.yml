@@ -8,6 +8,11 @@ options:
 packages:
   QAudionEngine:
     path: ../QAudionEngine
+  # WireGuard official iOS library — linked only to QAudionPacketTunnel.
+  # Provides WireGuardAdapter + TunnelConfiguration used in PacketTunnelProvider.
+  WireGuardKit:
+    url: https://github.com/WireGuard/wireguard-apple
+    from: "1.0.15-26"
 
 targets:
   QAudionApp:
@@ -54,6 +59,11 @@ targets:
       - sdk: ContactsUI.framework
       # W441: AppLockService uses LAContext for biometric / passcode auth.
       - sdk: LocalAuthentication.framework
+      # VPN: NETunnelProviderManager — main app side of the packet tunnel.
+      - sdk: NetworkExtension.framework
+      # VPN: embed the packet tunnel extension into the app bundle.
+      - target: QAudionPacketTunnel
+        embed: true
     resources:
       - path: Assets.xcassets
       # Apple privacy manifest. Placed at the root of the app bundle by
@@ -62,3 +72,34 @@ targets:
       # 2024. See QAudionApp/PrivacyInfo.xcprivacy for the full content
       # and the rationale for each declared API category / data type.
       - path: PrivacyInfo.xcprivacy
+
+  # ------------------------------------------------------------------ #
+  # QAudionPacketTunnel — Network Extension (packet tunnel provider)    #
+  # Separate OS-launched process; uses WireGuardKit to manage the       #
+  # WireGuard tunnel. Bundle: com.bcrypto.qaudion.packet-tunnel         #
+  # ------------------------------------------------------------------ #
+  QAudionPacketTunnel:
+    type: app-extension
+    platform: iOS
+    # WireGuardKit 1.x requires iOS 15+. Set to 16.0 to match the main app
+    # so the extension runs on every device the app supports.
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../QAudionPacketTunnel
+    settings:
+      base:
+        INFOPLIST_FILE: ../QAudionPacketTunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../QAudionPacketTunnel/QAudionPacketTunnel.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.bcrypto.qaudion.packet-tunnel
+        PRODUCT_NAME: QAudionPacketTunnel
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: 5G22P9239N
+        CODE_SIGN_STYLE: Automatic
+        # Extension-only: suppress "main" entry point and standard library
+        # linking that the OS handles for extensions.
+        SKIP_INSTALL: YES
+    dependencies:
+      # WireGuardKit — the only import in PacketTunnelProvider.swift besides
+      # NetworkExtension and os.log (both are Apple system frameworks).
+      - package: WireGuardKit
+        product: WireGuardKit

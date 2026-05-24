@@ -52,6 +52,19 @@ echo "=== Info.plist AFTER plutil ==="
 plutil -extract CFBundleShortVersionString raw -o - Info.plist
 plutil -extract CFBundleVersion             raw -o - Info.plist
 
+# Keep QAudionPacketTunnel extension version in sync with the app.
+# App extensions must have a CFBundleVersion ≤ the containing app's
+# version or TestFlight/App Store Connect rejects the upload.
+EXT_PLIST="$REPO_ROOT/QAudionPacketTunnel/Info.plist"
+if [ -f "$EXT_PLIST" ]; then
+  echo ""
+  echo "=== Bumping QAudionPacketTunnel Info.plist ==="
+  plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$EXT_PLIST"
+  plutil -replace CFBundleVersion            -string "$BUILD_NUMBER"      "$EXT_PLIST"
+  plutil -extract CFBundleShortVersionString raw -o - "$EXT_PLIST"
+  plutil -extract CFBundleVersion             raw -o - "$EXT_PLIST"
+fi
+
 # ----------------------------------------------------------------------
 # (2) Patch onnxruntime.framework MinimumOSVersion
 # ----------------------------------------------------------------------

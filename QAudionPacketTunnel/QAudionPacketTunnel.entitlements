@@ -2,18 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.developer.nfc.readersession.formats</key>
-	<array>
-		<string>TAG</string>
-	</array>
-	<key>aps-environment</key>
-	<string>production</string>
-	<!-- VPN: App Group shared with QAudionPacketTunnel extension -->
+	<!-- App Group shared with main QAudionApp target -->
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.com.bcrypto.qaudion.vpn</string>
 	</array>
-	<!-- VPN: Network Extension capability (packet tunnel manager side) -->
+	<!-- Network Extension capability: this IS the packet tunnel provider -->
 	<key>com.apple.developer.networking.networkextension</key>
 	<array>
 		<string>packet-tunnel-provider</string>
