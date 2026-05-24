@@ -174,21 +174,21 @@ struct InCallScreen: View {
                     rekeyInSeconds: rekeyInSeconds
                 )
 
-                Spacer().frame(height: 16)
+                Spacer().frame(height: 8)
 
                 ZStack {
-                    AvatarHalo(color: confidenceColor, diameter: 220)
+                    AvatarHalo(color: confidenceColor, diameter: 180)
                     QAudionAvatar(displayName: peerDisplayName,
                                   imageURL: avatarUrl,
-                                  size: 160,
+                                  size: 120,
                                   shortNumber: peerShortNumber)
                 }
-                .frame(width: 240, height: 240)
+                .frame(width: 200, height: 200)
 
-                Spacer().frame(height: 12)
+                Spacer().frame(height: 8)
 
                 Text(peerDisplayName)
-                    .font(.system(size: 28, weight: .semibold))
+                    .font(.system(size: 26, weight: .semibold))
                     .italic()
                     .foregroundStyle(scheme.onBackground)
                     .multilineTextAlignment(.center)
@@ -196,12 +196,12 @@ struct InCallScreen: View {
                 presenceLine
                     .padding(.top, 2)
 
-                Spacer().frame(height: 20)
+                Spacer().frame(height: 12)
 
                 statsCard.padding(.horizontal, 20)
 
                 if sasWords.count == 6 {
-                    Spacer().frame(height: 12)
+                    Spacer().frame(height: 8)
                     sasPanel.padding(.horizontal, 20)
                 }
 

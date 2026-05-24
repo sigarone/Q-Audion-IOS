@@ -118,8 +118,13 @@ final class CallService {
     // frame and binds on the second). They MUST stay nullary `() -> ...`.
     public typealias WsClientProvider = () -> BCryptoWebSocketClient?
     public typealias PeerIdProvider = () -> String?
+    /// Returns true iff the call is in an active/encrypted state — used
+    /// by the W469 fallback timer to skip self-activation during outgoing
+    /// ring (before the peer has answered). Wired by AppState at login.
+    public typealias CallActiveProvider = () -> Bool
     public var getWsClient: WsClientProvider?
     public var getPeerId: PeerIdProvider?
+    public var isCallActive: CallActiveProvider?
     /// Token usato per de-registrare il handler "audio_frame" su endCall
     /// — assumiamo che `registerHandler` sostituisca il precedente per
     /// type, quindi de-register è no-op (ma resettiamo wsClient così
@@ -317,6 +322,14 @@ final class CallService {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self = self else { return }
             guard !self.audioSessionActive, self.callIntegration != nil else { return }
+            // Only self-activate when the call is actually connected (peer
+            // answered). During outgoing ring this must not open the mic —
+            // the peer hasn't answered yet and early audio activation leaks
+            // the session and causes the waveform to animate before answer.
+            guard self.isCallActive?() == true else {
+                print("[CallService] W469 — skipped; call not active (peer has not answered)")
+                return
+            }
             print("[CallService] W469 — CallKit didActivate not seen after 1.5s; self-activating audio session (fallback)")
             self.handleAudioSessionActivated()
         }

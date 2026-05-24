@@ -20,6 +20,13 @@ struct ContentView: View {
     /// When non-nil, the sheet pops up. Set/cleared by the observer.
     @State private var pendingGroupInvite: PendingGroupInvite?
 
+    // Outgoing-call display name resolved from ContactsStore.
+    // Cached here so OutgoingCallScreen doesn't re-query on every
+    // TimelineView tick. Updated whenever callContactId changes.
+    @State private var outgoingDisplayName: String = ""
+    @State private var outgoingShortNumber: String? = nil
+    private let contactsStore = ContactsStore()
+
     var body: some View {
         ZStack(alignment: .top) {
             mainStack
@@ -76,7 +83,14 @@ struct ContentView: View {
         .animation(.easeInOut, value: appState.isAuthenticated)
         .animation(.easeInOut, value: appState.isInCall)
         .animation(.easeInOut, value: appState.isVideoCall)
+        .animation(.easeInOut, value: appState.callState)
         .animation(.easeInOut, value: splashResolved)
+        .onChange(of: appState.callContactId) { id in
+            resolveOutgoingName(id)
+        }
+        .onAppear {
+            resolveOutgoingName(appState.callContactId)
+        }
         // W37: bridge globale del deepfake detector. Quando AppState
         // alza il flag (DeepfakeMonitor → confidenceLevel == "red"
         // sustained), pushiamo una snackbar error visibile su qualsiasi
@@ -103,10 +117,8 @@ struct ContentView: View {
 
     @ViewBuilder
     private var mainStack: some View {
-        if appState.isInCall && appState.isVideoCall {
-            VideoCallView()
-        } else if appState.isInCall {
-            CallView()
+        if appState.isInCall {
+            inCallStack
         } else if !splashResolved {
             // W18.C: brand splash on cold start. Resolves itself
             // after the 400ms minimum window and toggles
@@ -130,6 +142,66 @@ struct ContentView: View {
             // (`https://voip.bcrypto.com`) so a malicious or stale
             // QR cannot redirect the phone to a different origin.
             OnboardingRoot()
+        }
+    }
+
+    /// Routes among the three in-call surfaces based on `callState`.
+    /// - `.connecting` / `.ringing` → OutgoingCallScreen (no audio yet)
+    /// - `.active` / `.encrypted` + video → VideoCallView
+    /// - `.active` / `.encrypted` + audio → LiveInCallScreen
+    /// - anything else (e.g. `.ended` during teardown) → OutgoingCallScreen
+    @ViewBuilder
+    private var inCallStack: some View {
+        let cs = appState.callState
+        if cs == .active || cs == .encrypted {
+            if appState.isVideoCall {
+                VideoCallView()
+            } else {
+                LiveInCallScreen()
+            }
+        } else {
+            makeOutgoingScreen()
+        }
+    }
+
+    private func makeOutgoingScreen() -> OutgoingCallScreen {
+        let cs = appState.callState
+        let outState: OutgoingCallScreen.State = (cs == .connecting) ? .dialing : .handshaking
+        let name: String = outgoingDisplayName.isEmpty
+            ? (appState.callContactId ?? "…")
+            : outgoingDisplayName
+        return OutgoingCallScreen(
+            peerDisplayName: name,
+            state: outState,
+            elapsedSeconds: Int(appState.callService.callDurationSeconds),
+            peerShortNumber: outgoingShortNumber,
+            onHangup: { appState.endCall() }
+        )
+    }
+
+    private func resolveOutgoingName(_ contactId: String?) {
+        guard let id = contactId else {
+            outgoingDisplayName = ""
+            outgoingShortNumber = nil
+            return
+        }
+        let contacts = contactsStore.load()
+        if let match = contacts.first(where: { $0.userId == id }) {
+            outgoingDisplayName = match.displayName
+            let tokens = match.displayName
+                .trimmingCharacters(in: .whitespaces)
+                .split(whereSeparator: { $0.isWhitespace })
+                .map(String.init)
+            if let numTok = tokens.first(where: { $0.allSatisfy({ $0.isNumber }) }) {
+                outgoingShortNumber = String(numTok.prefix(3))
+            } else {
+                outgoingShortNumber = nil
+            }
+        } else {
+            outgoingDisplayName = id.hasPrefix("user-")
+                ? String(id.dropFirst(5)).capitalized
+                : id
+            outgoingShortNumber = nil
         }
     }
 }

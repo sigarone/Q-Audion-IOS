@@ -286,13 +286,17 @@ struct LiveInCallScreen: View {
     /// and only receives real samples once the audio engine delivers frames,
     /// so the empty-check correctly gates the fallback sparkline.
     private var liveSamples: [Float] {
+        // No audio before the call is active — returning empty prevents the
+        // SessionStatusStrip mini-spark from animating during outgoing ring.
+        guard appState.callState == .active || appState.callState == .encrypted else {
+            return []
+        }
         let tx = appState.txWaveformSamples
         if !tx.isEmpty {
-            // Take the last 16 points for the strip.
             return Array(tx.suffix(16))
         }
-        // Confidence-derived stub series (slowly drifts ±5%) shown while
-        // audio hasn't started yet or when the call is muted.
+        // Confidence-derived stub series shown while call is active but
+        // audio packets haven't arrived yet (e.g. first few frames).
         let c = max(0.05, min(1.0, appState.confidenceScore))
         return [c, c * 0.98, c * 1.02, c * 0.99, c, c * 1.03, c * 0.97, c]
     }

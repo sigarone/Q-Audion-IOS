@@ -763,6 +763,10 @@ final class AppState: ObservableObject {
         callService.getPeerId = { [weak self] in
             self?.callContactId
         }
+        callService.isCallActive = { [weak self] in
+            guard let self else { return false }
+            return self.callState == .active || self.callState == .encrypted
+        }
         // W74: register inbound call handlers BEFORE the WS lands. The
         // server relays Android→iOS calls as `call_incoming`, NOT
         // `call_offer` (see bcrypto-server signaling/messages.go
