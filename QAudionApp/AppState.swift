@@ -812,6 +812,9 @@ final class AppState: ObservableObject {
                     // stale.
                     self?.bindPresenceAfterAuth()
                 }
+                if state == .authenticated {
+                    self?.rewireCallAudioOnReconnect()
+                }
             }
         }
         Task {
@@ -2339,6 +2342,19 @@ final class AppState: ObservableObject {
     /// twice with the same auth state is a no-op (the service rebinds
     /// to the same provider). Best-effort: failures are logged but don't
     /// block the auth flow.
+    /// Re-wires the call audio transport to the fresh WS instance after a
+    /// BCryptoWS reconnect. Without this, `audio_frame` RX stays registered
+    /// on the dead old WS (silent RX) and TX also goes to the dead instance
+    /// because `wsClient != nil` prevents the `getWsClient` fallback.
+    @MainActor
+    private func rewireCallAudioOnReconnect() {
+        guard isInCall,
+              let ws = liveProvider?.getWebSocketClient(),
+              let peerId = callContactId else { return }
+        callService.wireTransport(wsClient: ws, peerUserId: peerId)
+        print("[AppState] WS reconnect — call audio re-wired to fresh WS for peer \(peerId.prefix(8))…")
+    }
+
     private func bindPresenceAfterAuth() {
         // W74: prefer the long-lived provider when present so the
         // presence subscriptions ride the SAME WS that keeps the user
