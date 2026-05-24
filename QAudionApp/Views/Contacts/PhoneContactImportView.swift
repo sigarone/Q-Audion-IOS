@@ -155,6 +155,11 @@ struct PhoneContactImportView: View {
             return candidates.isEmpty
                 ? "Carica i tuoi contatti per scoprire chi usa Q-Audion"
                 : "\(candidates.count) contatti trovati in rubrica"
+        case .limited:
+            // iOS 18+: limited access — show available contacts.
+            return candidates.isEmpty
+                ? "Accesso parziale ai contatti autorizzato"
+                : "\(candidates.count) contatti trovati in rubrica"
         @unknown default:
             return "Tocca per importare i contatti"
         }
@@ -259,6 +264,9 @@ struct PhoneContactImportView: View {
                 UIApplication.shared.open(url)
             }
         case .authorized:
+            loadCandidates()
+        case .limited:
+            // iOS 18+: limited access grants read to the user-chosen subset.
             loadCandidates()
         @unknown default:
             break

@@ -91,7 +91,7 @@ public final class SecurityEventStore {
     
     public func clearAll() {
         do {
-            try db.writer.write { db in
+            _ = try db.writer.write { db in
                 try SecurityEvent.deleteAll(db)
             }
         } catch {

@@ -3127,14 +3127,17 @@ final class AppState: ObservableObject {
         // Encrypt and send via backend
         do {
             guard let content = text.data(using: .utf8) else { return }
-            // Use a derived key for message encryption (32 bytes for AES-256)
-            let keyMaterial = Data(SHA256.hash(data: Data((contactId + (currentUserId ?? "")).utf8)))
-            let encrypted = try messageCrypto.encrypt(message: content, key: keyMaterial)
-            // Package encrypted payload: nonce + ciphertext + tag
-            var payload = Data()
-            payload.append(encrypted.nonce)
-            payload.append(encrypted.ciphertext)
-            payload.append(encrypted.tag)
+            // Use a derived PSK for message encryption (32 bytes for AES-256).
+            // New AAD-bound encrypt() returns a self-contained wire blob
+            // (salt || nonce || ciphertext || tag) — no manual packing needed.
+            let psk = Data(SHA256.hash(data: Data((contactId + (currentUserId ?? "")).utf8)))
+            let payload = try messageCrypto.encrypt(
+                plaintext: content,
+                psk: psk,
+                senderId: currentUserId ?? "",
+                recipientId: contactId,
+                msgId: messageId
+            )
 
             let backendConfig = pinnedConfig(token: authService.loadToken())
             let provider = BCryptoBackendProvider(config: backendConfig)

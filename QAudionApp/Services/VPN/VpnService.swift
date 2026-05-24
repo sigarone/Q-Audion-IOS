@@ -26,7 +26,7 @@
 // NOTE: If WireGuardKit is linked, use WireGuardKit.PrivateKey() for this.
 
 import Foundation
-import NetworkExtension
+@preconcurrency import NetworkExtension
 import CryptoKit // for SHA256/random bytes only
 
 /// App Group ID shared between the main app and the VPN extension.

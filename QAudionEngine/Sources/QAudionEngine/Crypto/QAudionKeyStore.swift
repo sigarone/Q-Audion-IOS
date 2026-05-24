@@ -2,6 +2,9 @@ import Foundation
 #if canImport(Security)
 import Security
 #endif
+#if canImport(LocalAuthentication)
+import LocalAuthentication
+#endif
 
 public final class QAudionKeyStore {
     private static let service = "com.bcrypto.qaudion.keys"
@@ -53,14 +56,18 @@ public final class QAudionKeyStore {
     /// it does NOT alter how keys are written or the silent
     /// `loadKey(identifier:)` path.
     public func loadKeyWithUserPresence(identifier: String, reason: String) -> Data? {
-        #if canImport(Security)
+        #if canImport(Security) && canImport(LocalAuthentication)
+        // kSecUseOperationPrompt is deprecated since iOS 14.
+        // Use kSecUseAuthenticationContext with LAContext.localizedReason instead.
+        let context = LAContext()
+        context.localizedReason = reason
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: identifier,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseOperationPrompt as String: reason
+            kSecUseAuthenticationContext as String: context
         ]
         var item: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &item)

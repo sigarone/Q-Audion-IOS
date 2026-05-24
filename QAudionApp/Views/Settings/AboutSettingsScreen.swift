@@ -584,7 +584,7 @@ struct AboutSettingsScreen: View {
             }
         }
         // Fallback for completeness — pre-iOS 16 / unset region.
-        return Locale.current.regionCode ?? "?"
+        return Locale.current.region?.identifier ?? "?"
     }
 
     /// W272: total physical memory in GB, formatted like "6,00 GB" via

@@ -52,7 +52,7 @@ public final class ConversationStore {
 
     public func deleteConversation(id: UUID) {
         do {
-            try db.writer.write { db in
+            _ = try db.writer.write { db in
                 try Conversation.filter(key: id).deleteAll(db)
                 // messages are deleted via cascade
             }
@@ -144,7 +144,7 @@ public final class ConversationStore {
 
     public func removeMessage(id: UUID, conversationId: UUID) {
         do {
-            try db.writer.write { db in
+            _ = try db.writer.write { db in
                 try Message.filter(key: id).deleteAll(db)
             }
         } catch {
@@ -407,7 +407,7 @@ public final class ConversationStore {
     public func deleteExpiredMessages() {
         do {
             let now = Date()
-            try db.writer.write { db in
+            _ = try db.writer.write { db in
                 try Message
                     .filter(Column("expiresAt") != nil)
                     .filter(Column("expiresAt") <= now)
@@ -448,7 +448,7 @@ public final class ConversationStore {
 
     public func wipeAll() {
         do {
-            try db.writer.write { db in
+            _ = try db.writer.write { db in
                 try Conversation.deleteAll(db)
             }
         } catch {
