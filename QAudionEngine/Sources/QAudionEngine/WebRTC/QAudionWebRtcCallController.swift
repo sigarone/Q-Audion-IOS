@@ -418,10 +418,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// the WS hangup on a detached Task (unblocked by MainActor teardown).
     public func sendHangupAndClose() {
         let rid = recipientId          // capture BEFORE closeSynchronously
+        let api = callingApi           // W497 — strong capture: after closeSynchronously()
+                                       // AppState sets webRtcController = nil which
+                                       // releases the controller; [weak self] would
+                                       // then see self == nil and skip sendHangup.
+                                       // Capturing `api` directly keeps the CallingApi
+                                       // alive for the lifetime of the Task regardless
+                                       // of whether `self` has been released.
         closeSynchronously()           // closes peer connection, clears fields
         guard let r = rid else { return }
-        Task.detached(priority: .userInitiated) { [weak self] in
-            try? await self?.callingApi.sendHangup(recipientId: r)
+        Task.detached(priority: .userInitiated) {
+            try? await api.sendHangup(recipientId: r)
         }
     }
 

@@ -114,7 +114,16 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     public func answerCall(uuid: UUID) async throws {
         if callKitRejectedUUIDs.contains(uuid) {
             callKitRejectedUUIDs.remove(uuid)
-            // Manually replicate what CXProviderDelegate fires on a normal answer.
+            // W497 — mirror the EXACT order of CXProviderDelegate callbacks on
+            // a normal CallKit answer:
+            //   1. provider(_:perform:CXAnswerCallAction) → onAnswerCall (sets up
+            //      callIntegration, WebRTC tracks, etc.)
+            //   2. provider(_:didActivate:) → onAudioSessionActivated (starts
+            //      AVAudioEngine capture/playback)
+            //
+            // The previous order (activate THEN answer) started the audio engine
+            // before callIntegration existed → mic/speaker silent, level bars frozen.
+            await onAnswerCall?(uuid)
             let session = AVAudioSession.sharedInstance()
             try? session.setCategory(
                 .playAndRecord,
@@ -128,7 +137,6 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             )
             try? session.setActive(true)
             onAudioSessionActivated?()
-            await onAnswerCall?(uuid)
             return
         }
         let action = CXAnswerCallAction(call: uuid)

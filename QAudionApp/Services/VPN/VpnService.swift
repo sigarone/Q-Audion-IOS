@@ -101,6 +101,10 @@ final class VpnService: ObservableObject {
                 .components(separatedBy: "/").first ?? wgConfig.assignedIp4
 
         } catch {
+            // W497 — log the full error so it surfaces in the live telemetry feed.
+            // Before this, the error was silently swallowed and the chip showed
+            // only "Errore VPN" with no actionable detail.
+            print("[VpnService] connect failed: \(error.localizedDescription)")
             state = .error(message: error.localizedDescription)
         }
     }
