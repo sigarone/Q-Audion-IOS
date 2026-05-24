@@ -243,7 +243,19 @@ jobs:
           chmod 600 "$CERT_KEY_PATH"
           openssl rsa -in "$CERT_KEY_PATH" -noout -check && echo "private key OK"
 
+          # Main app profile
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificate-key "@file:$CERT_KEY_PATH" \
+            --strict-match-identifier
+
+          # VPN extension profile (App Groups + Network Extensions).
+          # QAudionPacketTunnel has bundle ID com.qaudion.app.packet-tunnel;
+          # it needs its own IOS_APP_STORE profile. xcode-project use-profiles
+          # matches it to the QAudionPacketTunnel target automatically.
+          app-store-connect fetch-signing-files "com.qaudion.app.packet-tunnel" \
             --type IOS_APP_STORE \
             --create \
             --platform IOS \
