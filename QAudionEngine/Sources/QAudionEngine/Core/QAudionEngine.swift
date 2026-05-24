@@ -5,7 +5,24 @@ public final class QAudionEngine: @unchecked Sendable {
     private let lock = NSLock()
     private var state: EngineState = .uninitialized
     private var config: EngineConfig
-    private var sessionManager: SessionManager?
+    // W477 — split TX/RX SessionManagers. The chain ratchet MUST
+    // advance independently per direction: in a bidirectional call a
+    // shared ratchet (the previous design) advanced the LOCAL counter
+    // on every `processOutgoingAudio` AND every `processIncomingAudio`,
+    // so the local RX counter immediately diverged from the peer's TX
+    // counter (the peer advances ITS counter only on its own TX). Every
+    // RX frame derived its key from a different chain step than the
+    // peer had used to encrypt — telemetry showed `CryptoKitError`
+    // (error 3 / authentication failure) on every frame the moment
+    // bidirectional audio started. With this split:
+    //   • `txSessionManager.ratchet()` advances ONLY when we encrypt,
+    //   • `rxSessionManager.ratchet()` advances ONLY when we decrypt,
+    // so our TX-key at index K matches the peer's RX-key at K, and our
+    // RX-key at K matches the peer's TX-key at K. Both managers are
+    // initialised from the SAME shared secret in `initSession`, so
+    // they start with identical chainKeys.
+    private var txSessionManager: SessionManager?
+    private var rxSessionManager: SessionManager?
     private var aeadCipher: AeadCipher?
     private var pqcKeyExchange: PqcKeyExchange?
     private var audioProcessor: QAudionAudioProcessor?
@@ -20,7 +37,8 @@ public final class QAudionEngine: @unchecked Sendable {
         guard state.canTransitionTo(.initialized) else {
             throw QAudionEngineError.invalidStateTransition(from: state, to: .initialized)
         }
-        sessionManager = SessionManager()
+        txSessionManager = SessionManager()
+        rxSessionManager = SessionManager()
         aeadCipher = AeadCipher()
         pqcKeyExchange = PqcKeyExchange()
         audioProcessor = QAudionAudioProcessor(
@@ -35,8 +53,14 @@ public final class QAudionEngine: @unchecked Sendable {
         guard state == .initialized || state == .sessionActive else {
             throw QAudionEngineError.invalidStateTransition(from: state, to: .sessionActive)
         }
-        guard let sm = sessionManager else { throw QAudionEngineError.notInitialized }
-        let sessionState = try sm.initSession(sharedSecret: sharedSecret, psk: psk)
+        guard let txSm = txSessionManager, let rxSm = rxSessionManager else {
+            throw QAudionEngineError.notInitialized
+        }
+        // W477 — initialise BOTH managers from the SAME shared secret,
+        // so they produce identical initial chainKeys. From there each
+        // chain advances independently per direction.
+        let sessionState = try txSm.initSession(sharedSecret: sharedSecret, psk: psk)
+        _ = try rxSm.initSession(sharedSecret: sharedSecret, psk: psk)
         sessionInfo = SessionInfo(sessionId: sessionState.sessionId, isActive: true)
         sessionStartTime = Date()
         stats = EngineStats()
@@ -48,16 +72,17 @@ public final class QAudionEngine: @unchecked Sendable {
         guard state == .sessionActive || state == .processing else {
             throw QAudionEngineError.noActiveSession
         }
-        guard let sm = sessionManager, let cipher = aeadCipher else {
+        guard let txSm = txSessionManager, let cipher = aeadCipher else {
             throw QAudionEngineError.notInitialized
         }
-        let frameKey = try sm.ratchet()
+        // W477 — TX uses the txSessionManager only; RX has its own.
+        let frameKey = try txSm.ratchet()
         let opus = audioProcessor?.processOutgoing(pcmFrame: pcmFrame) ?? pcmFrame
         // W473 — bind the frame sequence number into the AEAD as AAD,
         // byte-identical to Android `SecureAudioPipeline.buildAad`.
         // Before this, iOS used NO AAD while Android bound seq||timestamp,
         // so every cross-platform decrypt failed with a GCM tag mismatch.
-        let seq = UInt32(truncatingIfNeeded: sm.frameCounter)
+        let seq = UInt32(truncatingIfNeeded: txSm.frameCounter)
         let encrypted = try cipher.encrypt(plaintext: opus, key: frameKey,
                                            associatedData: Self.frameAAD(seq))
         let frame = EncryptedFrame(
@@ -76,7 +101,7 @@ public final class QAudionEngine: @unchecked Sendable {
         guard state == .sessionActive || state == .processing else {
             throw QAudionEngineError.noActiveSession
         }
-        guard let sm = sessionManager, let cipher = aeadCipher else {
+        guard let rxSm = rxSessionManager, let cipher = aeadCipher else {
             throw QAudionEngineError.notInitialized
         }
         // W469 — cross-platform RX. iOS peers send the native
@@ -99,7 +124,8 @@ public final class QAudionEngine: @unchecked Sendable {
         } else {
             frame = try WireRelayFrameCodec.decode(serializedFrame).frame
         }
-        let frameKey = try sm.ratchet()
+        // W477 — RX uses the rxSessionManager only; TX has its own.
+        let frameKey = try rxSm.ratchet()
         let cipherOutput = AeadCipher.CipherOutput(
             nonce: frame.nonce, ciphertext: frame.payload, tag: frame.tag
         )
@@ -128,7 +154,8 @@ public final class QAudionEngine: @unchecked Sendable {
 
     public func destroySession() {
         lock.lock(); defer { lock.unlock() }
-        sessionManager?.destroySession()
+        txSessionManager?.destroySession()
+        rxSessionManager?.destroySession()
         sessionInfo?.isActive = false
         if let start = sessionStartTime {
             stats.sessionDurationMs = Int64(Date().timeIntervalSince(start) * 1000)
@@ -138,8 +165,10 @@ public final class QAudionEngine: @unchecked Sendable {
 
     public func release() {
         lock.lock(); defer { lock.unlock() }
-        sessionManager?.destroySession()
-        sessionManager = nil; aeadCipher = nil; pqcKeyExchange = nil; audioProcessor = nil
+        txSessionManager?.destroySession()
+        rxSessionManager?.destroySession()
+        txSessionManager = nil; rxSessionManager = nil
+        aeadCipher = nil; pqcKeyExchange = nil; audioProcessor = nil
         state = .destroyed
     }
 
