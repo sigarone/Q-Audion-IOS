@@ -80,10 +80,11 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     private var central: CBCentralManager?
     private var connectedPeripheral: CBPeripheral?
 
-    // Q-Audion GATT service UUID — must match qaudion-firmware gatt_server.
-    // Placeholder until firmware UUIDs are published in qaudion-firmware CLAUDE.md.
-    private static let serviceUUID = CBUUID(string: "12345678-1234-5678-1234-56789ABCDEF0")
-    private static let metricsCharUUID = CBUUID(string: "12345678-1234-5678-1234-56789ABCDEF1")
+    // Q-Audion GATT service and DIAG characteristic UUIDs — canonical values from
+    // qaudion-firmware/nspe/src/transport/qaudion_gatt.c (QAUDION_SVC_UUID_VAL /
+    // QAUDION_CH_DIAG_UUID_VAL, slot 0x90).
+    private static let serviceUUID = CBUUID(string: "f2c0aaaa-bcc0-4001-8000-000000000001")
+    private static let metricsCharUUID = CBUUID(string: "f2c0aaaa-bcc0-4001-8000-000000000090")
 
     // MARK: - Public API
 
