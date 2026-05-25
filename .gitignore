@@ -22,3 +22,6 @@ graphify-out/
 # Local Stitch reference screenshots (not committed)
 .stitch_*.png
 .stitch_*.html
+
+# Server admin scripts (belong in bcrypto-server, not iOS repo)
+scripts/reset_profiles_vps.py
