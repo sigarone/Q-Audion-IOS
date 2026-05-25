@@ -35,4 +35,13 @@ static inline int opus_helper_set_packet_loss_perc(OpusEncoder *enc, opus_int32 
     return opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC(loss_perc));
 }
 
+/* W528 — Android passes OPUS_SET_MAX_BANDWIDTH explicitly. iOS not
+ * setting it lets libopus pick a narrower band at low bitrates,
+ * which is audibly worse than Android's FULLBAND output. Constrain
+ * iOS to the same wire shape so the decode side has matching
+ * spectrum to reconstruct. */
+static inline int opus_helper_set_max_bandwidth(OpusEncoder *enc, opus_int32 bandwidth) {
+    return opus_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH(bandwidth));
+}
+
 #endif /* OPUS_HELPERS_H */

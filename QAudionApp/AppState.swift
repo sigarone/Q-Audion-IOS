@@ -3383,8 +3383,29 @@ extension AppState {
                 // Advance the call-state machine to .encrypted now that
                 // the ML-KEM session key is live. Guards against regressing
                 // from .ended (stale notification after hangup).
-                if self.callState == .active {
+                //
+                // W528: include .ringing AND .connecting in the
+                // transition set. The original W521 fix covered the
+                // CALLEE answer race (ringing → active → encrypted in
+                // onAnswerCall). But the CALLER side never explicitly
+                // transitions .ringing → .active for the Android-
+                // compatible outgoing path: the only .active assignments
+                // are at line 482 (CALLEE answer), line 2833 (legacy
+                // iOS-only outgoing branch). When iPhone calls iPad or
+                // Android, the caller stays at .ringing through the
+                // entire ACCEPT + PQC decapsulation, and this observer
+                // (which fires when the peer's ACCEPT bundle has been
+                // decapsulated) would skip the transition because
+                // callState != .active. Result: caller UI stuck on
+                // "scambio chiavi" while the callee's UI shows the
+                // active encrypted call. Treat ringing/connecting as
+                // "ready to flip to encrypted" since PQC having
+                // completed is a strictly stronger guarantee.
+                switch self.callState {
+                case .active, .ringing, .connecting:
                     self.callState = .encrypted
+                default:
+                    break  // .idle, .ended, already .encrypted — skip
                 }
             }
         }

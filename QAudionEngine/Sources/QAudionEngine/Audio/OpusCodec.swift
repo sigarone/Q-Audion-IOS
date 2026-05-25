@@ -53,6 +53,17 @@ public final class OpusCodec {
             // heard on iPad↔iPhone v1.0.521 was the encoder under-budgeting
             // FEC redundancy on WiFi micro-bursts of loss.
             opus_helper_set_packet_loss_perc(enc, Int32(30))
+            // W528: align iOS encoder with Android byte-for-byte.
+            // Android logs show OpusConfig(signalType=3001,
+            // maxBandwidth=1105). 3001 = OPUS_SIGNAL_VOICE (tells the
+            // encoder to bias toward SILK at low bitrates — important
+            // for voice intelligibility), 1105 = OPUS_BANDWIDTH_FULLBAND.
+            // Without these, iOS lets libopus auto-detect signal type
+            // (occasionally picking music branch on noisy mic input) and
+            // auto-bandwidth (narrower at 32 kbps), which is the
+            // audible quality gap user reported on Android→iOS audio.
+            opus_helper_set_signal(enc, Int32(OPUS_SIGNAL_VOICE))
+            opus_helper_set_max_bandwidth(enc, Int32(OPUS_BANDWIDTH_FULLBAND))
         }
 
         decoder = opus_decoder_create(Int32(AudioConstants.sampleRate),
