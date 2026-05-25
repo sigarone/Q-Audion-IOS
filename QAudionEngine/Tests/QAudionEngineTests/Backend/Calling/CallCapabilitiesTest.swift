@@ -59,4 +59,31 @@ final class CallCapabilitiesTest: XCTestCase {
     func test_LOCAL_containsSFrameV1() {
         XCTAssertTrue(CallCapabilities.local.contains(CallCapabilities.sframeV1))
     }
+
+    // ── ratchet-v3 parity tests (mirrors Kotlin CallCapabilitiesTest) ──
+
+    func test_useRatchetV3_trueWhenBothSidesAdvertiseRatchetV3() {
+        let n = CallCapabilities.negotiate(
+            local: CallCapabilities.local,
+            peer: [CallCapabilities.sframeV1, CallCapabilities.ratchetV3]
+        )
+        XCTAssertTrue(n.useRatchetV3)
+    }
+
+    func test_useRatchetV3_falseWhenOnlyPeerAdvertisesAndLocalDoesNot() {
+        let n = CallCapabilities.negotiate(
+            local: [CallCapabilities.sframeV1], // no ratchetV3
+            peer: [CallCapabilities.sframeV1, CallCapabilities.ratchetV3]
+        )
+        XCTAssertFalse(n.useRatchetV3)
+    }
+
+    func test_useRatchetV3_falseWhenPeerIsLegacyNil() {
+        let n = CallCapabilities.negotiate(local: CallCapabilities.local, peer: nil)
+        XCTAssertFalse(n.useRatchetV3)
+    }
+
+    func test_LOCAL_containsRatchetV3() {
+        XCTAssertTrue(CallCapabilities.local.contains(CallCapabilities.ratchetV3))
+    }
 }

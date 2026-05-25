@@ -24,8 +24,14 @@ public enum CallCapabilities {
     /// SFrame video frame format v1 (RFC 9605 + Q-Audion deviations §4-§5).
     public static let sframeV1: String = "sframe-v1"
 
+    /// Ratchet v3 messaging support. When both sides advertise this tag the
+    /// post-call msg-PSK is wired to the v3 Double-Ratchet chain instead of
+    /// the v2 symmetric ratchet. Mirrors `RATCHET_V3` in Android
+    /// `CallCapabilities.kt` and `CAP_RATCHET_V3` in the Desktop TS port.
+    public static let ratchetV3: String = "ratchet-v3"
+
     /// Capabilities advertised by THIS build of the iOS client.
-    public static let local: [String] = [sframeV1]
+    public static let local: [String] = [sframeV1, ratchetV3]
 
     /// Outcome of a capability negotiation between local and peer.
     public struct Negotiated: Equatable, Sendable {
@@ -38,6 +44,10 @@ public enum CallCapabilities {
             self.useSFrame = useSFrame
             self.agreedTags = agreedTags
         }
+
+        /// True iff both sides advertise ``ratchetV3``. Derived from
+        /// ``agreedTags`` — no wire or init change.
+        public var useRatchetV3: Bool { agreedTags.contains(CallCapabilities.ratchetV3) }
     }
 
     /// Compute the agreed capability set from the local list and the peer
