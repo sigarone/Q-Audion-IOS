@@ -158,6 +158,8 @@ struct LiveInCallScreen: View {
                 hasVideo: appState.isVideoCall,
                 cameraOn: cameraOn,
                 peerShortNumber: cachedPeerShortNumber,
+                rxSamples: liveRxSamples,
+                cipherSamples: liveCipherSamples,
                 onToggleMute: handleToggleMute,
                 onToggleSpeaker: handleToggleSpeaker,
                 onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
@@ -459,6 +461,30 @@ struct LiveInCallScreen: View {
         // audio packets haven't arrived yet (e.g. first few frames).
         let c = max(0.05, min(1.0, appState.confidenceScore))
         return [c, c * 0.98, c * 1.02, c * 0.99, c, c * 1.03, c * 0.97, c]
+    }
+
+    /// Live RX oscilloscope — received audio from the peer.
+    /// This is the raw PCM that feeds the deepfake detector in real time.
+    /// Normalized to -1…1; up to 64 samples for a smooth waveform.
+    private var liveRxSamples: [Float] {
+        guard appState.callState == .active || appState.callState == .encrypted else {
+            return []
+        }
+        let rx = appState.rxWaveformSamples
+        guard !rx.isEmpty else { return [] }
+        return Array(rx.suffix(64))
+    }
+
+    /// Live cipher oscilloscope — byte amplitudes of the decrypted packet stream.
+    /// Normalized to -1…1 (cipher bytes mapped through 0…1 → -1…1 around midpoint).
+    /// Shows that the ML-KEM-1024 + SFrame pipeline is actively processing frames.
+    private var liveCipherSamples: [Float] {
+        guard appState.callState == .active || appState.callState == .encrypted else {
+            return []
+        }
+        let cipher = appState.cipherWaveformSamples
+        guard !cipher.isEmpty else { return [] }
+        return Array(cipher.suffix(64))
     }
 
     private var liveTransportMode: InCallScreen.TransportMode {

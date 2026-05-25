@@ -89,6 +89,14 @@ struct InCallScreen: View {
     /// Priorità assoluta nel cerchietto dell'avatar. Port di Android
     /// `AvatarImage.kt` `shortNumber` param.
     let peerShortNumber: String?
+    /// Normalized RX PCM samples (-1…1) from the received audio stream.
+    /// Drives the "VOCE RICEVUTA" waveform — oscilloscope of what the
+    /// peer is saying, which is also the deepfake-detector's live input.
+    let rxSamples: [Float]
+    /// Normalized cipher-stream samples from the active decryption path.
+    /// Drives the "CIFRATURA" waveform — visually represents the
+    /// encryption/decryption process on received audio packets.
+    let cipherSamples: [Float]
     let onToggleMute: () -> Void
     let onToggleSpeaker: () -> Void
     let onToggleVoiceEnhancement: () -> Void
@@ -116,6 +124,8 @@ struct InCallScreen: View {
          hasVideo: Bool = false,
          cameraOn: Bool = false,
          peerShortNumber: String? = nil,
+         rxSamples: [Float] = [],
+         cipherSamples: [Float] = [],
          onToggleMute: @escaping () -> Void = {},
          onToggleSpeaker: @escaping () -> Void = {},
          onToggleVoiceEnhancement: @escaping () -> Void = {},
@@ -142,6 +152,8 @@ struct InCallScreen: View {
         self.hasVideo = hasVideo
         self.cameraOn = cameraOn
         self.peerShortNumber = peerShortNumber
+        self.rxSamples = rxSamples
+        self.cipherSamples = cipherSamples
         self.onToggleMute = onToggleMute
         self.onToggleSpeaker = onToggleSpeaker
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
@@ -260,30 +272,53 @@ struct InCallScreen: View {
     /// per SWIFT6_PATTERNS §1 / §6.
     private static let stubBadgeText: String = "DEMO"
 
-    // MARK: - Stats card
+    // MARK: - Stats card (waveform panel)
 
+    /// The card below the avatar. CONFIDENCE and RE-KEY have been removed
+    /// — both are already visible in the `SessionStatusStrip` at the top.
+    /// The freed space shows two live oscilloscopes:
+    ///   • VOCE RICEVUTA — RX audio from the peer (deepfake detector input)
+    ///   • CIFRATURA — decryption stream (visually represents the crypto work)
     private var statsCard: some View {
-        HStack(alignment: .top, spacing: 0) {
-            statColumn(label: "DURATA",
-                       value: formatMmSs(durationSeconds),
-                       valueColor: extras.success)
-            Spacer()
-            statColumn(label: "CONFIDENCE",
-                       value: String(format: "C=%.2f", confidence),
-                       valueColor: confidenceColor)
-            Spacer()
-            VStack(alignment: .leading, spacing: 4) {
-                Text("RE-KEY")
-                    .qaudionStyle(type.labelSmall)
-                    .tracking(1.2)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                Text("\(rekeyInSeconds)/\(rekeyTotalSeconds)")
-                    .qaudionStyle(type.titleSmall)
-                    .foregroundStyle(extras.pqcAccent)
-                ProgressView(value: rekeyProgress)
-                    .tint(extras.pqcAccent)
-                    .frame(width: 72)
+        VStack(alignment: .leading, spacing: 10) {
+            // Duration — the only metric not shown elsewhere.
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("DURATA")
+                        .qaudionStyle(type.labelSmall)
+                        .tracking(1.2)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                    Text(formatMmSs(durationSeconds))
+                        .qaudionStyle(type.titleSmall)
+                        .foregroundStyle(extras.success)
+                }
+                Spacer(minLength: 0)
             }
+
+            Rectangle()
+                .fill(scheme.outline.opacity(0.3))
+                .frame(height: 1)
+
+            // RX voice waveform — oscilloscope of received audio.
+            // This is what the deepfake detector analyses in real time.
+            waveformStrip(
+                label: "VOCE RICEVUTA",
+                samples: rxSamples,
+                color: extras.success
+            )
+
+            Rectangle()
+                .fill(scheme.outline.opacity(0.2))
+                .frame(height: 1)
+
+            // Cipher waveform — the encryption/decryption byte stream.
+            // Visually shows that every received packet is being unwrapped
+            // by the ML-KEM-1024 + SFrame pipeline in real time.
+            waveformStrip(
+                label: "CIFRATURA",
+                samples: cipherSamples,
+                color: extras.pqcAccent
+            )
         }
         .padding(14)
         .background(
@@ -296,15 +331,38 @@ struct InCallScreen: View {
         )
     }
 
-    private func statColumn(label: String, value: String, valueColor: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    /// Compact oscilloscope strip used inside `statsCard`.
+    /// Label above, Canvas waveform (36 pt tall) below.
+    /// Falls back to a silent flat line when `samples` is empty.
+    private func waveformStrip(label: String, samples: [Float], color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
             Text(label)
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.2)
                 .foregroundStyle(scheme.onSurfaceVariant)
-            Text(value)
-                .qaudionStyle(type.titleSmall)
-                .foregroundStyle(valueColor)
+            Canvas { ctx, size in
+                let midY = size.height / 2
+                // Center reference line (always drawn)
+                var centerLine = Path()
+                centerLine.move(to: CGPoint(x: 0, y: midY))
+                centerLine.addLine(to: CGPoint(x: size.width, y: midY))
+                ctx.stroke(centerLine,
+                           with: .color(color.opacity(0.18)),
+                           lineWidth: 0.5)
+                guard samples.count > 1 else { return }
+                let count = samples.count - 1
+                let stepX = size.width / CGFloat(count)
+                var wave = Path()
+                for (i, sample) in samples.enumerated() {
+                    let x = CGFloat(i) * stepX
+                    let clamped = max(-1, min(1, sample))
+                    let y = midY - CGFloat(clamped) * midY * 0.85
+                    if i == 0 { wave.move(to: CGPoint(x: x, y: y)) }
+                    else       { wave.addLine(to: CGPoint(x: x, y: y)) }
+                }
+                ctx.stroke(wave, with: .color(color), lineWidth: 1.5)
+            }
+            .frame(height: 36)
         }
     }
 
@@ -424,10 +482,10 @@ struct InCallScreen: View {
     // MARK: - Pills row
 
     private var pillsRow: some View {
+        // RE-KEY removed here — already shown in SessionStatusStrip at top.
         HStack(spacing: 8) {
-            MetaPill("RE-KEY \(rekeyInSeconds)s", accent: extras.pqcAccent)
-            MetaPill("LIVENESS OK",                accent: extras.success, filled: true)
-            MetaPill("PSK ROTATION OK",            accent: extras.success)
+            MetaPill("LIVENESS OK",   accent: extras.success, filled: true)
+            MetaPill("PSK ROTATION",  accent: extras.success)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -523,11 +581,6 @@ struct InCallScreen: View {
         case 1:  return extras.warning
         default: return extras.riskHigh
         }
-    }
-
-    private var rekeyProgress: Double {
-        guard rekeyTotalSeconds > 0 else { return 0 }
-        return max(0, min(1, Double(rekeyInSeconds) / Double(rekeyTotalSeconds)))
     }
 
     private func formatMmSs(_ seconds: Int) -> String {
