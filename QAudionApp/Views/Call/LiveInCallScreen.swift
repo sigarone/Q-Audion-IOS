@@ -273,8 +273,14 @@ struct LiveInCallScreen: View {
     private var diagPanelFrameCounters: some View {
         let txVal = appState.callService.framesEncryptedTx.description
         let rxVal = appState.callService.framesDecryptedRx.description
+        let rekeyVal = appState.rekeyCount.description
+        let latencyVal: String = appState.latencyMs > 0
+            ? appState.latencyMs.description + " ms"
+            : "n/d"
         diagRow("TX FRAME CIFRATI",   txVal)
         diagRow("RX FRAME DECIFRATI", rxVal)
+        diagRow("REKEY",              rekeyVal)
+        diagRow("LATENZA RELAY",      latencyVal)
     }
 
     private func diagRow(_ label: String, _ value: String) -> some View {

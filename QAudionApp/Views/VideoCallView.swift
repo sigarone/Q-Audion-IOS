@@ -377,7 +377,13 @@ struct VideoCallView: View {
     private var videoDiagFrameCounters: some View {
         let hasPipeline = appState.videoPipeline != nil
         let pipelineState = hasPipeline ? "attiva" : "inattiva"
+        let rekeyVal = appState.rekeyCount.description
+        let latencyVal: String = appState.latencyMs > 0
+            ? appState.latencyMs.description + " ms"
+            : "n/d"
         videoDiagRow("PIPELINE VIDEO", pipelineState)
+        videoDiagRow("REKEY",          rekeyVal)
+        videoDiagRow("LATENZA RELAY",  latencyVal)
     }
 
     @ViewBuilder
