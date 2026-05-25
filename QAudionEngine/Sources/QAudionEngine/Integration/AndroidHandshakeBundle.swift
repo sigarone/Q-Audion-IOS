@@ -77,11 +77,19 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     public let kind: Kind
     public let callId: String
 
-    // OFFER-only fields. Optional so the ACCEPT JSON omits them
-    // entirely (rather than emitting `"pqcPublicKey":""`); some
-    // peer parsers tolerate the empty-string form, others may
-    // interpret it as a missing field that should fail base64
-    // decoding. Optional + nil-skip is the unambiguous wire shape.
+    // OFFER-required, ACCEPT-empty-string fields.
+    //
+    // W527 correction to the original W?-era comment: Android's
+    // kotlinx.serialization HandshakeBundle data class declares these
+    // as non-nullable `String` with NO default value — kotlinx-
+    // serialization treats them as REQUIRED at parse time and throws
+    // `MissingFieldException` if they're absent from the JSON.
+    // Android's own ACCEPT-side construction sets them to `""`
+    // (see PqcHandshake.kt, the `respond` path). iOS callers MUST
+    // emit `""` (not nil) for ACCEPT bundles so the JSON contains
+    // the keys with empty-string values. They remain Optional here
+    // only so iOS can still decode legacy-format inbound OFFERs
+    // that omitted the fields entirely.
     public let pqcPublicKey: String?
     public let x25519PublicKey: String?
     public let strongBoxPublicKey: String?

@@ -556,9 +556,22 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             )
 
             // 7. Build ACCEPT JSON.
+            // W527: Android's kotlinx.serialization HandshakeBundle data
+            // class declares `pqcPublicKey` and `x25519PublicKey` as
+            // non-nullable `String` with NO default → both fields are
+            // REQUIRED at parse time. Passing nil here makes
+            // JSONEncoder omit them entirely, and Android then throws
+            // `MissingFieldException: Fields [pqcPublicKey,
+            // x25519PublicKey] are required for type with serial name
+            // HandshakeBundle` (confirmed in A50 logcat 22:48:58 —
+            // CallController$startOutgoing$$inlined$transitionHandshake).
+            // Android's own ACCEPT path sets these to "" — match that
+            // wire shape so the deserializer is happy.
             let accept = AndroidHandshakeBundle(
                 kind: .accept,
                 callId: callId,
+                pqcPublicKey: "",
+                x25519PublicKey: "",
                 ciphertext: AndroidHandshakeBundle.Ciphertext(
                     pqc: pqcResult.ciphertext.base64EncodedString(),
                     x25519: x25519Result.ephemeralPublicKey.base64EncodedString()
