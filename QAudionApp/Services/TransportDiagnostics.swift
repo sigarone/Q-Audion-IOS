@@ -22,6 +22,8 @@ final class TransportDiagnostics: ObservableObject {
     @Published private(set) var preferredTurnUrl: URL?
 
     private let appState: AppState
+    /// SECURITY C-6 — cert-pinned session for transport diagnostics.
+    private lazy var session: URLSession = PinnedURLSession.make(for: appState.serverUrl)
 
     init(appState: AppState) {
         self.appState = appState
@@ -46,7 +48,7 @@ final class TransportDiagnostics: ObservableObject {
 
         let startedAt = Date()
         do {
-            let (_, response) = try await URLSession.shared.data(from: url)
+            let (_, response) = try await session.data(from: url)
             let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
                 serverStatus = (latencyMs < 200) ? .healthy(latencyMs: latencyMs) : .degraded(latencyMs: latencyMs)
@@ -70,7 +72,7 @@ final class TransportDiagnostics: ObservableObject {
 
         let started = Date()
         do {
-            let (_, response) = try await URLSession.shared.data(for: req)
+            let (_, response) = try await session.data(for: req)
             let latencyMs = Int(Date().timeIntervalSince(started) * 1000)
             if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
                 lastTurnRoundTripMs = latencyMs

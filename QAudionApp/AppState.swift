@@ -902,9 +902,11 @@ final class AppState: ObservableObject {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = bodyData
-        Task { [weak self, hex] in
+        // SECURITY C-6 — cert-pinned session for push token registration.
+        let pinnedSession = PinnedURLSession.make(for: serverUrl)
+        Task { [weak self, hex, pinnedSession] in
             do {
-                let (_, resp) = try await URLSession.shared.data(for: req)
+                let (_, resp) = try await pinnedSession.data(for: req)
                 if let http = resp as? HTTPURLResponse {
                     if (200..<300).contains(http.statusCode) {
                         // C-10: token registered OK — do NOT log any

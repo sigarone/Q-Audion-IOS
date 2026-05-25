@@ -23,6 +23,8 @@ final class AppUpdateChecker: ObservableObject {
 
     private let appState: AppState
     private let currentVersion: String
+    /// SECURITY C-6 — cert-pinned session for update checks.
+    private lazy var session: URLSession = PinnedURLSession.make(for: appState.serverUrl)
 
     init(appState: AppState, currentVersion: String? = nil) {
         self.appState = appState
@@ -60,7 +62,7 @@ final class AppUpdateChecker: ObservableObject {
         }
 
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode) else {
                 lastResult = .error("HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
