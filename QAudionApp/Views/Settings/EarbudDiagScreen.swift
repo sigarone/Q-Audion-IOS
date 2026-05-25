@@ -426,12 +426,15 @@ struct EarbudDiagScreen: View {
 
     // MARK: - Metrics
 
+    private static func heapPercent(_ m: EarbudDiagViewModel.EarbudMetrics) -> Double {
+        guard m.heapTotal > 0 else { return 0.0 }
+        return Double(m.heapFree) / Double(m.heapTotal)
+    }
+
     private func metricsSection(_ m: EarbudDiagViewModel.EarbudMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let heapPct = Self.heapPercent(m)
+        return VStack(alignment: .leading, spacing: 8) {
             SettingsSectionHeader("METRICHE LIVE")
-            let heapPct: Double = m.heapTotal > 0
-                ? Double(m.heapFree) / Double(m.heapTotal)
-                : 0.0
             metricsCard(m, heapPct: heapPct)
             lastUpdatedFooter(m.lastUpdated)
         }
