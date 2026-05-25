@@ -713,17 +713,26 @@ final class CallService {
     /// (NetworkSim HighLatency/Satellite).
     private func processAndSendEncryptedFrame(pcmFrame: Data,
                                                integration: QAudionCallIntegration) {
+        // W517 — honour mute / hold flags.
+        // Hold: suppress TX entirely so the peer hears silence without
+        // the ratchet advancing out-of-step.
+        guard !isOnHold else { return }
+        // Mute: replace mic PCM with silence so the crypto state advances
+        // in step with the peer (ratchet stays aligned) but the peer
+        // hears nothing. Mirrors the gate in the legacy processOutgoingAudio().
+        let frameToProcess = isMuted ? Data(repeating: 0, count: pcmFrame.count) : pcmFrame
+
         // W466 — TX-path instrumentation: prove whether the mic produces
         // frames, whether encryption succeeds, and whether frames hit the
         // wire. Rate-limited (first occurrence + 250-frame heartbeat).
         if !loggedFirstTxCapture {
             loggedFirstTxCapture = true
-            let bytes: String = pcmFrame.count.description
+            let bytes: String = frameToProcess.count.description
             let line: String = "[CallService] TX: first mic frame reached encrypt stage (" + bytes + " bytes PCM)"
             print(line)
         }
         do {
-            let encrypted = try integration.processOutgoingAudio(pcmFrame: pcmFrame)
+            let encrypted = try integration.processOutgoingAudio(pcmFrame: frameToProcess)
             framesEncryptedTx &+= 1
             if !loggedFirstTxEncrypt {
                 loggedFirstTxEncrypt = true
@@ -731,7 +740,7 @@ final class CallService {
                 let line: String = "[CallService] TX: first frame ENCRYPTED ok (" + bytes + " bytes) — Opus+AEAD pipeline live"
                 print(line)
             }
-            let txSamples = updateWaveformSamples(from: pcmFrame)
+            let txSamples = updateWaveformSamples(from: frameToProcess)
             let cipherSamples = updateCipherSamples(from: encrypted)
             Task { @MainActor [weak self] in
                 self?.onTxWaveformUpdate?(txSamples)

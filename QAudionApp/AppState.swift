@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import CryptoKit
+import AVFoundation
 import QAudionEngine
 #if canImport(WebRTC)
 // W412: needed by the W411 RTCIceServer references inside the
@@ -2979,6 +2980,19 @@ final class AppState: ObservableObject {
         // controller and leak the RTCPeerConnection.
         guard !isEndingCall else { return }
         isEndingCall = true
+
+        // W517: send call_hangup for non-WebRTC paths (QUAD binary iOS↔Android
+        // and all incoming calls). The WebRTC path uses sendHangupAndClose()
+        // below — skip here to avoid double-hangup.
+        // callingApi.activeCallId is pre-bound: outgoing via sendCallOfferWithId,
+        // incoming via bindIncomingCallId (AppState.wireIncomingCallHandlers).
+        // Capture callContactId NOW before the teardown sequence clears it.
+        if let peer = callContactId,
+           let provider = liveProvider,
+           webRtcController == nil {
+            Task { try? await provider.callingApi.sendHangup(recipientId: peer) }
+        }
+
         if let uuid = activeCallKitId {
             Task { [weak self] in
                 await self?.callKit?.reportCallEnded(uuid: uuid, reason: .userEnded)
@@ -3115,7 +3129,17 @@ final class AppState: ObservableObject {
     }
 
     func setSpeaker(_ enabled: Bool) {
-        // Audio routing is managed by the OS via AVAudioSession; no engine API needed.
+        // W517: route audio to the device's external loudspeaker (or back to
+        // the earpiece) via AVAudioSession.overrideOutputAudioPort. Must be
+        // called after the session is already active (i.e. inside an active call).
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.overrideOutputAudioPort(enabled ? .speaker : .none)
+            RTLog.info("call", "setSpeaker(" + (enabled ? "true" : "false") + ") ok")
+        } catch {
+            let msg: String = error.localizedDescription
+            RTLog.warn("call", "setSpeaker failed: " + msg)
+        }
     }
 
     /// Toggle the local camera for video calls. Pauses/resumes the
