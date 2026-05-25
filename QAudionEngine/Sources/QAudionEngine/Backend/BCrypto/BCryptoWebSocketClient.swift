@@ -420,12 +420,30 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         send(type: "opaque_message", data: ["recipient_id": recipientId, "data": payload])
     }
 
-    public func sendAudioFrame(recipientId: String, frame: Data) {
-        send(type: "audio_frame", data: ["recipient_id": recipientId, "frame": frame.base64EncodedString()])
+    /// W525 — `callId` is OPTIONAL only for backwards compatibility with
+    /// callers that haven't been updated yet. In production it MUST be
+    /// passed: Android's `BcryptoWsFrameRelayTransport.parseRawFrame`
+    /// and the Desktop `MediaTransport.socketHandler` both filter
+    /// inbound `audio_frame`/`video_frame` envelopes by `call_id` —
+    /// if it's missing the frame is silently dropped, producing
+    /// asymmetric one-way audio (Android→iOS works because iOS doesn't
+    /// filter; iOS→Android dies because Android does).
+    public func sendAudioFrame(recipientId: String, frame: Data, callId: String? = nil) {
+        var data: [String: Any] = [
+            "recipient_id": recipientId,
+            "frame": frame.base64EncodedString(),
+        ]
+        if let cid = callId, !cid.isEmpty { data["call_id"] = cid }
+        send(type: "audio_frame", data: data)
     }
 
-    public func sendVideoFrame(recipientId: String, frame: Data) {
-        send(type: "video_frame", data: ["recipient_id": recipientId, "frame": frame.base64EncodedString()])
+    public func sendVideoFrame(recipientId: String, frame: Data, callId: String? = nil) {
+        var data: [String: Any] = [
+            "recipient_id": recipientId,
+            "frame": frame.base64EncodedString(),
+        ]
+        if let cid = callId, !cid.isEmpty { data["call_id"] = cid }
+        send(type: "video_frame", data: data)
     }
 
     public func registerHandler(type: String, handler: @escaping MessageHandler) {

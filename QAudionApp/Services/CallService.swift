@@ -122,9 +122,16 @@ final class CallService {
     /// by the W469 fallback timer to skip self-activation during outgoing
     /// ring (before the peer has answered). Wired by AppState at login.
     public typealias CallActiveProvider = () -> Bool
+    /// W525 — Returns the wire-format call_id of the currently active
+    /// call (lowercase UUID for outgoing, server-supplied callIdStr
+    /// for incoming). Required on every `audio_frame` envelope so
+    /// Android + Desktop peers accept the frame instead of dropping
+    /// it for missing/mismatched call_id. Wired by AppState at login.
+    public typealias CallIdProvider = () -> String?
     public var getWsClient: WsClientProvider?
     public var getPeerId: PeerIdProvider?
     public var isCallActive: CallActiveProvider?
+    public var getCallId: CallIdProvider?
     /// Token usato per de-registrare il handler "audio_frame" su endCall
     /// — assumiamo che `registerHandler` sostituisca il precedente per
     /// type, quindi de-register è no-op (ma resettiamo wsClient così
@@ -785,7 +792,11 @@ final class CallService {
                 // receiving iOS side auto-detects either format, so this is
                 // also correct for iOS↔iOS).
                 let wireFrame = encodeAudioForWire(encrypted)
-                ws.sendAudioFrame(recipientId: peer, frame: wireFrame)
+                // W525: include the call_id so Android/Desktop accept
+                // the frame. Their filter drops envelopes whose
+                // call_id doesn't match the active call.
+                let cid = getCallId?()
+                ws.sendAudioFrame(recipientId: peer, frame: wireFrame, callId: cid)
                 if !loggedFirstTxWire {
                     loggedFirstTxWire = true
                     let fmt: String = androidAudioWireCompat ? "WireRelayFrameCodec" : "FrameEncoder"

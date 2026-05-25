@@ -789,6 +789,18 @@ final class AppState: ObservableObject {
             guard let self else { return false }
             return self.callState == .active || self.callState == .encrypted
         }
+        // W525: stamp the call_id onto every outbound audio_frame so
+        // Android (BcryptoWsFrameRelayTransport) and Desktop
+        // (MediaTransport) don't silently drop our frames. The engine's
+        // BCryptoCallingApiImpl is the authoritative source — its
+        // activeCallId is set by sendCallOfferWithId (outgoing) or
+        // bindIncomingCallId (incoming via wireIncomingCallHandlers).
+        callService.getCallId = { [weak self] in
+            guard let live = self?.liveProvider,
+                  let impl = live.callingApi as? BCryptoCallingApiImpl
+            else { return nil }
+            return impl.getActiveCallId()
+        }
         // W74: register inbound call handlers BEFORE the WS lands. The
         // server relays Android→iOS calls as `call_incoming`, NOT
         // `call_offer` (see bcrypto-server signaling/messages.go
@@ -3848,7 +3860,16 @@ extension AppState {
         // Outbound — each fragment ships as a video_frame WS envelope.
         // sealOutboundFragment reads the current sealer from the
         // pipeline so rekey is observed without rewiring closures.
-        pipeline.onOutboundFragment = { [weak ws, weak pipeline] fragment in
+        // W525: capture a weak reference to the calling impl so each
+        // fragment can stamp the current call_id onto the WS envelope.
+        // Without this Android/Desktop drop every video_frame the same
+        // way they drop audio_frames without call_id.
+        // Captured strongly because BCryptoCallingApiImpl is owned by
+        // liveProvider (also captured via `ws`) and outlives the call;
+        // a weak capture on an optional reference here would just add
+        // optional chaining noise without lifetime benefit.
+        let callingImpl: BCryptoCallingApiImpl? = liveProvider?.callingApi as? BCryptoCallingApiImpl
+        pipeline.onOutboundFragment = { [weak ws, weak pipeline, callingImpl] fragment in
             // Parse the iOS sub-header BEFORE sealing so the sealed
             // envelope carries it inside the ciphertext. The Android
             // wrapper only needs the metadata to rebuild the outer
@@ -3866,7 +3887,8 @@ extension AppState {
             } else {
                 toShip = sealed
             }
-            ws?.sendVideoFrame(recipientId: peerId, frame: toShip)
+            let cid = callingImpl?.getActiveCallId()
+            ws?.sendVideoFrame(recipientId: peerId, frame: toShip, callId: cid)
         }
 
         // Inbound — register the WS handler. When Android-wire is on,

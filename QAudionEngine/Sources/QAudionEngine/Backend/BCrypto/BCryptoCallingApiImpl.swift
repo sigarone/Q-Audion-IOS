@@ -348,6 +348,18 @@ public final class BCryptoCallingApiImpl: CallingApi {
         callIdLock.lock(); activeCallId = callId; callIdLock.unlock()
     }
 
+    /// W525 — public read of the currently-bound call_id. Used by
+    /// CallService.processOutgoingAudio so the `audio_frame` WS
+    /// envelope can include the `call_id` field that Android's
+    /// `BcryptoWsFrameRelayTransport.parseRawFrame` and Desktop's
+    /// `MediaTransport.socketHandler` BOTH require — they silently
+    /// drop frames whose `call_id` doesn't match. Returns nil when no
+    /// call is active (no frames will be in flight in that state).
+    public func getActiveCallId() -> String? {
+        callIdLock.lock(); defer { callIdLock.unlock() }
+        return activeCallId
+    }
+
     /// Sync helpers — Swift 6 prohibits NSLock.lock/unlock directly inside
     /// `async` functions ("instance method 'lock' is unavailable from
     /// asynchronous contexts"). Wrapping the mutation in a sync method
