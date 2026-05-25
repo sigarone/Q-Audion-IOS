@@ -7,7 +7,7 @@ public enum AudioConstants {
     public static let frameDurationMs = 20
     public static let samplesPerFrame = (sampleRate * frameDurationMs) / 1000
     public static let bytesPerFrame = samplesPerFrame * (bitsPerSample / 8) * channels
-    public static let opusBitrate = 32000
+    public static let opusBitrate = 64000
     public static let jitterBufferFramesP2P = 3
     public static let jitterBufferFramesWsRelay = 8
     public static let jitterBufferFramesSignalRelay = 150

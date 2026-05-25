@@ -164,6 +164,7 @@ struct LiveInCallScreen: View {
                 onToggleSpeaker: handleToggleSpeaker,
                 onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
                 onToggleCamera: handleToggleCamera,
+                onUpgradeToVideo: handleUpgradeToVideo,
                 onAddParticipant: {},
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
@@ -193,6 +194,11 @@ struct LiveInCallScreen: View {
     private func handleToggleCamera() {
         cameraOn.toggle()
         appState.setCamera(cameraOn)
+    }
+
+    private func handleUpgradeToVideo() {
+        cameraOn = true
+        appState.upgradeToVideo()
     }
 
     private func handleHangup() {

@@ -15,7 +15,7 @@ public final class OpusCodec {
             self.bitrate = bitrate; self.complexity = complexity
             self.enableHpf = enableHpf; self.enableAgc = enableAgc
         }
-        public static func secure() -> Config { Config(bitrate: 32000, complexity: 5, enableHpf: true) }
+        public static func secure() -> Config { Config(bitrate: 64000, complexity: 8, enableHpf: true) }
         public static func highQuality() -> Config { Config(bitrate: 64000, complexity: 10) }
         public static func lowLatency() -> Config { Config(bitrate: 24000, complexity: 3) }
     }

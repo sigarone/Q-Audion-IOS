@@ -1026,11 +1026,22 @@ final class AppState: ObservableObject {
                     return
                 }
                 Task {
-                    await self.callKit?.reportIncomingCall(
-                        uuid: callUUID,
-                        callerName: resolvedCallerName,
-                        hasVideo: callType == "video"
-                    )
+                    // W520: WS foreground calls — skip reportNewIncomingCall.
+                    // The native CallKit incoming-call screen looks identical
+                    // to a standard phone call; showing it alongside our custom
+                    // ringing banner creates a "double call" UX and confuses
+                    // users who must distinguish encrypted calls from cleartext.
+                    // We register the UUID as "suppressed" so that when the user
+                    // taps Answer in our custom ringing banner, answerCall() uses
+                    // the manual audio-session activation path (identical to the
+                    // Focus/DnD fallback in CallKitProvider.answerCall).
+                    // PushKit background calls STILL call reportIncomingCall (Apple
+                    // policy: the PushKit payload handler must report or the app
+                    // is terminated). That path is in the onIncomingCall closure
+                    // inside initialize() and is NOT changed here.
+                    if let provider = self.callKit as? CallKitProvider {
+                        provider.registerSuppressedCall(callUUID)
+                    }
                     await MainActor.run {
                         self.activeCallKitId = callUUID
                         self.callContactId = senderId
@@ -3129,13 +3140,28 @@ final class AppState: ObservableObject {
     }
 
     func setSpeaker(_ enabled: Bool) {
-        // W517: route audio to the device's external loudspeaker (or back to
-        // the earpiece) via AVAudioSession.overrideOutputAudioPort. Must be
-        // called after the session is already active (i.e. inside an active call).
+        // W520: route audio to the external loudspeaker (or back to the earpiece).
+        //
+        // Two-step approach required:
+        // 1. Reconfigure the category options: include .defaultToSpeaker only
+        //    when speaker is ON. Without it, overrideOutputAudioPort(.none)
+        //    correctly falls back to earpiece. With it, the proximity sensor
+        //    overrides earpiece anyway — so both must change together.
+        // 2. Call overrideOutputAudioPort to LOCK the route regardless of
+        //    the proximity sensor (which .voiceChat mode monitors by default).
+        //    Without this lock, holding the phone to your ear silently reverts
+        //    to earpiece even after the user explicitly tapped "speaker".
+        let session = AVAudioSession.sharedInstance()
         do {
-            let session = AVAudioSession.sharedInstance()
+            var opts: AVAudioSession.CategoryOptions = [
+                .allowBluetoothHFP,
+                .allowBluetoothA2DP,
+                .interruptSpokenAudioAndMixWithOthers
+            ]
+            if enabled { opts.insert(.defaultToSpeaker) }
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
             try session.overrideOutputAudioPort(enabled ? .speaker : .none)
-            RTLog.info("call", "setSpeaker(" + (enabled ? "true" : "false") + ") ok")
+            RTLog.info("call", "setSpeaker(" + String(describing: enabled) + ") ok")
         } catch {
             let msg: String = error.localizedDescription
             RTLog.warn("call", "setSpeaker failed: " + msg)
@@ -3146,6 +3172,17 @@ final class AppState: ObservableObject {
     /// video capture pipeline. No-op when there is no active video call.
     func setCamera(_ enabled: Bool) {
         videoPipeline?.setCameraEnabled(enabled)
+    }
+
+    /// Upgrade an audio call to video mid-call (same as Android/Desktop "upgrade to video").
+    /// Sets `isVideoCall = true` so the camera toggle button appears in InCallScreen
+    /// and starts the local video capture pipeline. Does NOT yet signal the peer
+    /// (a WS video-upgrade message will be added when the server supports it).
+    func upgradeToVideo() {
+        guard isInCall, !isVideoCall else { return }
+        isVideoCall = true
+        setCamera(true)
+        RTLog.info("call", "upgradeToVideo: starting local video pipeline")
     }
 
     func testConnection() async {

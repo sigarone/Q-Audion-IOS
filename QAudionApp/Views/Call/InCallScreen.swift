@@ -101,6 +101,10 @@ struct InCallScreen: View {
     let onToggleSpeaker: () -> Void
     let onToggleVoiceEnhancement: () -> Void
     let onToggleCamera: () -> Void
+    /// Upgrade an audio call to video mid-call. Shown only when `!hasVideo`.
+    /// Mirrors Android/Desktop "upgrade to video" button. On tap, starts the
+    /// local camera and transitions the call to video mode.
+    let onUpgradeToVideo: () -> Void
     let onAddParticipant: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
@@ -130,6 +134,7 @@ struct InCallScreen: View {
          onToggleSpeaker: @escaping () -> Void = {},
          onToggleVoiceEnhancement: @escaping () -> Void = {},
          onToggleCamera: @escaping () -> Void = {},
+         onUpgradeToVideo: @escaping () -> Void = {},
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
@@ -158,6 +163,7 @@ struct InCallScreen: View {
         self.onToggleSpeaker = onToggleSpeaker
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
         self.onToggleCamera = onToggleCamera
+        self.onUpgradeToVideo = onUpgradeToVideo
         self.onAddParticipant = onAddParticipant
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
@@ -528,15 +534,24 @@ struct InCallScreen: View {
                 background: speakerOn ? extras.success : scheme.surfaceVariant,
                 iconColor: speakerOn ? extras.onSuccess : scheme.onSurface
             )
-            // Camera toggle — only visible on video calls.
-            // Mirrors Android InCallScreen cameraButton visibility logic.
             if hasVideo {
+                // Video call: camera on/off toggle.
                 CircularAction(
                     icon: cameraOn ? "video.fill" : "video.slash.fill",
                     action: onToggleCamera,
                     diameter: 48,
                     background: cameraOn ? extras.success : scheme.surfaceVariant,
                     iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
+                )
+            } else {
+                // Audio call: upgrade-to-video button (matches Android/Desktop).
+                // Tapping starts the local camera and transitions to video mode.
+                CircularAction(
+                    icon: "video.badge.plus",
+                    action: onUpgradeToVideo,
+                    diameter: 48,
+                    background: scheme.surfaceVariant,
+                    iconColor: scheme.onSurface
                 )
             }
             CircularAction(

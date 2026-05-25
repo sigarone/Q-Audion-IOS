@@ -99,6 +99,16 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         try await controller.request(CXTransaction(action: action))
     }
 
+    /// W520 — register a call UUID as "suppressed" so that answerCall() uses
+    /// the manual audio-session activation path instead of going through
+    /// CXCallController. Called for WS foreground incoming calls where we
+    /// intentionally skip reportNewIncomingCall to avoid showing the native
+    /// iOS phone UI (which looks identical to a plain voice call and would
+    /// confuse users who need to distinguish encrypted calls from cleartext).
+    public func registerSuppressedCall(_ uuid: UUID) {
+        callKitRejectedUUIDs.insert(uuid)
+    }
+
     /// W478 — answer an incoming call via the CallKit CXCallController.
     /// This path is triggered by the in-app answer button; it fires the same
     /// CXAnswerCallAction that the system UI button would fire, ensuring the
