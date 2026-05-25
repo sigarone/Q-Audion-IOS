@@ -351,6 +351,24 @@ struct SettingsScreen: View {
                             subtitle: "P2P · TURN · Relay")
             }
             .buttonStyle(.plain)
+
+            // W515: Recovery seed enrollment — 1:1 parity with Android
+            // RecoveryEnrollRoute. Generates a 12-word BIP-39 mnemonic,
+            // computes SHA-256 hash, submits to AccountApi.recoverySetup.
+            // RecoverySeedContainer + RecoverySeedView live in QAudionEngine.
+            NavigationLink {
+                LazyView {
+                    RecoverySeedContainerView(
+                        container: RecoverySeedContainer(mode: .setup, appState: appState)
+                    )
+                }
+            } label: {
+                SettingsRow(icon: "arrow.counterclockwise.icloud",
+                            iconColor: extras.pqcAccent,
+                            title: "Seed di recupero",
+                            subtitle: "Mnemonica 12 parole · ripristino account")
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }
