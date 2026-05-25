@@ -1,5 +1,6 @@
 import SwiftUI
 import CryptoKit
+import QAudionEngine
 #if canImport(WebRTC)
 import WebRTC
 #endif
