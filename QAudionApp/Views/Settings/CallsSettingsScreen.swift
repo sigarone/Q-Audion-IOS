@@ -82,6 +82,20 @@ struct CallsSettingsScreen: View {
     @AppStorage("qaudion.calls.adaptive_padding_enabled")
     private var adaptivePaddingEnabled: Bool = true
 
+    // W503: metered-network cap — parity with Android SettingsScreen
+    // `videoQuality` DATA_SAVER / BALANCED / ULTRA and `meteredNetworkCap`.
+    @AppStorage("qaudion.calls.metered_cap_enabled")
+    private var meteredCapEnabled: Bool = false
+
+    @AppStorage("qaudion.calls.metered_max_quality")
+    private var meteredMaxQuality: MeteredQuality = .low
+
+    enum MeteredQuality: String, CaseIterable, RawRepresentable {
+        case low    = "Bassa"
+        case medium = "Media"
+        case high   = "Alta"
+    }
+
     init(state: AppState) {
         _container = StateObject(wrappedValue: CallsSettingsContainer())
     }
@@ -141,6 +155,22 @@ struct CallsSettingsScreen: View {
                         .padding(.horizontal, 14)
                         .padding(.top, 4)
 
+                    // W503: metered-network cap — parity with Android
+                    // SettingsScreen root VIDEO_QUALITY / meteredNetworkCap.
+                    // When enabled, caps codec quality on cellular/metered
+                    // connections to reduce data usage without touching Wi-Fi.
+                    SettingsSectionHeader("RETE DATI")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Risparmio dati in chiamata",
+                            subtitle: "Limita qualità codec su rete cellulare",
+                            isOn: $meteredCapEnabled
+                        )
+                        if meteredCapEnabled {
+                            meteredQualityPicker
+                        }
+                    }
+
                     // W443: call-session security features (parity with Android Privacy section)
                     SettingsSectionHeader("SICUREZZA CHIAMATE")
                     VStack(spacing: 8) {
@@ -167,6 +197,30 @@ struct CallsSettingsScreen: View {
             }
         }
         .navigationTitle("Chiamate")
+    }
+
+    // MARK: - Metered quality picker
+
+    private var meteredQualityPicker: some View {
+        HStack {
+            Text("Qualità massima su cellulare")
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Picker("", selection: $meteredMaxQuality) {
+                ForEach(MeteredQuality.allCases, id: \.self) { q in
+                    Text(q.rawValue).tag(q)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(scheme.primary)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
     }
 
     private var anyAudioProcDisabled: Bool {

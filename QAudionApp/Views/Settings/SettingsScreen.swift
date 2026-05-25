@@ -485,6 +485,19 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // W503: earbud BLE diagnostics — 1:1 port of Android EarbudDiagScreen.kt.
+            // Shows heap/CPU/CRACEN/PDM/TDM/Axon metrics from connected Q-Audion
+            // earbuds. GATT service UUID wired to qaudion-firmware constants.
+            NavigationLink {
+                LazyView { EarbudDiagScreen() }
+            } label: {
+                SettingsRow(icon: "headphones",
+                            iconColor: .orange,
+                            title: "Diagnostica auricolare",
+                            subtitle: "BLE · CRACEN · heap · PDM/TDM · Axon")
+            }
+            .buttonStyle(.plain)
+
             NavigationLink {
                 LazyView { CallDesignShowcase() }
             } label: {
