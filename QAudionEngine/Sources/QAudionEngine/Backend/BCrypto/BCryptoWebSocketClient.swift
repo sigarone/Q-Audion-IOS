@@ -51,6 +51,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// server-sent message). Used to detect stale connections even if OS keepalive
     /// hasn't tripped the URLSessionWebSocketTask yet.
     private var lastInboundAt: TimeInterval = 0
+    /// Timestamp recorded when the most recent outbound `ping` was sent.
+    /// Paired with the server's `pong`/`heartbeat_ack` to compute WS RTT.
+    private var pingSentAt: TimeInterval = 0
+    /// Called on the utility queue with the measured WS round-trip time in
+    /// milliseconds after each `ping`/`pong` cycle. Consumers should dispatch
+    /// to @MainActor before updating UI state.
+    public var onLatencyMeasured: ((Int) -> Void)?
     /// Interval between outbound ping keepalives. Server-side idle timeout is
     /// usually 60s; 30s gives us one retry window before the server drops us.
     private let pingIntervalSec: TimeInterval = 30
@@ -489,9 +496,19 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             return
         }
 
-        // `pong` and `heartbeat_ack` are server responses to our ping. No listener
-        // handler is needed — just refreshing `lastInboundAt` above is enough.
-        if type == "pong" || type == "heartbeat_ack" { return }
+        // `pong` and `heartbeat_ack` are server responses to our ping. Compute
+        // round-trip time if we have a recorded pingSentAt, then fire the callback.
+        if type == "pong" || type == "heartbeat_ack" {
+            lock.lock()
+            let sent = pingSentAt
+            let cb = onLatencyMeasured
+            lock.unlock()
+            if sent > 0 {
+                let rttMs = Int((Date().timeIntervalSinceReferenceDate - sent) * 1000)
+                if rttMs > 0 { cb?(rttMs) }
+            }
+            return
+        }
 
         lock.lock()
         let handler = messageHandlers[type]
@@ -539,6 +556,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             return
         }
 
+        lock.lock()
+        pingSentAt = Date().timeIntervalSinceReferenceDate
+        lock.unlock()
         send(type: "ping", data: [:])
     }
 

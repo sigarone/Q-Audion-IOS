@@ -786,6 +786,13 @@ final class AppState: ObservableObject {
         // QUAD frame back to ContactKeyExchange when it carries a key
         // exchange payload.
         let ws = provider.getWebSocketClient()
+        // W505: wire ping/pong RTT measurement so CallSecurityBadge and
+        // the call diagnostics panels can show a live relay latency value.
+        // The callback fires on the utility queue every 30 s (ping interval)
+        // so we dispatch to main before writing @Published latencyMs.
+        ws.onLatencyMeasured = { [weak self] rttMs in
+            DispatchQueue.main.async { self?.latencyMs = rttMs }
+        }
         let cke = ContactKeyExchange(
             identity: sovereignIdentity,
             vault: SovereignKeyVault(),
