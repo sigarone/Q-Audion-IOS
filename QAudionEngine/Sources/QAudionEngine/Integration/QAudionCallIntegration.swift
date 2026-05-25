@@ -974,8 +974,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guard Date().timeIntervalSince(startedAt) < handshakeTimeoutSec else { return }
         // Skip if the handshake is already done — caller transitions
         // to .active when ACCEPT decapsulates, responder also moves
-        // through .active. Replay only makes sense before that.
-        guard snapshot.state != .active, snapshot.state != .ended else { return }
+        // through .active. Also bail on terminal/reset states. Replay
+        // only makes sense in the handshake-in-flight window
+        // (.capabilitySent, .negotiating, .connecting, .ringing).
+        switch snapshot.state {
+        case .idle, .active, .fallback, .error:
+            return
+        case .capabilitySent, .negotiating, .connecting, .ringing:
+            break  // proceed to replay
+        }
         guard let sender = snapshot.sender else { return }
         let toReplay: String? = snapshot.isCaller ? snapshot.offer : snapshot.accept
         guard let wire = toReplay else { return }
