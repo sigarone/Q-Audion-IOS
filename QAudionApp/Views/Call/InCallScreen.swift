@@ -307,10 +307,15 @@ struct InCallScreen: View {
 
             // RX voice waveform — oscilloscope of received audio.
             // This is what the deepfake detector analyses in real time.
+            // autoGain on so the line stays visibly dynamic even at
+            // conversational levels (typical |sample| peaks at ~0.2-0.4).
             waveformStrip(
                 label: "VOCE RICEVUTA",
                 samples: rxSamples,
-                color: extras.success
+                color: extras.success,
+                autoGain: true,
+                lineWidth: 1.5,
+                glow: false
             )
 
             Rectangle()
@@ -319,11 +324,16 @@ struct InCallScreen: View {
 
             // Cipher waveform — the encryption/decryption byte stream.
             // Visually shows that every received packet is being unwrapped
-            // by the ML-KEM-1024 + SFrame pipeline in real time.
+            // by the ML-KEM-1024 + SFrame pipeline in real time. Thicker
+            // line + soft glow gives a more "scenographic" feel that
+            // distinguishes the crypto layer from the voice trace.
             waveformStrip(
                 label: "CIFRATURA",
                 samples: cipherSamples,
-                color: extras.pqcAccent
+                color: extras.pqcAccent,
+                autoGain: false,
+                lineWidth: 2.2,
+                glow: true
             )
         }
         .padding(14)
@@ -340,7 +350,21 @@ struct InCallScreen: View {
     /// Compact oscilloscope strip used inside `statsCard`.
     /// Label above, Canvas waveform (36 pt tall) below.
     /// Falls back to a silent flat line when `samples` is empty.
-    private func waveformStrip(label: String, samples: [Float], color: Color) -> some View {
+    ///
+    /// - Parameters:
+    ///   - autoGain: scale samples by `1 / peak` so even quiet voice
+    ///     levels fill the canvas (peak floor 0.1 so total silence stays
+    ///     near the centerline). Cipher samples are uniform-distributed
+    ///     bytes and don't need it.
+    ///   - lineWidth: stroke width (1.5 for voice, 2.2 for cipher).
+    ///   - glow: draws a soft 4-pt blur underneath the main stroke to
+    ///     give the cipher trace a more "scenographic" feel.
+    private func waveformStrip(label: String,
+                               samples: [Float],
+                               color: Color,
+                               autoGain: Bool,
+                               lineWidth: CGFloat,
+                               glow: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
                 .qaudionStyle(type.labelSmall)
@@ -356,17 +380,47 @@ struct InCallScreen: View {
                            with: .color(color.opacity(0.18)),
                            lineWidth: 0.5)
                 guard samples.count > 1 else { return }
+
+                // W523: peak-based auto-gain for the voice trace. Peak
+                // floor 0.10 keeps silence near the centerline (no
+                // amplification of noise floor). Without this the line
+                // appeared "stuck" at conversational levels because
+                // typical mic Int16 peaks are well under 32768 → after
+                // /32768 normalisation the |y| was 0.15-0.30, eating
+                // only 25 % of the canvas.
+                let gain: CGFloat
+                if autoGain {
+                    var peak: Float = 0.10
+                    for s in samples {
+                        let a = abs(s)
+                        if a > peak { peak = a }
+                    }
+                    gain = CGFloat(min(1.0, 0.92 / peak))
+                } else {
+                    gain = 1.0
+                }
+
                 let count = samples.count - 1
                 let stepX = size.width / CGFloat(count)
                 var wave = Path()
                 for (i, sample) in samples.enumerated() {
                     let x = CGFloat(i) * stepX
-                    let clamped = max(-1, min(1, sample))
-                    let y = midY - CGFloat(clamped) * midY * 0.85
+                    let scaled = max(-1.0, min(1.0, CGFloat(sample) * gain))
+                    let y = midY - scaled * midY * 0.85
                     if i == 0 { wave.move(to: CGPoint(x: x, y: y)) }
                     else       { wave.addLine(to: CGPoint(x: x, y: y)) }
                 }
-                ctx.stroke(wave, with: .color(color), lineWidth: 1.5)
+
+                if glow {
+                    // Soft glow underlay — gives the cipher trace depth
+                    // without sacrificing legibility of the main stroke.
+                    var glowContext = ctx
+                    glowContext.addFilter(.blur(radius: 4))
+                    glowContext.stroke(wave,
+                                       with: .color(color.opacity(0.55)),
+                                       lineWidth: lineWidth + 2.0)
+                }
+                ctx.stroke(wave, with: .color(color), lineWidth: lineWidth)
             }
             .frame(height: 36)
         }

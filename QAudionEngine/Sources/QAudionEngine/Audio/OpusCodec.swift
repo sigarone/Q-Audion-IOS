@@ -15,7 +15,12 @@ public final class OpusCodec {
             self.bitrate = bitrate; self.complexity = complexity
             self.enableHpf = enableHpf; self.enableAgc = enableAgc
         }
-        public static func secure() -> Config { Config(bitrate: 64000, complexity: 8, enableHpf: true) }
+        // W523: aligned with Android/firmware ecosystem — 32 kbps CBR
+        // complexity 10. Higher bitrate would desynchronise the CBR
+        // anti-traffic-analysis property (every device emits frames of
+        // the SAME size). Quality improvement comes from complexity 10 +
+        // PLR 30 % (FEC envelope) rather than raw bitrate.
+        public static func secure() -> Config { Config(bitrate: 32000, complexity: 10, enableHpf: true) }
         public static func highQuality() -> Config { Config(bitrate: 64000, complexity: 10) }
         public static func lowLatency() -> Config { Config(bitrate: 24000, complexity: 3) }
     }
@@ -44,7 +49,10 @@ public final class OpusCodec {
             // 10 % PLR hint lets the encoder calibrate FEC overhead (~+5 %
             // effective bitrate) without exceeding the CBR budget.
             opus_helper_set_inband_fec(enc, Int32(1))
-            opus_helper_set_packet_loss_perc(enc, Int32(10))
+            // W523: PLR raised 10→30 % to match Android. The crackling
+            // heard on iPad↔iPhone v1.0.521 was the encoder under-budgeting
+            // FEC redundancy on WiFi micro-bursts of loss.
+            opus_helper_set_packet_loss_perc(enc, Int32(30))
         }
 
         decoder = opus_decoder_create(Int32(AudioConstants.sampleRate),

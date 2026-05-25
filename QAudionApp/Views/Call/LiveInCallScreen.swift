@@ -454,19 +454,13 @@ struct LiveInCallScreen: View {
     /// and only receives real samples once the audio engine delivers frames,
     /// so the empty-check correctly gates the fallback sparkline.
     private var liveSamples: [Float] {
-        // No audio before the call is active — returning empty prevents the
-        // SessionStatusStrip mini-spark from animating during outgoing ring.
-        guard appState.callState == .active || appState.callState == .encrypted else {
-            return []
-        }
-        let tx = appState.txWaveformSamples
-        if !tx.isEmpty {
-            return Array(tx.suffix(16))
-        }
-        // Confidence-derived stub series shown while call is active but
-        // audio packets haven't arrived yet (e.g. first few frames).
-        let c = max(0.05, min(1.0, appState.confidenceScore))
-        return [c, c * 0.98, c * 1.02, c * 0.99, c, c * 1.03, c * 0.97, c]
+        // W523 — user feedback v1.0.522: the SessionStatusStrip mini-spark
+        // duplicates the main "VOCE RICEVUTA" oscilloscope below the avatar.
+        // Pass an empty array so the strip hides the spark (SessionStatusStrip
+        // guards `if !recentSamples.isEmpty`) and keeps the strip purely as
+        // presence + confidence + rekey-countdown summary. The full waveform
+        // moved to the stats card.
+        return []
     }
 
     /// Live RX oscilloscope — received audio from the peer.

@@ -330,6 +330,35 @@ public final class VideoCallPipeline: NSObject {
             throw PipelineError.outputAttachFailed
         }
         captureSession.addOutput(videoOutput)
+
+        // W523: rotate captured frames to portrait BEFORE handing them to
+        // the encoder. Without this the videoOutput connection delivers
+        // pixel buffers in the sensor's native landscape orientation —
+        // local preview can correct it for display but the encoded
+        // HEVC stream goes out landscape, so the remote peer sees a
+        // 90° counter-clockwise rotated video (confirmed user-report
+        // v1.0.522 iPad↔iPhone). For the front camera we ALSO need to
+        // mirror so the encoded stream matches what the user sees in
+        // their local self-view (otherwise the peer sees a mirrored
+        // image too, which Android does NOT do).
+        if let conn = videoOutput.connection(with: .video) {
+            if #available(iOS 17.0, *) {
+                // 90° = portrait (home button down equivalent on legacy hw).
+                if conn.isVideoRotationAngleSupported(90) {
+                    conn.videoRotationAngle = 90
+                }
+            } else {
+                if conn.isVideoOrientationSupported {
+                    conn.videoOrientation = .portrait
+                }
+            }
+            // Front camera: undo the sensor mirror so the peer sees the
+            // un-mirrored image (faces correct, text readable).
+            if cameraPosition == .front, conn.isVideoMirroringSupported {
+                conn.automaticallyAdjustsVideoMirroring = false
+                conn.isVideoMirrored = false
+            }
+        }
         captureSession.commitConfiguration()
     }
 
