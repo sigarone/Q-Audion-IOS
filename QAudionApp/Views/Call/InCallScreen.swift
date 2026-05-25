@@ -105,6 +105,13 @@ struct InCallScreen: View {
     /// Mirrors Android/Desktop "upgrade to video" button. On tap, starts the
     /// local camera and transitions the call to video mode.
     let onUpgradeToVideo: () -> Void
+    /// W533: true when ReplayKit screen capture is currently feeding
+    /// the WebRTC video sender instead of the camera. Drives the
+    /// share-screen button's filled state.
+    let screenSharing: Bool
+    /// W533: toggle screen-share on/off. Shown only when `hasVideo == true`
+    /// (in audio calls we'd need an upgrade-to-video first).
+    let onToggleScreenShare: () -> Void
     let onAddParticipant: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
@@ -135,6 +142,8 @@ struct InCallScreen: View {
          onToggleVoiceEnhancement: @escaping () -> Void = {},
          onToggleCamera: @escaping () -> Void = {},
          onUpgradeToVideo: @escaping () -> Void = {},
+         screenSharing: Bool = false,
+         onToggleScreenShare: @escaping () -> Void = {},
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
@@ -164,6 +173,8 @@ struct InCallScreen: View {
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
         self.onToggleCamera = onToggleCamera
         self.onUpgradeToVideo = onUpgradeToVideo
+        self.screenSharing = screenSharing
+        self.onToggleScreenShare = onToggleScreenShare
         self.onAddParticipant = onAddParticipant
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
@@ -596,6 +607,19 @@ struct InCallScreen: View {
                     diameter: 48,
                     background: cameraOn ? extras.success : scheme.surfaceVariant,
                     iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
+                )
+                // W533: screen-share toggle. Mirror of the desktop's
+                // PeerConnectionManager.startScreenShare / .stopScreenShare,
+                // implemented on iOS via ReplayKit's in-app capture
+                // routed through the same WebRTC video sender as the
+                // camera. Receivers (desktop / Android) see it as
+                // standard remote video.
+                CircularAction(
+                    icon: screenSharing ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle",
+                    action: onToggleScreenShare,
+                    diameter: 48,
+                    background: screenSharing ? extras.success : scheme.surfaceVariant,
+                    iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
                 )
             } else {
                 // Audio call: upgrade-to-video button (matches Android/Desktop).

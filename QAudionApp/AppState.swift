@@ -214,6 +214,18 @@ final class AppState: ObservableObject {
     /// W398: ABR controller bound to the active video pipeline.
     /// Co-lifecycled with videoPipeline.
     private var abrController: AbrController?
+    // W533 — screen-share state. Mirrors the desktop client's
+    // PeerConnectionManager.isScreenSharing flag and toggles a stub
+    // `cameraFrameClosureSnapshot` so the camera-to-WebRTC pipe can
+    // be restored when the user stops sharing.
+    @Published public private(set) var isScreenSharing: Bool = false
+    #if os(iOS)
+    private let screenShareController = ScreenShareController()
+    /// Camera-frame closure captured BEFORE starting screen share, so
+    /// stopScreenShare can restore it without re-running the whole
+    /// startVideoPipeline wiring sequence.
+    private var preScreenShareCameraClosure: ((CVPixelBuffer, Int64) -> Void)?
+    #endif
     /// W396: responder-side QAudionCallIntegration. Lazy-created on
     /// inbound `call_incoming` BEFORE the user accepts on CallKit so
     /// we have somewhere to land the early PQC OFFER opaque_message.
@@ -3088,6 +3100,19 @@ final class AppState: ObservableObject {
         abrController = nil
         // W391: tear down the video pipeline alongside the audio
         // session. Idempotent if no video pipeline was started.
+        // W533: also stop screen share if it was running so ReplayKit
+        // releases its capture session cleanly. We don't await — the
+        // call is already ending, the user doesn't need to wait for
+        // ReplayKit's stopCapture callback.
+        #if os(iOS)
+        if isScreenSharing {
+            isScreenSharing = false
+            preScreenShareCameraClosure = nil
+            Task { @MainActor [weak self] in
+                await self?.screenShareController.stop()
+            }
+        }
+        #endif
         videoPipeline?.stop()
         videoPipeline = nil
         // W396: tear down the responder integration so a subsequent
@@ -3258,6 +3283,76 @@ final class AppState: ObservableObject {
         Task { @MainActor [weak self] in
             await self?.startVideoPipeline(for: peerId)
         }
+    }
+
+    // MARK: - W533: Screen Share
+
+    /// Start sharing the iOS in-app screen to the remote peer. Hot-
+    /// swaps the camera-frame producer on `VideoCallPipeline.
+    /// onCapturedPixelBuffer` for a no-op (so two writers don't race
+    /// into the same `RTCVideoSource`) and points `ScreenShareController`
+    /// at the WebRTC capturer. The remote peer sees the screen
+    /// content as a normal WebRTC video track — no wire-protocol
+    /// change required. Desktop / Android receive it automatically.
+    ///
+    /// Pre-conditions:
+    ///   - The call must already be in `.encrypted` (video stream
+    ///     plumbing is up only for video calls — for audio-only
+    ///     calls we would also need to flip `isVideoCall=true` and
+    ///     run `upgradeToVideo()` first; deferring that to a future
+    ///     iteration since the UI button is shown only on
+    ///     active video calls).
+    ///   - The WebRTC controller is live so its `webrtcPixelBuffer
+    ///     Capturer` is non-nil.
+    public func startScreenShare() async {
+        #if os(iOS)
+        guard isInCall, isVideoCall else {
+            RTLog.warn("call", "startScreenShare: not in video call — refusing")
+            return
+        }
+        #if canImport(WebRTC)
+        guard let controller = webRtcController as? QAudionWebRtcCallController,
+              let capturer = controller.webrtcPixelBufferCapturer
+        else {
+            RTLog.warn("call", "startScreenShare: WebRTC capturer unavailable")
+            return
+        }
+        // Capture (and clear) the current camera-frame closure so we
+        // can restore it on stop. AppState owns the source of truth
+        // here — videoPipeline writes to onCapturedPixelBuffer when
+        // startVideoPipeline runs.
+        preScreenShareCameraClosure = videoPipeline?.onCapturedPixelBuffer
+        videoPipeline?.onCapturedPixelBuffer = nil
+        do {
+            try await screenShareController.start(into: capturer)
+            isScreenSharing = true
+            RTLog.info("call", "startScreenShare: ReplayKit capture live — pushing into WebRTC")
+        } catch {
+            // Restore the camera closure if start failed so the call
+            // doesn't get stuck without any video producer.
+            videoPipeline?.onCapturedPixelBuffer = preScreenShareCameraClosure
+            preScreenShareCameraClosure = nil
+            let msg: String = error.localizedDescription
+            RTLog.warn("call", "startScreenShare failed: " + msg)
+            errorMessage = msg
+        }
+        #else
+        RTLog.warn("call", "startScreenShare: WebRTC not available in this build")
+        #endif
+        #endif
+    }
+
+    public func stopScreenShare() async {
+        #if os(iOS)
+        guard isScreenSharing else { return }
+        await screenShareController.stop()
+        // Restore the camera path so VideoCallPipeline frames once
+        // again flow to the WebRTC capturer.
+        videoPipeline?.onCapturedPixelBuffer = preScreenShareCameraClosure
+        preScreenShareCameraClosure = nil
+        isScreenSharing = false
+        RTLog.info("call", "stopScreenShare: camera frame closure restored")
+        #endif
     }
 
     func testConnection() async {

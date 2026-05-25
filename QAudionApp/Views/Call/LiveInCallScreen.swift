@@ -165,6 +165,8 @@ struct LiveInCallScreen: View {
                 onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
                 onToggleCamera: handleToggleCamera,
                 onUpgradeToVideo: handleUpgradeToVideo,
+                screenSharing: appState.isScreenSharing,
+                onToggleScreenShare: handleToggleScreenShare,
                 onAddParticipant: {},
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
@@ -199,6 +201,18 @@ struct LiveInCallScreen: View {
     private func handleUpgradeToVideo() {
         cameraOn = true
         appState.upgradeToVideo()
+    }
+
+    /// W533: toggle screen-share. Tapping while not sharing requests
+    /// the ReplayKit capture; tapping again stops it and restores
+    /// the camera. Both branches dispatch into AppState which owns
+    /// the WebRTC capturer + ScreenShareController.
+    private func handleToggleScreenShare() {
+        if appState.isScreenSharing {
+            Task { @MainActor in await appState.stopScreenShare() }
+        } else {
+            Task { @MainActor in await appState.startScreenShare() }
+        }
     }
 
     private func handleHangup() {
