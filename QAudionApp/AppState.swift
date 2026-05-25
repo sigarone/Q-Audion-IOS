@@ -126,6 +126,12 @@ final class AppState: ObservableObject {
     /// SECURITY C-6: cert-pinned URLSession for VoIP push token registration.
     /// Lazy — created once on first use against the server URL configured at
     /// login time. Avoids per-call URLSession + thread-pool allocation.
+    ///
+    /// NOTE: captures `serverUrl` at first access (i.e. first push-token
+    /// registration after login). `serverUrl` is always `PinnedServerHost.url`
+    /// today (see line ~275 comment). If serverUrl ever becomes genuinely
+    /// reconfigurable, this property must be reset to nil between logins so
+    /// the next registration pins against the new host.
     private lazy var voipPushSession: URLSession = PinnedURLSession.make(for: serverUrl)
 
     // MARK: - Call state
