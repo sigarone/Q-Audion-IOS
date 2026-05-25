@@ -11,6 +11,7 @@ struct ContactRow: View {
     let presence: PresenceDot?
     let onChatTap: () -> Void
     let onCallTap: () -> Void
+    let onVideoCallTap: () -> Void
 
     @State private var pulsing = false
 
@@ -18,12 +19,14 @@ struct ContactRow: View {
          extensionLabel: String? = nil,
          presence: PresenceDot? = nil,
          onChatTap: @escaping () -> Void = {},
-         onCallTap: @escaping () -> Void = {}) {
+         onCallTap: @escaping () -> Void = {},
+         onVideoCallTap: @escaping () -> Void = {}) {
         self.item = item
         self.extensionLabel = extensionLabel
         self.presence = presence
         self.onChatTap = onChatTap
         self.onCallTap = onCallTap
+        self.onVideoCallTap = onVideoCallTap
     }
 
     private var resolvedPresence: PresenceDot {
@@ -100,6 +103,14 @@ struct ContactRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Chiama \(item.displayName)")
+
+                Button(action: onVideoCallTap) {
+                    Image(systemName: "video")
+                        .font(.system(size: 17))
+                        .foregroundStyle(scheme.primary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Videochiama \(item.displayName)")
             }
         }
         .padding(.vertical, 4)

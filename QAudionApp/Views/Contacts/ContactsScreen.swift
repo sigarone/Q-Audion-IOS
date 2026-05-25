@@ -294,7 +294,8 @@ struct ContactsScreen: View {
                                        presence: appState.presenceService.isOnline(item.userId) ? .online :
                                                  (appState.presenceService.status(for: item.userId) == .offline ? .offline : nil),
                                        onChatTap: { openChat(item) },
-                                       onCallTap: { openCall(item) })
+                                       onCallTap: { openCall(item) },
+                                       onVideoCallTap: { openVideoCall(item) })
                         }
                         .listRowBackground(scheme.background)
                     }
@@ -436,6 +437,10 @@ struct ContactsScreen: View {
 
     private func openCall(_ item: ContactsListViewModel.Item) {
         Task { await appState.startCall(contactId: item.userId, video: false) }
+    }
+
+    private func openVideoCall(_ item: ContactsListViewModel.Item) {
+        Task { await appState.startCall(contactId: item.userId, video: true) }
     }
 }
 
