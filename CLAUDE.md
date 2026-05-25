@@ -33,7 +33,7 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 
 1. Open the failed run on GitHub Actions: https://github.com/sigarone/Q-Audion-IOS/actions
 2. The "Diagnose Swift compile (raw xcodebuild)" step (when present) uploads `diag.log` as an artifact — read it before guessing.
-3. Do NOT push tags repeatedly to "see if it works" — Pavel pays for macOS minutes. Reproduce locally with `xcodebuild` if possible.
+3. Do NOT push tags repeatedly to "see if it works" — macOS runner minutes cost money. Reproduce locally with `xcodebuild` if possible.
 
 ## ⚡ AUTOMATION RULE — iOS runtime log fetch (auto-pump v1.0.398+)
 
@@ -51,13 +51,12 @@ qaudion-live-<userIdPrefix8>-<bootSessionUUID>-<seqZeroPad6>.log
 you MUST AUTOMATICALLY run:
 
 ```bash
-cd D:/users/f10379a/DEV\ APP/BCRYPTO/apps/qaudion-ios
 python scripts/fetch-ios-live.py --minutes 60 --limit 80
 ```
 
 The script:
-1. SSH to the IONOS VPS using credentials from
-   `apps/bcrypto-server/VPS_ACCESS.md` (root@217.160.65.35 + password)
+1. SSH to the VPS using credentials from
+   `apps/bcrypto-server/VPS_ACCESS.md` or env vars `QAUDION_VPS_HOST/USER/PASS`
 2. Lists files modified in the last N minutes under `/opt/bcrypto/data/files/`
    (sharded `<id[0:2]>/<id>` layout — server discards original
    filenames, every blob is a UUID)
@@ -72,10 +71,10 @@ The full dump is the primary diagnostic source — every line has a
 millisecond timestamp + level + tag + message, so call/dial/crypto
 flow can be reconstructed exactly.
 
-**Auth:** the script reads `apps/bcrypto-server/VPS_ACCESS.md` for
-SSH credentials. They are in plain text in the bcrypto-server repo
-(NOT in the iOS repo). If you don't have BCrypto repo cloned, the
-fallback is the older `scripts/fetch-ios-log.sh` which uses
+**Auth:** the script reads VPS credentials from env vars
+`QAUDION_VPS_HOST` / `QAUDION_VPS_USER` / `QAUDION_VPS_PASS`, or
+falls back to `apps/bcrypto-server/VPS_ACCESS.md` (private repo, not
+in the iOS repo). Fallback: `scripts/fetch-ios-log.sh` uses
 `QAUDION_USER_TOKEN` env var to fetch a single fileId via REST.
 
 **Why the auto-pump exists:** user reported 2026-05-03 that the
@@ -91,9 +90,8 @@ SSH. Until that's done, SSH+SFTP is the working path.
 
 - **Repo:** `github.com/sigarone/Q-Audion-IOS`
 - **Platform:** iOS 16.0+ / iPadOS 16.0+, Xcode 16.2
-- **Team:** `5G22P9239N` (DEVELOPER, paid Apple Developer account)
+- **Team:** configured in GitHub Secrets (paid Apple Developer account)
 - **Bundle id:** `com.qaudion.app`
-- **App Store Connect App Apple ID:** `REDACTED_APP_ID`
 - **Current status:** ✅ Distribution pipeline green; app v1.0.0 (build 1) is on TestFlight and installed on the internal testers' devices.
 
 ### Top-level layout
@@ -176,9 +174,9 @@ Distribution certificate and App Store provisioning profile via the
 Apple API. Only **Admin** role keys can do this. App Manager /
 Developer roles cannot.
 
-The current working key Id is `REDACTED_KEY_ID`. If it's ever revoked, the
-replacement MUST be Admin-role and the new value goes in the
-`APP_STORE_CONNECT_KEY_IDENTIFIER` GitHub secret.
+The current working Key ID is stored in the `APP_STORE_CONNECT_KEY_IDENTIFIER`
+GitHub secret. If it's ever revoked, the replacement MUST be Admin-role
+and the new value goes in that same secret.
 
 ### 3. Distribution cert private key must be supplied
 
@@ -186,10 +184,9 @@ replacement MUST be Admin-role and the new value goes in the
 CSR. GitHub Secret `CERTIFICATE_PRIVATE_KEY` stores it in PEM format
 (with `-----BEGIN PRIVATE KEY-----` / `-----END PRIVATE KEY-----`).
 
-The PEM source of truth lives OUTSIDE the repo at
-`D:\users\f10379a\DEV APP\BCRYPTO\cert\distribution_cert_key.pem`.
-**Never commit it.** If lost, a new Distribution cert must be revoked
-& recreated (Apple allows max 2 per team).
+The PEM source of truth lives OUTSIDE the repo (local developer
+machine only). **Never commit it.** If lost, a new Distribution cert
+must be revoked & recreated (Apple allows max 2 per team).
 
 The correct CLI flag is `--certificate-key "@file:$CERT_KEY_PATH"`,
 NOT `--certificate-key-path`.

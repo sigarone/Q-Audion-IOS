@@ -24,7 +24,8 @@ Output:
 
 Requires:
   - paramiko (`pip install paramiko`)
-  - Server SSH password from VPS_ACCESS.md
+  - VPS credentials in VPS_ACCESS.md (bcrypto-server repo) or env vars:
+      QAUDION_VPS_HOST, QAUDION_VPS_USER, QAUDION_VPS_PASS
 """
 
 import os
@@ -42,9 +43,35 @@ except ImportError:
     sys.exit(1)
 
 
-VPS_HOST = "217.160.65.35"
-VPS_USER = "root"
-VPS_PASS = "REDACTED"
+def _load_vps_creds():
+    """Load VPS credentials from environment variables or VPS_ACCESS.md."""
+    host = os.environ.get("QAUDION_VPS_HOST")
+    user = os.environ.get("QAUDION_VPS_USER")
+    password = os.environ.get("QAUDION_VPS_PASS")
+    if host and user and password:
+        return host, user, password
+
+    # Fall back to VPS_ACCESS.md in sibling bcrypto-server repo
+    candidates = [
+        Path(__file__).parent.parent.parent / "bcrypto-server" / "VPS_ACCESS.md",
+        Path.home() / "DEV APP" / "BCRYPTO" / "apps" / "bcrypto-server" / "VPS_ACCESS.md",
+    ]
+    for p in candidates:
+        if p.exists():
+            text = p.read_text(encoding="utf-8")
+            h = re.search(r"\*\*IP\*\*:\s*(\S+)", text)
+            u = re.search(r"\*\*SSH\*\*:\s*(\w+)@", text)
+            pw = re.search(r"\*\*Password root\*\*:\s*(\S+)", text)
+            if h and u and pw:
+                return h.group(1), u.group(1), pw.group(1)
+
+    print("ERROR: VPS credentials not found.", file=sys.stderr)
+    print("Set env vars QAUDION_VPS_HOST / QAUDION_VPS_USER / QAUDION_VPS_PASS", file=sys.stderr)
+    print("or place VPS_ACCESS.md in the bcrypto-server sibling repo.", file=sys.stderr)
+    sys.exit(1)
+
+
+VPS_HOST, VPS_USER, VPS_PASS = _load_vps_creds()
 DATA_DIR = "/opt/bcrypto/data/files"
 SERVICE_LOG_LINES = 50  # also fetch last N journalctl lines for context
 
