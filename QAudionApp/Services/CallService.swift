@@ -757,8 +757,26 @@ final class CallService {
             let effectiveWs = wsClient ?? getWsClient?()
             let effectivePeer = peerUserId ?? getPeerId?()
             if let ws = effectiveWs, let peer = effectivePeer {
+                // W522 — when the W476 lazy fallback rescues TX (wireTransport
+                // was never called because liveProvider was nil at startCall),
+                // we ALSO need to register the audio_frame RX handler. Without
+                // this branch the iPad encrypts+sends correctly but never sees
+                // any inbound audio_frame from the peer: the symptom is the
+                // remote side hears us but we hear silence (confirmed in
+                // session bbe9a2ff, 1.0.520 — TX heartbeat reaches 3000 frames
+                // while RX heartbeat is never emitted).
+                let needsRxRegistration: Bool = (wsClient == nil)
                 if wsClient == nil { wsClient = ws }
                 if peerUserId == nil { peerUserId = peer }
+                if needsRxRegistration {
+                    ws.registerHandler(type: "audio_frame") { [weak self] _, data in
+                        guard let self,
+                              let b64 = data["frame"] as? String,
+                              let frameData = Data(base64Encoded: b64) else { return }
+                        self.handleIncomingEncryptedFrame(frameData)
+                    }
+                    print("[CallService] W522: lazy audio_frame RX handler registered (fallback path)")
+                }
                 // W469 — emit the cross-platform wire format. The engine's
                 // `processOutgoingAudio` always serialises the iOS-native
                 // `FrameEncoder` container; Android peers on the relay can

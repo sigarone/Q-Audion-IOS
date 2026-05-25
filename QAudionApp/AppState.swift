@@ -3194,9 +3194,22 @@ final class AppState: ObservableObject {
     /// (a WS video-upgrade message will be added when the server supports it).
     func upgradeToVideo() {
         guard isInCall, !isVideoCall else { return }
+        guard let peerId = callContactId, !peerId.isEmpty else {
+            RTLog.warn("call", "upgradeToVideo: callContactId nil — aborting")
+            return
+        }
         isVideoCall = true
         setCamera(true)
-        RTLog.info("call", "upgradeToVideo: starting local video pipeline")
+        RTLog.info("call", "upgradeToVideo: starting local video pipeline for peer " + peerId.prefix(8).description + "…")
+        // W522 — the previous implementation only flipped isVideoCall and
+        // turned the camera on. That brought up the local preview (so the
+        // user thought it was working) but neither encoded outgoing video
+        // fragments nor registered the WS `video_frame` RX handler. Result:
+        // both sides saw a black remote video. Now we kick off the same
+        // pipeline that startCall(video:true) uses.
+        Task { @MainActor [weak self] in
+            await self?.startVideoPipeline(for: peerId)
+        }
     }
 
     func testConnection() async {
