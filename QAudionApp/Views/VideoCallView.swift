@@ -373,14 +373,19 @@ struct VideoCallView: View {
         videoDiagRow("AUDIO RX",  appState.callService.framesDecryptedRx.description)
     }
 
+    // Helpers — build strings outside @ViewBuilder to avoid String(Int)
+    // overload timeout on Xcode 26.4 (CLAUDE.md §13 v1.0.255).
+    private static func videoLatencyString(_ ms: Int) -> String {
+        guard ms > 0 else { return "n/d" }
+        return ms.description + " ms"
+    }
+
     @ViewBuilder
     private var videoDiagFrameCounters: some View {
         let hasPipeline = appState.videoPipeline != nil
         let pipelineState = hasPipeline ? "attiva" : "inattiva"
         let rekeyVal = appState.rekeyCount.description
-        let latencyVal: String = appState.latencyMs > 0
-            ? appState.latencyMs.description + " ms"
-            : "n/d"
+        let latencyVal = Self.videoLatencyString(appState.latencyMs)
         videoDiagRow("PIPELINE VIDEO", pipelineState)
         videoDiagRow("REKEY",          rekeyVal)
         videoDiagRow("LATENZA RELAY",  latencyVal)

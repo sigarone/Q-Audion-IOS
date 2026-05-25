@@ -273,14 +273,19 @@ struct LiveInCallScreen: View {
         diagRow("MODO",     label)
     }
 
+    // Helpers to avoid String(Int) overload-resolution timeout in @ViewBuilder
+    // (CLAUDE.md §13 v1.0.255). All string building happens outside ViewBuilder.
+    private static func latencyString(_ ms: Int) -> String {
+        guard ms > 0 else { return "n/d" }
+        return ms.description + " ms"
+    }
+
     @ViewBuilder
     private var diagPanelFrameCounters: some View {
         let txVal = appState.callService.framesEncryptedTx.description
         let rxVal = appState.callService.framesDecryptedRx.description
         let rekeyVal = appState.rekeyCount.description
-        let latencyVal: String = appState.latencyMs > 0
-            ? appState.latencyMs.description + " ms"
-            : "n/d"
+        let latencyVal = Self.latencyString(appState.latencyMs)
         diagRow("TX FRAME CIFRATI",   txVal)
         diagRow("RX FRAME DECIFRATI", rxVal)
         diagRow("REKEY",              rekeyVal)
