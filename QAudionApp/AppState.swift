@@ -123,6 +123,10 @@ final class AppState: ObservableObject {
     /// the registration succeeds, subsequent re-emits (rotation /
     /// reinstall) hit `registerVoipPushToken` directly.
     private var pendingVoipPushTokenHex: String?
+    /// SECURITY C-6: cert-pinned URLSession for VoIP push token registration.
+    /// Lazy — created once on first use against the server URL configured at
+    /// login time. Avoids per-call URLSession + thread-pool allocation.
+    private lazy var voipPushSession: URLSession = PinnedURLSession.make(for: serverUrl)
 
     // MARK: - Call state
     @Published var isInCall: Bool = false
@@ -903,10 +907,11 @@ final class AppState: ObservableObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = bodyData
         // SECURITY C-6 — cert-pinned session for push token registration.
-        let pinnedSession = PinnedURLSession.make(for: serverUrl)
-        Task { [weak self, hex, pinnedSession] in
+        // Capture the lazy session once; avoids per-call URLSession allocation.
+        let session = voipPushSession
+        Task { [weak self, hex, session] in
             do {
-                let (_, resp) = try await pinnedSession.data(for: req)
+                let (_, resp) = try await session.data(for: req)
                 if let http = resp as? HTTPURLResponse {
                     if (200..<300).contains(http.statusCode) {
                         // C-10: token registered OK — do NOT log any

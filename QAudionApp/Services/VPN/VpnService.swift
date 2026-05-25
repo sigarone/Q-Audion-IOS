@@ -65,6 +65,17 @@ final class VpnService: ObservableObject {
 
     // MARK: - Public API
 
+    /// Fetches the list of available VPN nodes.
+    ///
+    /// Convenience wrapper over `VpnApiService.getNodes` so external callers
+    /// (e.g. `VpnToggleChip`) don't need their own `VpnApiService` instance
+    /// and the associated URLSession allocation.
+    ///
+    /// - Parameter accessToken: The user's current session access token.
+    func fetchNodes(accessToken: String) async throws -> [VpnNode] {
+        try await api.getNodes(accessToken: accessToken)
+    }
+
     /// Connect to the given VPN node.
     ///
     /// - Parameters:
