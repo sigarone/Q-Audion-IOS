@@ -374,8 +374,9 @@ struct EarbudDiagScreen: View {
     // MARK: - Device list
 
     private var deviceListSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SettingsSectionHeader("DISPOSITIVI RILEVATI (\(vm.discoveredEarbuds.count))")
+        let header = "DISPOSITIVI RILEVATI (" + String(describing: vm.discoveredEarbuds.count) + ")"
+        return VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader(header)
             ForEach(vm.discoveredEarbuds) { earbud in
                 earbudRow(earbud)
             }
@@ -396,7 +397,7 @@ struct EarbudDiagScreen: View {
                     Text(earbud.name)
                         .qaudionStyle(type.bodyMedium)
                         .foregroundStyle(scheme.onSurface)
-                    let rssiStr = String(earbud.rssi) + " dBm"
+                    let rssiStr = String(describing: earbud.rssi) + " dBm"
                     Text(rssiStr)
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
@@ -436,19 +437,38 @@ struct EarbudDiagScreen: View {
         }
     }
 
+    // Pre-build all metric strings outside @ViewBuilder to avoid String(Int)
+    // overload-resolution timeouts (CLAUDE.md §13 v1.0.255+).
+    private func heapLabel(_ m: EarbudDiagViewModel.EarbudMetrics) -> String {
+        let free = String(describing: m.heapFree / 1024)
+        let total = String(describing: m.heapTotal / 1024)
+        return free + " / " + total + " KB"
+    }
+    private func cpuLabel(_ m: EarbudDiagViewModel.EarbudMetrics) -> String {
+        String(describing: m.cpuPercent) + "%"
+    }
+    private func cracenLabel(_ m: EarbudDiagViewModel.EarbudMetrics) -> String {
+        String(describing: m.cracenOps) + " ops"
+    }
+    private func axonLabel(_ m: EarbudDiagViewModel.EarbudMetrics) -> String {
+        "AXON " + m.axonState
+    }
+
     private func metricsCard(
         _ m: EarbudDiagViewModel.EarbudMetrics,
         heapPct: Double
     ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let heapStr = heapLabel(m)
+        let cpuStr = cpuLabel(m)
+        let cracenStr = cracenLabel(m)
+        let axonStr = axonLabel(m)
+        return VStack(alignment: .leading, spacing: 12) {
             // HEAP row
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     metricLabel("HEAP")
                     Spacer()
-                    let freeKb = String(m.heapFree / 1024) + " / "
-                    let totalKb = String(m.heapTotal / 1024) + " KB"
-                    Text(freeKb + totalKb)
+                    Text(heapStr)
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurface)
                         .monospacedDigit()
@@ -461,9 +481,9 @@ struct EarbudDiagScreen: View {
 
             // CPU + CRACEN row
             HStack(spacing: 0) {
-                metricColumn("CPU", value: String(m.cpuPercent) + "%")
+                metricColumn("CPU", value: cpuStr)
                 Spacer()
-                metricColumn("CRACEN", value: String(m.cracenOps) + " ops")
+                metricColumn("CRACEN", value: cracenStr)
                 Spacer()
                 metricColumn("FW", value: m.firmwareVersion)
             }
@@ -474,7 +494,7 @@ struct EarbudDiagScreen: View {
             HStack(spacing: 16) {
                 statusChip("PDM", active: m.pdmActive)
                 statusChip("TDM", active: m.tdmActive)
-                statusChip("AXON " + m.axonState, active: m.axonState != "idle")
+                statusChip(axonStr, active: m.axonState != "idle")
                 Spacer()
             }
         }
