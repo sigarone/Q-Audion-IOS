@@ -155,6 +155,29 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         pendingFrames.removeValue(forKey: frameId)
         // W398: count completed frames for loss-rate denominator.
         framesReceivedInWindow &+= 1
+        // W524: track per-frame reassembly latency + inter-arrival
+        // jitter as local proxies for the (latencyMs, jitterMs) fields
+        // Android's AdaptiveBitrateController uses. We don't have RTCP
+        // feedback on the WS relay path so a remote RTT isn't available;
+        // the reassembly tail (time from first fragment to last
+        // fragment) is a usable proxy for transport jitter because it
+        // grows with both packet delay variance and reorder. Inter-
+        // arrival jitter is the std deviation of completion times
+        // computed via Welford's online algorithm.
+        let nowMsForStats = Int64(Date().timeIntervalSince1970 * 1000)
+        let reassemblyMs = max(Int64(0), nowMsForStats - pending.startTimeMs)
+        latencySumMs &+= reassemblyMs
+        latencySamplesInWindow &+= 1
+        if lastCompletionTimeMs > 0 {
+            let gap = Double(nowMsForStats - lastCompletionTimeMs)
+            // Welford's online variance: tracks running mean and m2 for
+            // gap-time, and we publish stddev at window close.
+            jitterCount += 1
+            let delta = gap - jitterMean
+            jitterMean += delta / Double(jitterCount)
+            jitterM2 += delta * (gap - jitterMean)
+        }
+        lastCompletionTimeMs = nowMsForStats
 
         // Reassemble NAL unit.
         let totalSize = pending.fragments.reduce(0) { $0 + ($1?.count ?? 0) }
@@ -198,6 +221,15 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
 
     private var framesReceivedInWindow: Int = 0
     private var framesLostInWindow: Int = 0
+    // W524: latency / jitter rolling state. See `defragment` for the
+    // online update; published values are averaged over the window and
+    // reset on each `consumeAbrSample()` call.
+    private var latencySumMs: Int64 = 0
+    private var latencySamplesInWindow: Int = 0
+    private var lastCompletionTimeMs: Int64 = 0
+    private var jitterMean: Double = 0
+    private var jitterM2: Double = 0
+    private var jitterCount: Int = 0
 
     /// W398 — read and reset the sliding-window loss counters. Called
     /// by AbrController every `abrSampleIntervalMs` to compute recent
@@ -211,6 +243,34 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         framesReceivedInWindow = 0
         framesLostInWindow = 0
         return (r, l)
+    }
+
+    /// W524 — extended ABR sample including latency + jitter proxies.
+    /// Resets the window after read. avgLatencyMs is the mean
+    /// reassembly tail (first fragment → completion) over the window;
+    /// jitterMs is the std deviation of inter-arrival times of
+    /// successfully-reassembled frames. Both are 0 when the window
+    /// had no completed frames (caller should fall back to the
+    /// loss-only loop in that case).
+    public func consumeAbrSampleExtended() -> (received: Int, lost: Int, avgLatencyMs: Int64, jitterMs: Double) {
+        lock.lock()
+        defer { lock.unlock() }
+        let r = framesReceivedInWindow
+        let l = framesLostInWindow
+        let avgLat: Int64 = latencySamplesInWindow > 0
+            ? latencySumMs / Int64(latencySamplesInWindow) : 0
+        let jitter: Double = jitterCount > 1
+            ? (jitterM2 / Double(jitterCount - 1)).squareRoot() : 0
+        framesReceivedInWindow = 0
+        framesLostInWindow = 0
+        latencySumMs = 0
+        latencySamplesInWindow = 0
+        jitterMean = 0
+        jitterM2 = 0
+        jitterCount = 0
+        // Keep lastCompletionTimeMs so the next window's first jitter
+        // sample is a real inter-arrival from this window's last frame.
+        return (r, l, avgLat, jitter)
     }
 
     public var pendingFrameCount: Int {

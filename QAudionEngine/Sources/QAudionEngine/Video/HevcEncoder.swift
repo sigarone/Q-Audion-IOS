@@ -31,10 +31,14 @@ public final class HevcEncoder: @unchecked Sendable {
         case sessionNotInitialised
     }
 
-    public let width: Int
-    public let height: Int
-    public let bitrateBps: Int
-    public let fps: Int
+    // W524: these are no longer `let` so the ABR controller can adjust
+    // bitrate / fps mid-stream and resolution stepping can recreate
+    // the VTCompressionSession at a new size. All four still default
+    // to VideoConstants.* in the initialiser.
+    public private(set) var width: Int
+    public private(set) var height: Int
+    public private(set) var bitrateBps: Int
+    public private(set) var fps: Int
     /// Keyframe interval in seconds.
     public let keyframeIntervalSec: Int
 
@@ -167,6 +171,7 @@ public final class HevcEncoder: @unchecked Sendable {
                           min(VideoConstants.maxVideoBitrateBps, newBps))
         lock.lock()
         guard let session = session else { lock.unlock(); return }
+        bitrateBps = clamped
         lock.unlock()
         let status = VTSessionSetProperty(
             session,
@@ -175,6 +180,50 @@ public final class HevcEncoder: @unchecked Sendable {
         if status != noErr {
             print("[HevcEncoder] setBitrate(\(clamped)) failed status=\(status)")
         }
+    }
+
+    /// W524 — adjust expected frame rate mid-stream. Bounded to a sane
+    /// VoIP range so the ABR controller cannot push the encoder into
+    /// degenerate states. Note: the AVCaptureSession upstream still
+    /// delivers frames at its own native cadence — this hint only
+    /// affects rate-control (the encoder spends fewer bits on motion
+    /// estimation when the expected rate is lower, which preserves
+    /// per-frame quality at the bitrate budget the ABR set).
+    public func setFps(_ newFps: Int) {
+        let clamped = max(5, min(60, newFps))
+        lock.lock()
+        guard let session = session else { lock.unlock(); return }
+        fps = clamped
+        lock.unlock()
+        let status = VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_ExpectedFrameRate,
+            value: NSNumber(value: clamped))
+        if status != noErr {
+            print("[HevcEncoder] setFps(\(clamped)) failed status=\(status)")
+        }
+    }
+
+    /// W524 — recreate the VTCompressionSession at a new resolution.
+    /// VideoToolbox does not allow width/height to change on a live
+    /// session, so this tears down the current session and rebuilds
+    /// it at the new dimensions. Caller MUST also update the upstream
+    /// AVCaptureSession preset so the pixel buffers match. The new
+    /// session inherits the current bitrate / fps / keyframe interval.
+    public func setResolution(width newW: Int, height newH: Int) throws {
+        guard newW > 0, newH > 0 else { return }
+        // Save / restore bitrate + fps across the session recreation so
+        // the ABR controller's last decision isn't reverted by the
+        // tear-down. keyframeIntervalSec is `let` so it carries over
+        // implicitly without an explicit save/restore.
+        let oldFps = self.fps
+        let oldBps = self.bitrateBps
+        invalidate()
+        self.width = newW
+        self.height = newH
+        self.bitrateBps = oldBps
+        self.fps = oldFps
+        try start()
     }
 
     /// Flush any queued frames and emit them through `onNal`.

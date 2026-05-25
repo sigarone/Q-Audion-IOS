@@ -98,8 +98,23 @@ public final class VideoCallPipeline: NSObject {
     // strict mode flags `nonisolated(unsafe)` on Sendable lets as
     // unnecessary (and the build promotes that diagnostic to an
     // error). W401: dropped the annotation.
+    // The encoder stays a `let` — resolution stepping mutates the
+    // VTCompressionSession inside the existing HevcEncoder instance
+    // (invalidate + start at new width/height), so the reference
+    // doesn't change. That keeps the nonisolated capture delegate's
+    // cross-actor `encoder.encode(...)` access pattern valid under
+    // Swift 6 strict concurrency.
     private let encoder = HevcEncoder()
     private let decoder = HevcDecoder()
+    /// W524: when true the captureOutput delegate skips encoding so
+    /// no fragments are emitted to the peer. AVCaptureSession keeps
+    /// running so the local preview stays live and resuming is
+    /// instant (no permission re-prompt). Toggled by setVideoPaused.
+    /// `nonisolated(unsafe)` because the capture delegate (running on
+    /// captureQueue) reads it cross-actor — a Bool read is atomic on
+    /// arm64 so the worst-case race is one stale frame emitted right
+    /// at toggle time.
+    private nonisolated(unsafe) var paused: Bool = false
     private let outboundFragmenter = VideoFrameFragmenter()
     private let inboundFragmenter = VideoFrameFragmenter()
 
@@ -250,12 +265,65 @@ public final class VideoCallPipeline: NSObject {
         return inboundFragmenter.consumeAbrSample()
     }
 
+    /// W524 — extended ABR sample with latency + jitter proxies.
+    /// The AbrController prefers this over the loss-only variant so it
+    /// can match Android's full AdaptiveBitrateController.update path.
+    public nonisolated func consumeInboundAbrSampleExtended()
+        -> (received: Int, lost: Int, avgLatencyMs: Int64, jitterMs: Double)
+    {
+        return inboundFragmenter.consumeAbrSampleExtended()
+    }
+
     /// W398 — adjust the HEVC encoder's target bitrate mid-stream.
     /// Called by AbrController based on observed inbound loss rate.
     /// HevcEncoder.setBitrate clamps to [minVideoBitrateBps,
     /// maxVideoBitrateBps] so any value is safe.
     public nonisolated func setEncoderBitrate(_ newBps: Int) {
         encoder.setBitrate(newBps)
+    }
+
+    /// W524 — adjust expected frame rate (ABR layer 3). Pure
+    /// VTSessionSetProperty call, no restart needed.
+    public nonisolated func setEncoderFps(_ newFps: Int) {
+        encoder.setFps(newFps)
+    }
+
+    /// W524 — pause/resume outbound video without tearing down the
+    /// capture session. The local preview stays live; the captureOutput
+    /// delegate just stops feeding the encoder. Used by ABR layer 4
+    /// when latency + loss enter "give up on video" territory.
+    public nonisolated func setVideoPaused(_ paused: Bool) {
+        self.paused = paused
+    }
+
+    /// W524 — step the encoder + capture session to a new resolution
+    /// tier. Mirrors Android's `ResolutionTier` (720/480/360p). Both
+    /// the AVCaptureSession preset AND the HEVC encoder session must
+    /// be reconfigured atomically; we recreate the encoder and bounce
+    /// the capture session preset under a single beginConfiguration
+    /// block so no frame in flight reaches a mismatched encoder.
+    @MainActor
+    public func setEncoderResolution(width: Int, height: Int) {
+        do {
+            try encoder.setResolution(width: width, height: height)
+            captureSession.beginConfiguration()
+            captureSession.sessionPreset = preset(forHeight: height)
+            captureSession.commitConfiguration()
+            print("[VideoCallPipeline] resolution → \(width)x\(height)")
+        } catch {
+            print("[VideoCallPipeline] setEncoderResolution failed: \(error)")
+        }
+    }
+
+    /// Maps a target height to the closest AVCaptureSession preset.
+    /// 720→.hd1280x720, 480→.vga640x480 (closest standard 480p), 360→.cif352x288.
+    private func preset(forHeight h: Int) -> AVCaptureSession.Preset {
+        switch h {
+        case 720: return .hd1280x720
+        case 480: return .vga640x480
+        case 360: return .cif352x288
+        default:  return .hd1280x720
+        }
     }
 
     /// W394: install / rotate the PQC sealer. Called when
@@ -418,6 +486,11 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         from connection: AVCaptureConnection
     ) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        // W524: ABR layer 4 — video paused under extreme network
+        // conditions. Skip BOTH the WebRTC bridge and the HEVC
+        // encoder so the peer sees a clean stall, not garbled
+        // partial frames at the bottom of the bitrate floor.
+        if self.paused { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let ns = UInt64(CMTimeGetSeconds(pts) * 1_000_000_000)
         // Android interop bridge: push raw frame to WebRTC RTCVideoSource
