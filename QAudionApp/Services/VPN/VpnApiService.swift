@@ -9,6 +9,7 @@
 //   POST /api/v1/vpn/wg-register    → WgConfigResponse
 
 import Foundation
+import QAudionEngine
 
 enum VpnApiError: LocalizedError {
     case httpError(Int, String)
@@ -26,6 +27,11 @@ enum VpnApiError: LocalizedError {
 
 struct VpnApiService {
     private static let base = URL(string: "https://voip.bcrypto.com/api/v1")!
+    // URLSession retains CertPinningDelegate internally, so this is safe
+    // after the temporary BCryptoRestClient is released.
+    private static let pinnedSession: URLSession = BCryptoRestClient(
+        config: BackendConfig.pinned(serverUrl: PinnedServerHost.url)
+    ).urlSession
     private let decoder: JSONDecoder = JSONDecoder()
 
     // MARK: - Fetch helpers
@@ -59,7 +65,7 @@ struct VpnApiService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await Self.pinnedSession.data(for: req)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw VpnApiError.httpError(http.statusCode, body)

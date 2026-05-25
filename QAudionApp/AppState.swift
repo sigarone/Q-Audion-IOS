@@ -481,6 +481,20 @@ final class AppState: ObservableObject {
                     if self.callState == .ringing {
                         self.callState = .active
                     }
+                    // W521: sasReadyNotification may have fired during the
+                    // ringing phase — before the user answered. Its observer
+                    // (wireSasReadyToController) guards on callState == .active,
+                    // which was false at that point, so the .encrypted
+                    // transition was skipped. callSasKeySource is still set to
+                    // .mlKem unconditionally when the notification fires.
+                    // Catch up: if the ML-KEM handshake already completed,
+                    // advance the state machine to .encrypted right now so
+                    // the peer (Android/Desktop) doesn't time out waiting for
+                    // PQC confirmation and send call_hangup.
+                    if self.callState == .active && self.callSasKeySource == .mlKem {
+                        self.callState = .encrypted
+                        RTLog.info("call", "onAnswerCall: PQC handshake completed during ringing — state .active → .encrypted")
+                    }
                     // W450: boot audio pipeline for incoming call.
                     // Outgoing calls do this inside startCall(contactId:) →
                     // callService.startCall(engine:contactId:). For incoming
