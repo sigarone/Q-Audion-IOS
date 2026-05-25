@@ -132,7 +132,7 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
 extension EarbudDiagViewModel: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Task { @MainActor in
-            if central.state == .unauthorized || central.state == .denied {
+            if central.state == .unauthorized {
                 self.blePermissionDenied = true
             }
         }

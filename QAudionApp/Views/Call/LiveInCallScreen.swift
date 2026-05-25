@@ -255,16 +255,20 @@ struct LiveInCallScreen: View {
         }
     }
 
+    // Helper — pure function so @ViewBuilder never sees a switch that returns ().
+    private func diagTransportPath(_ mode: InCallScreen.TransportMode) -> String {
+        switch mode {
+        case .p2pSrtp:        return "P2P SRTP · UDP"
+        case .turn:           return "TURN · relay"
+        case .bcryptoWsRelay: return "WSS sealed · bcrypto relay"
+        case .disconnected:   return "—"
+        }
+    }
+
     @ViewBuilder
     private var diagPanelTransport: some View {
+        let path = diagTransportPath(liveTransportMode)
         let label = liveTransportMode.label
-        let path: String
-        switch liveTransportMode {
-        case .p2pSrtp:        path = "P2P SRTP · UDP"
-        case .turn:           path = "TURN · relay"
-        case .bcryptoWsRelay: path = "WSS sealed · bcrypto relay"
-        case .disconnected:   path = "—"
-        }
         diagRow("PERCORSO", path)
         diagRow("MODO",     label)
     }
