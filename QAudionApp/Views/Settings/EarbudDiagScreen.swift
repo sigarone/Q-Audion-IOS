@@ -63,14 +63,16 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     }
 
     struct EarbudMetrics {
-        var heapFree: Int = 0
-        var heapTotal: Int = 0
+        var heapFreeKb: Int = 0
+        var heapTotalKb: Int = 0      // heapUsedKb + heapFreeKb
         var cpuPercent: Int = 0
-        var cracenOps: Int = 0
+        var hsCount: Int = 0          // legacy handshake-count proxy for CRACEN PSA ops
+        var aeadOpsTotal: UInt32? = nil  // V2 only (32-byte payload); nil on legacy firmware
         var pdmActive: Bool = false
         var tdmActive: Bool = false
-        var axonState: String = "idle"
-        var bleConnected: Bool = false
+        var axonOk: Bool = false
+        var batteryPct: Int = 0
+        var uptimeSec: Int = 0
         var firmwareVersion: String = "—"
         var lastUpdated: Date = Date()
     }
@@ -79,6 +81,11 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
 
     private var central: CBCentralManager?
     private var connectedPeripheral: CBPeripheral?
+
+    // W511: client-side CRACEN fps tracking (mirrors Android LaunchedEffect pattern).
+    @Published var cracenFps: Int? = nil
+    private var prevAeadOps: UInt32? = nil
+    private var prevAeadOpsAt: TimeInterval = 0
 
     // Q-Audion GATT service and DIAG characteristic UUIDs — canonical values from
     // qaudion-firmware/nspe/src/transport/qaudion_gatt.c (QAUDION_SVC_UUID_VAL /
@@ -170,10 +177,10 @@ extension EarbudDiagViewModel: CBCentralManagerDelegate {
         Task { @MainActor in
             self.connectionState = .connected
             self.metrics = EarbudMetrics(
-                heapFree: 0, heapTotal: 0,
-                cpuPercent: 0, cracenOps: 0,
+                heapFreeKb: 0, heapTotalKb: 0,
+                cpuPercent: 0, hsCount: 0,
                 pdmActive: false, tdmActive: false,
-                axonState: "connesso", bleConnected: true,
+                axonOk: false, batteryPct: 0, uptimeSec: 0,
                 firmwareVersion: "—", lastUpdated: Date()
             )
         }
@@ -238,22 +245,76 @@ extension EarbudDiagViewModel: CBPeripheralDelegate {
         didUpdateValueFor characteristic: CBCharacteristic,
         error: Error?
     ) {
-        guard let data = characteristic.value,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return }
+        guard error == nil, let data = characteristic.value else { return }
+        if characteristic.uuid == EarbudDiagViewModel.metricsCharUUID {
+            parseDiagPayload(data)
+        }
+    }
+
+    // MARK: - Binary DIAG parser
+    //
+    // Wire layout (little-endian packed, 28 or 32 bytes — matching Android EarbudDiag.kt):
+    //   off  0  UInt32  heap_used_kb
+    //   off  4  UInt32  heap_free_kb
+    //   off  8  UInt8   cpu_load_pct
+    //   off  9  UInt8   battery_pct
+    //   off 10  UInt8   pdm_ok
+    //   off 11  UInt8   tdm_ok
+    //   off 12  Int32   hs_count
+    //   off 16  UInt8   axon_ok
+    //   off 17  UInt8   call_state
+    //   off 18  UInt16  ble_interval_125us
+    //   off 20  Float32 deepfake_score
+    //   off 24  UInt32  uptime_sec
+    //   off 28  UInt32  aead_ops_total  (V2 / 32-byte payload only)
+    nonisolated private static func u32le(_ d: Data, _ off: Int) -> UInt32 {
+        var v: UInt32 = 0
+        _ = withUnsafeMutableBytes(of: &v) { d.copyBytes(to: $0, from: off..<(off + 4)) }
+        return UInt32(littleEndian: v)
+    }
+    nonisolated private static func u16le(_ d: Data, _ off: Int) -> UInt16 {
+        var v: UInt16 = 0
+        _ = withUnsafeMutableBytes(of: &v) { d.copyBytes(to: $0, from: off..<(off + 2)) }
+        return UInt16(littleEndian: v)
+    }
+
+    nonisolated private func parseDiagPayload(_ data: Data) {
+        let sz = data.count
+        guard sz == 28 || sz == 32 else { return }
+        let heapUsed = Int(Self.u32le(data, 0))
+        let heapFree = Int(Self.u32le(data, 4))
+        let cpuPct   = Int(data[8])
+        let batPct   = Int(data[9])
+        let pdmOk    = data[10] != 0
+        let tdmOk    = data[11] != 0
+        let hsCount  = Int(Int32(bitPattern: Self.u32le(data, 12)))
+        let axonOk   = data[16] != 0
+        let uptimeSec = Int(Self.u32le(data, 24))
+        let aeadOps: UInt32? = sz == 32 ? Self.u32le(data, 28) : nil
+        let fwVer    = metrics?.firmwareVersion ?? "—"
         Task { @MainActor in
-            var m = self.metrics ?? EarbudDiagViewModel.EarbudMetrics()
-            m.heapFree    = json["heap_free"]   as? Int ?? m.heapFree
-            m.heapTotal   = json["heap_total"]  as? Int ?? m.heapTotal
-            m.cpuPercent  = json["cpu_pct"]     as? Int ?? m.cpuPercent
-            m.cracenOps   = json["cracen_ops"]  as? Int ?? m.cracenOps
-            m.pdmActive   = json["pdm"]         as? Bool ?? m.pdmActive
-            m.tdmActive   = json["tdm"]         as? Bool ?? m.tdmActive
-            m.axonState   = json["axon"]        as? String ?? m.axonState
-            m.bleConnected = true
-            m.firmwareVersion = json["fw"]      as? String ?? m.firmwareVersion
-            m.lastUpdated = Date()
-            self.metrics = m
+            // fps computation: unsigned delta with 2^32 wrap (mirrors Android unsignedDelta32)
+            if let curr = aeadOps {
+                let now = Date().timeIntervalSinceReferenceDate
+                if let prev = self.prevAeadOps, self.prevAeadOpsAt > 0 {
+                    let delta = curr &- prev
+                    let dt = now - self.prevAeadOpsAt
+                    self.cracenFps = dt > 0 ? Int((Double(delta) / dt).rounded()) : nil
+                } else {
+                    self.cracenFps = nil
+                }
+                self.prevAeadOps = curr
+                self.prevAeadOpsAt = now
+            } else {
+                self.cracenFps = nil
+            }
+            self.metrics = EarbudMetrics(
+                heapFreeKb: heapFree, heapTotalKb: heapUsed + heapFree,
+                cpuPercent: cpuPct, hsCount: hsCount, aeadOpsTotal: aeadOps,
+                pdmActive: pdmOk, tdmActive: tdmOk, axonOk: axonOk,
+                batteryPct: batPct, uptimeSec: uptimeSec,
+                firmwareVersion: fwVer, lastUpdated: Date()
+            )
         }
     }
 }
@@ -428,8 +489,8 @@ struct EarbudDiagScreen: View {
     // MARK: - Metrics
 
     private static func heapPercent(_ m: EarbudDiagViewModel.EarbudMetrics) -> Double {
-        guard m.heapTotal > 0 else { return 0.0 }
-        return Double(m.heapFree) / Double(m.heapTotal)
+        guard m.heapTotalKb > 0 else { return 0.0 }
+        return Double(m.heapFreeKb) / Double(m.heapTotalKb)
     }
 
     private func metricsSection(_ m: EarbudDiagViewModel.EarbudMetrics) -> some View {
@@ -441,31 +502,39 @@ struct EarbudDiagScreen: View {
         }
     }
 
-    // Pre-build all metric strings outside @ViewBuilder to avoid String(Int)
-    // overload-resolution timeouts (CLAUDE.md §13 v1.0.255+).
+    // Pre-build all metric strings outside @ViewBuilder (CLAUDE.md §13 v1.0.255+).
     private func heapLabel(_ m: EarbudDiagViewModel.EarbudMetrics) -> String {
-        let free = String(describing: m.heapFree / 1024)
-        let total = String(describing: m.heapTotal / 1024)
-        return free + " / " + total + " KB"
+        // heapFreeKb / heapTotalKb already in KB — display directly.
+        String(describing: m.heapFreeKb) + " / " + String(describing: m.heapTotalKb) + " KB"
     }
     private func cpuLabel(_ m: EarbudDiagViewModel.EarbudMetrics) -> String {
         String(describing: m.cpuPercent) + "%"
     }
+    // W511: CRACEN label — new firmware shows "ops | fps", legacy shows "×hsCount".
     private func cracenLabel(_ m: EarbudDiagViewModel.EarbudMetrics) -> String {
-        String(describing: m.cracenOps) + " ops"
+        if let ops = m.aeadOpsTotal {
+            let opsStr = String(describing: ops)
+            let fpsStr = vm.cracenFps.map { String(describing: $0) } ?? "--"
+            return opsStr + " ops | " + fpsStr + " fps"
+        }
+        return "×" + String(describing: m.hsCount)
     }
-    private func axonLabel(_ m: EarbudDiagViewModel.EarbudMetrics) -> String {
-        "AXON " + m.axonState
+    private func uptimeLabel(_ m: EarbudDiagViewModel.EarbudMetrics) -> String {
+        let h = m.uptimeSec / 3600
+        let min = (m.uptimeSec % 3600) / 60
+        let s = m.uptimeSec % 60
+        return String(describing: h) + "h " + String(describing: min) + "m " + String(describing: s) + "s"
     }
 
     private func metricsCard(
         _ m: EarbudDiagViewModel.EarbudMetrics,
         heapPct: Double
     ) -> some View {
-        let heapStr = heapLabel(m)
-        let cpuStr = cpuLabel(m)
-        let cracenStr = cracenLabel(m)
-        let axonStr = axonLabel(m)
+        let heapStr    = heapLabel(m)
+        let cpuStr     = cpuLabel(m)
+        let cracenStr  = cracenLabel(m)
+        let uptimeStr  = uptimeLabel(m)
+        let batStr     = String(describing: m.batteryPct) + "%"
         return VStack(alignment: .leading, spacing: 12) {
             // HEAP row
             VStack(alignment: .leading, spacing: 6) {
@@ -483,22 +552,31 @@ struct EarbudDiagScreen: View {
 
             Divider().background(scheme.outline.opacity(0.4))
 
-            // CPU + CRACEN row
+            // CPU / CRACEN / BAT row
             HStack(spacing: 0) {
                 metricColumn("CPU", value: cpuStr)
                 Spacer()
                 metricColumn("CRACEN", value: cracenStr)
                 Spacer()
-                metricColumn("FW", value: m.firmwareVersion)
+                metricColumn("BAT", value: batStr)
             }
 
             Divider().background(scheme.outline.opacity(0.4))
 
-            // PDM / TDM / AXON row
+            // FW / UPTIME row
+            HStack(spacing: 0) {
+                metricColumn("FW", value: m.firmwareVersion)
+                Spacer()
+                metricColumn("UPTIME", value: uptimeStr)
+            }
+
+            Divider().background(scheme.outline.opacity(0.4))
+
+            // PDM / TDM / AXON status chips
             HStack(spacing: 16) {
                 statusChip("PDM", active: m.pdmActive)
                 statusChip("TDM", active: m.tdmActive)
-                statusChip(axonStr, active: m.axonState != "idle")
+                statusChip("AXON", active: m.axonOk)
                 Spacer()
             }
         }
