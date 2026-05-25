@@ -90,8 +90,12 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     // Q-Audion GATT service and DIAG characteristic UUIDs — canonical values from
     // qaudion-firmware/nspe/src/transport/qaudion_gatt.c (QAUDION_SVC_UUID_VAL /
     // QAUDION_CH_DIAG_UUID_VAL, slot 0x90).
-    private static let serviceUUID = CBUUID(string: "f2c0aaaa-bcc0-4001-8000-000000000001")
-    private static let metricsCharUUID = CBUUID(string: "f2c0aaaa-bcc0-4001-8000-000000000090")
+    // nonisolated(unsafe): these are constants (never mutated) accessed from
+    // CBCentralManager/CBPeripheralDelegate callbacks which are nonisolated.
+    // Swift 6 strict-concurrency requires explicit opt-in for @MainActor statics
+    // referenced from nonisolated context.
+    private nonisolated(unsafe) static let serviceUUID    = CBUUID(string: "f2c0aaaa-bcc0-4001-8000-000000000001")
+    private nonisolated(unsafe) static let metricsCharUUID = CBUUID(string: "f2c0aaaa-bcc0-4001-8000-000000000090")
 
     // MARK: - Public API
 
