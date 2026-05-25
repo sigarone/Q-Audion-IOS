@@ -839,6 +839,33 @@ final class CallService {
         }
     }
 
+    /// W530 — register ONLY the inbound `audio_frame` handler on the
+    /// given WS, without touching the eager outbound fields
+    /// (`wsClient` / `peerUserId`). AppState calls this once at login
+    /// AND on every WS reconnect, so the dispatcher's
+    /// `messageHandlers["audio_frame"]` slot is always populated
+    /// before any frame can arrive — eliminating the ~5 s RX gap that
+    /// was caused by `wireTransport(wsClient:peerUserId:)` only
+    /// running at startCall/answer time when `liveProvider` happened
+    /// to be non-nil.
+    ///
+    /// Idempotent: BCryptoWebSocketClient.registerHandler replaces any
+    /// previous handler for the same type, so calling this on every
+    /// reconnect simply re-attaches the closure on the (possibly
+    /// fresh) WS instance.
+    ///
+    /// The handler dispatches to `handleIncomingEncryptedFrame` which
+    /// no-ops via the rxPreBuffer when no call integration is bound
+    /// yet (W481) — so registering early is harmless.
+    public func attachIncomingAudioHandler(wsClient: BCryptoWebSocketClient) {
+        wsClient.registerHandler(type: "audio_frame") { [weak self] _, data in
+            guard let self,
+                  let b64 = data["frame"] as? String,
+                  let frameData = Data(base64Encoded: b64) else { return }
+            self.handleIncomingEncryptedFrame(frameData)
+        }
+    }
+
     /// W67: wire del WebSocket transport per chiudere il loop audio.
     /// Chiamato da `AppState.startCall()` PRIMA di `startCall(engine:contactId:)`
     /// così la prima frame catturata può immediatamente essere instradata.

@@ -842,6 +842,21 @@ final class AppState: ObservableObject {
         }
         self.contactKeyExchange = cke
         wireOpaqueMessageHandler(on: ws, cke: cke)
+        // W530: register the audio_frame RX handler EAGERLY at login.
+        // Previously this was wired only inside startCall (caller) or
+        // startIncomingCallAudioOnAnswer (callee), both gated on
+        // `liveProvider?.getWebSocketClient()` being non-nil at the
+        // exact instant the call happened. When liveProvider was
+        // transient-nil (mid-reconnect), `wireTransport` was skipped
+        // entirely → the W522 lazy fallback registered the handler
+        // only after the first encrypted TX frame, leaving a ~5 s
+        // window in which any inbound audio_frame from the peer hit
+        // an empty `messageHandlers["audio_frame"]` slot and was
+        // silently dropped. Registering here (and again on every
+        // reconnect, see state listener below) makes the dispatcher
+        // ALWAYS able to route inbound audio to handleIncomingEncryptedFrame,
+        // which buffers (W481) if no integration is bound yet.
+        callService.attachIncomingAudioHandler(wsClient: ws)
         // Subscribe state listener so the UI can show "Connecting → Online".
         provider.persistentConnection.addStateListener { [weak self] state in
             DispatchQueue.main.async {
@@ -854,7 +869,28 @@ final class AppState: ObservableObject {
                     self?.bindPresenceAfterAuth()
                 }
                 if state == .authenticated {
+                    // W530: re-register the audio_frame handler on the
+                    // (possibly fresh) WS instance after every reconnect.
+                    // BCryptoWebSocketClient.registerHandler is idempotent
+                    // per type so this is safe to call repeatedly.
+                    if let live = self?.liveProvider {
+                        self?.callService.attachIncomingAudioHandler(
+                            wsClient: live.getWebSocketClient())
+                    }
                     self?.rewireCallAudioOnReconnect()
+                    // W531: if a handshake is in flight, re-emit the last
+                    // unACKed bundle (caller→OFFER, responder→ACCEPT)
+                    // so the bytes that may have been lost while the WS
+                    // was reconnecting are delivered. The integration
+                    // is fully idempotent at both wire and crypto
+                    // layers (sessionInitializedByCall + cached
+                    // ACCEPT) so this is safe even if the original
+                    // bundle DID arrive.
+                    if let integration = self?.callService.callIntegration {
+                        Task {
+                            await integration.replayPendingHandshake()
+                        }
+                    }
                 }
             }
         }

@@ -62,6 +62,29 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Tracks whether this client is the caller (true) or responder (false) for the
     /// current call. Used to gate pre-negotiation event handling.
     private var isCaller: Bool = false
+
+    // MARK: - W529 / W531: handshake retry & WS-reconnect replay state
+
+    /// Last serialized OFFER wire bundle (`"<callId>|<JSON>"`) actually
+    /// shipped by `onAndroidCallSetupStarted`. Stashed BEFORE the timer
+    /// arms so a retry uses byte-identical bytes (same callId, same
+    /// PQC public keys) — the responder must produce a deterministic
+    /// re-ACCEPT keyed off these bytes.
+    private var lastSentOfferWire: String?
+    /// Last serialized ACCEPT wire bundle. Re-emitted on duplicate OFFER
+    /// (so re-derivation doesn't happen and the caller decapsulates
+    /// against the SAME ciphertext we already committed to).
+    private var lastSentAcceptWire: String?
+    /// Timestamp of the first OFFER/ACCEPT send for this call. Used to
+    /// bound retries within the handshake window (default 30 s).
+    private var handshakeStartedAt: Date?
+    /// Captured caller-side sender closure so the W529 retry timer can
+    /// re-emit without AppState plumbing each retry through.
+    private var retrySenderClosure: ((String) async throws -> Void)?
+    /// W529 retry task — fires at 5 s intervals up to handshakeTimeout.
+    private var offerRetryTask: Task<Void, Never>?
+    public let handshakeTimeoutSec: Double = 30.0
+    public let offerRetryIntervalSec: UInt64 = 5
     /// Tracks whether the local UI/CallKit alert is already ringing for an
     /// incoming call. Lets `onCallRingReceived` (server "we told the caller you
     /// are ringing" ACK) fire a fallback ring only if setup was async-slow.
@@ -353,7 +376,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         //    (which their dispatcher rejects). Failure here propagates
         //    back to the caller — the JSON path is the
         //    Android-interop-critical one.
+        // W529: stash the EXACT bytes BEFORE sending so a WS-reconnect
+        // replay (W531) or a 5 s retry timer uses byte-identical
+        // bytes (same callId, same PQC pubkeys). The retry sender
+        // closure is also captured so we don't need AppState in the
+        // loop.
+        lock.withLock {
+            lastSentOfferWire = jsonWire
+            handshakeStartedAt = Date()
+            retrySenderClosure = sendOpaqueRaw
+        }
         try await sendOpaqueRaw(jsonWire)
+        // W529: arm the 5 s idempotent retry loop. Cancels on
+        // session-key install (success) or call end (handshake.reset).
+        armOfferRetryTimer()
 
         // 2. Ship the legacy QUAD binary OFFER for older iOS peers.
         //    Failure here is non-fatal for Android interop (the JSON
@@ -420,6 +456,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let accept = QAudionCapabilityExchange.createAccept(ciphertext: result.ciphertext, pskFingerprint: nil)
             Task { try? await sendOpaqueMessage(accept) }
             lock.lock(); state = .active; lock.unlock()
+            // W529: handshake reached active — kill the retry loop.
+            offerRetryTask?.cancel()
+            offerRetryTask = nil
             onStateChanged?(.active)
             // W389: surface the real ML-KEM-1024 session key so the app
             // layer can swap the W369 transitional PSK seed for the
@@ -439,6 +478,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let sharedSecret = try pqc.decapsulate(ciphertext: ciphertext, privateKey: kp.privateKey)
             try engine.initSession(sharedSecret: sharedSecret)
             lock.lock(); state = .active; lock.unlock()
+            // W529: handshake reached active — kill the retry loop.
+            offerRetryTask?.cancel()
+            offerRetryTask = nil
             onStateChanged?(.active)
             // W389: caller side — same surface as the responder branch.
             // After this fires, both ends hold the same 32 bytes for
@@ -580,20 +622,41 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 selectedPskFingerprint: selectedFp
             )
             let wire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: accept)
-            try await sendOpaqueRaw(wire)
 
-            // 8. Initialise the audio session and fire the broker hook.
-            // Double-ACCEPT guard — normalise to lowercase for case-insensitive match.
+            // W529 — stash the ACCEPT wire BEFORE checking the
+            // session-init guard so a duplicate OFFER replays this
+            // EXACT same bundle (same ciphertext, same shared secret)
+            // instead of deriving a fresh one. Re-deriving on every
+            // duplicate OFFER would produce a different ML-KEM
+            // ciphertext (encapsulation is randomized) and the caller
+            // would race between two valid-but-different ACCEPTs.
             let normalizedOId = callId.lowercased()
             let alreadyInit = lock.withLock {
                 let r = sessionInitializedByCall.contains(normalizedOId)
-                if !r { sessionInitializedByCall.insert(normalizedOId) }
+                if !r {
+                    sessionInitializedByCall.insert(normalizedOId)
+                    lastSentAcceptWire = wire
+                    if handshakeStartedAt == nil { handshakeStartedAt = Date() }
+                    // Capture the responder-side sender closure for
+                    // W531 (WS-reconnect replay) so we don't depend on
+                    // AppState re-supplying it.
+                    retrySenderClosure = sendOpaqueRaw
+                }
                 return r
             }
             if alreadyInit {
-                print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
+                // W529: idempotent replay — re-emit the SAME bundle the
+                // first OFFER produced. Caller will recognise it via
+                // their own session-init guard and discard.
+                if let cached = lock.withLock({ lastSentAcceptWire }) {
+                    print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — replaying cached ACCEPT")
+                    try await sendOpaqueRaw(cached)
+                } else {
+                    print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
+                }
                 return
             }
+            try await sendOpaqueRaw(wire)
             try engine.initialize()
             // W479 — Android peer: use AdaptivePaddingController-compatible
             // audio scheme (static session key, no AAD, 2-byte len + 120B padding).
@@ -601,6 +664,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // AdaptivePaddingController.sealAudio/openAudio.
             try engine.initSession(sharedSecret: combined, adaptivePadding: true)
             lock.withLock { state = .active }
+            // W529: handshake reached active — kill the retry loop.
+            offerRetryTask?.cancel()
+            offerRetryTask = nil
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
 
@@ -697,6 +763,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
+            // W529: caller's ACCEPT decapsulation succeeded → cancel
+            // any outstanding 5 s OFFER retry.
+            offerRetryTask?.cancel()
+            offerRetryTask = nil
         }
     }
 
@@ -819,8 +889,100 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // re-runs key generation + session init from scratch.
         sessionInitializedByCall.removeAll()
         localHybridKeysByCall.removeAll()
+        // W529 / W531: clear handshake retry state so the next call
+        // starts with a fresh stash.
+        lastSentOfferWire = nil
+        lastSentAcceptWire = nil
+        handshakeStartedAt = nil
+        retrySenderClosure = nil
         lock.unlock()
+        offerRetryTask?.cancel()
+        offerRetryTask = nil
         onStateChanged?(.idle)
+    }
+
+    // MARK: - W529: idempotent OFFER retry timer
+
+    /// Arm a 5 s retry loop that re-emits the EXACT same OFFER bundle
+    /// every interval while the handshake hasn't completed (state
+    /// stays `.capabilitySent`) and we're still inside the
+    /// handshakeTimeout window. On Android/iOS the responder's
+    /// `sessionInitializedByCall` dedup turns each duplicate OFFER
+    /// into a cached-ACCEPT replay (see W529 changes in
+    /// onAndroidBundleReceived.offer), so retries are byte-identical
+    /// at the network layer and idempotent at the crypto layer.
+    private func armOfferRetryTimer() {
+        offerRetryTask?.cancel()
+        offerRetryTask = Task { [weak self] in
+            // Wait the first interval BEFORE re-sending — the
+            // happy-path ACCEPT typically arrives in ~1 s on Wi-Fi,
+            // so retrying too eagerly would cost bandwidth.
+            let interval = self?.offerRetryIntervalSec ?? 5
+            let timeout = self?.handshakeTimeoutSec ?? 30.0
+            var elapsed: Double = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: interval * 1_000_000_000)
+                if Task.isCancelled { return }
+                elapsed += Double(interval)
+                if elapsed > timeout { return }
+                guard let self = self else { return }
+                // Snapshot the state + cached wire + sender under the lock.
+                let snapshot: (state: CallState, wire: String?, sender: ((String) async throws -> Void)?) =
+                    self.lock.withLock {
+                        (self.state, self.lastSentOfferWire, self.retrySenderClosure)
+                    }
+                // Only the caller (state still .capabilitySent) keeps
+                // retrying. As soon as the engine transitions to
+                // .active (ACCEPT decapsulated), bail out — the
+                // cancelHandshakeRetries() call from the session-key
+                // path will also fire but we don't depend on that.
+                guard snapshot.state == .capabilitySent,
+                      let wire = snapshot.wire,
+                      let sender = snapshot.sender else { return }
+                let elapsedSec: Int = Int(elapsed)
+                let logLine: String = "[QAudionCallIntegration] W529: retrying OFFER (elapsed=" + String(describing: elapsedSec) + "s)"
+                print(logLine)
+                try? await sender(wire)
+            }
+        }
+    }
+
+    /// W529 / W531: explicit cancel hook for the retry loop. Called by
+    /// AppState (or any caller path) the moment we know the handshake
+    /// has succeeded — i.e. when onPqcSessionKeyEstablished fires for
+    /// the caller, or when the call ends.
+    public func cancelHandshakeRetries() {
+        offerRetryTask?.cancel()
+        offerRetryTask = nil
+    }
+
+    // MARK: - W531: WS-reconnect handshake replay
+
+    /// Re-emit the last unACKed handshake bundle if we're still in
+    /// the handshake window. Idempotent at the wire level (caller
+    /// re-sends same OFFER bytes, responder re-sends same ACCEPT
+    /// bytes — both sides ignore dups). Called by AppState when
+    /// BCryptoWS state transitions back to `.authenticated` during a
+    /// call that's in `.capabilitySent` (caller) state OR has not yet
+    /// reached `.active` (responder).
+    public func replayPendingHandshake() async {
+        let snapshot: (started: Date?, state: CallState, offer: String?, accept: String?, isCaller: Bool, sender: ((String) async throws -> Void)?) =
+            lock.withLock {
+                (handshakeStartedAt, state, lastSentOfferWire, lastSentAcceptWire, isCaller, retrySenderClosure)
+            }
+        guard let startedAt = snapshot.started else { return }
+        guard Date().timeIntervalSince(startedAt) < handshakeTimeoutSec else { return }
+        // Skip if the handshake is already done — caller transitions
+        // to .active when ACCEPT decapsulates, responder also moves
+        // through .active. Replay only makes sense before that.
+        guard snapshot.state != .active, snapshot.state != .ended else { return }
+        guard let sender = snapshot.sender else { return }
+        let toReplay: String? = snapshot.isCaller ? snapshot.offer : snapshot.accept
+        guard let wire = toReplay else { return }
+        let role: String = snapshot.isCaller ? "OFFER" : "ACCEPT"
+        let logLine: String = "[QAudionCallIntegration] W531: replaying " + role + " on WS reconnect"
+        print(logLine)
+        try? await sender(wire)
     }
 
     // MARK: - Pre-negotiation event entry points
