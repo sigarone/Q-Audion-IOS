@@ -1,4 +1,5 @@
 import SwiftUI
+import CryptoKit
 #if canImport(WebRTC)
 import WebRTC
 #endif
@@ -18,6 +19,8 @@ struct VideoCallView: View {
     @State private var isSpeaker = true
     @State private var showControls = true
     @State private var showSas = false
+    /// W502: toggle for the diagnostics overlay.
+    @State private var showDiagnostics = false
 
     // Resolved display name (same lookup pattern as LiveInCallScreen).
     @State private var peerDisplayName: String = ""
@@ -65,8 +68,18 @@ struct VideoCallView: View {
                 showControls.toggle()
             }
         }
+        // W502: diagnostics overlay (bottom sheet, above controls).
+        .overlay(alignment: .bottom) {
+            if showDiagnostics {
+                videoDiagPanel
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(.bottom, 120)
+                    .padding(.horizontal, 16)
+            }
+        }
         .animation(.easeInOut(duration: 0.25), value: showControls)
         .animation(.easeInOut(duration: 0.25), value: showSas)
+        .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
         .statusBarHidden(!showControls)
         .onAppear {
             ScreenshotLockService.lock()
@@ -148,6 +161,18 @@ struct VideoCallView: View {
                 }
                 .padding(.trailing, 8)
             }
+
+            // W502: diagnostics toggle button.
+            Button {
+                showDiagnostics.toggle()
+            } label: {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 15))
+                    .foregroundColor(.white.opacity(0.7))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.white.opacity(0.12)))
+            }
+            .padding(.trailing, 4)
 
             CallSecurityBadge()
         }
@@ -303,6 +328,90 @@ struct VideoCallView: View {
                     .foregroundColor(.gray)
             }
         }
+    }
+
+    // MARK: - Diagnostics panel (W502)
+
+    @ViewBuilder
+    private var videoDiagPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.green)
+                Text("DIAGNOSTICA VIDEO")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(1.2)
+                    .foregroundColor(.green)
+                Spacer()
+                Button {
+                    showDiagnostics = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.gray)
+                }
+                .buttonStyle(.plain)
+            }
+            Divider().background(Color.white.opacity(0.2))
+            videoDiagTransport
+            videoDiagFrameCounters
+            videoDiagSessionKey
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.88)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.green.opacity(0.35), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var videoDiagTransport: some View {
+        let codec = appState.videoCodecLabel
+        let path = codec + " · AES-256-GCM"
+        videoDiagRow("CODEC / CIFRA", path)
+        videoDiagRow("AUDIO TX",  appState.callService.framesEncryptedTx.description)
+        videoDiagRow("AUDIO RX",  appState.callService.framesDecryptedRx.description)
+    }
+
+    @ViewBuilder
+    private var videoDiagFrameCounters: some View {
+        let hasPipeline = appState.videoPipeline != nil
+        let pipelineState = hasPipeline ? "attiva" : "inattiva"
+        videoDiagRow("PIPELINE VIDEO", pipelineState)
+    }
+
+    @ViewBuilder
+    private var videoDiagSessionKey: some View {
+        if let key = appState.callPqcSessionKey, !key.isEmpty {
+            let fp = Self.sessionFingerprintForDiag(key)
+            videoDiagRow("SESSIONE ML-KEM", fp)
+        } else {
+            videoDiagRow("SESSIONE ML-KEM", "handshake in corso…")
+        }
+    }
+
+    private func videoDiagRow(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.8)
+                .foregroundColor(.gray)
+                .frame(width: 130, alignment: .leading)
+            Text(value)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private static func sessionFingerprintForDiag(_ key: Data) -> String {
+        let digest = SHA256.hash(data: key)
+        var hex = ""
+        for byte in digest { hex += String(format: "%02x", byte) }
+        let head = String(hex.prefix(8))
+        let tail = String(hex.suffix(4))
+        return head + "…" + tail
     }
 
     // MARK: - Derived state

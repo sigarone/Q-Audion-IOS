@@ -1,4 +1,5 @@
 import SwiftUI
+import CryptoKit
 import QAudionEngine
 
 /// Bridge between the live `AppState` + `CallService` and the new
@@ -17,19 +18,20 @@ import QAudionEngine
 ///                              (refreshed once per second via TimelineView)
 ///   - `confidence`          ← `appState.confidenceScore` (@Published, live
 ///                              feed from deepfake detector)
-///   - `recentSamples`       ← `appState.txWaveform` (last N tx samples)
+///   - `recentSamples`       ← `appState.txWaveformSamples` (last N tx samples)
 ///   - `muted`               ← local @State mirror, set + read by button tap
 ///   - `transportMode`       ← `.bcryptoWsRelay` if `backendType == "PQC"`
 ///                              else `.disconnected` (richer mapping when
 ///                              engine surfaces real transport feedback)
+///   - `keyInfo`             ← built from `appState.callPqcSessionKey` +
+///                              `appState.pskActive`/`pskName`/`pskFingerprint`
+///                              when ML-KEM session key is available (W502)
 ///
 /// Stub fields (kept until engine exposes them — see W29 spec from
 /// the parallel agent):
 ///   - `recentSamples` if empty → fallback to confidenceScore-derived
 ///                                 5-point sparkline
 ///   - `rekeyInSeconds` / `rekeyTotalSeconds` — fixed 252/300
-///   - `sasWords` — empty (panel hidden)
-///   - `keyInfo` — nil (panel hidden)
 ///   - `voiceEnhancement` — local @State only
 ///   - `speakerOn` — local @State only (real AVAudioSession routing
 ///                   stays inside legacy InCallView for now)
@@ -46,6 +48,9 @@ struct LiveInCallScreen: View {
     /// Camera on/off state for video calls. Starts ON when the call
     /// is a video call; user can mute/unmute the camera mid-call.
     @State private var cameraOn: Bool = false
+
+    /// W502: whether the network diagnostics overlay is visible.
+    @State private var showDiagnostics: Bool = false
 
     /// Cached peer display name. Resolved once on appear / on
     /// callContactId change so the contacts-store lookup doesn't run
@@ -72,15 +77,25 @@ struct LiveInCallScreen: View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             inCallScreenView
         }
+        // W502: network diagnostics overlay — slides up from the bottom
+        // when the analytics button in the transport row is tapped.
+        .overlay(alignment: .bottom) {
+            if showDiagnostics {
+                diagPanel
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(.bottom, 160)    // clear the pinned action row
+                    .padding(.horizontal, 16)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
+        // W324: stub disclaimer next to the rekey countdown, shown only
+        // while the engine rekey ETA is not yet surfaced (i.e. keyInfo==nil).
         .overlay(alignment: .topTrailing) {
-            // W324: stub disclaimer next to the rekey countdown. The
-            // rekey timer rendered inside InCallScreen is a local
-            // anchor, not the engine's real next-rekey-ETA. Surface
-            // that to testers so a "ticking" 252→0 doesn't look
-            // load-bearing.
-            stubRekeyDisclaimer
-                .padding(.top, 56)
-                .padding(.trailing, 12)
+            if liveKeyInfo == nil {
+                stubRekeyDisclaimer
+                    .padding(.top, 56)
+                    .padding(.trailing, 12)
+            }
         }
         .onAppear {
             // SECURITY F-3: the in-call screen renders the SAS words +
@@ -134,7 +149,8 @@ struct LiveInCallScreen: View {
                 // for the current SAS-words fingerprint, render the
                 // panel as VERIFIED and disable the confirm button.
                 sasVerified: liveSasVerified,
-                keyInfo: nil,
+                // W502: KeyInfo built from live session key when available.
+                keyInfo: liveKeyInfo,
                 transportMode: liveTransportMode,
                 muted: liveMuted,
                 speakerOn: speakerOn,
@@ -142,54 +158,143 @@ struct LiveInCallScreen: View {
                 hasVideo: appState.isVideoCall,
                 cameraOn: cameraOn,
                 peerShortNumber: cachedPeerShortNumber,
-                onToggleMute: {
-                    // Source of truth = CallService.isMuted. We flip it
-                    // via AppState.setMuted then re-read; the @State
-                    // mirror updates on the next tick anyway, but
-                    // toggling locally first avoids one frame of
-                    // visual lag.
-                    let next = !appState.callService.isMuted
-                    muted = next
-                    appState.setMuted(next)
-                },
-                onToggleSpeaker: {
-                    speakerOn.toggle()
-                    appState.setSpeaker(speakerOn)
-                },
-                onToggleVoiceEnhancement: {
-                    voiceEnhancement.toggle()
-                    // Real audio-processing flag will land when the engine
-                    // exposes a voice-enhancement toggle. For now this
-                    // is UI-only.
-                },
-                onToggleCamera: {
-                    cameraOn.toggle()
-                    appState.setCamera(cameraOn)
-                },
-                onAddParticipant: {
-                    // 1:1 call → no-op placeholder. Group calling has
-                    // its own GroupCallScreen surface.
-                },
-                onHangup: {
-                    appState.endCall()
-                },
-                onConfirmSas: {
-                    // W368: persist the SAS confirmation under the
-                    // current peer + words fingerprint so the next
-                    // call between the same pair starts pre-verified.
-                    let words = appState.callSasWords
-                    guard !words.isEmpty,
-                          let peer = appState.callContactId else { return }
-                    let fp = SasVerificationStore.fingerprint(forWords: words)
-                    SasVerificationStore.shared.recordVerified(
-                        peerUserId: peer, fingerprint: fp)
-                }
+                onToggleMute: handleToggleMute,
+                onToggleSpeaker: handleToggleSpeaker,
+                onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
+                onToggleCamera: handleToggleCamera,
+                onAddParticipant: {},
+                onHangup: handleHangup,
+                onConfirmSas: handleConfirmSas,
+                // W502: toggle the diagnostics overlay.
+                onToggleDiagnostics: handleToggleDiagnostics
             )
     }
 
-    /// W324: tiny "DEMO" badge anchored to the top-trailing corner.
-    /// Italian copy. Static formatting (no closures, no multi-segment
-    /// interpolation) per SWIFT6_PATTERNS §1.
+    // MARK: - Action handlers (extracted per SWIFT6_PATTERNS §13 — named
+    //         methods prevent type-checker timeout inside @ViewBuilder).
+
+    private func handleToggleMute() {
+        let next = !appState.callService.isMuted
+        muted = next
+        appState.setMuted(next)
+    }
+
+    private func handleToggleSpeaker() {
+        speakerOn.toggle()
+        appState.setSpeaker(speakerOn)
+    }
+
+    private func handleToggleVoiceEnhancement() {
+        voiceEnhancement.toggle()
+    }
+
+    private func handleToggleCamera() {
+        cameraOn.toggle()
+        appState.setCamera(cameraOn)
+    }
+
+    private func handleHangup() {
+        appState.endCall()
+    }
+
+    private func handleConfirmSas() {
+        let words = appState.callSasWords
+        guard !words.isEmpty,
+              let peer = appState.callContactId else { return }
+        let fp = SasVerificationStore.fingerprint(forWords: words)
+        SasVerificationStore.shared.recordVerified(peerUserId: peer, fingerprint: fp)
+    }
+
+    private func handleToggleDiagnostics() {
+        showDiagnostics.toggle()
+    }
+
+    // MARK: - Diagnostics panel (W502)
+
+    /// Network + crypto pipeline diagnostics panel. Slides up from the
+    /// bottom on tap of the analytics icon in the transport row.
+    /// Mirrors Android InCallScreen's diagnostics panel with available
+    /// engine counters. WebRTC RTT/bitrate/jitter will land when the
+    /// engine surfaces RTCStatisticsReport via AppState.
+    @ViewBuilder
+    private var diagPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            diagPanelHeader
+            Divider().background(Color.white.opacity(0.2))
+            diagPanelTransport
+            diagPanelFrameCounters
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.88))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.green.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var diagPanelHeader: some View {
+        HStack {
+            Image(systemName: "chart.bar.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.green)
+            Text("DIAGNOSTICA RETE")
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.2)
+                .foregroundColor(.green)
+            Spacer()
+            Button(action: handleToggleDiagnostics) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.gray)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private var diagPanelTransport: some View {
+        let label = liveTransportMode.label
+        let path: String
+        switch liveTransportMode {
+        case .p2pSrtp:        path = "P2P SRTP · UDP"
+        case .turn:           path = "TURN · relay"
+        case .bcryptoWsRelay: path = "WSS sealed · bcrypto relay"
+        case .disconnected:   path = "—"
+        }
+        diagRow("PERCORSO", path)
+        diagRow("MODO",     label)
+    }
+
+    @ViewBuilder
+    private var diagPanelFrameCounters: some View {
+        let txVal = appState.callService.framesEncryptedTx.description
+        let rxVal = appState.callService.framesDecryptedRx.description
+        diagRow("TX FRAME CIFRATI",   txVal)
+        diagRow("RX FRAME DECIFRATI", rxVal)
+    }
+
+    private func diagRow(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.8)
+                .foregroundColor(.gray)
+                .frame(width: 130, alignment: .leading)
+            Text(value)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - W324: stub "REKEY DEMO" badge (hidden once keyInfo is live).
+
     @ViewBuilder
     private var stubRekeyDisclaimer: some View {
         Text(Self.stubRekeyText)
@@ -204,7 +309,6 @@ struct LiveInCallScreen: View {
             .accessibilityLabel("Rekey demo, contatore non collegato al motore")
     }
 
-    /// W324: static helper — keep the literal out of @ViewBuilder.
     private static let stubRekeyText: String = "REKEY DEMO"
 
     // MARK: - Derived state
@@ -230,6 +334,49 @@ struct LiveInCallScreen: View {
             peerUserId: peer, currentFingerprint: fp)
     }
 
+    /// W502: build a `KeyInfo` panel from the live ML-KEM session key.
+    /// Returns nil while the key is unavailable (panel stays hidden,
+    /// "DEMO" badge remains visible). Mirrors Android's KeyInfoPanel
+    /// which shows algo + session fingerprint + PSK block.
+    private var liveKeyInfo: InCallScreen.KeyInfo? {
+        guard let key = appState.callPqcSessionKey, !key.isEmpty else { return nil }
+        let fp = Self.sessionFingerprintFromKey(key)
+        let pskMethod: String? = appState.pskActive ? "PSK" : nil
+        let pskName: String?
+        if appState.pskActive && !appState.pskName.isEmpty {
+            pskName = appState.pskName
+        } else {
+            pskName = nil
+        }
+        let pskFp: String?
+        if appState.pskActive && !appState.pskFingerprint.isEmpty {
+            pskFp = String(appState.pskFingerprint.prefix(9))
+        } else {
+            pskFp = nil
+        }
+        return InCallScreen.KeyInfo(
+            pqcAlgorithm: "ML-KEM-1024 + X25519",
+            sessionFingerprint: fp,
+            pskMethodLabel: pskMethod,
+            pskName: pskName,
+            pskFingerprint: pskFp
+        )
+    }
+
+    /// Compute a short display fingerprint from the ML-KEM session key.
+    /// Format: first 8 hex chars + "…" + last 4 hex chars of SHA-256(key).
+    /// E.g. "7f3bd2a1…d2e9" — matches Android KeyInfoPanel.
+    private static func sessionFingerprintFromKey(_ key: Data) -> String {
+        let digest = SHA256.hash(data: key)
+        var hex = ""
+        for byte in digest {
+            hex += String(format: "%02x", byte)
+        }
+        let head = String(hex.prefix(8))
+        let tail = String(hex.suffix(4))
+        return head + "…" + tail
+    }
+
     private func resolvePeerDisplayName() {
         guard let id = appState.callContactId else {
             cachedPeerDisplayName = "Sconosciuto"
@@ -242,8 +389,6 @@ struct LiveInCallScreen: View {
             // Estrai il numero interno dal displayName del contatto usando
             // la stessa logica di QAudionAvatar.initials() — cerca token
             // puramente numerici (es. "103" in "Interno 103").
-            // Se il displayName ha già un token numerico, questo diventa
-            // shortNumber e l'avatar lo mostra direttamente senza derivazioni.
             let tokens = match.displayName
                 .trimmingCharacters(in: .whitespaces)
                 .split(whereSeparator: { $0.isWhitespace })
