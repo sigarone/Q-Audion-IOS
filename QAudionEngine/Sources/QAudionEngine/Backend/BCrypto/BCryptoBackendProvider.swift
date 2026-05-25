@@ -3,7 +3,10 @@ import Foundation
 public final class BCryptoBackendProvider: BackendProvider {
     public let identifier = "bcrypto"
     public let displayName = "BCrypto"
-    private var config: BackendConfig
+    /// Current backend configuration. Read-only externally; mutated internally
+    /// by `applyTokenPair` and `updateServerUrl`. External components (e.g.
+    /// ServerSelector) read `config.serverUrl` and `config.accessToken` here.
+    public private(set) var config: BackendConfig
     private let wsClient: BCryptoWebSocketClient
     private let restClient: BCryptoRestClient
 
@@ -63,6 +66,16 @@ public final class BCryptoBackendProvider: BackendProvider {
     public func applyTokenPair(access: String, refresh: String?) {
         config.accessToken = access
         if let r = refresh { config.refreshToken = r }
+        wsClient.updateConfig(config)
+        restClient.updateConfig(config)
+    }
+
+    /// Switch all transport components to a different server URL.
+    /// Used by ServerSelector after probing finds a lower-latency node.
+    /// The currently connected WebSocket is disconnected — it will
+    /// reconnect automatically (with backoff) to the new URL.
+    public func updateServerUrl(to newUrl: String) {
+        config.serverUrl = newUrl
         wsClient.updateConfig(config)
         restClient.updateConfig(config)
     }

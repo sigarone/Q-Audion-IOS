@@ -748,6 +748,13 @@ final class AppState: ObservableObject {
         let config = pinnedConfig(token: token)
         let provider = BCryptoBackendProvider(config: config)
         self.liveProvider = provider
+        // Server selection: probe all nodes and connect to the fastest one.
+        // Runs in background — does not delay the login flow.
+        Task { [weak self] in
+            guard let self, let prov = await MainActor.run(body: { self.liveProvider }) else { return }
+            await ServerSelector.shared.selectBestServer(provider: prov)
+            await MainActor.run { ServerSelector.shared.startMonitor(provider: prov) }
+        }
         // W476 — wire CallService's lazy WS / peer-id fallback providers
         // ONCE, here at login. The TX path falls back to these when
         // `wireTransport(wsClient:peerUserId:)` never bound the eager
@@ -2397,6 +2404,7 @@ final class AppState: ObservableObject {
         // to `offline` immediately. Otherwise the connection lingers
         // until the next service restart and "online" flickers wrong.
         liveProvider?.persistentConnection.disconnect()
+        ServerSelector.shared.stopMonitor()
         liveProvider = nil
         // Drop the relay credentials cache so the next login creates a fresh
         // RelayCredentialsProvider bound to the new token. Without this,
