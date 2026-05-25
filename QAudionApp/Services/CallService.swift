@@ -804,6 +804,15 @@ final class CallService {
                     let b: String = wireFrame.count.description
                     let line: String = "[CallService] TX: wire format = " + fmt + " (" + a + "->" + b + " bytes)"
                     print(line)
+                    // W526 diagnostic: confirm whether the call_id is
+                    // actually flowing through. If `cid == nil` here the
+                    // peer (Android/Desktop) silently drops every frame.
+                    let cidStr: String = cid ?? "<NIL>"
+                    let cidShortPrefix: String = String(cidStr.prefix(8))
+                    let cidShort: String = cidStr.count > 8 ? (cidShortPrefix + "…") : cidStr
+                    let peerShort: String = String(peer.prefix(8))
+                    let cidLine: String = "[CallService] TX call_id=" + cidShort + " (peer=" + peerShort + "…)"
+                    print(cidLine)
                 }
                 if framesEncryptedTx % 250 == 0 {
                     let n: String = framesEncryptedTx.description
