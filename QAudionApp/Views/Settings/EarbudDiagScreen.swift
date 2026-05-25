@@ -295,8 +295,9 @@ extension EarbudDiagViewModel: CBPeripheralDelegate {
         let axonOk   = data[16] != 0
         let uptimeSec = Int(Self.u32le(data, 24))
         let aeadOps: UInt32? = sz == 32 ? Self.u32le(data, 28) : nil
-        let fwVer    = metrics?.firmwareVersion ?? "—"
         Task { @MainActor in
+            // Preserve existing firmwareVersion (set separately via PROTOVER char).
+            let fwVer = self.metrics?.firmwareVersion ?? "—"
             // fps computation: unsigned delta with 2^32 wrap (mirrors Android unsignedDelta32)
             if let curr = aeadOps {
                 let now = Date().timeIntervalSinceReferenceDate
