@@ -3598,15 +3598,34 @@ final class AppState: ObservableObject {
     ///     Capturer` is non-nil.
     public func startScreenShare() async {
         #if os(iOS)
-        guard isInCall, isVideoCall else {
-            RTLog.warn("call", "startScreenShare: not in video call — refusing")
+        guard isInCall else {
+            RTLog.warn("call", "startScreenShare: not in a call — refusing")
             return
         }
         #if canImport(WebRTC)
+        // W538: audio-call screen-share — if there's no video transceiver
+        // yet, upgrade the call to video first (same path as the
+        // upgrade-to-video button). The WebRTC capturer is only created
+        // after `startCameraCapture` (which `upgradeToVideo` triggers),
+        // so without this step `webrtcPixelBufferCapturer` is nil on
+        // audio calls and ReplayKit has nowhere to push frames.
+        if !isVideoCall {
+            RTLog.info("call", "startScreenShare: upgrading audio→video before capture")
+            guard let peerId = callContactId, !peerId.isEmpty else {
+                RTLog.warn("call", "startScreenShare: callContactId nil — aborting")
+                errorMessage = "Impossibile avviare la condivisione: peer sconosciuto."
+                return
+            }
+            await performWebRtcVideoUpgrade(for: peerId)
+            // Give the renegotiation a brief moment to wire the
+            // capturer; bail with a clear error if it didn't land.
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
         guard let controller = webRtcController as? QAudionWebRtcCallController,
               let capturer = controller.webrtcPixelBufferCapturer
         else {
             RTLog.warn("call", "startScreenShare: WebRTC capturer unavailable")
+            errorMessage = "Condivisione schermo non disponibile: video non pronto."
             return
         }
         // Capture (and clear) the current camera-frame closure so we
@@ -3619,6 +3638,14 @@ final class AppState: ObservableObject {
             try await screenShareController.start(into: capturer)
             isScreenSharing = true
             RTLog.info("call", "startScreenShare: ReplayKit capture live — pushing into WebRTC")
+            // W538: fire-and-forget peer announce so cross-platform
+            // peers can mount the screen-share video sink with the
+            // right badge. If the peer doesn't support the SCREEN_SHARE
+            // protocol, the opaque message is harmlessly ignored —
+            // local capture is unaffected.
+            Task { @MainActor [weak self] in
+                await self?.announceScreenShare(active: true)
+            }
         } catch {
             // Restore the camera closure if start failed so the call
             // doesn't get stuck without any video producer.
@@ -3644,6 +3671,12 @@ final class AppState: ObservableObject {
         preScreenShareCameraClosure = nil
         isScreenSharing = false
         RTLog.info("call", "stopScreenShare: camera frame closure restored")
+        // W538: symmetric announce so the peer can swap the screen-share
+        // sink back to the normal camera video badge. Fire-and-forget —
+        // not blocking the UI restoration on the opaque-message round-trip.
+        Task { @MainActor [weak self] in
+            await self?.announceScreenShare(active: false)
+        }
         #endif
     }
 

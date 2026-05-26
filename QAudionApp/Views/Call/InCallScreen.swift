@@ -608,19 +608,6 @@ struct InCallScreen: View {
                     background: cameraOn ? extras.success : scheme.surfaceVariant,
                     iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
                 )
-                // W533: screen-share toggle. Mirror of the desktop's
-                // PeerConnectionManager.startScreenShare / .stopScreenShare,
-                // implemented on iOS via ReplayKit's in-app capture
-                // routed through the same WebRTC video sender as the
-                // camera. Receivers (desktop / Android) see it as
-                // standard remote video.
-                CircularAction(
-                    icon: screenSharing ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle",
-                    action: onToggleScreenShare,
-                    diameter: 48,
-                    background: screenSharing ? extras.success : scheme.surfaceVariant,
-                    iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
-                )
             } else {
                 // Audio call: upgrade-to-video button (matches Android/Desktop).
                 // Tapping starts the local camera and transitions to video mode.
@@ -630,6 +617,23 @@ struct InCallScreen: View {
                     diameter: 48,
                     background: scheme.surfaceVariant,
                     iconColor: scheme.onSurface
+                )
+            }
+            // W538: screen-share toggle — visible on BOTH audio and video
+            // calls (mirrors Desktop's PeerConnectionManager.startScreenShare,
+            // which works on audio calls thanks to the pre-allocated
+            // sendrecv transceiver). On audio calls, AppState.startScreenShare
+            // first upgrades the call to video via WebRTC SDP renegotiation;
+            // ReplayKit then feeds frames into the WebRTC video sender so
+            // desktop / Android peers see standard remote video.
+            // Hidden on Mac Catalyst (ReplayKit unavailable there).
+            if screenShareAvailable {
+                CircularAction(
+                    icon: screenSharing ? "square.on.square.fill" : "square.on.square",
+                    action: onToggleScreenShare,
+                    diameter: 48,
+                    background: screenSharing ? extras.success : scheme.surfaceVariant,
+                    iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
                 )
             }
             CircularAction(
@@ -667,6 +671,18 @@ struct InCallScreen: View {
     }
 
     // MARK: - Helpers
+
+    /// W538: screen-share is supported on iOS / iPadOS (ReplayKit's
+    /// in-app `RPScreenRecorder` path). It is NOT supported on Mac
+    /// Catalyst — `RPScreenRecorder.isAvailable` is false there and
+    /// users would tap an inert button. Hide it on Catalyst entirely.
+    private var screenShareAvailable: Bool {
+        #if targetEnvironment(macCatalyst)
+        return false
+        #else
+        return true
+        #endif
+    }
 
     private var confidenceColor: Color {
         switch ConfidenceThresholds.category(of: confidence) {
