@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// W546+W547 — Bidirectional in-app feedback channel.
 ///
@@ -23,14 +24,20 @@ import Foundation
 /// as a parameter type, or the Swift type checker exhausts itself
 /// on Sendable inference and the build silently fails).
 @MainActor
-public final class FeedbackService {
+public final class FeedbackService: ObservableObject {
 
     public static let shared = FeedbackService()
 
     public typealias TokenProvider = TelemetryService.TokenProvider
 
+    /// Number of unread maintainer replies across all threads.
+    /// Updated by the background poller — read by SettingsScreen
+    /// to show a badge dot next to the "Feedback" row.
+    @Published public private(set) var unreadCount: Int = 0
+
     private var serverUrl: String = ""
     private var getToken: TokenProvider?
+    private var pollTask: Task<Void, Never>?
 
     private init() {}
 
@@ -44,6 +51,45 @@ public final class FeedbackService {
     ) {
         self.serverUrl = serverUrl
         self.getToken = getToken
+        startPollingIfNeeded()
+    }
+
+    /// Kicks the 60-second inbox poll. Idempotent. The poll runs
+    /// silently — failures don't surface as snackbars, they just
+    /// keep `unreadCount` at its last known value. Cancel the
+    /// task at logout (or leave it running — without a token it
+    /// no-ops anyway).
+    public func startPollingIfNeeded() {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            // First refresh ~5 s after launch so we don't compete
+            // with login + WS connect for bandwidth.
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            while !Task.isCancelled {
+                await self?.refreshUnreadCount()
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+            }
+        }
+    }
+
+    public func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    /// Update `unreadCount` from the server. Best-effort — keeps
+    /// the previous value on failure.
+    public func refreshUnreadCount() async {
+        do {
+            let items = try await fetchInbox()
+            self.unreadCount = items.reduce(0) { acc, item in
+                acc + item.replies.filter {
+                    $0.role == "maintainer" && ($0.read_by_user != true)
+                }.count
+            }
+        } catch {
+            // Silent — pre-login or transient network.
+        }
     }
 
     // ─── Wire types ────────────────────────────────────────────────

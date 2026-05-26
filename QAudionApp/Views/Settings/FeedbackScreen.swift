@@ -91,6 +91,7 @@ struct FeedbackScreen: View {
         } catch {
             self.error = "Impossibile caricare i messaggi (\(error))"
         }
+        await FeedbackService.shared.refreshUnreadCount()
     }
 }
 
@@ -294,6 +295,39 @@ private struct ReplyBubble: View {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────
+
+// ─── Settings entry with badge ─────────────────────────────────────
+
+/// Sub-view because SettingsScreen.swift is already at its
+/// type-checker budget (see CLAUDE.md Hard-won lesson 14). Extracting
+/// the link here keeps the parent body compilable.
+struct FeedbackSettingsLink: View {
+    @ObservedObject private var feedback = FeedbackService.shared
+
+    var body: some View {
+        let n = feedback.unreadCount
+        let subtitle: String = n > 0
+            ? "\(n) " + (n == 1 ? "nuova risposta" : "nuove risposte") + " dal team"
+            : "Invia un messaggio · leggi le risposte del team"
+        NavigationLink {
+            LazyView { FeedbackScreen() }
+        } label: {
+            HStack(spacing: 0) {
+                SettingsRow(icon: "bubble.left.and.bubble.right.fill",
+                            iconColor: .blue,
+                            title: "Feedback",
+                            subtitle: subtitle)
+                if n > 0 {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 10, height: 10)
+                        .padding(.trailing, 12)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
 
 private func relativeAge(ms: Int64) -> String {
     let dt = Date().timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(ms) / 1000))
