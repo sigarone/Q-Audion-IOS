@@ -55,7 +55,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `QAudionPeerConnection.installPqcSealer` (W382). Mid-call
     /// updates re-install the sealer on next set.
     public var pqcSessionKey: Data? {
-        didSet { applyPqcSealerIfPossible() }
+        didSet {
+            applyPqcSealerIfPossible()
+            // W539 — when the PQC key arrives (or rotates), retry the
+            // video pipeline pick. ensureVideoSealer needs BOTH the
+            // peer's negotiated caps AND a 32-byte key to install the
+            // LiveKit cryptor; whichever arrives last triggers the
+            // install via this didSet or acceptPeerCapabilities below.
+            _ = ensureVideoSealerInternal()
+        }
     }
 
     /// W411 — optional override for the ICE server list. When set
@@ -72,23 +80,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// otherwise default `.all`.
     public var iceTransportPolicyOverride: RTCIceTransportPolicy?
 
-    /// SFrame video sealer factory — DI seam mirroring Android's
-    /// `CallController.sframeVideoSealerProvider`. The closure receives
-    /// a key provider (returns the current 32-byte PQC session key on
-    /// every call, picking up rekey rotations transparently) and
-    /// returns a fully-built `SFrameVideoSealer`.
+    /// SFrame video sealer factory — DI seam retained for backwards
+    /// compatibility with AppState wiring. As of W539 it is NO LONGER
+    /// consulted by the default video pipeline pick: cross-platform
+    /// 1:1 calls install ``LiveKitVideoFrameCryptor`` instead so iOS
+    /// interoperates with Desktop and Android.
     ///
-    /// Set this from the app/DI layer at startup, BEFORE any call.
-    /// Leaving it `nil` keeps the controller on the legacy video
-    /// pipeline forever — useful for tests + builds where the SFrame
-    /// flip should stay disabled.
-    ///
-    /// Recommended wiring:
-    /// ```swift
-    ///   ctrl.sframeVideoSealerFactory = { keyProvider in
-    ///       SFrameVideoSealer.forRotatingKey(keyProvider)
-    ///   }
-    /// ```
+    /// Setting this is harmless — it is simply unused by
+    /// ``ensureVideoSealer(pqcSessionKeyProvider:)``. The property is
+    /// kept so existing AppState DI code continues to compile.
     public var sframeVideoSealerFactory: ((@escaping () -> Data) -> SFrameVideoSealer)?
 
     /// Discriminator for the active video pipeline on this call.
@@ -97,15 +97,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// fixed for the call's lifetime (matches Android's "construct
     /// pipeline once" rule, NVIDIA Llama-3.3-70b reviewed).
     public enum VideoCallSealer {
-        /// Legacy iOS video path — frames flow through the existing
-        /// audio-shape RTP frame encryptor (or plain WebRTC SRTP on
-        /// builds where the insertable-streams API is unavailable).
+        /// Legacy iOS video path — frames flow through plain WebRTC
+        /// SRTP only (no E2EE on video). Used when the peer didn't
+        /// advertise any compatible video sealer cap.
         case legacy
-        /// SFrame v1 path — outbound video frames go through
-        /// ``SFrameVideoSealer/seal(plaintext:layer:keyFrame:padded:)``
-        /// before the transport ships them; inbound frames come
-        /// through ``SFrameVideoSealer/open(_:)``.
+        /// SFrame v1 path — Q-Audion custom envelope, kept for future
+        /// iOS-only group-call work or compile-time-flagged
+        /// experimentation. NOT selected by default — the cross-platform
+        /// 1:1 path uses ``livekit(_:)`` so iOS interoperates with
+        /// Desktop and Android.
         case sframe(SFrameVideoSealer)
+        /// W539 — LiveKit / libwebrtc native FrameCryptor envelope.
+        /// This is the format Desktop (`LiveKitFrameCryptor.ts`) and
+        /// Android (libwebrtc native `FrameCryptor`) actually emit and
+        /// consume on 1:1 video calls; we MUST use it on iOS too so
+        /// cross-platform calls render. AES-128-GCM, HKDF-SHA256
+        /// (empty salt, 128-byte zero info), keyIndex=0.
+        case livekit(LiveKitVideoFrameCryptor)
     }
     public private(set) var videoSealer: VideoCallSealer?
 
@@ -200,10 +208,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
         let iceServers = await fetchIceServers()
         let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
-            if case .sframe(let sealer) = self?.videoSealer {
-                return sealer
+            // W539 — surface either SFrame or LiveKit sealer to the codec
+            // decorator. The LiveKit path is the cross-platform default
+            // (Desktop / Android emit this wire format); SFrame is kept
+            // for potential iOS-only future paths.
+            switch self?.videoSealer {
+            case .sframe(let s):  return .sframe(s)
+            case .livekit(let c): return .livekit(c)
+            default:              return nil
             }
-            return nil
         })
         let pc = QAudionPeerConnection(
             factory: factory,
@@ -308,10 +321,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
         let iceServers = await fetchIceServers()
         let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
-            if case .sframe(let sealer) = self?.videoSealer {
-                return sealer
+            // W539 — surface either SFrame or LiveKit sealer to the codec
+            // decorator. The LiveKit path is the cross-platform default
+            // (Desktop / Android emit this wire format); SFrame is kept
+            // for potential iOS-only future paths.
+            switch self?.videoSealer {
+            case .sframe(let s):  return .sframe(s)
+            case .livekit(let c): return .livekit(c)
+            default:              return nil
             }
-            return nil
         })
         let pc = QAudionPeerConnection(
             factory: factory,
@@ -581,6 +599,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// ```
     public func acceptPeerCapabilities(_ peer: [String]?) {
         peerConnection?.acceptPeerCapabilities(peer)
+        // W539 — opportunistic install: if the PQC key is already
+        // present (typical on responder path where the PQC handshake
+        // ran BEFORE the WebRTC offer applied), install the LiveKit
+        // cryptor now. On the caller path the key arrives later
+        // via the pqcSessionKey didSet which also calls this.
+        _ = ensureVideoSealerInternal()
     }
 
     /// Read the current peer-negotiated capability set. Returns `nil`
@@ -591,6 +615,22 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         peerConnection?.peerNegotiated()
     }
 
+    /// W539 — internal autopilot: install the LiveKit video cryptor as
+    /// soon as BOTH the peer's negotiated caps and a 32-byte PQC key
+    /// are available. Called from `acceptPeerCapabilities` and from
+    /// the `pqcSessionKey` didSet so whichever arrives last triggers
+    /// the install. Idempotent — once `videoSealer` is set, this is a
+    /// no-op for the rest of the call. The keyProvider closure used by
+    /// the LiveKit cryptor reads `self.pqcSessionKey` lazily on every
+    /// frame, so audio-driven rekey rotations continue to be picked
+    /// up transparently.
+    @discardableResult
+    private func ensureVideoSealerInternal() -> VideoCallSealer? {
+        return ensureVideoSealer { [weak self] in
+            self?.pqcSessionKey ?? Data()
+        }
+    }
+
     /// Idempotently pick the video pipeline based on the peer's
     /// negotiated capabilities. Mirrors Android
     /// `CallController.ensureVideoSealer()` (commit 3db2cd81):
@@ -598,16 +638,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// - If ``videoSealer`` is already set → no-op (one pick per call).
     /// - If `peerNegotiated()` is `nil` (peer not heard from yet) →
     ///   leaves `videoSealer` unset; caller should defer.
-    /// - If `useSFrame=true` AND ``sframeVideoSealerFactory`` is wired
-    ///   AND a 32-byte PQC session key is available → builds an
-    ///   SFrame sealer via the factory and stores `.sframe(sealer)`.
+    /// - W539: If `useSFrame=true` (peer advertised `sframe-v1`) AND
+    ///   a 32-byte PQC session key is available → builds a
+    ///   ``LiveKitVideoFrameCryptor`` and stores `.livekit(...)`. This
+    ///   matches the wire format Desktop and Android actually emit
+    ///   (despite the legacy `sframe-v1` tag name on the wire — see
+    ///   `LiveKitFrameCryptor.ts` for the format spec).
     /// - Otherwise → stores `.legacy`, preserving today's behaviour
-    ///   for legacy peers + tests where the factory isn't wired.
+    ///   for legacy peers + tests.
     ///
     /// - Parameter pqcSessionKeyProvider: closure returning the
     ///   current 32-byte PQC session key. Typically backed by
     ///   `{ self.pqcSessionKey ?? Data() }` from the app layer.
-    ///   The closure is captured by the resulting sealer and called
+    ///   The closure is captured by the resulting cryptor and called
     ///   on every frame so audio-driven rekey rotations are picked
     ///   up transparently.
     /// - Returns: the resolved sealer, or `nil` if the peer hasn't
@@ -619,19 +662,37 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         if let existing = videoSealer { return existing }
         guard let negotiated = peerNegotiated() else { return nil }
 
-        let resolved: VideoCallSealer
-        if negotiated.useSFrame,
-           let factory = sframeVideoSealerFactory,
-           pqcSessionKeyProvider().count == 32 {
-            let sealer = factory(pqcSessionKeyProvider)
-            resolved = .sframe(sealer)
-            print("[WebRtcCallController] video pipeline → SFrame v1 (peerCaps=\(negotiated.agreedTags))")
-        } else {
-            resolved = .legacy
-            print("[WebRtcCallController] video pipeline → legacy (peerCaps=\(negotiated.agreedTags), useSFrame=\(negotiated.useSFrame), factoryWired=\(sframeVideoSealerFactory != nil))")
+        // W539 — when the peer advertised `sframe-v1` we install LiveKit
+        // and only LiveKit (cross-platform-compatible wire format). Until
+        // the PQC key is available we DEFER (return nil) so that a later
+        // arrival of the key via the `pqcSessionKey` didSet still picks
+        // up the install. We must NOT latch `.legacy` while we are still
+        // waiting for the key — otherwise the cryptor would never come
+        // online and every video frame would silently mis-decode on the
+        // peer's side (the exact bug W539 is fixing).
+        if negotiated.useSFrame {
+            let keyLen = pqcSessionKeyProvider().count
+            guard keyLen == 32 else {
+                // Defer — PQC handshake hasn't yielded a key yet. The
+                // `pqcSessionKey` didSet will call us again once it does.
+                return nil
+            }
+            // The `sframe-v1` capability tag is a misnomer kept for
+            // backwards compatibility with peers (Desktop / Android emit
+            // it from `LOCAL_CAPABILITIES` / `local`). The actual wire
+            // format used on all platforms is the libwebrtc-native
+            // FrameCryptor envelope (ported in `LiveKitVideoFrameCryptor`).
+            let cryptor = LiveKitVideoFrameCryptor(keyProvider: pqcSessionKeyProvider)
+            videoSealer = .livekit(cryptor)
+            print("[WebRtcCallController] video pipeline → LiveKit FrameCryptor (peerCaps=\(negotiated.agreedTags))")
+            return videoSealer
         }
-        videoSealer = resolved
-        return resolved
+
+        // Peer is legacy / didn't advertise sframe-v1 → no E2EE on video,
+        // DTLS-SRTP only. Latch this so we don't keep re-checking.
+        videoSealer = .legacy
+        print("[WebRtcCallController] video pipeline → legacy (peerCaps=\(negotiated.agreedTags), useSFrame=false)")
+        return videoSealer
     }
 
     // MARK: - Camera capture

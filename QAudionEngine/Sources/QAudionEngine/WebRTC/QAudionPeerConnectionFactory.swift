@@ -30,8 +30,11 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         return f
     }
 
-    /// Create a new factory instance, optionally decorated with an SFrame sealer provider.
-    public func createFactory(sealerProvider: @escaping () -> SFrameVideoSealer? = { nil }) -> RTCPeerConnectionFactory {
+    /// Create a new factory instance, optionally decorated with a video
+    /// frame sealer provider. The provider is consulted per-frame so
+    /// mid-call sealer changes (e.g. legacy → LiveKit after the cap
+    /// handshake completes) are picked up without rebuilding the factory.
+    public func createFactory(sealerProvider: @escaping () -> VideoFrameSealer? = { nil }) -> RTCPeerConnectionFactory {
         // RTCInitializeSSL is idempotent — safe to call once on first use.
         RTCInitializeSSL()
         
