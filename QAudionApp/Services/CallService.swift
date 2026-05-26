@@ -58,6 +58,10 @@ final class CallService {
     private var framesReceivedRx: Int64 = 0   // audio_frame envelopes off the WS, pre-decrypt
     private var txEncryptErrorCount: Int64 = 0
     private var rxDecryptErrorCount: Int64 = 0
+    // Frames dropped because their call_id didn't match the active session.
+    // Batched relay delivery from a previous/overlapping session causes x250+
+    // AEAD failures (CryptoKitError 3) without this filter.
+    private var rxStaleDropCount: Int64 = 0
     private var loggedFirstTxCapture = false
     private var loggedFirstTxEncrypt = false
     private var loggedTxNoTransport = false
@@ -65,6 +69,7 @@ final class CallService {
     private var loggedRxNoIntegration = false
     private var loggedFirstRxDecrypt = false
     private var loggedRxNoPlayback = false
+    private var loggedFirstStaleDrop = false
 
     // W481 — pre-bind RX frame buffer.
     // The PQC handshake and callIntegration binding are async; audio frames
@@ -498,8 +503,6 @@ final class CallService {
     }
 
     func endCall() {
-        callIntegration?.onCallEnded()
-        callIntegration = nil
         onDeepfakeAlert?(false)
         stopDurationTimer()
         callStartedAt = nil
@@ -508,6 +511,7 @@ final class CallService {
         isOnHold = false
 
         // W65+W66: stop capture/playback + rilascia AVAudioSession.
+        // teardownAudioStack also handles callIntegration cleanup.
         teardownAudioStack()
     }
 
@@ -540,7 +544,12 @@ final class CallService {
     /// di URLSession. AVAudioPCMBuffer scheduleBuffer è thread-safe per
     /// Apple docs, ma per safety con i `@Published` AppState e i counter
     /// non-atomic, dispatchiamo l'intera elaborazione su main.
-    public func handleIncomingEncryptedFrame(_ serializedFrame: Data) {
+    /// `callId` is the `call_id` field from the `audio_frame` WS envelope.
+    /// When present and mismatched against the active call, the frame is
+    /// dropped immediately — this prevents x250+ CryptoKitError 3 storms
+    /// caused by stale relay delivery from a previous/overlapping session.
+    public func handleIncomingEncryptedFrame(_ serializedFrame: Data,
+                                             callId: String? = nil) {
         // W69: dev network simulator hook RX. Stessa semantica del TX —
         // simula packet loss inbound. Branch-predicted off-path in Off.
         if !NetworkConditionSimulator.shared.isPassthrough() {
@@ -552,6 +561,25 @@ final class CallService {
         // e per evitare race su framesDecryptedRx counter.
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            // Stale-session filter: drop frames whose call_id doesn't match
+            // the active call. Without this, the relay delivers all buffered
+            // frames from a previous session to the new session's decrypt
+            // path, causing x250+ AEAD authentication failures (CryptoKitError 3).
+            // Only filter when both sides are known — if either is nil (old
+            // client with no call_id, or call not yet fully set up), allow through.
+            if let incomingId = callId,
+               let activeId = self.getCallId?(),
+               incomingId.caseInsensitiveCompare(activeId) != .orderedSame {
+                self.rxStaleDropCount &+= 1
+                if !self.loggedFirstStaleDrop {
+                    self.loggedFirstStaleDrop = true
+                    let inc: String = String(incomingId.prefix(8))
+                    let act: String = String(activeId.prefix(8))
+                    let line: String = "[CallService] RX stale drop: frame callId=" + inc + "… != active=" + act + "… (suppressing further per-frame logs)"
+                    print(line)
+                }
+                return
+            }
             // W466 — count EVERY audio_frame off the WS, before decrypt,
             // so the telemetry distinguishes "peer never sent" from
             // "received but decrypt failed".
@@ -612,7 +640,12 @@ final class CallService {
     /// W66: stop ordinato di capture + playback + session deactivation.
     /// Chiamato sia in `endCall()` che come defensive cleanup all'inizio
     /// di `startCall()` (re-entry guard).
+    /// Also owns callIntegration lifecycle: fires onCallEnded and nils it
+    /// so stale frames arriving after teardown can't be decrypted with
+    /// an old session key (they hit the W481 pre-buffer instead).
     private func teardownAudioStack() {
+        callIntegration?.onCallEnded()
+        callIntegration = nil
         audioCapture?.stop()
         audioCapture = nil
         audioPlayback?.stop()
@@ -633,6 +666,8 @@ final class CallService {
         loggedRxNoIntegration = false
         loggedFirstRxDecrypt = false
         loggedRxNoPlayback = false
+        loggedFirstStaleDrop = false
+        rxStaleDropCount = 0
         rxPreBuffer.removeAll()  // W481
         // W464 — drop the session-active flag so the NEXT call starts
         // from a clean slate and waits for its own CallKit `didActivate`.
@@ -780,7 +815,8 @@ final class CallService {
                         guard let self,
                               let b64 = data["frame"] as? String,
                               let frameData = Data(base64Encoded: b64) else { return }
-                        self.handleIncomingEncryptedFrame(frameData)
+                        let incomingCallId = data["call_id"] as? String
+                        self.handleIncomingEncryptedFrame(frameData, callId: incomingCallId)
                     }
                     print("[CallService] W522: lazy audio_frame RX handler registered (fallback path)")
                 }
@@ -862,7 +898,8 @@ final class CallService {
             guard let self,
                   let b64 = data["frame"] as? String,
                   let frameData = Data(base64Encoded: b64) else { return }
-            self.handleIncomingEncryptedFrame(frameData)
+            let incomingCallId = data["call_id"] as? String
+            self.handleIncomingEncryptedFrame(frameData, callId: incomingCallId)
         }
     }
 
@@ -887,7 +924,8 @@ final class CallService {
             guard let self,
                   let b64 = data["frame"] as? String,
                   let frameData = Data(base64Encoded: b64) else { return }
-            self.handleIncomingEncryptedFrame(frameData)
+            let incomingCallId = data["call_id"] as? String
+            self.handleIncomingEncryptedFrame(frameData, callId: incomingCallId)
         }
     }
 
