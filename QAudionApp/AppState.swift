@@ -2983,6 +2983,8 @@ final class AppState: ObservableObject {
                         guard let self = self else { return }
                         self.errorMessage = "Il destinatario non è raggiungibile."
                         self.callService.endCall()
+                        let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+                        CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "peer_offline")
                         self.callState = .ended
                         self.isInCall = false
                         self.callContactId = nil
@@ -3155,6 +3157,16 @@ final class AppState: ObservableObject {
             }
 
             callState = .active
+            // W548 (iOS): per-call media lifecycle telemetry. Pair
+            // with `call.media.summary` emitted on the .ended edge.
+            do {
+                let cid = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+                CallMediaTelemetry.shared.recordConnected(
+                    callId: cid,
+                    peerPrefix: String(contactId.prefix(8)),
+                    sasSource: "answered"
+                )
+            }
             // W391: bring up the video pipeline for video calls.
             // Best-effort: if camera permission is denied or hardware
             // is unavailable, the call continues without video (the
@@ -3289,6 +3301,8 @@ final class AppState: ObservableObject {
                 if recentCalls.count > 20 { recentCalls = Array(recentCalls.prefix(20)) }
             }
         } catch {
+            let cid = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+            CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "answer_failed:\(error.localizedDescription)")
             callState = .ended
             isInCall = false
             isVideoCall = false
@@ -3407,6 +3421,11 @@ final class AppState: ObservableObject {
         // call from the same peer starts with a clean state machine.
         responderCallIntegration?.onCallEnded()
         responderCallIntegration = nil
+        // W548 (iOS): emit call.media.summary on the canonical end edge.
+        do {
+            let cid = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+            CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "user_hangup")
+        }
         callState = .ended
         isInCall = false
         isVideoCall = false
