@@ -235,8 +235,12 @@ public final class TelemetryService {
         guard !batchEvents.isEmpty else { return }
 
         // Seal.
-        guard let serverPubKey,
-              let wire = sealBatch(jsonlBytes, serverPubKey: serverPubKey) else {
+        // W541-3-fix1: don't shadow `self.serverPubKey` with a local
+        // `let` named the same — the 401 branch below needs to clear
+        // the property, but Swift binds the inner name to a
+        // non-mutable constant. Use a distinctly-named local.
+        guard let pubKeyForSeal = self.serverPubKey,
+              let wire = sealBatch(jsonlBytes, serverPubKey: pubKeyForSeal) else {
             return
         }
 
