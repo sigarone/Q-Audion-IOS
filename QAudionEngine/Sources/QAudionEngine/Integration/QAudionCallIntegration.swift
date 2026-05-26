@@ -931,16 +931,36 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     self.lock.withLock {
                         (self.state, self.lastSentOfferWire, self.retrySenderClosure)
                     }
-                // Only the caller (state still .capabilitySent) keeps
-                // retrying. As soon as the engine transitions to
-                // .active (ACCEPT decapsulated), bail out — the
-                // cancelHandshakeRetries() call from the session-key
-                // path will also fire but we don't depend on that.
-                guard snapshot.state == .capabilitySent,
+                // W540-A: keep retrying the OFFER for ANY pre-active
+                // handshake state. The original W529 guard was
+                // `state == .capabilitySent` only, which stopped
+                // retrying as soon as the integration advanced to
+                // `.connecting` (call_processing received from the
+                // peer). Confirmed in iPhone→S24 call a7ab0514:
+                // peer ACK'd OFFER with call_processing → integration
+                // went to .connecting → retry loop bailed out → ACCEPT
+                // then never arrived → silent 30 s timeout.
+                //
+                // The right invariant: retry while we DON'T have a
+                // session key yet, regardless of which pre-active
+                // state we're in. As soon as ACCEPT decapsulates we
+                // hit .active and cancelHandshakeRetries fires from
+                // the session-key path; here we just enumerate the
+                // pre-active states explicitly so future enum cases
+                // can't accidentally suppress retries.
+                let preActive: Bool
+                switch snapshot.state {
+                case .capabilitySent, .negotiating, .connecting, .ringing:
+                    preActive = true
+                case .idle, .active, .fallback, .error:
+                    preActive = false
+                }
+                guard preActive,
                       let wire = snapshot.wire,
                       let sender = snapshot.sender else { return }
                 let elapsedSec: Int = Int(elapsed)
-                let logLine: String = "[QAudionCallIntegration] W529: retrying OFFER (elapsed=" + String(describing: elapsedSec) + "s)"
+                let stateStr: String = String(describing: snapshot.state)
+                let logLine: String = "[QAudionCallIntegration] W529: retrying OFFER (elapsed=" + String(describing: elapsedSec) + "s state=" + stateStr + ")"
                 print(logLine)
                 try? await sender(wire)
             }
