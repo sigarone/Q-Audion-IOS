@@ -112,6 +112,12 @@ struct InCallScreen: View {
     /// W533: toggle screen-share on/off. Shown only when `hasVideo == true`
     /// (in audio calls we'd need an upgrade-to-video first).
     let onToggleScreenShare: () -> Void
+    /// W534: true when the REMOTE peer has announced they are sharing
+    /// their screen (via the `<callId>|SCREEN_SHARE:start` opaque
+    /// piggy-back from iOS/Desktop/Android). Drives the "Peer is
+    /// sharing screen" badge over the remote video panel so the user
+    /// understands they're seeing screen content, not camera.
+    let peerScreenSharing: Bool
     let onAddParticipant: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
@@ -144,6 +150,7 @@ struct InCallScreen: View {
          onUpgradeToVideo: @escaping () -> Void = {},
          screenSharing: Bool = false,
          onToggleScreenShare: @escaping () -> Void = {},
+         peerScreenSharing: Bool = false,
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
@@ -175,6 +182,7 @@ struct InCallScreen: View {
         self.onUpgradeToVideo = onUpgradeToVideo
         self.screenSharing = screenSharing
         self.onToggleScreenShare = onToggleScreenShare
+        self.peerScreenSharing = peerScreenSharing
         self.onAddParticipant = onAddParticipant
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
@@ -188,7 +196,47 @@ struct InCallScreen: View {
             CallMeshBackground()
             scrollContent
             bottomActionRow
+            // W534: top-center pill badge "Peer sta condividendo lo
+            // schermo" surfaced when the remote side has announced a
+            // SCREEN_SHARE:start. Wrapped in the outermost ZStack so
+            // the position is fixed independent of scrollContent /
+            // bottomActionRow layout.
+            if peerScreenSharing {
+                VStack {
+                    peerScreenShareBadge
+                        .padding(.top, 14)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.2), value: peerScreenSharing)
+            }
         }
+    }
+
+    /// W534 — pill badge surfaced when `peerScreenSharing == true`.
+    /// Visually distinct from the SAS-confirmation banner so the user
+    /// understands "you are seeing remote screen" rather than any
+    /// security-state UI. Tinted with the same `pqcAccent` colour the
+    /// CIFRATURA waveform uses for crypto-stream visual continuity.
+    private var peerScreenShareBadge: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "rectangle.on.rectangle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(extras.onSuccess)
+            Text("\(peerDisplayName) sta condividendo lo schermo")
+                .qaudionStyle(type.labelSmall)
+                .tracking(0.4)
+                .foregroundStyle(extras.onSuccess)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(
+            Capsule()
+                .fill(extras.pqcAccent.opacity(0.92))
+                .shadow(color: .black.opacity(0.18), radius: 6, x: 0, y: 2)
+        )
     }
 
     // MARK: - Scroll content (everything above the pinned action row)

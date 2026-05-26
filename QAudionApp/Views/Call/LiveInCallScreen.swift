@@ -167,6 +167,7 @@ struct LiveInCallScreen: View {
                 onUpgradeToVideo: handleUpgradeToVideo,
                 screenSharing: appState.isScreenSharing,
                 onToggleScreenShare: handleToggleScreenShare,
+                peerScreenSharing: appState.peerScreenShareActive,
                 onAddParticipant: {},
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
