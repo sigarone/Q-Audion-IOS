@@ -152,6 +152,26 @@ public final class AudioProcessingPipeline {
             // iOS 13+: setVoiceProcessingEnabled enables Apple's full VoIP DSP
             if #available(iOS 13.0, *) {
                 try inputNode.setVoiceProcessingEnabled(true)
+                // W537: disable the Voice-Processing AGC component.
+                // User-reported "qualità scarsa nella codifica da iPad
+                // ad Android" was traced to Apple's AGC compressing/
+                // expanding the speech envelope inside the VP I/O unit
+                // BEFORE Opus saw it. Opus's own rate-distortion and
+                // SILK pitch tracking work BEST with a clean, un-AGC-
+                // mangled signal — and Android's reference build sets
+                // `OpusConfig(agcEnabled = false)` (no system AGC, no
+                // pre-Opus AGC). Matching that wire-shape on iOS removes
+                // the dynamic-range pumping artefact the receiver hears.
+                // AEC + NS are preserved (they're separate VP knobs).
+                do {
+                    try inputNode.setVoiceProcessingAGCEnabled(false)
+                    print("[AudioProcessingPipeline] W537: voice-processing AGC disabled (Opus gets raw mic)")
+                } catch {
+                    // Non-fatal — older devices may reject the call;
+                    // AGC stays on but Opus still gets the signal.
+                    let msg: String = error.localizedDescription
+                    print("[AudioProcessingPipeline] W537: setVoiceProcessingAGCEnabled(false) failed: " + msg)
+                }
             }
             voiceProcessingActive = true
         } else {

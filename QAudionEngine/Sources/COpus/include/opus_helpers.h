@@ -44,4 +44,23 @@ static inline int opus_helper_set_max_bandwidth(OpusEncoder *enc, opus_int32 ban
     return opus_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH(bandwidth));
 }
 
+/* W537 — Android encoder sets OPUS_SET_LSB_DEPTH=16 explicitly. The
+ * default is 24, which tells libopus the input PCM has bits below
+ * 16 that are signal (not noise). Our capture is Int16 PCM so the
+ * lower 8 bits below bit 16 are guaranteed to be noise; setting
+ * LSB_DEPTH=16 lets the noise-shaped quantizer make better
+ * trade-offs (don't spend bits encoding what is actually quantization
+ * noise). User-perceived quality on Android receivers improves
+ * because Opus reallocates the saved bits to the speech band. */
+static inline int opus_helper_set_lsb_depth(OpusEncoder *enc, opus_int32 depth) {
+    return opus_encoder_ctl(enc, OPUS_SET_LSB_DEPTH(depth));
+}
+
+/* W537 — Android also sets DTX explicitly to 0. Opus's default for
+ * VOIP mode is also 0 but exposing the knob keeps parity with
+ * `OpusConfig.dtx = false`. */
+static inline int opus_helper_set_dtx(OpusEncoder *enc, opus_int32 dtx) {
+    return opus_encoder_ctl(enc, OPUS_SET_DTX(dtx));
+}
+
 #endif /* OPUS_HELPERS_H */

@@ -64,6 +64,17 @@ public final class OpusCodec {
             // audible quality gap user reported on Android→iOS audio.
             opus_helper_set_signal(enc, Int32(OPUS_SIGNAL_VOICE))
             opus_helper_set_max_bandwidth(enc, Int32(OPUS_BANDWIDTH_FULLBAND))
+            // W537: complete the Android-parity surface.
+            //   - LSB_DEPTH=16: matches Android's `lsbDepth = 16` so the
+            //     encoder's noise-shaping doesn't waste bits modelling
+            //     quantization noise below bit-16 of our Int16 input.
+            //   - DTX=0: explicit. User-reported quality issue from
+            //     iPad→Android was an envelope-pumping artefact —
+            //     making absolutely sure we're not silently triggering
+            //     DTX at low input levels (which would chop the speech
+            //     tail and the Android decoder would replay PLC noise).
+            opus_helper_set_lsb_depth(enc, Int32(16))
+            opus_helper_set_dtx(enc, Int32(0))
         }
 
         decoder = opus_decoder_create(Int32(AudioConstants.sampleRate),
