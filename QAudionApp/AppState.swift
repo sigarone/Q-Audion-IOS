@@ -389,6 +389,16 @@ final class AppState: ObservableObject {
             ]
         )
 
+        // W545 — per-device synthetic self-tests. Schedules a first
+        // run ~3 s after launch in background, emits selftest.*
+        // telemetry events with timing percentiles for regression
+        // detection across iOS versions / hardware. Primitives-only
+        // API per CLAUDE.md "Hard-won lesson 16".
+        SelfTestService.shared.start(
+            serverUrl: serverUrl,
+            getToken: { [weak self] in self?.authService.loadToken() }
+        )
+
         // W94: wire chat-message notification taps to pendingDeepLinkConversationId
         // so the chat list can pick up and navigate. Idempotent — re-init
         // overwrites the closure with a fresh AppState capture.
