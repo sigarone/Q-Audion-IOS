@@ -399,6 +399,15 @@ final class AppState: ObservableObject {
             getToken: { [weak self] in self?.authService.loadToken() }
         )
 
+        // W546+W547 — in-app feedback channel. Wires the HTTP client
+        // for the FeedbackScreen (Settings → Feedback). The screen
+        // pulls inbox on appear; no background polling here yet —
+        // a future iteration can add an APNS push trigger.
+        FeedbackService.shared.start(
+            serverUrl: serverUrl,
+            getToken: { [weak self] in self?.authService.loadToken() }
+        )
+
         // W94: wire chat-message notification taps to pendingDeepLinkConversationId
         // so the chat list can pick up and navigate. Idempotent — re-init
         // overwrites the closure with a fresh AppState capture.

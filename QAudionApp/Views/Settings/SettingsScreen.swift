@@ -516,6 +516,17 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // W546+W547 — in-app feedback inbox + compose.
+            NavigationLink {
+                LazyView { FeedbackScreen() }
+            } label: {
+                SettingsRow(icon: "bubble.left.and.bubble.right.fill",
+                            iconColor: .blue,
+                            title: "Feedback",
+                            subtitle: "Invia un messaggio · leggi le risposte del team")
+            }
+            .buttonStyle(.plain)
+
             NavigationLink {
                 LazyView { CallDesignShowcase() }
             } label: {
