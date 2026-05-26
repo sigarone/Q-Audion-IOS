@@ -371,6 +371,24 @@ final class AppState: ObservableObject {
             getUserId: { [weak self] in self?.currentUserId }
         )
 
+        // W541-3 — start structured telemetry pump (encrypted batch
+        // POST every 5 s). Same primitives-only API constraint as
+        // LiveLogStreamer per CLAUDE.md "Hard-won lesson 16".
+        TelemetryService.shared.start(
+            serverUrl: serverUrl,
+            getToken: { [weak self] in self?.authService.loadToken() },
+            getUserId: { [weak self] in self?.currentUserId }
+        )
+        // First event: app-launch marker so the maintainer can
+        // anchor every per-call timeline against the session start.
+        TelemetryService.shared.emit(
+            kind: "app.launch",
+            attrs: [
+                "device_model": UIDevice.current.model,
+                "ios_version":  UIDevice.current.systemVersion
+            ]
+        )
+
         // W94: wire chat-message notification taps to pendingDeepLinkConversationId
         // so the chat list can pick up and navigate. Idempotent — re-init
         // overwrites the closure with a fresh AppState capture.
@@ -516,6 +534,15 @@ final class AppState: ObservableObject {
                     if self.callState == .active && self.callSasKeySource == .mlKem {
                         self.callState = .encrypted
                         RTLog.info("call", "onAnswerCall: PQC handshake completed during ringing — state .active → .encrypted")
+                        // W541-3: emit encrypted-state-reached event.
+                        // Maintainer measures (call.encrypted.ts -
+                        // call.start_dial.ts) as the dial-to-secure
+                        // latency p95 — a key user-perceived metric.
+                        TelemetryService.shared.emit(
+                            kind: "call.encrypted",
+                            callId: uuid.uuidString.lowercased(),
+                            attrs: ["path": "answer-fastpath-w521"]
+                        )
                     }
                     // W450: boot audio pipeline for incoming call.
                     // Outgoing calls do this inside startCall(contactId:) →
@@ -2818,6 +2845,16 @@ final class AppState: ObservableObject {
 
     func startCall(contactId: String, video: Bool = false) async {
         RTLog.info("call", "startCall contactId=\(contactId.prefix(8))… video=\(video)")
+        // W541-3: telemetry event marking outgoing-call dial. callId
+        // isn't minted yet at this point — bound later via the same
+        // session_id. Useful for measuring dial-to-active duration.
+        TelemetryService.shared.emit(
+            kind: "call.start_dial",
+            attrs: [
+                "peer_prefix": String(contactId.prefix(8)),
+                "video": video
+            ]
+        )
         // Guard against double-tap / concurrent calls. Without this,
         // two rapid invocations each generate a fresh UUID and each
         // send an independent call_offer — the server creates two
@@ -3307,6 +3344,18 @@ final class AppState: ObservableObject {
         // avoid leaking the social graph through auto-uploaded VPS telemetry.
         let callLogId: String = activeOutgoingRecordId ?? "none"
         RTLog.info("call", "endCall — callId=" + callLogId + " state=\(callState)")
+        // W541-3: telemetry event for call end. callState carries the
+        // terminal state which the maintainer correlates with peer's
+        // own endCall event to detect "iPhone went encrypted but S24
+        // gave up at ringing" patterns.
+        TelemetryService.shared.emit(
+            kind: "call.end",
+            callId: callLogId == "none" ? nil : callLogId,
+            attrs: [
+                "terminal_state": String(describing: callState),
+                "is_video": isVideoCall
+            ]
+        )
         // Persist call end time. Use the stable record id registered in startCall
         // or wireIncomingCallHandlers. Works for both outgoing and incoming paths.
         if let rid = activeOutgoingRecordId {
@@ -3857,11 +3906,28 @@ extension AppState {
                 // active encrypted call. Treat ringing/connecting as
                 // "ready to flip to encrypted" since PQC having
                 // completed is a strictly stronger guarantee.
+                let prev = self.callState
                 switch self.callState {
                 case .active, .ringing, .connecting:
                     self.callState = .encrypted
                 default:
                     break  // .idle, .ended, already .encrypted — skip
+                }
+                if self.callState == .encrypted && prev != .encrypted {
+                    // W541-3: emit caller-side encrypted-reached
+                    // event. Pair with callee's emission above; the
+                    // per-call decode tool computes the dial-to-secure
+                    // delta on both sides for asymmetry detection.
+                    let cid: String? = (self.liveProvider?.callingApi
+                        as? BCryptoCallingApiImpl)?.getActiveCallId()
+                    TelemetryService.shared.emit(
+                        kind: "call.encrypted",
+                        callId: cid,
+                        attrs: [
+                            "path": "caller-sasReady",
+                            "prev_state": String(describing: prev)
+                        ]
+                    )
                 }
             }
         }
