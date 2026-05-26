@@ -150,11 +150,18 @@ struct ContentView: View {
     /// - `.active` / `.encrypted` + video → VideoCallView
     /// - `.active` / `.encrypted` + audio → LiveInCallScreen
     /// - anything else (e.g. `.ended` during teardown) → OutgoingCallScreen
+    ///
+    /// W534 — also route to `VideoCallView` when the peer has announced
+    /// a screen-share via `SCREEN_SHARE:start` on an otherwise
+    /// audio-only call. The pre-allocated `m=video` transceiver is
+    /// already negotiated; the announce just tells the UI to mount the
+    /// remote video sink so the encrypted RTP frames actually render.
+    /// See `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
     @ViewBuilder
     private var inCallStack: some View {
         let cs = appState.callState
         if cs == .active || cs == .encrypted {
-            if appState.isVideoCall {
+            if appState.isVideoCall || appState.peerScreenShareActive {
                 VideoCallView()
             } else {
                 LiveInCallScreen()

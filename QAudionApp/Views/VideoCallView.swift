@@ -78,9 +78,22 @@ struct VideoCallView: View {
                     .padding(.horizontal, 16)
             }
         }
+        // W534 — "peer is sharing their screen" badge. Shown whenever
+        // the remote peer has announced a `SCREEN_SHARE:start` via the
+        // OpaqueMessage piggy-back framing. Pinned top-center under
+        // the safe area so it doesn't fight the topBar layout.
+        // See apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md.
+        .overlay(alignment: .top) {
+            if appState.peerScreenShareActive {
+                screenShareBadge
+                    .padding(.top, 56)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
         .animation(.easeInOut(duration: 0.25), value: showControls)
         .animation(.easeInOut(duration: 0.25), value: showSas)
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
+        .animation(.easeInOut(duration: 0.25), value: appState.peerScreenShareActive)
         .statusBarHidden(!showControls)
         .onAppear {
             ScreenshotLockService.lock()
@@ -127,6 +140,32 @@ struct VideoCallView: View {
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(.green.opacity(0.5))
         }
+    }
+
+    /// W534 — minimal "schermo condiviso" badge surfaced when the peer
+    /// announces `SCREEN_SHARE:start`. The remote RTP frames mount on
+    /// the existing `remoteVideoLayer` (pre-allocated transceiver), so
+    /// this view only owns the textual affordance.
+    private var screenShareBadge: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "rectangle.on.rectangle.angled")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Schermo condiviso")
+                .font(.caption)
+                .fontWeight(.medium)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            Capsule()
+                .fill(Color.black.opacity(0.55))
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+        )
+        .accessibilityLabel(Text("Il peer sta condividendo lo schermo"))
     }
 
     // MARK: - Top bar

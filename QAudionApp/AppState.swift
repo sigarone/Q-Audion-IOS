@@ -219,6 +219,16 @@ final class AppState: ObservableObject {
     // `cameraFrameClosureSnapshot` so the camera-to-WebRTC pipe can
     // be restored when the user stops sharing.
     @Published public private(set) var isScreenSharing: Bool = false
+
+    /// W534 — true when the REMOTE peer has announced an active
+    /// `<callId>|SCREEN_SHARE:start` piggy-back for the current call.
+    /// The receiver still gets RTP video frames on the pre-allocated
+    /// `m=video` transceiver regardless of this flag (the transceiver
+    /// is built at PeerConnection setup), but the UI only mounts the
+    /// `WebRTCRemoteVideoView` + badge while this flag is true on an
+    /// audio-only call. See
+    /// `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
+    @Published public private(set) var peerScreenShareActive: Bool = false
     #if os(iOS)
     private let screenShareController = ScreenShareController()
     /// Camera-frame closure captured BEFORE starting screen share, so
@@ -2299,6 +2309,20 @@ final class AppState: ObservableObject {
                 return
             }
 
+            // Path B0 — `<callId>|<TAG>:value` piggy-back framing shared
+            // with Android + Desktop (SCREEN_SHARE / CAPS / HANGUP).
+            // Tested BEFORE the JSON HandshakeBundle branch because both
+            // share the `<callId>|...` prefix; the piggy-back parser
+            // bails out for `{`-prefixed payloads so JSON falls through
+            // intact. See AndroidHandshakeBundle.swift `CallPiggyBack`
+            // and docs/SCREEN_SHARE_PROTOCOL.md.
+            if let piggy = CallPiggyBack.parse(blobStr) {
+                Task { @MainActor [weak self] in
+                    self?.routeInboundCallPiggyBack(piggy, senderId: senderId)
+                }
+                return
+            }
+
             // Path B — Android JSON HandshakeBundle (full processing).
             //
             // Wire shape (WIRE_SPEC.md §3.1): literal UTF-8 string
@@ -2390,6 +2414,91 @@ final class AppState: ObservableObject {
             } catch {
                 print("[AppState] routeInboundAndroidAccept failed: \(error)")
             }
+        }
+    }
+
+    /// W534 — dispatch for `<callId>|<TAG>:value` piggy-backs.
+    /// Currently consumes `SCREEN_SHARE:` (start/stop) and silently
+    /// drops CAPS / HANGUP (the regular `call_hangup` envelope is
+    /// authoritative for teardown). See
+    /// `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
+    @MainActor
+    private func routeInboundCallPiggyBack(_ piggy: CallPiggyBack, senderId: String) {
+        switch piggy {
+        case .screenShare(let callId, let active):
+            handleRemoteScreenShareState(
+                callId: callId, active: active, senderId: senderId)
+        case .caps(let callId, let raw):
+            // Reserved — iOS doesn't yet consume CAPS, but log to
+            // confirm we're seeing them so the parser isn't a black
+            // hole when Desktop / Android add new tags.
+            print("[AppState] piggy-back CAPS dropped (not consumed): callId=\(callId.prefix(8))… raw=\(raw)")
+        case .hangup(let callId, let reason):
+            // The authoritative teardown still arrives on the
+            // `call_hangup` WS envelope. Log + drop.
+            print("[AppState] piggy-back HANGUP dropped (call_hangup is authoritative): callId=\(callId.prefix(8))… reason=\(reason) from=\(senderId.prefix(8))…")
+        }
+    }
+
+    /// W534 — apply a remote `SCREEN_SHARE:start|stop` to the current
+    /// call. Stale callIds (from a previous call) are silently ignored
+    /// so a late-arriving frame can't flip the UI back on after hangup.
+    @MainActor
+    private func handleRemoteScreenShareState(
+        callId: String, active: Bool, senderId: String
+    ) {
+        let currentCallId: String? = {
+            if let provider = liveProvider,
+               let impl = provider.callingApi as? BCryptoCallingApiImpl {
+                return impl.getActiveCallId()
+            }
+            return nil
+        }()
+        // Match case-insensitively — Android historically echoes the
+        // server-side lowercase UUID even when iOS minted uppercase
+        // (see W461). If we have no bound callId yet (very early or
+        // already torn down), still match against the peer userId.
+        let callIdMatches: Bool = {
+            guard let cur = currentCallId else { return isInCall && callContactId == senderId }
+            return cur.caseInsensitiveCompare(callId) == .orderedSame
+        }()
+        let senderMatches = (callContactId == senderId)
+        guard callIdMatches, senderMatches else {
+            print("[AppState] SCREEN_SHARE dropped — stale callId=\(callId.prefix(8))… active=\(active) (current=\(currentCallId?.prefix(8) ?? "nil") senderMatch=\(senderMatches))")
+            return
+        }
+        // Debounce identical state (the spec warns about a malicious
+        // peer flapping start/stop — keep the UI calm).
+        guard peerScreenShareActive != active else { return }
+        peerScreenShareActive = active
+        print("[AppState] SCREEN_SHARE \(active ? "start" : "stop") from=\(senderId.prefix(8))… callId=\(callId.prefix(8))…")
+    }
+
+    /// W534 — outbound announce primitive. Builds
+    /// `<callId>|SCREEN_SHARE:<start|stop>` and ships it via the
+    /// existing `opaque_message` UTF-8 string path so Desktop +
+    /// Android peers mount their remote video sink. iOS does NOT yet
+    /// expose a screen-share UI button (would require a ReplayKit
+    /// broadcast extension) — this method exists so a future iOS
+    /// capture path has the announce ready without re-touching the
+    /// piggy-back framing.
+    @MainActor
+    public func announceScreenShare(active: Bool) async {
+        guard let peer = callContactId, !peer.isEmpty,
+              let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId(), !callId.isEmpty
+        else {
+            print("[AppState] announceScreenShare: no active call — refusing")
+            return
+        }
+        let wire = CallPiggyBack.serializeScreenShare(callId: callId, active: active)
+        do {
+            try await provider.callingApi.sendOpaqueMessageString(
+                recipientId: peer, payload: wire)
+            print("[AppState] SCREEN_SHARE announce shipped active=\(active) callId=\(callId.prefix(8))…")
+        } catch {
+            print("[AppState] announceScreenShare failed: \(error)")
         }
     }
 
@@ -3237,6 +3346,12 @@ final class AppState: ObservableObject {
         callContactId = nil
         incomingCallerName = ""
         activeCallKitId = nil
+        // W534 — drop any sticky peer-screen-share state from this call
+        // so the next call starts with a clean UI. Per SCREEN_SHARE_
+        // PROTOCOL.md the call_hangup envelope is authoritative for
+        // teardown; we do NOT need (and the spec explicitly says not to
+        // send) a final `SCREEN_SHARE:stop` here.
+        peerScreenShareActive = false
         // W339: drop the PQC session key so the SAS panel hides on the
         // next call setup. Holding stale key material across calls
         // would otherwise let one call's verified SAS appear on the

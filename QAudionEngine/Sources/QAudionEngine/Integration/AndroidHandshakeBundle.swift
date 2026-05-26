@@ -171,3 +171,88 @@ public enum AndroidHandshakeEnvelope {
         return "\(callId)|\(json)"
     }
 }
+
+/// Lightweight `<callId>|<TAG>:<value>` piggy-back framing shared with
+/// Android (`AndroidBundleHandshake.kt`) and Desktop
+/// (`apps/qaudion-desktop/src/main/calling/CallController.ts`).
+///
+/// These travel in the SAME `opaque_message.data` UTF-8 string slot as
+/// the JSON HandshakeBundle but use a flat `KEY:value` payload after the
+/// pipe instead of a JSON object. The pipe-prefixed callId lets the
+/// receiver match against its current call before reacting.
+///
+/// Known tags (extend as needed — forward-compat: unknown tags fall
+/// through to `nil` and the caller silently drops the envelope, exactly
+/// like an unknown JSON shape):
+///
+///   - `SCREEN_SHARE:<state>` — peer announces start/stop of a screen
+///     share on the existing video transceiver. `<state>` is
+///     `start` / `on` / `true` (active) or `stop` / `off` / `false`
+///     (inactive). Case-insensitive. See
+///     `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
+///   - `CAPS:<csv>` — peer capability announce (reserved, not consumed
+///     by iOS yet — silently dropped).
+///   - `HANGUP:<reason>` — peer hangup piggy-back (reserved, not
+///     consumed by iOS yet — the regular `call_hangup` WS envelope is
+///     authoritative; silently dropped).
+public enum CallPiggyBack: Equatable {
+
+    /// `<callId>|SCREEN_SHARE:<state>` — peer toggled screen sharing.
+    case screenShare(callId: String, active: Bool)
+
+    /// `<callId>|CAPS:<csv>` — capability announce. Carried for
+    /// completeness so the parser sink can log/ignore it instead of
+    /// printing "unrecognised envelope".
+    case caps(callId: String, raw: String)
+
+    /// `<callId>|HANGUP:<reason>` — secondary hangup signal. The
+    /// authoritative teardown still arrives on the `call_hangup` WS
+    /// envelope; this branch exists so the parser doesn't classify the
+    /// piggy-back as malformed.
+    case hangup(callId: String, reason: String)
+
+    /// Parse the literal `opaque_message.data` UTF-8 string.
+    ///
+    /// Returns `nil` for shapes that are NOT a `<callId>|<TAG>:...`
+    /// piggy-back (e.g. JSON HandshakeBundle starting with `{`, or
+    /// base64 QUAD binary). Callers should fall through to other
+    /// parsers in that case — this method MUST NOT throw.
+    public static func parse(_ raw: String) -> CallPiggyBack? {
+        guard let pipeIdx = raw.firstIndex(of: "|") else { return nil }
+        let callId = String(raw[raw.startIndex ..< pipeIdx])
+        let payload = String(raw[raw.index(after: pipeIdx)...])
+        guard !callId.isEmpty, !payload.isEmpty else { return nil }
+        // JSON HandshakeBundle path — not our concern.
+        if payload.hasPrefix("{") { return nil }
+
+        // SCREEN_SHARE:<state>
+        if let v = stripPrefix(payload, "SCREEN_SHARE:") {
+            let lower = v.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            // Active aliases (case-insensitive) — matches Desktop +
+            // Android receiver. Everything else (including the empty
+            // string) is treated as inactive so a malformed payload
+            // can't trick the UI into a stuck "active" state.
+            let active = (lower == "start" || lower == "on" || lower == "true")
+            return .screenShare(callId: callId, active: active)
+        }
+        if let v = stripPrefix(payload, "CAPS:") {
+            return .caps(callId: callId, raw: v)
+        }
+        if let v = stripPrefix(payload, "HANGUP:") {
+            return .hangup(callId: callId, reason: v)
+        }
+        return nil
+    }
+
+    private static func stripPrefix(_ s: String, _ prefix: String) -> String? {
+        guard s.hasPrefix(prefix) else { return nil }
+        return String(s.dropFirst(prefix.count))
+    }
+
+    /// Build a wire string for a SCREEN_SHARE announce — the inverse of
+    /// `parse`. Used by the sender side (future iOS screen-share UI
+    /// hook) so AppState doesn't have to know the framing details.
+    public static func serializeScreenShare(callId: String, active: Bool) -> String {
+        return "\(callId)|SCREEN_SHARE:\(active ? "start" : "stop")"
+    }
+}
