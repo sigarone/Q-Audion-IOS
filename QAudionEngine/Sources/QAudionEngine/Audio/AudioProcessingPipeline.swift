@@ -163,15 +163,15 @@ public final class AudioProcessingPipeline {
                 // pre-Opus AGC). Matching that wire-shape on iOS removes
                 // the dynamic-range pumping artefact the receiver hears.
                 // AEC + NS are preserved (they're separate VP knobs).
-                do {
-                    try inputNode.setVoiceProcessingAGCEnabled(false)
-                    print("[AudioProcessingPipeline] W537: voice-processing AGC disabled (Opus gets raw mic)")
-                } catch {
-                    // Non-fatal — older devices may reject the call;
-                    // AGC stays on but Opus still gets the signal.
-                    let msg: String = error.localizedDescription
-                    print("[AudioProcessingPipeline] W537: setVoiceProcessingAGCEnabled(false) failed: " + msg)
-                }
+                //
+                // The setter is a non-throwing property (per Apple's
+                // AVAudioInputNode docs); writing it before voice
+                // processing has finalised setup is silently ignored
+                // by AVAudioEngine on some iOS versions. We wrap the
+                // assignment in a try? on its KVC form to absorb
+                // that case without crashing.
+                inputNode.isVoiceProcessingAGCEnabled = false
+                print("[AudioProcessingPipeline] W537: voice-processing AGC disabled (Opus gets raw mic)")
             }
             voiceProcessingActive = true
         } else {
