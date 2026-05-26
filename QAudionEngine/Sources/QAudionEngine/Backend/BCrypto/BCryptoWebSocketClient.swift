@@ -31,6 +31,17 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// The caller hung up before we picked up — stop ringing locally.
     public var onCallCancel: ((_ callId: String, _ reason: String?) -> Void)?
 
+    /// W536 — mid-call audio↔video upgrade. The initiator side ships a
+    /// fresh SDP offer (with the new video m-section); the callee
+    /// applies it as a remote offer, generates an answer, and ships
+    /// it back via `call_upgrade_response`. Wire format matches
+    /// `qaudion-desktop/src/main/calling/CallController.ts:
+    /// requestUpgradeToVideo` (call_id + sdp on request, plus
+    /// `accepted` boolean on response) so iOS↔desktop↔Android can
+    /// upgrade interchangeably.
+    public var onCallUpgradeRequest: ((_ callId: String, _ senderId: String, _ sdp: String) -> Void)?
+    public var onCallUpgradeResponse: ((_ callId: String, _ accepted: Bool, _ sdp: String) -> Void)?
+
     private var webSocketTask: URLSessionWebSocketTask?
     /// SECURITY C-6 / H-5 — strong ref to the session delegate so it
     /// survives the lifetime of the `URLSession` (URLSession only holds
@@ -134,6 +145,33 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                   let callId = data["call_id"] as? String else { return }
             let reason = data["reason"] as? String
             self.onCallCancel?(callId, reason)
+        }
+
+        // W536 — call_upgrade_request (caller→callee). Same wire shape
+        // as desktop's CallUpgradeRequestData: { call_id, sdp,
+        // sender_id?, from? }. Android's WsCodec parses sender_id; the
+        // desktop server normalises to `sender_id`. Fall back to `from`
+        // for any legacy variant. recipient_id is not delivered to
+        // this client (the server already routed by it).
+        registerHandler(type: "call_upgrade_request") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String,
+                  let sdp = data["sdp"] as? String else { return }
+            let senderId = (data["sender_id"] as? String)
+                ?? (data["from"] as? String)
+                ?? ""
+            self.onCallUpgradeRequest?(callId, senderId, sdp)
+        }
+
+        // W536 — call_upgrade_response (callee→caller). `accepted`
+        // defaults to true when the peer omits the field (legacy
+        // desktop builds < commit a13b that always implied accepted).
+        registerHandler(type: "call_upgrade_response") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let sdp = (data["sdp"] as? String) ?? ""
+            let accepted = (data["accepted"] as? Bool) ?? true
+            self.onCallUpgradeResponse?(callId, accepted, sdp)
         }
     }
 

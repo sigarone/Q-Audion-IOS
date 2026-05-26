@@ -222,6 +222,14 @@ public final class QAudionPeerConnection: NSObject {
         localVideoTrack?.isEnabled = !muted
     }
 
+    /// W536 — true once `addLocalVideoTrack` has installed a track.
+    /// Used by QAudionWebRtcCallController.upgradeToVideo to short-
+    /// circuit a redundant addTransceiver when the renegotiation has
+    /// already been driven from the other side.
+    public func hasLocalVideoTrack() -> Bool {
+        return localVideoTrack != nil
+    }
+
     // MARK: - Offer / Answer
 
     public func createOffer(audioOnly: Bool = true,

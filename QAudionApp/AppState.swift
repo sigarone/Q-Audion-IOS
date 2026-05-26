@@ -1182,6 +1182,117 @@ final class AppState: ObservableObject {
                 self.handleRemoteCallHangup(reasonString: reasonString)
             }
         }
+
+        // W536 — inbound mid-call upgrade. Responder side: peer
+        // wants to add video; apply their SDP offer, generate an
+        // answer, ship it back, flip the UI to video mode, and
+        // start the local VideoCallPipeline so the WS HEVC path is
+        // populated too (the WebRTC RTP path is what the peer
+        // actually consumes; the WS path serves iOS↔iOS peers).
+        ws.onCallUpgradeRequest = { [weak self] callId, senderId, sdp in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.handleIncomingUpgradeRequest(
+                    callId: callId, senderId: senderId, sdp: sdp)
+            }
+        }
+        // W536 — caller side: peer accepted/rejected our upgrade
+        // request. Apply the answer SDP if accepted.
+        ws.onCallUpgradeResponse = { [weak self] callId, accepted, sdp in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.handleUpgradeResponse(
+                    callId: callId, accepted: accepted, sdp: sdp)
+            }
+        }
+    }
+
+    /// W536 — responder side of audio→video upgrade. Builds the
+    /// answer SDP via the WebRTC controller, ships it back via
+    /// `sendCallUpgradeResponse(accepted: true)`, and starts the
+    /// local VideoCallPipeline. If the WebRTC controller is not
+    /// available we ship `accepted: false` with empty SDP so the
+    /// peer sees an explicit reject instead of waiting on a timeout.
+    @MainActor
+    private func handleIncomingUpgradeRequest(
+        callId: String, senderId: String, sdp: String
+    ) {
+        #if canImport(WebRTC)
+        guard let controller = webRtcController as? QAudionWebRtcCallController,
+              let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl
+        else {
+            RTLog.warn("call", "onCallUpgradeRequest: WebRTC controller unavailable — sending reject")
+            Task {
+                try? await (liveProvider?.callingApi as? BCryptoCallingApiImpl)?
+                    .sendCallUpgradeResponse(
+                        callId: callId,
+                        recipientId: senderId,
+                        sdp: "",
+                        accepted: false)
+            }
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            do {
+                let answerSdp = try await controller.acceptUpgradeOffer(remoteSdp: sdp)
+                try await impl.sendCallUpgradeResponse(
+                    callId: callId,
+                    recipientId: senderId,
+                    sdp: answerSdp,
+                    accepted: true)
+                self.isVideoCall = true
+                self.setCamera(true)
+                await self.startVideoPipeline(for: senderId)
+                RTLog.info("call", "onCallUpgradeRequest accepted — local video pipeline up")
+            } catch {
+                let desc: String = error.localizedDescription
+                RTLog.warn("call", "onCallUpgradeRequest failed: " + desc)
+                try? await impl.sendCallUpgradeResponse(
+                    callId: callId,
+                    recipientId: senderId,
+                    sdp: "",
+                    accepted: false)
+            }
+        }
+        #endif
+    }
+
+    /// W536 — caller side. Apply peer's answer SDP or revert the
+    /// local UI if the peer rejected.
+    @MainActor
+    private func handleUpgradeResponse(
+        callId: String, accepted: Bool, sdp: String
+    ) {
+        #if canImport(WebRTC)
+        guard let controller = webRtcController as? QAudionWebRtcCallController else { return }
+        if !accepted || sdp.isEmpty {
+            RTLog.info("call", "onCallUpgradeResponse: peer rejected — reverting to audio-only UI")
+            self.isVideoCall = false
+            self.setCamera(false)
+            self.videoPipeline?.stop()
+            self.videoPipeline = nil
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            do {
+                try await controller.applyUpgradeAnswer(sdp: sdp)
+                RTLog.info("call", "onCallUpgradeResponse: WebRTC renegotiation complete — video flowing")
+                // W402: forward the (possibly newly-derived) PQC key
+                // to the WebRTC controller in case the upgrade
+                // crossed a rekey boundary. Idempotent.
+                if let key = self.callPqcSessionKey {
+                    controller.pqcSessionKey = key
+                }
+            } catch {
+                let desc: String = error.localizedDescription
+                RTLog.warn("call", "applyUpgradeAnswer failed: " + desc)
+                self.errorMessage = "Upgrade a video fallito: " + desc
+            }
+        }
+        #endif
     }
 
     /// C-3 — remote hangup / decline / timeout teardown. Runs the full
@@ -3271,18 +3382,84 @@ final class AppState: ObservableObject {
             RTLog.warn("call", "upgradeToVideo: callContactId nil — aborting")
             return
         }
-        isVideoCall = true
-        setCamera(true)
-        RTLog.info("call", "upgradeToVideo: starting local video pipeline for peer " + peerId.prefix(8).description + "…")
-        // W522 — the previous implementation only flipped isVideoCall and
-        // turned the camera on. That brought up the local preview (so the
-        // user thought it was working) but neither encoded outgoing video
-        // fragments nor registered the WS `video_frame` RX handler. Result:
-        // both sides saw a black remote video. Now we kick off the same
-        // pipeline that startCall(video:true) uses.
+        RTLog.info("call", "upgradeToVideo: starting WebRTC renegotiation for peer " + peerId.prefix(8).description + "…")
+        // W536 — proper cross-platform audio→video upgrade via WebRTC
+        // SDP renegotiation. The previous (W522) implementation only
+        // flipped isVideoCall and started VideoCallPipeline (WS HEVC
+        // path). That produced black/purple video on Android + desktop
+        // because their video render side only consumes WebRTC RTP —
+        // and the existing PC had no m=video section, so there was
+        // nothing to consume.
+        //
+        // New flow (matches desktop's PeerConnectionManager.
+        // upgradeToVideo + CallController.requestUpgradeToVideo):
+        //   1. addTransceiver(.video) via QAudionWebRtcCallController.
+        //      upgradeToVideo — returns the regenerated SDP offer.
+        //   2. CallingApi.sendCallUpgradeRequest ships the offer over
+        //      WS. Recipient is the peer's userId; call_id ties it to
+        //      the existing session.
+        //   3. Peer responds with call_upgrade_response (handled in
+        //      wireUpgradeHandlers). On accept, we feed the answer
+        //      back via applyUpgradeAnswer.
+        //   4. Once the renegotiation lands, VideoCallPipeline starts
+        //      so the WS-relay HEVC path (iOS↔iOS) ALSO carries video.
+        //      Cross-platform peers ignore the WS video_frame (no
+        //      consumer) but the WebRTC RTP path is what they render.
+        //
+        // setCamera(true) is deferred to AFTER the WebRTC renegotiation
+        // succeeds — turning on the camera before there's a sink for
+        // the frames would flash the local preview without sending.
         Task { @MainActor [weak self] in
-            await self?.startVideoPipeline(for: peerId)
+            await self?.performWebRtcVideoUpgrade(for: peerId)
         }
+    }
+
+    /// W536 — execute the WebRTC half of upgradeToVideo. Split out of
+    /// `upgradeToVideo()` so the synchronous public function can
+    /// return immediately while the async signaling happens in the
+    /// background. Best-effort: any failure leaves the call in
+    /// audio-only mode (no UI regression).
+    @MainActor
+    private func performWebRtcVideoUpgrade(for peerId: String) async {
+        #if canImport(WebRTC)
+        guard let controller = webRtcController as? QAudionWebRtcCallController,
+              let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId()
+        else {
+            RTLog.warn("call", "upgradeToVideo: WebRTC controller / callId unavailable — leaving call audio-only")
+            return
+        }
+        do {
+            let offerSdp = try await controller.upgradeToVideo()
+            // Mark the local UI as video BEFORE the peer accepts so
+            // the local preview can show as soon as the camera is on.
+            // If the peer rejects (accepted=false), we revert below.
+            self.isVideoCall = true
+            self.setCamera(true)
+            try await impl.sendCallUpgradeRequest(
+                callId: callId,
+                recipientId: peerId,
+                sdp: offerSdp
+            )
+            RTLog.info("call", "upgradeToVideo: call_upgrade_request shipped — awaiting response")
+            // ALSO bring up the VideoCallPipeline so iOS↔iOS peers get
+            // the WS HEVC stream. The WebRTC RTP path handles Android
+            // + desktop. Both are wired to the same camera frames; no
+            // extra capture session.
+            await startVideoPipeline(for: peerId)
+        } catch QAudionWebRtcCallController.ControllerError.alreadyHasVideo {
+            // The peer raced us with their own upgrade. acceptUpgrade
+            // Offer will fire shortly; nothing to do here.
+            RTLog.info("call", "upgradeToVideo: already in video — peer raced us")
+        } catch {
+            let desc: String = error.localizedDescription
+            RTLog.warn("call", "upgradeToVideo failed: " + desc)
+            errorMessage = "Upgrade a video fallito: " + desc
+        }
+        #else
+        RTLog.warn("call", "upgradeToVideo: WebRTC not available in this build")
+        #endif
     }
 
     // MARK: - W533: Screen Share

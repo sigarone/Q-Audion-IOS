@@ -363,6 +363,133 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         state = .connecting
     }
 
+    // MARK: - W536 — mid-call audio↔video upgrade
+
+    /// Idempotency flag for upgradeToVideo. Set BEFORE the awaits on
+    /// addLocalVideoTrack / createOffer so a concurrent
+    /// acceptUpgradeOffer (peer-initiated upgrade racing with our
+    /// own button press) cannot double-add the video track. Cleared
+    /// on applyUpgradeAnswer success or any failure path.
+    private var videoUpgradeInProgress: Bool = false
+
+    /// W536 — initiator side. Add a local video track to the live
+    /// peer connection, generate a fresh SDP offer that contains the
+    /// new m=video section, and return the SDP for AppState to ship
+    /// via `CallingApi.sendCallUpgradeRequest`. AppState awaits the
+    /// peer's response then calls `applyUpgradeAnswer(sdp:)`.
+    ///
+    /// Mirrors qaudion-desktop PeerConnectionManager.upgradeToVideo
+    /// at the same wire boundary, so iOS↔desktop↔Android upgrades
+    /// interoperate.
+    ///
+    /// Throws:
+    /// - `.noPeerConnection` if the call has no live PC.
+    /// - `.alreadyHasVideo` if the PC already carries video (either
+    ///   the call started with video=true, or the peer raced us).
+    /// - `.videoAddFailed` if addLocalVideoTrack returned nil.
+    /// - Any underlying WebRTC error from createOffer /
+    ///   setLocalDescription.
+    public func upgradeToVideo() async throws -> String {
+        guard let pc = peerConnection else {
+            throw ControllerError.noPeerConnection
+        }
+        if pc.hasLocalVideoTrack() || videoUpgradeInProgress {
+            throw ControllerError.alreadyHasVideo
+        }
+        videoUpgradeInProgress = true
+
+        // Adding the track BEFORE createOffer is what gets the
+        // m=video section into the SDP. RTCPeerConnection's offer
+        // generation enumerates current transceivers — order matters.
+        let source: RTCVideoSource? = pc.addLocalVideoTrack()
+        guard let videoSource = source else {
+            videoUpgradeInProgress = false
+            throw ControllerError.videoAddFailed
+        }
+        // startCameraCapture branches on useExternalVideoSource:
+        // - true  → creates WebRTCPixelBufferCapturer, AppState will
+        //           re-wire VideoCallPipeline.onCapturedPixelBuffer.
+        // - false → opens the front camera via RTCCameraVideoCapturer.
+        startCameraCapture(for: videoSource)
+
+        // Reset the answer-applied flag so the upgrade response isn't
+        // mistaken for a duplicate call_answer (the original audio-
+        // call answer already set hasAppliedRemoteAnswer=true).
+        hasAppliedRemoteAnswer = false
+
+        do {
+            let sdp: String = try await withCheckedThrowingContinuation { cont in
+                pc.createOffer(audioOnly: false) { result in
+                    switch result {
+                    case .success(let s): cont.resume(returning: s)
+                    case .failure(let e): cont.resume(throwing: e)
+                    }
+                }
+            }
+            return sdp
+        } catch {
+            videoUpgradeInProgress = false
+            throw error
+        }
+    }
+
+    /// W536 — initiator side. Apply the SDP answer the peer shipped
+    /// in `call_upgrade_response`. Idempotent: a duplicate response
+    /// from the relay is silently swallowed via the
+    /// `tryAcquireAnswerSlot()` gate.
+    public func applyUpgradeAnswer(sdp: String) async throws {
+        guard let pc = peerConnection else {
+            throw ControllerError.noPeerConnection
+        }
+        guard tryAcquireAnswerSlot() else {
+            // Duplicate call_upgrade_response. No-op.
+            return
+        }
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                pc.setRemoteAnswer(sdp: sdp) { err in
+                    if let err = err { cont.resume(throwing: err) } else { cont.resume() }
+                }
+            }
+            videoUpgradeInProgress = false
+        } catch {
+            videoUpgradeInProgress = false
+            throw error
+        }
+    }
+
+    /// W536 — responder side. Accept a `call_upgrade_request`: add a
+    /// local video track if not already present, apply the remote
+    /// offer, generate the local answer, and return the answer SDP.
+    /// AppState ships the answer via
+    /// `CallingApi.sendCallUpgradeResponse(accepted: true)`.
+    public func acceptUpgradeOffer(remoteSdp: String) async throws -> String {
+        guard let pc = peerConnection else {
+            throw ControllerError.noPeerConnection
+        }
+        if !pc.hasLocalVideoTrack() {
+            if let source = pc.addLocalVideoTrack() {
+                startCameraCapture(for: source)
+            }
+        }
+        // 1. Remote offer (with new m=video section).
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            pc.setRemoteOffer(sdp: remoteSdp) { err in
+                if let err = err { cont.resume(throwing: err) } else { cont.resume() }
+            }
+        }
+        // 2. Local answer.
+        let answerSdp: String = try await withCheckedThrowingContinuation { cont in
+            pc.createAnswer(hasVideo: true) { result in
+                switch result {
+                case .success(let s): cont.resume(returning: s)
+                case .failure(let e): cont.resume(throwing: e)
+                }
+            }
+        }
+        return answerSdp
+    }
+
     // MARK: - ICE
 
     public func handleRemoteIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
@@ -615,6 +742,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public enum ControllerError: Error, Equatable {
         case wrongState(String)
         case noPeerConnection
+        /// W536 — upgradeToVideo invoked but the PC already carries a
+        /// local video track (a crossing acceptUpgradeOffer or an
+        /// initial-video call). Treat as "already done", not a real
+        /// failure; AppState surfaces it as a no-op.
+        case alreadyHasVideo
+        /// W536 — addLocalVideoTrack returned nil at upgrade time
+        /// (PC tear-down race, factory failure, etc.).
+        case videoAddFailed
     }
 
     // MARK: - QAudionPeerConnection.Delegate

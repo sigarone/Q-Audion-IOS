@@ -321,6 +321,38 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ])
     }
 
+    /// W536 — initiator-side mid-call upgrade request. Ships the new
+    /// SDP offer (with the freshly-added video m-section) so the peer
+    /// can produce an answer that closes the renegotiation loop. Wire
+    /// format byte-for-byte identical to desktop
+    /// CallController.requestUpgradeToVideo + Android
+    /// WsCommand.CallUpgradeRequest.
+    public func sendCallUpgradeRequest(callId: String, recipientId: String, sdp: String) async throws {
+        ws.send(type: "call_upgrade_request", data: [
+            "call_id":      callId,
+            "recipient_id": recipientId,
+            "sdp":          sdp,
+        ])
+    }
+
+    /// W536 — callee-side response to a `call_upgrade_request`. When
+    /// `accepted == false`, the peer should leave the SDP empty and
+    /// keep the audio-only PC. Mirrors desktop
+    /// CallController.respondToUpgrade.
+    public func sendCallUpgradeResponse(
+        callId: String,
+        recipientId: String,
+        sdp: String,
+        accepted: Bool
+    ) async throws {
+        ws.send(type: "call_upgrade_response", data: [
+            "call_id":      callId,
+            "recipient_id": recipientId,
+            "sdp":          sdp,
+            "accepted":     accepted,
+        ])
+    }
+
     public func getRelays() async throws -> [RelayServer] {
         return try await getRelaysResponse().relays
     }
