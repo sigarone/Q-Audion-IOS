@@ -408,6 +408,14 @@ final class AppState: ObservableObject {
             getToken: { [weak self] in self?.authService.loadToken() }
         )
 
+        // W559 — cross-platform bug report service. Volume-gesture trigger +
+        // auto-detection hook. Primitives-only API per CLAUDE.md rule #16.
+        BugReporter.shared.configure(
+            getToken: { [weak self] in self?.authService.loadToken() },
+            getServerUrl: { [weak self] in self?.serverUrl ?? "" }
+        )
+        BugReporter.shared.startVolumeObserver()
+
         // W94: wire chat-message notification taps to pendingDeepLinkConversationId
         // so the chat list can pick up and navigate. Idempotent — re-init
         // overwrites the closure with a fresh AppState capture.

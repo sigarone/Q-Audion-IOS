@@ -92,6 +92,10 @@ public final class RuntimeLogSink: ObservableObject {
         }
         // Bump observable count on main (we're already @MainActor).
         entryCount &+= 1
+        // W559 — feed errors into the auto-detection window.
+        if level == .error {
+            BugReporter.shared.onError(tag: tag, message: message)
+        }
     }
 
     /// Snapshot of the current buffer formatted for log export.
@@ -109,6 +113,32 @@ public final class RuntimeLogSink: ObservableObject {
             out.append(" ")
             out.append(e.level.rawValue.uppercased())
             out.append(" [")
+            out.append(e.tag)
+            out.append("] ")
+            out.append(e.message)
+            out.append("\n")
+        }
+        return out
+    }
+
+    /// W559 — Returns the last `minutes` minutes of log entries as a
+    /// plain-text string formatted as `[timestamp] [LEVEL] [tag] message`.
+    /// Thread-safe; allocates a temporary copy of the ring buffer.
+    public func recentLogsAsString(minutes: Double = 2.0) -> String {
+        lock.lock()
+        let copy = entries
+        lock.unlock()
+        let cutoff = Date().addingTimeInterval(-minutes * 60.0)
+        let recent = copy.filter { $0.timestamp >= cutoff }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var out = String()
+        out.reserveCapacity(recent.count * 200)
+        for e in recent {
+            out.append(f.string(from: e.timestamp))
+            out.append(" [")
+            out.append(e.level.rawValue.uppercased())
+            out.append("] [")
             out.append(e.tag)
             out.append("] ")
             out.append(e.message)

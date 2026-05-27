@@ -31,6 +31,14 @@ struct ContentView: View {
         ZStack(alignment: .top) {
             mainStack
             QAudionSnackbarHost(state: snackbarHost)
+            // W559 — bug report overlay (volume-gesture or auto-trigger).
+            BugReportOverlay()
+        }
+        // W559 — show a non-intrusive snackbar when an auto report fires.
+        .onReceive(NotificationCenter.default.publisher(for: BugReporter.autoReportNotification)) { note in
+            let tag = note.userInfo?["tag"] as? String ?? "unknown"
+            let msg = "Report automatico inviato (tag: " + tag + ")"
+            snackbarHost.show(.init(text: msg, severity: .info, durationSeconds: 2))
         }
         // W400: subscribe to inbound group invites so the user gets a
         // sheet immediately. Posts come from
