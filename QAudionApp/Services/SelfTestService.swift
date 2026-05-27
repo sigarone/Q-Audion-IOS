@@ -156,10 +156,13 @@ public final class SelfTestService {
     private func runMLKEMKeygen(runId: String) async {
         let iterations = 10
         var us: [Int] = []
+        // W553-fix: `generateKeyPair()` is an instance method, not
+        // static — construct once and reuse for the whole loop.
+        let pqc = PqcKeyExchange()
         for _ in 0..<iterations {
             let t0 = DispatchTime.now()
             do {
-                _ = try PqcKeyExchange.generateKeyPair()
+                _ = try pqc.generateKeyPair()
             } catch {
                 // Don't crash the suite — emit a failure event and bail.
                 TelemetryService.shared.emit(
