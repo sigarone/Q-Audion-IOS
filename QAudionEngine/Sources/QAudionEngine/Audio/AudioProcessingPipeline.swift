@@ -24,7 +24,24 @@ public final class AudioProcessingPipeline {
 
         public init(
             echoCancellationEnabled: Bool = true,
-            noiseCancellationEnabled: Bool = true,
+            // W555 — was `true` by default. This flag gates BOTH Apple's
+            // Voice-Processing noise-suppression AND the per-sample
+            // "soft-gating" inside `applyNoiseReduction()` (which is
+            // commented as spectral subtraction but is actually a
+            // sample-domain noise gate). The sample-domain gate
+            // attenuates samples below ~2× noise-floor, producing
+            // envelope pumping + transient distortion BEFORE Opus
+            // sees the signal. Android has NO equivalent pre-Opus
+            // step — that's the audio-quality gap iPhone→S24
+            // reported on the 2026-05-27 test call.
+            //
+            // Apple's hardware VP-IO already handles noise suppression
+            // much better than our naive software gate. Keeping the
+            // flag for explicit user control but flipping default to
+            // `false` so the pre-Opus pipeline matches Android's
+            // (= identity passthrough). Receiver still gets HW NS via
+            // the VP-IO chain — just no double-attenuation.
+            noiseCancellationEnabled: Bool = false,
             automaticGainControl: Bool = true,
             voiceIsolation: Bool = true,
             preferredBufferDuration: TimeInterval = 0.005,  // 5ms for real-time VoIP

@@ -3539,7 +3539,20 @@ final class AppState: ObservableObject {
     /// Both peers compute the SAS from the same shared secret using the
     /// same canonical salt/info, so two same-version peers always agree
     /// on the 6-word string.
+    ///
+    /// W554 — gate render on `callSasKeySource == .mlKem`.
+    /// The previous version exposed words derived from the transitional
+    /// PSK (`deriveTransitionalSasKey`, see line 2946), which iOS seeds
+    /// for ~3-5 s before the ML-KEM handshake delivers the real key.
+    /// Android has NO equivalent transitional path — it waits for the
+    /// CallSessionKeyBroker. The mismatch produced two completely
+    /// different 6-word strings on the two ends for that window, the
+    /// user reads them, sees "no match", thinks the call is compromised.
+    /// Holding the panel hidden until the broker fires is the right UX
+    /// AND security stance: a SAS that doesn't reflect the actual call
+    /// key is worse than no SAS.
     var callSasWords: [String] {
+        guard callSasKeySource == .mlKem else { return [] }
         guard let key = callPqcSessionKey, !key.isEmpty else { return [] }
         do {
             return try ComputeSasUseCase.invoke(sessionKey: key).words
