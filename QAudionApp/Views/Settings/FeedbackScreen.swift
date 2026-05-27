@@ -127,7 +127,12 @@ private struct FeedbackComposeSheet: View {
     let onSubmitted: (FeedbackService.Item) -> Void
     @State private var kind: String = "bug"
     @State private var subject: String = ""
-    @State private var body: String = ""
+    // W553 — renamed from `body` to `bodyText` to avoid shadowing the
+    // `View.body` requirement (Swift compile error
+    // `invalid redeclaration of 'body'`). Discovered after GH Actions
+    // TestFlight builds v1.0.544-v1.0.546 all failed for this reason —
+    // the tester devices never got the W550/W551/W552 fixes.
+    @State private var bodyText: String = ""
     @State private var submitting = false
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
@@ -146,7 +151,7 @@ private struct FeedbackComposeSheet: View {
                         .textInputAutocapitalization(.sentences)
                 }
                 Section("Messaggio") {
-                    TextEditor(text: $body)
+                    TextEditor(text: $bodyText)
                         .frame(minHeight: 160)
                 }
                 if let error {
@@ -167,7 +172,7 @@ private struct FeedbackComposeSheet: View {
                     } label: {
                         if submitting { ProgressView() } else { Text("Invia") }
                     }
-                    .disabled(submitting || body.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(submitting || bodyText.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
@@ -180,7 +185,7 @@ private struct FeedbackComposeSheet: View {
             let item = try await FeedbackService.shared.submit(
                 kind: kind,
                 subject: subject.trimmingCharacters(in: .whitespacesAndNewlines),
-                body: body.trimmingCharacters(in: .whitespacesAndNewlines)
+                body: bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             onSubmitted(item)
             dismiss()
