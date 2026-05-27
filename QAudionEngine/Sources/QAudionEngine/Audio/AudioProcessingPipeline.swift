@@ -23,7 +23,18 @@ public final class AudioProcessingPipeline {
         public var preferredSampleRate: Double
 
         public init(
-            echoCancellationEnabled: Bool = true,
+            // W556 — default flipped to `false`.
+            // When CallsGate.anyVoiceProcessingEnabled is used as
+            // voiceProcessingOverride (the production path in CallService),
+            // this value is ignored — the override wins. This default
+            // matters only for standalone AudioProcessingPipeline usage
+            // (SelfTestService, unit tests, simulator). Flipping it to
+            // `false` means no VP-IO in those paths either, matching the
+            // production default and avoiding NS artefacts in test audio.
+            //
+            // See CallsGate.aecEnabled for the full rationale behind
+            // defaulting all VP-IO flags to false (W556).
+            echoCancellationEnabled: Bool = false,
             // W555 — was `true` by default. This flag gates BOTH Apple's
             // Voice-Processing noise-suppression AND the per-sample
             // "soft-gating" inside `applyNoiseReduction()` (which is
@@ -42,7 +53,7 @@ public final class AudioProcessingPipeline {
             // (= identity passthrough). Receiver still gets HW NS via
             // the VP-IO chain — just no double-attenuation.
             noiseCancellationEnabled: Bool = false,
-            automaticGainControl: Bool = true,
+            automaticGainControl: Bool = false,   // W556: was true, VP-IO off by default
             voiceIsolation: Bool = true,
             preferredBufferDuration: TimeInterval = 0.005,  // 5ms for real-time VoIP
             preferredSampleRate: Double = Double(AudioConstants.sampleRate)
@@ -107,13 +118,31 @@ public final class AudioProcessingPipeline {
 
         // Category: playAndRecord for full-duplex VoIP
         // Mode: voiceChat enables hardware AEC + AGC + noise suppression
+        //
+        // W556 — removed `.allowBluetoothA2DP` from VoIP options.
+        // A2DP is a high-quality STEREO OUTPUT profile (no mic input).
+        // In `.voiceChat` mode iOS must use HFP for Bluetooth devices
+        // (HFP = 16 kHz mono, bidirectional). Having `.allowBluetoothA2DP`
+        // alongside `.allowBluetoothHFP` caused iOS to route PLAYBACK
+        // through A2DP (high-quality) while the CAPTURE path fell back
+        // to HFP — but the routing decision is made per-session start
+        // and can flip mid-call when the user's headset state changes,
+        // producing an audible glitch. More critically, when the device
+        // was in A2DP output mode, `setVoiceProcessingEnabled(true)` on
+        // the inputNode attached VP-IO to a capture node that was wired
+        // to the HFP SCO codec (8/16 kHz) rather than the built-in mic's
+        // 48 kHz path — the NS/AEC saw a 16 kHz signal and applied a
+        // filter designed for that bandwidth to a resampled 48 kHz
+        // stream, producing exactly the metallic coloring reported by
+        // the user on the 2026-05-27 call. Removing A2DP from VoIP
+        // forces iOS to use HFP for BOTH directions (or the built-in
+        // mic/speaker), keeping the VP-IO attachment consistent.
         try session.setCategory(
             .playAndRecord,
             mode: .voiceChat,
             options: [
                 .defaultToSpeaker,
                 .allowBluetoothHFP,
-                .allowBluetoothA2DP,
                 .interruptSpokenAudioAndMixWithOthers
             ]
         )
@@ -130,6 +159,36 @@ public final class AudioProcessingPipeline {
         try? session.setActive(true, options: .notifyOthersOnDeactivation)
 
         isConfigured = true
+    }
+
+    /// W556 — emit `call.media.session_config` telemetry right after the
+    /// session is configured (but before VP-IO enable). This records the
+    /// ACTUAL sample rate and buffer duration iOS granted vs the preferred
+    /// values, the current Bluetooth route, and the VP-IO state. Used to
+    /// diagnose metallic/choppy artefacts on the dashboard without a device.
+    ///
+    /// Must be called AFTER `configureForVoIP()` and `enableVoiceProcessing()`.
+    public func emitSessionDiagnostics(vpioEnabled: Bool) {
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+        let outputPorts = route.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+        let inputPorts  = route.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+        let actualSR    = session.sampleRate
+        let actualBuf   = session.ioBufferDuration
+        let preferredSR = config.preferredSampleRate
+        let preferredBuf = config.preferredBufferDuration
+
+        // Build the log line inside a single let — avoids Swift 6
+        // type-checker timeout in nested closures (CLAUDE.md lesson 13).
+        let line: String = "[AudioProcessingPipeline] W556 session: "
+            + "sr=" + String(describing: actualSR)
+            + " (pref=" + String(describing: preferredSR) + ")"
+            + " buf=" + String(describing: actualBuf)
+            + " (pref=" + String(describing: preferredBuf) + ")"
+            + " vpio=" + String(describing: vpioEnabled)
+            + " in=" + inputPorts
+            + " out=" + outputPorts
+        print(line)
     }
 
     /// Enable Apple Voice Processing I/O on the audio engine's input node.
@@ -208,6 +267,11 @@ public final class AudioProcessingPipeline {
                 configureVoiceIsolation()
             }
         }
+
+        // W556 — emit session diagnostics so the maintainer can see
+        // the ACTUAL sample rate / buffer / routing on every call from
+        // the telemetry dashboard, without needing a device.
+        emitSessionDiagnostics(vpioEnabled: voiceProcessingActive)
     }
 
     /// Disable voice processing (call when the call ends).
