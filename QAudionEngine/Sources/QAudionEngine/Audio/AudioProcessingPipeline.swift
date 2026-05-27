@@ -137,11 +137,28 @@ public final class AudioProcessingPipeline {
         // the user on the 2026-05-27 call. Removing A2DP from VoIP
         // forces iOS to use HFP for BOTH directions (or the built-in
         // mic/speaker), keeping the VP-IO attachment consistent.
+        // W557 — removed `.defaultToSpeaker`.
+        //
+        // `.defaultToSpeaker` routed audio to the EXTERNAL loudspeaker
+        // instead of the earpiece. On iPhone this means the speaker
+        // output physically bleeds back into the microphone (room echo).
+        // With VP-IO disabled (W556), there is no software AEC to cancel
+        // that loop → the S24 receiver hears the iPhone's own speaker
+        // echo mixed with the mic signal → metallic / washy artefact.
+        //
+        // The correct VoIP default is the EARPIECE, which is physically
+        // isolated from the mic (no echo path). The user can switch to
+        // speaker via the speaker button in InCallScreen, which calls
+        // `AVAudioSession.overrideOutputAudioPort(.speaker)`.
+        //
+        // When the user switches to speaker mode AND is in a noisy
+        // environment, they can enable AEC in Settings → Chiamate →
+        // Echo Cancellation to re-activate VP-IO. For the common
+        // earpiece case, no AEC is needed.
         try session.setCategory(
             .playAndRecord,
             mode: .voiceChat,
             options: [
-                .defaultToSpeaker,
                 .allowBluetoothHFP,
                 .interruptSpokenAudioAndMixWithOthers
             ]

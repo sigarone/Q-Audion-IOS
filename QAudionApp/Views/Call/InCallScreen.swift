@@ -293,8 +293,9 @@ struct InCallScreen: View {
                 Spacer().frame(height: 8)
                 transportRow.padding(.horizontal, 20)
 
-                // Reserve room for the pinned bottom action row.
-                Spacer().frame(height: 140)
+                // Reserve room for the pinned 2-row bottom action row.
+                // Old 1-row: 140pt. New 2-row: ~160pt (2×48+10gap+28padding+20bottom).
+                Spacer().frame(height: 170)
             }
         }
     }
@@ -631,24 +632,43 @@ struct InCallScreen: View {
 
     // MARK: - Bottom action row (pinned)
 
+    // MARK: - Bottom action row (W557: 2-row adaptive layout for iPhone)
+    //
+    // Previous design: single HStack with 7 buttons.
+    // Problem: 7×48pt + 1×60pt + 6×12pt spacing ≈ 420pt — overflows any
+    // iPhone screen (narrowest = iPhone SE 375pt safe area ≈ 343pt).
+    // The row was clipped / invisible on every iPhone in portrait mode.
+    //
+    // New design: two rows inside a rounded-rectangle card.
+    //   Row 1 (secondary): camera/upgrade · screenshare · voice-enhance · add
+    //   Row 2 (primary):   mute · speaker ·  [ HANGUP (centred, 60pt) ]
+    // Each row fits comfortably on a 375pt screen.
+
     private var bottomActionRow: some View {
-        HStack(spacing: 12) {
-            CircularAction(
-                icon: muted ? "mic.slash.fill" : "mic.fill",
-                action: onToggleMute,
-                diameter: 48,
-                background: muted ? extras.warning : scheme.surfaceVariant,
-                iconColor: muted ? extras.onWarning : scheme.onSurface
-            )
-            CircularAction(
-                icon: speakerOn ? "speaker.wave.3.fill" : "speaker.fill",
-                action: onToggleSpeaker,
-                diameter: 48,
-                background: speakerOn ? extras.success : scheme.surfaceVariant,
-                iconColor: speakerOn ? extras.onSuccess : scheme.onSurface
-            )
+        VStack(spacing: 10) {
+            secondaryControlsRow
+            primaryControlsRow
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(scheme.surface.opacity(0.92))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
+        .padding(.bottom, 20)
+    }
+
+    /// Row 1: secondary / contextual controls.
+    /// camera/upgrade-video | screen-share | voice-enhance | add-participant
+    private var secondaryControlsRow: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
             if hasVideo {
-                // Video call: camera on/off toggle.
                 CircularAction(
                     icon: cameraOn ? "video.fill" : "video.slash.fill",
                     action: onToggleCamera,
@@ -657,8 +677,6 @@ struct InCallScreen: View {
                     iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
                 )
             } else {
-                // Audio call: upgrade-to-video button (matches Android/Desktop).
-                // Tapping starts the local camera and transitions to video mode.
                 CircularAction(
                     icon: "video.badge.plus",
                     action: onUpgradeToVideo,
@@ -667,14 +685,8 @@ struct InCallScreen: View {
                     iconColor: scheme.onSurface
                 )
             }
-            // W538: screen-share toggle — visible on BOTH audio and video
-            // calls (mirrors Desktop's PeerConnectionManager.startScreenShare,
-            // which works on audio calls thanks to the pre-allocated
-            // sendrecv transceiver). On audio calls, AppState.startScreenShare
-            // first upgrades the call to video via WebRTC SDP renegotiation;
-            // ReplayKit then feeds frames into the WebRTC video sender so
-            // desktop / Android peers see standard remote video.
-            // Hidden on Mac Catalyst (ReplayKit unavailable there).
+            Spacer(minLength: 0)
+            // W538: screen-share (hidden on Mac Catalyst).
             if screenShareAvailable {
                 CircularAction(
                     icon: screenSharing ? "square.on.square.fill" : "square.on.square",
@@ -683,6 +695,7 @@ struct InCallScreen: View {
                     background: screenSharing ? extras.success : scheme.surfaceVariant,
                     iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
                 )
+                Spacer(minLength: 0)
             }
             CircularAction(
                 icon: "line.3.horizontal",
@@ -691,6 +704,7 @@ struct InCallScreen: View {
                 background: voiceEnhancement ? extras.success : scheme.surfaceVariant,
                 iconColor: voiceEnhancement ? extras.onSuccess : scheme.onSurface
             )
+            Spacer(minLength: 0)
             CircularAction(
                 icon: "person.badge.plus",
                 action: onAddParticipant,
@@ -698,24 +712,40 @@ struct InCallScreen: View {
                 background: scheme.surfaceVariant,
                 iconColor: scheme.onSurface
             )
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Row 2: primary controls — mute, speaker, hangup (centred).
+    private var primaryControlsRow: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            CircularAction(
+                icon: muted ? "mic.slash.fill" : "mic.fill",
+                action: onToggleMute,
+                diameter: 52,
+                background: muted ? extras.warning : scheme.surfaceVariant,
+                iconColor: muted ? extras.onWarning : scheme.onSurface
+            )
+            Spacer(minLength: 0)
+            CircularAction(
+                icon: speakerOn ? "speaker.wave.3.fill" : "speaker.fill",
+                action: onToggleSpeaker,
+                diameter: 52,
+                background: speakerOn ? extras.success : scheme.surfaceVariant,
+                iconColor: speakerOn ? extras.onSuccess : scheme.onSurface
+            )
+            Spacer(minLength: 0)
+            // Hangup — prominent, centred, larger than secondary buttons.
             CircularAction(
                 icon: "phone.down.fill",
                 action: onHangup,
-                diameter: 60,
+                diameter: 64,
                 background: extras.riskHigh,
                 iconColor: scheme.onPrimary
             )
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 12)
-        .background(
-            Capsule().fill(scheme.surface.opacity(0.9))
-        )
-        .overlay(
-            Capsule().stroke(scheme.outline.opacity(0.4), lineWidth: 1)
-        )
-        .padding(.horizontal, 16)
-        .padding(.bottom, 16)
     }
 
     // MARK: - Helpers
