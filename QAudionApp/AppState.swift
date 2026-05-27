@@ -928,6 +928,21 @@ final class AppState: ObservableObject {
         // Subscribe state listener so the UI can show "Connecting → Online".
         provider.persistentConnection.addStateListener { [weak self] state in
             DispatchQueue.main.async {
+                // W550 — emit a sealed telemetry event on every WS
+                // state change so the maintainer dashboard can see
+                // which device is flapping. Pair with the server's
+                // `ws: opened` / `ws: closing unauthenticated` logs
+                // by cf_ip + timestamp to identify reconnect loops.
+                let prev = self?.wsConnectionState
+                if prev != state {
+                    TelemetryService.shared.emit(
+                        kind: "ws.state",
+                        attrs: [
+                            "state": String(describing: state),
+                            "prev":  String(describing: prev ?? .disconnected)
+                        ]
+                    )
+                }
                 self?.wsConnectionState = state
                 if state == .connected || state == .authenticated {
                     // (re-)bind presence now that the transport is live —

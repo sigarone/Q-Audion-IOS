@@ -644,7 +644,24 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         listeners.forEach { $0(.disconnected) }
 
         guard attempt < maxReconnectAttempts else { return }
-        let delay = min(30.0, Double(min(attempt, 10)) * 0.5)
+        // W550 — real exponential backoff with jitter.
+        //
+        // OLD formula: `min(30, attempt * 0.5)` capped at attempt=10 →
+        // attempt 11+ reconnected every 5 s forever. On a broken-token
+        // device this generated 720 reconnects/h on the server (the
+        // exact pattern we saw on 79.51.170.153). Multiplied by N
+        // devices behind the same provider, that's a slow DoS of the
+        // app's own auth-deadline budget.
+        //
+        // NEW formula: 1 s × 2^(attempt-1) capped at 30 s + ±25 %
+        // jitter. Recovery on a healthy network is fast (1-2 s) but
+        // a wedged token decays to a 30 s probe rate within 6
+        // attempts (saves 10x server load). Jitter prevents N
+        // devices on a network coming back from a blip from
+        // synchronizing into a thundering herd.
+        let baseDelay = min(30.0, pow(2.0, Double(min(attempt - 1, 5))))
+        let jitter = baseDelay * (Double.random(in: -0.25...0.25))
+        let delay = max(0.5, baseDelay + jitter)
         DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.connect()
         }
