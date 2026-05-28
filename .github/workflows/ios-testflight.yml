@@ -87,14 +87,14 @@ jobs:
 
       # ----------------------------------------------------------
       # 1b) Configure git HTTPS credentials so SPM can clone all
-      #     package dependencies (including new ones not yet in
-      #     the runner's cache, e.g. iCepa/Tor.swift). Without
-      #     this, macOS runners re-route HTTPS to SSH and fail
-      #     with "terminal prompts disabled" on fresh clones.
+      #     package dependencies — including private forks like
+      #     sigarone/wireguard-apple. GITHUB_TOKEN only has access
+      #     to the current repo; GH_PAT has full `repo` scope so
+      #     private-fork clones don't time out or get cancelled.
       # ----------------------------------------------------------
       - name: Configure git credentials for SPM
         run: |
-          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
 
       # ----------------------------------------------------------
       # 2) Pin Xcode version. Adjust XCODE_VERSION env above.
