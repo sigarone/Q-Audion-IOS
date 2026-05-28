@@ -32,6 +32,12 @@ let package = Package(
         // Xcode 16.2 (Swift tools 6.0) which is incompatible. Pin to 6.x until CI
         // upgrades to Xcode 16.3+.
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
+        // W610: iCepa/Tor.swift — embedded Tor for iOS.
+        // Removes the external Orbot dependency for .onion signaling.
+        // Ships a pre-compiled XCFramework (arm64-device + simulator) so
+        // no C toolchain configuration is needed; iOS 14+ compatible.
+        // 427.x version numbers correspond to Tor stable release series 0.4.7.x.
+        .package(url: "https://github.com/iCepa/Tor.swift", from: "427.14.0"),
     ],
     targets: [
         .target(
@@ -86,6 +92,7 @@ let package = Package(
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
                 .product(name: "WebRTC", package: "WebRTC"),
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "Tor", package: "Tor.swift"),
             ],
             path: "Sources/QAudionEngine",
             resources: [

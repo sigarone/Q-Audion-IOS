@@ -139,9 +139,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 .playAndRecord,
                 mode: .voiceChat,
                 options: [
-                    .defaultToSpeaker,
                     .allowBluetoothHFP,
-                    .allowBluetoothA2DP,
                     .interruptSpokenAudioAndMixWithOthers
                 ]
             )
@@ -165,9 +163,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             .playAndRecord,
             mode: .voiceChat,
             options: [
-                .defaultToSpeaker,
                 .allowBluetoothHFP,
-                .allowBluetoothA2DP,
                 .interruptSpokenAudioAndMixWithOthers
             ]
         )
@@ -205,9 +201,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             .playAndRecord,
             mode: .voiceChat,
             options: [
-                .defaultToSpeaker,
                 .allowBluetoothHFP,
-                .allowBluetoothA2DP,
                 .interruptSpokenAudioAndMixWithOthers
             ]
         )

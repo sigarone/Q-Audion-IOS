@@ -3209,6 +3209,9 @@ final class AppState: ObservableObject {
                     callingApi: provider.callingApi,
                     relayProvider: ensureRelayProvider()
                 )
+                // WSS-TURN bridge JWT auth — forwarded to the WS handshake
+                // on /api/v1/turn-ws (server requires Bearer token since W559).
+                controller.accessToken = currentAccessToken
                 // W411: apply user-configured Transport overrides.
                 #if canImport(WebRTC)
                 if let customUrl = TransportGate.preferredTurnUrl {
@@ -3591,7 +3594,6 @@ final class AppState: ObservableObject {
         do {
             var opts: AVAudioSession.CategoryOptions = [
                 .allowBluetoothHFP,
-                .allowBluetoothA2DP,
                 .interruptSpokenAudioAndMixWithOthers
             ]
             if enabled { opts.insert(.defaultToSpeaker) }
@@ -4647,6 +4649,8 @@ extension AppState {
             callingApi: provider.callingApi,
             relayProvider: ensureRelayProvider()
         )
+        // WSS-TURN bridge JWT auth (responder side mirrors caller).
+        controller.accessToken = currentAccessToken
         // W411: apply Transport overrides on the responder side too.
         if let customUrl = TransportGate.preferredTurnUrl {
             controller.iceServerOverride = [

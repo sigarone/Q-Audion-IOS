@@ -91,6 +91,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// kept so existing AppState DI code continues to compile.
     public var sframeVideoSealerFactory: ((@escaping () -> Data) -> SFrameVideoSealer)?
 
+    /// JWT bearer token forwarded to the WSS-TURN WebSocket handshake.
+    /// Must be set (from AppState) before `startOutgoingCall` /
+    /// `acceptIncomingCall` so the server-side auth check on
+    /// `/api/v1/turn-ws` succeeds. Mirrors Desktop `WssTurnBridge.ts`
+    /// `accessToken` option and Android's `@Named("ws")` OkHttpClient
+    /// interceptor that auto-attaches the Bearer token.
+    public var accessToken: String?
+
     /// Discriminator for the active video pipeline on this call.
     /// Resolved at video setup time by ``ensureVideoSealer()`` based
     /// on the peer's negotiated capabilities — once set it stays
@@ -129,6 +137,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private let callingApi: CallingApi
     private let relayProvider: RelayCredentialsProvider?
     private var peerConnection: QAudionPeerConnection?
+    private var wssTurnBridge: WssTurnBridge?
     private var recipientId: String?
     #if os(iOS)
     private var localVideoCapturer: RTCCameraVideoCapturer?
@@ -540,6 +549,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return
         }
         stopCameraCapture()
+        wssTurnBridge?.stop()
+        wssTurnBridge = nil
         peerConnection?.close()
         peerConnection = nil
         recipientId = nil
@@ -797,7 +808,46 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         guard let provider = relayProvider else { return [] }
         guard let bundle = await provider.currentOrRefresh() else { return [] }
-        return QAudionPeerConnectionFactory.iceServers(from: bundle.servers)
+
+        var servers = QAudionPeerConnectionFactory.iceServers(from: bundle.servers)
+
+        // WSS-TURN bridge — last-resort bypass for corporate firewalls
+        // that block UDP 3478, TCP 3478, and TURNS 5349. The server
+        // exposes a WebSocket TURN proxy at /api/v1/turn-ws; we relay
+        // raw TURN frames between a loopback UDP socket and that WSS
+        // endpoint, presenting libwebrtc with a standard
+        // turn:127.0.0.1:<port>?transport=udp entry.
+        // Mirrors Android WssTurnBridge.kt and Desktop WssTurnBridge.ts.
+        if let wssUrlStr = bundle.wssTurnUrl,
+           let wssUrl = URL(string: wssUrlStr),
+           // Skip if bundle has no TURN entry with credentials — libwebrtc
+           // needs real credentials inside the TURN ALLOCATE request.
+           let firstTurn = bundle.servers.first(where: { s in
+               s.urls.contains { $0.hasPrefix("turn:") || $0.hasPrefix("turns:") }
+           }),
+           firstTurn.username != nil,
+           firstTurn.credential != nil {
+            let bridge = WssTurnBridge(
+                wssUrl: wssUrl,
+                username: firstTurn.username,
+                credential: firstTurn.credential,
+                accessToken: accessToken
+            )
+            if let result = try? await bridge.start() {
+                wssTurnBridge?.stop()
+                wssTurnBridge = bridge
+                servers.insert(
+                    RTCIceServer(
+                        urlStrings: [result.iceUrl],
+                        username: firstTurn.username ?? "",
+                        credential: firstTurn.credential ?? ""
+                    ),
+                    at: 0
+                )
+            }
+        }
+
+        return servers
     }
 
     public enum ControllerError: Error, Equatable {
