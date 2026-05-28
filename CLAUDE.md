@@ -191,26 +191,26 @@ must be revoked & recreated (Apple allows max 2 per team).
 The correct CLI flag is `--certificate-key "@file:$CERT_KEY_PATH"`,
 NOT `--certificate-key-path`.
 
-### 4. ONNX Runtime 1.17.0 has a packaging bug — DO NOT UPGRADE
+### 4. ONNX Runtime — pinned exact, always patch the Info.plist
 
-The dependency is **pinned** in `QAudionEngine/Package.swift`:
+The dependency is **pinned exact** in `QAudionEngine/Package.swift` (currently **1.24.2**):
 
 ```swift
-.package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.17.0"),
+.package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.24.2"),
 ```
 
-- Newer versions (1.20+) raise `MinimumOSVersion` inside the XCFramework to iOS ≥ 18, which forces ITMS-90208 unless the app also raises deployment target to iOS 18+. This defeats the purpose.
-- 1.17.0 supports iOS 13+ (good) **BUT** ships with a broken `onnxruntime.framework/Info.plist` where `MinimumOSVersion=""` (empty string). Apple's altool rejects this with two errors: "Invalid MinimumOSVersion … is ''" and "A value for the key 'MinimumOSVersion' … is required".
-- The framework's Mach-O itself is fine (`LC_BUILD_VERSION` already declares iOS 16.0 minimum).
+**History:** 1.17.0 was the original pin. It ships with a broken `onnxruntime.framework/Info.plist` where `MinimumOSVersion=""` (empty string) — Apple's altool rejects this. The framework's Mach-O (`LC_BUILD_VERSION`) correctly declared iOS 16.0 minimum, so the CI patch step was introduced to set `MinimumOSVersion = "16.0"` to match. Bumped to 1.24.2 (commit `b33d4f4`) because it declares iOS 15+ in its own Package.swift, avoiding the iOS 18 issue seen in intermediate releases (1.20+). ⚠️ **First TestFlight build with 1.24.2 not yet validated** — if ITMS-90208 appears after the next tag push, read the CI `diag.log` artifact and check that the Mach-O `minos` still matches 16.0.
+
+**Upgrade rule:** Before bumping to any new version, verify its XCFramework Mach-O `minos` with `otool -l onnxruntime.framework/onnxruntime | grep -A3 LC_BUILD_VERSION`. The value patched into `Info.plist` (16.0) must be **≥ the Mach-O minos** or ITMS-90208 fires.
 
 **Workaround in `.github/workflows/ios-testflight.yml` — the "Patch onnxruntime.framework" step**:
 1. Unzip the IPA produced by `xcode-project build-ipa`.
-2. `plutil -replace MinimumOSVersion -string "16.0" Payload/QAudionApp.app/Frameworks/onnxruntime.framework/Info.plist` — the value **must match the Mach-O's `minos` (16.0)**, not something else. Mismatch between Info.plist (e.g. 13.0) and Mach-O (16.0) ALSO triggers ITMS-90208.
+2. `plutil -replace MinimumOSVersion -string "16.0" Payload/QAudionApp.app/Frameworks/onnxruntime.framework/Info.plist` — **must match or exceed the Mach-O `minos`**. Mismatch triggers ITMS-90208.
 3. Re-sign the framework with `codesign --force --sign "$IDENTITY"`.
 4. Re-sign the app with its original entitlements (dumped to a REAL file, not via `<(…)` process substitution — the latter creates `/dev/fd/63` which codesign can't stat).
 5. Repackage the IPA and let publishing pick it up.
 
-If you ever need to touch this step, run it first mentally against the full error history — there are several near-miss paths that look right and aren't.
+This step is version-agnostic — it runs on every build regardless of the pinned version. Do not remove it.
 
 ### 5. XcodeGen system frameworks
 
@@ -311,7 +311,7 @@ The app is on TestFlight but has not been exercised end-to-end. Expect to debug:
 ## Rules for subsequent agents
 
 1. **Never touch code signing config** (`integrations`, `environment.ios_signing`, `auth: integration`) without re-reading sections 1–3 above — the Personal Account topology is fragile.
-2. **Never upgrade `onnxruntime-swift-package-manager` past 1.17.0** without a plan for handling its MinOS breakage — either find a version that both supports iOS 16 AND has a correct Info.plist, or change the patch step accordingly.
+2. **Before upgrading `onnxruntime-swift-package-manager`** verify the new XCFramework's Mach-O `minos` with `otool -l` (see sec 4). The CI patch step forces `MinimumOSVersion = "16.0"` — safe as long as the Mach-O minos is ≤ 16.0. Currently pinned to **1.24.2** (iOS 15+ minos, compatible).
 3. **Never remove the "Patch onnxruntime.framework" step** in `.github/workflows/ios-testflight.yml` — the pipeline breaks silently on validation otherwise.
 4. **Always bump the tag** for a new release (e.g. `v1.0.23`). Don't re-use old tags; don't build from branches.
 5. **Treat Apple emails after upload as canonical**. The publish step reporting "publishing succeeded" only means the upload HTTP call returned 2xx. Apple may still reject on validation minutes later via email. Always check inbox before declaring victory.

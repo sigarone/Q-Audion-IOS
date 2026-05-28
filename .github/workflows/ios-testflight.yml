@@ -411,7 +411,9 @@ jobs:
 
       # ----------------------------------------------------------
       # 8) Patch onnxruntime.framework MinimumOSVersion + re-sign.
-      #    See CLAUDE.md sec 4 for the full story. Pinned to 1.17.0.
+      #    See CLAUDE.md sec 4 for the full story. Currently 1.24.2.
+      #    The plutil line forces 16.0 regardless of what the XCFramework
+      #    Info.plist contains, so this step is version-agnostic.
       # ----------------------------------------------------------
       - name: Patch onnxruntime + re-sign
         run: |
