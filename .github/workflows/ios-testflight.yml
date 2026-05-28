@@ -86,6 +86,17 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       # ----------------------------------------------------------
+      # 1b) Configure git HTTPS credentials so SPM can clone all
+      #     package dependencies (including new ones not yet in
+      #     the runner's cache, e.g. iCepa/Tor.swift). Without
+      #     this, macOS runners re-route HTTPS to SSH and fail
+      #     with "terminal prompts disabled" on fresh clones.
+      # ----------------------------------------------------------
+      - name: Configure git credentials for SPM
+        run: |
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+
+      # ----------------------------------------------------------
       # 2) Pin Xcode version. Adjust XCODE_VERSION env above.
       # ----------------------------------------------------------
       - name: Select Xcode

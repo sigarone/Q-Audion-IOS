@@ -13,6 +13,9 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - name: Configure git credentials for SPM
+        run: |
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
       - name: Show Swift version
         run: swift --version
       - name: Resolve dependencies
