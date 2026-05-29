@@ -19,14 +19,13 @@ let package = Package(
         // `git clone` take 60+ minutes on GitHub Actions macOS runners → CI timeout.
         // This fork is identical source-code-wise but has a single clean commit
         // (490 KB clone vs 58 MB), reducing onnxruntime resolution to <5 seconds.
-        // The binary artifact (pod-archive-onnxruntime-c-1.24.2.zip ~52 MB) still
-        // downloads from download.onnxruntime.ai — checksum unchanged.
+        // Binaries hosted on GitHub Releases (sigarone CDN) — no more throttling
+        // from download.onnxruntime.ai which was capping CI runners at ~5 KB/s.
         .package(url: "https://github.com/sigarone/onnxruntime-spm", exact: "1.24.2"),
-        // W347: WebRTC binary framework (community-maintained build of Google's libwebrtc).
-        // stasel/WebRTC ships an XCFramework with arm64 (device) + arm64/x86_64 (simulator).
-        // Pinned to a known-good iOS 16-compatible release. The IPA size impact is
-        // significant (~150 MB) but unavoidable for cross-platform 1:1 + group calls.
-        .package(url: "https://github.com/stasel/WebRTC", exact: "147.0.0"),
+        // W347: WebRTC binary framework. Thin fork of stasel/WebRTC with 1 commit
+        // and binary hosted on GitHub Releases (sigarone CDN) for fast CI downloads.
+        // Same checksum as stasel/WebRTC 147.0.0 — binary is identical.
+        .package(url: "https://github.com/sigarone/webrtc-spm", exact: "147.0.0"),
         // W500: GRDB for local persistence (conversation + message store).
         // Note: GRDB-SQLCipher is NOT a valid SPM product in groue/GRDB.swift —
         // SQLCipher integration is available only via CocoaPods/xcframework.
@@ -97,7 +96,7 @@ let package = Package(
                 "CLiboqs",
                 "COpus",
                 .product(name: "onnxruntime", package: "onnxruntime-spm"),
-                .product(name: "WebRTC", package: "WebRTC"),
+                .product(name: "WebRTC", package: "webrtc-spm"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 // Tor.swift removed — see W610 note in dependencies above.
             ],
