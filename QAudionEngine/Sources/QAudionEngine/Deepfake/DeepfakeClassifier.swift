@@ -147,6 +147,16 @@ public final class DeepfakeClassifier: @unchecked Sendable {
                 let opts = try ORTSessionOptions()
                 try opts.setIntraOpNumThreads(tier == .small ? 2 : 4)
                 try opts.setGraphOptimizationLevel(.all)
+                // CoreML EP: routes inference to the Apple Neural Engine on
+                // devices that have it. CoreML auto-dispatches to GPU/CPU on
+                // older iPhones without an ANE, so this is safe everywhere.
+                // Wrapped in its own do/catch so an append failure (e.g. a
+                // runtime built without CoreML) never blocks the CPU path.
+                do {
+                    try opts.appendCoreMLExecutionProvider(with: ORTCoreMLExecutionProviderOptions())
+                } catch {
+                    // CoreML EP unavailable on this device/runtime — continue CPU-only.
+                }
                 let s = try ORTSession(env: env, modelPath: url.path, sessionOptions: opts)
                 directSession = s
                 return s

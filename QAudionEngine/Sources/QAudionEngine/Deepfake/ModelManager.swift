@@ -93,6 +93,14 @@ public final class ModelManager {
             let options = try ORTSessionOptions()
             try options.setIntraOpNumThreads(tier == .small ? 2 : 4)
             try options.setGraphOptimizationLevel(.all)
+            // CoreML EP: Apple Neural Engine acceleration where available,
+            // auto-fallback to GPU/CPU on older iPhones. Nested do/catch so an
+            // append failure never blocks the CPU path.
+            do {
+                try options.appendCoreMLExecutionProvider(with: ORTCoreMLExecutionProviderOptions())
+            } catch {
+                // CoreML EP unavailable — continue CPU-only.
+            }
             session = try ORTSession(env: ortEnv!, modelPath: modelURL.path, sessionOptions: options)
             activeTier = tier
             state = .loaded
