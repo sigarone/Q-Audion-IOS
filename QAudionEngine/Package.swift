@@ -14,10 +14,14 @@ let package = Package(
         )
     ],
     dependencies: [
-        // Pinned exact because onnxruntime XCFrameworks have historically shipped
-        // with elevated MinimumOSVersion (e.g. iOS 18.1) that triggers ITMS-90208.
-        // 1.24.2 declares iOS 15+ in its Package.swift — safe for our iOS 16 target.
-        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.24.2"),
+        // Thin fork of microsoft/onnxruntime-swift-package-manager at 1.24.2.
+        // The upstream repo has 58 MB of git history (old binary blobs) that makes
+        // `git clone` take 60+ minutes on GitHub Actions macOS runners → CI timeout.
+        // This fork is identical source-code-wise but has a single clean commit
+        // (490 KB clone vs 58 MB), reducing onnxruntime resolution to <5 seconds.
+        // The binary artifact (pod-archive-onnxruntime-c-1.24.2.zip ~52 MB) still
+        // downloads from download.onnxruntime.ai — checksum unchanged.
+        .package(url: "https://github.com/sigarone/onnxruntime-spm", exact: "1.24.2"),
         // W347: WebRTC binary framework (community-maintained build of Google's libwebrtc).
         // stasel/WebRTC ships an XCFramework with arm64 (device) + arm64/x86_64 (simulator).
         // Pinned to a known-good iOS 16-compatible release. The IPA size impact is
@@ -92,7 +96,7 @@ let package = Package(
             dependencies: [
                 "CLiboqs",
                 "COpus",
-                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+                .product(name: "onnxruntime", package: "onnxruntime-spm"),
                 .product(name: "WebRTC", package: "WebRTC"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 // Tor.swift removed — see W610 note in dependencies above.

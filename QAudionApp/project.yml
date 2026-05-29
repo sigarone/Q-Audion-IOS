@@ -4,6 +4,12 @@ options:
   deploymentTarget:
     iOS: "16.0"
   xcodeVersion: "16.2"
+  # Prevents "member of multiple groups" xcodebuild warnings.
+  # Without this, subdirectories (DesignSystem, Services, Views) appear
+  # both in the target group and the root project group ("") when
+  # sources uses path: . — XcodeGen flattens intermediate folders into
+  # the root, producing duplicate file references.
+  createIntermediateGroups: true
 
 packages:
   QAudionEngine:

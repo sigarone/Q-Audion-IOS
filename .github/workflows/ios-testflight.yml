@@ -87,10 +87,9 @@ jobs:
 
       # ----------------------------------------------------------
       # 1b) Cache SPM packages (git repos + binary artifacts).
-      #     onnxruntime 1.24.2 XCFramework is ~500 MB and takes
-      #     ~60 min to download from scratch — without cache every
-      #     run hits the timeout. Cache key based on Package.swift
-      #     + project.yml so it invalidates only when deps change.
+      #     save-always: true ensures partial downloads are cached
+      #     even if the job times out or fails — so each run makes
+      #     progress until the cache is fully warm.
       # ----------------------------------------------------------
       - name: Cache SPM packages
         id: cache-spm
@@ -98,8 +97,8 @@ jobs:
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
-            ~/Library/Developer/Xcode/DerivedData/QAudionApp-*/SourcePackages
           key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          save-always: true
           restore-keys: |
             ${{ runner.os }}-spm-
 
