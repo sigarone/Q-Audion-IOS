@@ -103,17 +103,14 @@ jobs:
             ${{ runner.os }}-spm-
 
       # ----------------------------------------------------------
-      # 1c) Configure git HTTPS credentials so SPM can clone all
-      #     package dependencies on fresh runners (no cache).
-      #     Without this, macOS runners re-route HTTPS → SSH and
-      #     fail with "terminal prompts disabled" on fresh clones.
-      #     sigarone/wireguard-apple is public — github.token is
-      #     sufficient for all SPM dependencies here.
+      # 1c) NO git credential injection. All SPM deps are PUBLIC.
+      #     The url.insteadOf token rewrite ALSO rewrites binaryTarget
+      #     download URLs, sending an Authorization header to GitHub's
+      #     release-asset S3 redirect → 401 Unauthorized → SPM hangs for
+      #     hours retrying. Verified: plain URL → 200 OK; auth-injected
+      #     URL → 401. Public repos clone fine without credentials.
+      #     (Removed 2026-05-29 — root cause of CI binary-download hang.)
       # ----------------------------------------------------------
-      - name: Configure git credentials for SPM
-        if: steps.cache-spm.outputs.cache-hit != 'true'
-        run: |
-          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
 
       # ----------------------------------------------------------
       # 2) Pin Xcode version. Adjust XCODE_VERSION env above.

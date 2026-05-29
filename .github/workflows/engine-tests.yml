@@ -26,10 +26,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-engine-v2-
 
-      - name: Configure git credentials for SPM
-        if: steps.cache-spm.outputs.cache-hit != 'true'
-        run: |
-          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+      # NO git credential injection here. All SPM deps (onnxruntime-spm,
+      # webrtc-spm, GRDB) are PUBLIC. Injecting
+      #   git config url."https://x-access-token:TOKEN@github.com/".insteadOf ...
+      # makes SPM rewrite the binaryTarget download URLs too, sending an
+      # Authorization header to GitHub's release-asset S3 redirect, which
+      # returns 401 Unauthorized → SPM hangs retrying for hours. Verified:
+      # plain URL → 200 OK 43 MB; auth-injected URL → 401. Public repos clone
+      # fine without credentials, so this step is removed entirely.
 
       - name: Show Swift version
         run: swift --version
