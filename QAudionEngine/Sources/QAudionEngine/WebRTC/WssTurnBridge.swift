@@ -138,7 +138,7 @@ public final class WssTurnBridge: @unchecked Sendable {
             await self?.pumpWsToUdp(fd: capturedFD)
         }
 
-        Self.log.info("start: 127.0.0.1:\(port) ↔ \(wssUrl.absoluteString)")
+        Self.log.info("start: 127.0.0.1:\(port) ↔ \(self.wssUrl.absoluteString)")
         return BridgeResult(localPort: port)
     }
 

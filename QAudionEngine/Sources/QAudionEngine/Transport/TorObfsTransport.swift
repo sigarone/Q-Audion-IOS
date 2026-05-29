@@ -161,7 +161,7 @@ public final class TorObfsTransport: @unchecked Sendable {
         // Fall back to external Orbot: probe whether SOCKS5 is available.
         let orbotAvailable = await probeOrbot(port: orbotSocksPort)
         if orbotAvailable {
-            Self.log.info("resolveSocksPort: using Orbot SOCKS5 on port \(orbotSocksPort)")
+            Self.log.info("resolveSocksPort: using Orbot SOCKS5 on port \(self.orbotSocksPort)")
             return orbotSocksPort
         }
 
@@ -239,7 +239,7 @@ public final class TorObfsTransport: @unchecked Sendable {
         isConnected = true
         startReceiveLoop()
         onStateChange?("open")
-        Self.log.info("connectViaSocks: connected to \(onionAddress) via SOCKS5:\(port)")
+        Self.log.info("connectViaSocks: connected to \(self.onionAddress) via SOCKS5:\(port)")
         return true
     }
 
