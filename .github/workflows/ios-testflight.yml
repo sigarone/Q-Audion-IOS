@@ -56,7 +56,7 @@ jobs:
     # GitHub auto-bumps as new images roll out, and pin XCODE_VERSION
     # explicitly. Discovery step below fails fast if Xcode 26 missing.
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
 
     env:
       BUNDLE_ID: com.qaudion.app
@@ -86,15 +86,35 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       # ----------------------------------------------------------
-      # 1b) Configure git HTTPS credentials so SPM can clone all
-      #     package dependencies — including private forks like
-      #     sigarone/wireguard-apple. GITHUB_TOKEN only has access
-      #     to the current repo; GH_PAT has full `repo` scope so
-      #     private-fork clones don't time out or get cancelled.
+      # 1b) Cache SPM packages (git repos + binary artifacts).
+      #     onnxruntime 1.24.2 XCFramework is ~500 MB and takes
+      #     ~60 min to download from scratch — without cache every
+      #     run hits the timeout. Cache key based on Package.swift
+      #     + project.yml so it invalidates only when deps change.
+      # ----------------------------------------------------------
+      - name: Cache SPM packages
+        id: cache-spm
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/Developer/Xcode/DerivedData/QAudionApp-*/SourcePackages
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      # ----------------------------------------------------------
+      # 1c) Configure git HTTPS credentials so SPM can clone all
+      #     package dependencies on fresh runners (no cache).
+      #     Without this, macOS runners re-route HTTPS → SSH and
+      #     fail with "terminal prompts disabled" on fresh clones.
+      #     sigarone/wireguard-apple is public — github.token is
+      #     sufficient for all SPM dependencies here.
       # ----------------------------------------------------------
       - name: Configure git credentials for SPM
+        if: steps.cache-spm.outputs.cache-hit != 'true'
         run: |
-          git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
 
       # ----------------------------------------------------------
       # 2) Pin Xcode version. Adjust XCODE_VERSION env above.

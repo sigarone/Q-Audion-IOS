@@ -11,11 +11,21 @@ env:
 jobs:
   test:
     runs-on: macos-14
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SPM packages
+        id: cache-spm
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-engine-${{ hashFiles('QAudionEngine/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-engine-
       - name: Configure git credentials for SPM
+        if: steps.cache-spm.outputs.cache-hit != 'true'
         run: |
-          git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
       - name: Show Swift version
         run: swift --version
       - name: Resolve dependencies
