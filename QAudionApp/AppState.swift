@@ -3248,6 +3248,13 @@ final class AppState: ObservableObject {
                         self?.remoteWebRtcVideoTrack = track
                     }
                 }
+                // R-4 (sovereign-only): reject incoming video when the
+                // policy is on. Read live (not captured) so a mid-session
+                // toggle takes effect on the next inbound track.
+                controller.shouldRejectIncomingVideo = { CallsGate.shouldRejectIncomingVideo }
+                // R-4 (DEFECT 2): strip `vkey-v1` from every offer/answer
+                // this controller advertises when sovereign-only is on.
+                controller.advertisedCapabilitiesFilter = { CallsGate.filterAdvertisedCapabilities($0) }
                 // If ICE fails / drops mid-call (network change, TURN
                 // unreachable) the controller flips to .failed/.disconnected
                 // but nothing tore down AppState — isInCall stayed true and
@@ -4687,6 +4694,12 @@ extension AppState {
                 self?.remoteWebRtcVideoTrack = track
             }
         }
+        // R-4 (sovereign-only): reject incoming video when the policy is
+        // on (responder side). Mirror of the caller-side wiring.
+        controller.shouldRejectIncomingVideo = { CallsGate.shouldRejectIncomingVideo }
+        // R-4 (DEFECT 2): strip `vkey-v1` from this controller's
+        // offer/answer advertisements under sovereign-only (responder).
+        controller.advertisedCapabilitiesFilter = { CallsGate.filterAdvertisedCapabilities($0) }
         // Mirror of the caller-side teardown: a mid-call ICE failure on
         // the responder side would otherwise leave isInCall == true and
         // the UI stuck on the call screen. Guarded by isInCall to avoid

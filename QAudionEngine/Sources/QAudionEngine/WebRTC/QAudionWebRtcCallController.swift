@@ -48,6 +48,31 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onRemoteAudioTrack: ((RTCAudioTrack) -> Void)?
     public var onRemoteVideoTrack: ((RTCVideoTrack) -> Void)?
 
+    /// R-4 (vkey-v1 / sovereign-only) — injectable policy hook consulted
+    /// when a remote VIDEO track arrives. When it returns `true` the
+    /// controller REJECTS the incoming video: it disables the track and
+    /// does NOT forward `onRemoteVideoTrack`, so nothing renders. The
+    /// engine module cannot read the app-layer `CallsGate` directly, so
+    /// the app wires this to `{ CallsGate.shouldRejectIncomingVideo }`
+    /// (see `AppState`). Defaults to allowing video (`{ false }`) so
+    /// engine-only / test targets are unaffected. Mirrors Android
+    /// rejecting incoming video under the sovereign-only policy.
+    public var shouldRejectIncomingVideo: () -> Bool = { false }
+
+    /// R-4 (vkey-v1 / sovereign-only) — injectable filter applied to the
+    /// capability list advertised on EVERY outgoing `call_offer` AND
+    /// `call_answer` from this controller. The engine module cannot read
+    /// the app-layer `CallsGate`, so the app wires this to
+    /// `{ CallsGate.filterAdvertisedCapabilities($0) }` (see `AppState`),
+    /// which strips `vkey-v1` when sovereign-only is on. Defaults to the
+    /// identity transform so engine-only / test targets advertise the
+    /// full local set. Applied to both the WebRTC-rail offer and the
+    /// answer so a sovereign-only user who ANSWERS also strips `vkey-v1`,
+    /// not just one who originates (DEFECT 2 fix). Read live (not
+    /// captured) so a mid-session policy toggle takes effect on the next
+    /// advertised envelope.
+    public var advertisedCapabilitiesFilter: ([String]) -> [String] = { $0 }
+
     /// W383: optional PQC session key for the inner SRTP layer.
     /// When set BEFORE startOutgoingCall / acceptIncomingCall, the
     /// controller automatically installs PqcFrameEncryptor /
@@ -65,6 +90,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             _ = ensureVideoSealerInternal()
         }
     }
+
+    /// `vkey-v1` — optional contact PSK (32 bytes) for the K_video HKDF
+    /// salt. iOS has NO SovereignKeyVault today so this is always `nil`,
+    /// which makes `deriveVideoKey` fall back to the fixed
+    /// `Q-AUDION-PHONE-VIDEO-SALT-V1` salt — byte-identical to Android's
+    /// PSK-absent path. The property exists so a future SovereignKeyVault
+    /// landing can wire the per-contact PSK without touching the
+    /// derivation call site. When set it MUST be exactly 32 bytes.
+    public var videoContactPsk: Data?
+
+    /// `vkey-v1` — true once the active video pipeline was keyed off the
+    /// phone-level K_video (peer advertised `vkey-v1`). Used by the
+    /// dual-trust UI indicator ("video is phone-level vs audio sovereign").
+    /// `false` means video either ran legacy/DTLS-only or shared the
+    /// audio session key (pre-vkey-v1 peer). Mirrors Android
+    /// `videoKeyIsPhoneLevel`.
+    public private(set) var videoKeyIsPhoneLevel: Bool = false
 
     /// W411 — optional override for the ICE server list. When set
     /// (typically by AppState reading TransportGate.preferredTurnUrl),
@@ -271,7 +313,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 callId: cid,
                 recipientId: recipientId,
                 sdp: sdp,
-                capabilities: CallCapabilities.local,
+                // R-4: same sovereign-only strip on the WebRTC-rail offer.
+                capabilities: advertisedCapabilitiesFilter(CallCapabilities.local),
                 callerDisplay: callerDisplay,
                 hasVideo: callHasVideo
             )
@@ -279,7 +322,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             try await callingApi.sendCallOffer(
                 recipientId: recipientId,
                 sdp: sdp,
-                capabilities: CallCapabilities.local,
+                capabilities: advertisedCapabilitiesFilter(CallCapabilities.local),
                 callerDisplay: callerDisplay,
                 hasVideo: callHasVideo
             )
@@ -384,7 +427,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         try await callingApi.sendCallAnswer(
             recipientId: callerId,
             sdp: answerSdp,
-            capabilities: CallCapabilities.local,
+            // R-4 (DEFECT 2): strip `vkey-v1` when sovereign-only is on so
+            // a sovereign user who ANSWERS also refuses phone-level video.
+            capabilities: advertisedCapabilitiesFilter(CallCapabilities.local),
             hasVideo: !audioOnly
         )
         state = .connecting
@@ -558,6 +603,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         videoSealer = nil                // commit 3db2cd81 parity — reset
                                          // pipeline pick so the next call
                                          // re-runs ensureVideoSealer().
+        videoKeyIsPhoneLevel = false     // vkey-v1 — reset dual-trust flag.
+        videoContactPsk = nil            // vkey-v1 — clear per-call PSK.
         state = .disconnected
     }
 
@@ -635,10 +682,38 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// the LiveKit cryptor reads `self.pqcSessionKey` lazily on every
     /// frame, so audio-driven rekey rotations continue to be picked
     /// up transparently.
+    ///
+    /// `vkey-v1`: when the peer advertised `vkey-v1` (negotiated
+    /// `useVideoKey == true`) the closure returns the dedicated 32-byte
+    /// K_video derived from the CURRENT session key on every frame —
+    /// `INSTEAD of` the raw `pqcSessionKey`. K_video binds the negotiated
+    /// capability tags via the HKDF `info` (transcriptHash), so it is
+    /// recomputed from `peerNegotiated().agreedTags` each frame. The
+    /// per-frame HKDF is identical in cost to the existing one already
+    /// done inside `LiveKitVideoFrameCryptor` (a second SHA-256-based
+    /// HKDF, ~2 µs). When the peer did NOT advertise `vkey-v1` the
+    /// closure returns the raw session key, preserving the W539 behaviour
+    /// for older peers. The FrameCryptor params are UNCHANGED — K_video
+    /// is the INPUT key fed to the cryptor's own internal HKDF, not the
+    /// final AES key.
     @discardableResult
     private func ensureVideoSealerInternal() -> VideoCallSealer? {
         return ensureVideoSealer { [weak self] in
-            self?.pqcSessionKey ?? Data()
+            guard let self = self else { return Data() }
+            let sessionKey = self.pqcSessionKey ?? Data()
+            // Only swap to K_video when BOTH sides advertised vkey-v1 and
+            // we hold a full 32-byte session key. Anything else falls back
+            // to the raw session key (legacy/pre-vkey-v1 wire behaviour).
+            guard sessionKey.count == 32,
+                  let negotiated = self.peerNegotiated(),
+                  negotiated.useVideoKey else {
+                return sessionKey
+            }
+            return QAudionCallIntegration.deriveVideoKey(
+                sessionKey: sessionKey,
+                agreedTags: negotiated.agreedTags,
+                psk: self.videoContactPsk
+            )
         }
     }
 
@@ -695,7 +770,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // FrameCryptor envelope (ported in `LiveKitVideoFrameCryptor`).
             let cryptor = LiveKitVideoFrameCryptor(keyProvider: pqcSessionKeyProvider)
             videoSealer = .livekit(cryptor)
-            print("[WebRtcCallController] video pipeline → LiveKit FrameCryptor (peerCaps=\(negotiated.agreedTags))")
+            // vkey-v1: record whether this pipeline is keyed off the
+            // phone-level K_video (peer advertised vkey-v1) for the
+            // dual-trust UI indicator. The keyProvider passed by
+            // `ensureVideoSealerInternal` already swaps to K_video when
+            // `useVideoKey` is true; this flag just surfaces that fact.
+            videoKeyIsPhoneLevel = negotiated.useVideoKey
+            let keyKind = negotiated.useVideoKey ? "K_video (phone-level)" : "session-key (legacy)"
+            print("[WebRtcCallController] video pipeline → LiveKit FrameCryptor key=\(keyKind) (peerCaps=\(negotiated.agreedTags))")
             return videoSealer
         }
 
@@ -944,6 +1026,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                                  didReceiveRemoteVideoTrack track: RTCVideoTrack) {
         // W466 — confirm the remote video track arrived.
         print("[WebRTC] remote VIDEO track received — enabled=\(track.isEnabled)")
+        // R-4 (sovereign-only): a sovereign user only accepts video under
+        // sovereign-grade keys; phone-level K_video does not qualify, so
+        // when the policy is on we REJECT incoming video outright rather
+        // than rendering it. Disable the track (stops decode/render) and
+        // do NOT forward it to the UI callback. Mirrors Android rejecting
+        // incoming video under sovereign-only.
+        if shouldRejectIncomingVideo() {
+            track.isEnabled = false
+            print("[WebRTC] remote VIDEO track REJECTED — sovereign-only policy active (R-4)")
+            return
+        }
         onRemoteVideoTrack?(track)
     }
 }

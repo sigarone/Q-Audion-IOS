@@ -463,7 +463,9 @@ final class CallService {
             callId: callId,
             recipientId: recipientId,
             sdp: vestigialSdp,
-            capabilities: CallCapabilities.local,
+            // R-4 (vkey-v1): strip `vkey-v1` when sovereign-only is on so
+            // we never advertise phone-level video E2EE to the peer.
+            capabilities: CallsGate.filterAdvertisedCapabilities(CallCapabilities.local),
             callerDisplay: callerDisplay,
             hasVideo: hasVideo
         )

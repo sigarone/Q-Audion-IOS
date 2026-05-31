@@ -113,6 +113,32 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Fires at most once per call. The integration does not retain
     /// the secret; the caller is responsible for lifecycle.
     public var onPqcSessionKeyEstablished: ((Data) -> Void)?
+
+    /// `vkey-v1` — fired alongside ``onPqcSessionKeyEstablished`` at every
+    /// handshake-completion site. Carries the SAME 32-byte post-PSK-mix
+    /// session key, which is the **IKM** for the dedicated earbud-video
+    /// key K_video.
+    ///
+    /// IMPORTANT — why this carries the session key and NOT K_video:
+    /// K_video = `HKDF(sessionKey, salt, info)` where `info` binds the
+    /// negotiated capability tags (`transcriptHash`). The integration
+    /// completes the PQC handshake BEFORE the WebRTC capability
+    /// negotiation result (`peerNegotiated()`) is necessarily available,
+    /// and it never holds the agreed-tag set. So the actual K_video
+    /// derivation happens in
+    /// `QAudionWebRtcCallController.ensureVideoSealerInternal()`, which is
+    /// the single component that holds BOTH the session key (via
+    /// `pqcSessionKey`) AND the negotiated tags (via `peerNegotiated()`).
+    /// This callback exists so the app layer can mirror the
+    /// `onPqcSessionKeyEstablished → broker → callPqcSessionKey` plumbing
+    /// for any future video-key-specific surface (e.g. the dual-trust UI
+    /// indicator) without re-plumbing the session key through a second
+    /// path.
+    ///
+    /// Use ``deriveVideoKey(sessionKey:agreedTags:psk:)`` to compute the
+    /// final K_video from this IKM once the negotiated tags are known.
+    /// Fires at most once per call.
+    public var onVideoKeyEstablished: ((Data) -> Void)?
     /// Set a BCryptoRestClient to enable userId pre-resolution before OFFER.
     /// Without this, OFFERs use the raw recipientId which may cause server routing failures.
     public var restClient: BCryptoRestClient?
@@ -466,6 +492,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // AFTER engine.initSession so the audio pipeline is already
             // active under the same key — observers can rely on it.
             onPqcSessionKeyEstablished?(result.sharedSecret)
+            // vkey-v1: same 32 bytes are the IKM for K_video. Fired so the
+            // app/controller layer can derive K_video once the negotiated
+            // tags are known (see onVideoKeyEstablished docs).
+            onVideoKeyEstablished?(result.sharedSecret)
 
             // Pre-negotiation step 2: PQC OFFER fully deserialised — tell the
             // caller we are ringing locally so its UI flips to "Ringing".
@@ -486,6 +516,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // After this fires, both ends hold the same 32 bytes for
             // SAS derivation.
             onPqcSessionKeyEstablished?(sharedSecret)
+            // vkey-v1: caller side — same IKM surface as the responder.
+            onVideoKeyEstablished?(sharedSecret)
 
         case .keyExchangeOffer(let payload):
             // Peer is initiating first-contact PSK derivation.
@@ -669,6 +701,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             offerRetryTask = nil
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
+            // vkey-v1: JSON responder — `combined` is the post-PSK-mix
+            // session key and the IKM for K_video.
+            onVideoKeyEstablished?(combined)
 
         case .accept:
             // Originator side — completes the dual-hybrid combine using
@@ -763,6 +798,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
+            // vkey-v1: JSON caller — `combined` is the IKM for K_video.
+            onVideoKeyEstablished?(combined)
             // W529: caller's ACCEPT decapsulation succeeded → cancel
             // any outstanding 5 s OFFER retry.
             offerRetryTask?.cancel()
@@ -838,6 +875,61 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
         let key = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: salt,
+            info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
+    /// `vkey-v1` — derive the dedicated 32-byte earbud-video key K_video.
+    ///
+    /// Byte-identical to Android `deriveVideoKey` and the Desktop port.
+    /// Pinned by `PhoneVideoKeyKatTests` against the frozen KAT vectors.
+    /// Spec (frozen, android-crypto + gemini-verified):
+    ///
+    ///   transcriptHash = SHA-256( agreedTags.distinct().sorted()
+    ///                              .joined(",") as UTF-8 )             [32B]
+    ///   IKM            = sessionKey (32-byte post-PSK-mix session key)
+    ///   salt           = psk(32)        if (psk != nil && !psk.isEmpty)
+    ///                    else UTF8("Q-AUDION-PHONE-VIDEO-SALT-V1")     [28B]
+    ///   info           = UTF8("Q-AUDION-PHONE-VIDEO-V1")(23)
+    ///                    || transcriptHash(32)                        [55B]
+    ///   K_video        = HKDF-SHA256(IKM, salt, info, 32)
+    ///
+    /// `agreedTags` is the negotiated capability intersection
+    /// (`CallCapabilities.Negotiated.agreedTags`). It is re-normalised
+    /// here (`Set` → `sorted`) so the transcript hash is independent of
+    /// the caller's ordering — identical to Android
+    /// `negotiatedTags.distinct().sorted()`.
+    ///
+    /// `internal` (not `private`) so `PhoneVideoKeyKatTests` can exercise
+    /// the exact production path via `@testable import`.
+    static func deriveVideoKey(
+        sessionKey: Data,
+        agreedTags: [String],
+        psk: Data?
+    ) -> Data {
+        // transcriptHash = SHA-256( sorted-deduped-tags joined by "," ).
+        let normalized = Array(Set(agreedTags)).sorted()
+        let transcriptString = normalized.joined(separator: ",")
+        let transcriptHash = Data(
+            SHA256.hash(data: Data(transcriptString.utf8))
+        )
+
+        let salt: Data
+        if let psk = psk, !psk.isEmpty {
+            salt = psk
+        } else {
+            salt = HkdfLabels.phoneVideoSaltV1
+        }
+
+        var info = Data(capacity: HkdfLabels.phoneVideoV1.count + transcriptHash.count)
+        info.append(HkdfLabels.phoneVideoV1)
+        info.append(transcriptHash)
+
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: sessionKey),
             salt: salt,
             info: info,
             outputByteCount: 32

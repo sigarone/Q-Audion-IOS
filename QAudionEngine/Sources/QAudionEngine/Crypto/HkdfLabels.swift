@@ -35,6 +35,23 @@ public enum HkdfLabels {
     /// Frame chain (video) — per-frame key for video uplift (Track B.5).
     public static let frameChainVideo: Data = "q-audion-video-frame-key".data(using: .utf8)!
 
+    /// Earbud-video K_video HKDF `info` label (cross-platform `vkey-v1`).
+    ///
+    /// Used as the leading 23 bytes of the HKDF `info` when deriving the
+    /// dedicated phone-level video key (K_video) for earbud calls. The
+    /// full `info` is `phoneVideoV1 || transcriptHash(32)` = 55 bytes.
+    /// MUST be byte-identical to Android `PHONE_VIDEO_INFO` and the
+    /// Desktop port — pinned by the K_video KAT (`PhoneVideoKeyKatTests`).
+    /// 23 bytes, NOT null-terminated.
+    public static let phoneVideoV1: Data = "Q-AUDION-PHONE-VIDEO-V1".data(using: .utf8)!
+
+    /// Earbud-video K_video HKDF `salt` used when NO contact PSK is
+    /// present (the only path on iOS today — iOS has no SovereignKeyVault
+    /// so the contact PSK is always absent). When a PSK *is* present the
+    /// 32-byte PSK replaces this salt. MUST match Android's PSK-absent
+    /// salt byte-for-byte. 28 bytes, NOT null-terminated.
+    public static let phoneVideoSaltV1: Data = "Q-AUDION-PHONE-VIDEO-SALT-V1".data(using: .utf8)!
+
     /// Attachment encryption — per-file key derivation.
     public static let fileKey: Data = "q-audion-file-key".data(using: .utf8)!
 
@@ -87,7 +104,7 @@ public enum HkdfLabels {
             messageKey, hybridPqcSessionKey, nfcCollaborativePsk,
             deviceLinkPsk, frameChainAudio, frameChainVideo, fileKey,
             recoveryAuth, recoverySalt, hybridPqcSaltV1, hybridCtBindV1,
-            deviceLinkSalt
+            deviceLinkSalt, phoneVideoV1, phoneVideoSaltV1
         ]
         for label in labels {
             guard let s = String(data: label, encoding: .utf8),

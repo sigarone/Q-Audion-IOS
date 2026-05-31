@@ -30,8 +30,24 @@ public enum CallCapabilities {
     /// `CallCapabilities.kt` and `CAP_RATCHET_V3` in the Desktop TS port.
     public static let ratchetV3: String = "ratchet-v3"
 
+    /// Earbud-video phone-level key (`vkey-v1`). When BOTH sides advertise
+    /// this tag the video FrameCryptor is keyed off a dedicated K_video
+    /// (HKDF of the session key with domain-separation label
+    /// `Q-AUDION-PHONE-VIDEO-V1` + transcript binding) instead of the raw
+    /// audio/control PQC session key. Mirrors `VKEY_V1` in Android
+    /// `CallCapabilities.kt` and the Desktop TS port. The trust level it
+    /// grants is "phone-level" (the video key is derived on the phone, not
+    /// inside a sovereign HSM) — surfaced to the UI via
+    /// `videoKeyIsPhoneLevel`.
+    public static let vkeyV1: String = "vkey-v1"
+
     /// Capabilities advertised by THIS build of the iOS client.
-    public static let local: [String] = [sframeV1, ratchetV3]
+    ///
+    /// NOTE: `vkeyV1` is advertised by default but may be stripped at
+    /// send time by the sovereign-only policy (see
+    /// `CallsGate.sovereignOnlyEnabled`), enforced at the app layer when
+    /// it builds the outgoing `capabilities` array.
+    public static let local: [String] = [sframeV1, ratchetV3, vkeyV1]
 
     /// Outcome of a capability negotiation between local and peer.
     public struct Negotiated: Equatable, Sendable {
@@ -48,6 +64,12 @@ public enum CallCapabilities {
         /// True iff both sides advertise ``ratchetV3``. Derived from
         /// ``agreedTags`` — no wire or init change.
         public var useRatchetV3: Bool { agreedTags.contains(CallCapabilities.ratchetV3) }
+
+        /// True iff both sides advertise ``vkeyV1``. When `true` the video
+        /// FrameCryptor must be keyed off the dedicated K_video instead of
+        /// the audio/control PQC session key. Derived from ``agreedTags``
+        /// — no wire or init change.
+        public var useVideoKey: Bool { agreedTags.contains(CallCapabilities.vkeyV1) }
     }
 
     /// Compute the agreed capability set from the local list and the peer

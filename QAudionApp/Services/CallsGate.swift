@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import QAudionEngine  // vkey-v1: CallCapabilities.vkeyV1 for filterAdvertisedCapabilities
 
 /// W406 — single source of truth for VoIP audio DSP gates.
 ///
@@ -101,6 +102,43 @@ public enum CallsGate {
     public static func setAdaptivePadding(_ value: Bool) {
         writeSecureBool(keyAdaptivePadding, value)
     }
+
+    // MARK: - R-4 (vkey-v1) sovereign-only video policy
+
+    /// Sovereign-only video policy. When ON the client MUST NOT advertise
+    /// `vkey-v1` (so it never offers phone-level video E2EE) and MUST
+    /// reject any incoming video. Rationale: a "sovereign" user only
+    /// accepts video protected by sovereign-grade keys; the phone-derived
+    /// K_video does not meet that bar, so video is refused outright rather
+    /// than downgraded to phone-level trust. Default OFF (phone-level
+    /// video allowed). Keychain-backed (SECURITY M-8) so it cannot be
+    /// silently downgraded via plist/backup. Mirrors Android
+    /// `qaudion.calls.sovereign_only`.
+    public static let keySovereignOnly = "qaudion.calls.sovereign_only"
+
+    /// True when the sovereign-only video policy is active. Default false.
+    public static var sovereignOnlyEnabled: Bool { readSecureBool(keySovereignOnly, default: false) }
+
+    public static func setSovereignOnly(_ value: Bool) {
+        writeSecureBool(keySovereignOnly, value)
+    }
+
+    /// Apply the sovereign-only policy to an outgoing capability list:
+    /// strips `vkey-v1` when the policy is on, leaves the list untouched
+    /// otherwise. The app layer MUST route its advertised `capabilities`
+    /// array through this before sending `call_offer` / `call_answer`.
+    /// Pure function — safe to unit-test. Uses `CallCapabilities.vkeyV1`
+    /// as the source of truth for the tag string.
+    public static func filterAdvertisedCapabilities(_ caps: [String]) -> [String] {
+        guard sovereignOnlyEnabled else { return caps }
+        return caps.filter { $0 != CallCapabilities.vkeyV1 }
+    }
+
+    /// True iff incoming video must be rejected under this policy (i.e.
+    /// sovereign-only is on). The app layer consults this when an inbound
+    /// `m=video` / remote video track arrives and tears it down instead
+    /// of rendering. Pure read — no side effects.
+    public static var shouldRejectIncomingVideo: Bool { sovereignOnlyEnabled }
 
     // MARK: - Helpers
 
