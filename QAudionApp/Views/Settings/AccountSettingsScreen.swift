@@ -90,9 +90,15 @@ final class AccountSettingsContainer: ObservableObject {
         )
     }
 
+    func logout() {
+        guard let appState else { return }
+        appState.logout()
+    }
+
     func loadFromServer() {
         guard let provider = makeProvider() else {
             errorMessage = "Not signed in"
+            isLoading = false
             return
         }
         Task {
@@ -248,9 +254,10 @@ final class AccountSettingsContainer: ObservableObject {
     /// arm the Save button.
     var isDraftUnchanged: Bool {
         let persistedPhone = LocalCallerIdSettings.phoneNumber() ?? ""
-        let normalisedDraftPhone = draftLocalPhone
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .filter { $0.isASCII && $0.isNumber }
+        let trimmed = draftLocalPhone.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasPlus = trimmed.hasPrefix("+")
+        let digits = trimmed.filter { $0.isASCII && $0.isNumber }
+        let normalisedDraftPhone = hasPlus ? "+" + digits : digits
         return draftDisplayName == (viewModel.displayName ?? "") &&
                draftStatusMessage == (viewModel.statusMessage ?? "") &&
                normalisedDraftPhone == persistedPhone
@@ -288,6 +295,7 @@ struct AccountSettingsScreen: View {
     @State private var selectedItem: PhotosPickerItem?
     /// W445: shows AvatarIconPicker sheet.
     @State private var showingIconPicker = false
+    @State private var showLogoutConfirm = false
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -314,25 +322,16 @@ struct AccountSettingsScreen: View {
 
                     SettingsSectionHeader("IDENTITÀ")
                     VStack(spacing: 8) {
-                        // W307: User ID + Phone Hash become tap-to-copy.
-                        // These are the two values most often pasted in
-                        // bug reports / cross-device verification, but
-                        // they used to be select-and-hold to copy.
                         tapCopyRow(label: "User ID",
                                    value: container.viewModel.userId)
-                        tapCopyRow(label: "Phone Hash",
-                                   value: phoneHashShort)
+                        // Phone hash: hidden when empty or zero (no phone registered).
+                        if !phoneHashShort.isEmpty && phoneHashShort != "0" {
+                            tapCopyRow(label: "Phone Hash",
+                                       value: phoneHashShort)
+                        }
                         if let ext = container.viewModel.dialExtension {
                             kvRow(label: "Interno",
                                   value: ext,
-                                  mono: true)
-                        }
-                        // W445: handle display — '@' + first 8 chars of userId.
-                        // Server does not yet expose a dedicated handle field;
-                        // using uuid8 prefix as a stable placeholder.
-                        if !container.handle.isEmpty {
-                            kvRow(label: "Handle",
-                                  value: container.handle,
                                   mono: true)
                         }
                     }
@@ -356,12 +355,12 @@ struct AccountSettingsScreen: View {
                     // field with the user's internal extension.
                     SettingsSectionHeader("CALLER-ID")
                     VStack(spacing: 12) {
-                        digitsOnlyField(
+                        phoneNumberField(
                             label: "Numero telefono pubblico",
                             value: $container.draftLocalPhone,
-                            placeholder: "es. 3331234567"
+                            placeholder: "es. +393331234567"
                         )
-                        Text("Mostrato come ID chiamante alle persone che chiami. Solo cifre — nessun '+', nessun prefisso. Salvato solo su questo dispositivo.")
+                        Text("Mostrato come ID chiamante alle persone che chiami. Puoi usare il prefisso internazionale (es. +39). Salvato solo su questo dispositivo.")
                             .qaudionStyle(type.labelSmall)
                             .foregroundStyle(scheme.onSurfaceVariant)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -375,6 +374,8 @@ struct AccountSettingsScreen: View {
 
                     Spacer().frame(height: 16)
                     saveButton
+                    Spacer().frame(height: 12)
+                    logoutButton
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
@@ -387,6 +388,18 @@ struct AccountSettingsScreen: View {
         }
         .sheet(isPresented: $showingIconPicker) {
             AvatarIconPicker { icon in container.setIconAvatar(icon) }
+        }
+        .confirmationDialog(
+            "Uscire da Q-Audion?",
+            isPresented: $showLogoutConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Esci", role: .destructive) {
+                container.logout()
+            }
+            Button("Annulla", role: .cancel) { }
+        } message: {
+            Text("Dovrai accedere di nuovo per usare le chat e le chiamate.")
         }
         .onChange(of: selectedItem) { newItem in
             Task {
@@ -467,9 +480,12 @@ struct AccountSettingsScreen: View {
             .clipShape(Circle())
             .overlay(Circle().stroke(scheme.outline.opacity(0.4), lineWidth: 1))
         } else {
-            QAudionAvatar(displayName: container.draftDisplayName.isEmpty
-                                        ? container.viewModel.userId
-                                        : container.draftDisplayName,
+            let avatarLabel: String = {
+                if !container.draftDisplayName.isEmpty { return container.draftDisplayName }
+                if let ext = container.viewModel.dialExtension, !ext.isEmpty { return ext }
+                return "?"
+            }()
+            QAudionAvatar(displayName: avatarLabel,
                           size: 64,
                           shortNumber: container.viewModel.dialExtension)
         }
@@ -581,21 +597,19 @@ struct AccountSettingsScreen: View {
         }
     }
 
-    /// Variant of `textField` that:
-    ///   * uses the .numberPad keyboard so only digits are reachable,
-    ///   * filters input to digits-only on every keystroke (defends
-    ///     against paste of "+39 333 …" or similar formatted input),
-    ///   * caps length at 20 chars (longer than any plausible national
-    ///     dial-string but still bounded to keep the UI sane).
-    /// Used for the "Numero telefono pubblico" caller-id field.
-    private func digitsOnlyField(label: String,
-                                 value: Binding<String>,
-                                 placeholder: String) -> some View {
+    /// Phone number field supporting E.164 format ("+39…") or plain digits.
+    /// Uses phonePad keyboard (has "+", "*", "#"). Strips spaces/dashes/parens
+    /// but keeps a leading "+". Caps at 20 chars.
+    private func phoneNumberField(label: String,
+                                  value: Binding<String>,
+                                  placeholder: String) -> some View {
         let sanitisedBinding = Binding<String>(
             get: { value.wrappedValue },
             set: { newValue in
+                let hasPlus = newValue.hasPrefix("+")
                 let digits = newValue.filter { $0.isASCII && $0.isNumber }
-                value.wrappedValue = String(digits.prefix(20))
+                let canonical = hasPlus ? "+" + digits : digits
+                value.wrappedValue = String(canonical.prefix(20))
             }
         )
         return VStack(alignment: .leading, spacing: 6) {
@@ -609,7 +623,7 @@ struct AccountSettingsScreen: View {
                 .qaudionStyle(type.bodyMedium)
                 .foregroundColor(scheme.onSurface)
                 .tint(scheme.primary)
-                .keyboardType(.numberPad)
+                .keyboardType(.phonePad)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .disabled(container.isLoading)
@@ -652,6 +666,31 @@ struct AccountSettingsScreen: View {
                         .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
                 )
         }
+    }
+
+    private var logoutButton: some View {
+        Button {
+            showLogoutConfirm = true
+        } label: {
+            HStack {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 16, weight: .regular))
+                Text("Esci dall'account")
+                    .qaudionStyle(type.bodyMedium)
+            }
+            .foregroundStyle(extras.riskHigh)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(extras.riskHigh.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(extras.riskHigh.opacity(0.4), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func errorBanner(_ msg: String) -> some View {

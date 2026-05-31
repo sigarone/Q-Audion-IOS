@@ -22,28 +22,31 @@ public enum LocalCallerIdSettings {
     public static let key = "qaudion.local.phone"
 
     /// Read the locally-set standard phone number. Returns nil when the
-    /// user has not configured one. Always pure digits — callers can
-    /// pass the value straight to CallKit / dial.
+    /// user has not configured one. Supports E.164 format (leading "+")
+    /// or plain digits.
     public static func phoneNumber(defaults: UserDefaults = .standard) -> String? {
         let raw = defaults.string(forKey: key)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !raw.isEmpty else { return nil }
-        // Belt-and-braces: strip any non-digit that might have slipped
-        // past the input field (e.g. user pasting "+39 333…").
-        let digits = raw.filter { $0.isASCII && $0.isNumber }
-        return digits.isEmpty ? nil : digits
+        return raw
     }
 
-    /// Persist the user's standard phone number. Empty / whitespace /
-    /// non-digit-only input clears the key. Filters input to digits-only
-    /// so the on-disk value is always dial-safe.
+    /// Persist the user's standard phone number. Accepts E.164 format
+    /// ("+39331234567") or plain digits ("331234567"). Strips spaces,
+    /// dashes and parentheses but preserves a leading "+". Empty input
+    /// clears the key.
     public static func setPhoneNumber(_ value: String?, defaults: UserDefaults = .standard) {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let digits = trimmed.filter { $0.isASCII && $0.isNumber }
-        if digits.isEmpty {
+        guard !trimmed.isEmpty else {
+            defaults.removeObject(forKey: key)
+            return
+        }
+        let hasPlus = trimmed.hasPrefix("+")
+        let digitsOnly = trimmed.filter { $0.isASCII && $0.isNumber }
+        if digitsOnly.isEmpty {
             defaults.removeObject(forKey: key)
         } else {
-            defaults.set(digits, forKey: key)
+            defaults.set(hasPlus ? "+" + digitsOnly : digitsOnly, forKey: key)
         }
     }
 }
