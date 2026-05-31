@@ -651,14 +651,16 @@ final class AppState: ObservableObject {
         #endif
 
         if let token = authService.loadToken() {
-            // W444: pre-fill userId + dialExtension from UserDefaults so
-            // SettingsScreen shows the correct handle before getProfile() returns.
+            // Pre-fill userId from UserDefaults so the profile card renders before
+            // getProfile() returns. dialExtension is intentionally NOT pre-filled:
+            // it is account-specific and a stale cached value from a previous account
+            // would show the wrong internal number until the server round-trip completes.
+            // nil here means the hero card shows the dial extension only after the live
+            // server response arrives — no stale artefact across account switches.
             if let cached = UserDefaults.standard.string(forKey: "currentUserId") {
                 self.currentUserId = cached
             }
-            if let cached = UserDefaults.standard.string(forKey: "currentUserDialExtension") {
-                self.currentUserDialExtension = cached
-            }
+            self.currentUserDialExtension = nil   // always wait for live getProfile()
             let backendConfig = pinnedConfig(token: token)
             let provider = BCryptoBackendProvider(config: backendConfig)
             Task {
