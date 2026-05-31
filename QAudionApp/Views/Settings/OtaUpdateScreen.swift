@@ -55,14 +55,22 @@ final class OtaUpdateContainer: ObservableObject {
     let pubkeyFingerprint: String = "a1b2c3d4 e5f60718 29304142 53647586 97a8b9ca dbecfd0e"
 
     init() {
+        // Read real version from bundle instead of hardcoding old values.
+        let info = Bundle.main.infoDictionary
+        if let v = info?["CFBundleShortVersionString"] as? String {
+            currentVersion = v
+        }
+        if let b = info?["CFBundleVersion"] as? String,
+           let code = Int64(b) {
+            currentVersionCode = code
+        }
         load()
     }
 
     func load() {
-        // Mock catalog. Sostituito da AppUpdateChecker.fetchCatalog()
-        // quando lands engine-side.
-        allReleases = Self.mockCatalog()
-        applyChannel()
+        allReleases = []
+        visibleReleases = []
+        selectedReleaseId = nil
     }
 
     func applyChannel() {
@@ -140,56 +148,24 @@ final class OtaUpdateContainer: ObservableObject {
     }
 
     func install() async {
-        guard let id = selectedReleaseId,
-              let release = visibleReleases.first(where: { $0.id == id })
-        else { return }
-        downloading = true
-        error = nil
-        downloadProgress = 0.0
-        // Simula download progressivo
-        for step in 1...10 {
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            downloadProgress = Float(step) / 10.0
+        // On iOS, installation is handled by TestFlight or the App Store.
+        // There is no mechanism to install an IPA from a custom server
+        // outside Apple's distribution channels. Open TestFlight directly.
+        #if canImport(UIKit)
+        await MainActor.run {
+            if let url = URL(string: "itms-beta://") {
+                if UIApplication.shared.canOpenURL(url) {
+                    UIApplication.shared.open(url)
+                    return
+                }
+            }
+            if let url = URL(string: "https://testflight.apple.com") {
+                UIApplication.shared.open(url)
+            }
         }
-        downloading = false
-        // Su iOS l'install è gestito da App Store / TestFlight.
-        // L'engine wirerà l'apertura del link App Store.
-        justUpdatedToVersion = release.versionName
+        #endif
     }
 
-    private static func mockCatalog() -> [VerifiedRelease] {
-        let now = Date()
-        return [
-            .init(id: "rel-1.0.90", versionCode: 90, versionName: "1.0.90",
-                  sha256Hex: "8a3f29c4d7b612e0987cba14a09f5d8e3c821b6f4d09e5a7f234c8a71d3e6b04",
-                  fileSizeBytes: 28_400_000,
-                  releaseNotes: "• Fix sporadico CallKit dopo backgrounding\n• Nuova animazione halo InCallScreen\n• Performance audio enhancement engine",
-                  channel: "beta", isForced: false,
-                  createdAt: now.addingTimeInterval(-3 * 86400),
-                  signatureValid: true, isInstalled: false),
-            .init(id: "rel-1.0.89", versionCode: 89, versionName: "1.0.89",
-                  sha256Hex: "5c1d9ea73f24b8e0f3d617c4a0871b9c2e58fdb3a76094c182e7d40b9cf3a821",
-                  fileSizeBytes: 28_100_000,
-                  releaseNotes: "• Group chat trio (W40)\n• CallHistory (W39)\n• DeviceManager refresh + LinkNewDevice",
-                  channel: "stable", isForced: false,
-                  createdAt: now.addingTimeInterval(-1 * 86400),
-                  signatureValid: true, isInstalled: false),
-            .init(id: "rel-1.0.88", versionCode: 88, versionName: "1.0.88",
-                  sha256Hex: "d4b81c2a93f0e7615a9d3c08b6f4290eda57c821b03f9e6047a8d3c50f17e2b9",
-                  fileSizeBytes: 27_900_000,
-                  releaseNotes: "• Snackbar feedback chat actions\n• Fix LinkNewDevice key wipe",
-                  channel: "stable", isForced: false,
-                  createdAt: now.addingTimeInterval(-5 * 86400),
-                  signatureValid: true, isInstalled: true),
-            .init(id: "rel-1.0.87", versionCode: 87, versionName: "1.0.87",
-                  sha256Hex: "6f29b08e1d5c374a2086f4b09e7c3215d8a4e7c612b03f9e6047a8d3c50f1729",
-                  fileSizeBytes: 27_700_000,
-                  releaseNotes: "• Device management enhanced\n• X25519 ephemeral keys",
-                  channel: "stable", isForced: false,
-                  createdAt: now.addingTimeInterval(-9 * 86400),
-                  signatureValid: true, isInstalled: false)
-        ]
-    }
 }
 
 /// Schermo "Aggiornamento firmato OTA". 1:1 visual port di Android
@@ -217,9 +193,6 @@ struct OtaUpdateScreen: View {
                     trustCard
                     SettingsSectionHeader("RELEASE DISPONIBILI")
                     releasesBlock
-                    if container.downloading {
-                        downloadProgressRow
-                    }
                     if let err = container.error {
                         errorBanner(err)
                     }
@@ -255,7 +228,7 @@ struct OtaUpdateScreen: View {
             }
             Button("Annulla", role: .cancel) {}
         } message: { _ in
-            Text("Sugli store iOS, la sessione verrà brevemente interrotta per scaricare il build dal server. Leggi la pagina di conferma su App Store. L'app si riaprirà automaticamente.")
+            Text("Su iOS gli aggiornamenti vengono distribuiti via TestFlight o App Store. Verrai reindirizzato a TestFlight per installare la build.")
         }
     }
 
