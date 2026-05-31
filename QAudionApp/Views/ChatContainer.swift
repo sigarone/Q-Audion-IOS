@@ -36,11 +36,12 @@ final class ChatContainer: ObservableObject {
     @Published private(set) var viewModel: ChatViewModel
     @Published var composerText: String = ""
 
-    /// Id dell'ultimo messaggio fallito. nil quando nessun fallimento
-    /// pending. Wired su QAudionSnackbar dalla `ChatDetailScreen`.
     @Published private(set) var failedMessageId: UUID? = nil
-    /// Reason del fallimento corrente. nil se nessun fallimento.
     @Published private(set) var failureReason: SendFailureReason? = nil
+    /// When true, the NEXT message sent will be flagged as view-once.
+    @Published var isNextMessageViewOnce: Bool = false
+    /// Mirrors conversation.screenshotGrantedByPeer for reactive UI.
+    @Published private(set) var screenshotGrantedByPeer: Bool? = nil
 
     private let store: ConversationStore
     private let conversationId: UUID
@@ -213,6 +214,11 @@ final class ChatContainer: ObservableObject {
         let ephExpiry: Date? = ephSecs.flatMap { s in
             s > 0 ? sentNow.addingTimeInterval(Double(s)) : nil
         }
+        let viewOnce = isNextMessageViewOnce
+        // Wire format for view-once: prefix plaintext with [vo] marker.
+        // On receive, AppState strips [vo] from the displayed text and
+        // marks the message isViewOnce=true.
+        let wireText = viewOnce ? "[vo]\(text)" : text
         let msg = Message(
             id: outboundId,
             conversationId: conversationId,
@@ -222,13 +228,11 @@ final class ChatContainer: ObservableObject {
             deliveredAt: nil,
             readAt: nil,
             status: .sending,
-            // W86: stamp clientMsgId on outbound so the receiver can
-            // target this message for future edit/delete envelopes.
-            // Equals id.uuidString — the same value we already pass as
-            // `client_msg_id` on the msg_send WS envelope.
             clientMsgId: outboundId.uuidString,
-            expiresAt: ephExpiry
+            expiresAt: ephExpiry,
+            isViewOnce: viewOnce ? true : nil
         )
+        if viewOnce { isNextMessageViewOnce = false }
         store.appendMessage(msg)
         // W83: bump conversation preview + activity for outbound text.
         // Outbound never increments unread (sender already read what
@@ -252,11 +256,11 @@ final class ChatContainer: ObservableObject {
         // qaudion-desktop and qaudion-android-new. Fallback PSK kicks in
         // for unpaired contacts so the wire still flows.
         if let sender = sendService {
-            Task { [conversationId, peerUserId, msgId = msg.id] in
+            Task { [conversationId, peerUserId, msgId = msg.id, wireText] in
                 let outcome = await sender.sendEncrypted(
                     messageId: msgId,
                     peerUserId: peerUserId,
-                    plaintext: text
+                    plaintext: wireText
                 )
                 await MainActor.run {
                     switch outcome {
@@ -1229,6 +1233,7 @@ final class ChatContainer: ObservableObject {
     func refreshFromStore() {
         let messages = store.loadMessages(conversationId: conversationId)
         let conv = store.loadConversations().first { $0.id == conversationId } ?? viewModel.conversation
+        screenshotGrantedByPeer = conv.screenshotGrantedByPeer
         viewModel = ChatViewModel(
             conversation: conv,
             messages: messages,
@@ -1236,5 +1241,101 @@ final class ChatContainer: ObservableObject {
             isPeerTyping: viewModel.isPeerTyping,
             isPeerOnline: viewModel.isPeerOnline
         )
+    }
+
+    // MARK: - View-once
+
+    /// Called when the user taps to reveal a view-once message.
+    func markViewOnceOpened(message: Message) {
+        store.markViewOnceOpened(messageId: message.id, conversationId: conversationId)
+        refreshFromStore()
+    }
+
+    // MARK: - Screenshot permission
+
+    /// Send a screenshot-permission REQUEST to the peer.
+    func requestScreenshotPermission() {
+        guard let sender = sendService else { return }
+        let payload: String = "{\"qa_ctl\":1,\"t\":\"screenshot_request\"}"
+        let reqId = UUID()
+        let msg = Message(
+            id: reqId, conversationId: conversationId,
+            direction: .outgoing, plaintext: payload,
+            sentAt: Date(), deliveredAt: nil, readAt: nil, status: .sending,
+            clientMsgId: reqId.uuidString
+        )
+        store.appendMessage(msg)
+        store.recordNewMessage(conversationId: conversationId,
+                               lastMessagePreview: "📸 Richiesta autorizzazione screenshot",
+                               lastActivity: Date(), incrementUnread: false)
+        refreshFromStore()
+        Task { [peerUserId = peerUserId, msgId = reqId] in
+            _ = await sender.sendEncrypted(messageId: msgId,
+                                           peerUserId: peerUserId,
+                                           plaintext: payload)
+        }
+    }
+
+    /// Send a screenshot-permission GRANT to the peer (they requested it).
+    func grantScreenshotPermission() {
+        guard let sender = sendService else { return }
+        let payload: String = "{\"qa_ctl\":1,\"t\":\"screenshot_grant\"}"
+        let reqId = UUID()
+        let msg = Message(
+            id: reqId, conversationId: conversationId,
+            direction: .outgoing, plaintext: payload,
+            sentAt: Date(), deliveredAt: nil, readAt: nil, status: .sending,
+            clientMsgId: reqId.uuidString
+        )
+        store.appendMessage(msg)
+        store.recordNewMessage(conversationId: conversationId,
+                               lastMessagePreview: "📸 Screenshot autorizzato",
+                               lastActivity: Date(), incrementUnread: false)
+        refreshFromStore()
+        Task { [peerUserId = peerUserId, msgId = reqId] in
+            _ = await sender.sendEncrypted(messageId: msgId,
+                                           peerUserId: peerUserId,
+                                           plaintext: payload)
+        }
+    }
+
+    /// Revoke previously granted screenshot permission.
+    func revokeScreenshotPermission() {
+        store.setScreenshotGranted(conversationId: conversationId, granted: false)
+        let payload: String = "{\"qa_ctl\":1,\"t\":\"screenshot_revoke\"}"
+        let reqId = UUID()
+        let msg = Message(
+            id: reqId, conversationId: conversationId,
+            direction: .outgoing, plaintext: payload,
+            sentAt: Date(), deliveredAt: nil, readAt: nil, status: .sending,
+            clientMsgId: reqId.uuidString
+        )
+        store.appendMessage(msg)
+        store.recordNewMessage(conversationId: conversationId,
+                               lastMessagePreview: "📸 Autorizzazione screenshot revocata",
+                               lastActivity: Date(), incrementUnread: false)
+        refreshFromStore()
+        if let sender = sendService {
+            Task { [peerUserId = peerUserId, msgId = reqId] in
+                _ = await sender.sendEncrypted(messageId: msgId,
+                                               peerUserId: peerUserId,
+                                               plaintext: payload)
+            }
+        }
+    }
+
+    /// Handle an incoming screenshot-control envelope from the peer.
+    /// Called by AppState when a message with qa_ctl screenshot type arrives.
+    func handleScreenshotControl(type: String) {
+        switch type {
+        case "screenshot_grant":
+            store.setScreenshotGranted(conversationId: conversationId, granted: true)
+            refreshFromStore()
+        case "screenshot_revoke":
+            store.setScreenshotGranted(conversationId: conversationId, granted: false)
+            refreshFromStore()
+        default:
+            break
+        }
     }
 }

@@ -27,12 +27,17 @@ public struct Conversation: Equatable, Sendable, Hashable, Codable, Identifiable
     /// Mirrors Android's ConversationEntity.ephemeralTimerSec.
     /// Optional for Codable backward compat with pre-W441 stored rows.
     public let ephemeralTimerSeconds: Int?
+    /// Screenshot permission granted by the remote peer for this conversation.
+    /// nil = not requested. false = denied. true = granted.
+    /// Stored locally — the peer sends a control envelope to set it.
+    public let screenshotGrantedByPeer: Bool?
 
     public init(id: UUID, peerUserId: String, peerDisplayName: String,
                 lastMessagePreview: String?, lastActivity: Date,
                 unreadCount: Int, pinned: Bool, kind: Kind = .oneToOne,
                 muted: Bool = false,
-                ephemeralTimerSeconds: Int? = nil) {
+                ephemeralTimerSeconds: Int? = nil,
+                screenshotGrantedByPeer: Bool? = nil) {
         self.id = id
         self.peerUserId = peerUserId
         self.peerDisplayName = peerDisplayName
@@ -43,5 +48,6 @@ public struct Conversation: Equatable, Sendable, Hashable, Codable, Identifiable
         self.kind = kind
         self.muted = muted
         self.ephemeralTimerSeconds = ephemeralTimerSeconds
+        self.screenshotGrantedByPeer = screenshotGrantedByPeer
     }
 }

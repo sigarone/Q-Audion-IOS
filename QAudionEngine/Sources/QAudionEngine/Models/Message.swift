@@ -74,10 +74,13 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// pre-W87 stored rows.
     public let reactions: [String: [String]]?
     /// W441: UTC timestamp at which this message auto-deletes locally.
-    /// Set at send/receive time from the conversation's ephemeral timer.
-    /// nil = no expiry. Swept by EphemeralMessageJanitor every 60 s.
-    /// Optional for backward compat — older stored rows decode with nil.
     public let expiresAt: Date?
+    /// View-once: content is hidden until tapped, then auto-deleted after viewing.
+    /// nil = false for backward compat with older stored rows.
+    public let isViewOnce: Bool?
+    /// True once the user has tapped to reveal a view-once message.
+    /// nil = not yet opened. Swept by EphemeralMessageJanitor (expiresAt set on open).
+    public let viewOnceOpened: Bool?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
@@ -90,7 +93,9 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
                 edited: Bool? = nil,
                 deletedAt: Date? = nil,
                 reactions: [String: [String]]? = nil,
-                expiresAt: Date? = nil) {
+                expiresAt: Date? = nil,
+                isViewOnce: Bool? = nil,
+                viewOnceOpened: Bool? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -109,5 +114,7 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.deletedAt = deletedAt
         self.reactions = reactions
         self.expiresAt = expiresAt
+        self.isViewOnce = isViewOnce
+        self.viewOnceOpened = viewOnceOpened
     }
 }

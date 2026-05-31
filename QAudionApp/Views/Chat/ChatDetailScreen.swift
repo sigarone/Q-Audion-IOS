@@ -129,6 +129,9 @@ struct ChatDetailScreen: View {
         // (CLAUDE.md §13).
         .onAppear(perform: handleScreenAppear)
         .onDisappear(perform: handleScreenDisappear)
+        .onChange(of: container.screenshotGrantedByPeer) { _ in
+            handleScreenAppear()
+        }
         // W38: send-failure feedback. Quando il container marca un
         // messaggio fallito (engine pipeline wires `markFailed` su
         // crypto/network error), pushiamo una snackbar error con bottone
@@ -440,11 +443,37 @@ struct ChatDetailScreen: View {
             // contact. The local-store wipe is immediate; block / unblock
             // hits ContactsApi.blockContact via the persistent backend.
             Menu {
+                // View-once toggle for next message
+                Button {
+                    container.isNextMessageViewOnce.toggle()
+                } label: {
+                    Label(container.isNextMessageViewOnce
+                          ? "Annulla visualizza una volta"
+                          : "Prossimo: visualizza una volta",
+                          systemImage: "eye.slash")
+                }
+                Divider()
+                // Screenshot permission
+                let ssGranted = container.screenshotGrantedByPeer
+                if ssGranted == true {
+                    Button {
+                        container.revokeScreenshotPermission()
+                        snackbar?.show(.init(text: "Autorizzazione screenshot revocata.",
+                                             severity: .info))
+                    } label: {
+                        Label("Revoca screenshot", systemImage: "camera.badge.ellipsis")
+                    }
+                } else {
+                    Button {
+                        container.requestScreenshotPermission()
+                        snackbar?.show(.init(text: "Richiesta screenshot inviata.",
+                                             severity: .info))
+                    } label: {
+                        Label("Richiedi screenshot", systemImage: "camera")
+                    }
+                }
+                Divider()
                 Button(role: .destructive) {
-                    // W147: gate behind confirm dialog instead of
-                    // wiping straight away — the action is hard to
-                    // undo (no engine-side rewind) and one stray tap
-                    // shouldn't nuke a long thread.
                     showClearHistoryConfirm = true
                 } label: {
                     Label("Svuota cronologia", systemImage: "tray")
@@ -643,6 +672,9 @@ struct ChatDetailScreen: View {
                 )
             }
 
+        let isVO = msg.isViewOnce == true
+        let voOpened = msg.viewOnceOpened == true
+
         MessageBubble(
             variant: variant,
             timeLabel: timeLabel,
@@ -650,10 +682,32 @@ struct ChatDetailScreen: View {
             replyQuote: nil,
             reactions: reactionChips
         ) {
-            // W81/W82: route bubble UI by media MIME type so voice
-            // notes get the play/pause player and image attachments
-            // get the inline preview + tap-to-fullscreen.
-            if let mime = msg.mediaMimeType, mime.hasPrefix("audio/") {
+            if isVO && !voOpened {
+                // View-once: hidden until tapped. Show eye-slash pill.
+                Button {
+                    container.markViewOnceOpened(message: msg)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "eye.slash.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Tocca per visualizzare · una sola volta")
+                            .qaudionStyle(type.labelSmall)
+                    }
+                    .foregroundStyle(extras.pqcAccent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+            } else if isVO && voOpened {
+                // Already opened — show tombstone.
+                HStack(spacing: 6) {
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 12))
+                    Text("Visualizzato")
+                        .qaudionStyle(type.labelSmall)
+                }
+                .foregroundStyle(scheme.onSurfaceVariant)
+            } else if let mime = msg.mediaMimeType, mime.hasPrefix("audio/") {
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
                     messageId: msg.id,
@@ -666,8 +720,6 @@ struct ChatDetailScreen: View {
                     mediaLocalPath: msg.mediaLocalPath
                 )
             } else if let dur = msg.mediaDurationMs, dur > 0 {
-                // Legacy fallback: pre-W82 voice notes lack mediaMimeType
-                // but carry duration. Render via voice player.
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
                     messageId: msg.id,
@@ -675,11 +727,6 @@ struct ChatDetailScreen: View {
                     durationMs: dur
                 )
             } else {
-                // W127: AttributedString with NSDataDetector-style URL
-                // detection so http(s) links in the message body render
-                // as tappable. Text on iOS 15+ honors AttributedRun.link
-                // and styles + handles tap automatically. Falls back to
-                // plain string if construction fails.
                 Text(Self.attributedBody(msg.plaintext, linkColor: extras.success))
                     .qaudionStyle(type.bodyMedium)
                     .foregroundStyle(scheme.onSurface)
@@ -788,8 +835,12 @@ struct ChatDetailScreen: View {
     // MARK: - W445: screenshot lock handlers
 
     private func handleScreenAppear() {
-        if screenshotLockEnabled {
+        // Lock screenshots unless the peer has explicitly granted permission.
+        let peerGranted = container.screenshotGrantedByPeer == true
+        if screenshotLockEnabled && !peerGranted {
             ScreenshotLockService.lock()
+        } else {
+            ScreenshotLockService.unlock()
         }
     }
 
@@ -872,7 +923,31 @@ struct ChatDetailScreen: View {
 
     @ViewBuilder
     private var composerView: some View {
-        MessageComposer(
+        VStack(spacing: 0) {
+            // View-once toggle pill — shown above the composer when active.
+            if container.isNextMessageViewOnce {
+                HStack(spacing: 6) {
+                    Image(systemName: "eye.slash.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(extras.pqcAccent)
+                    Text("Visualizza una volta")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(extras.pqcAccent)
+                    Spacer()
+                    Button {
+                        container.isNextMessageViewOnce = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(extras.pqcAccent.opacity(0.10))
+            }
+            MessageComposer(
             text: Binding(
                 get: { container.composerText },
                 set: handleComposerTextChange
@@ -896,6 +971,7 @@ struct ChatDetailScreen: View {
             onFinishVoiceNote: handleVoiceNoteFinish,
             onCancelVoiceNote: handleVoiceNoteCancel
         )
+        }
     }
 
     // MARK: - Composer text-change callback (W260)

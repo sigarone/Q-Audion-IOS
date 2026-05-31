@@ -444,6 +444,65 @@ public final class ConversationStore {
         }
     }
 
+    // MARK: - View-once
+
+    /// Mark a view-once message as opened: sets viewOnceOpened=true and
+    /// expiresAt=now+5s so EphemeralMessageJanitor wipes it quickly.
+    public func markViewOnceOpened(messageId: UUID, conversationId: UUID) {
+        do {
+            let deadline = Date().addingTimeInterval(5)
+            try db.writer.write { db in
+                if var msg = try Message.fetchOne(db, key: messageId) {
+                    msg = Message(
+                        id: msg.id, conversationId: msg.conversationId,
+                        direction: msg.direction, plaintext: msg.plaintext,
+                        sentAt: msg.sentAt, deliveredAt: msg.deliveredAt,
+                        readAt: msg.readAt, status: msg.status,
+                        senderUserId: msg.senderUserId,
+                        serverMessageId: msg.serverMessageId,
+                        mediaLocalPath: msg.mediaLocalPath,
+                        mediaDurationMs: msg.mediaDurationMs,
+                        mediaMimeType: msg.mediaMimeType,
+                        clientMsgId: msg.clientMsgId,
+                        edited: msg.edited, deletedAt: msg.deletedAt,
+                        reactions: msg.reactions,
+                        expiresAt: deadline,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: true
+                    )
+                    try msg.save(db)
+                }
+            }
+        } catch {
+            print("[ConversationStore] markViewOnceOpened failed: \(error)")
+        }
+    }
+
+    // MARK: - Screenshot permission
+
+    /// Persist the screenshot permission granted by the remote peer.
+    public func setScreenshotGranted(conversationId: UUID, granted: Bool?) {
+        do {
+            try db.writer.write { db in
+                if var conv = try Conversation.fetchOne(db, key: conversationId) {
+                    conv = Conversation(
+                        id: conv.id, peerUserId: conv.peerUserId,
+                        peerDisplayName: conv.peerDisplayName,
+                        lastMessagePreview: conv.lastMessagePreview,
+                        lastActivity: conv.lastActivity,
+                        unreadCount: conv.unreadCount, pinned: conv.pinned,
+                        kind: conv.kind, muted: conv.muted,
+                        ephemeralTimerSeconds: conv.ephemeralTimerSeconds,
+                        screenshotGrantedByPeer: granted
+                    )
+                    try conv.save(db)
+                }
+            }
+        } catch {
+            print("[ConversationStore] setScreenshotGranted failed: \(error)")
+        }
+    }
+
     // MARK: - Reset
 
     public func wipeAll() {

@@ -1840,13 +1840,51 @@ final class AppState: ObservableObject {
             )
             store.upsertConversation(conv)
         }
+        // View-once: detect [vo] prefix, strip from display text.
+        var isViewOnce: Bool = false
+        if plaintext.hasPrefix("[vo]") {
+            isViewOnce = true
+            plaintext = String(plaintext.dropFirst(4))
+        }
+
+        // Screenshot control: detect qa_ctl screenshot messages.
+        // Route to the active ChatContainer (if any) and skip storing
+        // as a normal message row (they are rendered as system events).
+        if let data = plaintext.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let qaCtl = json["qa_ctl"] as? Int, qaCtl == 1,
+           let ctlType = json["t"] as? String,
+           ctlType == "screenshot_request" || ctlType == "screenshot_grant" || ctlType == "screenshot_revoke" {
+            // Persist a system bubble so the user sees what happened.
+            let label: String
+            switch ctlType {
+            case "screenshot_request":
+                label = "📸 Il contatto chiede autorizzazione per gli screenshot"
+            case "screenshot_grant":
+                label = "📸 Screenshot autorizzati"
+                store.setScreenshotGranted(conversationId: conv.id, granted: true)
+            default:
+                label = "📸 Autorizzazione screenshot revocata"
+                store.setScreenshotGranted(conversationId: conv.id, granted: false)
+            }
+            let sysMsg = Message(
+                id: UUID(), conversationId: conv.id,
+                direction: .incoming, plaintext: label,
+                sentAt: Date(), deliveredAt: Date(), readAt: nil,
+                status: .delivered, senderUserId: senderId
+            )
+            store.appendMessage(sysMsg)
+            store.recordNewMessage(conversationId: conv.id,
+                                   lastMessagePreview: label,
+                                   lastActivity: Date(), incrementUnread: !conv.muted)
+            NotificationCenter.default.post(name: AppState.chatRefreshNotification,
+                                            object: nil,
+                                            userInfo: ["peerUserId": senderId])
+            return
+        }
+
         let msgUUID = UUID()
-        // W80: voice-note receive — if the decrypted plaintext is a
-        // `qfile` v3 marker (carrying a download_claim), persist the
-        // duration up front so the row already shows "🎤 Nota vocale
-        // (4.2s) (download in arrivo)", and kick off the async
-        // download+decrypt that flips the row to a playable bubble
-        // once the M4A lands in the cache.
+        // W80: voice-note receive.
         var initialMediaDur: Int64? = nil
         var pendingMarker: FileTransfer.FileMarker? = nil
         var pendingAttachAnnounce: AttachAnnounceEnvelope? = nil
@@ -1876,21 +1914,12 @@ final class AppState: ObservableObject {
             readAt: nil,
             status: .delivered,
             senderUserId: senderId,
-            // W78: persist the server id on inbound messages too so any
-            // future cross-device sync (read receipts emitted by a
-            // companion device, e.g. desktop session) can match the row.
             serverMessageId: serverMsgId,
             mediaLocalPath: nil,
             mediaDurationMs: initialMediaDur,
-            // W82: route bubble UI by mime (audio/* → voice player,
-            // image/* → image preview). Stamped up-front from the
-            // marker so the row already shows the right placeholder.
             mediaMimeType: pendingMarker?.qfile.mime ?? pendingAttachAnnounce?.att.mime,
-            // W86: persist the sender-generated clientMsgId so future
-            // qa_ctl:1 envelopes (edit/delete/reaction) targeting this
-            // message can find the row. Without this, peers can't edit
-            // or delete what they previously sent us.
-            clientMsgId: clientMsgId
+            clientMsgId: clientMsgId,
+            isViewOnce: isViewOnce ? true : nil
         )
         store.appendMessage(msg)
         // W83: bump conversation preview + activity + unread so the
