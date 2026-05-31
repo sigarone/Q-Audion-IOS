@@ -139,8 +139,7 @@ final class OtaUpdateContainer: ObservableObject {
                 signatureValid: false,  // Ed25519 verify deferred
                 isInstalled: false
             )
-            // Carica il mock catalog poi prepend l'entry server (sopra).
-            allReleases = [serverEntry] + Self.mockCatalog()
+            allReleases = [serverEntry]
             applyChannel()
         case .error(let msg):
             error = "Verifica fallita: \(msg)"

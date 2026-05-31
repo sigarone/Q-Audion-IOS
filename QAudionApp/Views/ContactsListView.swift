@@ -369,7 +369,7 @@ struct ContactsListView: View {
             },
             onVerifySas: nil,
             onBlock: {
-                BlockedContactsStore.block(item.userId)
+                BlockedContactsStore.add(item.userId)
             },
             onDelete: {
                 ContactsStore().remove(userId: item.userId)
