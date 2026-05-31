@@ -39,16 +39,10 @@ final class CallsSettingsContainer: ObservableObject {
         CallsGate.setAgc(enabled)
     }
 
-    func setCallQuality(_ quality: CallsSettingsViewModel.CallQuality) {
-        viewModel = makeUpdated(quality: quality)
-        store.saveCalls(viewModel)
-    }
-
     private func makeUpdated(
         aec: Bool? = nil,
         ns: Bool? = nil,
-        agc: Bool? = nil,
-        quality: CallsSettingsViewModel.CallQuality? = nil
+        agc: Bool? = nil
     ) -> CallsSettingsViewModel {
         CallsSettingsViewModel(
             codecPreference: viewModel.codecPreference,
@@ -56,7 +50,7 @@ final class CallsSettingsContainer: ObservableObject {
             isNsEnabled: ns ?? viewModel.isNsEnabled,
             isAgcEnabled: agc ?? viewModel.isAgcEnabled,
             isVoipBackgroundModeActive: viewModel.isVoipBackgroundModeActive,
-            preferredCallQuality: quality ?? viewModel.preferredCallQuality
+            preferredCallQuality: viewModel.preferredCallQuality
         )
     }
 }
@@ -106,7 +100,14 @@ struct CallsSettingsScreen: View {
                           mono: false)
 
                     SettingsSectionHeader("QUALITÀ CHIAMATA")
-                    qualityPicker
+                    kvRow(label: "Preset audio",
+                          value: "32 kbps CBR · Complexity 10",
+                          mono: true)
+                    Text("Il bitrate è fisso a 32 kbps CBR su tutti i dispositivi (iOS, Android, firmware). Cambiarlo romperebbe la compatibilità cross-platform e la proprietà anti-fingerprinting (frame a dimensione costante).")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 4)
 
                     SettingsSectionHeader("ELABORAZIONE AUDIO")
                     VStack(spacing: 8) {
@@ -235,26 +236,6 @@ struct CallsSettingsScreen: View {
         !container.viewModel.isAecEnabled
             || !container.viewModel.isNsEnabled
             || !container.viewModel.isAgcEnabled
-    }
-
-    // MARK: - Quality picker
-
-    private var qualityPicker: some View {
-        Picker("", selection: Binding(
-            get: { container.viewModel.preferredCallQuality },
-            set: { container.setCallQuality($0) }
-        )) {
-            ForEach(CallsSettingsViewModel.CallQuality.allCases, id: \.self) { quality in
-                Text(quality.rawValue.capitalized).tag(quality)
-            }
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
     }
 
     // MARK: - kvRow + statusRow + warningHint helpers
