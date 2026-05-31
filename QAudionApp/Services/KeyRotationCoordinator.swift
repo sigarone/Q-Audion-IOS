@@ -31,20 +31,51 @@ final class KeyRotationCoordinator: ObservableObject {
     @Published private(set) var isRotating: Bool = false
     @Published var errorMessage: String?
 
+    /// PSK vault entries loaded from SovereignKeyVault (name → fingerprint).
+    @Published private(set) var vaultKeys: [(name: String, fingerprint: String)] = []
+
     private let appState: AppState
     private var currentKeyPair: Curve25519.KeyAgreement.PrivateKey
 
     init(appState: AppState) {
         self.appState = appState
-        // Generate a fresh keypair on init (placeholder until vault wires in).
         let keyPair = Curve25519.KeyAgreement.PrivateKey()
         self.currentKeyPair = keyPair
         let pubBytes = keyPair.publicKey.rawRepresentation
         self.currentFingerprint = (try? Fingerprint.format(pubkey: pubBytes)) ?? "????.????.????.????"
-        // Compute initial QR.
         let userId = appState.currentUserId ?? "unknown-user"
         let identity = IdentityQrCode.Identity(userId: userId, pubkey: pubBytes)
         self.currentIdentityQr = try? IdentityQrCode.encode(identity: identity)
+        loadVaultKeys()
+    }
+
+    /// Reload the PSK list from SovereignKeyVault (call after import or delete).
+    func loadVaultKeys() {
+        let vault = SovereignKeyVault()
+        let names = vault.listPskNames()
+        vaultKeys = names.map { name in
+            let fp = vault.getFingerprint(name: name) ?? "—"
+            return (name: name, fingerprint: fp)
+        }.sorted { $0.name < $1.name }
+    }
+
+    /// Store a peer's identity (from QR scan) as a PSK entry in the vault.
+    func importPeerIdentity(userId: String, pubkey: Data) {
+        let vault = SovereignKeyVault()
+        let fp = (try? Fingerprint.format(pubkey: pubkey)) ?? "—"
+        do {
+            try vault.storePsk(name: "peer.\(userId)", key: pubkey, fingerprint: fp)
+            loadVaultKeys()
+        } catch {
+            errorMessage = "Importazione fallita: \(error.localizedDescription)"
+        }
+    }
+
+    /// Delete a PSK entry from the vault.
+    func deletePsk(name: String) {
+        let vault = SovereignKeyVault()
+        try? vault.deletePsk(name: name)
+        loadVaultKeys()
     }
 
     /// W407 — Rotate the ephemeral keypair. Generates new X25519,

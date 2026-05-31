@@ -10,6 +10,7 @@ struct KeyManagementScreen: View {
     @StateObject private var coordinator: KeyRotationCoordinator
     @State private var showingRotateConfirm = false
     @State private var showingIdentityText = false
+    @State private var showingQrScanner = false
 
     private let appState: AppState
 
@@ -46,31 +47,12 @@ struct KeyManagementScreen: View {
                         }
                     }
 
-                    SettingsSectionHeader("ROTAZIONE CHIAVI")
+                    SettingsSectionHeader("SCAMBIO CHIAVE CON CONTATTO")
                     VStack(spacing: 8) {
-                        if let last = coordinator.lastRotationDate {
-                            kvRow(label: "Ultima rotazione",
-                                  value: last.formatted(.relative(presentation: .named)),
-                                  mono: false)
+                        actionRow(icon: "qrcode.viewfinder",
+                                  title: "Scansiona QR contatto") {
+                            showingQrScanner = true
                         }
-                        rotateButton
-                        Text("La rotazione genera una nuova identità. I tuoi contatti vedranno un fingerprint diverso e dovranno ri-verificarti.")
-                            .qaudionStyle(type.labelSmall)
-                            .foregroundStyle(scheme.onSurfaceVariant)
-                            .padding(.horizontal, 14)
-                    }
-
-                    SettingsSectionHeader("DISPOSITIVI")
-                    VStack(spacing: 8) {
-                        NavigationLink {
-                            DeviceManagementScreen(state: appState)
-                        } label: {
-                            SettingsRow(icon: "iphone",
-                                        iconColor: scheme.primary,
-                                        title: "Dispositivi collegati")
-                        }
-                        .buttonStyle(.plain)
-
                         NavigationLink {
                             NfcExchangeView()
                         } label: {
@@ -79,7 +61,38 @@ struct KeyManagementScreen: View {
                                         title: "Accoppia via NFC")
                         }
                         .buttonStyle(.plain)
+                        Text("Scansiona il QR del tuo contatto per salvare la sua chiave pubblica nel vault. Puoi anche condividere il tuo QR qui sopra.")
+                            .qaudionStyle(type.labelSmall)
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .padding(.horizontal, 14)
                     }
+
+                    SettingsSectionHeader("CHIAVI IN VAULT (PSK)")
+                    vaultSection
+
+                    SettingsSectionHeader("ROTAZIONE CHIAVE EFFIMERA")
+                    VStack(spacing: 8) {
+                        if let last = coordinator.lastRotationDate {
+                            kvRow(label: "Ultima rotazione",
+                                  value: last.formatted(.relative(presentation: .named)),
+                                  mono: false)
+                        }
+                        rotateButton
+                        Text("Genera un nuovo keypair X25519 effimero locale. Aggiorna il fingerprint e il QR mostrati sopra. Non modifica la tua identità sovrana (userId). Per ora la chiave è solo locale — il push al server arriverà quando il backend esporrà l'endpoint di aggiornamento chiave.")
+                            .qaudionStyle(type.labelSmall)
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .padding(.horizontal, 14)
+                    }
+
+                    SettingsSectionHeader("DISPOSITIVI")
+                    NavigationLink {
+                        DeviceManagementScreen(state: appState)
+                    } label: {
+                        SettingsRow(icon: "iphone",
+                                    iconColor: scheme.primary,
+                                    title: "Dispositivi collegati")
+                    }
+                    .buttonStyle(.plain)
 
                     if let err = coordinator.errorMessage {
                         errorBanner(err).padding(.top, 12)
@@ -110,6 +123,13 @@ struct KeyManagementScreen: View {
         } message: {
             Text("Verranno generate nuove chiavi. Tutti i contatti dovranno ri-verificare la tua identità. Continuare?")
         }
+        .sheet(isPresented: $showingQrScanner) {
+            QrScannerSheet { decoded in
+                if case .identity(let identity) = decoded {
+                    coordinator.importPeerIdentity(userId: identity.userId, pubkey: identity.pubkey)
+                }
+            }
+        }
         .sheet(isPresented: $showingIdentityText) {
             NavigationStack {
                 ZStack {
@@ -131,6 +151,55 @@ struct KeyManagementScreen: View {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Fatto") { showingIdentityText = false }
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Vault PSK section
+
+    @ViewBuilder
+    private var vaultSection: some View {
+        if coordinator.vaultKeys.isEmpty {
+            Text("Nessuna chiave salvata. Scansiona il QR di un contatto per aggiungerne una.")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12).fill(scheme.surfaceVariant.opacity(0.4)))
+        } else {
+            VStack(spacing: 8) {
+                ForEach(coordinator.vaultKeys, id: \.name) { entry in
+                    HStack(spacing: 14) {
+                        Image(systemName: "key.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(extras.pqcAccent)
+                            .frame(width: 22)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.name)
+                                .qaudionStyle(type.bodyMedium)
+                                .foregroundStyle(scheme.onSurface)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(entry.fingerprint)
+                                .qaudionStyle(type.labelSmall)
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                                .font(.system(.caption, design: .monospaced))
+                        }
+                        Spacer()
+                        Button {
+                            coordinator.deletePsk(name: entry.name)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 14))
+                                .foregroundStyle(extras.riskHigh.opacity(0.7))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 52)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(scheme.surfaceVariant.opacity(0.4)))
                 }
             }
         }

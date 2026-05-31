@@ -72,18 +72,13 @@ struct CallsSettingsScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
-    // W443: call session security toggles (parity with Android Security section)
-    @AppStorage("qaudion.calls.deepfake_guard_enabled")
-    private var deepfakeGuardEnabled: Bool = true
+    // W443: call session security toggles — Keychain-backed via CallsGate
+    // (SECURITY M-8). @AppStorage bypasses the Keychain store and breaks
+    // the engine reads, so we use @State + explicit CallsGate setters.
+    @State private var deepfakeGuardEnabled: Bool = false
+    @State private var adaptiveRekeyingEnabled: Bool = false
+    @State private var adaptivePaddingEnabled: Bool = false
 
-    @AppStorage("qaudion.calls.adaptive_rekeying_enabled")
-    private var adaptiveRekeyingEnabled: Bool = true
-
-    @AppStorage("qaudion.calls.adaptive_padding_enabled")
-    private var adaptivePaddingEnabled: Bool = true
-
-    // W503: metered-network cap — parity with Android SettingsScreen
-    // `videoQuality` DATA_SAVER / BALANCED / ULTRA and `meteredNetworkCap`.
     @AppStorage("qaudion.calls.metered_cap_enabled")
     private var meteredCapEnabled: Bool = false
 
@@ -171,23 +166,31 @@ struct CallsSettingsScreen: View {
                         }
                     }
 
-                    // W443: call-session security features (parity with Android Privacy section)
                     SettingsSectionHeader("SICUREZZA CHIAMATE")
                     VStack(spacing: 8) {
                         SettingsToggleRow(
                             title: "Deepfake Guard",
                             subtitle: "Analisi deepfake live on-device durante ogni chiamata",
-                            isOn: $deepfakeGuardEnabled
+                            isOn: Binding(
+                                get: { deepfakeGuardEnabled },
+                                set: { v in deepfakeGuardEnabled = v; CallsGate.setDeepfakeGuard(v) }
+                            )
                         )
                         SettingsToggleRow(
                             title: "Re-keying adattivo",
                             subtitle: "Frequenza di rinnovo chiavi scalata con il Confidence Index",
-                            isOn: $adaptiveRekeyingEnabled
+                            isOn: Binding(
+                                get: { adaptiveRekeyingEnabled },
+                                set: { v in adaptiveRekeyingEnabled = v; CallsGate.setAdaptiveRekeying(v) }
+                            )
                         )
                         SettingsToggleRow(
                             title: "Adaptive Padding CBR",
                             subtitle: "Bitrate costante per resistere all'analisi del traffico",
-                            isOn: $adaptivePaddingEnabled
+                            isOn: Binding(
+                                get: { adaptivePaddingEnabled },
+                                set: { v in adaptivePaddingEnabled = v; CallsGate.setAdaptivePadding(v) }
+                            )
                         )
                     }
 
@@ -197,6 +200,11 @@ struct CallsSettingsScreen: View {
             }
         }
         .navigationTitle("Chiamate")
+        .onAppear {
+            deepfakeGuardEnabled = CallsGate.deepfakeGuardEnabled
+            adaptiveRekeyingEnabled = CallsGate.adaptiveRekeyingEnabled
+            adaptivePaddingEnabled = CallsGate.adaptivePaddingEnabled
+        }
     }
 
     // MARK: - Metered quality picker
