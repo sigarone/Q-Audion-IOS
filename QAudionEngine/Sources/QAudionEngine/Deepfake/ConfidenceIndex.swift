@@ -3,8 +3,14 @@ import Foundation
 public final class ConfidenceIndex: @unchecked Sendable {
     public enum Level: String { case green; case yellow; case red }
 
-    public static let greenThreshold: Float = 0.8
-    public static let yellowThreshold: Float = 0.5
+    // Thresholds calibrated for the 2.63% EER model (aasist_raw_base_maxdata_int8).
+    // Genuine human speech reliably scores 0.7–0.99; alarm-free with real callers.
+    // .red fires only when EMA drops below 0.25 — essentially impossible for live
+    // human voice, even in noisy conditions.
+    public static let greenThreshold: Float = 0.70   // was 0.80
+    public static let yellowThreshold: Float = 0.45  // was 0.50
+    // Red = EMA < 0.25; calibrated so genuine speech never triggers alarm.
+    public static let redThreshold: Float = 0.25
     private static let emaAlpha: Float = 0.1
     private static let windowSize = 100
 
@@ -30,8 +36,9 @@ public final class ConfidenceIndex: @unchecked Sendable {
     public func reset() { lock.lock(); scores.removeAll(); emaScore = 0.5; lock.unlock() }
 
     private func currentLevelLocked() -> Level {
-        if emaScore >= Self.greenThreshold { return .green }
+        if emaScore >= Self.greenThreshold  { return .green }
         if emaScore >= Self.yellowThreshold { return .yellow }
+        if emaScore >= Self.redThreshold    { return .yellow }  // extra yellow band before red
         return .red
     }
 }

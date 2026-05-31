@@ -8,7 +8,7 @@ import OnnxRuntimeBindings
 /// Adaptive ONNX Runtime model manager for AASIST-raw deepfake detection.
 ///
 /// Automatically selects the best model based on device capabilities:
-/// - High-end devices (≥6 GB RAM): AASIST-raw-base (EER 2.83%, 755 KB)
+/// - High-end devices (≥6 GB RAM): AASIST-raw-base-maxdata (EER 2.63%, 686 KB)
 /// - Low-end devices (<6 GB RAM):  AASIST-raw-small-distill (EER 8.0%, 351 KB)
 ///
 /// Both models accept raw waveform input at 16kHz.
@@ -27,13 +27,13 @@ public final class ModelManager {
         }
         var eer: Float {
             switch self {
-            case .base:  return 0.0815
+            case .base:  return 0.0263  // 2.63% EER — upgraded 2026-05-29
             case .small: return 0.080
             }
         }
         var sizeKb: Int {
             switch self {
-            case .base:  return 755
+            case .base:  return 686
             case .small: return 351
             }
         }
@@ -46,7 +46,8 @@ public final class ModelManager {
     private static let highEndRamThreshold: UInt64 = 6 * 1024 * 1024 * 1024
 
     private static let trustedHashes: [String: String] = [
-        "aasist_raw_base_maxdata_int8": "f2c95d8fbb949fb4b5b7629d21a97b6c22b6d9bb9537f5c4f31624ae7f5ea8b0",
+        // 2.63% EER model — replaced 2026-05-29 (was 8.15% EER)
+        "aasist_raw_base_maxdata_int8": "ec3468a2bbfb82f0385f3a024319424990c883363b273d734557368c8f04c78e",
         "aasist_raw_small_distill_int8": "3a675ee542eccedaf1535e8298285986b99858ebafe46caa22aa3d23aae20a0b",
     ]
 

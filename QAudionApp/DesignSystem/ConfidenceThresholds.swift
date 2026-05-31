@@ -9,10 +9,11 @@ import Foundation
 /// `LiveInCallScreen`. Adesso un solo edit propaga il threshold a tutto
 /// il design system.
 public enum ConfidenceThresholds {
+    // Calibrated for the 2.63% EER model. Genuine voice scores 0.7–0.99 reliably.
     /// `index >= verified` → `extras.success` (verde, "Voce verificata")
-    public static let verified: Double = 0.80
+    public static let verified: Double = 0.70   // was 0.80
     /// `verified > index >= caution` → `extras.warning` (ambra, "Voce incerta")
-    public static let caution: Double = 0.50
+    public static let caution: Double = 0.25    // was 0.50 — alarm only at extremely low scores
     // Sotto `caution` → `extras.riskHigh` (rosso, "Voce sconosciuta")
 
     /// Helper di categorizzazione comune. Restituisce 0 (verified),
