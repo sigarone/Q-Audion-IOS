@@ -1840,48 +1840,57 @@ final class AppState: ObservableObject {
             )
             store.upsertConversation(conv)
         }
-        // View-once: detect [vo] prefix, strip from display text.
-        var isViewOnce: Bool = false
-        if plaintext.hasPrefix("[vo]") {
-            isViewOnce = true
-            plaintext = String(plaintext.dropFirst(4))
-        }
-
-        // Screenshot control: detect qa_ctl screenshot messages.
-        // Route to the active ChatContainer (if any) and skip storing
-        // as a normal message row (they are rendered as system events).
+        // qa_ctl control envelope detection (Android-compatible wire format).
+        // These are NOT stored as normal message rows — they trigger state changes
+        // and optionally store a system bubble for user visibility.
         if let data = plaintext.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let qaCtl = json["qa_ctl"] as? Int, qaCtl == 1,
-           let ctlType = json["t"] as? String,
-           ctlType == "screenshot_request" || ctlType == "screenshot_grant" || ctlType == "screenshot_revoke" {
-            // Persist a system bubble so the user sees what happened.
-            let label: String
-            switch ctlType {
-            case "screenshot_request":
-                label = "📸 Il contatto chiede autorizzazione per gli screenshot"
-            case "screenshot_grant":
-                label = "📸 Screenshot autorizzati"
-                store.setScreenshotGranted(conversationId: conv.id, granted: true)
-            default:
-                label = "📸 Autorizzazione screenshot revocata"
-                store.setScreenshotGranted(conversationId: conv.id, granted: false)
+           let ctlType = json["t"] as? String {
+            let isScreenshotCtl = ctlType == "ss_req" || ctlType == "ss_resp" || ctlType == "ss_lock"
+            let isTimerCtl = ctlType == "ephemeral_timer"
+            if isScreenshotCtl || isTimerCtl {
+                let label: String
+                if ctlType == "ss_req" {
+                    label = "📸 Il contatto chiede autorizzazione per gli screenshot"
+                } else if ctlType == "ss_resp" {
+                    let approved = json["approved"] as? Bool ?? false
+                    label = approved ? "📸 Screenshot autorizzati" : "📸 Richiesta screenshot negata"
+                    store.setScreenshotGranted(conversationId: conv.id, granted: approved)
+                } else if ctlType == "ss_lock" {
+                    label = "📸 Screenshot nuovamente bloccati"
+                    store.setScreenshotGranted(conversationId: conv.id, granted: false)
+                } else if ctlType == "ephemeral_timer" {
+                    let sec = json["timer_sec"] as? Int ?? 0
+                    store.setEphemeralTimer(conversationId: conv.id, seconds: sec == 0 ? nil : sec)
+                    label = sec == -1 ? "⏱ Messaggi: visualizza una volta"
+                         : sec == 0 ? "⏱ Messaggi a scomparsa: disattivati"
+                         : "⏱ Messaggi a scomparsa: \(sec)s"
+                } else {
+                    label = ""
+                }
+                if !label.isEmpty {
+                    let sysMsg = Message(
+                        id: UUID(), conversationId: conv.id,
+                        direction: .incoming, plaintext: label,
+                        sentAt: Date(), deliveredAt: Date(), readAt: nil,
+                        status: .delivered, senderUserId: senderId
+                    )
+                    store.appendMessage(sysMsg)
+                    store.recordNewMessage(conversationId: conv.id,
+                                           lastMessagePreview: label,
+                                           lastActivity: Date(), incrementUnread: !conv.muted)
+                }
+                NotificationCenter.default.post(name: AppState.chatRefreshNotification,
+                                                object: nil,
+                                                userInfo: ["peerUserId": senderId])
+                return
             }
-            let sysMsg = Message(
-                id: UUID(), conversationId: conv.id,
-                direction: .incoming, plaintext: label,
-                sentAt: Date(), deliveredAt: Date(), readAt: nil,
-                status: .delivered, senderUserId: senderId
-            )
-            store.appendMessage(sysMsg)
-            store.recordNewMessage(conversationId: conv.id,
-                                   lastMessagePreview: label,
-                                   lastActivity: Date(), incrementUnread: !conv.muted)
-            NotificationCenter.default.post(name: AppState.chatRefreshNotification,
-                                            object: nil,
-                                            userInfo: ["peerUserId": senderId])
-            return
         }
+
+        // Incoming message: isViewOnce derived from conversation timer == -1.
+        var isViewOnce: Bool = false
+        isViewOnce = (conv.ephemeralTimerSeconds ?? 0) == -1
 
         let msgUUID = UUID()
         // W80: voice-note receive.

@@ -340,6 +340,7 @@ struct ChatDetailScreen: View {
             titleVisibility: .visible
         ) {
             Button("Spento") { container.setEphemeralTimer(nil) }
+            Button("Visualizza una volta") { container.setEphemeralTimer(-1) }
             Button("30 secondi") { container.setEphemeralTimer(30) }
             Button("5 minuti") { container.setEphemeralTimer(5 * 60) }
             Button("1 ora") { container.setEphemeralTimer(60 * 60) }
@@ -347,7 +348,7 @@ struct ChatDetailScreen: View {
             Button("1 settimana") { container.setEphemeralTimer(7 * 24 * 60 * 60) }
             Button("Annulla", role: .cancel) { }
         } message: {
-            Text("I messaggi verranno eliminati automaticamente dopo l'intervallo scelto.")
+            Text("I messaggi verranno eliminati automaticamente. \"Visualizza una volta\" li elimina appena aperti.")
         }
         // W445: forward message picker sheet.
         .sheet(isPresented: $showingForwardPicker) {
@@ -443,16 +444,6 @@ struct ChatDetailScreen: View {
             // contact. The local-store wipe is immediate; block / unblock
             // hits ContactsApi.blockContact via the persistent backend.
             Menu {
-                // View-once toggle for next message
-                Button {
-                    container.isNextMessageViewOnce.toggle()
-                } label: {
-                    Label(container.isNextMessageViewOnce
-                          ? "Annulla visualizza una volta"
-                          : "Prossimo: visualizza una volta",
-                          systemImage: "eye.slash")
-                }
-                Divider()
                 // Screenshot permission
                 let ssGranted = container.screenshotGrantedByPeer
                 if ssGranted == true {
@@ -924,18 +915,20 @@ struct ChatDetailScreen: View {
     @ViewBuilder
     private var composerView: some View {
         VStack(spacing: 0) {
-            // View-once toggle pill — shown above the composer when active.
-            if container.isNextMessageViewOnce {
+            // View-once indicator — shown when conversation timer is set to -1.
+            // User disables it via the ⏱ timer button → set to "Spento".
+            let convTimer = container.viewModel.conversation.ephemeralTimerSeconds ?? 0
+            if convTimer == -1 {
                 HStack(spacing: 6) {
                     Image(systemName: "eye.slash.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(extras.pqcAccent)
-                    Text("Visualizza una volta")
+                    Text("Modalità: visualizza una volta")
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(extras.pqcAccent)
                     Spacer()
                     Button {
-                        container.isNextMessageViewOnce = false
+                        container.setEphemeralTimer(nil)
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 14))

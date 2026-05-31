@@ -39,7 +39,6 @@ final class ChatContainer: ObservableObject {
     @Published private(set) var failedMessageId: UUID? = nil
     @Published private(set) var failureReason: SendFailureReason? = nil
     /// When true, the NEXT message sent will be flagged as view-once.
-    @Published var isNextMessageViewOnce: Bool = false
     /// Mirrors conversation.screenshotGrantedByPeer for reactive UI.
     @Published private(set) var screenshotGrantedByPeer: Bool? = nil
 
@@ -214,11 +213,10 @@ final class ChatContainer: ObservableObject {
         let ephExpiry: Date? = ephSecs.flatMap { s in
             s > 0 ? sentNow.addingTimeInterval(Double(s)) : nil
         }
-        let viewOnce = isNextMessageViewOnce
-        // Wire format for view-once: prefix plaintext with [vo] marker.
-        // On receive, AppState strips [vo] from the displayed text and
-        // marks the message isViewOnce=true.
-        let wireText = viewOnce ? "[vo]\(text)" : text
+        // View-once is a per-conversation timer value of -1 (Android parity).
+        // When the conversation timer is -1, every outgoing message is view-once.
+        let convTimerSec = viewModel.conversation.ephemeralTimerSeconds ?? 0
+        let isViewOnce = convTimerSec == -1
         let msg = Message(
             id: outboundId,
             conversationId: conversationId,
@@ -230,9 +228,9 @@ final class ChatContainer: ObservableObject {
             status: .sending,
             clientMsgId: outboundId.uuidString,
             expiresAt: ephExpiry,
-            isViewOnce: viewOnce ? true : nil
+            isViewOnce: isViewOnce ? true : nil
         )
-        if viewOnce { isNextMessageViewOnce = false }
+        let wireText = text
         store.appendMessage(msg)
         // W83: bump conversation preview + activity for outbound text.
         // Outbound never increments unread (sender already read what
@@ -434,9 +432,12 @@ final class ChatContainer: ObservableObject {
     /// Set the per-conversation ephemeral timer. `nil` or `0` disables it.
     /// Persists to the ConversationStore so the value survives across restarts.
     /// The next `sendMessage()` call will pick up the new value automatically.
+    /// Set the per-conversation ephemeral timer and notify the peer.
+    /// seconds = nil/0 = off, positive = TTL, -1 = view-once (Android parity).
     func setEphemeralTimer(_ seconds: Int?) {
         store.setEphemeralTimer(conversationId: conversationId, seconds: seconds)
         refreshFromStore()
+        syncEphemeralTimerToPeer(seconds: seconds)
     }
 
     /// W90: clear the active-peer hint so inbound banners resume firing
@@ -1251,91 +1252,87 @@ final class ChatContainer: ObservableObject {
         refreshFromStore()
     }
 
-    // MARK: - Screenshot permission
+    // MARK: - Screenshot permission (Android wire: ss_req / ss_resp / ss_lock)
 
     /// Send a screenshot-permission REQUEST to the peer.
+    /// Android: ChatControlEnvelope TYPE_SCREENSHOT_REQUEST = "ss_req"
     func requestScreenshotPermission() {
-        guard let sender = sendService else { return }
-        let payload: String = "{\"qa_ctl\":1,\"t\":\"screenshot_request\"}"
-        let reqId = UUID()
-        let msg = Message(
-            id: reqId, conversationId: conversationId,
-            direction: .outgoing, plaintext: payload,
-            sentAt: Date(), deliveredAt: nil, readAt: nil, status: .sending,
-            clientMsgId: reqId.uuidString
+        sendControlEnvelope(
+            payload: "{\"qa_ctl\":1,\"t\":\"ss_req\",\"ts\":\(Int64(Date().timeIntervalSince1970))}",
+            preview: "📸 Richiesta autorizzazione screenshot"
         )
-        store.appendMessage(msg)
-        store.recordNewMessage(conversationId: conversationId,
-                               lastMessagePreview: "📸 Richiesta autorizzazione screenshot",
-                               lastActivity: Date(), incrementUnread: false)
-        refreshFromStore()
-        Task { [peerUserId = peerUserId, msgId = reqId] in
-            _ = await sender.sendEncrypted(messageId: msgId,
-                                           peerUserId: peerUserId,
-                                           plaintext: payload)
-        }
     }
 
-    /// Send a screenshot-permission GRANT to the peer (they requested it).
+    /// Approve an incoming screenshot-request from the peer.
+    /// Android: ChatControlEnvelope TYPE_SCREENSHOT_RESPONSE = "ss_resp" + approved:true
     func grantScreenshotPermission() {
-        guard let sender = sendService else { return }
-        let payload: String = "{\"qa_ctl\":1,\"t\":\"screenshot_grant\"}"
-        let reqId = UUID()
-        let msg = Message(
-            id: reqId, conversationId: conversationId,
-            direction: .outgoing, plaintext: payload,
-            sentAt: Date(), deliveredAt: nil, readAt: nil, status: .sending,
-            clientMsgId: reqId.uuidString
+        sendControlEnvelope(
+            payload: "{\"qa_ctl\":1,\"t\":\"ss_resp\",\"approved\":true,\"ts\":\(Int64(Date().timeIntervalSince1970))}",
+            preview: "📸 Screenshot autorizzati"
         )
-        store.appendMessage(msg)
-        store.recordNewMessage(conversationId: conversationId,
-                               lastMessagePreview: "📸 Screenshot autorizzato",
-                               lastActivity: Date(), incrementUnread: false)
-        refreshFromStore()
-        Task { [peerUserId = peerUserId, msgId = reqId] in
-            _ = await sender.sendEncrypted(messageId: msgId,
-                                           peerUserId: peerUserId,
-                                           plaintext: payload)
-        }
     }
 
-    /// Revoke previously granted screenshot permission.
+    /// Re-lock screenshots in this conversation.
+    /// Android: ChatControlEnvelope TYPE_SCREENSHOT_LOCK = "ss_lock"
     func revokeScreenshotPermission() {
         store.setScreenshotGranted(conversationId: conversationId, granted: false)
-        let payload: String = "{\"qa_ctl\":1,\"t\":\"screenshot_revoke\"}"
-        let reqId = UUID()
-        let msg = Message(
-            id: reqId, conversationId: conversationId,
-            direction: .outgoing, plaintext: payload,
-            sentAt: Date(), deliveredAt: nil, readAt: nil, status: .sending,
-            clientMsgId: reqId.uuidString
+        sendControlEnvelope(
+            payload: "{\"qa_ctl\":1,\"t\":\"ss_lock\",\"ts\":\(Int64(Date().timeIntervalSince1970))}",
+            preview: "📸 Screenshot nuovamente bloccati"
         )
-        store.appendMessage(msg)
-        store.recordNewMessage(conversationId: conversationId,
-                               lastMessagePreview: "📸 Autorizzazione screenshot revocata",
-                               lastActivity: Date(), incrementUnread: false)
-        refreshFromStore()
-        if let sender = sendService {
-            Task { [peerUserId = peerUserId, msgId = reqId] in
-                _ = await sender.sendEncrypted(messageId: msgId,
-                                               peerUserId: peerUserId,
-                                               plaintext: payload)
-            }
-        }
     }
 
     /// Handle an incoming screenshot-control envelope from the peer.
-    /// Called by AppState when a message with qa_ctl screenshot type arrives.
-    func handleScreenshotControl(type: String) {
+    /// Called by AppState when a message with qa_ctl ss_* type arrives.
+    func handleScreenshotControl(type: String, approved: Bool?) {
         switch type {
-        case "screenshot_grant":
-            store.setScreenshotGranted(conversationId: conversationId, granted: true)
+        case "ss_resp":
+            store.setScreenshotGranted(conversationId: conversationId, granted: approved == true)
             refreshFromStore()
-        case "screenshot_revoke":
+        case "ss_lock":
             store.setScreenshotGranted(conversationId: conversationId, granted: false)
             refreshFromStore()
         default:
             break
+        }
+    }
+
+    // MARK: - Ephemeral timer sync to peer
+    // Android: ChatControlEnvelope TYPE_EPHEMERAL_TIMER = "ephemeral_timer", timer_sec field
+    // timer_sec: -1 = view-once, 0 = off, positive = seconds
+
+    /// Notify the peer of the new per-conversation ephemeral timer.
+    /// Call after setEphemeralTimer() so both sides are in sync.
+    func syncEphemeralTimerToPeer(seconds: Int?) {
+        let timerSec = seconds ?? 0
+        let payload: String = "{\"qa_ctl\":1,\"t\":\"ephemeral_timer\",\"timer_sec\":\(timerSec),\"ts\":\(Int64(Date().timeIntervalSince1970))}"
+        let preview: String = timerSec == -1 ? "⏱ Messaggi: visualizza una volta"
+            : timerSec == 0 ? "⏱ Messaggi a scomparsa: disattivati"
+            : "⏱ Messaggi a scomparsa: \(timerSec)s"
+        sendControlEnvelope(payload: payload, preview: preview)
+    }
+
+    // MARK: - Private helper
+
+    private func sendControlEnvelope(payload: String, preview: String) {
+        let reqId = UUID()
+        let msg = Message(
+            id: reqId, conversationId: conversationId,
+            direction: .outgoing, plaintext: payload,
+            sentAt: Date(), deliveredAt: nil, readAt: nil, status: .sending,
+            clientMsgId: reqId.uuidString
+        )
+        store.appendMessage(msg)
+        store.recordNewMessage(conversationId: conversationId,
+                               lastMessagePreview: preview,
+                               lastActivity: Date(), incrementUnread: false)
+        refreshFromStore()
+        if let sender = sendService {
+            Task { [peerUserId = peerUserId, msgId = reqId, payload] in
+                _ = await sender.sendEncrypted(messageId: msgId,
+                                               peerUserId: peerUserId,
+                                               plaintext: payload)
+            }
         }
     }
 }
