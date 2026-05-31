@@ -180,6 +180,7 @@ struct ContactsListView: View {
     @State private var showingNfcPair: Bool = false
     @State private var showingPhonebookImport: Bool = false
     @State private var lastScanResult: ScanResultBanner?
+    @Environment(\.dismiss) private var dismiss
 
     init() {
         _container = StateObject(wrappedValue: ContactsListContainer())
@@ -230,13 +231,13 @@ struct ContactsListView: View {
         }
         .refreshable { container.refresh() }
         .onAppear {
-            // Late-bind AppState into the container so pull-to-refresh
-            // can call ContactsRefreshService (which needs the auth-bearing
-            // backend provider). Without this, init() builds a service-less
-            // container and refresh() silently no-ops.
             container.attach(appState: appState)
-            // W445: infer InCall from AppState.$isInCall + $callContactId.
             appState.presenceService.observeCallState(appState)
+        }
+        // When a chat deep-link is set (e.g. user tapped Chat in ContactDetailView),
+        // dismiss this sheet so ChatListScreen can navigate to the conversation.
+        .onChange(of: appState.pendingDeepLinkConversationId) { newId in
+            if newId != nil { dismiss() }
         }
         .overlay(alignment: .top) {
             if let progress = container.scanProgress, container.isRefreshing {
@@ -341,10 +342,6 @@ struct ContactsListView: View {
 
     @ViewBuilder
     private func detailView(for item: ContactsListViewModel.Item) -> some View {
-        // Map ContactsListViewModel.Item → ContactDetailViewModel for the detail view.
-        // Resolve fingerprint from the stored pubkey (populated by W14 QR-scan
-        // pairing flow); legacy rows persisted before pubkey was tracked
-        // fall back to the unknown-fingerprint placeholder.
         let pubkey = container.lookupPubkey(userId: item.userId)
         let fingerprint: String = {
             guard let pk = pubkey else { return "????.????.????.????" }
@@ -362,7 +359,46 @@ struct ContactsListView: View {
             recentCallCount: 0,
             unreadMessageCount: item.unreadMessageCount
         )
-        ContactDetailView(viewModel: detail)
+        ContactDetailView(
+            viewModel: detail,
+            onCall: {
+                Task { await appState.startCall(contactId: item.userId, video: false) }
+            },
+            onChat: {
+                openOrCreateChat(peerUserId: item.userId, displayName: item.displayName)
+            },
+            onVerifySas: nil,
+            onBlock: {
+                BlockedContactsStore.block(item.userId)
+            },
+            onDelete: {
+                ContactsStore().remove(userId: item.userId)
+                container.refresh()
+            }
+        )
+    }
+
+    /// Find existing or create new conversation for a peer, then set the deep-link
+    /// so ChatListScreen navigates to it. ContactsListView auto-dismisses via onChange.
+    private func openOrCreateChat(peerUserId: String, displayName: String) {
+        let store = ConversationStore()
+        let convId: UUID
+        if let existing = store.loadConversations().first(where: { $0.peerUserId == peerUserId }) {
+            convId = existing.id
+        } else {
+            let newConv = Conversation(
+                id: UUID(),
+                peerUserId: peerUserId,
+                peerDisplayName: displayName,
+                lastMessagePreview: nil,
+                lastActivity: Date(),
+                unreadCount: 0,
+                pinned: false
+            )
+            store.upsertConversation(newConv)
+            convId = newConv.id
+        }
+        appState.pendingDeepLinkConversationId = convId
     }
 
     private func contactRow(_ item: ContactsListViewModel.Item) -> some View {

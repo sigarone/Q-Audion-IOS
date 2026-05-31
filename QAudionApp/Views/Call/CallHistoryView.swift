@@ -356,6 +356,8 @@ struct CallHistoryView: View {
                     Task { await appState.startCall(contactId: peerId, video: false) }
                 }, onVideoCall: { peerId in
                     Task { await appState.startCall(contactId: peerId, video: true) }
+                }, onChat: { peerId, displayName in
+                    openOrCreateChat(peerUserId: peerId, displayName: displayName)
                 })
                 .listRowBackground(scheme.background)
                 .listRowSeparator(.hidden)
@@ -382,6 +384,29 @@ struct CallHistoryView: View {
         .scrollContentBackground(.hidden)
         .background(scheme.background)
         .refreshable { store.refresh(from: appState) }
+    }
+
+    /// Find existing or create new conversation for a peer, then trigger
+    /// ChatListScreen navigation via AppState deep-link.
+    private func openOrCreateChat(peerUserId: String, displayName: String) {
+        let store = ConversationStore()
+        let convId: UUID
+        if let existing = store.loadConversations().first(where: { $0.peerUserId == peerUserId }) {
+            convId = existing.id
+        } else {
+            let newConv = Conversation(
+                id: UUID(),
+                peerUserId: peerUserId,
+                peerDisplayName: displayName,
+                lastMessagePreview: nil,
+                lastActivity: Date(),
+                unreadCount: 0,
+                pinned: false
+            )
+            store.upsertConversation(newConv)
+            convId = newConv.id
+        }
+        appState.pendingDeepLinkConversationId = convId
     }
 
     private var emptyState: some View {
@@ -433,6 +458,7 @@ private struct CallHistoryRow: View {
     let entry: CallHistoryEntry
     let onAudioCall: (String) -> Void
     let onVideoCall: (String) -> Void
+    let onChat: (String, String) -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -467,6 +493,14 @@ private struct CallHistoryRow: View {
             }
 
             Spacer(minLength: 8)
+
+            Button(action: { onChat(entry.peerUserId, entry.peerDisplay) }) {
+                Image(systemName: "bubble.right")
+                    .font(.system(size: 18))
+                    .foregroundStyle(scheme.primary)
+                    .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Chatta con \(entry.peerDisplay)")
 
             Button(action: { onAudioCall(entry.peerUserId) }) {
                 Image(systemName: "phone")
