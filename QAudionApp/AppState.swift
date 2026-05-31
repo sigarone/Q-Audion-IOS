@@ -1148,6 +1148,11 @@ final class AppState: ObservableObject {
                    !match.displayName.isEmpty {
                     return match.displayName
                 }
+                // Last resort: never show the raw 36-char UUID to the user.
+                // Truncate to head…tail like the Settings/profile screens do.
+                if senderId.count > 12 {
+                    return String(senderId.prefix(8)) + "…" + String(senderId.suffix(4))
+                }
                 return senderId
             }()
             // Commit 540b79c0 parity — `call_incoming` is the responder's
@@ -1170,26 +1175,39 @@ final class AppState: ObservableObject {
             // CallKit must run from MainActor — its CXProvider state
             // machine refuses cross-thread mutations.
             DispatchQueue.main.async {
-                // W450-dedup: server can echo both `call_offer` AND
-                // `call_incoming` for the same call (confirmed by Android
-                // WsCallSignaller comment). Without this guard a second
-                // call_incoming arrives before `isInCall` is set inside
-                // the Task below → two reportIncomingCall → two system
-                // call UIs (the "doppia chiamata" bug).
-                guard self.callState == .idle, self.activeCallKitId == nil else {
-                    print("[AppState] call_incoming: dup dropped callId=\(callIdStr.prefix(8))… state=\(self.callState)")
+                // W450-dedup + PushKit-first fix.
+                //
+                // Drop ONLY a genuine duplicate. Two cases must be told apart:
+                //   (A) A second WS `call_incoming` for a call already fully
+                //       provisioned here (integration built + callState set).
+                //       → drop, else we double-report to CallKit.
+                //   (B) PushKit (APNs VoIP) woke the device FIRST. Its handler
+                //       sets `activeCallKitId` / `callContactId` but does NOT
+                //       build the responder integration and does NOT set
+                //       `callState`. The old guard (`activeCallKitId == nil`)
+                //       wrongly treated this as a duplicate and bailed out —
+                //       so `ensureResponderIntegration` + the early PQC OFFER
+                //       sink never ran, leaving audio buffered with
+                //       "callIntegration nil" and the answer path failing with
+                //       "audio not started". In this case we MUST proceed
+                //       (the duplicate `reportIncomingCall` is skipped below).
+                let sameCallProvisioned = (self.activeCallKitId == callUUID)
+                    && (self.responderCallIntegration != nil)
+                    && (self.callState != .idle)
+                let differentCallActive = (self.activeCallKitId != nil)
+                    && (self.activeCallKitId != callUUID)
+                guard !sameCallProvisioned, !differentCallActive else {
+                    print("[AppState] call_incoming: dup dropped callId=\(callIdStr.prefix(8))… state=\(self.callState) sameProvisioned=\(sameCallProvisioned) otherActive=\(differentCallActive)")
                     return
                 }
                 Task {
-                    // W520-fix: always call reportNewIncomingCall, even when the
-                    // app is foregrounded. When the app is in the foreground, iOS
-                    // shows a compact banner (not the full-screen call overlay);
-                    // the full-screen overlay only appears on a locked device.
-                    // Calling it unconditionally enables Apple Watch mirroring
-                    // (Watch mirrors CallKit calls automatically — no WatchConnectivity
-                    // or watchOS target needed) and Focus/DnD/Silence-Unknown-Callers
-                    // integration on both iPhone and Watch.
-                    if let ck = self.callKit {
+                    // If PushKit already reported this call (activeCallKitId set),
+                    // skip the second reportIncomingCall to avoid Code=2
+                    // (callUUIDAlreadyExists). But ALWAYS fall through to set up the
+                    // responder integration below — without it audio never starts
+                    // even when PushKit handled the CallKit registration first.
+                    let alreadyRegisteredByPushKit = await MainActor.run { self.activeCallKitId != nil }
+                    if !alreadyRegisteredByPushKit, let ck = self.callKit {
                         await ck.reportIncomingCall(
                             uuid: callUUID,
                             callerName: resolvedCallerName,
@@ -1197,7 +1215,7 @@ final class AppState: ObservableObject {
                         )
                     }
                     await MainActor.run {
-                        self.activeCallKitId = callUUID
+                        if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
                         self.callContactId = senderId
                         self.incomingCallerName = resolvedCallerName
                         self.isVideoCall = (callType == "video")

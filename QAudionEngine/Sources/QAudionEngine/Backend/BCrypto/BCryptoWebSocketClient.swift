@@ -435,9 +435,21 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// pings are excluded to avoid reconnect storms — those callers either
     /// tolerate the drop or run alongside a control envelope that already
     /// triggered recovery.
+    ///
+    /// CRITICAL: `authenticate` MUST be excluded. It is the handshake frame
+    /// sent from `onOpen()` on a freshly-upgraded socket whose state is still
+    /// `.connecting` (NOT `.authenticated`). The staleness check in `send()`
+    /// (`!isFreshlyAuthenticated()`) is therefore ALWAYS true for the auth
+    /// frame — gating it on "is this socket already authenticated?" is
+    /// circular and self-defeating: it would `forceReconnect()` and cancel
+    /// the very task carrying the auth frame, producing a connect→auth→
+    /// self-cancel→reconnect storm (observed server-side as a new `/ws`
+    /// every 1-2s, client-side as "STALE socket … FAILED: cancelled").
+    /// That storm left the device permanently un-authenticated → shown
+    /// offline → unable to send call_answer / PQC ACCEPT / audio frames.
     private static func shouldKickReconnect(forType type: String) -> Bool {
         switch type {
-        case "audio_frame", "video_frame", "ping": return false
+        case "audio_frame", "video_frame", "ping", "authenticate": return false
         default: return true
         }
     }

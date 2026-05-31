@@ -50,14 +50,17 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         do {
             try await provider.reportNewIncomingCall(with: uuid, update: update)
         } catch {
-            // W478 — log instead of silently dropping. If CallKit rejects
-            // the incoming call (Focus mode, Silence Unknown Callers, DnD,
-            // max-calls-per-group, etc.) the in-app ringing banner still
-            // appears because `callState` is set to `.ringing` AFTER this
-            // call returns, regardless of success/failure.
-            print("[CallKitProvider] reportNewIncomingCall rejected: \(error)")
-            // W495 — track rejected UUIDs so answerCall() can fall back to
-            // a direct in-app answer path that bypasses CXCallController.
+            // W478 — log instead of silently dropping. CallKit rejects with:
+            //   Code=2 callUUIDAlreadyExists (PushKit+WS duplicate),
+            //   Code=3 filteredByDoNotDisturb (Focus / DnD active on device),
+            //   Code=4 filteredByBlockList.
+            // In ALL these cases the system call UI won't appear, so we arm the
+            // in-app ringing banner's manual answer path via callKitRejectedUUIDs.
+            // The in-app `callState = .ringing` is set by the caller AFTER this
+            // returns, regardless of success/failure, so the user can still
+            // answer from the custom banner.
+            let nsErr = error as NSError
+            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) — arming in-app manual answer path for \(uuid)")
             callKitRejectedUUIDs.insert(uuid)
         }
     }
