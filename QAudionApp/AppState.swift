@@ -1179,21 +1179,20 @@ final class AppState: ObservableObject {
                     return
                 }
                 Task {
-                    // W520: WS foreground calls — skip reportNewIncomingCall.
-                    // The native CallKit incoming-call screen looks identical
-                    // to a standard phone call; showing it alongside our custom
-                    // ringing banner creates a "double call" UX and confuses
-                    // users who must distinguish encrypted calls from cleartext.
-                    // We register the UUID as "suppressed" so that when the user
-                    // taps Answer in our custom ringing banner, answerCall() uses
-                    // the manual audio-session activation path (identical to the
-                    // Focus/DnD fallback in CallKitProvider.answerCall).
-                    // PushKit background calls STILL call reportIncomingCall (Apple
-                    // policy: the PushKit payload handler must report or the app
-                    // is terminated). That path is in the onIncomingCall closure
-                    // inside initialize() and is NOT changed here.
-                    if let provider = self.callKit as? CallKitProvider {
-                        provider.registerSuppressedCall(callUUID)
+                    // W520-fix: always call reportNewIncomingCall, even when the
+                    // app is foregrounded. When the app is in the foreground, iOS
+                    // shows a compact banner (not the full-screen call overlay);
+                    // the full-screen overlay only appears on a locked device.
+                    // Calling it unconditionally enables Apple Watch mirroring
+                    // (Watch mirrors CallKit calls automatically — no WatchConnectivity
+                    // or watchOS target needed) and Focus/DnD/Silence-Unknown-Callers
+                    // integration on both iPhone and Watch.
+                    if let ck = self.callKit {
+                        await ck.reportIncomingCall(
+                            uuid: callUUID,
+                            callerName: resolvedCallerName,
+                            hasVideo: (callType == "video")
+                        )
                     }
                     await MainActor.run {
                         self.activeCallKitId = callUUID
