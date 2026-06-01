@@ -41,9 +41,30 @@ public final class ConversationStore {
     }
 
     public func upsertConversation(_ conv: Conversation) {
+        // The `conversations.lastMessagePreview` column is NOT NULL (migration v1),
+        // but the model allows nil (a brand-new conversation with no messages yet).
+        // GRDB writes nil as NULL → "NOT NULL constraint failed" → the whole insert
+        // is dropped, so creating a chat from a contact / call-history / fresh
+        // conversation silently fails. Coerce nil → "" at the single storage
+        // chokepoint so no caller (present or future) can trip the constraint.
+        let safe: Conversation
+        if conv.lastMessagePreview == nil {
+            safe = Conversation(
+                id: conv.id, peerUserId: conv.peerUserId,
+                peerDisplayName: conv.peerDisplayName,
+                lastMessagePreview: "",
+                lastActivity: conv.lastActivity,
+                unreadCount: conv.unreadCount, pinned: conv.pinned,
+                kind: conv.kind, muted: conv.muted,
+                ephemeralTimerSeconds: conv.ephemeralTimerSeconds,
+                screenshotGrantedByPeer: conv.screenshotGrantedByPeer
+            )
+        } else {
+            safe = conv
+        }
         do {
             try db.writer.write { db in
-                try conv.save(db)
+                try safe.save(db)
             }
         } catch {
             print("[ConversationStore] upsertConversation failed: \(error)")

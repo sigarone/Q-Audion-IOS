@@ -439,10 +439,17 @@ struct LiveInCallScreen: View {
                 cachedPeerShortNumber = nil
             }
         } else {
-            // Fallback: trim "user-" prefix if present.
-            cachedPeerDisplayName = id.hasPrefix("user-")
-                ? String(id.dropFirst(5)).capitalized
-                : id
+            // Fallback: peer not in contacts. Never show the raw 36-char UUID
+            // on the call screen (user-reported "numero lunghissimo"). Trim a
+            // "user-" prefix if present, else truncate to head…tail like the
+            // profile / call-history / incoming-call paths do.
+            if id.hasPrefix("user-") {
+                cachedPeerDisplayName = String(id.dropFirst(5)).capitalized
+            } else if id.count > 12 {
+                cachedPeerDisplayName = String(id.prefix(8)) + "…" + String(id.suffix(4))
+            } else {
+                cachedPeerDisplayName = id
+            }
             cachedPeerShortNumber = nil
         }
     }
