@@ -367,6 +367,17 @@ public final class VideoCallPipeline: NSObject {
     }
 
     private func setupSession() throws {
+        // CRITICAL — do NOT let AVCaptureSession touch the shared AVAudioSession.
+        // It defaults to `true`, which means startRunning() reconfigures and
+        // re-activates the app's audio session. During a voice call that session
+        // is owned by CallKit (CXProvider, .playAndRecord/.voiceChat) and driven
+        // by our AVAudioEngine. Letting the camera reconfigure it clobbers the
+        // voice route → the call audio corrupts / goes silent the instant video
+        // starts (user-reported: "la voce si è corrotta/ammutolita appena video").
+        // We add NO audio input to this session (video-only), so we never need
+        // it to manage audio. Must be set BEFORE beginConfiguration/startRunning.
+        captureSession.automaticallyConfiguresApplicationAudioSession = false
+
         captureSession.beginConfiguration()
         captureSession.sessionPreset = .hd1280x720
 
