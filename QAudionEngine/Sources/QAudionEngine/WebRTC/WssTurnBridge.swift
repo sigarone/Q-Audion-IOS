@@ -108,7 +108,7 @@ public final class WssTurnBridge: @unchecked Sendable {
 
         var bound = sockaddr_in()
         var boundLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-        withUnsafeMutablePointer(to: &bound) {
+        _ = withUnsafeMutablePointer(to: &bound) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 getsockname(fd, $0, &boundLen)
             }
@@ -173,7 +173,7 @@ public final class WssTurnBridge: @unchecked Sendable {
             if n <= 0 { break }
             lastSrcLock.withLock { lastSrc = src }
             let data = Data(bytes: buf, count: n)
-            wsTask?.send(.data(data)) { [weak self] err in
+            wsTask?.send(.data(data)) { err in
                 if let err { Self.log.warning("ws.send error: \(err)") }
             }
         }
@@ -195,7 +195,7 @@ public final class WssTurnBridge: @unchecked Sendable {
                 }
                 data.withUnsafeBytes { rawBuf in
                     var d = dst
-                    withUnsafeMutablePointer(to: &d) {
+                    _ = withUnsafeMutablePointer(to: &d) {
                         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
                             sendto(fd, rawBuf.baseAddress, data.count, 0, sa,
                                    socklen_t(MemoryLayout<sockaddr_in>.size))

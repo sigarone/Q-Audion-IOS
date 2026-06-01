@@ -174,7 +174,6 @@ public final class TorObfsTransport: @unchecked Sendable {
             var probeConnection: URLSessionDataTask? = nil
             let cfg = URLSessionConfiguration.ephemeral
             cfg.timeoutIntervalForRequest = 2
-            let session = URLSession(configuration: cfg)
             // A plain TCP probe: we just try to open a connection.
             // Using a dummy URL with the proxy configured is the simplest
             // approach available without Network.framework.
