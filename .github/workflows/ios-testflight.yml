@@ -93,7 +93,7 @@ jobs:
       # ----------------------------------------------------------
       - name: Cache SPM packages
         id: cache-spm
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
@@ -192,7 +192,7 @@ jobs:
       #     Go 1.21+ is required for iOS cross-compilation support.
       # ----------------------------------------------------------
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.22'
           cache: false
