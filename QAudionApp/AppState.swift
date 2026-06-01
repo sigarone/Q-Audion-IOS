@@ -1219,7 +1219,17 @@ final class AppState: ObservableObject {
                         self.callContactId = senderId
                         self.incomingCallerName = resolvedCallerName
                         self.isVideoCall = (callType == "video")
-                        self.callState = .ringing
+                        // W450-fix: when PushKit woke the device first, CallKit's
+                        // native phone UI is already visible. Setting .ringing here
+                        // would also trigger Q-Audion's in-app ringing banner →
+                        // the user sees TWO simultaneous call screens ("una nostra
+                        // e una con l'interfaccia telefonica"). When the native
+                        // CallKit UI handles ringing, stay in .idle so the in-app
+                        // view stays hidden. callState advances to .active in
+                        // CallKitProvider.onAnswerCall when the user accepts.
+                        if !alreadyRegisteredByPushKit {
+                            self.callState = .ringing
+                        }
                         // C-3: do NOT set isInCall here. Setting it on
                         // call ARRIVAL (before the user answers) blocks
                         // startCall() (guards !isInCall) and a spurious
@@ -1604,6 +1614,23 @@ final class AppState: ObservableObject {
                 self.handleIncomingWebRtcAnswer(sdp: sdp, peerCapabilities: peerCaps)
             } else {
                 print("[AppState] call_answer: no sdp field")
+            }
+            // W528-fix: caller-side .ringing → .active on answer.
+            // wireSasReadyToController no longer transitions from .ringing
+            // so we must advance the state here when the callee answers.
+            // If PQC completed before the answer (callSasKeySource == .mlKem),
+            // skip .active and jump straight to .encrypted — matching the
+            // race-handling already in place for the callee side (W521).
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.callState == .ringing else { return }
+                if self.callSasKeySource == .mlKem {
+                    self.callState = .encrypted
+                    RTLog.info("call", "call_answer: PQC already done — .ringing → .encrypted")
+                } else {
+                    self.callState = .active
+                    RTLog.info("call", "call_answer: callee answered — .ringing → .active")
+                }
             }
         }
         ws.registerHandler(type: "call_ice") { [weak self] _, data in
@@ -4046,12 +4073,22 @@ extension AppState {
                 // active encrypted call. Treat ringing/connecting as
                 // "ready to flip to encrypted" since PQC having
                 // completed is a strictly stronger guarantee.
+                //
+                // W528-fix: do NOT include .ringing here. When the caller is
+                // in .ringing (ringback playing) it means the callee has NOT
+                // yet answered — PQC finishing early is by design (zero-ring-
+                // delay) but the caller UI must stay in .ringing until the
+                // callee's call_answer arrives. Jumping straight to .encrypted
+                // from .ringing showed the iPad caller an "active encrypted
+                // call" while Android was still on the incoming call screen.
+                // The call_answer WS handler below now drives .ringing → .active
+                // (and → .encrypted if PQC is already done). (report 10a131a4)
                 let prev = self.callState
                 switch self.callState {
-                case .active, .ringing, .connecting:
+                case .active, .connecting:
                     self.callState = .encrypted
                 default:
-                    break  // .idle, .ended, already .encrypted — skip
+                    break  // .idle, .ringing, .ended, already .encrypted — skip
                 }
                 if self.callState == .encrypted && prev != .encrypted {
                     // W541-3: emit caller-side encrypted-reached
