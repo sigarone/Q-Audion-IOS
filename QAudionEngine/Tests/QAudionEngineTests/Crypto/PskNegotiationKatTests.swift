@@ -36,16 +36,16 @@ final class PskNegotiationKatTests: XCTestCase {
         for v in kat.vectors {
             // Reproduce the production algorithm from
             // QAudionCallIntegration.onAndroidBundleReceived (responder
-            // .offer branch):
-            //   intersection = advertised.filter { eligiblePsks[$0] != nil }.sorted()
-            //   if let first = intersection.first { selectedFp = first }
+            // .offer branch) — CALLER'S PRIORITY COMMANDS (WIRE_SPEC §3.3,
+            // revised 2026-06-02): pick the FIRST fingerprint in the OFFER's
+            // order that we also hold. NOT a lexicographic sort.
+            //   selectedFp = advertised.first(where: { eligiblePsks[$0] != nil })
             let localSet = Set(v.local)
-            let intersection = v.offer.filter { localSet.contains($0) }.sorted()
-            let selected = intersection.first
+            let selected = v.offer.first(where: { localSet.contains($0) })
 
             XCTAssertEqual(
                 selected, v.expected_selected,
-                "[\(v.name)] PSK selection drift — iOS lex-sort intersection failed"
+                "[\(v.name)] PSK selection drift — iOS caller-priority first-match failed"
             )
         }
     }

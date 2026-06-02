@@ -604,15 +604,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let pqcResult = try pqc.encapsulate(remotePublicKey: pqcPub)
             let x25519Result = try Self.x25519Encap(remotePub: x25519Pub)
 
-            // 4. Deterministic PSK fingerprint intersection (lex-sort).
-            // Selected BEFORE deriving the session key: the PSK is the
-            // HKDF Extract salt of the single corrected derivation, not a
-            // separate post-mix (schema :2).
+            // 4. PSK selection — CALLER'S PRIORITY COMMANDS (revised
+            // 2026-06-02, WIRE_SPEC §3.3). The initiator advertises its
+            // fingerprints ORDERED BY PRIORITY (highest first); the responder
+            // picks the FIRST one in the OFFER's order that it also holds —
+            // NOT a lexicographic sort. The choice is sent back
+            // (selectedPskFingerprint) and the initiator honors it, so both
+            // ends agree regardless of platform. MUST iterate the OFFER's
+            // order, NOT the local catalogue order. Selected BEFORE deriving
+            // the session key: the PSK is the HKDF Extract salt of the single
+            // corrected derivation (schema :2).
             var selectedFp: String? = nil
             var selectedPsk: Data? = nil
             if let advertised = bundle.pskFingerprints {
-                let intersection = advertised.filter { eligiblePsks[$0] != nil }.sorted()
-                if let first = intersection.first {
+                if let first = advertised.first(where: { eligiblePsks[$0] != nil }) {
                     selectedFp = first
                     selectedPsk = eligiblePsks[first]
                 }
