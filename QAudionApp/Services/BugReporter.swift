@@ -190,7 +190,7 @@ public final class BugReporter: ObservableObject {
               let getToken = getToken else { return }
         let serverUrl = getServerUrl()
         guard !serverUrl.isEmpty else { return }
-        guard let token = await getToken() else { return }
+        guard let token = getToken() else { return }
         guard !token.isEmpty else { return }
 
         let endpoint = serverUrl + "/api/v1/bugreport"

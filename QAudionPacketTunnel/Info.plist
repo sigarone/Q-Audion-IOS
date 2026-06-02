@@ -16,8 +16,13 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<!-- Must match the parent app's CFBundleVersion. Apple validation
+	     rejects archives where extension and host disagree (warning at
+	     archive time, hard error at App Store / TestFlight upload).
+	     ios-release.ps1 bumps BOTH this file and QAudionApp/Info.plist
+	     in lockstep on every release tag. -->
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>1.0.570</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<!-- Network Extension descriptor — iOS uses this to identify and launch

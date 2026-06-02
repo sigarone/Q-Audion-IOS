@@ -98,7 +98,8 @@ jobs:
           path: |
             ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
-          save-always: true
+          # `save-always` is deprecated in cache@v5. The replacement is a
+          # separate `Save SPM cache` step below using `if: always()`.
           restore-keys: |
             ${{ runner.os }}-spm-
 
@@ -254,8 +255,16 @@ jobs:
           plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" Info.plist
           plutil -replace CFBundleVersion            -string "$NEW_BUILD"        Info.plist
 
+          # Sync extension version with the host. Apple validation rejects
+          # archives where extension and host CFBundleVersion differ.
+          EXT_PLIST="../QAudionPacketTunnel/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$EXT_PLIST"
+          plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$EXT_PLIST"
+
           plutil -extract CFBundleShortVersionString raw -o - Info.plist
           plutil -extract CFBundleVersion             raw -o - Info.plist
+          echo "--- extension ---"
+          plutil -extract CFBundleVersion raw -o - "$EXT_PLIST"
 
       # ----------------------------------------------------------
       # 6) Set up signing — fetch or create Distribution cert + App
