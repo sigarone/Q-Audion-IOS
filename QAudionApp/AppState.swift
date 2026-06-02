@@ -1232,12 +1232,31 @@ final class AppState: ObservableObject {
                     // responder integration below — without it audio never starts
                     // even when PushKit handled the CallKit registration first.
                     let alreadyRegisteredByPushKit = await MainActor.run { self.activeCallKitId != nil }
-                    if !alreadyRegisteredByPushKit, let ck = self.callKit {
-                        await ck.reportIncomingCall(
-                            uuid: callUUID,
-                            callerName: resolvedCallerName,
-                            hasVideo: (callType == "video")
-                        )
+                    // Single-dialer (W520): a FOREGROUND WS call shows ONLY the
+                    // in-app Qaudion banner — suppress the native CallKit UI so
+                    // the user never sees two dialers at once (the "seconda
+                    // chiamata in chiaro"). The previous code called
+                    // reportIncomingCall (native) AND set callState=.ringing
+                    // (in-app) for every WS call with no prior PushKit → a
+                    // permanent double dialer on iOS↔iOS. A BACKGROUND WS call
+                    // (no PushKit yet) has no visible in-app banner, so it MUST
+                    // fall back to the native UI. PushKit-first calls already
+                    // own the native UI (skip both).
+                    let appForeground = await MainActor.run {
+                        UIApplication.shared.applicationState == .active
+                    }
+                    if !alreadyRegisteredByPushKit {
+                        if appForeground {
+                            await MainActor.run {
+                                (self.callKit as? CallKitProvider)?.registerSuppressedCall(callUUID)
+                            }
+                        } else if let ck = self.callKit {
+                            await ck.reportIncomingCall(
+                                uuid: callUUID,
+                                callerName: resolvedCallerName,
+                                hasVideo: (callType == "video")
+                            )
+                        }
                     }
                     await MainActor.run {
                         if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
@@ -1252,7 +1271,11 @@ final class AppState: ObservableObject {
                         // CallKit UI handles ringing, stay in .idle so the in-app
                         // view stays hidden. callState advances to .active in
                         // CallKitProvider.onAnswerCall when the user accepts.
-                        if !alreadyRegisteredByPushKit {
+                        // Only show the in-app banner when FOREGROUND: when the
+                        // native CallKit UI is handling ringing (background WS or
+                        // PushKit), stay .idle so the in-app view stays hidden —
+                        // the single-dialer guarantee.
+                        if !alreadyRegisteredByPushKit && appForeground {
                             self.callState = .ringing
                         }
                         // C-3: do NOT set isInCall here. Setting it on
