@@ -3332,6 +3332,13 @@ final class AppState: ObservableObject {
                         self?.remoteWebRtcVideoTrack = track
                     }
                 }
+                // Remote-readable video diagnostics (mirrors Android). Ships
+                // outbound/inbound video RTP stats + remote-track arrival to
+                // the server so an iOS→Android video failure is diagnosable
+                // without a Mac console session.
+                controller.videoTelemetry = { kind, attrs in
+                    TelemetryService.shared.emit(kind: kind, attrs: attrs)
+                }
                 // R-4 (sovereign-only): reject incoming video when the
                 // policy is on. Read live (not captured) so a mid-session
                 // toggle takes effect on the next inbound track.
@@ -4787,6 +4794,10 @@ extension AppState {
             Task { @MainActor [weak self] in
                 self?.remoteWebRtcVideoTrack = track
             }
+        }
+        // Remote-readable video diagnostics (responder side, mirrors caller).
+        controller.videoTelemetry = { kind, attrs in
+            TelemetryService.shared.emit(kind: kind, attrs: attrs)
         }
         // R-4 (sovereign-only): reject incoming video when the policy is
         // on (responder side). Mirror of the caller-side wiring.

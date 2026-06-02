@@ -48,6 +48,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onRemoteAudioTrack: ((RTCAudioTrack) -> Void)?
     public var onRemoteVideoTrack: ((RTCVideoTrack) -> Void)?
 
+    /// Diagnostic telemetry sink for the video pipeline (kind, attrs).
+    /// Mirrors the Android `PeerConnectionHolder.videoTelemetry` hook so an
+    /// iOS↔Android video failure is diagnosable REMOTELY from the admin
+    /// telemetry API. Set by AppState to `TelemetryService.shared.emit`.
+    /// The engine cannot reach the app-layer TelemetryService directly,
+    /// hence the closure indirection.
+    public var videoTelemetry: ((String, [String: Any]) -> Void)?
+    /// Repeating timer that polls outbound/inbound video RTP stats while a
+    /// call is connected. Created on ICE-connected, invalidated on close.
+    private var videoStatsTimer: Timer?
+
     /// R-4 (vkey-v1 / sovereign-only) — injectable policy hook consulted
     /// when a remote VIDEO track arrives. When it returns `true` the
     /// controller REJECTS the incoming video: it disables the track and
@@ -594,6 +605,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return
         }
         stopCameraCapture()
+        stopVideoStatsTelemetry()
         wssTurnBridge?.stop()
         wssTurnBridge = nil
         peerConnection?.close()
@@ -987,14 +999,80 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         switch s {
         case .connected, .completed:
             state = .connected
+            // Start outbound/inbound video RTP telemetry once media can flow.
+            startVideoStatsTelemetry()
         case .failed:
             state = .failed("ICE failed")
         case .disconnected, .closed:
             state = .disconnected
+            stopVideoStatsTelemetry()
         default:
             break
         }
         onIceConnectionState?(s)
+    }
+
+    // MARK: - Video diagnostics telemetry
+
+    /// Poll RTCPeerConnection statistics every 3 s and ship outbound +
+    /// inbound video frame counts / codec to the telemetry sink. The iOS
+    /// caller is the SENDER in the "iPad calls Android" scenario, so
+    /// `out_frames_enc` answers "did the iPad actually encode+send video?"
+    /// — the missing half of the Android-side `video.stats`.
+    private func startVideoStatsTelemetry() {
+        guard videoTelemetry != nil, videoStatsTimer == nil else { return }
+        let timer = Timer(timeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.pollVideoStatsOnce()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        videoStatsTimer = timer
+    }
+
+    private func stopVideoStatsTelemetry() {
+        videoStatsTimer?.invalidate()
+        videoStatsTimer = nil
+    }
+
+    private func pollVideoStatsOnce() {
+        guard let pc = peerConnection?.peerConnection, let sink = videoTelemetry else { return }
+        pc.statistics { report in
+            var outFramesEnc = -1, outBytes = -1, outW = -1
+            var inFramesDec = -1, inFramesRec = -1, inBytes = -1, inW = -1, inH = -1
+            var inCodecId = "", outCodecId = ""
+            for (_, s) in report.statistics {
+                guard let kind = s.values["kind"] as? String, kind == "video" else { continue }
+                if s.type == "outbound-rtp" {
+                    outFramesEnc = (s.values["framesEncoded"] as? NSNumber)?.intValue ?? outFramesEnc
+                    outBytes = (s.values["bytesSent"] as? NSNumber)?.intValue ?? outBytes
+                    outW = (s.values["frameWidth"] as? NSNumber)?.intValue ?? outW
+                    outCodecId = (s.values["codecId"] as? String) ?? outCodecId
+                } else if s.type == "inbound-rtp" {
+                    inFramesDec = (s.values["framesDecoded"] as? NSNumber)?.intValue ?? inFramesDec
+                    inFramesRec = (s.values["framesReceived"] as? NSNumber)?.intValue ?? inFramesRec
+                    inBytes = (s.values["bytesReceived"] as? NSNumber)?.intValue ?? inBytes
+                    inW = (s.values["frameWidth"] as? NSNumber)?.intValue ?? inW
+                    inH = (s.values["frameHeight"] as? NSNumber)?.intValue ?? inH
+                    inCodecId = (s.values["codecId"] as? String) ?? inCodecId
+                }
+            }
+            // Resolve codec mimeType from the referenced codec stats object.
+            func mime(_ id: String) -> String {
+                guard !id.isEmpty, let c = report.statistics[id] else { return "?" }
+                return (c.values["mimeType"] as? String) ?? "?"
+            }
+            sink("video.stats", [
+                "out_frames_enc": outFramesEnc,
+                "out_bytes": outBytes,
+                "out_frame_w": outW,
+                "out_codec": mime(outCodecId),
+                "in_frames_rec": inFramesRec,
+                "in_frames_dec": inFramesDec,
+                "in_bytes": inBytes,
+                "in_frame_w": inW,
+                "in_frame_h": inH,
+                "in_codec": mime(inCodecId),
+            ])
+        }
     }
 
     public func peerConnection(_ pc: QAudionPeerConnection,
@@ -1037,6 +1115,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             print("[WebRTC] remote VIDEO track REJECTED — sovereign-only policy active (R-4)")
             return
         }
+        // Remote diagnostics: the inbound video track arrived on the iOS side.
+        videoTelemetry?("video.remote_track", [
+            "track_id": track.trackId,
+            "enabled": track.isEnabled,
+            "use_sframe": peerNegotiated()?.useSFrame ?? false,
+        ])
         onRemoteVideoTrack?(track)
     }
 }
