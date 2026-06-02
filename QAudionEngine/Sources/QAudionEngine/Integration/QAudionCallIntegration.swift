@@ -580,12 +580,28 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public func onAndroidBundleReceived(
         bundle: AndroidHandshakeBundle,
         callId: String,
+        callerId: String = "",
         eligiblePsks: [String: Data] = [:],
         sendOpaqueRaw: @escaping (String) async throws -> Void
     ) async throws {
 
         switch bundle.kind {
         case .offer:
+            // Pre-negotiation parity with the iOS-native (QUAD) responder
+            // path (`onCapabilityMessageReceived` .offer): emit
+            // `call_processing` the moment the OFFER lands so the Android
+            // caller's UI flips "Calling…" → "Connecting…". The Android
+            // JSON path previously skipped BOTH call_processing AND
+            // call_ready, so the iPad-as-callee NEVER acked the OFFER on the
+            // signalling channel — confirmed in server logs (device
+            // ef91920d emits no call_ready/call_processing in any call).
+            // The server also uses this ack to decide whether the WS
+            // delivery of `call_incoming` actually landed (vs a zombie WS),
+            // gating a backup VoIP push. callerId may be "" when the
+            // dispatcher could not supply it — guard the emit on non-empty.
+            if !callerId.isEmpty {
+                sendCallProcessing?(callId, callerId)
+            }
             // 1. Validate callId match (loose — responder hasn't seen it
             // yet, so we just keep the value the bundle carries).
             // 2. Decode public keys from base64.
@@ -709,6 +725,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // vkey-v1: JSON responder — `combined` is the post-PSK-mix
             // session key and the IKM for K_video.
             onVideoKeyEstablished?(combined)
+
+            // Pre-negotiation parity (mirror of the QUAD .offer branch):
+            // the PQC OFFER is fully deserialised and our ACCEPT is on the
+            // wire — tell the Android caller we are ringing locally so its
+            // UI flips to "Ringing" and the server marks the WS-delivered
+            // `call_incoming` as acknowledged (suppressing the backup VoIP
+            // push). Sent AFTER the ACCEPT so the crypto round-trip is
+            // already in flight when the caller starts ringing.
+            if !callerId.isEmpty {
+                sendCallReady?(callId, callerId)
+            }
 
         case .accept:
             // Originator side — completes the dual-hybrid combine using

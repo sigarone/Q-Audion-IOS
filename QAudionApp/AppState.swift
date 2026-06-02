@@ -1673,8 +1673,25 @@ final class AppState: ObservableObject {
     private func replayPendingSyncEntry(_ entry: [String: Any]) {
         guard let senderId = entry["sender_id"] as? String,
               !senderId.isEmpty,
-              let cipherB64 = entry["encrypted_payload"] as? String,
-              let serverMsgId = entry["message_id"] as? String,
+              let cipherB64 = entry["encrypted_payload"] as? String else {
+            return
+        }
+        // CRITICAL (Android→iOS key sync): opaque call-signalling queued while
+        // this device was offline / a suspended-iOS zombie (PQC OFFER or
+        // ACCEPT, contact key-exchange, call piggy-back) must go to the opaque
+        // dispatcher — NOT the chat decrypt. Two reasons:
+        //   1. handleIncomingMessage would try to MessageCrypto-decrypt the
+        //      OFFER as a chat ciphertext → garbage → silently dropped, so the
+        //      responder never encapsulates / sends the ACCEPT → no key sync.
+        //   2. The Android JSON OFFER wire is `<callId>|<json>` (NOT base64),
+        //      so it cannot even pass the chat path's Data(base64Encoded:)
+        //      guard below — it would be dropped before any handler runs.
+        // Already on the main queue (caller dispatches the batch on .main).
+        if (entry["msg_type"] as? String) == "opaque" {
+            dispatchInboundOpaque(senderId: senderId, blobStr: cipherB64)
+            return
+        }
+        guard let serverMsgId = entry["message_id"] as? String,
               let cipher = Data(base64Encoded: cipherB64) else {
             return
         }
@@ -2439,71 +2456,96 @@ final class AppState: ObservableObject {
                   let blobStr = data["data"] as? String else {
                 return
             }
-
-            // Path A — base64-encoded QUAD binary frame (iOS / Desktop peers).
-            if let blob = Data(base64Encoded: blobStr),
-               let decoded = QAudionCapabilityExchange.parse(blob) {
-                switch decoded {
-                case .keyExchangeOffer(let pub):
-                    Task { await cke.handleOffer(senderId: senderId, peerPubKey: pub) }
-                case .keyExchangeAccept(let pub):
-                    Task { await cke.handleAccept(senderId: senderId, peerPubKey: pub) }
-                case .offer:
-                    Task { @MainActor [weak self] in
-                        self?.routeInboundPqcOffer(blob: blob, senderId: senderId)
-                    }
-                case .accept:
-                    Task { @MainActor [weak self] in
-                        self?.routeInboundPqcAccept(blob: blob, senderId: senderId)
-                    }
-                default:
-                    break
-                }
-                return
+            // MessageHandler is a non-isolated closure but dispatchInboundOpaque
+            // is @MainActor (AppState is @MainActor) — hop to the main actor,
+            // mirroring the original handler which wrapped every routing call in
+            // `Task { @MainActor }`.
+            Task { @MainActor [weak self] in
+                self?.dispatchInboundOpaque(senderId: senderId, blobStr: blobStr)
             }
-
-            // Path B0 — `<callId>|<TAG>:value` piggy-back framing shared
-            // with Android + Desktop (SCREEN_SHARE / CAPS / HANGUP).
-            // Tested BEFORE the JSON HandshakeBundle branch because both
-            // share the `<callId>|...` prefix; the piggy-back parser
-            // bails out for `{`-prefixed payloads so JSON falls through
-            // intact. See AndroidHandshakeBundle.swift `CallPiggyBack`
-            // and docs/SCREEN_SHARE_PROTOCOL.md.
-            if let piggy = CallPiggyBack.parse(blobStr) {
-                Task { @MainActor [weak self] in
-                    self?.routeInboundCallPiggyBack(piggy, senderId: senderId)
-                }
-                return
-            }
-
-            // Path B — Android JSON HandshakeBundle (full processing).
-            //
-            // Wire shape (WIRE_SPEC.md §3.1): literal UTF-8 string
-            // `"<callId>|<JSON>"` placed verbatim in the `data` field
-            // (NOT base64). The JSON carries split pqcPublicKey +
-            // x25519PublicKey + capabilities + pskFingerprints. iOS
-            // engine's QAudionCapabilityExchange (QUAD binary, single
-            // combined kemPublicKey) cannot consume this directly, so
-            // we decode via AndroidHandshakeEnvelope.parse() and route
-            // to QAudionCallIntegration.onAndroidBundleReceived which
-            // does the dual-hybrid encapsulate (ML-KEM-1024 + X25519)
-            // and ships the matching ACCEPT back over the same wire.
-            if let parsed = AndroidHandshakeEnvelope.parse(blobStr) {
-                switch parsed.bundle.kind {
-                case .offer:
-                    Task { @MainActor [weak self] in
-                        self?.routeInboundAndroidOffer(parsed: parsed, senderId: senderId)
-                    }
-                case .accept:
-                    Task { @MainActor [weak self] in
-                        self?.routeInboundAndroidAccept(parsed: parsed, senderId: senderId)
-                    }
-                }
-                return
-            }
-
-            print("[AppState] opaque_message from \(senderId.prefix(8))… not a valid QUAD frame and not a recognised Android envelope (\(blobStr.count) bytes)")
         }
+    }
+
+    /// Route a single inbound opaque blob to the correct handler. Invoked for a
+    /// LIVE `opaque_message` and also REPLAYED for a `msg_pending_sync` entry
+    /// whose `msg_type == "opaque"` — a PQC OFFER/ACCEPT, contact-key-exchange
+    /// frame or call piggy-back that the server queued offline while this
+    /// device's WS was disconnected OR a suspended-iOS zombie.
+    ///
+    /// Before this extraction the pending-sync replay path
+    /// (`replayPendingSyncEntry`) fed EVERY queued blob through the chat
+    /// decrypt (`handleIncomingMessage`), so an offline-queued Android OFFER
+    /// was mis-decrypted as a chat ciphertext and silently dropped. Combined
+    /// with the server's zombie-WS race that caused OFFERs to be queued in the
+    /// first place, this left every backgrounded Android→iOS call ringing on
+    /// the iPad but NEVER reaching the key sync. Routing opaque blobs here on
+    /// replay closes that hole.
+    private func dispatchInboundOpaque(senderId: String, blobStr: String) {
+        guard let cke = contactKeyExchange else { return }
+
+        // Path A — base64-encoded QUAD binary frame (iOS / Desktop peers).
+        if let blob = Data(base64Encoded: blobStr),
+           let decoded = QAudionCapabilityExchange.parse(blob) {
+            switch decoded {
+            case .keyExchangeOffer(let pub):
+                Task { await cke.handleOffer(senderId: senderId, peerPubKey: pub) }
+            case .keyExchangeAccept(let pub):
+                Task { await cke.handleAccept(senderId: senderId, peerPubKey: pub) }
+            case .offer:
+                Task { @MainActor [weak self] in
+                    self?.routeInboundPqcOffer(blob: blob, senderId: senderId)
+                }
+            case .accept:
+                Task { @MainActor [weak self] in
+                    self?.routeInboundPqcAccept(blob: blob, senderId: senderId)
+                }
+            default:
+                break
+            }
+            return
+        }
+
+        // Path B0 — `<callId>|<TAG>:value` piggy-back framing shared
+        // with Android + Desktop (SCREEN_SHARE / CAPS / HANGUP).
+        // Tested BEFORE the JSON HandshakeBundle branch because both
+        // share the `<callId>|...` prefix; the piggy-back parser
+        // bails out for `{`-prefixed payloads so JSON falls through
+        // intact. See AndroidHandshakeBundle.swift `CallPiggyBack`
+        // and docs/SCREEN_SHARE_PROTOCOL.md.
+        if let piggy = CallPiggyBack.parse(blobStr) {
+            Task { @MainActor [weak self] in
+                self?.routeInboundCallPiggyBack(piggy, senderId: senderId)
+            }
+            return
+        }
+
+        // Path B — Android JSON HandshakeBundle (full processing).
+        //
+        // Wire shape (WIRE_SPEC.md §3.1): literal UTF-8 string
+        // `"<callId>|<JSON>"` placed verbatim in the `data` field
+        // (NOT base64). The JSON carries split pqcPublicKey +
+        // x25519PublicKey + capabilities + pskFingerprints. iOS
+        // engine's QAudionCapabilityExchange (QUAD binary, single
+        // combined kemPublicKey) cannot consume this directly, so
+        // we decode via AndroidHandshakeEnvelope.parse() and route
+        // to QAudionCallIntegration.onAndroidBundleReceived which
+        // does the dual-hybrid encapsulate (ML-KEM-1024 + X25519)
+        // and ships the matching ACCEPT back over the same wire.
+        if let parsed = AndroidHandshakeEnvelope.parse(blobStr) {
+            switch parsed.bundle.kind {
+            case .offer:
+                Task { @MainActor [weak self] in
+                    self?.routeInboundAndroidOffer(parsed: parsed, senderId: senderId)
+                }
+            case .accept:
+                Task { @MainActor [weak self] in
+                    self?.routeInboundAndroidAccept(parsed: parsed, senderId: senderId)
+                }
+            }
+            return
+        }
+
+        print("[AppState] opaque_message from \(senderId.prefix(8))… not a valid QUAD frame and not a recognised Android envelope (\(blobStr.count) bytes)")
     }
 
     /// Responder-side dispatch for Android JSON OFFER. Symmetric to
@@ -2529,6 +2571,7 @@ final class AppState: ObservableObject {
                 try await integration.onAndroidBundleReceived(
                     bundle: parsed.bundle,
                     callId: parsed.callId,
+                    callerId: senderId,
                     eligiblePsks: [:],
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
