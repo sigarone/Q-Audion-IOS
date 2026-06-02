@@ -83,6 +83,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private var retrySenderClosure: ((String) async throws -> Void)?
     /// W529 retry task — fires at 5 s intervals up to handshakeTimeout.
     private var offerRetryTask: Task<Void, Never>?
+
+    // ─── Answer-gated responder commit ──────────────────────────────────────
+    /// True once the LOCAL user pressed answer (green button / CallKit accept).
+    /// The responder still pre-computes the ML-KEM hybrid secret on OFFER
+    /// receipt (during ringing — keeps zero-ring-delay), but DEFERS the side
+    /// effects that the peer observes — sending the ACCEPT (which makes the
+    /// caller's SAS appear), opening the audio session, and firing the local
+    /// SAS — until this flag flips. Set by [commitLocalAnswer].
+    private var localAnswerAccepted = false
+    /// Buffered responder ACCEPT, prepared on OFFER receipt but held until the
+    /// user answers. (acceptWire = serialized ACCEPT envelope; combined = the
+    /// post-PSK-mix hybrid session key already derived.)
+    private var bufferedResponderAccept: (wire: String, combined: Data)?
     public let handshakeTimeoutSec: Double = 30.0
     public let offerRetryIntervalSec: UInt64 = 5
     /// Tracks whether the local UI/CallKit alert is already ringing for an
@@ -685,30 +698,39 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // W529: idempotent replay — re-emit the SAME bundle the
                 // first OFFER produced. Caller will recognise it via
                 // their own session-init guard and discard.
-                if let cached = lock.withLock({ lastSentAcceptWire }) {
-                    print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — replaying cached ACCEPT")
+                // ANSWER GATE: only replay the ACCEPT to the caller if we have
+                // actually answered. A duplicate OFFER arriving while we are
+                // still ringing must NOT leak the ACCEPT (which would surface
+                // the SAS on the caller before we pressed answer) — the bundle
+                // stays buffered and goes out via commitLocalAnswer().
+                let answered = lock.withLock { localAnswerAccepted }
+                if answered, let cached = lock.withLock({ lastSentAcceptWire }) {
+                    print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… (answered) — replaying cached ACCEPT")
                     try await sendOpaqueRaw(cached)
                 } else {
-                    print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
+                    print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — \(answered ? "session already initialised" : "still ringing, ACCEPT stays buffered")")
                 }
                 return
             }
-            try await sendOpaqueRaw(wire)
-            try engine.initialize()
-            // W479 — Android peer: use AdaptivePaddingController-compatible
-            // audio scheme (static session key, no AAD, 2-byte len + 120B padding).
-            // Byte-identical to Android FrameRelayTransport.send/decode +
-            // AdaptivePaddingController.sealAudio/openAudio.
-            try engine.initSession(sharedSecret: combined, adaptivePadding: true)
-            lock.withLock { state = .active }
-            // W529: handshake reached active — kill the retry loop.
-            offerRetryTask?.cancel()
-            offerRetryTask = nil
-            onStateChanged?(.active)
-            onPqcSessionKeyEstablished?(combined)
-            // vkey-v1: JSON responder — `combined` is the post-PSK-mix
-            // session key and the IKM for K_video.
-            onVideoKeyEstablished?(combined)
+            // ANSWER GATE — the ML-KEM hybrid secret (`combined`) and the
+            // ACCEPT `wire` are now ready (the expensive crypto ran during
+            // ringing, preserving zero-ring-delay). But we MUST NOT make the
+            // call "happen" before the local user actually answers:
+            //   • sending the ACCEPT is what completes the CALLER's handshake
+            //     and makes their SAS appear → the caller would see the call
+            //     "encrypted/answered" before we pressed the green button.
+            //   • initSession opens the audio channel.
+            //   • onPqcSessionKeyEstablished fires OUR SAS.
+            // So if the user hasn't answered yet, buffer everything and return.
+            // [commitLocalAnswer] flushes the buffer the instant they answer —
+            // the send is then immediate because the crypto is already done.
+            let answeredAlready = lock.withLock { localAnswerAccepted }
+            if !answeredAlready {
+                lock.withLock { bufferedResponderAccept = (wire, combined) }
+                print("[QAudionCallIntegration] OFFER processed for callId=\(callId.prefix(8))… — ACCEPT buffered, awaiting local answer (caller will NOT see SAS until then)")
+                return
+            }
+            try await commitResponderHandshake(wire: wire, combined: combined)
 
         case .accept:
             // Originator side — completes the dual-hybrid combine using
@@ -992,6 +1014,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lastSentAcceptWire = nil
         handshakeStartedAt = nil
         retrySenderClosure = nil
+        // Answer-gate: a reused integration must start the next call un-answered
+        // with no stale buffered ACCEPT.
+        localAnswerAccepted = false
+        bufferedResponderAccept = nil
         lock.unlock()
         offerRetryTask?.cancel()
         offerRetryTask = nil
@@ -1139,6 +1165,52 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// duplicate fallback ring.
     public func setLocallyRinging(_ ringing: Bool) {
         lock.lock(); isLocallyRinging = ringing; lock.unlock()
+    }
+
+    /// Responder side — the LOCAL user pressed answer (green button / CallKit
+    /// CXAnswerCallAction). This is the single gate that lets the buffered
+    /// handshake "go live": it sends the ACCEPT (caller's SAS appears now),
+    /// opens the audio channel, and fires our SAS. If the OFFER hasn't arrived
+    /// yet, we just record the answer; the `.offer` case then commits
+    /// immediately when it lands. Idempotent.
+    public func commitLocalAnswer() async {
+        let buffered: (wire: String, combined: Data)? = lock.withLock {
+            localAnswerAccepted = true
+            let b = bufferedResponderAccept
+            bufferedResponderAccept = nil
+            return b
+        }
+        guard let b = buffered else {
+            // OFFER not processed yet (fast answer) — the `.offer` case will
+            // see localAnswerAccepted == true and commit inline. Or this is a
+            // caller-side / no-op call; harmless.
+            return
+        }
+        print("[QAudionCallIntegration] local answer — flushing buffered ACCEPT (handshake + audio + SAS go live now)")
+        do {
+            try await commitResponderHandshake(wire: b.wire, combined: b.combined)
+        } catch {
+            print("[QAudionCallIntegration] commitLocalAnswer: commit failed: \(error)")
+        }
+    }
+
+    /// Send the responder ACCEPT, open the audio session and fire the SAS /
+    /// video-key hooks. Factored out of the `.offer` case so it can run either
+    /// inline (user already answered) or deferred (via [commitLocalAnswer]).
+    private func commitResponderHandshake(wire: String, combined: Data) async throws {
+        try await sendOpaqueRaw(wire)
+        try engine.initialize()
+        // W479 — Android peer: AdaptivePaddingController-compatible audio
+        // scheme (static session key, no AAD, 2-byte len + 120B padding).
+        try engine.initSession(sharedSecret: combined, adaptivePadding: true)
+        lock.withLock { state = .active }
+        // W529: handshake reached active — kill the retry loop.
+        offerRetryTask?.cancel()
+        offerRetryTask = nil
+        onStateChanged?(.active)
+        onPqcSessionKeyEstablished?(combined)
+        // vkey-v1: `combined` is the post-PSK-mix session key + IKM for K_video.
+        onVideoKeyEstablished?(combined)
     }
 
     /// Caller-side handler for inbound `call_processing`. Bumps state to

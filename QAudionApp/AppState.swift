@@ -536,6 +536,14 @@ final class AppState: ObservableObject {
         if let provider = callKit as? CallKitProvider {
             provider.onAnswerCall = { [weak self] uuid in
                 guard let self = self else { return }
+                // ANSWER GATE (callee): flush the responder's buffered ACCEPT.
+                // On OFFER receipt during ringing we pre-computed the ML-KEM
+                // hybrid secret but deferred sending the ACCEPT, opening audio
+                // and firing the SAS. THIS is the green-button press — commit
+                // it now. The send is immediate (crypto already done), so the
+                // caller sees the SAS only AFTER we actually answer.
+                let integration = await MainActor.run { self.callService.callIntegration }
+                await integration?.commitLocalAnswer()
                 await MainActor.run {
                     // User accepted incoming call from lock screen.
                     // Notify "user accepted" so the call transitions from ringing to active.
