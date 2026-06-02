@@ -399,14 +399,34 @@ jobs:
           xcode-project use-profiles --project "QAudionApp/$XCODE_PROJECT"
 
       # ----------------------------------------------------------
-      # 7a) Diagnose Swift compile errors BEFORE the full build.
-      #     Runs xcodebuild without code signing so Swift errors
-      #     appear in the raw output (xcbeautify filters them away
-      #     in the build-ipa step). The diag.log artifact is the
-      #     primary diagnostic source on build failures.
+      # 7a) Build IPA. Identical command to codemagic.yaml.
+      #     On failure: print full build.log to stdout so the
+      #     error is visible in the GitHub Actions step UI without
+      #     downloading the artifact.
+      # ----------------------------------------------------------
+      - name: Build IPA
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme QAudionApp 2>&1 | tee build.log \
+          || (echo ""; echo "=== BUILD FAILED — full build.log ==="; cat build.log; exit 1)
+
+      # ----------------------------------------------------------
+      # 7b) Diagnose Swift compile errors ONLY when Build IPA fails.
+      #     Previously this ran BEFORE Build IPA as a precaution (raw
+      #     xcodebuild with CODE_SIGNING_ALLOWED=NO so Swift errors
+      #     appear without xcbeautify filtering them away). That paid
+      #     ~2:10 of full re-compilation on EVERY build, including
+      #     green ones — ~22% of total wall time wasted when nothing
+      #     is broken. By gating on `if: failure()`, the diag pass
+      #     runs only when actually needed (the build-log tail above
+      #     gives a first hint; this gives the full Swift output).
       #     See CLAUDE.md sec 13 for the type-checker timeout traps.
       # ----------------------------------------------------------
       - name: Diagnose Swift compile (raw xcodebuild)
+        if: failure()
         working-directory: QAudionApp
         continue-on-error: true
         run: |
@@ -421,7 +441,7 @@ jobs:
           tail -50 diag.log
 
       - name: Upload diag.log
-        if: always()
+        if: failure()
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
@@ -429,21 +449,6 @@ jobs:
           path: QAudionApp/diag.log
           retention-days: 7
           if-no-files-found: warn
-
-      # ----------------------------------------------------------
-      # 7b) Build IPA. Identical command to codemagic.yaml.
-      #     On failure: print full build.log to stdout so the
-      #     error is visible in the GitHub Actions step UI without
-      #     downloading the artifact.
-      # ----------------------------------------------------------
-      - name: Build IPA
-        working-directory: QAudionApp
-        run: |
-          set -o pipefail
-          xcode-project build-ipa \
-            --project "$XCODE_PROJECT" \
-            --scheme QAudionApp 2>&1 | tee build.log \
-          || (echo ""; echo "=== BUILD FAILED — full build.log ==="; cat build.log; exit 1)
 
       # ----------------------------------------------------------
       # 8) Patch onnxruntime.framework MinimumOSVersion + re-sign.
