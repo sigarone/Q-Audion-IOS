@@ -306,6 +306,16 @@ public final class AudioProcessingPipeline {
         isConfigured = false
     }
 
+    /// Bug B robustness — best-effort (re)activate the shared session.
+    /// Used by the CallService didActivate-fallback: when CallKit SKIPS its
+    /// `provider(_:didActivate:)` (the session was already active from
+    /// `configureForVoIP`'s setActive or a prior call), the engines must still
+    /// start under a definitely-active session. Idempotent / harmless if the
+    /// session is already active.
+    public func activateSession() {
+        try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+    }
+
     // MARK: - Software noise reduction (supplemental)
 
     /// Apply spectral subtraction noise reduction to a PCM frame.

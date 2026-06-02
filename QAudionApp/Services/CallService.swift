@@ -58,6 +58,12 @@ final class CallService {
     private var framesReceivedRx: Int64 = 0   // audio_frame envelopes off the WS, pre-decrypt
     private var txEncryptErrorCount: Int64 = 0
     private var rxDecryptErrorCount: Int64 = 0
+    // Bug B diagnostics — did the playback/capture AVAudioEngines actually
+    // start (true only after startAudioIOIfReady ran with an active session),
+    // and did the didActivate-fallback have to fire (CallKit skipped its own
+    // didActivate). Emitted in the call.audio.counts summary on teardown.
+    private var audioEnginesStarted = false
+    private var didActivateFallbackFired = false
     // Frames dropped because their call_id didn't match the active session.
     // Batched relay delivery from a previous/overlapping session causes x250+
     // AEAD failures (CryptoKitError 3) without this filter.
@@ -435,7 +441,14 @@ final class CallService {
             guard let self = self,
                   !self.audioSessionActive,
                   (self.audioCapture != nil || self.audioPlayback != nil) else { return }
-            print("[CallService] Bug B fallback — CallKit didActivate never fired; starting audio under the already-active session")
+            print("[CallService] Bug B fallback — CallKit didActivate never fired; forcing session active + starting audio")
+            self.didActivateFallbackFired = true
+            // Force the session active: configureForVoIP's setActive(true) is
+            // best-effort and may not have stuck. Starting the engines under an
+            // INACTIVE session is exactly what produces "connected but silent",
+            // so guarantee it is active before handleAudioSessionActivated()
+            // flips audioSessionActive and starts capture+playback.
+            self.audioPipeline?.activateSession()
             self.handleAudioSessionActivated()
         }
     }
@@ -668,6 +681,38 @@ final class CallService {
     /// so stale frames arriving after teardown can't be decrypted with
     /// an old session key (they hit the W481 pre-buffer instead).
     private func teardownAudioStack() {
+        // Diagnostic: emit the REAL audio frame counters BEFORE they reset.
+        // call.media.summary's `suspect_silent` is a timer-only heuristic and
+        // says nothing about audio — these counters are the ground truth that
+        // distinguishes the failure modes the user reported ("connected but no
+        // audio / no SAS"):
+        //   rx_recv>0 & rx_dec≈rx_recv & engines_started → audio DECRYPTS; a
+        //       silent call then means PLAYBACK/route (Bug B / speaker).
+        //   rx_recv>0 & rx_dec≈0 & rx_dec_err high       → KEY MISMATCH (the
+        //       two sides derived different session keys → SAS won't match).
+        //   rx_recv≈0                                     → audio never arrived
+        //       (peer not capturing / transport / wrong call_id).
+        //   engines_started=false                         → engines never ran.
+        // Only emit when the call actually had an audio stack (skip the
+        // defensive pre-call cleanups that would log all-zeros).
+        if audioEnginesStarted || framesReceivedRx > 0 || framesEncryptedTx > 0 {
+            TelemetryService.shared.emit(
+                kind: "call.audio.counts",
+                callId: getCallId?(),
+                attrs: [
+                    "tx_enc":          framesEncryptedTx,
+                    "rx_recv":         framesReceivedRx,
+                    "rx_dec":          framesDecryptedRx,
+                    "rx_dec_err":      rxDecryptErrorCount,
+                    "tx_enc_err":      txEncryptErrorCount,
+                    "engines_started": audioEnginesStarted,
+                    "fallback_fired":  didActivateFallbackFired,
+                    "session_active":  audioSessionActive
+                ]
+            )
+        }
+        audioEnginesStarted = false
+        didActivateFallbackFired = false
         callIntegration?.onCallEnded()
         callIntegration = nil
         audioCapture?.stop()
@@ -739,6 +784,13 @@ final class CallService {
                 let line: String = "[CallService] AudioCapture start failed: " + desc + " — chiamata continua senza HW VP"
                 print(line)
             }
+        }
+        // Bug B diagnostics: reaching here means the session was active and we
+        // attempted to start both engines. Marks that audio I/O is live so the
+        // teardown summary can distinguish "engines never started" (the no-audio
+        // bug) from "started but silent" (decrypt / routing).
+        if audioPlayback != nil || audioCapture != nil {
+            audioEnginesStarted = true
         }
     }
 
