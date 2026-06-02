@@ -329,6 +329,18 @@ final class AppState: ObservableObject {
     /// Currently-active CallKit call UUID (one at a time).
     private(set) var activeCallKitId: UUID?
 
+    /// Bug A guard — the call UUID for which `onAnswerCall` has already run.
+    /// On the double-dialer second call (PushKit native UI + in-app banner
+    /// both up), CallKit can deliver `CXAnswerCallAction` more than once for
+    /// the same call: once from the in-app green button
+    /// (`CXCallController.request`) and once from the native UI. A second
+    /// `onAnswerCall` re-enters `startIncomingCallAudioOnAnswer` →
+    /// `activateIncomingCallAudio` → `teardownAudioStack()` WHILE the first
+    /// answer's `AVAudioEngine` is mid-start → an uncatchable Obj-C
+    /// `NSException` (SIGABRT). Tracking the answered UUID makes the answer
+    /// idempotent. Reset to nil on call teardown.
+    private var answeredCallKitId: UUID?
+
     /// UUID string of the PersistentCallRecord for the current call.
     /// Set in startCall (outgoing) and wireIncomingCallHandlers (incoming).
     /// Cleared after endCall() writes the end timestamp.
@@ -537,6 +549,19 @@ final class AppState: ObservableObject {
             provider.onAnswerCall = { [weak self] uuid in
                 guard let self = self else { return }
                 await MainActor.run {
+                    // Bug A — idempotent answer. CallKit may deliver
+                    // CXAnswerCallAction twice for the same call when the
+                    // in-app green button and the native UI both target it
+                    // (double-dialer second call). The second pass would
+                    // re-enter startIncomingCallAudioOnAnswer →
+                    // activateIncomingCallAudio → teardownAudioStack() while
+                    // the first AVAudioEngine start is still in flight → an
+                    // uncatchable NSException. Ignore repeats for the same call.
+                    if self.answeredCallKitId == uuid {
+                        print("[AppState] onAnswerCall: duplicate answer for \(uuid) ignored (Bug A guard)")
+                        return
+                    }
+                    self.answeredCallKitId = uuid
                     // User accepted incoming call from lock screen.
                     // Notify "user accepted" so the call transitions from ringing to active.
                     // Actual signalling (offer/answer) stays inside QAudionCallIntegration.
@@ -3600,6 +3625,7 @@ final class AppState: ObservableObject {
         callContactId = nil
         incomingCallerName = ""
         activeCallKitId = nil
+        answeredCallKitId = nil  // Bug A — re-arm the idempotent-answer guard for the next call
         // W534 — drop any sticky peer-screen-share state from this call
         // so the next call starts with a clean UI. Per SCREEN_SHARE_
         // PROTOCOL.md the call_hangup envelope is authoritative for

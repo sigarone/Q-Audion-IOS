@@ -416,6 +416,28 @@ final class CallService {
         self.callIntegration = integration
         drainRxPreBuffer()  // W481 — replay any frames that arrived before binding
         startDurationTimer()
+
+        // Bug B — `didActivate` fallback. CallKit emits
+        // provider(_:didActivate:) ONLY on an inactive→active AVAudioSession
+        // transition. `configureForVoIP()` above best-effort `setActive(true)`,
+        // and a PRIOR call can leave the session active, so on the SECOND
+        // incoming call CallKit frequently SKIPS didActivate →
+        // handleAudioSessionActivated() never runs → `audioSessionActive`
+        // stays false → startAudioIOIfReady() no-ops → handshake completes but
+        // there is TOTAL SILENCE (the exact "second call: data exchange OK but
+        // no audio" symptom). If didActivate hasn't fired shortly after we set
+        // up the stack, drive the start ourselves. The session is already
+        // active (that's WHY CallKit skipped didActivate), so flipping the
+        // flag + startAudioIOIfReady() starts capture+playback under it.
+        // Idempotent: guarded on !audioSessionActive, and the engines guard on
+        // their own isRunning flag, so a real didActivate that fires first wins.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            guard let self = self,
+                  !self.audioSessionActive,
+                  (self.audioCapture != nil || self.audioPlayback != nil) else { return }
+            print("[CallService] Bug B fallback — CallKit didActivate never fired; starting audio under the already-active session")
+            self.handleAudioSessionActivated()
+        }
     }
 
     /// Originator-side wire driver for the iOS-as-caller PQC handshake.
