@@ -726,7 +726,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // the send is then immediate because the crypto is already done.
             let answeredAlready = lock.withLock { localAnswerAccepted }
             if !answeredAlready {
-                lock.withLock { bufferedResponderAccept = (wire: wire, combined: combined) }
+                lock.withLock { bufferedResponderAccept = (wire, combined) }
                 print("[QAudionCallIntegration] OFFER processed for callId=\(callId.prefix(8))… — ACCEPT buffered, awaiting local answer (caller will NOT see SAS until then)")
                 return
             }
@@ -1197,15 +1197,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Send the responder ACCEPT, open the audio session and fire the SAS /
     /// video-key hooks. Factored out of the `.offer` case so it can run either
     /// inline (user already answered) or deferred (via [commitLocalAnswer]).
-    ///
-    /// `sendOpaqueRaw` is a LOCAL closure inside the message handler, so it is
-    /// not in scope here — we use [retrySenderClosure], which the `.offer` case
-    /// captured to exactly that closure (= the WS opaque sender) before buffering.
     private func commitResponderHandshake(wire: String, combined: Data) async throws {
-        guard let sendOpaqueRaw = lock.withLock({ retrySenderClosure }) else {
-            print("[QAudionCallIntegration] commitResponderHandshake: no sender closure captured — cannot send ACCEPT")
-            return
-        }
         try await sendOpaqueRaw(wire)
         try engine.initialize()
         // W479 — Android peer: AdaptivePaddingController-compatible audio
