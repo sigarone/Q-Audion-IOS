@@ -603,6 +603,22 @@ final class AppState: ObservableObject {
                     // We must start capture+playback here, when the user
                     // explicitly accepts, so there is actual audio in the call.
                     self.startIncomingCallAudioOnAnswer()
+                    // SAS-fix: tell the CALLER we answered. On the WS-relay path
+                    // (iOS↔iOS — no WebRTC controller) NOTHING else emits
+                    // call_answer (sendCallAnswer lives only in the WebRTC
+                    // controller), so the caller stays stuck in .ringing and its
+                    // SAS screen never completes ("il chiamante non completa mai
+                    // la schermata SAS"). A bare call_answer (empty SDP) makes the
+                    // caller's W528 handler advance .ringing → .encrypted and
+                    // render the 6 SAS words. WebRTC calls already send their own
+                    // SDP-bearing call_answer from the controller — skip those to
+                    // avoid a duplicate. The bound incoming call_id is attached by
+                    // sendCallAnswer (currentCallId), so the server routes it.
+                    if self.webRtcController == nil,
+                       let peer = self.callContactId,
+                       let calling = self.liveProvider?.callingApi {
+                        Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
+                    }
                 }
             }
             provider.onEndCall = { [weak self] uuid in
@@ -1658,10 +1674,13 @@ final class AppState: ObservableObject {
             // applying the SDP so the pipeline pick has the right
             // negotiated set when ensureVideoSealer() runs at video setup.
             let peerCaps = data["capabilities"] as? [String]
-            if let sdp = data["sdp"] as? String {
+            if let sdp = data["sdp"] as? String, !sdp.isEmpty {
                 self.handleIncomingWebRtcAnswer(sdp: sdp, peerCapabilities: peerCaps)
             } else {
-                print("[AppState] call_answer: no sdp field")
+                // Bare call_answer (no/empty SDP) — the WS-relay path (iOS↔iOS)
+                // signals "answered" without a WebRTC SDP. Skip WebRTC and let
+                // the W528 state-advance below render the SAS on the caller.
+                print("[AppState] call_answer: no/empty sdp — bare answer, advancing state only")
             }
             // W528-fix: caller-side .ringing → .active on answer.
             // wireSasReadyToController no longer transitions from .ringing
