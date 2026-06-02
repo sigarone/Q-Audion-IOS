@@ -57,7 +57,15 @@ final class CallHistoryStore: ObservableObject {
         loading = true
         let persistedRecords = PersistentCallRecordStore.shared.records
         if !persistedRecords.isEmpty {
-            entries = persistedRecords.map { Self.toEntry($0) }
+            // Re-resolve display names at RENDER time against the CURRENT
+            // ContactsStore: a contact added or renamed AFTER the call should
+            // show its name instead of the bare userId stored then, and a peer
+            // with only a PBX extension should show "Int. NNN" rather than the
+            // long UUID truncation ("il numero lungo nella lista chiamate").
+            let stored = ContactsStore().load()
+            var nameMap: [String: String] = [:]
+            for c in stored where !c.displayName.isEmpty { nameMap[c.userId] = c.displayName }
+            entries = persistedRecords.map { Self.toEntry($0, nameByUserId: nameMap) }
         } else {
             // Backwards-compat stub path: builds display-name-resolved
             // outgoing entries from the legacy recentCalls list.
@@ -91,17 +99,33 @@ final class CallHistoryStore: ObservableObject {
     }
 
     /// Convert a persisted record to the UI model used by CallHistoryRow.
-    private static func toEntry(_ record: CallRecord) -> CallHistoryEntry {
+    private static func toEntry(_ record: CallRecord,
+                                nameByUserId: [String: String] = [:]) -> CallHistoryEntry {
         let dir: CallHistoryEntry.Direction
         switch record.direction {
         case .incoming: dir = .incoming
         case .outgoing: dir = .outgoing
         case .missed:   dir = .missed
         }
+        // Display priority: live rubrica name > a stored REAL name (not a UUID
+        // truncation) > PBX extension > stored fallback. Without this the list
+        // shows whatever was resolved at call time forever — a bare
+        // prefix8…suffix4 UUID for peers not yet in the address book.
+        let display: String = {
+            if let n = nameByUserId[record.peerUserId], !n.isEmpty { return n }
+            let s = record.peerDisplayName
+            let isUuidish = s.isEmpty || s == record.peerUserId || s.contains("…")
+            if !isUuidish { return s }
+            if let ext = record.peerExtension, ext > 0 { return "Int. \(ext)" }
+            return s.isEmpty
+                ? PersistentCallRecordStore.resolveDisplayName(
+                    userId: record.peerUserId, wireDisplay: nil, nameByUserId: nameByUserId)
+                : s
+        }()
         return CallHistoryEntry(
             id: record.id,
             peerUserId: record.peerUserId,
-            peerDisplay: record.peerDisplayName,
+            peerDisplay: display,
             direction: dir,
             startedAt: record.startedAt,
             durationSeconds: record.durationSeconds,
