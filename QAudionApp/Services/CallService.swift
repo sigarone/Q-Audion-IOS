@@ -370,15 +370,14 @@ final class CallService {
     ///     kept symmetric with `startCall` for future use).
     ///   - integration: The responder integration built during ringing.
     func activateIncomingCallAudio(engine: QAudionEngine,
-                                   integration: QAudionCallIntegration,
-                                   defaultToSpeaker: Bool = false) throws {
+                                   integration: QAudionCallIntegration) throws {
         // Defensive cleanup: stop any leftover capture from a previous call.
         teardownAudioStack()
 
         let pipeline = AudioProcessingPipeline()
         pipeline.voiceProcessingOverride = CallsGate.anyVoiceProcessingEnabled
         do {
-            try pipeline.configureForVoIP(defaultToSpeaker: defaultToSpeaker)
+            try pipeline.configureForVoIP()
         } catch {
             print("[CallService] activateIncomingCallAudio: AVAudioSession config failed: \(error.localizedDescription)")
         }

@@ -113,12 +113,7 @@ public final class AudioProcessingPipeline {
     /// fails because CallKit hasn't handed over yet, the failure is
     /// swallowed and the real activation arrives via `didActivate`, which
     /// then drives `CallService.startAudioIOIfReady()`.
-    /// Configure `AVAudioSession` for VoIP.
-    /// `defaultToSpeaker`: pass `true` for the WS-relay path (iOS↔iOS) where
-    /// no WebRTC AEC is in play and the earpiece produces inaudible output.
-    /// Pass `false` (default) for WebRTC calls where `.defaultToSpeaker`
-    /// would cause speaker-bleed → mic echo (W557).
-    public func configureForVoIP(defaultToSpeaker: Bool = false) throws {
+    public func configureForVoIP() throws {
         let session = AVAudioSession.sharedInstance()
 
         // Category: playAndRecord for full-duplex VoIP
@@ -160,18 +155,13 @@ public final class AudioProcessingPipeline {
         // environment, they can enable AEC in Settings → Chiamate →
         // Echo Cancellation to re-activate VP-IO. For the common
         // earpiece case, no AEC is needed.
-        var opts: AVAudioSession.CategoryOptions = [
-            .allowBluetoothHFP,
-            .interruptSpokenAudioAndMixWithOthers
-        ]
-        // W557 note: .defaultToSpeaker causes speaker-bleed echo on WebRTC calls
-        // because the mic picks up the speaker output. Only safe for the WS-relay
-        // path (iOS↔iOS) where there is no WebRTC AEC. Caller passes this in.
-        if defaultToSpeaker { opts.insert(.defaultToSpeaker) }
         try session.setCategory(
             .playAndRecord,
             mode: .voiceChat,
-            options: opts
+            options: [
+                .allowBluetoothHFP,
+                .interruptSpokenAudioAndMixWithOthers
+            ]
         )
 
         // Low-latency I/O buffer for real-time VoIP

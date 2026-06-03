@@ -2928,16 +2928,8 @@ final class AppState: ObservableObject {
         // Activate capture + playback. Reuses the existing responder
         // integration so the PQC session key negotiated during ringing
         // is the same one the audio codec uses — no re-keying needed.
-        // Use speaker as default output on the WS-relay path (no WebRTC,
-        // no hardware AEC) — earpiece volume is inaudible unless held to ear.
-        // On WebRTC paths the echo canceller handles the speaker feedback, but
-        // defaultToSpeaker is intentionally off there to avoid bleed artifacts
-        // when the phone IS at the ear (W557). If the user wants speaker/earpiece
-        // they can tap the speaker toggle in InCallScreen.
-        let useSpk = (webRtcController == nil)
         do {
-            try callService.activateIncomingCallAudio(engine: eng, integration: intg,
-                                                       defaultToSpeaker: useSpk)
+            try callService.activateIncomingCallAudio(engine: eng, integration: intg)
         } catch {
             print("[AppState] startIncomingCallAudioOnAnswer: audio activation failed: \(error)")
         }
@@ -3763,6 +3755,13 @@ final class AppState: ObservableObject {
         // Reset transport indicator so the next call doesn't inherit
         // the previous call's transport type (WS relay vs WebRTC).
         backendType = "p2p"  // reset — next call starts assuming direct until ICE says otherwise
+        // Reset audio routing to default (earpiece + proximity sensor) so
+        // the next call does NOT inherit a previous overrideOutputAudioPort(.speaker).
+        // Without this, if the user activated loudspeaker in the previous call,
+        // the next call would start with .speaker override still active → audio
+        // comes out of the external speaker at low perceived volume when
+        // the user holds the phone to their ear expecting the earpiece.
+        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
         // W347 / H-6: tear down the WebRTC bridge for this call.
         // W495 — send WS call_hangup BEFORE closing the peer connection.
         // Old pattern (closeSynchronously THEN Task { hangup() }) was broken:
