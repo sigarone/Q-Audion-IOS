@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import CryptoKit
 import AVFoundation
+import AudioToolbox  // AudioServicesPlayAlertSound (in-app ringtone)
 import QAudionEngine
 #if canImport(WebRTC)
 // W412: needed by the W411 RTCIceServer references inside the
@@ -345,6 +346,9 @@ final class AppState: ObservableObject {
     /// `NSException` (SIGABRT). Tracking the answered UUID makes the answer
     /// idempotent. Reset to nil on call teardown.
     private var answeredCallKitId: UUID?
+    /// In-app ringtone timer (fires every 3 s while callState == .ringing
+    /// and the native CallKit UI is suppressed).
+    private var ringtoneTimer: DispatchSourceTimer?
 
     /// UUID string of the PersistentCallRecord for the current call.
     /// Set in startCall (outgoing) and wireIncomingCallHandlers (incoming).
@@ -1298,6 +1302,14 @@ final class AppState: ObservableObject {
                         // the single-dialer guarantee.
                         if !alreadyRegisteredByPushKit && appForeground {
                             self.callState = .ringing
+                            // In-app ringtone: CallKit (suppressed for in-app dialer) was
+                            // previously the only ring source. Play the system "sms-received"
+                            // sound on repeat every 3 s until the call is answered/declined.
+                            // AudioServicesPlayAlertSound is safe to call on the main thread
+                            // and requires no separate AVAudioSession — it shares the system
+                            // notification channel, which works even when the audio session is
+                            // inactive (i.e. before the user answers).
+                            self.startInAppRingtone()
                         }
                         // C-3: do NOT set isInCall here. Setting it on
                         // call ARRIVAL (before the user answers) blocks
@@ -2916,8 +2928,16 @@ final class AppState: ObservableObject {
         // Activate capture + playback. Reuses the existing responder
         // integration so the PQC session key negotiated during ringing
         // is the same one the audio codec uses — no re-keying needed.
+        // Use speaker as default output on the WS-relay path (no WebRTC,
+        // no hardware AEC) — earpiece volume is inaudible unless held to ear.
+        // On WebRTC paths the echo canceller handles the speaker feedback, but
+        // defaultToSpeaker is intentionally off there to avoid bleed artifacts
+        // when the phone IS at the ear (W557). If the user wants speaker/earpiece
+        // they can tap the speaker toggle in InCallScreen.
+        let useSpk = (webRtcController == nil)
         do {
-            try callService.activateIncomingCallAudio(engine: eng, integration: intg)
+            try callService.activateIncomingCallAudio(engine: eng, integration: intg,
+                                                       defaultToSpeaker: useSpk)
         } catch {
             print("[AppState] startIncomingCallAudioOnAnswer: audio activation failed: \(error)")
         }
@@ -3578,6 +3598,28 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - In-app ringtone (foreground WS calls, no CallKit UI)
+
+    /// Start the in-app ringtone using AudioServicesPlayAlertSound.
+    /// Repeats every 3 s. Safe to call multiple times (idempotent).
+    func startInAppRingtone() {
+        guard ringtoneTimer == nil else { return }
+        // 1005 = "sms-received5.caf" — short, distinctive, non-intrusive.
+        // Using 1000 (classic tring) would clash with system notifications.
+        let soundId: SystemSoundID = 1005
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: 3.0)
+        timer.setEventHandler { AudioServicesPlayAlertSound(soundId) }
+        ringtoneTimer = timer
+        timer.resume()
+    }
+
+    /// Stop the in-app ringtone. Called on answer, decline, or hangup.
+    func stopInAppRingtone() {
+        ringtoneTimer?.cancel()
+        ringtoneTimer = nil
+    }
+
     /// C-2 — terminate the call when WebRTC reports a fatal ICE /
     /// connection state (`.failed` / `.disconnected` / `.closed`).
     /// Without this the controller's onStateChange/onIceConnectionState
@@ -3605,6 +3647,7 @@ final class AppState: ObservableObject {
     /// Uses CXCallController so the same `provider(_:perform:CXAnswerCallAction)`
     /// delegate path fires as when the user taps Answer on the system sheet.
     func answerIncomingCall() {
+        stopInAppRingtone()
         guard let uuid = activeCallKitId else { return }
         Task { try? await callKit?.answerCall(uuid: uuid) }
     }
@@ -3621,6 +3664,7 @@ final class AppState: ObservableObject {
         // already in flight (CallKit onEndCall racing a remote
         // call_hangup) must be a no-op, otherwise we double-hangup the
         // controller and leak the RTCPeerConnection.
+        stopInAppRingtone()
         guard !isEndingCall else { return }
         isEndingCall = true
 

@@ -306,9 +306,15 @@ struct HomeView: View {
                 Text("Chiamata in arrivo")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.85))
-                let name: String = appState.incomingCallerName.isEmpty
-                    ? (appState.callContactId ?? "Sconosciuto")
-                    : appState.incomingCallerName
+                // Use incomingCallerName if resolved; truncate UUID to
+                // prefix8…suffix4 if it's the raw peer ID (same style as
+                // CallHistoryView). Never show 36-char UUID in the banner.
+                let name: String = {
+                    if !appState.incomingCallerName.isEmpty { return appState.incomingCallerName }
+                    let cid = appState.callContactId ?? ""
+                    if cid.count > 12 { return String(cid.prefix(8)) + "…" + String(cid.suffix(4)) }
+                    return cid.isEmpty ? "Sconosciuto" : cid
+                }()
                 Text(name)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)

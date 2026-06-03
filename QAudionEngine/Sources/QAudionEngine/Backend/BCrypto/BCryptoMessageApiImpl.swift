@@ -1,5 +1,9 @@
 import Foundation
 
+public enum BCryptoMessageError: Error {
+    case wsUnavailable  // WS not authenticated within timeout — message not sent
+}
+
 /// Wire-format adapter between the high-level `MessageApi` protocol and the
 /// `bcrypto-server` signaling envelopes (see `internal/signaling/messages.go`
 /// `MsgSendData`, `MsgDeliveredData`, `MsgReadData`, `MsgTypingData`).
@@ -17,6 +21,14 @@ public final class BCryptoMessageApiImpl: MessageApi {
     init(ws: BCryptoWebSocketClient) { self.ws = ws }
 
     public func sendMessage(recipientId: String, content: Data) async throws -> String {
+        // Ensure the WS is live before sending: ws.send() silently drops the
+        // frame if the socket is nil/stale (the iPad WS flaps ~every minute),
+        // the local store marks the message "sent", but the server never sees
+        // it — "messaggio cifrato non arriva". Wait up to 5 s for auth.
+        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        if !ready {
+            throw BCryptoMessageError.wsUnavailable
+        }
         // ClientMsgID is the dedup key — the server echoes it back in
         // the `msg_receive` envelope (alongside the server-assigned UUID
         // in `message_id`). The caller maps client→server IDs so retries
