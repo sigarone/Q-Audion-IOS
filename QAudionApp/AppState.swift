@@ -710,7 +710,14 @@ final class AppState: ObservableObject {
             if let cached = UserDefaults.standard.string(forKey: "currentUserId") {
                 self.currentUserId = cached
             }
-            self.currentUserDialExtension = nil   // always wait for live getProfile()
+            // Pre-fill extension from cache so SettingsScreen hero card shows
+            // "Interno 112" immediately on launch, before getProfile() returns.
+            // The live getProfile() will overwrite with the fresh value (or clear
+            // if the server returns 0). This mirrors how currentUserId is handled.
+            if let cachedExt = UserDefaults.standard.string(forKey: "currentUserDialExtension"),
+               !cachedExt.isEmpty {
+                self.currentUserDialExtension = cachedExt
+            }
             let backendConfig = pinnedConfig(token: token)
             let provider = BCryptoBackendProvider(config: backendConfig)
             Task {
