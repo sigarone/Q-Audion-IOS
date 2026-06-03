@@ -438,19 +438,28 @@ final class CallService {
         // flag + startAudioIOIfReady() starts capture+playback under it.
         // Idempotent: guarded on !audioSessionActive, and the engines guard on
         // their own isRunning flag, so a real didActivate that fires first wins.
+        // Fallback: ensure audio engines start even if CallKit's didActivate
+        // never fires (W520 suppressed call, or CallKit skipping didActivate
+        // because the session was already active). The guard on
+        // !audioSessionActive was WRONG — in rapid call sequences the flag
+        // could be stale from a previous call, silently skipping the fallback
+        // and leaving tx_enc=0 (the "iPhone non codificava" bug).
+        // startAudioIOIfReady() is already idempotent (guards on isRunning),
+        // so calling it unconditionally is safe — worst case it's a no-op.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
             guard let self = self,
-                  !self.audioSessionActive,
                   (self.audioCapture != nil || self.audioPlayback != nil) else { return }
-            print("[CallService] Bug B fallback — CallKit didActivate never fired; forcing session active + starting audio")
-            self.didActivateFallbackFired = true
-            // Force the session active: configureForVoIP's setActive(true) is
-            // best-effort and may not have stuck. Starting the engines under an
-            // INACTIVE session is exactly what produces "connected but silent",
-            // so guarantee it is active before handleAudioSessionActivated()
-            // flips audioSessionActive and starts capture+playback.
-            self.audioPipeline?.activateSession()
-            self.handleAudioSessionActivated()
+            if !self.audioSessionActive {
+                print("[CallService] Bug B fallback — CallKit didActivate never fired; forcing session active + starting audio")
+                self.didActivateFallbackFired = true
+                self.audioPipeline?.activateSession()
+                self.handleAudioSessionActivated()
+            } else {
+                // Session is already active but engines may not have started
+                // (e.g. rapid call sequence where the flag was stale). Poke
+                // startAudioIOIfReady to ensure they're running.
+                self.startAudioIOIfReady()
+            }
         }
     }
 
