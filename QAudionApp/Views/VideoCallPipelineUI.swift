@@ -64,6 +64,8 @@ public struct RemoteVideoDisplay: UIViewRepresentable {
 
     public func makeUIView(context: Context) -> DisplayUIView {
         let v = DisplayUIView()
+        v.contentMode = .scaleAspectFit   // prevent SwiftUI from stretching the UIView
+        v.backgroundColor = .black
         v.attach(pipeline: pipeline)
         return v
     }

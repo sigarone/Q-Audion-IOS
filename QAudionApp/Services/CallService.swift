@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation  // AVAudioSession for speaker override
 import QAudionEngine
 
 final class CallService {

@@ -113,11 +113,13 @@ struct VideoCallView: View {
     private var remoteVideoLayer: some View {
         if let pipeline = appState.videoPipeline {
             RemoteVideoDisplay(pipeline: pipeline)
+                .aspectRatio(contentMode: .fit)
                 .ignoresSafeArea()
         } else {
             #if canImport(WebRTC)
             if let track = appState.remoteWebRtcVideoTrack as? RTCVideoTrack {
                 WebRTCRemoteVideoView(track: track)
+                    .aspectRatio(contentMode: .fit)
                     .ignoresSafeArea()
             } else {
                 remoteVideoFallback
