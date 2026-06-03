@@ -3098,6 +3098,15 @@ final class AppState: ObservableObject {
                     return
                 }
                 RTLog.info("dial", "ext=\(ext) → userId=\(profile.userId.prefix(8))…")
+                // Preserve a human-readable peer label for the call screens.
+                // Dialing a short extension resolves to a bare UUID; without
+                // this the outgoing / in-call screens fall back to the
+                // truncated UUID ("non si capisce perché mostri uid lungo").
+                // Prefer the server display name, else show the dialed
+                // extension as "Int. NNN" — every call screen consults
+                // incomingCallerName as its name fallback (build 595).
+                let dn = (profile.displayName ?? "").trimmingCharacters(in: .whitespaces)
+                self.incomingCallerName = dn.isEmpty ? "Int. \(ext)" : dn
                 await startCall(contactId: profile.userId, video: video)
                 return
             } catch {
@@ -3121,6 +3130,9 @@ final class AppState: ObservableObject {
                     errorMessage = "Numero \(normalized) non risulta tra gli utenti registrati."
                     return
                 }
+                // Same UUID-leak fix as the extension branch: show the dialed
+                // E.164 number on the call screens instead of the raw UUID.
+                self.incomingCallerName = normalized
                 await startCall(contactId: userId, video: video)
                 return
             } catch {
