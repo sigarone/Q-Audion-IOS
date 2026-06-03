@@ -1,5 +1,41 @@
 import SwiftUI
 import QAudionEngine
+import MediaPlayer   // MPVolumeView — keeps AVAudioSession KVO alive
+
+// MARK: - Shake-to-report (W559 enhancement)
+// iOS delivers shake gestures via UIResponder.motionBegan. SwiftUI apps
+// have no UIViewController so we inject a hidden UIViewControllerRepresentable
+// that becomes first responder and forwards the motion to BugReporter.
+struct ShakeDetectorView: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> ShakeViewController { ShakeViewController() }
+    func updateUIViewController(_ vc: ShakeViewController, context: Context) {}
+    class ShakeViewController: UIViewController {
+        override var canBecomeFirstResponder: Bool { true }
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated); becomeFirstResponder()
+        }
+        override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
+            guard motion == .motionShake else { return }
+            Task { @MainActor in BugReporter.shared.triggerManualPublic() }
+        }
+    }
+}
+
+// MARK: - MPVolumeView keepalive (W559 enhancement)
+// Keeping an MPVolumeView allocated — even with zero frame, not in the view
+// hierarchy visually — is enough to make iOS route AVAudioSession.outputVolume
+// KVO notifications to the app while it's in foreground. Without it,
+// AVAudioSession is inactive (no audio session category set), and
+// UIKit only changes the RINGER volume silently, never firing the KVO.
+struct HiddenMPVolumeView: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let v = MPVolumeView()
+        v.isHidden = true      // not visible; the mere allocation activates KVO
+        v.alpha = 0.001        // belt-and-suspenders for SwiftUI layout passes
+        return v
+    }
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
+}
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
@@ -33,6 +69,21 @@ struct ContentView: View {
             QAudionSnackbarHost(state: snackbarHost)
             // W559 — bug report overlay (volume-gesture or auto-trigger).
             BugReportOverlay()
+            // W559 enhancement — shake-to-report: hidden ShakeDetectorView
+            // stays first responder and fires BugReporter.triggerManualPublic()
+            // on device shake. Works on ANY screen with no AVAudioSession
+            // dependency. ZeroFrame so it has no visual impact.
+            ShakeDetectorView().frame(width: 0, height: 0)
+            // W559 enhancement — MPVolumeView keepalive: a zero-frame hidden
+            // MPVolumeView activates the AVAudioSession KVO path that
+            // BugReporter's volume observer reads. Without this the KVO
+            // notification is only emitted while an active audio session
+            // exists (i.e. during a call); on all other screens the volume
+            // buttons change the ringer but never fire the KVO → the
+            // up-then-down gesture is silently swallowed. MPVolumeView is
+            // the documented Apple workaround (used by e.g. Shazam,
+            // WhatsApp) for observing outputVolume app-wide.
+            HiddenMPVolumeView().frame(width: 0, height: 0)
         }
         // W559 — show a non-intrusive snackbar when an auto report fires.
         .onReceive(NotificationCenter.default.publisher(for: BugReporter.autoReportNotification)) { note in

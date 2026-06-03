@@ -101,8 +101,16 @@ public final class BugReporter: ObservableObject {
         let first = volumeEvents[0]
         let second = volumeEvents[1]
         let delta = second.date.timeIntervalSince(first.date)
-        // up-then-down or down-then-up within 400ms
-        let isGesture = (first.up != second.up) && delta <= 0.4
+        // Accepted gestures:
+        //   A) up-then-down or down-then-up within 400ms (original)
+        //   B) two rapid presses in the SAME direction within 600ms —
+        //      covers the "both volume buttons simultaneously" case: pressing
+        //      Vol+ and Vol- at the same instant is registered as a SINGLE
+        //      event (one direction), but pressing both within ~300ms produces
+        //      two same-direction events in quick succession.
+        let isOpposite = (first.up != second.up) && delta <= 0.4
+        let isSameRapid = (first.up == second.up) && delta <= 0.6
+        let isGesture = isOpposite || isSameRapid
         guard isGesture else { return }
         volumeEvents.removeAll()
         volumeCooldownUntil = now.addingTimeInterval(5.0)
@@ -128,6 +136,10 @@ public final class BugReporter: ObservableObject {
     }
 
     // MARK: - Trigger paths
+
+    /// Public entry point for shake gesture (ShakeDetectorView in ContentView).
+    /// Same as the private triggerManual() but callable from outside the class.
+    public func triggerManualPublic() { triggerManual() }
 
     private func triggerManual() {
         let screenshot = captureScreen()
