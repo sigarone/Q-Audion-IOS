@@ -2948,13 +2948,9 @@ final class AppState: ObservableObject {
         } catch {
             print("[AppState] startIncomingCallAudioOnAnswer: audio activation failed: \(error)")
         }
-        // Default to speaker so the call is audible without holding the phone
-        // to the ear. overrideOutputAudioPort does NOT change the AVAudioSession
-        // category (so no echo-canceller interference) — it just routes the
-        // output to the built-in speaker. The user can switch to earpiece via
-        // the speaker toggle button in InCallScreen. The route is reset to
-        // .none in endCall() so the next call starts fresh.
-        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+        // Speaker override is now in CallService.handleAudioSessionActivated()
+        // — calling it here (before the session is active) was silently ignored
+        // by iOS, leaving audio on the earpiece (log: out=Receiver).
     }
 
     /// W77: public hook to trigger the first-contact PSK handshake with a

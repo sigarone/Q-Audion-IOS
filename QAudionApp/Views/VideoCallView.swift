@@ -487,9 +487,17 @@ struct VideoCallView: View {
         if let match = contacts.first(where: { $0.userId == id }) {
             peerDisplayName = match.displayName
         } else {
-            peerDisplayName = id.hasPrefix("user-")
-                ? String(id.dropFirst(5)).capitalized
-                : id
+            // Priority: incomingCallerName (resolved to "Int. 112" by
+            // call_incoming handler) → truncated UUID. Never show the full
+            // 36-char UUID on the video call screen.
+            let resolved = appState.incomingCallerName
+            if !resolved.isEmpty {
+                peerDisplayName = resolved
+            } else if id.count > 12 {
+                peerDisplayName = String(id.prefix(8)) + "…" + String(id.suffix(4))
+            } else {
+                peerDisplayName = id
+            }
         }
     }
 }

@@ -264,10 +264,28 @@ struct ContentView: View {
                 outgoingShortNumber = nil
             }
         } else {
-            outgoingDisplayName = id.hasPrefix("user-")
-                ? String(id.dropFirst(5)).capitalized
-                : id
-            outgoingShortNumber = nil
+            // Priority: incomingCallerName (resolved to "Int. 112" by
+            // call_incoming handler for incoming calls) → truncated UUID.
+            // Never show the full 36-char UUID on any call screen.
+            let resolved = appState.incomingCallerName
+            if !resolved.isEmpty {
+                outgoingDisplayName = resolved
+                let toks = resolved.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+                if let num = toks.first(where: { $0.allSatisfy({ $0.isNumber }) }) {
+                    outgoingShortNumber = String(num.prefix(3))
+                } else {
+                    outgoingShortNumber = nil
+                }
+            } else if id.hasPrefix("user-") {
+                outgoingDisplayName = String(id.dropFirst(5)).capitalized
+                outgoingShortNumber = nil
+            } else if id.count > 12 {
+                outgoingDisplayName = String(id.prefix(8)) + "…" + String(id.suffix(4))
+                outgoingShortNumber = nil
+            } else {
+                outgoingDisplayName = id
+                outgoingShortNumber = nil
+            }
         }
     }
 }
