@@ -439,18 +439,31 @@ struct LiveInCallScreen: View {
                 cachedPeerShortNumber = nil
             }
         } else {
-            // Fallback: peer not in contacts. Never show the raw 36-char UUID
-            // on the call screen (user-reported "numero lunghissimo"). Trim a
-            // "user-" prefix if present, else truncate to head…tail like the
-            // profile / call-history / incoming-call paths do.
-            if id.hasPrefix("user-") {
+            // Peer not in contacts. Priority:
+            // 1. incomingCallerName (already resolved from server caller_display
+            //    → "Int. 112") — this is set by call_incoming handler and contains
+            //    the PBX extension even when the peer is not in local contacts.
+            // 2. UUID truncation as last resort (never show 36-char raw UUID).
+            let resolvedFromSignaling = appState.incomingCallerName
+            if !resolvedFromSignaling.isEmpty {
+                cachedPeerDisplayName = resolvedFromSignaling
+                // Extract short number from "Int. 112" → "112"
+                let tokens = resolvedFromSignaling.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+                if let num = tokens.first(where: { $0.allSatisfy({ $0.isNumber }) }) {
+                    cachedPeerShortNumber = String(num.prefix(3))
+                } else {
+                    cachedPeerShortNumber = nil
+                }
+            } else if id.hasPrefix("user-") {
                 cachedPeerDisplayName = String(id.dropFirst(5)).capitalized
+                cachedPeerShortNumber = nil
             } else if id.count > 12 {
                 cachedPeerDisplayName = String(id.prefix(8)) + "…" + String(id.suffix(4))
+                cachedPeerShortNumber = nil
             } else {
                 cachedPeerDisplayName = id
+                cachedPeerShortNumber = nil
             }
-            cachedPeerShortNumber = nil
         }
     }
 

@@ -2948,6 +2948,13 @@ final class AppState: ObservableObject {
         } catch {
             print("[AppState] startIncomingCallAudioOnAnswer: audio activation failed: \(error)")
         }
+        // Default to speaker so the call is audible without holding the phone
+        // to the ear. overrideOutputAudioPort does NOT change the AVAudioSession
+        // category (so no echo-canceller interference) — it just routes the
+        // output to the built-in speaker. The user can switch to earpiece via
+        // the speaker toggle button in InCallScreen. The route is reset to
+        // .none in endCall() so the next call starts fresh.
+        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
     }
 
     /// W77: public hook to trigger the first-contact PSK handshake with a
@@ -3924,6 +3931,18 @@ final class AppState: ObservableObject {
         guard isInCall, !isVideoCall else { return }
         guard let peerId = callContactId, !peerId.isEmpty else {
             RTLog.warn("call", "upgradeToVideo: callContactId nil — aborting")
+            return
+        }
+        // iOS↔iOS WS-relay path: WebRTC controller is nil — start
+        // VideoCallPipeline directly (camera → HEVC → WS relay → HEVC decode).
+        // WebRTC renegotiation is skipped because there is no RTP transceiver.
+        if webRtcController == nil {
+            RTLog.info("call", "upgradeToVideo: iOS↔iOS WS relay — starting VideoCallPipeline directly")
+            isVideoCall = true
+            setCamera(true)
+            Task { @MainActor [weak self] in
+                await self?.startVideoPipeline(for: peerId)
+            }
             return
         }
         RTLog.info("call", "upgradeToVideo: starting WebRTC renegotiation for peer " + peerId.prefix(8).description + "…")
