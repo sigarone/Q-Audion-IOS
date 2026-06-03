@@ -511,10 +511,10 @@ struct LiveInCallScreen: View {
 
     private var liveTransportMode: InCallScreen.TransportMode {
         switch appState.backendType {
-        case "PQC":  return .p2pSrtp
-        case "BCR":  return .bcryptoWsRelay
-        case "STD":  return .turn
-        default:     return .disconnected
+        case "p2p":   return .p2pSrtp        // WebRTC ICE direct
+        case "turn":  return .turn            // WebRTC via TURN relay
+        case "relay": return .bcryptoWsRelay  // bcrypto server WS relay (fallback)
+        default:      return .disconnected
         }
     }
 }

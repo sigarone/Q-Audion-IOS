@@ -178,7 +178,12 @@ final class AppState: ObservableObject {
     // MARK: - Security badge state (updated during call)
     @Published var confidenceLevel: String = "green"  // "green", "yellow", "red"
     @Published var confidenceScore: Float = 0.97
-    @Published var backendType: String = "PQC"  // "PQC", "BCR", "STD"
+    /// Actual media transport in use for the current call.
+    /// "p2p"    — WebRTC ICE direct (host or srflx candidate pair)
+    /// "turn"   — WebRTC ICE via TURN relay (TransportGate.forcesRelay or VPN-TURN)
+    /// "relay"  — bcrypto server WS relay (fallback when P2P not yet negotiated)
+    /// The LiveInCallScreen maps these to TransportMode for the chip label.
+    @Published var backendType: String = "p2p"  // "p2p" | "turn" | "relay"
     @Published var pskActive: Bool = false
     @Published var pskName: String = ""
     @Published var pskFingerprint: String = ""
@@ -1321,6 +1326,26 @@ final class AppState: ObservableObject {
                         integration.didReceiveIncomingCallOffer(
                             callId: callIdStr, callerId: senderId)
                         integration.setLocallyRinging(true)
+                        // P2P iOS↔iOS: the server forwards the caller's
+                        // call_offer payload verbatim inside call_incoming
+                        // (including the "sdp" field from
+                        // BCryptoCallingApiImpl.sendCallOffer). Extract it
+                        // here and hand it to handleIncomingWebRtcOffer so
+                        // the callee starts WebRTC ICE negotiation — the
+                        // same path a desktop or Android callee uses. This
+                        // was the missing piece that forced iOS↔iOS audio
+                        // to fall back on the WS relay even when a direct
+                        // P2P path was available.
+                        if let sdp = data["sdp"] as? String, !sdp.isEmpty {
+                            let caps = data["capabilities"] as? [String]
+                            let vid = (callType == "video")
+                            self.handleIncomingWebRtcOffer(
+                                callerId: senderId,
+                                sdp: sdp,
+                                peerCapabilities: caps,
+                                hasVideo: vid
+                            )
+                        }
                     }
                 }
             }
@@ -3486,7 +3511,7 @@ final class AppState: ObservableObject {
                         // (→ label "TURN"). Otherwise "PQC" (→ "P2P SRTP").
                         let isRelayForced = TransportGate.forcesRelay
                         Task { @MainActor [weak self] in
-                            self?.backendType = isRelayForced ? "STD" : "PQC"
+                            self?.backendType = isRelayForced ? "turn" : "p2p"
                         }
                     default:
                         break
@@ -3693,7 +3718,7 @@ final class AppState: ObservableObject {
         callSasKeySource = .none
         // Reset transport indicator so the next call doesn't inherit
         // the previous call's transport type (WS relay vs WebRTC).
-        backendType = "PQC"
+        backendType = "p2p"  // reset — next call starts assuming direct until ICE says otherwise
         // W347 / H-6: tear down the WebRTC bridge for this call.
         // W495 — send WS call_hangup BEFORE closing the peer connection.
         // Old pattern (closeSynchronously THEN Task { hangup() }) was broken:
@@ -4951,7 +4976,7 @@ extension AppState {
             case .connected, .completed:
                 let isRelayForced = TransportGate.forcesRelay
                 Task { @MainActor [weak self] in
-                    self?.backendType = isRelayForced ? "STD" : "PQC"
+                    self?.backendType = isRelayForced ? "turn" : "p2p"
                 }
             default:
                 break
