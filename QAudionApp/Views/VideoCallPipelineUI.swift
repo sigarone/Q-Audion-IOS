@@ -83,7 +83,7 @@ public struct RemoteVideoDisplay: UIViewRepresentable {
 
         func attach(pipeline: VideoCallPipeline) {
             self.pipeline = pipeline
-            displayLayer.videoGravity = .resizeAspectFill
+            displayLayer.videoGravity = .resizeAspect   // preserve aspect ratio — no distortion on iPad
             // Chain a closure that drops each decoded pixel buffer
             // into our display layer. Wrap in CMSampleBuffer per the
             // AVSampleBufferDisplayLayer contract.

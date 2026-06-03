@@ -352,7 +352,21 @@ struct HomeView: View {
         Button(action: { presentingInCall = true }) {
             HStack {
                 Image(systemName: "phone.fill")
-                Text(appState.callContactId.map { "Chiamata attiva con \($0)" } ?? "Chiamata attiva")
+                // Resolve peer display name (extension, contact, truncated UUID)
+                // — same priority as incoming call banner — never show raw UUID.
+                Text({
+                    guard let cid = appState.callContactId, !cid.isEmpty else { return "Chiamata attiva" }
+                    // Use already-resolved incomingCallerName if set (incoming call).
+                    if !appState.incomingCallerName.isEmpty { return "Chiamata attiva con \(appState.incomingCallerName)" }
+                    // Outgoing: look up in contacts.
+                    let stored = ContactsStore().load()
+                    if let m = stored.first(where: { $0.userId == cid }), !m.displayName.isEmpty {
+                        return "Chiamata attiva con \(m.displayName)"
+                    }
+                    // Extension from dialExtension map if available, else truncate UUID.
+                    if cid.count > 12 { return "Chiamata attiva con \(String(cid.prefix(8)))…\(String(cid.suffix(4)))" }
+                    return "Chiamata attiva con \(cid)"
+                }())
                 Spacer()
                 Text("Tocca per rientrare")
             }

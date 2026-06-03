@@ -18,7 +18,7 @@ struct WebRTCRemoteVideoView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> RTCMTLVideoView {
         let view = RTCMTLVideoView(frame: .zero)
-        view.videoContentMode = .scaleAspectFill
+        view.videoContentMode = .scaleAspectFit   // preserve aspect ratio — no distortion on iPad/iPhone
         context.coordinator.connect(track: track, to: view)
         return view
     }
