@@ -51,7 +51,7 @@ public enum CallsGate {
     //
     // Users who are in loud environments / on speakerphone can still
     // enable AEC in Settings → Chiamate → Echo Cancellation.
-    public static var aecEnabled: Bool { readBool(keyAec, default: true) }  // default ON — prevents acoustic echo between nearby devices
+    public static var aecEnabled: Bool { readBool(keyAec, default: false) }  // VP-IO off by default — enabling it silently breaks tx capture (W556/W591)
     public static var nsEnabled: Bool  { readBool(keyNs,  default: false) }
     public static var agcEnabled: Bool { readBool(keyAgc, default: false) }
 
