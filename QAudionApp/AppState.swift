@@ -1192,7 +1192,15 @@ final class AppState: ObservableObject {
             let sanitisedWireDisplay = StringSanitiser.displayName(rawWireCallerDisplay, fallback: "")
             let wireCallerDisplay: String? = sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay
             let resolvedCallerName: String = {
-                if let cd = wireCallerDisplay, !cd.isEmpty { return cd }
+                if let cd = wireCallerDisplay, !cd.isEmpty {
+                    // The server sets caller_display to the caller's PBX
+                    // extension (a bare integer, e.g. "103") when no custom
+                    // display name is configured. Format it consistently with
+                    // CallHistoryView ("Int. 103") so the banner, CallKit UI
+                    // and call history all show the same string.
+                    if cd.allSatisfy({ $0.isNumber }) { return "Int. \(cd)" }
+                    return cd
+                }
                 let stored = ContactsStore().load()
                 if let match = stored.first(where: { $0.userId == senderId }),
                    !match.displayName.isEmpty {
