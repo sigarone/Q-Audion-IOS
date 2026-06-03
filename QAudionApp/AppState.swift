@@ -2887,9 +2887,6 @@ final class AppState: ObservableObject {
         // to handleIncomingEncryptedFrame, and TX frames are sent to peer.
         if let ws = liveProvider?.getWebSocketClient() {
             callService.wireTransport(wsClient: ws, peerUserId: cid)
-            // Transport indicator: WS relay path confirmed (no WebRTC).
-            // "BCR" → liveTransportMode == .bcryptoWsRelay → label "RELAY".
-            backendType = "BCR"
         }
         // Activate capture + playback. Reuses the existing responder
         // integration so the PQC session key negotiated during ringing
@@ -3168,8 +3165,6 @@ final class AppState: ObservableObject {
                     wsClient: ws,
                     peerUserId: contactId
                 )
-                // Transport indicator: WS relay path confirmed (no WebRTC).
-                backendType = "BCR"
                 // W72: pre-negotiation phase observers (caller side).
                 // Mirror desktop CallController.CallProgressPhase. Lets
                 // the UI distinguish "remote acked our offer" from
