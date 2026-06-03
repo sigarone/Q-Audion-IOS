@@ -2887,6 +2887,9 @@ final class AppState: ObservableObject {
         // to handleIncomingEncryptedFrame, and TX frames are sent to peer.
         if let ws = liveProvider?.getWebSocketClient() {
             callService.wireTransport(wsClient: ws, peerUserId: cid)
+            // Transport indicator: WS relay path confirmed (no WebRTC).
+            // "BCR" → liveTransportMode == .bcryptoWsRelay → label "RELAY".
+            backendType = "BCR"
         }
         // Activate capture + playback. Reuses the existing responder
         // integration so the PQC session key negotiated during ringing
@@ -3165,6 +3168,8 @@ final class AppState: ObservableObject {
                     wsClient: ws,
                     peerUserId: contactId
                 )
+                // Transport indicator: WS relay path confirmed (no WebRTC).
+                backendType = "BCR"
                 // W72: pre-negotiation phase observers (caller side).
                 // Mirror desktop CallController.CallProgressPhase. Lets
                 // the UI distinguish "remote acked our offer" from
@@ -3479,6 +3484,15 @@ final class AppState: ObservableObject {
                         Task { @MainActor [weak self] in
                             self?.handleIceTermination()
                         }
+                    case .connected, .completed:
+                        // Transport indicator: WebRTC path confirmed.
+                        // If the user forced relay (TransportGate.forcesRelay)
+                        // or the VPN routes everything through TURN, show "STD"
+                        // (→ label "TURN"). Otherwise "PQC" (→ "P2P SRTP").
+                        let isRelayForced = TransportGate.forcesRelay
+                        Task { @MainActor [weak self] in
+                            self?.backendType = isRelayForced ? "STD" : "PQC"
+                        }
                     default:
                         break
                     }
@@ -3682,6 +3696,9 @@ final class AppState: ObservableObject {
         // M-10: reset SAS provenance so the next call starts from
         // .none and doesn't inherit this call's .mlKem trust state.
         callSasKeySource = .none
+        // Reset transport indicator so the next call doesn't inherit
+        // the previous call's transport type (WS relay vs WebRTC).
+        backendType = "PQC"
         // W347 / H-6: tear down the WebRTC bridge for this call.
         // W495 — send WS call_hangup BEFORE closing the peer connection.
         // Old pattern (closeSynchronously THEN Task { hangup() }) was broken:
@@ -4935,6 +4952,11 @@ extension AppState {
             case .failed, .disconnected, .closed:
                 Task { @MainActor [weak self] in
                     self?.handleIceTermination()
+                }
+            case .connected, .completed:
+                let isRelayForced = TransportGate.forcesRelay
+                Task { @MainActor [weak self] in
+                    self?.backendType = isRelayForced ? "STD" : "PQC"
                 }
             default:
                 break
