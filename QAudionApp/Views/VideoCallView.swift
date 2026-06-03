@@ -112,14 +112,21 @@ struct VideoCallView: View {
     @ViewBuilder
     private var remoteVideoLayer: some View {
         if let pipeline = appState.videoPipeline {
+            // W562 — fill the whole screen; the AVSampleBufferDisplayLayer's
+            // own .resizeAspect already letterboxes the video keeping its
+            // aspect ratio. The previous SwiftUI .aspectRatio(.fit) on a UIView
+            // with NO intrinsic content size shrank the view, so the layer then
+            // letterboxed inside an already-undersized box → a huge black
+            // border ("enorme cornice nera"). A single aspect stage (the layer)
+            // is correct now that the encoder emits the right portrait dims.
             RemoteVideoDisplay(pipeline: pipeline)
-                .aspectRatio(contentMode: .fit)
                 .ignoresSafeArea()
         } else {
             #if canImport(WebRTC)
             if let track = appState.remoteWebRtcVideoTrack as? RTCVideoTrack {
+                // RTCMTLVideoView already applies .scaleAspectFit internally —
+                // same single-aspect-stage rule as above.
                 WebRTCRemoteVideoView(track: track)
-                    .aspectRatio(contentMode: .fit)
                     .ignoresSafeArea()
             } else {
                 remoteVideoFallback
