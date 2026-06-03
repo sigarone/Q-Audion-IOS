@@ -137,21 +137,65 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // The previous order (activate THEN answer) started the audio engine
             // before callIntegration existed → mic/speaker silent, level bars frozen.
             await onAnswerCall?(uuid)
-            let session = AVAudioSession.sharedInstance()
-            try? session.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: [
-                    .allowBluetoothHFP,
-                    .interruptSpokenAudioAndMixWithOthers
-                ]
-            )
-            try? session.setActive(true)
-            onAudioSessionActivated?()
+            // W556-fix — deterministic self-activation with retry. The old
+            // single `try? setActive(true)` could fail silently (swallowed) and
+            // then onAudioSessionActivated() started the engine on an INACTIVE
+            // session → capture.start() failed → silent call. See
+            // activateAudioSessionForAnswer().
+            await activateAudioSessionForAnswer()
             return
         }
         let action = CXAnswerCallAction(call: uuid)
         try await controller.request(CXTransaction(action: action))
+    }
+
+    /// W556-fix — deterministically bring the AVAudioSession to ACTIVE after the
+    /// user answers, then start the audio engine via `onAudioSessionActivated`.
+    ///
+    /// ROOT CAUSE (device logs, build 597): for a FOREGROUND / UI-suppressed
+    /// answer, CallKit does NOT call `provider(_:didActivate:)`. Apple only
+    /// guarantees `didActivate` when CallKit OWNS the session AND performs an
+    /// inactive→active transition; a suppressed call (no
+    /// `reportNewIncomingCall`) — or a session left active by a prior call —
+    /// skips it. The previous code waited for `didActivate` (never came) and a
+    /// racy 0.7s timer fallback whose guard got nilled by a re-entrant
+    /// duplicate `call_incoming`. Net result: the `AVAudioEngine` NEVER started
+    /// → no mic TX and decrypted RX frames never played (total silence both
+    /// directions — the "iPhone non sente e non trasmette nulla" bug).
+    ///
+    /// FIX (validated by external review): self-activate AFTER the answer is
+    /// processed. `setActive(true)` can transiently fail right after the answer
+    /// transaction (`cannotStartPlaying` / `cannotInterruptOthers`), so retry a
+    /// few times with a short delay; only fire `onAudioSessionActivated` once
+    /// the session is genuinely active so the engine start sees a live session.
+    /// Idempotent: if `didActivate` DOES arrive too, `onAudioSessionActivated`
+    /// re-runs harmlessly (the engine guards on its own `isRunning`).
+    private func activateAudioSessionForAnswer() async {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(
+            .playAndRecord,
+            mode: .voiceChat,
+            options: [
+                .allowBluetoothHFP,
+                .interruptSpokenAudioAndMixWithOthers
+            ]
+        )
+        for attempt in 0..<4 {
+            do {
+                try session.setActive(true)
+                print("[CallKitProvider] answer audio session ACTIVE (attempt \(attempt))")
+                onAudioSessionActivated?()
+                return
+            } catch {
+                print("[CallKitProvider] setActive retry \(attempt): \(error.localizedDescription)")
+                try? await Task.sleep(nanoseconds: 120_000_000) // 120 ms
+            }
+        }
+        // Last resort: drive the start anyway. configureForVoIP already did a
+        // best-effort setActive; handleAudioSessionActivated re-checks and any
+        // genuine failure surfaces in the AudioCapture start log.
+        print("[CallKitProvider] setActive never confirmed — forcing engine start")
+        onAudioSessionActivated?()
     }
 
     // MARK: - CXProviderDelegate
@@ -178,6 +222,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         Task {
             await onAnswerCall?(action.callUUID)
             action.fulfill()
+            // W556-fix — guarantee the engine starts even if CallKit never
+            // calls provider(_:didActivate:) (the foreground-answer case). Safe
+            // to self-activate AFTER fulfill: the answer transaction is closed,
+            // so setActive(true) no longer hits the "session activation failed"
+            // race. Idempotent with didActivate if it does arrive.
+            await activateAudioSessionForAnswer()
         }
     }
 

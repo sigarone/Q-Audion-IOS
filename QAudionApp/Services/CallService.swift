@@ -804,13 +804,13 @@ final class CallService {
     public func handleAudioSessionActivated() {
         audioSessionActive = true
         startAudioIOIfReady()
-        // Route audio to the built-in speaker so the call is audible without
-        // holding the phone to the ear. This MUST happen AFTER the session is
-        // active and the engines are started — calling overrideOutputAudioPort
-        // before activation is silently ignored by iOS, or gets reset when the
-        // session (re)activates. The user can switch to earpiece via the
-        // speaker button in InCallScreen (setSpeaker(false)).
-        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+        // EARPIECE is the default route for an encrypted phone call (user
+        // requirement: "gestire il volume della capsula telefonica; lo speaker
+        // esterno va bene solo se lo imposto dall'interfaccia per fare vivavoce").
+        // Do NOT force .speaker here — the .voiceChat session already routes to
+        // the receiver. The user switches to speaker via the in-call button
+        // (overrideOutputAudioPort(.speaker)). The .none reset in endCall keeps
+        // the next call starting on the earpiece.
     }
 
     /// W464 — CallKit released the audio session (call ending or
