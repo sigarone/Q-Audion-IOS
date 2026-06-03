@@ -510,6 +510,32 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         // iOS camera video to the Android peer.
         let nsInt64 = Int64(CMTimeGetSeconds(pts) * 1_000_000_000)
         self.onCapturedPixelBuffer?(pixelBuffer, nsInt64)
+        // W561 — the HEVC encoder dimensions MUST match the actual captured
+        // pixel-buffer dimensions. The capture connection rotates frames to
+        // PORTRAIT (videoRotationAngle=90 → 720x1280), but the encoder was
+        // created at LANDSCAPE 1280x720 (VideoConstants default). VTCompression
+        // Session SCALES a mismatched input to its configured WxH ignoring
+        // aspect ratio, squishing portrait content into a landscape frame → the
+        // peer saw a STRETCHED/distorted image ("formato sbagliato, stretchato").
+        // Reconfigure the encoder to the real buffer size on the first frame
+        // (and whenever it changes, e.g. an ABR preset switch or orientation
+        // flip). setResolution recreates the VTCompressionSession at the new
+        // dims; its first output is a fresh IDR keyframe, so the peer's decoder
+        // re-bootstraps with the correct SPS. Validated by external review:
+        // matching encoder-to-buffer is the robust fix for a mixed iOS/Android
+        // fleet (no reliance on optional rotation signaling).
+        let bw = CVPixelBufferGetWidth(pixelBuffer)
+        let bh = CVPixelBufferGetHeight(pixelBuffer)
+        if bw > 0, bh > 0, (bw != self.encoder.width || bh != self.encoder.height) {
+            do {
+                try self.encoder.setResolution(width: bw, height: bh)
+                self.targetWidth = bw
+                self.targetHeight = bh
+                print("[VideoCallPipeline] W561 encoder resized to match capture \(bw)x\(bh)")
+            } catch {
+                print("[VideoCallPipeline] W561 encoder resize failed: \(error)")
+            }
+        }
         // Encode on the capture queue so we don't bounce threads
         // unnecessarily. The encoder uses VTCompressionSession internally
         // which is thread-safe per session; our `lock` in HevcEncoder
