@@ -5,6 +5,19 @@ import AVFoundation
 public final class AudioCapture {
     public var onFrame: ((Data) -> Void)?
     private var engine: AVAudioEngine?
+    // SINGLE-ENGINE FIX — playback player node hosted on the SAME AVAudioEngine
+    // as the capture tap. Two SEPARATE AVAudioEngine instances on one
+    // AVAudioSession both instantiate the single hardware RemoteIO / Voice-
+    // Processing I/O unit; starting the second one tears down the first's
+    // OUTPUT route → the session reports "active" and engines report "started"
+    // but NO PCM ever reaches the DAC → total silence in BOTH directions
+    // (capture/input keeps working, which is why tx_enc grew while nobody heard
+    // anything). Confirmed independently by OpenRouter (large) + Gemini + the
+    // RemoteIO mechanism. One engine owning BOTH the input tap and the player
+    // node fixes it — and lets VP-IO's AEC reference the playback for echo
+    // cancellation, the canonical VoIP graph.
+    private var playerNode: AVAudioPlayerNode?
+    private var playFormat: AVAudioFormat?
     private var isRunning = false
     private let audioPipeline: AudioProcessingPipeline
     // W475 — re-chunking accumulator. `installTap` delivers buffers of
@@ -56,6 +69,13 @@ public final class AudioCapture {
             interleaved: true
         )!
 
+        // SINGLE-ENGINE FIX — attach + connect the PLAYBACK player node on the
+        // SAME engine that owns the capture tap, BEFORE engine.start(), so the
+        // one RemoteIO/VPIO unit drives both mic-in and speaker-out.
+        let player = AVAudioPlayerNode()
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+
         let pipeline = self.audioPipeline
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: format) { [weak self] buffer, _ in
             guard let self, let int16Data = buffer.int16ChannelData else { return }
@@ -90,14 +110,36 @@ public final class AudioCapture {
             }
         }
 
-        // 5. Start the engine
+        // 5. Start the engine, then the player node (single engine drives both).
+        engine.prepare()
         try engine.start()
+        player.play()
         self.engine = engine
+        self.playerNode = player
+        self.playFormat = format
         isRunning = true
 
         // 6. M-12 — observe AVAudioSession interruptions so we can
         //    pause on .began and resume on .ended (.shouldResume).
         registerInterruptionObserver()
+    }
+
+    /// SINGLE-ENGINE FIX — schedule a decoded PCM frame for playback on the
+    /// player node that lives on THIS capture engine. Replaces the old separate
+    /// `AudioPlayback`, which ran a SECOND AVAudioEngine and was therefore mute.
+    public func playFrame(_ pcmData: Data) {
+        guard isRunning, let player = playerNode, let fmt = playFormat else { return }
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: fmt,
+            frameCapacity: AVAudioFrameCount(AudioConstants.samplesPerFrame)
+        ) else { return }
+        buffer.frameLength = AVAudioFrameCount(AudioConstants.samplesPerFrame)
+        pcmData.withUnsafeBytes { raw in
+            if let src = raw.baseAddress, let dst = buffer.int16ChannelData?[0] {
+                memcpy(dst, src, min(pcmData.count, AudioConstants.bytesPerFrame))
+            }
+        }
+        player.scheduleBuffer(buffer, completionHandler: nil)
     }
 
     private func registerInterruptionObserver() {
@@ -124,11 +166,14 @@ public final class AudioCapture {
             // duration of the interruption.
             wasInterrupted = true
             engine?.inputNode.removeTap(onBus: 0)
+            playerNode?.stop()
             if let engine = engine {
                 audioPipeline.disableVoiceProcessing(on: engine)
             }
             engine?.stop()
             engine = nil
+            playerNode = nil
+            playFormat = nil
             isRunning = false
         case .ended:
             guard wasInterrupted else { return }
@@ -160,11 +205,14 @@ public final class AudioCapture {
             interruptionObserver = nil
         }
         engine?.inputNode.removeTap(onBus: 0)
+        playerNode?.stop()
         if let engine = engine {
             audioPipeline.disableVoiceProcessing(on: engine)
         }
         engine?.stop()
         engine = nil
+        playerNode = nil
+        playFormat = nil
         audioPipeline.deactivateSession()
         isRunning = false
     }

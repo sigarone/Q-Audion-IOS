@@ -566,7 +566,7 @@ final class CallService {
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: frame)
                 framesDecryptedRx &+= 1
-                audioPlayback?.playFrame(pcm)
+                audioCapture?.playFrame(pcm)  // single-engine: playback lives on the capture engine
             } catch {
                 rxDecryptErrorCount &+= 1
             }
@@ -649,11 +649,12 @@ final class CallService {
                     self.loggedFirstRxDecrypt = true
                     print("[CallService] RX: first frame DECRYPTED ok — AEAD+Opus decode live")
                 }
-                if let pb = self.audioPlayback {
-                    pb.playFrame(pcm)
+                if let cap = self.audioCapture {
+                    // single-engine: playback runs on the capture engine's player node
+                    cap.playFrame(pcm)
                 } else if !self.loggedRxNoPlayback {
                     self.loggedRxNoPlayback = true
-                    print("[CallService] RX: decrypted frame but audioPlayback is nil — not audible")
+                    print("[CallService] RX: decrypted frame but audioCapture is nil — not audible")
                 }
                 if self.framesDecryptedRx % 250 == 0 {
                     let n: String = self.framesDecryptedRx.description
@@ -766,16 +767,11 @@ final class CallService {
             print("[CallService] audio I/O deferred — waiting for CallKit didActivate")
             return
         }
-        if let playback = audioPlayback {
-            do {
-                try playback.start()
-            } catch {
-                // CLAUDE.md §13 — build the String before the print call.
-                let desc: String = error.localizedDescription
-                let line: String = "[CallService] AudioPlayback start failed: " + desc
-                print(line)
-            }
-        }
+        // SINGLE-ENGINE FIX — start ONE AVAudioEngine only. AudioCapture now
+        // owns both the mic tap AND the playback player node, so there is no
+        // separate AudioPlayback engine to start (a second engine on the same
+        // AVAudioSession muted the output route → total silence). audioPlayback
+        // is left intentionally unused/nil.
         if let capture = audioCapture {
             do {
                 try capture.start()
@@ -785,11 +781,8 @@ final class CallService {
                 print(line)
             }
         }
-        // Bug B diagnostics: reaching here means the session was active and we
-        // attempted to start both engines. Marks that audio I/O is live so the
-        // teardown summary can distinguish "engines never started" (the no-audio
-        // bug) from "started but silent" (decrypt / routing).
-        if audioPlayback != nil || audioCapture != nil {
+        // Diagnostics: mark audio I/O live once the single engine has started.
+        if audioCapture != nil {
             audioEnginesStarted = true
         }
     }
