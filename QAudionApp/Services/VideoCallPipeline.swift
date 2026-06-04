@@ -167,6 +167,13 @@ public final class VideoCallPipeline: NSObject {
                 cont.resume()
             }
         }
+        // W567 — request an immediate IDR keyframe on the first captured
+        // frame. Without this, the remote decoder receives P-frames and
+        // throws "awaitingParameterSets" until the scheduled keyframe
+        // (default: every 2 seconds), causing the video to appear frozen
+        // or very slow. The forced IDR includes VPS/SPS/PPS so the
+        // decoder can bootstrap immediately.
+        encoder.requestForcedKeyFrame()
         startPurgeTimer()
         isRunning = true
     }

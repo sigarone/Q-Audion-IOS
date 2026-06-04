@@ -130,6 +130,15 @@ public final class HevcEncoder: @unchecked Sendable {
     /// Encode one frame. The caller supplies a CVPixelBuffer at the
     /// configured `width`x`height`. Output NAL units are delivered
     /// asynchronously via `onNal`.
+    /// Request the next encoded frame to be a forced IDR keyframe.
+    /// The VTCompressionSession will include VPS/SPS/PPS in the output
+    /// callback so the remote decoder can start immediately.
+    /// Thread-safe (protected by `lock`).
+    public func requestForcedKeyFrame() {
+        lock.lock(); pendingForceKeyFrame = true; lock.unlock()
+    }
+    private var pendingForceKeyFrame = false
+
     public func encode(pixelBuffer: CVPixelBuffer, presentationTimeNs: UInt64? = nil) throws {
         lock.lock()
         guard let session = session else {
@@ -143,7 +152,17 @@ public final class HevcEncoder: @unchecked Sendable {
             pts = CMTime(value: frameIndex, timescale: CMTimeScale(fps))
         }
         frameIndex += 1
+        // W567 — force an IDR keyframe if requested (e.g. at pipeline start)
+        // so the remote decoder gets VPS/SPS/PPS immediately instead of
+        // waiting up to `keyframeIntervalSec` seconds. Cleared after use.
+        let doForce = pendingForceKeyFrame
+        if doForce { pendingForceKeyFrame = false }
         lock.unlock()
+
+        var frameProps: CFDictionary? = nil
+        if doForce {
+            frameProps = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary
+        }
 
         var flags: VTEncodeInfoFlags = []
         let status = VTCompressionSessionEncodeFrame(
@@ -151,7 +170,7 @@ public final class HevcEncoder: @unchecked Sendable {
             imageBuffer: pixelBuffer,
             presentationTimeStamp: pts,
             duration: .invalid,
-            frameProperties: nil,
+            frameProperties: frameProps,
             sourceFrameRefcon: nil,
             infoFlagsOut: &flags
         )

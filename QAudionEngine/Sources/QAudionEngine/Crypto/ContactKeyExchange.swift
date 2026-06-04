@@ -71,6 +71,24 @@ public final class ContactKeyExchange: @unchecked Sendable {
             removeBoundPsk(contactId: contactId)
         }
 
+        // W566 — if the device has no sovereign identity yet (fast-setup /
+        // QR-only users who never completed the X25519 key-gen step), the
+        // ContactKeyExchange has always silently failed with
+        // missingLocalIdentity. Those devices fall back to the deterministic
+        // SHA-256 PSK for outbound messages, but remote peers that DID
+        // complete a key exchange store a REAL PSK → mismatch →
+        // "[messaggio cifrato non leggibile]".
+        // Fix: auto-generate a sovereign X25519+Ed25519 keypair on the fly
+        // and persist it to the keychain. This is safe: the keypair is used
+        // exclusively for the ContactKeyExchange (X25519 DH shared secret
+        // for message PSKs). The new identity is self-signed and never
+        // uploaded to the server — the server uses a separate auth mechanism.
+        // On next `initiate` (immediately after this guard), myX25519PublicKey
+        // will return the new key.
+        if myX25519PublicKey() == nil {
+            let newId = identity.generateIdentity(serverUrl: "", displayName: nil)
+            try? identity.saveIdentity(newId)
+        }
         guard let myPub = myX25519PublicKey() else {
             throw ContactKeyExchangeError.missingLocalIdentity
         }
@@ -84,6 +102,12 @@ public final class ContactKeyExchange: @unchecked Sendable {
     /// Derives + stores the PSK, then replies with `KEY_EXCHANGE_ACCEPT`.
     public func handleOffer(senderId: String, peerPubKey: Data) async {
         do {
+            // W566 — same auto-generate guard as initiate(): if this device
+            // has no sovereign identity it can't respond to OFFERs either.
+            if myX25519PublicKey() == nil {
+                let newId = identity.generateIdentity(serverUrl: "", displayName: nil)
+                try? identity.saveIdentity(newId)
+            }
             try deriveAndStore(contactId: senderId, peerPub: peerPubKey)
             guard let myPub = myX25519PublicKey() else { return }
             let wire = QAudionCapabilityExchange.createKeyExchangeAccept(payload: myPub)
