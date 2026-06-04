@@ -3102,11 +3102,14 @@ final class AppState: ObservableObject {
                 // Dialing a short extension resolves to a bare UUID; without
                 // this the outgoing / in-call screens fall back to the
                 // truncated UUID ("non si capisce perché mostri uid lungo").
-                // Prefer the server display name, else show the dialed
-                // extension as "Int. NNN" — every call screen consults
-                // incomingCallerName as its name fallback (build 595).
+                // The server sets display_name = userId (UUID) for users who
+                // registered via QR/fast-setup without a real display name
+                // (server main.go: "if req.DisplayName == "" { req.DisplayName = id }").
+                // Detect UUID-format strings (36 chars, 4 hyphens) and prefer
+                // the dialed extension "Int. NNN" over the raw UUID.
                 let dn = (profile.displayName ?? "").trimmingCharacters(in: .whitespaces)
-                self.incomingCallerName = dn.isEmpty ? "Int. \(ext)" : dn
+                let looksLikeUUID = dn.count == 36 && dn.filter({ $0 == "-" }).count == 4
+                self.incomingCallerName = (dn.isEmpty || looksLikeUUID) ? "Int. \(ext)" : dn
                 await startCall(contactId: profile.userId, video: video)
                 return
             } catch {
@@ -3764,6 +3767,17 @@ final class AppState: ObservableObject {
         isInCall = false
         isVideoCall = false
         deepfakeAlert = false
+        // W564 — proactively trigger X25519 key exchange with the peer right
+        // before clearing callContactId. After a call both sides have done a
+        // PQC ML-KEM handshake (strong auth) so this is the ideal moment to
+        // also establish the pairwise PSK used for E2EE chat messages.
+        // Without this, the FIRST message sent after a call uses a deterministic
+        // fallback PSK; if one side has a STALE PSK from an old exchange stored
+        // in the vault, the other uses the fallback → mismatch → "[messaggio
+        // cifrato non leggibile]". Triggering now ensures both sides refresh to
+        // a fresh X25519 shared secret before any post-call message is sent.
+        // Fire-and-forget (triggerKeyExchange is try?-wrapped inside).
+        if let peer = callContactId { triggerKeyExchange(with: peer) }
         callContactId = nil
         incomingCallerName = ""
         activeCallKitId = nil
@@ -3993,43 +4007,56 @@ final class AppState: ObservableObject {
     @MainActor
     private func performWebRtcVideoUpgrade(for peerId: String) async {
         #if canImport(WebRTC)
-        guard let controller = webRtcController as? QAudionWebRtcCallController,
-              let provider = liveProvider,
+        guard let provider = liveProvider,
               let impl = provider.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId()
         else {
-            RTLog.warn("call", "upgradeToVideo: WebRTC controller / callId unavailable — leaving call audio-only")
+            RTLog.warn("call", "upgradeToVideo: callId unavailable — leaving call audio-only")
+            return
+        }
+        // W563 — start the WS-HEVC VideoCallPipeline FIRST so iOS↔iOS video
+        // works even when the WebRTC SDP renegotiation fails or is not needed.
+        // Previously, isVideoCall + camera + pipeline were only set AFTER a
+        // successful controller.upgradeToVideo() call. If that threw (e.g.
+        // alreadyHasVideo, videoAddFailed, wrong-state) the caller never
+        // started its camera → zero video from caller, UI appeared "blocked".
+        // The WS-HEVC path is the primary iOS↔iOS video transport; WebRTC
+        // renegotiation is needed for Android/desktop interop but is optional
+        // for iOS↔iOS. Starting the pipeline before the WebRTC path guarantees
+        // the caller's camera is always live.
+        self.isVideoCall = true
+        self.setCamera(true)
+        await startVideoPipeline(for: peerId)
+        RTLog.info("call", "upgradeToVideo: WS-HEVC pipeline started for \(peerId.prefix(8))…")
+
+        // Attempt WebRTC SDP renegotiation for Android/desktop cross-platform.
+        // Failure is non-fatal — the WS-HEVC path above already carries video.
+        guard let controller = webRtcController as? QAudionWebRtcCallController else {
+            RTLog.info("call", "upgradeToVideo: no WebRTC controller — WS-HEVC only (iOS↔iOS)")
             return
         }
         do {
             let offerSdp = try await controller.upgradeToVideo()
-            // Mark the local UI as video BEFORE the peer accepts so
-            // the local preview can show as soon as the camera is on.
-            // If the peer rejects (accepted=false), we revert below.
-            self.isVideoCall = true
-            self.setCamera(true)
             try await impl.sendCallUpgradeRequest(
                 callId: callId,
                 recipientId: peerId,
                 sdp: offerSdp
             )
             RTLog.info("call", "upgradeToVideo: call_upgrade_request shipped — awaiting response")
-            // ALSO bring up the VideoCallPipeline so iOS↔iOS peers get
-            // the WS HEVC stream. The WebRTC RTP path handles Android
-            // + desktop. Both are wired to the same camera frames; no
-            // extra capture session.
-            await startVideoPipeline(for: peerId)
         } catch QAudionWebRtcCallController.ControllerError.alreadyHasVideo {
-            // The peer raced us with their own upgrade. acceptUpgrade
-            // Offer will fire shortly; nothing to do here.
+            // Peer raced us; their upgrade offer arrives via wireUpgradeHandlers.
             RTLog.info("call", "upgradeToVideo: already in video — peer raced us")
         } catch {
-            let desc: String = error.localizedDescription
-            RTLog.warn("call", "upgradeToVideo failed: " + desc)
-            errorMessage = "Upgrade a video fallito: " + desc
+            // WebRTC renegotiation failed — not fatal for iOS↔iOS (WS-HEVC
+            // is already live). Log and continue without surfacing an error.
+            RTLog.warn("call", "upgradeToVideo WebRTC renegotiation failed (non-fatal): " + error.localizedDescription)
         }
         #else
-        RTLog.warn("call", "upgradeToVideo: WebRTC not available in this build")
+        // No WebRTC: go straight to WS-HEVC.
+        self.isVideoCall = true
+        self.setCamera(true)
+        await startVideoPipeline(for: peerId)
+        RTLog.warn("call", "upgradeToVideo: WebRTC not available — WS-HEVC only")
         #endif
     }
 
