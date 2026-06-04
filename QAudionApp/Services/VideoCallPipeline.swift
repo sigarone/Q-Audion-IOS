@@ -154,7 +154,19 @@ public final class VideoCallPipeline: NSObject {
         try await ensurePermission()
         try setupSession()
         try encoder.start()
-        captureSession.startRunning()
+        // W565 — MUST NOT call startRunning() on the main thread.
+        // Apple docs: "Do not call startRunning() on the main thread —
+        // it can block until the hardware is ready, stalling the UI and
+        // triggering a watchdog kill." AppState.startVideoPipeline() is
+        // @MainActor, so without this hop the blocking call lands on the
+        // main thread. Hopping to captureQueue makes it non-blocking for
+        // the caller AND puts the call on the queue that owns the session.
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            captureQueue.async { [weak self] in
+                self?.captureSession.startRunning()
+                cont.resume()
+            }
+        }
         startPurgeTimer()
         isRunning = true
     }
@@ -202,13 +214,14 @@ public final class VideoCallPipeline: NSObject {
     /// reaches the peer with no re-init.
     public func setCameraEnabled(_ enabled: Bool) {
         guard isRunning else { return }
-        if enabled {
-            if !captureSession.isRunning {
-                captureSession.startRunning()
-            }
-        } else {
-            if captureSession.isRunning {
-                captureSession.stopRunning()
+        // W565 — same thread-safety fix as start(): never call
+        // startRunning/stopRunning on the main thread (watchdog risk).
+        captureQueue.async { [weak self] in
+            guard let self = self else { return }
+            if enabled {
+                if !self.captureSession.isRunning { self.captureSession.startRunning() }
+            } else {
+                if self.captureSession.isRunning { self.captureSession.stopRunning() }
             }
         }
     }
