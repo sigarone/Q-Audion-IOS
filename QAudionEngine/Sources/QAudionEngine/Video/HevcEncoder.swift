@@ -138,6 +138,7 @@ public final class HevcEncoder: @unchecked Sendable {
         lock.lock(); pendingForceKeyFrame = true; lock.unlock()
     }
     private var pendingForceKeyFrame = false
+    private var forcedKeyFrameAtIndex: Int64 = -1
 
     public func encode(pixelBuffer: CVPixelBuffer, presentationTimeNs: UInt64? = nil) throws {
         lock.lock()
@@ -151,12 +152,14 @@ public final class HevcEncoder: @unchecked Sendable {
             // Default: monotonic frame counter at fps cadence.
             pts = CMTime(value: frameIndex, timescale: CMTimeScale(fps))
         }
-        frameIndex += 1
-        // W567 — force an IDR keyframe if requested (e.g. at pipeline start)
-        // so the remote decoder gets VPS/SPS/PPS immediately instead of
-        // waiting up to `keyframeIntervalSec` seconds. Cleared after use.
+        // W567-fix v2: record frameIndex before encode if a forced keyframe
+        // is requested, so handleOutput can check if this frame matches.
         let doForce = pendingForceKeyFrame
-        if doForce { pendingForceKeyFrame = false }
+        if doForce {
+            pendingForceKeyFrame = false
+            forcedKeyFrameAtIndex = frameIndex
+        }
+        frameIndex += 1
         lock.unlock()
 
         var frameProps: CFDictionary? = nil
@@ -280,7 +283,7 @@ public final class HevcEncoder: @unchecked Sendable {
         guard let cb = onNal else { return }
 
         // Determine if this is a key frame by inspecting the sync attachment.
-        let isKeyFrame: Bool
+        var isKeyFrame: Bool
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
            let first = attachments.first {
             // NotSync == false means it IS a sync (key) frame.
@@ -288,6 +291,17 @@ public final class HevcEncoder: @unchecked Sendable {
             isKeyFrame = !notSync
         } else {
             isKeyFrame = false
+        }
+
+        // W567-fix v2: if a forced keyframe was requested, the CMSampleBuffer
+        // attachment might not be set correctly by VideoToolbox. Force isKeyFrame=true
+        // for the first NAL of the frame with matching pts.
+        lock.lock()
+        let forcedFrame = forcedKeyFrameAtIndex
+        lock.unlock()
+
+        if forcedFrame >= 0, CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer) == CMTime(value: forcedFrame, timescale: CMTimeScale(fps)) {
+            isKeyFrame = true
         }
 
         // For a key frame, prepend the parameter sets (VPS/SPS/PPS) so the
