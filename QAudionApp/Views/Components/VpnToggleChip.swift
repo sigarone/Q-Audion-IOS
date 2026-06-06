@@ -99,11 +99,11 @@ struct VpnToggleChip: View {
         Task {
             defer { busy = false }
             do {
-                // Fetch node list; fall back to hardcoded Frankfurt on error.
-                let api = VpnApiService()
+                // Fetch node list via VpnService (reuses its persistent
+                // cert-pinned session — no per-tap URLSession allocation).
                 let nodes: [VpnNode]
                 do {
-                    nodes = try await api.getNodes(accessToken: accessToken)
+                    nodes = try await vpnService.fetchNodes(accessToken: accessToken)
                 } catch {
                     nodes = [.frankfurtFallback]
                 }

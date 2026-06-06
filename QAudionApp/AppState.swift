@@ -125,6 +125,16 @@ final class AppState: ObservableObject {
     /// the registration succeeds, subsequent re-emits (rotation /
     /// reinstall) hit `registerVoipPushToken` directly.
     private var pendingVoipPushTokenHex: String?
+    /// SECURITY C-6: cert-pinned URLSession for VoIP push token registration.
+    /// Lazy — created once on first use against the server URL configured at
+    /// login time. Avoids per-call URLSession + thread-pool allocation.
+    ///
+    /// NOTE: captures `serverUrl` at first access (i.e. first push-token
+    /// registration after login). `serverUrl` is always `PinnedServerHost.url`
+    /// today (see line ~275 comment). If serverUrl ever becomes genuinely
+    /// reconfigurable, this property must be reset to nil between logins so
+    /// the next registration pins against the new host.
+    private lazy var voipPushSession: URLSession = PinnedURLSession.make(for: serverUrl)
 
     // MARK: - Contacts cache (W-CC)
     /// In-memory snapshot of ContactsStore, refreshed at app start and on
@@ -1160,9 +1170,12 @@ final class AppState: ObservableObject {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = bodyData
-        Task { [weak self, hex] in
+        // SECURITY C-6 — cert-pinned session for push token registration.
+        // Capture the lazy session once; avoids per-call URLSession allocation.
+        let session = voipPushSession
+        Task { [weak self, hex, session] in
             do {
-                let (_, resp) = try await URLSession.shared.data(for: req)
+                let (_, resp) = try await session.data(for: req)
                 if let http = resp as? HTTPURLResponse {
                     if (200..<300).contains(http.statusCode) {
                         // C-10: token registered OK — do NOT log any

@@ -16,10 +16,13 @@ final class TrackBSyncService {
 
     private let baseURL: URL?
     private let token: String?
+    /// SECURITY C-6 — cert-pinned session for all Track-B sync calls.
+    private let session: URLSession
 
     init(serverUrl: String, accessToken: String?) {
         self.baseURL = URL(string: serverUrl)
         self.token = accessToken
+        self.session = PinnedURLSession.make(for: serverUrl)
     }
 
     /// Convenience init che pesca da AppState. Restituisce nil se non
@@ -145,7 +148,7 @@ final class TrackBSyncService {
     @discardableResult
     private func fireAndLog(_ req: URLRequest, label: String) async -> Bool {
         do {
-            let (_, resp) = try await URLSession.shared.data(for: req)
+            let (_, resp) = try await session.data(for: req)
             if let http = resp as? HTTPURLResponse {
                 let ok = (200..<300).contains(http.statusCode)
                 if !ok {

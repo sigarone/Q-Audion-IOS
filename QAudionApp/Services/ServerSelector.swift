@@ -37,8 +37,7 @@ final class ServerSelector {
     func selectBestServer(provider: BCryptoBackendProvider) async {
         currentProvider = provider
         let baseUrl = provider.config.serverUrl
-        guard let nodes = await fetchServers(baseUrl: baseUrl,
-                                             accessToken: provider.config.accessToken) else { return }
+        guard let nodes = await fetchServers(provider: provider) else { return }
         guard !nodes.isEmpty else { return }
         let ranked = await probeAll(nodes: nodes)
         guard let best = ranked.first else { return }
@@ -59,8 +58,7 @@ final class ServerSelector {
                 guard !Task.isCancelled else { break }
                 guard let p = self.currentProvider else { break }
                 let baseUrl = p.config.serverUrl
-                let token = p.config.accessToken
-                guard let nodes = await self.fetchServers(baseUrl: baseUrl, accessToken: token) else { continue }
+                guard let nodes = await self.fetchServers(provider: p) else { continue }
                 let ranked = await self.probeAll(nodes: nodes)
                 guard let best = ranked.first else { continue }
                 let currentRtt = await self.measureRtt(url: baseUrl + "/api/v1/health") ?? Double.infinity
@@ -83,14 +81,15 @@ final class ServerSelector {
         let rtt: Double
     }
 
-    private func fetchServers(baseUrl: String, accessToken: String?) async -> [[String: Any]]? {
-        guard let token = accessToken, !token.isEmpty else { return nil }
-        let cleaned = baseUrl.trimmingCharacters(in: .init(charactersIn: "/"))
+    /// SECURITY C-6 — uses the provider's cert-pinned BCryptoRestClient session.
+    private func fetchServers(provider: BCryptoBackendProvider) async -> [[String: Any]]? {
+        guard let token = provider.config.accessToken, !token.isEmpty else { return nil }
+        let cleaned = provider.config.serverUrl.trimmingCharacters(in: .init(charactersIn: "/"))
         guard let url = URL(string: "\(cleaned)/api/v1/servers") else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let (data, resp) = try await provider.getRestClient().urlSession.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return nil }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let servers = json["servers"] as? [[String: Any]] else { return nil }
