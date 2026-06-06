@@ -4416,7 +4416,11 @@ extension AppState {
                     // HKDF info string is "q-audion-srtp-master-v1:<callId>".
                     // Set pqcCallId BEFORE pqcSessionKey (didSet calls
                     // applyPqcSealerIfPossible which reads pqcCallId).
-                    ctrl.pqcCallId = self.activeCallKitId?.uuidString ?? ""
+                    // M-15: canonical callId = lowercase wire call_id.
+                    // UUID.uuidString is UPPERCASE — lowercased() normalises to
+                    // the same string the other party received from the wire
+                    // (all platforms send the callId lowercase in call_offer).
+                    ctrl.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
                     ctrl.pqcSessionKey = key
                     print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId))")
                 }
