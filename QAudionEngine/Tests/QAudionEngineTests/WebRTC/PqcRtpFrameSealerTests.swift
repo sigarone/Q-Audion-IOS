@@ -57,5 +57,36 @@ final class PqcRtpFrameSealerTests: XCTestCase {
         let receiver = try PqcRtpFrameSealer(pqcSessionKey: key)
         XCTAssertThrowsError(try receiver.open(Data([0x01, 0x02, 0x03])))
     }
+
+    // MARK: - M-15 callId binding
+
+    /// Two sealers with the same key AND the same callId interop correctly.
+    func testSameCallIdInterop() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let sealer   = try PqcRtpFrameSealer(pqcSessionKey: key, callId: "call-A")
+        let receiver = try PqcRtpFrameSealer(pqcSessionKey: key, callId: "call-A")
+        let pt = Data("pqc callid bound".utf8)
+        XCTAssertEqual(try receiver.open(try sealer.seal(pt)), pt)
+    }
+
+    /// Two sealers with the same key but DIFFERENT callIds derive different
+    /// master keys and cannot open each other's frames.
+    func testDifferentCallIdsDontInterop() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let sealer   = try PqcRtpFrameSealer(pqcSessionKey: key, callId: "call-A")
+        let receiver = try PqcRtpFrameSealer(pqcSessionKey: key, callId: "call-B")
+        let wire = try sealer.seal(Data("x".utf8))
+        XCTAssertThrowsError(try receiver.open(wire))
+    }
+
+    /// makeSibling inherits the callId so a send/recv pair on the same
+    /// session can interop regardless of which direction installs the sealer.
+    func testMakeSiblingSharesCallId() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let send = try PqcRtpFrameSealer(pqcSessionKey: key, callId: "call-C")
+        let recv = send.makeSibling()
+        let pt = Data("sibling callid".utf8)
+        XCTAssertEqual(try recv.open(try send.seal(pt)), pt)
+    }
 }
 #endif

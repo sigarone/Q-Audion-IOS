@@ -22,7 +22,8 @@ final class SecurityDashboardContainer: ObservableObject {
         let fingerprint = (try? Fingerprint.format(pubkey: pubkey))
             ?? "????.????.????.????"
 
-        let storedContacts = ContactsStore().load()
+        // Use the AppState cache rather than a fresh ContactsStore decode.
+        let storedContacts = appState.cachedContacts
         let unverifiedCount = storedContacts.filter { !$0.isVerified }.count
 
         viewModel = SecurityDashboardViewModel(

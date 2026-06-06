@@ -132,7 +132,10 @@ final class AppState: ObservableObject {
     /// Use this instead of ContactsStore().load() in hot paths (incoming call,
     /// message receive, outgoing call dial) to avoid a UserDefaults decode
     /// on each event.
-    private var cachedContacts: [ContactsStore.StoredContact] = []
+    /// Internal read access (module-visible) so Views can use the cached
+    /// snapshot directly without re-loading ContactsStore. Mutation is
+    /// private — only refreshContactsCache() may write this.
+    private(set) var cachedContacts: [ContactsStore.StoredContact] = []
     private var contactsCacheObserver: NSObjectProtocol?
 
     // MARK: - Call state
@@ -4409,8 +4412,13 @@ extension AppState {
                 self.callSasKeySource = .mlKem
                 #if canImport(WebRTC)
                 if let ctrl = self.webRtcController as? QAudionWebRtcCallController {
+                    // M-15: bind the derived key to this call session so the
+                    // HKDF info string is "q-audion-srtp-master-v1:<callId>".
+                    // Set pqcCallId BEFORE pqcSessionKey (didSet calls
+                    // applyPqcSealerIfPossible which reads pqcCallId).
+                    ctrl.pqcCallId = self.activeCallKitId?.uuidString ?? ""
                     ctrl.pqcSessionKey = key
-                    print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes)")
+                    print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId))")
                 }
                 #endif
                 // W394: rotate the video pipeline's sealer with the new

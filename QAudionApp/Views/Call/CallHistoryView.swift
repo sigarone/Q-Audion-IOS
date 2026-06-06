@@ -57,20 +57,17 @@ final class CallHistoryStore: ObservableObject {
         loading = true
         let persistedRecords = PersistentCallRecordStore.shared.records
         if !persistedRecords.isEmpty {
-            // Re-resolve display names at RENDER time against the CURRENT
-            // ContactsStore: a contact added or renamed AFTER the call should
-            // show its name instead of the bare userId stored then, and a peer
-            // with only a PBX extension should show "Int. NNN" rather than the
-            // long UUID truncation ("il numero lungo nella lista chiamate").
-            let stored = ContactsStore().load()
+            // Re-resolve display names at RENDER time. Use appState.cachedContacts
+            // (refreshed on every ContactsStore write via .contactsDidChange) to
+            // avoid a UserDefaults decode on each history load/refresh.
+            let stored = appState.cachedContacts
             var nameMap: [String: String] = [:]
             for c in stored where !c.displayName.isEmpty { nameMap[c.userId] = c.displayName }
             entries = persistedRecords.map { Self.toEntry($0, nameByUserId: nameMap) }
         } else {
             // Backwards-compat stub path: builds display-name-resolved
             // outgoing entries from the legacy recentCalls list.
-            // Pre-load ContactsStore once to avoid N disk hits.
-            let stored = ContactsStore().load()
+            let stored = appState.cachedContacts
             var nameMap: [String: String] = [:]
             for c in stored where !c.displayName.isEmpty {
                 nameMap[c.userId] = c.displayName

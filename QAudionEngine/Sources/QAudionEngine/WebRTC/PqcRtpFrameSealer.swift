@@ -64,7 +64,15 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     public static let masterKeySize = 32
 
     private static let salt = Data("qaudion-srtp-salt-v1".utf8)
-    private static let info = Data("q-audion-srtp-master-v1".utf8)
+
+    // M-15: info string bound to the call session (callId). When callId is
+    // non-empty the derived key is unique per call even if (theoretically)
+    // the same ML-KEM session key were reused across two calls.
+    // Format: "q-audion-srtp-master-v1:<callId>" when callId is provided,
+    //         "q-audion-srtp-master-v1" when empty (backward-compat / tests).
+    // ⚠️ CROSS-PLATFORM: Android + Desktop must use the SAME format before
+    // this feature is wire-deployed. Track in the coordinated change ticket.
+    private let info: Data
 
     private let masterKey: SymmetricKey
     private let nonceLock = NSLock()
@@ -97,14 +105,30 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         case truncated
     }
 
-    public init(pqcSessionKey: Data) throws {
+    /// Create a new sealer.
+    ///
+    /// - Parameters:
+    ///   - pqcSessionKey: 32-byte ML-KEM-derived shared secret.
+    ///   - callId: Unique identifier for the call session (e.g. the
+    ///     CallKit UUID string). When non-empty the HKDF info string
+    ///     becomes `"q-audion-srtp-master-v1:<callId>"`, binding the
+    ///     derived key to this specific call session (M-15). Pass `""`
+    ///     for backward-compat / tests where the callId is unknown.
+    ///     ⚠️ Both parties MUST supply the SAME callId; mismatched
+    ///     callIds produce different master keys and interop fails.
+    public init(pqcSessionKey: Data, callId: String = "") throws {
         guard pqcSessionKey.count == 32 else {
             throw SealerError.wrongKeyLength(pqcSessionKey.count)
         }
+        let infoString = callId.isEmpty
+            ? "q-audion-srtp-master-v1"
+            : "q-audion-srtp-master-v1:\(callId)"
+        let info = Data(infoString.utf8)
+        self.info = info
         let derived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: pqcSessionKey),
             salt: Self.salt,
-            info: Self.info,
+            info: info,
             outputByteCount: Self.masterKeySize
         )
         self.masterKey = derived
@@ -112,17 +136,19 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
 
     /// Private designated init reusing an already-derived master key —
     /// used by ``makeSibling()`` so the recv direction shares the key
-    /// material but keeps an independent `counter` (M-13).
-    private init(reusingMasterKey key: SymmetricKey) {
+    /// material AND the call-bound info string (M-13, M-15).
+    private init(reusingMasterKey key: SymmetricKey, info: Data) {
         self.masterKey = key
+        self.info = info
     }
 
     /// M-13 — produce an independent sealer that shares this sealer's
-    /// derived master key but has its own fresh counter (starts at 0).
-    /// Use the original for one direction (seal) and the sibling for
-    /// the other (open) so the two counter spaces never collide.
+    /// derived master key and call-bound info string but has its own
+    /// fresh counter (starts at 0). Use the original for one direction
+    /// (seal) and the sibling for the other (open) so the two counter
+    /// spaces never collide.
     public func makeSibling() -> PqcRtpFrameSealer {
-        return PqcRtpFrameSealer(reusingMasterKey: masterKey)
+        return PqcRtpFrameSealer(reusingMasterKey: masterKey, info: info)
     }
 
     /// Seal one RTP payload. Counter-based nonce so calling repeatedly

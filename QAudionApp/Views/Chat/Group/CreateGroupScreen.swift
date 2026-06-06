@@ -31,17 +31,17 @@ struct CreateGroupScreen: View {
     let onGroupCreated: (UUID) -> Void
 
     init(onGroupCreated: @escaping (UUID) -> Void = { _ in }) {
-        let initial = CreateGroupUiState(
-            contacts: Self.loadContacts()
-        )
-        _state = State(initialValue: initial)
+        // Contacts are loaded from appState.cachedContacts on .onAppear
+        // (available after @EnvironmentObject injection). Initial value
+        // is empty — the view renders an empty picker until appear fires,
+        // which is imperceptible since appear fires synchronously on mount.
+        _state = State(initialValue: CreateGroupUiState(contacts: []))
         self.onGroupCreated = onGroupCreated
     }
 
-    /// Carica i contatti dallo store engine. Statico così init() può
-    /// passare il valore al @State initial senza self-reference.
-    private static func loadContacts() -> [ContactPickerRowUi] {
-        let stored = ContactsStore().load()
+    /// Convert stored contacts to picker rows. Receives the cached snapshot
+    /// from AppState so no UserDefaults decode is needed at call time.
+    private static func makePickerRows(_ stored: [ContactsStore.StoredContact]) -> [ContactPickerRowUi] {
         return stored.map {
             ContactPickerRowUi(
                 userId: $0.userId,
@@ -68,6 +68,13 @@ struct CreateGroupScreen: View {
         }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            // Populate contacts from the AppState cache — zero UserDefaults
+            // overhead since cachedContacts is already loaded at app start.
+            if state.contacts.isEmpty {
+                state.contacts = Self.makePickerRows(appState.cachedContacts)
+            }
+        }
     }
 
     // MARK: - Top bar

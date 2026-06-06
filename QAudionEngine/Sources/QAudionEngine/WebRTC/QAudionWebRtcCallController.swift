@@ -84,6 +84,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// advertised envelope.
     public var advertisedCapabilitiesFilter: ([String]) -> [String] = { $0 }
 
+    /// M-15 — call-session identifier to bind the HKDF-derived PQC key.
+    /// Set this BEFORE (or atomically with) `pqcSessionKey` so the sealer
+    /// uses the bound info string `"q-audion-srtp-master-v1:<pqcCallId>"`.
+    /// Both parties must use the same callId (e.g. the CallKit UUID string).
+    /// ⚠️ Requires coordinated update on Android + Desktop before deployment.
+    public var pqcCallId: String = ""
+
     /// W383: optional PQC session key for the inner SRTP layer.
     /// When set BEFORE startOutgoingCall / acceptIncomingCall, the
     /// controller automatically installs PqcFrameEncryptor /
@@ -878,7 +885,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard let key = pqcSessionKey, key.count == 32 else { return }
         guard let pc = peerConnection else { return }
         do {
-            let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+            // M-15: bind derived key to this call session. pqcCallId is set
+            // by AppState before/alongside pqcSessionKey so both parties
+            // derive the same per-call master key.
+            let sealer = try PqcRtpFrameSealer(pqcSessionKey: key, callId: pqcCallId)
             pc.installPqcSealer(sealer)
             // C-1: installPqcSealer is intentionally a no-op on this
             // WebRTC binary (no RTCFrameEncryptor/Decryptor) — do NOT

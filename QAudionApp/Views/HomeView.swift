@@ -358,8 +358,10 @@ struct HomeView: View {
                     guard let cid = appState.callContactId, !cid.isEmpty else { return "Chiamata attiva" }
                     // Use already-resolved incomingCallerName if set (incoming call).
                     if !appState.incomingCallerName.isEmpty { return "Chiamata attiva con \(appState.incomingCallerName)" }
-                    // Outgoing: look up in contacts.
-                    let stored = ContactsStore().load()
+                    // Outgoing: look up in cached contacts (AppState.cachedContacts,
+                    // refreshed on every ContactsStore write — avoids a UserDefaults
+                    // decode on every in-call banner render).
+                    let stored = appState.cachedContacts
                     if let m = stored.first(where: { $0.userId == cid }), !m.displayName.isEmpty {
                         return "Chiamata attiva con \(m.displayName)"
                     }
@@ -527,15 +529,12 @@ private struct CallsTabView: View {
         return userId
     }
 
-    /// Pull the latest rubrica snapshot from `ContactsStore` and rebuild
-    /// the in-memory dictionary used by `displayNameFor`. Cheap (one
-    /// UserDefaults read + one JSON decode) so safe to call on every
-    /// recents change; the alternative — looking up per-row inline —
-    /// would re-decode for every visible cell on every scroll tick.
+    /// Rebuild the in-memory display-name map from AppState.cachedContacts.
+    /// The cache is already kept fresh by the .contactsDidChange notification
+    /// so this is effectively free (no UserDefaults access, no JSON decode).
     private func reloadContactNameCache() {
-        let stored = ContactsStore().load()
         var map: [String: String] = [:]
-        for c in stored where !c.displayName.isEmpty {
+        for c in appState.cachedContacts where !c.displayName.isEmpty {
             map[c.userId] = c.displayName
         }
         contactNameByUserId = map
