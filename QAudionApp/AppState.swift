@@ -1488,6 +1488,13 @@ final class AppState: ObservableObject {
                 self.isVideoCall = true
                 self.setCamera(true)
                 await self.startVideoPipeline(for: senderId)
+                if self.videoPipeline == nil {
+                    // Camera permission denied or hardware unavailable —
+                    // revert video state. The peer accepted the upgrade
+                    // so audio continues; UI returns to audio-only mode.
+                    self.isVideoCall = false
+                    self.setCamera(false)
+                }
                 RTLog.info("call", "onCallUpgradeRequest accepted — local video pipeline up")
             } catch {
                 let desc: String = error.localizedDescription
@@ -3449,6 +3456,7 @@ final class AppState: ObservableObject {
                     callService.endCall()
                     callState = .idle
                     isInCall = false
+                    isVideoCall = false
                     callContactId = nil
                     return
                 } catch {
@@ -3457,6 +3465,7 @@ final class AppState: ObservableObject {
                     callService.endCall()
                     callState = .idle
                     isInCall = false
+                    isVideoCall = false
                     callContactId = nil
                     return
                 }
