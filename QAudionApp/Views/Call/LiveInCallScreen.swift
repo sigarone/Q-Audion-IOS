@@ -422,12 +422,21 @@ struct LiveInCallScreen: View {
             return
         }
         let stored = contactsStore.load()
-        if let match = stored.first(where: { $0.userId == id }) {
-            cachedPeerDisplayName = match.displayName
+        // W569: sanitise the contact's displayName via StringSanitiser so that
+        // UUID-format names (set by the server when a user registers without a
+        // real display name) are treated as absent rather than displayed raw.
+        // Fall through to the incomingCallerName path when the name is a UUID.
+        let contactSanitised: String? = {
+            guard let m = stored.first(where: { $0.userId == id }) else { return nil }
+            let sanitised = StringSanitiser.displayName(m.displayName, fallback: "")
+            return sanitised.isEmpty ? nil : sanitised
+        }()
+        if let displayName = contactSanitised {
+            cachedPeerDisplayName = displayName
             // Estrai il numero interno dal displayName del contatto usando
             // la stessa logica di QAudionAvatar.initials() — cerca token
             // puramente numerici (es. "103" in "Interno 103").
-            let tokens = match.displayName
+            let tokens = displayName
                 .trimmingCharacters(in: .whitespaces)
                 .split(whereSeparator: { $0.isWhitespace })
                 .map(String.init)

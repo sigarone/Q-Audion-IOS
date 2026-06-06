@@ -283,14 +283,24 @@ public final class HevcEncoder: @unchecked Sendable {
         guard let cb = onNal else { return }
 
         // Determine if this is a key frame by inspecting the sync attachment.
+        // Apple docs: "If kCMSampleAttachmentKey_NotSync is present and kCFBooleanTrue,
+        // the sample is not a sync sample. If this key is absent, the sample is assumed
+        // to be a sync sample." — so the correct default is isKeyFrame = true.
+        // W567 v3: previous code defaulted to `false` in the else branch, which meant
+        // that VideoToolbox keyframes with an absent or empty attachment array were
+        // incorrectly marked as P-frames — the fragmenter never emitted VPS/SPS/PPS,
+        // the remote decoder never bootstrapped, and video appeared frozen/choppy.
         var isKeyFrame: Bool
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
            let first = attachments.first {
-            // NotSync == false means it IS a sync (key) frame.
+            // notSync == false (or absent) → IS a sync (key) frame.
             let notSync = first[kCMSampleAttachmentKey_NotSync] as? Bool ?? false
             isKeyFrame = !notSync
         } else {
-            isKeyFrame = false
+            // No attachments array, or array is empty — per Apple docs this means
+            // the frame IS a sync frame (keyframe). Previously this branch returned
+            // false, suppressing parameter-set emission and breaking the decoder.
+            isKeyFrame = true
         }
 
         // W567-fix v2: if a forced keyframe was requested, the CMSampleBuffer

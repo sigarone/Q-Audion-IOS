@@ -71,6 +71,28 @@ enum StringSanitiser {
         }
         let cleaned = String(out)
         let capped: String = String(cleaned.prefix(maxLength))
-        return capped.isEmpty ? fallback : capped
+        if capped.isEmpty { return fallback }
+        // W569: the server sets display_name = userId (UUID) when a user
+        // registers via QR/fast-setup without a real display name. A 36-char
+        // string with 4 hyphens at canonical UUID positions is not a human
+        // name — treat it the same as empty and fall back. This prevents the
+        // 36-char raw UUID appearing on the call screen and SAS panel.
+        if looksLikeUUID(capped) { return fallback }
+        return capped
+    }
+
+    /// Returns true when `s` has the canonical UUID format:
+    /// XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX (36 chars, hyphens at [8,13,18,23]).
+    private static func looksLikeUUID(_ s: String) -> Bool {
+        guard s.count == 36 else { return false }
+        let arr = Array(s)
+        guard arr[8] == "-", arr[13] == "-", arr[18] == "-", arr[23] == "-" else { return false }
+        // All other positions must be hex digits (0-9, a-f, A-F).
+        let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        let nonHyphen = [0..<8, 9..<13, 14..<18, 19..<23, 24..<36].flatMap { $0 }
+        for i in nonHyphen {
+            guard String(arr[i]).unicodeScalars.allSatisfy({ hexSet.contains($0) }) else { return false }
+        }
+        return true
     }
 }
