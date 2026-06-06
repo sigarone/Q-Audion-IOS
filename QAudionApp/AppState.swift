@@ -4320,7 +4320,10 @@ final class AppState: ObservableObject {
             let backendConfig = pinnedConfig(token: authService.loadToken())
             let provider = BCryptoBackendProvider(config: backendConfig)
             try await provider.initialize()
-            _ = try await provider.messageApi.sendMessage(recipientId: contactId, content: payload)
+            // Pass the same msgId used for AAD so the server echoes it
+            // verbatim and the receiver reconstructs the identical AAD.
+            _ = try await provider.messageApi.sendMessage(
+                recipientId: contactId, content: payload, clientMsgId: messageId)
         } catch {
             errorMessage = "Send failed: \(error.localizedDescription)"
         }

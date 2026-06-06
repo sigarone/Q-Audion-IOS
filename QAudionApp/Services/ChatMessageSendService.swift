@@ -139,9 +139,14 @@ final class ChatMessageSendService {
         do {
             let provider = BCryptoBackendProvider(config: backendConfig)
             try await provider.initialize()
+            // FIX: pass messageId.uuidString as clientMsgId so the server
+            // echoes the exact same UUID the recipient uses to reconstruct
+            // the AAD for AEAD verification. Previously BCryptoMessageApiImpl
+            // generated a NEW UUID here → AAD mismatch → every decrypt failed.
             let serverMsgId = try await provider.messageApi.sendMessage(
                 recipientId: peerUserId,
-                content: wireBlob
+                content: wireBlob,
+                clientMsgId: messageId.uuidString
             )
             if pskFallback {
                 // Wire still went out — caller may decide to flag the

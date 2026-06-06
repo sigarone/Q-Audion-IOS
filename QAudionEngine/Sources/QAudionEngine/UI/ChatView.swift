@@ -64,7 +64,8 @@ public struct ChatView: View {
 
     private func sendMessage() {
         guard !messageText.isEmpty else { return }
-        let msg = ChatMessage(id: UUID().uuidString, text: messageText, isOutgoing: true, timestamp: Date())
+        let msgId = UUID().uuidString
+        let msg = ChatMessage(id: msgId, text: messageText, isOutgoing: true, timestamp: Date())
         messages.append(msg)
         let text = messageText
         messageText = ""
@@ -73,7 +74,10 @@ public struct ChatView: View {
         Task {
             if let msgApi = appState.backend?.messageApi {
                 let encrypted = Data(text.utf8) // In production: encrypt with session key
-                _ = try? await msgApi.sendMessage(recipientId: conversationId, content: encrypted)
+                // Pass msgId so the server echoes it as client_msg_id and
+                // the receiver can reconstruct the correct AAD for AEAD.
+                _ = try? await msgApi.sendMessage(
+                    recipientId: conversationId, content: encrypted, clientMsgId: msgId)
             }
         }
     }

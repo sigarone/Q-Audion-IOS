@@ -20,7 +20,7 @@ public final class BCryptoMessageApiImpl: MessageApi {
     private let ws: BCryptoWebSocketClient
     init(ws: BCryptoWebSocketClient) { self.ws = ws }
 
-    public func sendMessage(recipientId: String, content: Data) async throws -> String {
+    public func sendMessage(recipientId: String, content: Data, clientMsgId: String) async throws -> String {
         // Ensure the WS is live before sending: ws.send() silently drops the
         // frame if the socket is nil/stale (the iPad WS flaps ~every minute),
         // the local store marks the message "sent", but the server never sees
@@ -29,11 +29,14 @@ public final class BCryptoMessageApiImpl: MessageApi {
         if !ready {
             throw BCryptoMessageError.wsUnavailable
         }
-        // ClientMsgID is the dedup key — the server echoes it back in
-        // the `msg_receive` envelope (alongside the server-assigned UUID
-        // in `message_id`). The caller maps client→server IDs so retries
-        // don't duplicate.
-        let clientMsgId = UUID().uuidString
+        // ClientMsgID is the dedup key AND the AEAD AAD component — the
+        // caller MUST pass the same UUID they used in MessageRatchet.encrypt
+        // (or MessageCrypto.encrypt) so that the recipient can reconstruct
+        // the identical AAD for AEAD verification. The server echoes it back
+        // in the `msg_receive` envelope under `client_msg_id`.
+        // BUG-FIX: previously this method generated a NEW UUID here, so the
+        // encrypt-AAD UUID (from the caller) never matched the relay UUID
+        // (generated here) → every v3 ratchet decrypt failed with aeadFailed.
         ws.send(
             type: "msg_send",
             data: [
