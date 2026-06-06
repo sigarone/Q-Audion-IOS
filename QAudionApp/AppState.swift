@@ -1255,7 +1255,7 @@ final class AppState: ObservableObject {
                 }
                 // W-CC: use cached snapshot — avoids a UserDefaults decode
                 // on every incoming call ringing path.
-                if let match = cachedContacts.first(where: { $0.userId == senderId }),
+                if let match = self.cachedContacts.first(where: { $0.userId == senderId }),
                    !match.displayName.isEmpty {
                     return match.displayName
                 }
@@ -2058,7 +2058,7 @@ final class AppState: ObservableObject {
             // W-CC: use cached snapshot — avoids a UserDefaults decode
             // on every incoming message path.
             let resolvedName: String = {
-                if let name = cachedContacts.first(where: { $0.userId == senderId })?.displayName,
+                if let name = self.cachedContacts.first(where: { $0.userId == senderId })?.displayName,
                    !name.isEmpty { return name }
                 if senderId.count > 12 {
                     return String(senderId.prefix(8)) + "…" + String(senderId.suffix(4))
@@ -3253,7 +3253,7 @@ final class AppState: ObservableObject {
         let _outgoingRecordId: String = UUID().uuidString
         let _outgoingPeerDisplay: String = {
             // W-CC: use cached snapshot — avoids a UserDefaults decode on every outgoing dial.
-            let stored = cachedContacts
+            let stored = self.cachedContacts
             var nameMap: [String: String] = [:]
             for c in stored where !c.displayName.isEmpty {
                 nameMap[c.userId] = c.displayName
