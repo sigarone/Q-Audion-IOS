@@ -29,6 +29,15 @@ public final class AudioCapture {
     // interruption ends, silently killing call audio.
     private var interruptionObserver: NSObjectProtocol?
     private var wasInterrupted = false
+    // W571 — route change observer (headset plug/unplug, Bluetooth connect/
+    // disconnect). Without this, when a Bluetooth HFP device disconnects
+    // the AVAudioEngine silently routes to the built-in speaker — correct
+    // routing — but if the built-in microphone is at a different sample
+    // rate or format the engine enters a degraded state: capture tap
+    // continues on the old format → frame-size mismatches → Opus encode
+    // errors or silence. Restarting the engine on route change ensures
+    // the tap format matches the new hardware route.
+    private var routeChangeObserver: NSObjectProtocol?
 
     /// Initialize with an optional audio processing pipeline.
     /// When provided, the pipeline configures AVAudioSession for VoIP and
@@ -151,6 +160,57 @@ public final class AudioCapture {
         ) { [weak self] note in
             self?.handleInterruption(note)
         }
+        // W571 — route change observer. Handles headset plug/unplug and
+        // Bluetooth HFP connect/disconnect. On .oldDeviceUnavailable
+        // (headset removed) the engine may keep running on the now-removed
+        // device route and go silent. Restarting on device unavailability
+        // ensures the engine re-opens on the current hardware (earpiece
+        // or built-in speaker) with the correct format.
+        guard routeChangeObserver == nil else { return }
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            self?.handleRouteChange(note)
+        }
+    }
+
+    private func handleRouteChange(_ note: Notification) {
+        guard let info = note.userInfo,
+              let rawReason = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) else { return }
+        switch reason {
+        case .oldDeviceUnavailable:
+            // A device that was in use (Bluetooth HFP, wired headset) was removed.
+            // AVAudioEngine may go silent if it was using the now-missing device.
+            // Restart to pick up the new route (built-in mic/speaker).
+            print("[AudioCapture] route change: old device unavailable — restarting engine")
+            guard isRunning else { return }
+            engine?.inputNode.removeTap(onBus: 0)
+            playerNode?.stop()
+            if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
+            engine?.stop()
+            engine = nil; playerNode = nil; playFormat = nil; isRunning = false
+            do { try start() }
+            catch { print("[AudioCapture] restart after route change failed: \(error.localizedDescription)") }
+        case .newDeviceAvailable:
+            // New device connected (e.g. Bluetooth HFP). The engine may be
+            // using a lower-quality route; restart to prefer the new device.
+            // This is best-effort — if the user just plugged in headphones
+            // mid-call a single engine restart is fast enough to be imperceptible.
+            guard isRunning else { return }
+            print("[AudioCapture] route change: new device available — restarting engine")
+            engine?.inputNode.removeTap(onBus: 0)
+            playerNode?.stop()
+            if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
+            engine?.stop()
+            engine = nil; playerNode = nil; playFormat = nil; isRunning = false
+            do { try start() }
+            catch { print("[AudioCapture] restart after new device failed: \(error.localizedDescription)") }
+        default:
+            break
+        }
     }
 
     private func handleInterruption(_ note: Notification) {
@@ -204,6 +264,10 @@ public final class AudioCapture {
             NotificationCenter.default.removeObserver(obs)
             interruptionObserver = nil
         }
+        if let obs = routeChangeObserver {
+            NotificationCenter.default.removeObserver(obs)
+            routeChangeObserver = nil
+        }
         engine?.inputNode.removeTap(onBus: 0)
         playerNode?.stop()
         if let engine = engine {
@@ -219,6 +283,9 @@ public final class AudioCapture {
 
     deinit {
         if let obs = interruptionObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        if let obs = routeChangeObserver {
             NotificationCenter.default.removeObserver(obs)
         }
     }

@@ -26,13 +26,25 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// or interrupted). AppState wires this to
     /// `CallService.handleAudioSessionDeactivated()`.
     public var onAudioSessionDeactivated: (() -> Void)?
+    /// W571 — fired when CallKit resets all calls (system-level reset).
+    /// AppState wires this to tear down any active audio/video pipeline
+    /// and clear call state so resources are released properly.
+    public var onProviderReset: (() -> Void)?
 
     public override init() {
         let cfg = CXProviderConfiguration()
         cfg.supportsVideo = true
         cfg.maximumCallsPerCallGroup = 1
+        cfg.maximumCallGroups = 1
         cfg.supportedHandleTypes = [.phoneNumber, .generic]
-        cfg.iconTemplateImageData = nil
+        // W571 — privacy: exclude encrypted VoIP calls from the system
+        // Recents list (default = true leaks call metadata to iOS Recents
+        // which may sync via iCloud). Set false for privacy by design.
+        cfg.includesCallsInRecents = false
+        // W571 — we don't implement hold/resume on the signaling layer;
+        // showing the Hold button in the native CallKit UI would present
+        // a broken affordance. Explicitly disable it.
+        cfg.supportsHolding = false
         cfg.ringtoneSound = nil
         self.provider = CXProvider(configuration: cfg)
         self.controller = CXCallController()
@@ -191,17 +203,30 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 try? await Task.sleep(nanoseconds: 120_000_000) // 120 ms
             }
         }
-        // Last resort: drive the start anyway. configureForVoIP already did a
-        // best-effort setActive; handleAudioSessionActivated re-checks and any
-        // genuine failure surfaces in the AudioCapture start log.
-        print("[CallKitProvider] setActive never confirmed — forcing engine start")
+        // W571 — last resort: fire onAudioSessionActivated anyway. The audio
+        // engine's start() re-checks session state and surfaces real failures
+        // in its own log. NOT firing here would leave the call permanently
+        // silent (engine never starts). The four-retry window (480ms total)
+        // covers transient system audio-session contention; a genuine session
+        // failure (e.g. hardware in use by another app) will surface as
+        // AudioCapture.start() throwing, which produces a user-visible log
+        // and eventually a call-quality banner. This is the lesser evil vs.
+        // a silent dead call.
+        print("[CallKitProvider] setActive never confirmed after 4 attempts — forcing engine start (session may be marginal)")
         onAudioSessionActivated?()
     }
 
     // MARK: - CXProviderDelegate
 
     public func providerDidReset(_ provider: CXProvider) {
-        // System reset — pending calls are gone.
+        // W571 — system-level reset: CallKit has invalidated all active calls.
+        // Delegate cleanup to AppState so audio engine, video pipeline, and
+        // network resources are released; call state is cleared to idle.
+        // Omitting this caused resource leaks (audio engine, WS handlers,
+        // video capture session) on system resets (rare but reproducible
+        // when switching between apps that use CallKit concurrently).
+        callKitRejectedUUIDs.removeAll()
+        onProviderReset?()
     }
 
     public func provider(_ provider: CXProvider, perform action: CXStartCallAction) {

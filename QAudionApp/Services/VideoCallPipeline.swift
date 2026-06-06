@@ -480,10 +480,15 @@ public final class VideoCallPipeline: NSObject {
     }
 
     private func startPurgeTimer() {
-        // Fire every 100ms to evict incomplete inbound frames whose
-        // missing fragments never arrived.
+        // W571 — fire every 200ms (was 100ms) to evict incomplete inbound frames
+        // whose missing fragments never arrived. 100ms was too aggressive for
+        // cellular jitter buffers where frame reassembly can legitimately take
+        // 120-180ms; bumping to 200ms gives the fragmenter a larger window to
+        // receive straggling fragments while still evicting truly lost frames
+        // well within the 2s keyframe interval. Recommendation from multi-LLM
+        // review: typical VoIP jitter buffers use 150-300ms eviction window.
         let timer = DispatchSource.makeTimerSource(queue: captureQueue)
-        timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
+        timer.schedule(deadline: .now() + .milliseconds(200), repeating: .milliseconds(200))
         timer.setEventHandler { [weak self] in
             _ = self?.inboundFragmenter.purgeStaleFrames()
         }

@@ -661,6 +661,25 @@ final class AppState: ObservableObject {
                     self?.callService.handleAudioSessionDeactivated()
                 }
             }
+            // W571 — wire up system-reset cleanup. CallKit may reset all calls
+            // when another CallKit app takes over (e.g. a real phone call), on
+            // app re-launch after a crash, or during suspension recovery.
+            // Without this, audio engine, video capture, and WS call handlers
+            // leaked across resets, causing a corrupted state on the next call.
+            provider.onProviderReset = { [weak self] in
+                Task { @MainActor in
+                    guard let self = self else { return }
+                    RTLog.warn("call", "providerDidReset — tearing down call resources")
+                    self.videoPipeline?.stop()
+                    self.videoPipeline = nil
+                    self.abrController?.stop()
+                    self.abrController = nil
+                    self.callService.handleAudioSessionDeactivated()
+                    self.isInCall = false
+                    self.isVideoCall = false
+                    self.callState = .idle
+                }
+            }
         }
 
         // MARK: PushKit VoIP push registration
@@ -3960,10 +3979,30 @@ final class AppState: ObservableObject {
         // WebRTC renegotiation is skipped because there is no RTP transceiver.
         if webRtcController == nil {
             RTLog.info("call", "upgradeToVideo: iOS↔iOS WS relay — starting VideoCallPipeline directly")
+            // W571 — check camera permission BEFORE flipping isVideoCall.
+            // Previously, isVideoCall=true was set before ensurePermission()
+            // ran inside VideoCallPipeline.start(). On permission denial,
+            // startVideoPipeline returned early but isVideoCall stayed true →
+            // ContentView routed to VideoCallView with no pipeline, showing
+            // a permanently black UI. Now: permission is pre-checked here;
+            // only on .authorized do we flip the flag and start the pipeline.
+            // On .notDetermined we request access inline; on .denied/.restricted
+            // we surface the settings prompt and abort without touching isVideoCall.
+            let camStatus = AVCaptureDevice.authorizationStatus(for: .video)
+            if camStatus == .denied || camStatus == .restricted {
+                errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
+                return
+            }
             isVideoCall = true
             setCamera(true)
             Task { @MainActor [weak self] in
                 await self?.startVideoPipeline(for: peerId)
+                // Rollback if the pipeline failed to start (permission denied
+                // at requestAccess time, or camera unavailable).
+                if let self = self, self.videoPipeline == nil {
+                    self.isVideoCall = false
+                    self.setCamera(false)
+                }
             }
             return
         }
@@ -4024,9 +4063,25 @@ final class AppState: ObservableObject {
         // renegotiation is needed for Android/desktop interop but is optional
         // for iOS↔iOS. Starting the pipeline before the WebRTC path guarantees
         // the caller's camera is always live.
+        //
+        // W571 — pre-check camera permission: if denied, surface the settings
+        // prompt and leave the call in audio-only mode (isVideoCall stays false).
+        let camAuth = AVCaptureDevice.authorizationStatus(for: .video)
+        if camAuth == .denied || camAuth == .restricted {
+            errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
+            return
+        }
         self.isVideoCall = true
         self.setCamera(true)
         await startVideoPipeline(for: peerId)
+        // W571 — rollback if the pipeline failed (permission denied at request
+        // time, camera unavailable, WS missing). videoPipeline is set inside
+        // startVideoPipeline only on success.
+        guard self.videoPipeline != nil else {
+            self.isVideoCall = false
+            self.setCamera(false)
+            return
+        }
         RTLog.info("call", "upgradeToVideo: WS-HEVC pipeline started for \(peerId.prefix(8))…")
 
         // Attempt WebRTC SDP renegotiation for Android/desktop cross-platform.
