@@ -70,6 +70,26 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     private let nonceLock = NSLock()
     private var counter: UInt64 = 0
 
+    // MARK: - Replay protection (open path only — M-14)
+    //
+    // AES-GCM authentication guarantees integrity: a modified or fabricated
+    // frame will fail tag verification. BUT it cannot prevent a recorded
+    // valid frame from being replayed — the (nonce, ciphertext, tag) tuple
+    // is still correct. Adding a 64-frame sliding window on the open()
+    // path blocks replay attacks at negligible cost: one NSLock + two UInt64s.
+    //
+    // The counter is encoded in the on-wire nonce at bytes [4..11] BE, so we
+    // extract it without a separate field. Window size 64 follows RFC 3711
+    // §3.3.2 (SRTP anti-replay), adequate for VoIP where reorder is < 1 s.
+    //
+    // This is a receiver-only change: the sender's seal() path is unchanged,
+    // no wire format differs, and Android/desktop don't need updating.
+    private let replayLock = NSLock()
+    private var replayInitialized = false
+    private var replayHighest: UInt64 = 0   // highest accepted counter
+    private var replayWindow:  UInt64 = 0   // bitmask: bit i → (replayHighest−i) seen
+    private static let replayWindowSize: UInt64 = 64
+
     public enum SealerError: Error, Equatable {
         case wrongKeyLength(Int)
         case sealFailed
@@ -126,14 +146,28 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     }
 
     /// Open one sealed frame. The peer's counter is reflected in the
-    /// nonce we read off the wire, so out-of-order delivery doesn't
-    /// require a window — each frame is self-contained.
+    /// nonce we read off the wire. Out-of-order delivery within the 64-frame
+    /// sliding window is accepted; replayed or excessively late frames are
+    /// rejected (M-14 anti-replay — receiver side only, no wire change).
     public func open(_ sealed: Data) throws -> Data {
         guard sealed.count >= Self.nonceSize + Self.tagSize else {
             throw SealerError.truncated
         }
         let base = sealed.startIndex
         let nonceBytes = sealed.subdata(in: base..<(base + Self.nonceSize))
+        // Extract the 8-byte BE counter from nonce bytes [4..11].
+        let wireCounter: UInt64 = {
+            var v: UInt64 = 0
+            for i in 0..<8 {
+                v = (v << 8) | UInt64(nonceBytes[nonceBytes.startIndex + 4 + i])
+            }
+            return v
+        }()
+        // M-14: reject replays before attempting AEAD open (saves crypto cost
+        // and closes the replay window before the authentication check).
+        guard checkAndUpdateReplay(counter: wireCounter) else {
+            throw SealerError.openFailed
+        }
         let tag = sealed.suffix(Self.tagSize)
         let ct = sealed.subdata(in: (base + Self.nonceSize)..<(sealed.endIndex - Self.tagSize))
         do {
@@ -143,6 +177,34 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         } catch {
             throw SealerError.openFailed
         }
+    }
+
+    /// M-14 — sliding-window anti-replay check. Returns true if the counter
+    /// is fresh and should be accepted; false if it is a replay or falls
+    /// outside the window (too old). Updates the window on acceptance.
+    private func checkAndUpdateReplay(counter: UInt64) -> Bool {
+        replayLock.lock()
+        defer { replayLock.unlock() }
+        if !replayInitialized {
+            replayInitialized = true
+            replayHighest = counter
+            replayWindow = 1   // bit 0 = highest = seen
+            return true
+        }
+        if counter > replayHighest {
+            let shift = counter - replayHighest
+            replayWindow = shift >= Self.replayWindowSize
+                ? 1
+                : (replayWindow >> shift) | 1
+            replayHighest = counter
+            return true
+        }
+        let gap = replayHighest - counter
+        guard gap < Self.replayWindowSize else { return false }   // too old
+        let bit: UInt64 = 1 << gap
+        if (replayWindow & bit) != 0 { return false }   // already seen
+        replayWindow |= bit
+        return true
     }
 
     private func nextNonce() -> Data {

@@ -196,7 +196,7 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
     // MARK: - Maintenance
 
     /// Purge stale incomplete frames that exceeded the reassembly timeout.
-    /// Should be called periodically (e.g., every 100ms). Returns the
+    /// Should be called periodically (e.g., every 200ms). Returns the
     /// number of purged frames.
     /// W398: each purge is also accumulated into a sliding-window
     /// loss counter so the ABR controller can read recent loss rate.

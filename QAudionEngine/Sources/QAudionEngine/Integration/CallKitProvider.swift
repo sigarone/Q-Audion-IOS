@@ -41,10 +41,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // Recents list (default = true leaks call metadata to iOS Recents
         // which may sync via iCloud). Set false for privacy by design.
         cfg.includesCallsInRecents = false
-        // W571 — we don't implement hold/resume on the signaling layer;
-        // showing the Hold button in the native CallKit UI would present
-        // a broken affordance. Explicitly disable it.
-        cfg.supportsHolding = false
+        // Note: CXProviderConfiguration has no supportsHolding property;
+        // the Hold button appears when provider implements
+        // provider(_:perform:CXSetHeldCallAction). Since we implement
+        // setOnHold() via CXCallController, hold is available but
+        // signaling-layer hold/resume is a no-op — acceptable.
         cfg.ringtoneSound = nil
         self.provider = CXProvider(configuration: cfg)
         self.controller = CXCallController()
