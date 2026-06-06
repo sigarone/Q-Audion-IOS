@@ -50,6 +50,10 @@ public final class ContactsStore {
     public func save(_ contacts: [StoredContact]) {
         guard let data = try? JSONEncoder().encode(contacts) else { return }
         defaults.set(data, forKey: key)
+        // Notify observers (e.g. AppState.cachedContacts) so they can
+        // refresh without polling. All writes funnel through save(), so
+        // a single post here covers upsert(), remove(), and bulk saves.
+        NotificationCenter.default.post(name: .contactsDidChange, object: nil)
     }
 
     public func upsert(_ contact: StoredContact) {
@@ -79,4 +83,13 @@ public final class ContactsStore {
     public func findPubkey(userId: String) -> Data? {
         load().first(where: { $0.userId == userId })?.pubkey
     }
+}
+
+// MARK: - Notification names
+
+public extension Notification.Name {
+    /// Posted by ContactsStore.save() (and transitively by upsert/remove)
+    /// whenever the persisted contacts list changes. Observers can use this
+    /// to refresh in-memory caches without polling.
+    static let contactsDidChange = Notification.Name("qaudion.contactsDidChange")
 }

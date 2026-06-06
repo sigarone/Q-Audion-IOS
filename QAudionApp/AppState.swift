@@ -126,6 +126,15 @@ final class AppState: ObservableObject {
     /// reinstall) hit `registerVoipPushToken` directly.
     private var pendingVoipPushTokenHex: String?
 
+    // MARK: - Contacts cache (W-CC)
+    /// In-memory snapshot of ContactsStore, refreshed at app start and on
+    /// every ContactsStore write (via .contactsDidChange notification).
+    /// Use this instead of ContactsStore().load() in hot paths (incoming call,
+    /// message receive, outgoing call dial) to avoid a UserDefaults decode
+    /// on each event.
+    private var cachedContacts: [ContactsStore.StoredContact] = []
+    private var contactsCacheObserver: NSObjectProtocol?
+
     // MARK: - Call state
     @Published var isInCall: Bool = false
     @Published var isVideoCall: Bool = false
@@ -373,6 +382,20 @@ final class AppState: ObservableObject {
     }
 
     func initialize() {
+        // W-CC: warm the contacts cache immediately so incoming-call and
+        // message-receive paths have fresh data without a synchronous disk
+        // decode. The notification observer keeps it current across the session.
+        refreshContactsCache()
+        contactsCacheObserver = NotificationCenter.default.addObserver(
+            forName: .contactsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // NotificationCenter callbacks are @Sendable in iOS 18+ — hop to
+            // MainActor to satisfy the @MainActor isolation of cachedContacts.
+            Task { @MainActor [weak self] in self?.refreshContactsCache() }
+        }
+
         let config = EngineConfig.production()
         let engine = QAudionEngine(config: config)
         do {
@@ -1227,8 +1250,9 @@ final class AppState: ObservableObject {
                     if cd.allSatisfy({ $0.isNumber }) { return "Int. \(cd)" }
                     return cd
                 }
-                let stored = ContactsStore().load()
-                if let match = stored.first(where: { $0.userId == senderId }),
+                // W-CC: use cached snapshot — avoids a UserDefaults decode
+                // on every incoming call ringing path.
+                if let match = cachedContacts.first(where: { $0.userId == senderId }),
                    !match.displayName.isEmpty {
                     return match.displayName
                 }
@@ -2028,9 +2052,10 @@ final class AppState: ObservableObject {
             // W444: resolve peer display name from ContactsStore so the conversation
             // list never shows a raw UUID. Falls back to abbreviated senderId when
             // the peer is not yet in contacts (e.g. first-contact inbound message).
-            let contactsStore = ContactsStore()
+            // W-CC: use cached snapshot — avoids a UserDefaults decode
+            // on every incoming message path.
             let resolvedName: String = {
-                if let name = contactsStore.load().first(where: { $0.userId == senderId })?.displayName,
+                if let name = cachedContacts.first(where: { $0.userId == senderId })?.displayName,
                    !name.isEmpty { return name }
                 if senderId.count > 12 {
                     return String(senderId.prefix(8)) + "…" + String(senderId.suffix(4))
@@ -3037,12 +3062,24 @@ final class AppState: ObservableObject {
         // Views that load additional userIds (chat list with full
         // history) call `presenceService.subscribe(userIds:)` themselves
         // to broaden the tracked set.
-        let contacts = ContactsStore().load().map { $0.userId }
+        // W-CC: refresh cache at auth time so the freshest contacts list
+        // is used for both presence and incoming-call name resolution.
+        refreshContactsCache()
+        let contacts = cachedContacts.map { $0.userId }
         let recents = recentCalls
         let union = Array(Set(contacts + recents)).filter { !$0.isEmpty }
         if !union.isEmpty {
             presenceService.subscribe(userIds: union)
         }
+    }
+
+    // MARK: - W-CC contacts cache
+
+    /// Reload the in-memory contacts snapshot from UserDefaults.
+    /// Called at app start (initialize), on auth success (bindPresenceAfterAuth),
+    /// and automatically whenever ContactsStore posts .contactsDidChange.
+    private func refreshContactsCache() {
+        cachedContacts = ContactsStore().load()
     }
 
     func logout() {
@@ -3212,7 +3249,8 @@ final class AppState: ObservableObject {
         // + startedAt so the record can be matched by endCall(id:).
         let _outgoingRecordId: String = UUID().uuidString
         let _outgoingPeerDisplay: String = {
-            let stored = ContactsStore().load()
+            // W-CC: use cached snapshot — avoids a UserDefaults decode on every outgoing dial.
+            let stored = cachedContacts
             var nameMap: [String: String] = [:]
             for c in stored where !c.displayName.isEmpty {
                 nameMap[c.userId] = c.displayName
