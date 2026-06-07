@@ -233,7 +233,7 @@ struct ChatListScreen: View {
                         let n = container.totalUnread
                         container.markAllAsRead()
                         // W70: replay server-side bulk read-all (best-effort).
-                        if let sync = TrackBSyncService.from(appState) {
+                        if let sync = TrackBSyncService.from(serverUrl: appState.serverUrl, token: appState.authService.loadToken()) {
                             Task { await sync.markAllConversationsRead() }
                         }
                         snackbar?.show(.init(

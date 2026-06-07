@@ -2,6 +2,19 @@ import SwiftUI
 import UIKit
 import QAudionEngine
 
+/// Value-type snapshot of AppState fields needed by DiagnosticsExportContainer.
+/// Extracted at the call site so the container has no direct AppState dependency.
+struct DiagnosticsSnapshot {
+    let isAuthenticated: Bool
+    let hasUserId: Bool
+    let hasToken: Bool
+    let isInCall: Bool
+    let callStateRaw: String
+    let isVideoCall: Bool
+    let hasCallPeer: Bool
+    let errorMessage: String?
+}
+
 /// W48: dev-only diagnostics export. Genera un text dump shareable con
 /// build info, device info, e state non-credenziale dell'app — utile
 /// quando un beta tester vuole mandarci un bug report. **Non** include
@@ -22,7 +35,7 @@ final class DiagnosticsExportContainer: ObservableObject {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
     }
 
-    func generate(appState: AppState) async {
+    func generate(snapshot: DiagnosticsSnapshot) async {
         generating = true
         try? await Task.sleep(nanoseconds: 300_000_000) // UX latency
         var lines: [String] = []
@@ -91,19 +104,19 @@ final class DiagnosticsExportContainer: ObservableObject {
 
         // ─── AUTH STATE (no secrets) ───────────────────────────────
         lines.append("AUTH")
-        lines.append("  authenticated : \(appState.isAuthenticated)")
-        lines.append("  has user id   : \(appState.currentUserId != nil)")
-        lines.append("  has token     : \(appState.authService.loadToken() != nil)")
+        lines.append("  authenticated : \(snapshot.isAuthenticated)")
+        lines.append("  has user id   : \(snapshot.hasUserId)")
+        lines.append("  has token     : \(snapshot.hasToken)")
         let hasDeviceId = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id") != nil
         lines.append("  has device id : \(hasDeviceId)")
         lines.append("")
 
         // ─── CALL STATE ────────────────────────────────────────────
         lines.append("CALL")
-        lines.append("  in call     : \(appState.isInCall)")
-        lines.append("  state       : \(appState.callState.rawValue)")
-        lines.append("  is video    : \(appState.isVideoCall)")
-        lines.append("  has peer    : \(appState.callContactId != nil)")
+        lines.append("  in call     : \(snapshot.isInCall)")
+        lines.append("  state       : \(snapshot.callStateRaw)")
+        lines.append("  is video    : \(snapshot.isVideoCall)")
+        lines.append("  has peer    : \(snapshot.hasCallPeer)")
         lines.append("")
 
         // ─── USERDEFAULTS (count summary, no values) ───────────────
@@ -136,7 +149,7 @@ final class DiagnosticsExportContainer: ObservableObject {
         lines.append("")
 
         // ─── ERRORE ATTUALE ────────────────────────────────────────
-        if let err = appState.errorMessage {
+        if let err = snapshot.errorMessage {
             lines.append("LAST ERROR")
             lines.append("  \(err)")
             lines.append("")
@@ -218,7 +231,16 @@ struct DiagnosticsExportScreen: View {
             // Auto-generate on first appearance so the user sees content
             // immediately rather than a blank "Genera" prompt.
             if container.report.isEmpty {
-                await container.generate(appState: appState)
+                await container.generate(snapshot: DiagnosticsSnapshot(
+                    isAuthenticated: appState.isAuthenticated,
+                    hasUserId: appState.currentUserId != nil,
+                    hasToken: appState.authService.loadToken() != nil,
+                    isInCall: appState.isInCall,
+                    callStateRaw: appState.callState.rawValue,
+                    isVideoCall: appState.isVideoCall,
+                    hasCallPeer: appState.callContactId != nil,
+                    errorMessage: appState.errorMessage
+                ))
             }
         }
     }
@@ -247,7 +269,7 @@ struct DiagnosticsExportScreen: View {
                 }
                 Button {
                     do {
-                        let url = try LogExportService.shared.writeDumpToTempFile(appState: appState)
+                        let url = try LogExportService.shared.writeDumpToTempFile(userId: appState.currentUserId)
                         logShareUrl = url
                         showingLogShare = true
                     } catch {
@@ -266,7 +288,7 @@ struct DiagnosticsExportScreen: View {
                     uploadError = nil
                     Task {
                         do {
-                            let id = try await LogExportService.shared.uploadDump(appState: appState)
+                            let id = try await LogExportService.shared.uploadDump(serverUrl: appState.serverUrl, token: appState.authService.loadToken(), userId: appState.currentUserId)
                             await MainActor.run {
                                 self.uploadFileId = id
                                 self.uploading = false
@@ -444,7 +466,16 @@ struct DiagnosticsExportScreen: View {
 
     private var generateButton: some View {
         Button {
-            Task { await container.generate(appState: appState) }
+            Task { await container.generate(snapshot: DiagnosticsSnapshot(
+                    isAuthenticated: appState.isAuthenticated,
+                    hasUserId: appState.currentUserId != nil,
+                    hasToken: appState.authService.loadToken() != nil,
+                    isInCall: appState.isInCall,
+                    callStateRaw: appState.callState.rawValue,
+                    isVideoCall: appState.isVideoCall,
+                    hasCallPeer: appState.callContactId != nil,
+                    errorMessage: appState.errorMessage
+                )) }
         } label: {
             HStack(spacing: 8) {
                 if container.generating {

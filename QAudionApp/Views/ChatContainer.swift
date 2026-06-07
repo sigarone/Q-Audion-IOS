@@ -129,9 +129,9 @@ final class ChatContainer: ObservableObject {
     /// Late-bind the App-state-bound sender. Idempotent — calling with the
     /// same AppState is a no-op; calling with a different one rebuilds.
     /// Views pass this in via `.environmentObject` once mounted.
-    func attach(appState: AppState) {
-        self.sendService = ChatMessageSendService(appState: appState)
-        self.appState = appState
+    func attach(_ state: AppState) {
+        self.sendService = ChatMessageSendService(appState: state)
+        self.appState = state
         // W76: listen for chat envelope events (msg_receive, typing,
         // delivery / read receipts) relayed from AppState's WS
         // dispatcher. Refresh the local view-model when something

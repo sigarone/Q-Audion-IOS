@@ -25,13 +25,11 @@ final class TrackBSyncService {
         self.session = PinnedURLSession.make(for: serverUrl)
     }
 
-    /// Convenience init che pesca da AppState. Restituisce nil se non
-    /// autenticato (caller deve trattare come no-op silenzioso).
-    static func from(_ appState: AppState) -> TrackBSyncService? {
-        guard let token = appState.authService.loadToken(), !token.isEmpty else {
-            return nil
-        }
-        return TrackBSyncService(serverUrl: appState.serverUrl, accessToken: token)
+    /// Convenience factory. Restituisce nil se non autenticato (caller deve
+    /// trattare come no-op silenzioso).
+    static func from(serverUrl: String, token: String?) -> TrackBSyncService? {
+        guard let token = token, !token.isEmpty else { return nil }
+        return TrackBSyncService(serverUrl: serverUrl, accessToken: token)
     }
 
     // MARK: - 1. Call history

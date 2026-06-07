@@ -21,13 +21,13 @@ final class AppUpdateChecker: ObservableObject {
     @Published private(set) var isChecking: Bool = false
     @Published private(set) var lastChecked: Date?
 
-    private let appState: AppState
+    private let serverUrl: String
     private let currentVersion: String
     /// SECURITY C-6 — cert-pinned session for update checks.
-    private lazy var session: URLSession = PinnedURLSession.make(for: appState.serverUrl)
+    private lazy var session: URLSession = PinnedURLSession.make(for: serverUrl)
 
-    init(appState: AppState, currentVersion: String? = nil) {
-        self.appState = appState
+    init(serverUrl: String, currentVersion: String? = nil) {
+        self.serverUrl = serverUrl
         if let v = currentVersion {
             self.currentVersion = v
         } else if let info = Bundle.main.infoDictionary,
@@ -36,6 +36,11 @@ final class AppUpdateChecker: ObservableObject {
         } else {
             self.currentVersion = "unknown"
         }
+    }
+
+    /// Convenience init for call sites that still hold a full AppState reference.
+    convenience init(appState: AppState, currentVersion: String? = nil) {
+        self.init(serverUrl: appState.serverUrl, currentVersion: currentVersion)
     }
 
     func checkForUpdates() async {
@@ -47,7 +52,7 @@ final class AppUpdateChecker: ObservableObject {
             }
         }
 
-        guard var components = URLComponents(string: appState.serverUrl) else {
+        guard var components = URLComponents(string: serverUrl) else {
             lastResult = .error("Invalid server URL")
             return
         }

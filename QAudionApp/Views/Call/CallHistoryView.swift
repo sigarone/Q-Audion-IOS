@@ -53,26 +53,23 @@ final class CallHistoryStore: ObservableObject {
     /// Refresh from PersistentCallRecordStore. Falls back to
     /// `appState.recentCalls` stubs when the persistent store is empty
     /// (first launch after upgrade from pre-persistent build).
-    func refresh(from appState: AppState) {
+    func refresh(cachedContacts: [ContactsStore.StoredContact], recentCalls: [String]) {
         loading = true
         let persistedRecords = PersistentCallRecordStore.shared.records
         if !persistedRecords.isEmpty {
-            // Re-resolve display names at RENDER time. Use appState.cachedContacts
-            // (refreshed on every ContactsStore write via .contactsDidChange) to
-            // avoid a UserDefaults decode on each history load/refresh.
-            let stored = appState.cachedContacts
+            // Re-resolve display names at RENDER time using the passed snapshot,
+            // avoiding a UserDefaults decode on each history load/refresh.
             var nameMap: [String: String] = [:]
-            for c in stored where !c.displayName.isEmpty { nameMap[c.userId] = c.displayName }
+            for c in cachedContacts where !c.displayName.isEmpty { nameMap[c.userId] = c.displayName }
             entries = persistedRecords.map { Self.toEntry($0, nameByUserId: nameMap) }
         } else {
             // Backwards-compat stub path: builds display-name-resolved
             // outgoing entries from the legacy recentCalls list.
-            let stored = appState.cachedContacts
             var nameMap: [String: String] = [:]
-            for c in stored where !c.displayName.isEmpty {
+            for c in cachedContacts where !c.displayName.isEmpty {
                 nameMap[c.userId] = c.displayName
             }
-            let recents = appState.recentCalls
+            let recents = recentCalls
             let now = Date()
             var out: [CallHistoryEntry] = []
             for (idx, userId) in recents.enumerated() {
@@ -205,14 +202,14 @@ struct CallHistoryView: View {
         // W460: same fix as SettingsScreen — replace deprecated API.
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
-            store.refresh(from: appState)
+            store.refresh(cachedContacts: appState.cachedContacts, recentCalls: appState.recentCalls)
             store.seedWithMockIfEmpty()
         }
         // Reactive refresh: when PersistentCallRecordStore.shared.records
         // changes (e.g. a call just ended and got its endedAt stamped),
         // re-derive the entry list so duration/direction update in-place.
         .onChange(of: persistedStore.records.count) { _ in
-            store.refresh(from: appState)
+            store.refresh(cachedContacts: appState.cachedContacts, recentCalls: appState.recentCalls)
         }
         .sheet(isPresented: $showingDialPad) {
             DialPadSheet(onCall: { dialed in
@@ -253,7 +250,7 @@ struct CallHistoryView: View {
             Button("Cancella", role: .destructive) {
                 store.clearAll()
                 // W70: replay loop server-side (best-effort fire-and-forget).
-                if let sync = TrackBSyncService.from(appState) {
+                if let sync = TrackBSyncService.from(serverUrl: appState.serverUrl, token: appState.authService.loadToken()) {
                     Task { await sync.deleteAllCallHistory() }
                 }
             }
@@ -391,7 +388,7 @@ struct CallHistoryView: View {
                     Button(role: .destructive) {
                         store.deleteEntry(entry.id)
                         // W70: replay server-side (best-effort).
-                        if let sync = TrackBSyncService.from(appState) {
+                        if let sync = TrackBSyncService.from(serverUrl: appState.serverUrl, token: appState.authService.loadToken()) {
                             let id = entry.id
                             Task { await sync.deleteCallHistoryEntry(id) }
                         }
@@ -404,7 +401,7 @@ struct CallHistoryView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(scheme.background)
-        .refreshable { store.refresh(from: appState) }
+        .refreshable { store.refresh(cachedContacts: appState.cachedContacts, recentCalls: appState.recentCalls) }
     }
 
     /// Find existing or create new conversation for a peer, then trigger

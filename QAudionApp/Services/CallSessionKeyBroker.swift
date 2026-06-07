@@ -32,15 +32,23 @@ public final class CallSessionKeyBroker {
     public static let sasReadyNotification = Notification.Name("qaudion.call.sasReady")
     public static let shared = CallSessionKeyBroker()
 
-    private weak var appState: AppState?
+    private var getCallContactId: (() -> String?)?
+    private var setSessionKey: ((Data) -> Void)?
+    private var setPskActive: ((Bool) -> Void)?
 
     public init() {}
 
-    /// W387: AppState is `internal` to QAudionApp, so this method must
-    /// also be `internal` (Swift access-control rule: public method
-    /// can't take an internal parameter type).
-    func bind(to appState: AppState) {
-        self.appState = appState
+    /// Bind the broker to AppState via closures so the type system
+    /// never sees AppState in a function-parameter position.
+    /// Idempotent — re-binding replaces the previous closures.
+    func bind(
+        getCallContactId: @escaping () -> String?,
+        setSessionKey: @escaping (Data) -> Void,
+        setPskActive: @escaping (Bool) -> Void
+    ) {
+        self.getCallContactId = getCallContactId
+        self.setSessionKey = setSessionKey
+        self.setPskActive = setPskActive
     }
 
     /// Call this from the PQC handshake completion path with the
@@ -55,17 +63,18 @@ public final class CallSessionKeyBroker {
     ///             call leg renegotiation), we ignore the late
     ///             arrival.
     public func registerPqcSessionKey(_ sharedSecret: Data, for peerId: String) {
-        guard let appState = appState else { return }
-        guard appState.callContactId == peerId else {
-            print("[CallSessionKeyBroker] late PQC key for \(peerId) — current peer is \(appState.callContactId ?? "nil"); ignoring")
+        guard let currentPeer = getCallContactId?() else { return }
+        guard currentPeer == peerId else {
+            print("[CallSessionKeyBroker] late PQC key for " + peerId + " - current peer is " + currentPeer + "; ignoring")
             return
         }
         guard sharedSecret.count == 32 else {
-            print("[CallSessionKeyBroker] PQC session key wrong length: \(sharedSecret.count)")
+            let len = String(describing: sharedSecret.count)
+            print("[CallSessionKeyBroker] PQC session key wrong length: " + len)
             return
         }
-        appState.callPqcSessionKey = sharedSecret
-        appState.pskActive = true
+        setSessionKey?(sharedSecret)
+        setPskActive?(true)
         NotificationCenter.default.post(
             name: Self.sasReadyNotification,
             object: nil,

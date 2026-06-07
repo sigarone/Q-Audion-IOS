@@ -46,7 +46,7 @@ public final class LogExportService {
 
     /// Compose the dump payload (header + ring buffer snapshot).
     /// Returns Data ready to be uploaded or shared via UIActivityVC.
-    func makeDumpData(appState: AppState) -> Data {
+    func makeDumpData(userId: String?) -> Data {
         var out = String()
         out.reserveCapacity(64 * 1024)
 
@@ -60,7 +60,7 @@ public final class LogExportService {
         // dump body cannot tie a log to a full account identity.
         // server_url is intentionally REMOVED: the server already
         // knows its own URL and embedding it leaks deployment topology.
-        let uidFull: String = appState.currentUserId ?? "<not signed in>"
+        let uidFull: String = userId ?? "<not signed in>"
         let uidShort: String = String(uidFull.prefix(8))
         out.append("user_id       : \(uidShort)\n")
         let bundle = Bundle.main
@@ -127,8 +127,8 @@ public final class LogExportService {
 
     /// Write the dump to a temporary file under `Caches/qaudion-logs/`
     /// and return the URL. Caller can hand this to UIActivityViewController.
-    func writeDumpToTempFile(appState: AppState) throws -> URL {
-        let data = makeDumpData(appState: appState)
+    func writeDumpToTempFile(userId: String?) throws -> URL {
+        let data = makeDumpData(userId: userId)
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("qaudion-logs", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -145,15 +145,15 @@ public final class LogExportService {
     /// Upload the dump to the server via the existing storage API.
     /// Returns the server-side fileId so the user can share it
     /// out-of-band with the maintainer.
-    func uploadDump(appState: AppState) async throws -> String {
-        guard let token = appState.authService.loadToken(), !token.isEmpty else {
+    func uploadDump(serverUrl: String, token: String?, userId: String?) async throws -> String {
+        guard let token = token, !token.isEmpty else {
             throw ExportError.notAuthenticated
         }
-        let data = makeDumpData(appState: appState)
-        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
+        let data = makeDumpData(userId: userId)
+        let backendConfig = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
         let stamp = Int(Date().timeIntervalSince1970)
-        let userPrefix = (appState.currentUserId ?? "anon").prefix(8)
+        let userPrefix = (userId ?? "anon").prefix(8)
         let filename = "qaudion-log-\(userPrefix)-\(stamp).log"
         do {
             let fileId = try await provider.storageApi.uploadFile(data: data, filename: String(filename))

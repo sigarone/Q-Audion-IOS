@@ -116,7 +116,7 @@ struct ContactsScreen: View {
         // W460: same fix as SettingsScreen — replace deprecated API.
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
-            container.attach(appState: appState)
+            container.attach(appState)
             blockedIds = BlockedContactsStore.loadBlockedIds()
         }
         .onChange(of: searchText) { newValue in

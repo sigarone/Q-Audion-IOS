@@ -215,16 +215,20 @@ final class PresenceService: ObservableObject {
         }
     }
 
-    /// Wire Combine to infer the peer's `.inCall` state from AppState
-    /// published properties. Call once from a view's `.onAppear` (e.g.
-    /// `ContactsListView`). Idempotent — duplicate calls replace the
-    /// prior subscription rather than stacking.
+    /// Wire Combine to infer the peer's `.inCall` state from the provided
+    /// published-property streams. Call once from a view's `.onAppear` (e.g.
+    /// `ContactsListView`). Idempotent — duplicate calls replace the prior
+    /// subscription rather than stacking.
     ///
-    /// Rule 16 CLAUDE.md: PresenceService.swift is an EXISTING file so
-    /// taking `AppState` as a parameter is safe (no new-file build failure).
-    func observeCallState(_ appState: AppState) {
+    /// Caller: `appState.presenceService.observeCallState(
+    ///     callContactId: appState.$callContactId.eraseToAnyPublisher(),
+    ///     isInCall: appState.$isInCall.eraseToAnyPublisher())`
+    func observeCallState(
+        callContactId: AnyPublisher<String?, Never>,
+        isInCall: AnyPublisher<Bool, Never>
+    ) {
         callStateCancellables.removeAll()
-        Publishers.CombineLatest(appState.$callContactId, appState.$isInCall)
+        Publishers.CombineLatest(callContactId, isInCall)
             .receive(on: RunLoop.main)
             .sink { [weak self] contactId, inCall in
                 guard let self else { return }

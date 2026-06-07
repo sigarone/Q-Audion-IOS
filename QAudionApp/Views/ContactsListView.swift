@@ -54,10 +54,10 @@ final class ContactsListContainer: ObservableObject {
     /// without forcing every call site (sheet presenters, previews) to
     /// inject one upfront. Idempotent: calling with the same AppState is
     /// a no-op; calling with a different AppState rebuilds the service.
-    func attach(appState: AppState) {
-        if self.appState === appState { return }
-        self.appState = appState
-        self.service = ContactsRefreshService(appState: appState, store: store)
+    func attach(_ state: AppState) {
+        if self.appState === state { return }
+        self.appState = state
+        self.service = ContactsRefreshService(appState: state, store: store)
     }
 
     /// Persists a QR-scanned payload as a verified local contact. Identity
@@ -91,7 +91,7 @@ final class ContactsListContainer: ObservableObject {
             // attendere il prossimo login. Best-effort, se 401/5xx la
             // pending resta nel local store per il replay successivo.
             if let appState = self.appState,
-               let sync = TrackBSyncService.from(appState) {
+               let sync = TrackBSyncService.from(serverUrl: appState.serverUrl, token: appState.authService.loadToken()) {
                 Task { _ = await sync.replayPendingGroupInvites() }
             }
             return false  // non aggiunto come contatto — è un gruppo
@@ -231,8 +231,11 @@ struct ContactsListView: View {
         }
         .refreshable { container.refresh() }
         .onAppear {
-            container.attach(appState: appState)
-            appState.presenceService.observeCallState(appState)
+            container.attach(appState)
+            appState.presenceService.observeCallState(
+                callContactId: appState.$callContactId.eraseToAnyPublisher(),
+                isInCall: appState.$isInCall.eraseToAnyPublisher()
+            )
         }
         // When a chat deep-link is set (e.g. user tapped Chat in ContactDetailView),
         // dismiss this sheet so ChatListScreen can navigate to the conversation.

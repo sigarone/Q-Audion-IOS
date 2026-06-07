@@ -904,7 +904,7 @@ final class AppState: ObservableObject {
     /// per ogni pending. Best-effort, mai blocca l'UI. Chiamato al
     /// completamento di ogni transizione auth → success.
     private func replayPendingTrackB() {
-        guard let sync = TrackBSyncService.from(self) else { return }
+        guard let sync = TrackBSyncService.from(serverUrl: serverUrl, token: authService.loadToken()) else { return }
         Task { _ = await sync.replayPendingGroupInvites() }
     }
 
@@ -943,7 +943,11 @@ final class AppState: ObservableObject {
             // W375: bind the PQC session-key broker so the call
             // handshake completion path can re-seed callPqcSessionKey
             // from the real ML-KEM shared secret once it's available.
-            CallSessionKeyBroker.shared.bind(to: self)
+            CallSessionKeyBroker.shared.bind(
+                getCallContactId: { [weak self] in self?.callContactId },
+                setSessionKey: { [weak self] in self?.callPqcSessionKey = $0 },
+                setPskActive: { [weak self] in self?.pskActive = $0 }
+            )
             // W383: forward broker notifications to the WebRTC
             // controller so the PQC SRTP sealer (W376/W382) gets
             // installed automatically when the handshake key arrives.
@@ -2957,7 +2961,11 @@ final class AppState: ObservableObject {
                 // otherwise a stale/cross-call handshake completion
                 // could race a different call's key into the broker.
                 guard self.callContactId == peerId else { return }
-                CallSessionKeyBroker.shared.bind(to: self)
+                CallSessionKeyBroker.shared.bind(
+                getCallContactId: { [weak self] in self?.callContactId },
+                setSessionKey: { [weak self] in self?.callPqcSessionKey = $0 },
+                setPskActive: { [weak self] in self?.pskActive = $0 }
+            )
                 CallSessionKeyBroker.shared.registerPqcSessionKey(
                     sharedSecret, for: peerId)
             }

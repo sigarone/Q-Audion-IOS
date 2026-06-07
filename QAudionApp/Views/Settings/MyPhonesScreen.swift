@@ -93,7 +93,7 @@ final class MyPhonesContainer: ObservableObject {
     /// in UserDefaults rimane comunque, così l'app funziona offline.
     ///
     /// Parità con Android `SettingsViewModel.pushPeppered(phones:)`.
-    func savePhones(appState: AppState) async {
+    func savePhones(serverUrl: String, token: String?) async {
         savingPhones = true
         error = nil
         defer { savingPhones = false }
@@ -102,13 +102,13 @@ final class MyPhonesContainer: ObservableObject {
         persist()
 
         // 2. Build provider — bail if not signed in (no token).
-        guard let token = appState.authService.loadToken(), !token.isEmpty else {
+        guard let token = token, !token.isEmpty else {
             // Local-only mode: lascia un info-banner nessun-token così l'utente
             // sa che la lista non è stata propagata al server.
             self.error = "Sessione non attiva — numeri salvati solo localmente."
             return
         }
-        let config = BackendConfig.pinned(serverUrl: appState.serverUrl,
+        let config = BackendConfig.pinned(serverUrl: serverUrl,
                                    accessToken: token)
         let provider = BCryptoBackendProvider(config: config)
         let rest = provider.getRestClient()
@@ -372,7 +372,7 @@ struct MyPhonesScreen: View {
     private var saveButton: some View {
         Button {
             Task {
-                await container.savePhones(appState: appState)
+                await container.savePhones(serverUrl: appState.serverUrl, token: appState.authService.loadToken())
                 if container.error == nil {
                     snackbar?.show(.init(
                         text: "Numeri salvati e pubblicati al server.",

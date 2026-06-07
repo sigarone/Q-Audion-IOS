@@ -101,7 +101,7 @@ final class OtaUpdateContainer: ObservableObject {
     /// so QA can see when the catalog was last queried.
     @Published private(set) var lastCheckedAt: Date? = nil
 
-    func check(appState: AppState) async {
+    func check(serverUrl: String) async {
         checking = true
         error = nil
         defer {
@@ -112,7 +112,7 @@ final class OtaUpdateContainer: ObservableObject {
             lastCheckedAt = Date()
         }
 
-        let checker = AppUpdateChecker(appState: appState)
+        let checker = AppUpdateChecker(serverUrl: serverUrl)
         await checker.checkForUpdates()
 
         switch checker.lastResult {
@@ -496,7 +496,7 @@ struct OtaUpdateScreen: View {
     private var actionButtons: some View {
         HStack(spacing: 10) {
             Button {
-                Task { await container.check(appState: appState) }
+                Task { await container.check(serverUrl: appState.serverUrl) }
                 snackbar?.show(.init(text: "Verifica avviata.",
                                      severity: .info,
                                      durationSeconds: 2))
