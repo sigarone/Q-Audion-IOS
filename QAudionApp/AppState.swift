@@ -3476,7 +3476,11 @@ final class AppState: ObservableObject {
                         // is actually in progress for this peer.
                         guard strongSelf.callContactId == peerId else { return }
                         // Bind broker on first use; idempotent.
-                        CallSessionKeyBroker.shared.bind(to: strongSelf)
+                        CallSessionKeyBroker.shared.bind(
+                            getCallContactId: { [weak self] in self?.callContactId },
+                            setSessionKey: { [weak self] in self?.callPqcSessionKey = $0 },
+                            setPskActive: { [weak self] in self?.pskActive = $0 }
+                        )
                         CallSessionKeyBroker.shared.registerPqcSessionKey(
                             sharedSecret, for: peerId)
                     }
