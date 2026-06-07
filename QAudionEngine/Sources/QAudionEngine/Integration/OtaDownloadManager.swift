@@ -7,8 +7,19 @@ public final class OtaDownloadManager {
 
     public func downloadModel(name: String, to localPath: URL) async throws {
         guard let rest = restClient else { throw OtaError.noServer }
-        let data = try await rest.get("/api/v1/models/\(name)")
+        guard OtaDownloadManager.isValidModelName(name) else { throw OtaError.invalidModelName }
+        let encodedName = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let data = try await rest.get("/api/v1/models/\(encodedName)")
         try data.write(to: localPath)
+    }
+
+    private static func isValidModelName(_ name: String) -> Bool {
+        !name.isEmpty
+            && name.count <= 128
+            && !name.contains("..")
+            && !name.contains("/")
+            && !name.contains("\\")
+            && name.range(of: "^[a-zA-Z0-9_\\-\\.]+$", options: .regularExpression) != nil
     }
 
     public func checkForUpdate(currentVersion: String) async throws -> String? {
@@ -20,4 +31,4 @@ public final class OtaDownloadManager {
     }
 }
 
-public enum OtaError: Error { case noServer; case downloadFailed }
+public enum OtaError: Error { case noServer; case downloadFailed; case invalidModelName }
