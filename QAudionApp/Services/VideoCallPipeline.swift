@@ -88,6 +88,7 @@ public final class VideoCallPipeline: NSObject {
     /// attach this to AVCaptureVideoPreviewLayer.
     public let captureSession = AVCaptureSession()
     private let captureQueue = DispatchQueue(label: "qaudion.video.capture")
+    private let videoProcessQueue = DispatchQueue(label: "qaudion.video.process")
     private let videoOutput = AVCaptureVideoDataOutput()
     private var captureInput: AVCaptureDeviceInput?
 
@@ -464,14 +465,16 @@ public final class VideoCallPipeline: NSObject {
     private func wireEngineCallbacks() {
         encoder.onNal = { [weak self] nal, isKeyFrame in
             guard let self = self else { return }
-            // Fragment the NAL and ship each chunk to the transport.
-            // Both fragmenter and the transport callback are reentrant.
-            let fragments = self.outboundFragmenter.fragment(
-                nalUnit: nal,
-                isKeyFrame: isKeyFrame,
-                bitrateKbps: self.targetBitrateBps / 1000)
-            for f in fragments {
-                self.onOutboundFragment?(f)
+            // Offload fragmentation and emission to a background queue
+            // to avoid blocking the AVCapture thread (or the VideoToolbox callback thread).
+            self.videoProcessQueue.async {
+                let fragments = self.outboundFragmenter.fragment(
+                    nalUnit: nal,
+                    isKeyFrame: isKeyFrame,
+                    bitrateKbps: self.targetBitrateBps / 1000)
+                for f in fragments {
+                    self.onOutboundFragment?(f)
+                }
             }
         }
         decoder.onPixelBuffer = { [weak self] pb, _ in

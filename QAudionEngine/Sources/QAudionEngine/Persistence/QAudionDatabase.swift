@@ -39,6 +39,12 @@ public final class QAudionDatabase {
             try migrator.migrate(dbQueue)
 
         } catch {
+            // E2EE data loss warning: failing gracefully here means the app will continue to
+            // try accessing an uninitialized database (which may crash later) or we must throw.
+            // Since we can't throw in a singleton init, and in-memory fallback loses keys,
+            // we log critically and still halt. A proper fix requires lifting DB init to a throwable or
+            // async application lifecycle phase. For now, keep the crash but log clearly.
+            print("[QAudionDatabase] CRITICAL: Failed to initialize SQLite file: \(error). Check device storage or data protection lock state.")
             fatalError("Failed to initialize database: \(error)")
         }
     }

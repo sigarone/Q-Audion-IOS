@@ -1649,8 +1649,12 @@ final class AppState: ObservableObject {
                 print("[AppState] msg_receive missing required fields: \(data.keys)")
                 return
             }
-            DispatchQueue.main.async {
-                self.handleIncomingMessage(
+
+            // W79: Offload decryption and parsing to a background queue to
+            // prevent AES-GCM and base64 operations from blocking the main
+            // thread, which freezes the UI during chat refresh bursts.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                self?.handleIncomingMessage(
                     senderId: senderId,
                     serverMsgId: serverMsgId,
                     cipher: cipher,
@@ -1841,11 +1845,12 @@ final class AppState: ObservableObject {
                 print("[AppState] msg_pending_sync: missing 'messages' array")
                 return
             }
-            // Replay each entry through the same path as a live
-            // msg_receive. Order matters — server pushes oldest first.
-            DispatchQueue.main.async {
+            // W79: Replay each entry through the background processing path
+            // to avoid blocking the main thread with 50 AES-GCM decryptions
+            // at once upon reconnect. Order matters — server pushes oldest first.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 for entry in batch {
-                    self.replayPendingSyncEntry(entry)
+                    self?.replayPendingSyncEntry(entry)
                 }
             }
         }
@@ -1873,7 +1878,9 @@ final class AppState: ObservableObject {
         //      guard below — it would be dropped before any handler runs.
         // Already on the main queue (caller dispatches the batch on .main).
         if (entry["msg_type"] as? String) == "opaque" {
-            dispatchInboundOpaque(senderId: senderId, blobStr: cipherB64)
+            DispatchQueue.main.async { [weak self] in
+                self?.dispatchInboundOpaque(senderId: senderId, blobStr: cipherB64)
+            }
             return
         }
         guard let serverMsgId = entry["message_id"] as? String,
