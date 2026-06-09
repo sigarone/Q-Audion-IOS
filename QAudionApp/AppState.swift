@@ -4342,13 +4342,22 @@ final class AppState: ObservableObject {
                 msgId: messageId
             )
 
-            let backendConfig = pinnedConfig(token: authService.loadToken())
-            let provider = BCryptoBackendProvider(config: backendConfig)
-            try await provider.initialize()
+            // Send over the shared persistent WS (liveProvider) instead of
+            // opening a fresh per-send WebSocket — a second socket with the
+            // same JWT/deviceID makes the server replace the persistent one
+            // ("replacing stale ws device") and triggers a reconnect storm.
             // Pass the same msgId used for AAD so the server echoes it
             // verbatim and the receiver reconstructs the identical AAD.
-            _ = try await provider.messageApi.sendMessage(
-                recipientId: contactId, content: payload, clientMsgId: messageId)
+            if let live = liveProvider {
+                _ = try await live.messageApi.sendMessage(
+                    recipientId: contactId, content: payload, clientMsgId: messageId)
+            } else {
+                let backendConfig = pinnedConfig(token: authService.loadToken())
+                let provider = BCryptoBackendProvider(config: backendConfig)
+                try await provider.initialize()
+                _ = try await provider.messageApi.sendMessage(
+                    recipientId: contactId, content: payload, clientMsgId: messageId)
+            }
         } catch {
             errorMessage = "Send failed: \(error.localizedDescription)"
         }

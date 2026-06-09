@@ -132,22 +132,35 @@ final class ChatMessageSendService {
             return .failed(reason: .cryptoFailure)
         }
 
-        // Ship via the BCrypto WS transport. The provider is built per
-        // call to keep this service stateless — token refresh /
-        // reconnect logic lives upstream in the WS client.
-        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
+        // Ship via the shared, already-authenticated persistent WS
+        // (appState.liveProvider). Building a fresh BCryptoBackendProvider
+        // per send opened a SECOND WebSocket authenticating with the same
+        // JWT → same server deviceID; the server then "replaced" the
+        // persistent socket ("replacing stale ws device"), driving a
+        // reconnect storm that left the device intermittently unreachable.
+        // Only fall back to a transient provider if the shared one isn't up.
         do {
-            let provider = BCryptoBackendProvider(config: backendConfig)
-            try await provider.initialize()
             // FIX: pass messageId.uuidString as clientMsgId so the server
             // echoes the exact same UUID the recipient uses to reconstruct
             // the AAD for AEAD verification. Previously BCryptoMessageApiImpl
             // generated a NEW UUID here → AAD mismatch → every decrypt failed.
-            let serverMsgId = try await provider.messageApi.sendMessage(
-                recipientId: peerUserId,
-                content: wireBlob,
-                clientMsgId: messageId.uuidString
-            )
+            let serverMsgId: String
+            if let live = appState.liveProvider {
+                serverMsgId = try await live.messageApi.sendMessage(
+                    recipientId: peerUserId,
+                    content: wireBlob,
+                    clientMsgId: messageId.uuidString
+                )
+            } else {
+                let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
+                let provider = BCryptoBackendProvider(config: backendConfig)
+                try await provider.initialize()
+                serverMsgId = try await provider.messageApi.sendMessage(
+                    recipientId: peerUserId,
+                    content: wireBlob,
+                    clientMsgId: messageId.uuidString
+                )
+            }
             if pskFallback {
                 // Wire still went out — caller may decide to flag the
                 // message visually but should not roll back the local

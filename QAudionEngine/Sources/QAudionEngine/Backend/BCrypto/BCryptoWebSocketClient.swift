@@ -103,6 +103,20 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         registerPreNegotiationHandlers()
     }
 
+    deinit {
+        // Deterministically tear down the socket when this client (and its
+        // BCryptoBackendProvider) is released. A transient, per-use provider
+        // never calls disconnect(); without this, its URLSessionWebSocketTask
+        // → URLSession → delegate retain cycle kept the WebSocket TCP-alive as
+        // a zombie until the server's keepalive ping timed it out ~50s later,
+        // churning the per-(user,deviceID) slot. Cancelling here closes it at
+        // once. No lock: the instance is being deallocated, so no other thread
+        // can hold a reference. We deliberately do NOT fire state listeners
+        // (transient providers register none; avoids reentrancy during dealloc).
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        pingTimer?.cancel()
+    }
+
     /// Register the 5 pre-negotiation message handlers on the generic dispatcher.
     /// Each handler parses the envelope `data` and forwards to the matching public
     /// callback property. Called once from init — keeps wiring local to this class.
