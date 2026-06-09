@@ -61,7 +61,6 @@ public enum CryptoConstants {
     /// Matches Android CryptoConstants.kt PINNED_CERT_HASHES.
     public static let pinnedCertHashes: [String] = [
         "Pppf8dGdb+O28sc86adx4xsrJbB9QQ4+m8a+TxyOKNw=", // voip.bcrypto.com TLS cert (primary)
-        "7t5azCKj59xN8cxykT6V/YCoyEGaI0j4qswAokEx01Y=", // 217.160.65.35 TLS cert (direct IP)
     ]
     public static let pinningEnabled = true
 
