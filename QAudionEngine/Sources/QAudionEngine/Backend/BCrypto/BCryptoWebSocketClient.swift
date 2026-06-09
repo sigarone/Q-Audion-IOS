@@ -308,8 +308,14 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         _state = .disconnected
         pingTimer?.cancel()
         pingTimer = nil
-        // Reset reconnectAttempt so the backoff in handleDisconnect is fresh.
-        reconnectAttempt = 0
+        // NOTE: deliberately do NOT reset reconnectAttempt here. Resetting it
+        // defeated the exponential backoff: a call_offer/message that found the
+        // socket momentarily non-fresh forceReconnect()ed with a 0-backoff, and
+        // combined with the server replacing the prior same-deviceID socket this
+        // produced a fast "replacing stale ws device" reconnect storm during
+        // calls. Letting the attempt count carry over lets handleDisconnect's
+        // backoff actually throttle a runaway loop; a genuinely successful
+        // reconnect still resets it to 0 in handleMessage("authenticated").
         let listeners = stateListeners
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
@@ -355,11 +361,32 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         if isFreshlyAuthenticated() {
             return true
         }
-        // Stale or disconnected — force a clean reconnect, then poll until
-        // either the state flips to .authenticated or we time out.
-        forceReconnect()
-
+        // If we are authenticated with a LIVE task but merely "stale" (no inbound
+        // JSON within the freshness window — usually just a delayed/OS-throttled
+        // keepalive pong, NOT a dead socket), do NOT tear it down. Probe it with a
+        // ping and wait briefly for the pong to refresh liveness. Tearing a live
+        // socket down on every call_offer/message is what drove the same-deviceID
+        // "replacing stale ws device" reconnect storm during calls: each teardown
+        // reopened the persistent socket, the server replaced the previous one,
+        // and the cycle repeated. Only fall through to forceReconnect() if the
+        // probe gets no pong (genuinely dead / OS-suspended ghost socket).
+        // Single overall budget so a probe + a reconnect never exceed timeoutSec.
         let deadline = Date().addingTimeInterval(timeoutSec)
+        if hasLiveAuthenticatedTask() {
+            send(type: "ping", data: [:])
+            // A healthy socket pongs in well under a second; cap the probe at 1 s
+            // (bounded by the overall deadline) before deciding it's a ghost.
+            let probeDeadline = min(Date().addingTimeInterval(1.0), deadline)
+            while Date() < probeDeadline {
+                if isFreshlyAuthenticated() {
+                    return true
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        // Genuinely disconnected (no task) or the live-socket probe got no pong —
+        // force a clean reconnect, then poll until authenticated or the deadline.
+        forceReconnect()
         while Date() < deadline {
             if isFreshlyAuthenticated() {
                 return true
@@ -369,6 +396,16 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return false
+    }
+
+    /// True iff authenticated with a non-nil task, regardless of inbound recency.
+    /// Lets ensureAuthenticated() distinguish a live-but-idle socket (probe it
+    /// with a ping) from a genuinely disconnected one (reconnect). Splitting this
+    /// out of isFreshlyAuthenticated() is what stops a live socket from being
+    /// needlessly torn down on every call.
+    private func hasLiveAuthenticatedTask() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _state == .authenticated && webSocketTask != nil
     }
 
     /// True iff the WS is authenticated, the task pointer is non-nil, and the
