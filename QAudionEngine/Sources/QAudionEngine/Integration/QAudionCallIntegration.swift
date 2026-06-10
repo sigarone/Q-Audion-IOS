@@ -982,7 +982,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 
     public func processOutgoingAudio(pcmFrame: Data) throws -> Data {
-        guardianMode.processFrame(pcmFrame)
         voiceAnalysis.processFrame(pcmFrame)
         return try engine.processOutgoingAudio(pcmFrame: pcmFrame)
     }
