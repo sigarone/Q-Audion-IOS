@@ -777,6 +777,16 @@ final class CallService {
             print("[CallService] audio I/O deferred — waiting for CallKit didActivate")
             return
         }
+        // W574 pre-answer gate: for outgoing calls CallKit fires didActivate
+        // as soon as the call UI appears — BEFORE the peer answers. Block the
+        // mic until the call is actually active (call_answer received).
+        // For incoming calls callState is already .active when this runs
+        // (AppState.onAnswerCall sets it before CallKit fires didActivate), so
+        // the guard is a no-op on the answering side.
+        if let checkActive = isCallActive, !checkActive() {
+            print("[CallService] audio I/O deferred — outgoing call, peer has not answered yet")
+            return
+        }
         // SINGLE-ENGINE FIX — start ONE AVAudioEngine only. AudioCapture now
         // owns both the mic tap AND the playback player node, so there is no
         // separate AudioPlayback engine to start (a second engine on the same
@@ -818,6 +828,15 @@ final class CallService {
     /// `didActivate`. Wired from `CallKitProvider.onAudioSessionDeactivated`.
     public func handleAudioSessionDeactivated() {
         audioSessionActive = false
+    }
+
+    /// W574 — called by AppState when `call_answer` is received (callee has
+    /// formally accepted). Kicks off audio I/O if CallKit already fired
+    /// `didActivate` (audioSessionActive == true). If `didActivate` has not
+    /// yet arrived, the deferred call to `startAudioIOIfReady()` from
+    /// `handleAudioSessionActivated()` will complete the start once it fires.
+    public func handleCallAnswered() {
+        startAudioIOIfReady()
     }
 
     /// W469 — convert the engine's `FrameEncoder` output to the wire

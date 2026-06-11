@@ -87,8 +87,27 @@ public final class AudioCapture {
 
         let pipeline = self.audioPipeline
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: format) { [weak self] buffer, _ in
-            guard let self, let int16Data = buffer.int16ChannelData else { return }
-            let raw = Data(bytes: int16Data[0], count: Int(buffer.frameLength) * 2)
+            guard let self else { return }
+            // W574: VP-IO may deliver Float32 frames even though we requested Int16.
+            // The tap bufferSize hint is also overridden by VP-IO (tied to hardware I/O
+            // duration per W475). Guard on int16ChannelData first; if VP-IO delivered
+            // Float32 natively, convert to Int16 so the accumulator/re-chunker always
+            // receives 16-bit samples regardless of the engine's VP-IO state.
+            let raw: Data
+            if let int16Data = buffer.int16ChannelData {
+                raw = Data(bytes: int16Data[0], count: Int(buffer.frameLength) * 2)
+            } else if let floatData = buffer.floatChannelData {
+                let count = Int(buffer.frameLength)
+                var int16Buf = [Int16](repeating: 0, count: count)
+                let src = floatData[0]
+                for i in 0..<count {
+                    let clamped = max(-1.0 as Float, min(1.0 as Float, src[i]))
+                    int16Buf[i] = Int16(clamped * Float(Int16.max))
+                }
+                raw = int16Buf.withUnsafeBytes { Data($0) }
+            } else {
+                return
+            }
             // W475 — re-chunk into EXACT bytesPerFrame frames. `installTap`'s
             // bufferSize is only a hint, and VoiceProcessing I/O ties the tap
             // buffer to the hardware I/O duration — so `buffer.frameLength`

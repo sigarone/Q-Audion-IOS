@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import UIKit         // W574: UIDevice.current for iPad detection in aecEnabled
 import QAudionEngine  // vkey-v1: CallCapabilities.vkeyV1 for filterAdvertisedCapabilities
 
 /// W406 — single source of truth for VoIP audio DSP gates.
@@ -51,7 +52,17 @@ public enum CallsGate {
     //
     // Users who are in loud environments / on speakerphone can still
     // enable AEC in Settings → Chiamate → Echo Cancellation.
-    public static var aecEnabled: Bool { readBool(keyAec, default: false) }  // VP-IO off by default — enabling it silently breaks tx capture (W556/W591)
+    public static var aecEnabled: Bool {
+        // W574: iPad has no earpiece — external speaker is the only route and
+        // without VP-IO AEC the user hears severe echo. Default to true on iPad
+        // so AEC (VP-IO) is active out-of-the-box; user can disable in Settings.
+        // W574 also fixed the VP-IO TX-capture regression (AudioCapture Float32
+        // fallback) that forced the W556 default-false — safe to opt-in on iPad.
+        // On iPhone the default stays false: earpiece provides HW isolation and
+        // VP-IO NS causes metallic artefacts in quiet rooms (W556 rationale).
+        let defaultValue = UIDevice.current.userInterfaceIdiom == .pad
+        return readBool(keyAec, default: defaultValue)
+    }
     public static var nsEnabled: Bool  { readBool(keyNs,  default: false) }
     public static var agcEnabled: Bool { readBool(keyAgc, default: false) }
 

@@ -1820,6 +1820,9 @@ final class AppState: ObservableObject {
                     self.callState = .active
                     RTLog.info("call", "call_answer: callee answered — .ringing → .active")
                 }
+                // W574: unblock mic — CallKit may already have fired didActivate
+                // while we were ringing; startAudioIOIfReady was deferred until now.
+                self.callService.handleCallAnswered()
             }
         }
         ws.registerHandler(type: "call_ice") { [weak self] _, data in
