@@ -159,6 +159,16 @@ final class CallService {
     /// `.start()` until `handleAudioSessionActivated()` fires.
     private var audioSessionActive = false
 
+    /// W574b — true once the remote peer has formally answered
+    /// (`call_answer` received, for outgoing calls) or once WE answered
+    /// (incoming calls — set in `activateIncomingCallAudio`). Gates the
+    /// mic start INDEPENDENTLY of `AppState.callState`: the outgoing flow
+    /// sets `.active` right after the OFFER is sent (long before the peer
+    /// answers), so the v1.0.618 `isCallActive?()` check never blocked
+    /// anything — verified in the 655de1d9 device log (mic at +1.6s,
+    /// call_answer at +5.9s).
+    private var peerAnswered = false
+
     // MARK: - Mute / Hold
 
     /// When true, processOutgoingAudio returns silent (zero-padded) ciphertext.
@@ -341,12 +351,14 @@ final class CallService {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self = self else { return }
             guard !self.audioSessionActive, self.callIntegration != nil else { return }
-            // Only self-activate when the call is actually connected (peer
-            // answered). During outgoing ring this must not open the mic —
-            // the peer hasn't answered yet and early audio activation leaks
-            // the session and causes the waveform to animate before answer.
-            guard self.isCallActive?() == true else {
-                print("[CallService] W469 — skipped; call not active (peer has not answered)")
+            // Only self-activate when the peer has actually answered.
+            // During outgoing ring this must not open the mic — the peer
+            // hasn't answered yet and early audio activation leaks the
+            // session and causes the waveform to animate before answer.
+            // W574b: use peerAnswered (not isCallActive — AppState sets
+            // .active right after the OFFER, before the answer).
+            guard self.peerAnswered else {
+                print("[CallService] W469 — skipped; peer has not answered yet")
                 return
             }
             print("[CallService] W469 — CallKit didActivate not seen after 1.5s; self-activating audio session (fallback)")
@@ -416,6 +428,10 @@ final class CallService {
         // covers the race where `didActivate` somehow already fired.
         self.audioPlayback = playback
         self.audioCapture = capture
+        // W574b — WE are the answering side: this method only runs from the
+        // answer handler, so the call is answered by definition. Unblock the
+        // pre-answer mic gate before the (possibly deferred) engine start.
+        peerAnswered = true
         startAudioIOIfReady()
 
         // Bind the integration so handleIncomingEncryptedFrame can decrypt
@@ -752,6 +768,7 @@ final class CallService {
         // W464 — drop the session-active flag so the NEXT call starts
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
+        peerAnswered = false  // W574b — re-arm the pre-answer mic gate for the next call
         // W67: reset transport binding. Nota: NON disconnect-iamo il
         // wsClient (può restare connesso per signaling / chat / contacts).
         // Solo facciamo nil-out i riferimenti così future audio frames
@@ -777,14 +794,16 @@ final class CallService {
             print("[CallService] audio I/O deferred — waiting for CallKit didActivate")
             return
         }
-        // W574 pre-answer gate: for outgoing calls CallKit fires didActivate
+        // W574b pre-answer gate: for outgoing calls CallKit fires didActivate
         // as soon as the call UI appears — BEFORE the peer answers. Block the
-        // mic until the call is actually active (call_answer received).
-        // For incoming calls callState is already .active when this runs
-        // (AppState.onAnswerCall sets it before CallKit fires didActivate), so
-        // the guard is a no-op on the answering side.
-        if let checkActive = isCallActive, !checkActive() {
-            print("[CallService] audio I/O deferred — outgoing call, peer has not answered yet")
+        // mic until call_answer arrives (handleCallAnswered flips the flag).
+        // Incoming calls set the flag in activateIncomingCallAudio (we ARE
+        // the answerer), so this is a no-op on the answering side.
+        // Do NOT use AppState.callState here — the outgoing flow sets
+        // `.active` immediately after the OFFER is sent, which defeated
+        // the v1.0.618 isCallActive?() version of this gate.
+        guard peerAnswered else {
+            print("[CallService] audio I/O deferred — peer has not answered yet")
             return
         }
         // SINGLE-ENGINE FIX — start ONE AVAudioEngine only. AudioCapture now
@@ -836,7 +855,21 @@ final class CallService {
     /// yet arrived, the deferred call to `startAudioIOIfReady()` from
     /// `handleAudioSessionActivated()` will complete the start once it fires.
     public func handleCallAnswered() {
+        peerAnswered = true
         startAudioIOIfReady()
+        // W574b — post-answer W469 fallback. The 1.5s timer in startCall
+        // now (correctly) skips while the peer hasn't answered, so it no
+        // longer covers the "CallKit didActivate never fires" case for
+        // outgoing calls. Re-arm here: if the session is still inactive
+        // shortly after the answer, self-activate so the call gets audio.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            guard !self.audioSessionActive,
+                  self.callIntegration != nil,
+                  self.peerAnswered else { return }
+            print("[CallService] W574b — didActivate not seen 1s after answer; self-activating audio session (fallback)")
+            self.handleAudioSessionActivated()
+        }
     }
 
     /// W469 — convert the engine's `FrameEncoder` output to the wire

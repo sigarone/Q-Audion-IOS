@@ -1,6 +1,5 @@
 import Foundation
 import Security
-import UIKit         // W574: UIDevice.current for iPad detection in aecEnabled
 import QAudionEngine  // vkey-v1: CallCapabilities.vkeyV1 for filterAdvertisedCapabilities
 
 /// W406 — single source of truth for VoIP audio DSP gates.
@@ -52,17 +51,15 @@ public enum CallsGate {
     //
     // Users who are in loud environments / on speakerphone can still
     // enable AEC in Settings → Chiamate → Echo Cancellation.
-    public static var aecEnabled: Bool {
-        // W574: iPad has no earpiece — external speaker is the only route and
-        // without VP-IO AEC the user hears severe echo. Default to true on iPad
-        // so AEC (VP-IO) is active out-of-the-box; user can disable in Settings.
-        // W574 also fixed the VP-IO TX-capture regression (AudioCapture Float32
-        // fallback) that forced the W556 default-false — safe to opt-in on iPad.
-        // On iPhone the default stays false: earpiece provides HW isolation and
-        // VP-IO NS causes metallic artefacts in quiet rooms (W556 rationale).
-        let defaultValue = UIDevice.current.userInterfaceIdiom == .pad
-        return readBool(keyAec, default: defaultValue)
-    }
+    // W574b — REVERTED the v1.0.618 iPad default-true experiment. Field
+    // evidence (call 655de1d9, server relay counters): with VP-IO enabled
+    // the iPad transmitted exactly 1 audio frame post-answer, then TX died
+    // — the W556/W591 "VP-IO silently breaks tx capture" regression is NOT
+    // fixed by the Float32 tap fallback alone. Until VP-IO capture is
+    // debugged ON-DEVICE, AEC stays opt-in everywhere (Settings → Chiamate).
+    // The iPad speakerphone echo issue remains OPEN and needs a different
+    // fix (likely tap-after-VPIO or a dedicated render-callback capture).
+    public static var aecEnabled: Bool { readBool(keyAec, default: false) }
     public static var nsEnabled: Bool  { readBool(keyNs,  default: false) }
     public static var agcEnabled: Bool { readBool(keyAgc, default: false) }
 

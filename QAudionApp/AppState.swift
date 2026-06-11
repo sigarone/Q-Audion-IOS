@@ -1812,6 +1812,12 @@ final class AppState: ObservableObject {
             // race-handling already in place for the callee side (W521).
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                // W574b: unblock the mic UNCONDITIONALLY — before the
+                // .ringing guard. The guard below only protects the state
+                // transition; gating the mic unblock on it left the mic
+                // permanently off whenever callState wasn't .ringing at
+                // answer time (e.g. still .active from the outgoing flow).
+                self.callService.handleCallAnswered()
                 guard self.callState == .ringing else { return }
                 if self.callSasKeySource == .mlKem {
                     self.callState = .encrypted
@@ -1820,9 +1826,6 @@ final class AppState: ObservableObject {
                     self.callState = .active
                     RTLog.info("call", "call_answer: callee answered — .ringing → .active")
                 }
-                // W574: unblock mic — CallKit may already have fired didActivate
-                // while we were ringing; startAudioIOIfReady was deferred until now.
-                self.callService.handleCallAnswered()
             }
         }
         ws.registerHandler(type: "call_ice") { [weak self] _, data in
@@ -3275,23 +3278,64 @@ final class AppState: ObservableObject {
         // runs below; here we use a stable per-session key derived from contactId
         // + startedAt so the record can be matched by endCall(id:).
         let _outgoingRecordId: String = UUID().uuidString
+        // W574b — peer label resolution chain for OUTGOING calls. The old
+        // code consulted only ContactsStore: a peer dialed by extension
+        // (not saved as a contact) fell straight to the UUID truncation
+        // "a0184f04…4b8f", which then got SHOWN in-call AND persisted in
+        // the history record — so every redial kept showing the UUID
+        // (user report 310d3304). New priority:
+        //   1. ContactsStore name (skipping UUID-format server defaults)
+        //   2. dialer label — dialAndCall sets incomingCallerName to
+        //      "Int. NNN" / E.164 BEFORE startCall
+        //   3. last history record for this peer with a real label
+        //      (covers redial-from-history after one good dial)
+        //   4. UUID truncation (last resort, as before)
+        let _dialerLabel = incomingCallerName.trimmingCharacters(in: .whitespaces)
         let _outgoingPeerDisplay: String = {
             // W-CC: use cached snapshot — avoids a UserDefaults decode on every outgoing dial.
             let stored = self.cachedContacts
-            var nameMap: [String: String] = [:]
-            for c in stored where !c.displayName.isEmpty {
-                nameMap[c.userId] = c.displayName
+            if let c = stored.first(where: { $0.userId == contactId }) {
+                let dn = c.displayName.trimmingCharacters(in: .whitespaces)
+                let looksLikeUUID = dn.count == 36 && dn.filter({ $0 == "-" }).count == 4
+                if !dn.isEmpty && !looksLikeUUID { return dn }
+            }
+            if !_dialerLabel.isEmpty { return _dialerLabel }
+            if let prev = PersistentCallRecordStore.shared.records.first(where: {
+                $0.peerUserId == contactId
+                    && !$0.peerDisplayName.isEmpty
+                    && !$0.peerDisplayName.contains("…")
+            }) {
+                return prev.peerDisplayName
             }
             return PersistentCallRecordStore.resolveDisplayName(
-                userId: contactId, wireDisplay: nil, nameByUserId: nameMap)
+                userId: contactId, wireDisplay: nil, nameByUserId: [:])
         }()
+        // PBX extension for the record: parse "Int. NNN" / bare digits from
+        // the resolved label, else inherit from a previous record.
+        let _outgoingPeerExt: Int? = {
+            let tokens = _outgoingPeerDisplay
+                .split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            if let num = tokens.first(where: { !$0.isEmpty && $0.allSatisfy({ $0.isNumber }) }),
+               let v = Int(num) { return v }
+            return PersistentCallRecordStore.shared.records
+                .first(where: { $0.peerUserId == contactId && $0.peerExtension != nil })?
+                .peerExtension
+        }()
+        // Feed the in-call screen: LiveInCallScreen falls back to
+        // incomingCallerName when the peer is not in contacts. Without this,
+        // calls started OUTSIDE the dialer (history redial, contact row)
+        // displayed the truncated UUID even when a good label was known.
+        if _dialerLabel.isEmpty && !_outgoingPeerDisplay.contains("…") {
+            incomingCallerName = _outgoingPeerDisplay
+        }
         activeOutgoingRecordId = _outgoingRecordId
         PersistentCallRecordStore.shared.beginCall(
             id: _outgoingRecordId,
             peerUserId: contactId,
             peerDisplayName: _outgoingPeerDisplay,
             direction: .outgoing,
-            isVideo: video
+            isVideo: video,
+            peerExtension: _outgoingPeerExt
         )
         confidenceLevel = "green"
         confidenceScore = 0.97
