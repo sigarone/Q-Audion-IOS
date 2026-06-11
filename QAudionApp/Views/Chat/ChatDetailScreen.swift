@@ -471,7 +471,7 @@ struct ChatDetailScreen: View {
                 }
                 Button(role: .destructive) {
                     Task {
-                        let ok = await container.toggleBlock(appState: appState)
+                        let ok = await container.toggleBlock()
                         await MainActor.run {
                             snackbar?.show(.init(
                                 text: ok ? "Contatto bloccato." : "Operazione fallita.",

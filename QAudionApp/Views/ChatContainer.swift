@@ -416,8 +416,8 @@ final class ChatContainer: ObservableObject {
     /// W93: server-side block/unblock via ContactsApi. Returns true on
     /// success. Idempotent semantically (blocking an already-blocked
     /// contact returns success per server behaviour).
-    func toggleBlock(appState: AppState) async -> Bool {
-        guard let provider = appState.liveProvider else { return false }
+    func toggleBlock() async -> Bool {
+        guard let provider = self.appState?.liveProvider else { return false }
         do {
             try await provider.contactsApi.blockContact(userId: peerUserId)
             return true
