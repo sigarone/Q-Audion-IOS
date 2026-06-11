@@ -153,6 +153,13 @@ public final class OpusCodec {
         }
     }
 
+    /// Update the expected packet-loss hint used by the FEC budget calculation.
+    /// Safe to call at any time; no-op if the encoder was not created.
+    public func setPacketLossPct(_ plp: Int) {
+        guard let enc = encoder else { return }
+        opus_helper_set_packet_loss_perc(enc, Int32(plp))
+    }
+
     // MARK: - Fallback (if C library returns errors)
 
     private func fallbackEncode(_ pcmFrame: Data) -> Data? {

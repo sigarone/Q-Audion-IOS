@@ -258,6 +258,21 @@ public final class QAudionEngine: @unchecked Sendable {
     public func getStats() -> EngineStats { lock.lock(); defer { lock.unlock() }; return stats }
     public func getConfig() -> EngineConfig { lock.lock(); defer { lock.unlock() }; return config }
     public func getSessionInfo() -> SessionInfo? { lock.lock(); defer { lock.unlock() }; return sessionInfo }
+
+    /// Reconfigure the Opus encoder with tuner-derived values.
+    /// Thread-safe; no-op when called before initialize() (audioProcessor nil).
+    /// bitrateKbps: target bitrate in kbps (e.g. 32 = 32 000 bps). Hard cap: 40.
+    /// plp: expected packet-loss percentage hint for FEC budget (0–100).
+    public func reconfigureAudioCodec(bitrateKbps: Int, plp: Int) {
+        lock.lock()
+        let proc = audioProcessor
+        lock.unlock()
+        guard let proc else { return }
+        let clampedBr = min(max(bitrateKbps, 8), 40)
+        proc.codec.reconfigure(OpusCodec.Config(
+            bitrate: clampedBr * 1000, complexity: 10, enableHpf: true))
+        proc.codec.setPacketLossPct(max(0, min(plp, 100)))
+    }
 }
 
 public enum QAudionEngineError: Error, CustomStringConvertible {

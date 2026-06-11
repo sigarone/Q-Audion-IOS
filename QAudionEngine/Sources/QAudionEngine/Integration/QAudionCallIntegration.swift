@@ -1224,6 +1224,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public func getState() -> CallState { lock.lock(); defer { lock.unlock() }; return state }
     public func getGuardianMode() -> GuardianMode { guardianMode }
     public func getVoiceAnalysis() -> VoiceAnalysisEngine { voiceAnalysis }
+
+    /// Reconfigure the Opus encoder after engine.initialize() has run.
+    /// Safe to call from onStateChanged(.active) or from activateIncomingCallAudio.
+    /// No-op before the engine is initialized.
+    public func reconfigureAudioCodec(bitrateKbps: Int, plp: Int) {
+        engine.reconfigureAudioCodec(bitrateKbps: bitrateKbps, plp: plp)
+    }
 }
 
 public enum IntegrationError: Error { case invalidState(QAudionCallIntegration.CallState) }

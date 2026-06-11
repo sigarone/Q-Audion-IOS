@@ -292,6 +292,11 @@ final class CallService {
             switch state {
             case .active:
                 print("[CallService] PQC handshake complete — session active")
+                // Engine is now initialized — apply tuner-persisted codec params.
+                self.callIntegration?.reconfigureAudioCodec(
+                    bitrateKbps: AudioCodecPrefs.bitrateKbps,
+                    plp:         AudioCodecPrefs.plp
+                )
             case .error:
                 self.endCall()
             case .fallback:
@@ -437,6 +442,12 @@ final class CallService {
         // Bind the integration so handleIncomingEncryptedFrame can decrypt
         // inbound audio_frame packets.
         self.callIntegration = integration
+        // For incoming calls the PQC handshake started before answer, so
+        // engine.initialize() has already run — apply tuner prefs now.
+        integration.reconfigureAudioCodec(
+            bitrateKbps: AudioCodecPrefs.bitrateKbps,
+            plp:         AudioCodecPrefs.plp
+        )
         drainRxPreBuffer()  // W481 — replay any frames that arrived before binding
         startDurationTimer()
 
@@ -736,6 +747,12 @@ final class CallService {
                     "fallback_fired":  didActivateFallbackFired,
                     "session_active":  audioSessionActive
                 ]
+            )
+            // Post-call Opus tuning — must run BEFORE counters reset below.
+            AudioAutoTuner.shared.tunePostCall(
+                framesReceived:  framesReceivedRx,
+                framesDecrypted: framesDecryptedRx,
+                rxDecryptErrors: rxDecryptErrorCount
             )
         }
         audioEnginesStarted = false
