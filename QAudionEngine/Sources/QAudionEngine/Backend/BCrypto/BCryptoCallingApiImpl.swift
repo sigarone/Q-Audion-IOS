@@ -327,11 +327,17 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// format byte-for-byte identical to desktop
     /// CallController.requestUpgradeToVideo + Android
     /// WsCommand.CallUpgradeRequest.
-    public func sendCallUpgradeRequest(callId: String, recipientId: String, sdp: String) async throws {
+    public func sendCallUpgradeRequest(
+        callId: String,
+        recipientId: String,
+        sdp: String,
+        media: String = "camera"
+    ) async throws {
         ws.send(type: "call_upgrade_request", data: [
             "call_id":      callId,
             "recipient_id": recipientId,
             "sdp":          sdp,
+            "media":        media,
         ])
     }
 

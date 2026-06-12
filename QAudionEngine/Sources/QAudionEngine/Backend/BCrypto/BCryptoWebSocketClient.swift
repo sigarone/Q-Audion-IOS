@@ -39,7 +39,11 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// requestUpgradeToVideo` (call_id + sdp on request, plus
     /// `accepted` boolean on response) so iOS↔desktop↔Android can
     /// upgrade interchangeably.
-    public var onCallUpgradeRequest: ((_ callId: String, _ senderId: String, _ sdp: String) -> Void)?
+    /// media-consent v1: `media` is "camera" (peer asks to turn their camera
+    /// on — requires the user's consent before answering) or "screen" (peer
+    /// is sharing their screen — auto-accepted, never opens our camera).
+    /// Absent on the wire ⇒ "camera".
+    public var onCallUpgradeRequest: ((_ callId: String, _ senderId: String, _ sdp: String, _ media: String) -> Void)?
     public var onCallUpgradeResponse: ((_ callId: String, _ accepted: Bool, _ sdp: String) -> Void)?
 
     private var webSocketTask: URLSessionWebSocketTask?
@@ -174,7 +178,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             let senderId = (data["sender_id"] as? String)
                 ?? (data["from"] as? String)
                 ?? ""
-            self.onCallUpgradeRequest?(callId, senderId, sdp)
+            // media-consent v1: absent ⇒ camera (consent dialog default).
+            let media = (data["media"] as? String) ?? "camera"
+            self.onCallUpgradeRequest?(callId, senderId, sdp, media)
         }
 
         // W536 — call_upgrade_response (callee→caller). `accepted`

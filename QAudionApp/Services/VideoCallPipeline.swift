@@ -72,6 +72,19 @@ public final class VideoCallPipeline: NSObject {
     /// Camera position. Default front-facing for video calls.
     public var cameraPosition: AVCaptureDevice.Position = .front
 
+    /// media-consent v1 — what feeds the encoder.
+    ///
+    /// - `.camera`: classic path — AVCaptureSession owns the frames.
+    /// - `.external`: NO camera is ever opened. Frames are injected via
+    ///   [submitExternalFrame] (ReplayKit screen share) and/or the pipeline
+    ///   is used decode-only (receiving a peer's screen on an audio call).
+    ///   `start()` skips the permission prompt and the capture session
+    ///   entirely, so an audio-only screen share never touches the camera.
+    public enum SourceMode { case camera, external }
+
+    /// Configure BEFORE `start()`. Defaults to `.camera`.
+    public var sourceMode: SourceMode = .camera
+
     /// Target dimensions / fps. Defaults match VideoConstants engine
     /// numbers so cross-platform interop is symmetrical.
     /// `nonisolated(unsafe)` so the AVCapture / VT callback closures
@@ -115,6 +128,12 @@ public final class VideoCallPipeline: NSObject {
     /// arm64 so the worst-case race is one stale frame emitted right
     /// at toggle time.
     private nonisolated(unsafe) var paused: Bool = false
+    /// media-consent v1 — while a screen share is feeding the encoder via
+    /// [submitExternalFrame], camera frames from the capture session are
+    /// dropped (one producer at a time; interleaving two sources corrupts
+    /// the HEVC stream). The capture session keeps running so the local
+    /// camera preview survives the share and resuming is instant.
+    public nonisolated(unsafe) var externalFeedActive: Bool = false
     private let outboundFragmenter = VideoFrameFragmenter()
     private let inboundFragmenter = VideoFrameFragmenter()
 
@@ -149,8 +168,17 @@ public final class VideoCallPipeline: NSObject {
 
     /// Start camera + encoder. Throws if AVCaptureSession can't open
     /// the camera (permission denied, simulator without camera, etc.)
+    /// In `.external` source mode the camera/permission steps are skipped
+    /// entirely — only the encoder/decoder/purge machinery comes up.
     public func start() async throws {
         guard !isRunning else { return }
+        if sourceMode == .external {
+            try encoder.start()
+            encoder.requestForcedKeyFrame()
+            startPurgeTimer()
+            isRunning = true
+            return
+        }
         try await ensurePermission()
         try setupSession()
         try encoder.start()
@@ -311,9 +339,41 @@ public final class VideoCallPipeline: NSObject {
     /// W524 — pause/resume outbound video without tearing down the
     /// capture session. The local preview stays live; the captureOutput
     /// delegate just stops feeding the encoder. Used by ABR layer 4
-    /// when latency + loss enter "give up on video" territory.
+    /// when latency + loss enter "give up on video" territory, and by
+    /// media-consent v1 to hold camera frames back until the peer accepts
+    /// the upgrade (preview-only: nothing leaves the device while paused).
     public nonisolated func setVideoPaused(_ paused: Bool) {
         self.paused = paused
+    }
+
+    /// media-consent v1 — external-source injection point (ReplayKit screen
+    /// share). Routes through the SAME paused gate / WebRTC bridge / W561
+    /// resize / HEVC encode path as camera frames, so the WS-HEVC transport
+    /// carries the screen exactly like it carries the camera. Safe to call
+    /// from any queue (mirrors the captureOutput delegate's isolation).
+    public nonisolated func submitExternalFrame(
+        _ pixelBuffer: CVPixelBuffer, presentationTimeNs: Int64
+    ) {
+        if self.paused { return }
+        self.onCapturedPixelBuffer?(pixelBuffer, presentationTimeNs)
+        let bw = CVPixelBufferGetWidth(pixelBuffer)
+        let bh = CVPixelBufferGetHeight(pixelBuffer)
+        if bw > 0, bh > 0, (bw != self.encoder.width || bh != self.encoder.height) {
+            do {
+                try self.encoder.setResolution(width: bw, height: bh)
+                self.targetWidth = bw
+                self.targetHeight = bh
+            } catch {
+                print("[VideoCallPipeline] external frame encoder resize failed: \(error)")
+            }
+        }
+        do {
+            try self.encoder.encode(
+                pixelBuffer: pixelBuffer,
+                presentationTimeNs: UInt64(max(0, presentationTimeNs)))
+        } catch {
+            print("[VideoCallPipeline] external frame encode failed: \(error)")
+        }
     }
 
     /// W524 — step the encoder + capture session to a new resolution
@@ -527,6 +587,9 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         // encoder so the peer sees a clean stall, not garbled
         // partial frames at the bottom of the bitrate floor.
         if self.paused { return }
+        // Screen share owns the encoder while active — drop camera frames
+        // (see externalFeedActive docs).
+        if self.externalFeedActive { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let ns = UInt64(CMTimeGetSeconds(pts) * 1_000_000_000)
         // Android interop bridge: push raw frame to WebRTC RTCVideoSource

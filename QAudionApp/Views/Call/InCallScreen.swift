@@ -109,7 +109,9 @@ struct InCallScreen: View {
     /// the WebRTC video sender instead of the camera. Drives the
     /// share-screen button's filled state.
     let screenSharing: Bool
-    /// W533: toggle screen-share on/off. Shown only when `hasVideo == true`
+    /// W533 + media-consent v1: toggle screen-share on/off. Always shown
+    /// during a call (screen share works from audio-only calls and never
+    /// opens the camera)
     /// (in audio calls we'd need an upgrade-to-video first).
     let onToggleScreenShare: () -> Void
     /// W534: true when the REMOTE peer has announced they are sharing
