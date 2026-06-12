@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit   // W574f — UIDevice.userInterfaceIdiom for the iPad VP-IO gate
+#endif
 #if canImport(AVFoundation)
 import AVFoundation
 
@@ -259,6 +262,26 @@ public final class AudioProcessingPipeline {
             .contains { $0.portType == .builtInSpeaker }
     }
 
+    /// W574f — VP-IO single-engine TX-capture is broken on iPad: enabling
+    /// `setVoiceProcessingEnabled(true)` on the iPad's built-in-speaker
+    /// route leaves the input tap callback silent (no buffers ever arrive
+    /// → tx_enc=0; confirmed call 8bfdbad1, iPad callee). The Float32 tap
+    /// fallback (W574) cannot help because the callback never fires at all
+    /// — this is the documented iPad VP-IO + builtInSpeaker failure mode,
+    /// NOT a format mismatch. The W556 history proves iPad TX works with
+    /// VP-IO OFF. So the speaker-route AEC force (W574c) must NOT apply on
+    /// iPad: working audio beats echo cancellation. iPad keeps no-VP-IO on
+    /// speaker (echo remains — tracked as a follow-up needing a capture
+    /// path that survives VP-IO, e.g. a dedicated VP-IO engine or software
+    /// AEC). iPhone is unaffected (its tap works under VP-IO).
+    private static var isPad: Bool {
+        #if canImport(UIKit)
+        return UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        return false
+        #endif
+    }
+
     /// L-15 — cached voice-processing state. Updated by
     /// enable/disableVoiceProcessing so `getStats()` no longer has to
     /// allocate a throwaway `AVAudioEngine()` on every call just to
@@ -271,7 +294,10 @@ public final class AudioProcessingPipeline {
         // W574c — evaluated at engine-(re)start time. AudioCapture restarts
         // the engine on route changes (including the speaker override), so
         // toggling the in-call speaker button re-runs this decision.
+        // W574f — EXCLUDE iPad: VP-IO kills the iPad tap (tx_enc=0). iPad
+        // keeps no-VP-IO on speaker (echo, but working TX). iPhone only.
         let speakerRoute = enableAecOnSpeakerRoute
+            && !Self.isPad
             && Self.currentRouteHasBuiltInSpeaker()
 
         let shouldEnable: Bool

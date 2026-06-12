@@ -3061,6 +3061,12 @@ final class AppState: ObservableObject {
                 // otherwise a stale/cross-call handshake completion
                 // could race a different call's key into the broker.
                 guard self.callContactId == peerId else { return }
+                // W574e — install the M-15 WS-relay sealers so audio interops
+                // with Android (which seals every relay frame). Uses the wire
+                // call_id so the HKDF info matches the peer byte-for-byte.
+                if let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(), !cid.isEmpty {
+                    self.callService.installRelaySealers(sessionKey: sharedSecret, callId: cid)
+                }
                 CallSessionKeyBroker.shared.bind(
                 getCallContactId: { [weak self] in self?.callContactId },
                 setSessionKey: { [weak self] in self?.callPqcSessionKey = $0 },
@@ -3622,6 +3628,10 @@ final class AppState: ObservableObject {
                         // M-9: only register the key for the call that
                         // is actually in progress for this peer.
                         guard strongSelf.callContactId == peerId else { return }
+                        // W574e — install M-15 WS-relay sealers (Android interop).
+                        if let cid = (strongSelf.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(), !cid.isEmpty {
+                            strongSelf.callService.installRelaySealers(sessionKey: sharedSecret, callId: cid)
+                        }
                         // Bind broker on first use; idempotent.
                         CallSessionKeyBroker.shared.bind(
                             getCallContactId: { [weak self] in self?.callContactId },

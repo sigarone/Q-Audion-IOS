@@ -1,7 +1,14 @@
 import Foundation
 import CryptoKit
-#if canImport(WebRTC)
-import WebRTC
+
+// W574e — sealer ungated from `#if canImport(WebRTC)`. Its crypto is pure
+// CryptoKit (the former `import WebRTC` was unused — only referenced in
+// doc comments). Ungating lets the BcryptoWsRelay audio path in
+// CallService apply the same M-15 seal that Android's
+// BcryptoWsFrameRelayTransport applies, which is REQUIRED for
+// Android↔iOS relay audio interop (Android seals unconditionally). The
+// WebRTC-SRTP adapter (PqcFrameEncryptorAdapter) stays WebRTC-gated and
+// still references this class unchanged.
 
 /// W376 — PQC-augmented RTP frame sealing layer.
 ///

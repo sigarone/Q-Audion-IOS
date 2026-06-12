@@ -169,6 +169,41 @@ final class CallService {
     /// call_answer at +5.9s).
     private var peerAnswered = false
 
+    // MARK: - W574e — M-15 BcryptoWsRelay frame sealing (Android interop)
+
+    /// PQC RTP frame sealers for the WS-relay audio path. Android's
+    /// `BcryptoWsFrameRelayTransport` wraps EVERY relay audio frame in an
+    /// AES-GCM seal (nonce12||ct||tag16, HKDF key from the PQC session key
+    /// + callId, per-frame counter nonce, 64-frame anti-replay) ON TOP of
+    /// the AdaptivePadding+WireRelayFrameCodec frame — UNCONDITIONALLY. iOS
+    /// shipped the byte-identical `PqcRtpFrameSealer` (KAT-matched) but
+    /// never wired it into this path (only into WebRTC SRTP), so every
+    /// Android→iOS relay frame failed AEAD decode (100% rx_dec_err, calls
+    /// 8bfdbad1/427e5027). These two sealers (independent counters via
+    /// makeSibling — M-13) restore the layer. nil until the session key is
+    /// known → pre-handshake frames pass through, matching Android's
+    /// `pqcSend?.seal(payload) ?: payload`.
+    private var relaySealerSend: PqcRtpFrameSealer?
+    private var relaySealerRecv: PqcRtpFrameSealer?
+
+    /// Build the WS-relay sealers from the established PQC session key and
+    /// the wire call_id. MUST use the lowercase wire call_id (same string
+    /// Android feeds `PqcRtpFrameSealer.create`) or the HKDF info diverges
+    /// and interop fails. Idempotent: a second call with the same key is a
+    /// no-op (the handshake completion can fire more than once).
+    public func installRelaySealers(sessionKey: Data, callId: String) {
+        guard relaySealerSend == nil else { return }
+        let cid = callId.lowercased()
+        do {
+            let send = try PqcRtpFrameSealer(pqcSessionKey: sessionKey, callId: cid)
+            relaySealerSend = send
+            relaySealerRecv = send.makeSibling()
+            print("[CallService] W574e: WS-relay PQC sealers installed (callId=\(cid.prefix(8))…)")
+        } catch {
+            print("[CallService] W574e: relay sealer install failed: \(error) — relay runs unsealed (Android interop will fail)")
+        }
+    }
+
     // MARK: - Mute / Hold
 
     /// When true, processOutgoingAudio returns silent (zero-padded) ciphertext.
@@ -576,6 +611,25 @@ final class CallService {
         case noIntegration
     }
 
+    /// W574e — strip the M-15 relay seal from an inbound frame, mirroring
+    /// Android `BcryptoWsFrameRelayTransport.parseRawFrame`.
+    ///
+    /// Returns the inner `0x01|…` WireRelayFrameCodec frame, or nil if the
+    /// frame must be DROPPED. Once the recv sealer is installed (key
+    /// established) ALL frames are expected sealed — an open failure is a
+    /// replay/forgery/garbage frame and is dropped (matching Android, which
+    /// drops on SecurityException). Before install (sealer nil) the frame
+    /// passes through unchanged — the pre-handshake window where neither
+    /// side seals yet.
+    private func unsealRelayFrame(_ data: Data) -> Data? {
+        guard let sealer = relaySealerRecv else { return data }
+        do {
+            return try sealer.open(data)
+        } catch {
+            return nil
+        }
+    }
+
     func endCall() {
         onDeepfakeAlert?(false)
         stopDurationTimer()
@@ -600,8 +654,16 @@ final class CallService {
         let n: String = frames.count.description
         print("[CallService] RX W481: draining " + n + " pre-buffered frame(s)")
         for frame in frames {
+            // W574e — these buffered frames arrived pre-bind (pre-handshake),
+            // so they are normally unsealed pass-through; unsealRelayFrame
+            // returns them unchanged when the sealer isn't installed yet, or
+            // strips the seal / drops if it is.
+            guard let inner = unsealRelayFrame(frame) else {
+                rxDecryptErrorCount &+= 1
+                continue
+            }
             do {
-                let pcm = try integration.processIncomingAudio(serializedFrame: frame)
+                let pcm = try integration.processIncomingAudio(serializedFrame: inner)
                 framesDecryptedRx &+= 1
                 audioCapture?.playFrame(pcm)  // single-engine: playback lives on the capture engine
             } catch {
@@ -679,8 +741,19 @@ final class CallService {
                 }
                 return
             }
+            // W574e — strip the M-15 relay seal before the AdaptivePadding
+            // decode. Android wraps every relay frame in this seal; once our
+            // recv sealer is installed an open failure means replay/forgery →
+            // drop (counts as a decrypt error). Pre-install → pass through.
+            guard let inner = self.unsealRelayFrame(serializedFrame) else {
+                self.rxDecryptErrorCount &+= 1
+                if self.rxDecryptErrorCount == 1 || self.rxDecryptErrorCount % 250 == 0 {
+                    print("[CallService] RX: M-15 unseal failed/replay (x\(self.rxDecryptErrorCount)) — dropped")
+                }
+                return
+            }
             do {
-                let pcm = try integration.processIncomingAudio(serializedFrame: serializedFrame)
+                let pcm = try integration.processIncomingAudio(serializedFrame: inner)
                 self.framesDecryptedRx &+= 1
                 if !self.loggedFirstRxDecrypt {
                     self.loggedFirstRxDecrypt = true
@@ -789,6 +862,8 @@ final class CallService {
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
         peerAnswered = false  // W574b — re-arm the pre-answer mic gate for the next call
+        relaySealerSend = nil  // W574e — fresh M-15 sealers per call (new key)
+        relaySealerRecv = nil
         // W67: reset transport binding. Nota: NON disconnect-iamo il
         // wsClient (può restare connesso per signaling / chat / contacts).
         // Solo facciamo nil-out i riferimenti così future audio frames
@@ -995,11 +1070,23 @@ final class CallService {
                 // receiving iOS side auto-detects either format, so this is
                 // also correct for iOS↔iOS).
                 let wireFrame = encodeAudioForWire(encrypted)
+                // W574e — apply the M-15 seal so the on-wire bytes match
+                // Android's BcryptoWsFrameRelayTransport.sendRaw exactly:
+                // seal( 0x01|nonce|seq|ctLen|ct ). Pass-through until the
+                // sealer is installed (key-established), mirroring Android's
+                // `pqcSend?.seal(payload) ?: payload`. iOS↔iOS (both new)
+                // seal↔open; iOS↔Android now interops.
+                let sealedFrame: Data
+                if let sealer = relaySealerSend {
+                    sealedFrame = (try? sealer.seal(wireFrame)) ?? wireFrame
+                } else {
+                    sealedFrame = wireFrame
+                }
                 // W525: include the call_id so Android/Desktop accept
                 // the frame. Their filter drops envelopes whose
                 // call_id doesn't match the active call.
                 let cid = getCallId?()
-                ws.sendAudioFrame(recipientId: peer, frame: wireFrame, callId: cid)
+                ws.sendAudioFrame(recipientId: peer, frame: sealedFrame, callId: cid)
                 if !loggedFirstTxWire {
                     loggedFirstTxWire = true
                     let fmt: String = androidAudioWireCompat ? "WireRelayFrameCodec" : "FrameEncoder"
