@@ -254,4 +254,3 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         return bytes
     }
 }
-#endif
