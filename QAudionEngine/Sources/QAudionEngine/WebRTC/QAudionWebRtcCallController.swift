@@ -1106,7 +1106,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                                  didReceiveRemoteAudioTrack track: RTCAudioTrack) {
         // W466 — confirm the remote audio track arrived. If this never
         // logs, the peer never published audio (or SDP m-line missing).
-        print("[WebRTC] remote AUDIO track received — enabled=\(track.isEnabled)")
+        //
+        // W574d — DISABLE playback of the remote SRTP audio. Voice rides
+        // the sealed relay path only; the Android peer keeps its SRTP mic
+        // track enabled, and before this gate its voice played out of the
+        // loudspeaker DURING RING (the responder's answer is created at
+        // call_incoming time, so ICE+DTLS complete pre-answer — there is
+        // no CallKit/session gate on WebRTC playout). Disabling the track
+        // also stops the post-answer double-audio (SRTP + relay).
+        track.isEnabled = false
+        print("[WebRTC] remote AUDIO track received — playback disabled (sealed relay carries voice)")
         onRemoteAudioTrack?(track)
     }
 

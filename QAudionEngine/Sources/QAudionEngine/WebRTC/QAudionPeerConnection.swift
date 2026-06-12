@@ -93,20 +93,30 @@ public final class QAudionPeerConnection: NSObject {
     // MARK: - Audio track
 
     /// Add the local microphone track. Required before createOffer / createAnswer
-    /// for an audio call.
+    /// for an audio call so the SDP negotiates an `m=audio` section.
+    ///
+    /// W574d — the track is added DISABLED. Q-Audion audio NEVER rides
+    /// plain DTLS-SRTP: iOS ships sealed Opus+AEAD frames over the WS
+    /// relay, Android over its FrameRelayTransport (DC/WS). The enabled
+    /// SRTP mic track caused two field bugs on Android→iOS calls
+    /// (report 2026-06-12): (1) the peer's SRTP voice played out of the
+    /// loudspeaker DURING RING (the responder builds its answer at
+    /// call_incoming time, so ICE+DTLS complete pre-answer and nothing
+    /// gated playback), and (2) WebRTC's voice-processing audio unit
+    /// owned the mic, starving the AVAudioEngine relay tap (tx_enc=0
+    /// on every cross call). m=audio still negotiates — the track just
+    /// carries silence, mirroring Android's earbud-relay behaviour
+    /// (`audioTrack.setEnabled(false)`).
     @discardableResult
     public func addLocalAudioTrack() -> Bool {
         guard let pc = peerConnection, localAudioTrack == nil else { return false }
         let audioConstraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         let audioSource = factory.audioSource(with: audioConstraints)
         let track = factory.audioTrack(with: audioSource, trackId: audioTrackId)
-        track.isEnabled = true
+        track.isEnabled = false  // W574d — sealed-relay-only audio; see doc above
         pc.add(track, streamIds: [stableStreamId])
         localAudioTrack = track
-        // W466 — confirm the local mic track was plumbed into the peer
-        // connection. If this never logs, the WebRTC call has no
-        // outgoing audio m-line and the peer hears nothing.
-        print("[WebRTC] local AUDIO track added to peer connection")
+        print("[WebRTC] local AUDIO track added to peer connection (disabled — sealed relay carries voice)")
         return true
     }
 
@@ -191,8 +201,13 @@ public final class QAudionPeerConnection: NSObject {
     }
 
     /// Mute / unmute the local microphone.
+    ///
+    /// W574d — the SRTP mic track is PERMANENTLY disabled (sealed relay
+    /// carries the voice, see `addLocalAudioTrack`). Only the muted
+    /// direction is propagated so no caller can accidentally re-enable
+    /// plain-SRTP voice transmission via an unmute.
     public func setMicrophoneMuted(_ muted: Bool) {
-        localAudioTrack?.isEnabled = !muted
+        if muted { localAudioTrack?.isEnabled = false }
     }
 
     // MARK: - Video track (optional)
