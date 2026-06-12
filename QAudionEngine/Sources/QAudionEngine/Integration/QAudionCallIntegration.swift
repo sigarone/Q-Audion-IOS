@@ -139,6 +139,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// final K_video from this IKM once the negotiated tags are known.
     /// Fires at most once per call.
     public var onVideoKeyEstablished: ((Data) -> Void)?
+
+    /// W574g — fires (sessionKey, callId) at EVERY session-init site, the
+    /// instant the engine session key is set. The app wires this to
+    /// `CallService.installRelaySealers` so the M-15 WS-relay sealer is
+    /// installed deterministically on BOTH caller and callee.
+    ///
+    /// Why this and not `onPqcSessionKeyEstablished` + AppState guards:
+    /// the responder's `onPqcSessionKeyEstablished` install was gated on
+    /// `AppState.callContactId == peerId`, but on the CALLEE that flag is
+    /// set in the call_incoming main-async block which RACES the inbound
+    /// OFFER Task — when the OFFER's handshake completed first the install
+    /// was skipped, so Android→iOS relay audio failed 100% AEAD decode
+    /// (call 456c1a40: rx_dec_err=597/597) while iOS→Android worked (call
+    /// ca28b4af, caller sets callContactId synchronously). This callback
+    /// carries the callId from the handshake itself (race-free) and fires
+    /// unconditionally, so caller and callee install identically.
+    public var onRelaySessionReady: ((Data, String) -> Void)?
+
     /// Set a BCryptoRestClient to enable userId pre-resolution before OFFER.
     /// Without this, OFFERs use the raw recipientId which may cause server routing failures.
     public var restClient: BCryptoRestClient?
@@ -479,6 +497,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let result = try pqc.encapsulate(remotePublicKey: remotePublicKey)
             try engine.initialize()
             try engine.initSession(sharedSecret: result.sharedSecret)
+            onRelaySessionReady?(result.sharedSecret, stashedCallId ?? "")
             let accept = QAudionCapabilityExchange.createAccept(ciphertext: result.ciphertext, pskFingerprint: nil)
             Task { try? await sendOpaqueMessage(accept) }
             lock.lock(); state = .active; lock.unlock()
@@ -507,6 +526,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             guard let kp = localKeyPair else { return }
             let sharedSecret = try pqc.decapsulate(ciphertext: ciphertext, privateKey: kp.privateKey)
             try engine.initSession(sharedSecret: sharedSecret)
+            onRelaySessionReady?(sharedSecret, (lock.withLock { pendingOutgoingCallId }) ?? "")
             lock.lock(); state = .active; lock.unlock()
             // W529: handshake reached active — kill the retry loop.
             offerRetryTask?.cancel()
@@ -716,6 +736,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // Byte-identical to Android FrameRelayTransport.send/decode +
             // AdaptivePaddingController.sealAudio/openAudio.
             try engine.initSession(sharedSecret: combined, adaptivePadding: true)
+            onRelaySessionReady?(combined, callId)
             lock.withLock { state = .active }
             // W529: handshake reached active — kill the retry loop.
             offerRetryTask?.cancel()
@@ -816,6 +837,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // 6. Initialise the audio session and fire the broker hook.
             // W479 — Android peer (caller side): same AdaptivePadding scheme.
             try engine.initSession(sharedSecret: combined, adaptivePadding: true)
+            onRelaySessionReady?(combined, callId)
             lock.withLock {
                 state = .active
                 // 7. Zero the stashed privs immediately — the session key is
@@ -1057,6 +1079,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
         try engine.initialize()
         try engine.initSession(sharedSecret: sessionKey, adaptivePadding: true)
+        onRelaySessionReady?(sessionKey, callId)
         lock.withLock { state = .active }
         offerRetryTask?.cancel()
         offerRetryTask = nil

@@ -3045,6 +3045,18 @@ final class AppState: ObservableObject {
             return existing
         }
         let integration = QAudionCallIntegration()
+        // W574g — install the M-15 WS-relay sealer the instant the engine
+        // session key is set, race-free, carrying the handshake's own
+        // callId. Responder side: this fires from the inbound OFFER's
+        // session-init regardless of whether AppState.callContactId has
+        // been set yet (the old onPqcSessionKeyEstablished install raced
+        // it and skipped the callee → Android→iOS 100% AEAD fail).
+        integration.onRelaySessionReady = { [weak self] sessionKey, cid in
+            Task { @MainActor [weak self] in
+                guard let self = self, !cid.isEmpty else { return }
+                self.callService.installRelaySealers(sessionKey: sessionKey, callId: cid)
+            }
+        }
         // W389: forward the ML-KEM secret to the broker. peerId is the
         // CALLER (we're the responder), so SAS / video sealer rotate
         // are bound to the right peer for this device.
@@ -3061,12 +3073,10 @@ final class AppState: ObservableObject {
                 // otherwise a stale/cross-call handshake completion
                 // could race a different call's key into the broker.
                 guard self.callContactId == peerId else { return }
-                // W574e — install the M-15 WS-relay sealers so audio interops
-                // with Android (which seals every relay frame). Uses the wire
-                // call_id so the HKDF info matches the peer byte-for-byte.
-                if let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(), !cid.isEmpty {
-                    self.callService.installRelaySealers(sessionKey: sharedSecret, callId: cid)
-                }
+                // W574e/g — M-15 relay sealer install moved to the race-free
+                // integration.onRelaySessionReady callback (wired below); the
+                // callContactId guard here raced the inbound OFFER on the
+                // callee and skipped the install.
                 CallSessionKeyBroker.shared.bind(
                 getCallContactId: { [weak self] in self?.callContactId },
                 setSessionKey: { [weak self] in self?.callPqcSessionKey = $0 },
@@ -3615,6 +3625,13 @@ final class AppState: ObservableObject {
                 // on the integration so we don't hold AppState alive via
                 // callService → integration → closure. The peerId is
                 // captured by-value from `contactId`.
+                // W574g — race-free M-15 relay sealer install (caller side).
+                integration.onRelaySessionReady = { [weak self] sessionKey, cid in
+                    Task { @MainActor [weak self] in
+                        guard let self = self, !cid.isEmpty else { return }
+                        self.callService.installRelaySealers(sessionKey: sessionKey, callId: cid)
+                    }
+                }
                 integration.onPqcSessionKeyEstablished = { [weak self] sharedSecret in
                     // The integration fires this from its WS dispatch
                     // queue. Both AppState and CallSessionKeyBroker are
@@ -3628,10 +3645,8 @@ final class AppState: ObservableObject {
                         // M-9: only register the key for the call that
                         // is actually in progress for this peer.
                         guard strongSelf.callContactId == peerId else { return }
-                        // W574e — install M-15 WS-relay sealers (Android interop).
-                        if let cid = (strongSelf.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(), !cid.isEmpty {
-                            strongSelf.callService.installRelaySealers(sessionKey: sharedSecret, callId: cid)
-                        }
+                        // W574e/g — M-15 sealer install moved to the race-free
+                        // integration.onRelaySessionReady callback (wired below).
                         // Bind broker on first use; idempotent.
                         CallSessionKeyBroker.shared.bind(
                             getCallContactId: { [weak self] in self?.callContactId },
