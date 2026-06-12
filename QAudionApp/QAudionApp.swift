@@ -35,7 +35,7 @@ struct QAudionApp: App {
                 return
             }
             NotificationCenter.default.post(
-                name: .bgWsKeepalive,
+                name: AppState.bgWsKeepalive,
                 object: refreshTask
             )
         }
