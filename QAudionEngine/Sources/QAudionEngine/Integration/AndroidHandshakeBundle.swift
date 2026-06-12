@@ -211,6 +211,15 @@ public enum CallPiggyBack: Equatable {
     /// piggy-back as malformed.
     case hangup(callId: String, reason: String)
 
+    /// `<callId>|EARBUDPDU:<base64>` — opaque earbud-firmware handshake
+    /// PDU (earbud-relay-v1). The earbud-side phone relays HSRESP
+    /// fragments from the firmware; iOS (always the SW counterparty)
+    /// replies with HSINIT / HSFIN through the same framing. Bytes are
+    /// opaque ciphertext fragments — decoded from base64 here, never
+    /// parsed beyond `EarbudFwPduCodec`. Mirrors Android
+    /// `WsCallSignaller.EARBUD_PDU_PAYLOAD_PREFIX`.
+    case earbudPdu(callId: String, pdu: Data)
+
     /// Parse the literal `opaque_message.data` UTF-8 string.
     ///
     /// Returns `nil` for shapes that are NOT a `<callId>|<TAG>:...`
@@ -241,6 +250,13 @@ public enum CallPiggyBack: Equatable {
         if let v = stripPrefix(payload, "HANGUP:") {
             return .hangup(callId: callId, reason: v)
         }
+        // EARBUDPDU:<base64> — earbud-relay-v1 handshake PDU. Malformed
+        // base64 is dropped fail-closed (handshake simply won't complete),
+        // mirroring the Android receive site.
+        if let v = stripPrefix(payload, "EARBUDPDU:") {
+            guard let bytes = Data(base64Encoded: v) else { return nil }
+            return .earbudPdu(callId: callId, pdu: bytes)
+        }
         return nil
     }
 
@@ -254,5 +270,12 @@ public enum CallPiggyBack: Equatable {
     /// hook) so AppState doesn't have to know the framing details.
     public static func serializeScreenShare(callId: String, active: Bool) -> String {
         return "\(callId)|SCREEN_SHARE:\(active ? "start" : "stop")"
+    }
+
+    /// Build a wire string for an earbud handshake PDU — the inverse of
+    /// the `.earbudPdu` parse branch. Byte-identical framing to Android
+    /// `WsCallSignaller.sendEarbudPdu` (`"<callId>|EARBUDPDU:<base64>"`).
+    public static func serializeEarbudPdu(callId: String, pdu: Data) -> String {
+        return "\(callId)|EARBUDPDU:\(pdu.base64EncodedString())"
     }
 }

@@ -331,6 +331,58 @@ final class AppState: ObservableObject {
     let authService = AuthService()
     let callService = CallService()
     let messageCrypto = MessageCrypto()
+
+    /// earbud-relay-v1 — SW counterparty handshake coordinator for calls
+    /// where the PEER's bonded earbud (HW firmware, CRUX SPE) owns the
+    /// audio key. iOS never advertises the capability; it reacts to the
+    /// peer's advertisement (call_incoming / call_answer caps) by running
+    /// `EarbudHandshakeResponder` over the `EARBUDPDU:` opaque channel
+    /// and installing K_counter via
+    /// `QAudionCallIntegration.completeEarbudCounterparty` — from there
+    /// the standard key-established wiring (SAS words, broker, sealers)
+    /// takes over unchanged. Lazy so the closures can capture self.
+    lazy var earbudCounterparty: EarbudCounterpartyService = {
+        let svc = EarbudCounterpartyService()
+        svc.sendOpaque = { [weak self] peerId, payload in
+            guard let api = self?.liveProvider?.callingApi else {
+                print("[AppState] earbud PDU send skipped — no live provider")
+                return
+            }
+            try await api.sendOpaqueMessageString(recipientId: peerId, payload: payload)
+        }
+        svc.onSessionKey = { [weak self] callId, key in
+            guard let self else { return }
+            // Callee timing: the earbud handshake typically completes
+            // DURING RING, before activateIncomingCallAudio binds
+            // callService.callIntegration — the key must land on the
+            // responder integration built at call_incoming time. Caller
+            // side: callService.callIntegration is bound by startCall.
+            guard let integration = self.callService.callIntegration
+                    ?? self.responderCallIntegration else {
+                print("[AppState] earbud K_counter ready but no call integration — dropped (call torn down?)")
+                return
+            }
+            do {
+                try integration.completeEarbudCounterparty(callId: callId, sessionKey: key)
+                // Telemetry/UI parity with the Android earbud side.
+                self.encryptionAlgo = "ML-KEM-1024 + X25519 (earbud SPE — CRUX)"
+            } catch {
+                print("[AppState] completeEarbudCounterparty failed: \(error.localizedDescription)")
+            }
+        }
+        svc.onFailed = { callId, reason in
+            // Diagnostic only — mirrors a PQC handshake timeout: the call
+            // survives, audio simply has no session key (and the W461
+            // fallback keeps it alive).
+            print("[AppState] earbud counterparty FAILED callId=\(callId.prefix(8))…: \(reason)")
+            TelemetryService.shared.emit(
+                kind: "call.earbud.counterparty_failed",
+                callId: callId,
+                attrs: ["reason": reason]
+            )
+        }
+        return svc
+    }()
     /// VPN service — manages WireGuard tunnel lifecycle via NetworkExtension.
     /// Bare `let` because `VpnService` is itself `ObservableObject`; HomeView
     /// passes it directly to `VpnToggleChip(@ObservedObject)` so the chip
@@ -1300,6 +1352,20 @@ final class AppState: ObservableObject {
                let calling = provider.callingApi as? BCryptoCallingApiImpl {
                 calling.bindIncomingCallId(callIdStr)
             }
+            // earbud-relay-v1 — the caller's audio key lives in its
+            // earbud FIRMWARE: no SW PQC OFFER will ever arrive. Start
+            // the counterparty handshake (HSINIT) IMMEDIATELY: the
+            // earbud-side phone buffers early PDUs (replay=8) while it
+            // brings up the BLE leg, and Android peers expect HSINIT
+            // "well before" their j1 subscriber is alive.
+            if CallCapabilities.peerAdvertisedEarbudRelay(self.pendingPeerCapabilities),
+               !callIdStr.isEmpty {
+                let earbudCallId = callIdStr
+                let earbudPeer = senderId
+                Task { @MainActor [weak self] in
+                    self?.earbudCounterparty.start(callId: earbudCallId, peerId: earbudPeer)
+                }
+            }
             // CallKit must run from MainActor — its CXProvider state
             // machine refuses cross-thread mutations.
             DispatchQueue.main.async {
@@ -1796,6 +1862,25 @@ final class AppState: ObservableObject {
             // applying the SDP so the pipeline pick has the right
             // negotiated set when ensureVideoSealer() runs at video setup.
             let peerCaps = data["capabilities"] as? [String]
+            // earbud-relay-v1 (caller side) — the callee answered from a
+            // phone whose bonded earbud owns the audio key. The SW PQC
+            // OFFER we already shipped will never be ACCEPTed; run the
+            // counterparty handshake instead. The callId comes from the
+            // envelope (or the bound active call as fallback).
+            if CallCapabilities.peerAdvertisedEarbudRelay(peerCaps) {
+                let envelopeCallId = (data["call_id"] as? String) ?? ""
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let cid = !envelopeCallId.isEmpty
+                        ? envelopeCallId
+                        : ((self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? "")
+                    guard !cid.isEmpty, let peer = self.callContactId else {
+                        print("[AppState] earbud caps on call_answer but no callId/peer — counterparty NOT started")
+                        return
+                    }
+                    self.earbudCounterparty.start(callId: cid, peerId: peer)
+                }
+            }
             if let sdp = data["sdp"] as? String, !sdp.isEmpty {
                 self.handleIncomingWebRtcAnswer(sdp: sdp, peerCapabilities: peerCaps)
             } else {
@@ -2829,6 +2914,15 @@ final class AppState: ObservableObject {
             // The authoritative teardown still arrives on the
             // `call_hangup` WS envelope. Log + drop.
             print("[AppState] piggy-back HANGUP dropped (call_hangup is authoritative): callId=\(callId.prefix(8))… reason=\(reason) from=\(senderId.prefix(8))…")
+        case .earbudPdu(let callId, let pdu):
+            // earbud-relay-v1 — HSRESP fragments relayed by the
+            // earbud-side phone. Sender must be the active call peer
+            // (the coordinator additionally matches the callId).
+            guard callContactId == senderId else {
+                print("[AppState] EARBUDPDU dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
+            }
+            earbudCounterparty.handleInbound(callId: callId, pdu: pdu)
         }
     }
 
@@ -3929,6 +4023,9 @@ final class AppState: ObservableObject {
         incomingCallerName = ""
         activeCallKitId = nil
         answeredCallKitId = nil  // Bug A — re-arm the idempotent-answer guard for the next call
+        // earbud-relay-v1 — drop the one-shot counterparty state so the
+        // next earbud call starts a fresh responder (fresh FW-H7 counter).
+        earbudCounterparty.reset()
         // W534 — drop any sticky peer-screen-share state from this call
         // so the next call starts with a clean UI. Per SCREEN_SHARE_
         // PROTOCOL.md the call_hangup envelope is authoritative for

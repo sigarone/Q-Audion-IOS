@@ -1024,6 +1024,51 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         onStateChanged?(.idle)
     }
 
+    // MARK: - earbud-relay-v1 (HW firmware) counterparty install
+
+    /// Install the session key produced by the earbud counterparty
+    /// handshake (`EarbudHandshakeResponder.Step.done`) — the
+    /// earbud-relay-v1 equivalent of the PQC OFFER/ACCEPT completion
+    /// branches above.
+    ///
+    /// On an `earbud-relay-v1` call the peer phone NEVER runs the SW
+    /// PqcHandshake (its key lives in the earbud firmware), so none of
+    /// the opaque OFFER/ACCEPT paths fire: this method is the single
+    /// completion site. It mirrors the JSON-responder branch
+    /// byte-for-byte: AdaptivePadding audio scheme (the wire the
+    /// firmware/Android relay speaks), `.active` transition, and the
+    /// same key-established callbacks so SAS + K_video derivation reuse
+    /// the existing app wiring. K_counter == K_spe (CRUX KAT), so
+    /// `ComputeSasUseCase.invoke(sessionKey:)` yields the SAME 6 words
+    /// the earbud side derives via `nsc_get_sas_entropy`.
+    ///
+    /// Idempotent per callId via `sessionInitializedByCall` (same dedup
+    /// the OFFER paths use).
+    public func completeEarbudCounterparty(callId: String, sessionKey: Data) throws {
+        let normalized = callId.lowercased()
+        let alreadyInit = lock.withLock { () -> Bool in
+            let r = sessionInitializedByCall.contains(normalized)
+            if !r { sessionInitializedByCall.insert(normalized) }
+            return r
+        }
+        if alreadyInit {
+            print("[QAudionCallIntegration] earbud counterparty: session already initialised for callId=\(callId.prefix(8))… — skipping")
+            return
+        }
+        try engine.initialize()
+        try engine.initSession(sharedSecret: sessionKey, adaptivePadding: true)
+        lock.withLock { state = .active }
+        offerRetryTask?.cancel()
+        offerRetryTask = nil
+        onStateChanged?(.active)
+        onPqcSessionKeyEstablished?(sessionKey)
+        // vkey-v1: K_counter is the IKM for the phone-level K_video on
+        // sovereign-earbud calls (parallel handshake gating happens in
+        // the app layer via the negotiated tags).
+        onVideoKeyEstablished?(sessionKey)
+        print("[QAudionCallIntegration] earbud counterparty COMPLETE for callId=\(callId.prefix(8))… — session active (CRUX K_counter installed)")
+    }
+
     // MARK: - W529: idempotent OFFER retry timer
 
     /// Arm a 5 s retry loop that re-emits the EXACT same OFFER bundle

@@ -41,13 +41,36 @@ public enum CallCapabilities {
     /// `videoKeyIsPhoneLevel`.
     public static let vkeyV1: String = "vkey-v1"
 
+    /// Earbud opaque sealed-audio relay v1 (`earbud-relay-v1`, HW switch).
+    /// Advertised by an Android peer whose bonded Q-Audion earbud is the
+    /// active media path: the audio key lives in the EARBUD FIRMWARE
+    /// (CRUX SPE) and the phone is a zero-knowledge relay. iOS NEVER
+    /// advertises this tag (no iOS earbud transport) — it only DETECTS it
+    /// on the peer's caps and switches the key exchange from the SW
+    /// PqcHandshake to the earbud counterparty handshake
+    /// (`EarbudHandshakeResponder` → HSINIT/HSRESP/HSFIN over the
+    /// `EARBUDPDU:` opaque piggy-back). Mirrors `EARBUD_RELAY_V1` in
+    /// Android `CallCapabilities.kt`.
+    public static let earbudRelayV1: String = "earbud-relay-v1"
+
     /// Capabilities advertised by THIS build of the iOS client.
     ///
     /// NOTE: `vkeyV1` is advertised by default but may be stripped at
     /// send time by the sovereign-only policy (see
     /// `CallsGate.sovereignOnlyEnabled`), enforced at the app layer when
     /// it builds the outgoing `capabilities` array.
+    /// `earbudRelayV1` is deliberately ABSENT — detection-only on iOS.
     public static let local: [String] = [sframeV1, ratchetV3, vkeyV1]
+
+    /// #2a gate (Android parity): did the PEER advertise
+    /// ``earbudRelayV1`` in its RAW call-setup capability list,
+    /// regardless of local caps? Pre-intersection check — the agreed set
+    /// (`local ∩ peer`) can never contain the tag because iOS does not
+    /// advertise it. Legacy/empty/nil peer → false (safe).
+    public static func peerAdvertisedEarbudRelay(_ peer: [String]?) -> Bool {
+        guard let peer = peer else { return false }
+        return peer.contains(earbudRelayV1)
+    }
 
     /// Outcome of a capability negotiation between local and peer.
     public struct Negotiated: Equatable, Sendable {
