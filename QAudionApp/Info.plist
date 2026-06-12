@@ -64,6 +64,11 @@
 	<array>
 		<string>voip</string>
 		<string>audio</string>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.bcrypto.qaudion.ws-keepalive</string>
 	</array>
 	<!--
 	  Export Compliance - required by Apple to skip the manual

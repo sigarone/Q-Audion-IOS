@@ -3,6 +3,7 @@ import SwiftUI
 import CryptoKit
 import AVFoundation
 import AudioToolbox  // AudioServicesPlayAlertSound (in-app ringtone)
+import BackgroundTasks
 import QAudionEngine
 #if canImport(WebRTC)
 // W412: needed by the W411 RTCIceServer references inside the
@@ -622,6 +623,20 @@ final class AppState: ObservableObject {
             }
         }
         #endif
+
+        // W-BGK: BGAppRefreshTask handler routing.
+        // QAudionApp.init() registers the BGTask with a closure that posts
+        // .bgWsKeepalive; we observe here so handleWsKeepaliveTask can access
+        // the live auth state without a static reference to AppState.
+        NotificationCenter.default.addObserver(
+            forName: .bgWsKeepalive,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
+            guard let task = notification.object as? BGAppRefreshTask else { return }
+            self?.handleWsKeepaliveTask(task)
+        }
+        scheduleWsKeepalive()
 
         callService.onDeepfakeAlert = { [weak self] isAlert in
             Task { @MainActor in
@@ -1301,6 +1316,40 @@ final class AppState: ObservableObject {
         try? await Task.sleep(nanoseconds: 30_000_000_000) // 30s
         await MainActor.run {
             ref?.retryPendingVoipPushTokenRegistration()
+        }
+    }
+
+    // MARK: - W-BGK: Background WS keepalive
+
+    /// Schedule the next BGAppRefreshTask. Called on launch and at the end of
+    /// each BGTask run so the chain is self-sustaining. iOS picks the actual
+    /// fire time; the `earliestBeginDate` sets a lower bound only — the system
+    /// may defer up to ~15 min based on power / usage patterns.
+    func scheduleWsKeepalive() {
+        let request = BGAppRefreshTaskRequest(identifier: "com.bcrypto.qaudion.ws-keepalive")
+        // Ask iOS to fire within the next 5 minutes; system may delay further.
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 5 * 60)
+        try? BGTaskScheduler.shared.submit(request)
+    }
+
+    /// BGAppRefreshTask handler. Ensures the WS is authenticated (reconnects if
+    /// stale), completes the task, and schedules the next run. The iOS budget
+    /// for a BGAppRefreshTask is ~30 s of CPU — ensureAuthenticated is capped
+    /// at 10 s to stay safely within it.
+    private func handleWsKeepaliveTask(_ task: BGAppRefreshTask) {
+        // Schedule the next run first — if this handler crashes or expires,
+        // the chain is already queued for next time.
+        scheduleWsKeepalive()
+
+        task.expirationHandler = { task.setTaskCompleted(success: false) }
+
+        Task { @MainActor [weak self] in
+            guard let self, self.isAuthenticated, let live = self.liveProvider else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            let ok = await live.persistentConnection.ensureAuthenticated(timeoutSec: 10)
+            task.setTaskCompleted(success: ok)
         }
     }
 
@@ -2843,6 +2892,11 @@ final class AppState: ObservableObject {
     /// chat uses. The recipient's chat dispatcher detects the
     /// `qa_grp:1` marker and routes to GroupChatService.
     static let groupSenderKeyCtlNotification = Notification.Name("qaudion.group.senderKeyCtl")
+
+    /// W-BGK: BGAppRefreshTask notification. QAudionApp.init() posts this when
+    /// iOS fires the ws-keepalive background task; AppState.handleWsKeepaliveTask
+    /// is the observer.
+    static let bgWsKeepalive = Notification.Name("com.bcrypto.qaudion.bgWsKeepalive")
 
     /// W77: dispatch inbound `opaque_message` envelopes. The QUAD frame
     /// inside the payload carries either:

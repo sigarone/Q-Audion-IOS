@@ -73,9 +73,11 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// milliseconds after each `ping`/`pong` cycle. Consumers should dispatch
     /// to @MainActor before updating UI state.
     public var onLatencyMeasured: ((Int) -> Void)?
-    /// Interval between outbound ping keepalives. Server-side idle timeout is
-    /// usually 60s; 30s gives us one retry window before the server drops us.
-    private let pingIntervalSec: TimeInterval = 30
+    /// Interval between outbound ping keepalives. Server pings every 20 s with a
+    /// 45 s stale threshold; matching 20 s ensures we beat mobile-carrier NAT
+    /// idle timeouts (many are ~30 s) and keeps lastInboundAt fresh enough that
+    /// the server never marks this device stale before a foreground ping cycle.
+    private let pingIntervalSec: TimeInterval = 20
     /// If no inbound traffic arrives within this window after a ping, treat the
     /// connection as dead and tear it down so the reconnect loop picks it up.
     private let pongTimeoutSec: TimeInterval = 25
@@ -232,6 +234,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let sessionConfig = URLSessionConfiguration.default
         sessionConfig.timeoutIntervalForRequest = 0   // no read timeout
         sessionConfig.waitsForConnectivity = true
+        // Mark this traffic as call-signaling so iOS gives it priority routing
+        // and (with the voip UIBackgroundMode) keeps the socket alive longer
+        // when the app is in background.
+        sessionConfig.networkServiceType = .callSignaling
 
         // SECURITY C-6 / H-1 / H-5 — pick the TLS-challenge mode the same
         // way BCryptoRestClient does, and route the WS-open event so the
