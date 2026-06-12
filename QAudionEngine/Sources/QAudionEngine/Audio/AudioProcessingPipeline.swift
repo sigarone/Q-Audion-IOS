@@ -170,6 +170,18 @@ public final class AudioProcessingPipeline {
         // Match engine sample rate
         try session.setPreferredSampleRate(config.preferredSampleRate)
 
+        // W574c — pin the built-in mic as preferred input. On iPad the
+        // voice-processing path expects the bottom (voice-chat) mic; when
+        // the system picks a different array mic, enabling VP-IO with the
+        // builtInSpeaker route can silently stop input callbacks (no tap
+        // buffers → dead TX). Best-effort: external mics (headset/BT HFP)
+        // still win automatically when their route is active, because
+        // preferredInput only applies to the built-in route selection.
+        if let builtInMic = session.availableInputs?.first(
+            where: { $0.portType == .builtInMic }) {
+            try? session.setPreferredInput(builtInMic)
+        }
+
         // W464: best-effort only — CallKit is the authoritative activator.
         // A failure here is EXPECTED when CallKit hasn't yet called
         // didActivate; it must not abort configuration or throw upward.
@@ -225,6 +237,28 @@ public final class AudioProcessingPipeline {
     /// VP is all-or-nothing.
     public var voiceProcessingOverride: Bool? = nil
 
+    /// W574c — speaker-route AEC policy ("regola vivavoce"): when the
+    /// CURRENT output route includes the built-in loudspeaker, Apple's
+    /// VP-IO echo cancellation is force-enabled REGARDLESS of the user
+    /// AEC toggle. Rationale: on the external speaker the output
+    /// physically feeds back into the mic — without AEC the far end
+    /// hears severe echo (iPad has no earpiece, so EVERY iPad call is
+    /// a speaker call; iPhone hits this when the user taps speaker).
+    /// On earpiece/headset routes the user toggle (override/config)
+    /// stays authoritative, preserving the W556 no-VP-IO default that
+    /// avoids NS artefacts. Set to `false` to restore pre-W574c
+    /// behaviour (toggle-only).
+    public var enableAecOnSpeakerRoute: Bool = true
+
+    /// True when the active AVAudioSession output route includes the
+    /// built-in loudspeaker (`.builtInSpeaker`). The earpiece reports
+    /// `.builtInReceiver`, so this cleanly separates speakerphone from
+    /// the normal handset route.
+    public static func currentRouteHasBuiltInSpeaker() -> Bool {
+        AVAudioSession.sharedInstance().currentRoute.outputs
+            .contains { $0.portType == .builtInSpeaker }
+    }
+
     /// L-15 — cached voice-processing state. Updated by
     /// enable/disableVoiceProcessing so `getStats()` no longer has to
     /// allocate a throwaway `AVAudioEngine()` on every call just to
@@ -234,8 +268,16 @@ public final class AudioProcessingPipeline {
     public func enableVoiceProcessing(on engine: AVAudioEngine) throws {
         let inputNode = engine.inputNode
 
+        // W574c — evaluated at engine-(re)start time. AudioCapture restarts
+        // the engine on route changes (including the speaker override), so
+        // toggling the in-call speaker button re-runs this decision.
+        let speakerRoute = enableAecOnSpeakerRoute
+            && Self.currentRouteHasBuiltInSpeaker()
+
         let shouldEnable: Bool
-        if let override = voiceProcessingOverride {
+        if speakerRoute {
+            shouldEnable = true
+        } else if let override = voiceProcessingOverride {
             shouldEnable = override
         } else {
             shouldEnable = config.echoCancellationEnabled || config.noiseCancellationEnabled
@@ -263,8 +305,15 @@ public final class AudioProcessingPipeline {
                 // by AVAudioEngine on some iOS versions. We wrap the
                 // assignment in a try? on its KVC form to absorb
                 // that case without crashing.
-                inputNode.isVoiceProcessingAGCEnabled = false
-                print("[AudioProcessingPipeline] W537: voice-processing AGC disabled (Opus gets raw mic)")
+                // W574c — AGC follows the route. On SPEAKERPHONE the mic
+                // is far from the mouth and the captured level is low
+                // ("audio molto basso" report from the iPad side): Apple's
+                // VP AGC is exactly the right tool there. On earpiece /
+                // headset routes keep W537 behaviour (AGC off — Opus gets
+                // the raw mic, no envelope pumping).
+                inputNode.isVoiceProcessingAGCEnabled = speakerRoute
+                let agcState: String = speakerRoute ? "ENABLED (speaker route)" : "disabled (W537)"
+                print("[AudioProcessingPipeline] voice-processing AGC " + agcState)
             }
             voiceProcessingActive = true
         } else {

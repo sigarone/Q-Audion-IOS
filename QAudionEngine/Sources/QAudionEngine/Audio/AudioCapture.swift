@@ -227,6 +227,23 @@ public final class AudioCapture {
             engine = nil; playerNode = nil; playFormat = nil; isRunning = false
             do { try start() }
             catch { print("[AudioCapture] restart after new device failed: \(error.localizedDescription)") }
+        case .override:
+            // W574c — the output route was overridden: this is the in-call
+            // speaker button (`overrideOutputAudioPort(.speaker)` / `.none`).
+            // The VP-IO decision is route-dependent ("regola vivavoce":
+            // speaker → AEC forced ON, earpiece → user toggle), and VP-IO
+            // can only be (un)set BEFORE engine start — so restart the
+            // engine to re-evaluate `enableVoiceProcessing` on the new
+            // route. Same teardown/rebuild sequence as the cases above.
+            guard isRunning else { return }
+            print("[AudioCapture] route change: output override (speaker toggle) — restarting engine to re-evaluate VP-IO")
+            engine?.inputNode.removeTap(onBus: 0)
+            playerNode?.stop()
+            if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
+            engine?.stop()
+            engine = nil; playerNode = nil; playFormat = nil; isRunning = false
+            do { try start() }
+            catch { print("[AudioCapture] restart after speaker override failed: \(error.localizedDescription)") }
         default:
             break
         }

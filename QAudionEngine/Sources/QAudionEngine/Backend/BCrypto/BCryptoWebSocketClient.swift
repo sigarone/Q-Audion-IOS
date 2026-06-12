@@ -500,10 +500,32 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// offline → unable to send call_answer / PQC ACCEPT / audio frames.
     private static func shouldKickReconnect(forType type: String) -> Bool {
         switch type {
-        case "audio_frame", "video_frame", "ping", "authenticate": return false
+        case "audio_frame", "video_frame":
+            // W574c — media frames DO kick a reconnect, but rate-limited to
+            // one kick per window instead of the blanket exclusion. The old
+            // `return false` meant a call whose socket died mid-stream
+            // dropped EVERY remaining frame silently with no recovery:
+            // call 382c46bb lost 2244/2245 TX frames (tx_enc=2245 client
+            // telemetry vs relayed=1 server-side) because nothing on the
+            // 50 fps media path was allowed to trigger reconnection. A 3 s
+            // rate limit preserves the anti-storm property (≤1 kick / 3 s
+            // instead of 50/s) while restoring in-call self-healing.
+            mediaKickLock.lock()
+            defer { mediaKickLock.unlock() }
+            let now = Date()
+            if now.timeIntervalSince(lastMediaKick) > 3.0 {
+                lastMediaKick = now
+                return true
+            }
+            return false
+        case "ping", "authenticate": return false
         default: return true
         }
     }
+
+    /// W574c — rate limiter state for media-frame reconnect kicks.
+    private static var lastMediaKick = Date.distantPast
+    private static let mediaKickLock = NSLock()
 
     public func sendOpaqueMessage(recipientId: String, payload: Data) {
         send(type: "opaque_message", data: ["recipient_id": recipientId, "data": payload.base64EncodedString()])

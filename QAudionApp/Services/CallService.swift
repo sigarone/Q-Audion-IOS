@@ -749,10 +749,13 @@ final class CallService {
                 ]
             )
             // Post-call Opus tuning — must run BEFORE counters reset below.
+            // W574c: callId attached so the tune decision (or skip reason)
+            // shows up on the server's per-call telemetry timeline.
             AudioAutoTuner.shared.tunePostCall(
                 framesReceived:  framesReceivedRx,
                 framesDecrypted: framesDecryptedRx,
-                rxDecryptErrors: rxDecryptErrorCount
+                rxDecryptErrors: rxDecryptErrorCount,
+                callId:          getCallId?()
             )
         }
         audioEnginesStarted = false
@@ -949,9 +952,18 @@ final class CallService {
             // for any call where `liveProvider` was nil at startCall
             // /answer time — the local waveforms moved but the server
             // logged zero `audio relay from=<us>` and the peer heard
-            // silence. Persist on first successful recovery so subsequent
-            // frames in the call skip the closure call.
-            let effectiveWs = wsClient ?? getWsClient?()
+            // silence.
+            //
+            // W574c — priority INVERTED: prefer the LIVE provider's client
+            // over the cached `wsClient`. The cache binds whatever instance
+            // was current at call setup; when that instance is superseded
+            // mid-call (multi-provider reconnect, see fix/ws-reconnect-storm)
+            // its webSocketTask goes nil and `send(audio_frame)` drops every
+            // frame with no recovery — call 382c46bb: client tx_enc=2245,
+            // server relayed=1, while RX kept flowing on the NEW instance.
+            // `getWsClient` always resolves the current live instance; the
+            // cache remains as fallback for transient liveProvider==nil.
+            let effectiveWs = getWsClient?() ?? wsClient
             let effectivePeer = peerUserId ?? getPeerId?()
             if let ws = effectiveWs, let peer = effectivePeer {
                 // W522 — when the W476 lazy fallback rescues TX (wireTransport

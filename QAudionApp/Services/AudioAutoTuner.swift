@@ -45,12 +45,26 @@ public final class AudioAutoTuner {
     ///   - framesReceived: total audio_frame envelopes off the WS (pre-decrypt)
     ///   - framesDecrypted: frames successfully decrypted and played
     ///   - rxDecryptErrors: AEAD + format failures during decryption
+    ///   - callId: active call id, for the telemetry timeline (W574c)
     public func tunePostCall(framesReceived: Int64,
                              framesDecrypted: Int64,
-                             rxDecryptErrors: Int64) {
+                             rxDecryptErrors: Int64,
+                             callId: String? = nil) {
         lastReport = nil
-        guard AudioCodecPrefs.autoTuneEnabled else { return }
-        guard framesReceived >= Self.minFramesForTune else { return }
+        guard AudioCodecPrefs.autoTuneEnabled else {
+            // W574c — make the "tuner did nothing" case visible on the
+            // server timeline too: a disabled tuner and a short call were
+            // previously indistinguishable from a tuner that never ran.
+            emitTelemetry(callId: callId, attrs: ["skipped": "disabled"])
+            return
+        }
+        guard framesReceived >= Self.minFramesForTune else {
+            emitTelemetry(callId: callId, attrs: [
+                "skipped": "too_short",
+                "frames_received": framesReceived
+            ])
+            return
+        }
 
         let lossRate: Float = framesReceived > 0
             ? Float(rxDecryptErrors) / Float(framesReceived)
@@ -90,6 +104,29 @@ public final class AudioAutoTuner {
             lossRate:        lossRate,
             bitrateKbps:     newBr,
             plp:             newPlp
+        )
+
+        // W574c — ship the tune decision to the server timeline. Until now
+        // the tuner only print()ed locally, so the maintainer dashboard had
+        // ZERO visibility on what the auto-tune loop decided per call.
+        emitTelemetry(callId: callId, attrs: [
+            "frames_received":   framesReceived,
+            "rx_decrypt_errors": rxDecryptErrors,
+            "loss_rate_pct":     Double(lossRate * 100).rounded(),
+            "bitrate_kbps":      newBr,
+            "plp":               newPlp,
+            "changed":           (newBr != curBr || newPlp != curPlp)
+        ])
+    }
+
+    /// W574c — single emit point so every tunePostCall outcome (tuned /
+    /// skipped) lands on the per-call telemetry timeline as
+    /// `call.audio.tune`.
+    private func emitTelemetry(callId: String?, attrs: [String: Any]) {
+        TelemetryService.shared.emit(
+            kind: "call.audio.tune",
+            callId: callId,
+            attrs: attrs
         )
     }
 }

@@ -3071,6 +3071,12 @@ final class AppState: ObservableObject {
               let ws = liveProvider?.getWebSocketClient(),
               let peerId = callContactId else { return }
         callService.wireTransport(wsClient: ws, peerUserId: peerId)
+        // W574c — video RX rides the same WS: re-register its inbound
+        // handler on the fresh instance too, or remote video freezes
+        // after a mid-call reconnect while audio recovers.
+        if let pipeline = videoPipeline {
+            registerInboundVideoHandler(on: ws, pipeline: pipeline)
+        }
         print("[AppState] WS reconnect — call audio re-wired to fresh WS for peer \(peerId.prefix(8))…")
     }
 
@@ -5054,7 +5060,14 @@ extension AppState {
         // a weak capture on an optional reference here would just add
         // optional chaining noise without lifetime benefit.
         let callingImpl: BCryptoCallingApiImpl? = liveProvider?.callingApi as? BCryptoCallingApiImpl
-        pipeline.onOutboundFragment = { [weak ws, weak pipeline, callingImpl] fragment in
+        // W574c — resolve the WS client PER FRAGMENT, mirroring the audio
+        // TX fix in CallService: the `weak ws` capture pins the instance
+        // that was live at pipeline setup; if that instance is superseded
+        // mid-call every remaining video_frame is dropped silently
+        // (webSocketTask nil → "DROPPED"), which the user experiences as
+        // the video freezing/chopping. `liveProvider` read is the same
+        // best-effort cross-thread pattern as CallService.getWsClient.
+        pipeline.onOutboundFragment = { [weak self, weak ws, weak pipeline, callingImpl] fragment in
             // Parse the iOS sub-header BEFORE sealing so the sealed
             // envelope carries it inside the ciphertext. The Android
             // wrapper only needs the metadata to rebuild the outer
@@ -5073,24 +5086,19 @@ extension AppState {
                 toShip = sealed
             }
             let cid = callingImpl?.getActiveCallId()
-            ws?.sendVideoFrame(recipientId: peerId, frame: toShip, callId: cid)
+            let effectiveWs = self?.liveProvider?.getWebSocketClient() ?? ws
+            effectiveWs?.sendVideoFrame(recipientId: peerId, frame: toShip, callId: cid)
         }
 
         // Inbound — register the WS handler. When Android-wire is on,
         // unwrap the outer mux header first; either way feed the
         // post-seal envelope to acceptInboundFragment which applies
         // PQC unwrap internally before defragmentation.
-        ws.registerHandler(type: "video_frame") { [weak pipeline] _, data in
-            guard let pipeline = pipeline,
-                  let b64 = data["frame"] as? String,
-                  let raw = Data(base64Encoded: b64) else { return }
-            if androidWire,
-               let unwrapped = AndroidVideoWireAdapter.decodeFromAndroid(raw) {
-                pipeline.acceptInboundFragment(unwrapped.sealedFragment)
-            } else {
-                pipeline.acceptInboundFragment(raw)
-            }
-        }
+        // W574c: extracted to registerInboundVideoHandler so the same
+        // registration can be replayed on the FRESH WS instance after a
+        // mid-call reconnect (see rewireCallAudioOnReconnect) — without
+        // it, video RX stayed bound to the dead instance.
+        registerInboundVideoHandler(on: ws, pipeline: pipeline)
 
         do {
             try await pipeline.start()
@@ -5117,6 +5125,29 @@ extension AppState {
         } catch {
             errorMessage = "Errore avvio video: \(error.localizedDescription)"
             print("[AppState] video pipeline start failed: \(error)")
+        }
+    }
+
+    /// W574c — inbound video_frame handler registration, shared between
+    /// startVideoPipeline (initial WS) and rewireCallAudioOnReconnect
+    /// (fresh WS instance after a mid-call reconnect). Reads the
+    /// android-wire toggle live so a re-registration keeps the same
+    /// decode behaviour as the original.
+    @MainActor
+    func registerInboundVideoHandler(on ws: BCryptoWebSocketClient,
+                                     pipeline: VideoCallPipeline) {
+        let androidWire = (UserDefaults.standard.object(
+            forKey: "qaudion.video.android_wire_compat") as? Bool) ?? true
+        ws.registerHandler(type: "video_frame") { [weak pipeline] _, data in
+            guard let pipeline = pipeline,
+                  let b64 = data["frame"] as? String,
+                  let raw = Data(base64Encoded: b64) else { return }
+            if androidWire,
+               let unwrapped = AndroidVideoWireAdapter.decodeFromAndroid(raw) {
+                pipeline.acceptInboundFragment(unwrapped.sealedFragment)
+            } else {
+                pipeline.acceptInboundFragment(raw)
+            }
         }
     }
 
