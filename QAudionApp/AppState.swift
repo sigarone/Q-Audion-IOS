@@ -626,10 +626,10 @@ final class AppState: ObservableObject {
 
         // W-BGK: BGAppRefreshTask handler routing.
         // QAudionApp.init() registers the BGTask with a closure that posts
-        // .bgWsKeepalive; we observe here so handleWsKeepaliveTask can access
-        // the live auth state without a static reference to AppState.
+        // AppState.bgWsKeepalive; we observe here so handleWsKeepaliveTask can
+        // access the live auth state without a static reference to AppState.
         NotificationCenter.default.addObserver(
-            forName: .bgWsKeepalive,
+            forName: AppState.bgWsKeepalive,
             object: nil,
             queue: nil
         ) { [weak self] notification in
