@@ -156,17 +156,50 @@ public final class AudioCapture {
     /// player node that lives on THIS capture engine. Replaces the old separate
     /// `AudioPlayback`, which ran a SECOND AVAudioEngine and was therefore mute.
     public func playFrame(_ pcmData: Data) {
-        guard isRunning, let player = playerNode, let fmt = playFormat else { return }
-        guard let buffer = AVAudioPCMBuffer(
-            pcmFormat: fmt,
-            frameCapacity: AVAudioFrameCount(AudioConstants.samplesPerFrame)
-        ) else { return }
-        buffer.frameLength = AVAudioFrameCount(AudioConstants.samplesPerFrame)
-        pcmData.withUnsafeBytes { raw in
-            if let src = raw.baseAddress, let dst = buffer.int16ChannelData?[0] {
-                memcpy(dst, src, min(pcmData.count, AudioConstants.bytesPerFrame))
+        // W574j — build the playback buffer in the player node's LIVE output
+        // format, not the cached `playFormat`. On iPad, enabling Voice
+        // Processing I/O reconfigures the player→mixer bus to the hardware
+        // format (typically Float32) AFTER our Int16 `connect(...)`. Scheduling
+        // an Int16 buffer onto a Float32 bus fails AVAudioPlayerNode's format
+        // precondition → AVAudioEngine throws an Obj-C NSException → SIGABRT.
+        // This was invisible until W574i fixed the seal: once relay audio
+        // actually decrypts, the receiver finally calls playFrame with real
+        // PCM and the latent format mismatch crashed the iPad on answer.
+        // Reading the bus format here (and converting the decoded Int16 mono
+        // PCM into it) keeps scheduleBuffer valid on every device/route.
+        guard isRunning,
+              let player = playerNode,
+              let engine = engine, engine.isRunning else { return }
+        let outFmt = player.outputFormat(forBus: 0)
+        let frames = pcmData.count / 2  // decoded PCM is Int16 mono
+        guard frames > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: outFmt,
+                                            frameCapacity: AVAudioFrameCount(frames)) else { return }
+        buffer.frameLength = AVAudioFrameCount(frames)
+        let ch = Int(outFmt.channelCount)
+        let scale: Float = 1.0 / 32768.0
+        let filled: Bool = pcmData.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+            guard let src = raw.bindMemory(to: Int16.self).baseAddress else { return false }
+            if outFmt.commonFormat == .pcmFormatInt16, let dst = buffer.int16ChannelData {
+                if outFmt.isInterleaved {
+                    let d = dst[0]
+                    for i in 0..<frames { let v = src[i]; for c in 0..<ch { d[i * ch + c] = v } }
+                } else {
+                    for c in 0..<ch { let d = dst[c]; for i in 0..<frames { d[i] = src[i] } }
+                }
+                return true
+            } else if outFmt.commonFormat == .pcmFormatFloat32, let dst = buffer.floatChannelData {
+                if outFmt.isInterleaved {
+                    let d = dst[0]
+                    for i in 0..<frames { let v = Float(src[i]) * scale; for c in 0..<ch { d[i * ch + c] = v } }
+                } else {
+                    for c in 0..<ch { let d = dst[c]; for i in 0..<frames { d[i] = Float(src[i]) * scale } }
+                }
+                return true
             }
+            return false  // unsupported bus format → skip frame (never crash)
         }
+        guard filled else { return }
         player.scheduleBuffer(buffer, completionHandler: nil)
     }
 

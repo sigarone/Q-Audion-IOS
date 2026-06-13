@@ -36,6 +36,14 @@ enum CrashReporter {
         return (base as NSString).appendingPathComponent("qaudion-last-crash.txt")
     }()
 
+    /// W574j — set by the uncaught-NSException handler. An NSException aborts
+    /// via SIGABRT, so the signal handler fires too; without this flag it
+    /// overwrote the exception report (name + REASON — e.g. AVFAudio
+    /// "required condition is false: …") with the bare signal stack, losing
+    /// the one line that pinpoints the crash. The signal handler now skips
+    /// persisting when an exception report is already in flight.
+    private static var exceptionInFlight = false
+
     /// Install the handlers. Call as early as possible (App.init) —
     /// before any code that might crash. Does NOT flush; the flush has
     /// to wait until the stdout tee is attached (see `flushPendingReport`).
@@ -43,6 +51,7 @@ enum CrashReporter {
         _ = reportPath  // force the lazy path computation up-front
 
         NSSetUncaughtExceptionHandler { exception in
+            CrashReporter.exceptionInFlight = true
             var report = "=== QAUDION CRASH — NSException ===\n"
             report += "name: " + exception.name.rawValue + "\n"
             report += "reason: " + (exception.reason ?? "(nil)") + "\n"
@@ -52,7 +61,13 @@ enum CrashReporter {
         }
 
         let signalHandler: @convention(c) (Int32) -> Void = { sig in
-            CrashReporter.persistSignalReport(sig)
+            // An uncaught NSException aborts via SIGABRT, firing this handler
+            // too. If the exception handler already persisted a report (with
+            // name + reason), do NOT overwrite it with the bare signal stack —
+            // the reason is what identifies the failure.
+            if !CrashReporter.exceptionInFlight {
+                CrashReporter.persistSignalReport(sig)
+            }
             // Restore the default disposition and re-raise so the OS
             // still records its own crash report and the process dies.
             signal(sig, SIG_DFL)
