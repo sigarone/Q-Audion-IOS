@@ -85,8 +85,23 @@ public final class AudioCapture {
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
 
+        // W574k — the tap format MUST match the input node's REAL output bus
+        // format. Voice Processing I/O runs the input node as Float32 (and on
+        // a warm engine / 2nd call it's already negotiated), so passing our
+        // hardcoded Int16 `format` made installTap throw
+        //   "Failed to create tap due to format mismatch, <…1 ch, 48000 Hz, Int16>"
+        // → NSException → SIGABRT. That hit BOTH startCall and
+        // activateIncomingCallAudio (both call start()), so the iPad crashed
+        // whether it dialled OR answered. The tap callback below already
+        // converts Float32→Int16, so feeding it the node's native format is
+        // safe; fall back to our canonical format only if the node reports an
+        // invalid (0-channel / 0-Hz) format before the engine is prepared.
+        let nodeFormat = inputNode.outputFormat(forBus: 0)
+        let tapFormat: AVAudioFormat = (nodeFormat.channelCount > 0 && nodeFormat.sampleRate > 0)
+            ? nodeFormat
+            : format
         let pipeline = self.audioPipeline
-        inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: format) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
             // W574: VP-IO may deliver Float32 frames even though we requested Int16.
             // The tap bufferSize hint is also overridden by VP-IO (tied to hardware I/O
