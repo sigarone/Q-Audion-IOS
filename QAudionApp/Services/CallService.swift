@@ -186,19 +186,62 @@ final class CallService {
     private var relaySealerSend: PqcRtpFrameSealer?
     private var relaySealerRecv: PqcRtpFrameSealer?
 
+    /// W574h — the (lowercased) callId the current relay sealers are bound to.
+    /// The M-15 seal key is `HKDF(pqcSessionKey, info="…:<callId>")`, so the
+    /// sealer is only valid for ONE call. Tracking the bound callId lets the
+    /// installer re-key when the active call changes (call glare / retry leave
+    /// more than one callId in flight) instead of staying locked to a dead
+    /// call's key — the v1.0.624→632 "connected but silent both ways" bug.
+    private var relaySealerCallId: String?
+
     /// Build the WS-relay sealers from the established PQC session key and
     /// the wire call_id. MUST use the lowercase wire call_id (same string
     /// Android feeds `PqcRtpFrameSealer.create`) or the HKDF info diverges
-    /// and interop fails. Idempotent: a second call with the same key is a
-    /// no-op (the handshake completion can fire more than once).
+    /// and interop fails.
+    ///
+    /// W574h — the sealer MUST track the ACTIVE call. The M-15 seal key is
+    /// `HKDF(pqcSessionKey, info="q-audion-srtp-master-v1:<callId>")`, so a
+    /// sealer built for callId A can NEVER open/seal frames for callId B.
+    /// Under call glare or retry there can be more than one callId in flight
+    /// (e.g. a superseded outgoing call whose handshake completed first, then
+    /// the call actually answered) — the old `guard relaySealerSend == nil`
+    /// locked onto whichever fired first and silently skipped the live call,
+    /// so the peer's frames failed 100% AEAD (M-15 unseal failed) in BOTH
+    /// directions with NO fallback (W574d disabled SRTP audio). This installer
+    /// now:
+    ///   • IGNORES installs for a callId that isn't the active call
+    ///     (`getActiveCallId()` is set by bindIncomingCallId /
+    ///     sendCallOfferWithId BEFORE the handshake completes, so it is
+    ///     authoritative here) — a dead call's late handshake can't clobber
+    ///     the live sealer, and can't leave us keyed to a stale call;
+    ///   • is IDEMPOTENT for the SAME call — re-firing must NOT rebuild,
+    ///     because that would reset the AES-GCM send counter to 0 and risk
+    ///     (key, nonce) reuse (catastrophic for confidentiality);
+    ///   • RE-KEYS when the active call's id genuinely changes.
+    /// Pure iOS-side logic — no wire-format / HKDF change, so Android, the
+    /// firmware earbud counterparty, Desktop and the server are unaffected.
     public func installRelaySealers(sessionKey: Data, callId: String) {
-        guard relaySealerSend == nil else { return }
         let cid = callId.lowercased()
+        // Stale-call guard: only (re)key for the call media actually flows on.
+        if let active = getCallId?()?.lowercased(), !active.isEmpty, active != cid {
+            let a: String = String(cid.prefix(8))
+            let b: String = String(active.prefix(8))
+            let line: String = "[CallService] W574h: relay sealer install IGNORED for non-active callId=" + a + "… (active=" + b + "…)"
+            print(line)
+            return
+        }
+        // Idempotent for the SAME call — never rebuild (would reset GCM counter).
+        if relaySealerSend != nil, relaySealerCallId == cid { return }
+        let cidChanged: Bool = (relaySealerSend != nil && relaySealerCallId != cid)
         do {
             let send = try PqcRtpFrameSealer(pqcSessionKey: sessionKey, callId: cid)
             relaySealerSend = send
             relaySealerRecv = send.makeSibling()
-            print("[CallService] W574e: WS-relay PQC sealers installed (callId=\(cid.prefix(8))…)")
+            relaySealerCallId = cid
+            let verb: String = cidChanged ? "re-keyed" : "installed"
+            let p: String = String(cid.prefix(8))
+            let line: String = "[CallService] W574e: WS-relay PQC sealers " + verb + " (callId=" + p + "…)"
+            print(line)
         } catch {
             print("[CallService] W574e: relay sealer install failed: \(error) — relay runs unsealed (Android interop will fail)")
         }
@@ -864,6 +907,7 @@ final class CallService {
         peerAnswered = false  // W574b — re-arm the pre-answer mic gate for the next call
         relaySealerSend = nil  // W574e — fresh M-15 sealers per call (new key)
         relaySealerRecv = nil
+        relaySealerCallId = nil  // W574h — unbind so the next call re-keys cleanly
         // W67: reset transport binding. Nota: NON disconnect-iamo il
         // wsClient (può restare connesso per signaling / chat / contacts).
         // Solo facciamo nil-out i riferimenti così future audio frames
