@@ -467,8 +467,37 @@ final class CallService {
     ///   - integration: The responder integration built during ringing.
     func activateIncomingCallAudio(engine: QAudionEngine,
                                    integration: QAudionCallIntegration) throws {
+        // W574i — preserve the M-15 relay sealers across the defensive
+        // teardown. On the CALLEE the PQC handshake completes DURING ringing,
+        // so onRelaySessionReady -> installRelaySealers has ALREADY run by the
+        // time the user answers and this method fires. teardownAudioStack()
+        // nils relaySealer{Send,Recv,CallId} — and the handshake will NOT fire
+        // again (it's done), so without this the callee runs with NIL sealers:
+        // it sends UNSEALED relay frames (159 B) and cannot unseal the caller's
+        // SEALED frames (187 B) -> 100% RX failure, no audio in either
+        // direction (the v1.0.624->633 callee-side "connected but silent" bug).
+        // The CALLER never hit this because it installs its sealers AFTER its
+        // own startCall() teardown. Save the sealers, run the teardown, then
+        // restore them iff they still belong to the call being answered.
+        let _savedSealerSend = relaySealerSend
+        let _savedSealerRecv = relaySealerRecv
+        let _savedSealerCallId = relaySealerCallId
         // Defensive cleanup: stop any leftover capture from a previous call.
         teardownAudioStack()
+        if let cid = _savedSealerCallId, _savedSealerSend != nil {
+            let active: String = getCallId?()?.lowercased() ?? ""
+            // Restore when the sealer matches the active call, or when the
+            // active id is unknown (the sealer was installed by W574h only for
+            // the active call, so it cannot belong to a superseded one here).
+            if active.isEmpty || active == cid {
+                relaySealerSend = _savedSealerSend
+                relaySealerRecv = _savedSealerRecv
+                relaySealerCallId = cid
+                let p: String = String(cid.prefix(8))
+                let line: String = "[CallService] W574i: preserved M-15 relay sealers across answer teardown (callId=" + p + "…)"
+                print(line)
+            }
+        }
 
         let pipeline = AudioProcessingPipeline()
         pipeline.voiceProcessingOverride = CallsGate.anyVoiceProcessingEnabled
