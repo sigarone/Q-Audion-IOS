@@ -59,9 +59,12 @@ def _load_vps_creds():
     for p in candidates:
         if p.exists():
             text = p.read_text(encoding="utf-8")
-            h = re.search(r"\*\*IP\*\*:\s*(\S+)", text)
-            u = re.search(r"\*\*SSH\*\*:\s*(\w+)@", text)
-            pw = re.search(r"\*\*Password root\*\*:\s*(\S+)", text)
+            # Values may be wrapped in markdown backticks (`root@host`,
+            # `Bcrypt2026`) — allow an optional leading backtick and stop the
+            # capture at a backtick/whitespace so the token is clean.
+            h = re.search(r"\*\*IP\*\*:\s*`?([^`\s]+)", text)
+            u = re.search(r"\*\*SSH\*\*:\s*`?(\w+)@", text)
+            pw = re.search(r"\*\*Password root\*\*:\s*`?([^`\s]+)", text)
             if h and u and pw:
                 return h.group(1), u.group(1), pw.group(1)
 
