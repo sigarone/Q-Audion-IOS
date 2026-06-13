@@ -68,6 +68,12 @@ public final class AbrController {
     private weak var pipeline: VideoCallPipeline?
     private var timer: DispatchSourceTimer?
 
+    /// W574o — resolves the active call_id so each `call.video.tune`
+    /// telemetry event lands on the per-call server timeline (mirrors the
+    /// audio tuner's callId). Set by AppState to BCryptoCallingApiImpl
+    /// .getActiveCallId. nil → event still emitted, just unattributed.
+    public var callIdProvider: (() -> String?)?
+
     // MARK: - Lifecycle
 
     public init(pipeline: VideoCallPipeline) {
@@ -127,6 +133,9 @@ public final class AbrController {
             // While paused we hold all the other knobs at their last
             // value — no point churning resolution/fps when nothing is
             // being sent. Matches Android's `return false` early exit.
+            // W574o — still surface the paused state on the server timeline.
+            emitTune(received: received, lost: lost, lossPct: lossPct,
+                     avgLatencyMs: avgLatencyMs, jitterMs: jitterMs)
             return
         } else if isVideoPaused && avgLatencyMs < 300 && lossPct < 0.10 {
             isVideoPaused = false
@@ -210,6 +219,40 @@ public final class AbrController {
             pipeline.setEncoderFps(newFps)
             print("[AbrController] FPS → \(newFps)")
         }
+
+        // W574o — emit the full ABR snapshot every tick (~2 s) so video
+        // adaptation is visible + loggable server-side, exactly like
+        // call.audio.tune. Reveals whether the relay's structural
+        // fragment-reassembly latency is making the ABR over-throttle
+        // fps/bitrate (the suspected residual-choppiness driver).
+        emitTune(received: received, lost: lost, lossPct: lossPct,
+                 avgLatencyMs: avgLatencyMs, jitterMs: jitterMs)
+    }
+
+    /// W574o — ship one `call.video.tune` event: the inbound metrics this
+    /// tick PLUS the resulting ABR knobs (bitrate / resolution / fps /
+    /// paused). Mirrors AudioAutoTuner.emitTelemetry so the two adaptive
+    /// loops share one server-side timeline shape.
+    private func emitTune(received: Int, lost: Int, lossPct: Float,
+                          avgLatencyMs: Int, jitterMs: Double) {
+        let lossPctRounded: Double = Double((lossPct * 100).rounded())
+        let jitterRounded: Int = Int(jitterMs.rounded())
+        TelemetryService.shared.emit(
+            kind: "call.video.tune",
+            callId: callIdProvider?(),
+            attrs: [
+                "received":       received,
+                "lost":           lost,
+                "loss_pct":       lossPctRounded,
+                "avg_latency_ms": avgLatencyMs,
+                "jitter_ms":      jitterRounded,
+                "bitrate_kbps":   currentBitrateBps / 1000,
+                "width":          currentResolution.width,
+                "height":         currentResolution.height,
+                "fps":            currentFps,
+                "paused":         isVideoPaused
+            ]
+        )
     }
 
     // MARK: - Resolution stepping

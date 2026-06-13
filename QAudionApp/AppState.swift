@@ -5567,6 +5567,14 @@ extension AppState {
             self.videoPipeline = pipeline
             // W398: spin up ABR loop on the same lifecycle.
             let abr = AbrController(pipeline: pipeline)
+            // W574o — attach the active call_id so call.video.tune telemetry
+            // lands on the per-call server timeline (same source the audio
+            // tuner + wire audio_frame use).
+            abr.callIdProvider = { [weak self] in
+                guard let live = self?.liveProvider,
+                      let impl = live.callingApi as? BCryptoCallingApiImpl else { return nil }
+                return impl.getActiveCallId()
+            }
             abr.start()
             self.abrController = abr
             print("[AppState] video pipeline up for peer \(peerId), ABR active")
