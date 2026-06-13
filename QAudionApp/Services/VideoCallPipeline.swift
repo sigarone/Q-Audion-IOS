@@ -93,7 +93,14 @@ public final class VideoCallPipeline: NSObject {
     public nonisolated(unsafe) var targetWidth: Int = VideoConstants.defaultVideoWidth
     public nonisolated(unsafe) var targetHeight: Int = VideoConstants.defaultVideoHeight
     public nonisolated(unsafe) var targetFps: Int = VideoConstants.defaultVideoFps
-    public nonisolated(unsafe) var targetBitrateBps: Int = VideoConstants.defaultVideoBitrateBps
+    // W574n — iOS starts video at 1.5 Mbps (vs the 800 kbps cross-platform
+    // VideoConstants default) for crisp 720p out of the gate; the ABR
+    // controller still climbs toward maxVideoBitrateBps (2.5 Mbps) on a good
+    // link and backs off on jitter/latency, so this only sets the STARTING
+    // quality (saves ~48 s of +50 kbps/2 s ramp from 800 k). iOS-side only —
+    // bitrate is a local encoder choice, not a wire-format value, so Android /
+    // Desktop / firmware decode it unchanged.
+    public nonisolated(unsafe) var targetBitrateBps: Int = 1_500_000
 
     // MARK: - Private state
 
@@ -117,7 +124,10 @@ public final class VideoCallPipeline: NSObject {
     // doesn't change. That keeps the nonisolated capture delegate's
     // cross-actor `encoder.encode(...)` access pattern valid under
     // Swift 6 strict concurrency.
-    private let encoder = HevcEncoder()
+    // W574n — start the encoder at the iOS 1.5 Mbps target (not the 800 kbps
+    // VideoConstants default) so the very first frames are already crisp; ABR
+    // adjusts from here.
+    private let encoder = HevcEncoder(bitrateBps: 1_500_000)
     private let decoder = HevcDecoder()
     /// W524: when true the captureOutput delegate skips encoding so
     /// no fragments are emitted to the peer. AVCaptureSession keeps
