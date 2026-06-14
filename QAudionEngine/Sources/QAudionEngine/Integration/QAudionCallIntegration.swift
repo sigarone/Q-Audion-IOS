@@ -208,6 +208,71 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// owns the actual download/UI.
     public var qaudionDidReceiveFile: ((_ marker: FileTransfer.FileMarker, _ from: String) -> Void)?
 
+    // MARK: - Phase-10b handshake signing (additive, all nil/off by default)
+    //
+    // HANDSHAKE-SIGNING-SPEC.md §2–§6. EVERY property below is nil/false by
+    // default. When `signTranscript` / `localSignerIdentityKey` are nil the
+    // OFFER/ACCEPT are sent UNSIGNED (the two optional bundle fields stay nil →
+    // JSONEncoder omits them → wire bytes byte-identical to the legacy path).
+    // When the verify closures are nil an inbound bundle is treated as a legacy
+    // unsigned peer (proceed; no abort). So an integration constructed without
+    // wiring these (tests, legacy call paths) behaves EXACTLY as before.
+    //
+    // CLAUDE.md §16: these are primitives + closures ONLY — never an AppState /
+    // SovereignIdentity engine type as a parameter, so the new wiring cannot
+    // trip the Swift-6 Sendable-inference silent build break.
+
+    /// Sign a raw §3 transcript with the LOCAL long-term Ed25519 identity →
+    /// 64-byte detached signature. `nil` (no identity loaded) → unsigned legacy
+    /// path. Wired in `AppState` from `HandshakeTranscript.sign(transcript:
+    /// signingPrivateKeyRaw:)` over `SovereignIdentity.signingPrivate`.
+    public var signTranscript: ((Data) -> Data?)?
+
+    /// The LOCAL signer's 32-byte raw Ed25519 public identity key, written into
+    /// the bundle's `signerIdentityKey` field alongside the signature. `nil` →
+    /// unsigned. Wired from `SovereignIdentity.signingPublic`.
+    public var localSignerIdentityKey: Data?
+
+    /// Resolve the TOFU-PINNED 32-byte Ed25519 key for a peer contactId, or nil
+    /// if not pinned yet (spec §5c trust source, highest priority). Wired from a
+    /// shared `PeerIdentityPinStore.pinnedKey`.
+    public var resolvePinnedPeerKey: ((String) -> Data?)?
+
+    /// Resolve the SERVER/QR-fetched 32-byte Ed25519 key for a peer contactId,
+    /// used as the trust source on first contact when no pin exists yet (spec
+    /// §5c). Wired from `ContactsStore.findPubkey`.
+    public var resolveServerPeerKey: ((String) -> Data?)?
+
+    /// Commit a first-contact TOFU pin (contactId, 32-byte Ed25519 key) AFTER a
+    /// signature verified under it (spec §2). Wired from
+    /// `PeerIdentityPinStore.pinOrMatch`.
+    public var commitTofuPin: ((String, Data) -> Void)?
+
+    /// Has this peer ever had a SIGNED v4 bundle verify (spec §4
+    /// `v4_capable_pinned`)? Wired from a UserDefaults-backed set in AppState.
+    public var isPeerV4Pinned: ((String) -> Bool)?
+
+    /// Mark this peer v4-capable-pinned (set the first time a signed v4 bundle
+    /// verifies, BEFORE handshake completion, never cleared — spec §4).
+    public var setPeerV4Pinned: ((String) -> Void)?
+
+    /// Is the channel to this peer trust ≥ VERIFIED_CHANNEL (spec §4 — verified
+    /// contacts MUST always present a valid signature)? Wired from the existing
+    /// SAS-verification state.
+    public var isPeerVerifiedChannel: ((String) -> Bool)?
+
+    /// Global `require_signed_handshake` enforcement flag (spec §4). DEFAULTS
+    /// `false` (WARN-only migration mode) so legacy unsigned peers still
+    /// connect; enforcement only kicks in once the fleet has rolled signing out.
+    public var requireSignedHandshakeFlag: Bool = false
+
+    /// Stash of the OFFER transcript WE SENT, keyed by lowercased callId, so the
+    /// initiator can recompute `offer_binding = SHA-256(offerTranscript)` when it
+    /// later verifies the matching ACCEPT (spec §3 / step (d)). Only populated
+    /// when we actually signed the OFFER (signing wired). Cleared with the rest
+    /// of the per-call state in `onCallEnded`.
+    private var sentOfferTranscriptByCall: [String: Data] = [:]
+
     public init() {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
         // Task #11 — head-start the ephemeral ML-KEM keypair off the
@@ -413,7 +478,26 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
             pskFingerprints: []  // iOS has no SovereignKeyVault yet (see WIRE_SPEC §5)
         )
-        let jsonWire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: offerBundle)
+
+        // Phase-10b (a) — SIGN the OFFER over the §3 transcript before serialize.
+        // No-op when signing is not wired → `bundleToSend == offerBundle` and the
+        // two sig fields stay nil → byte-identical legacy wire (additive). The
+        // transcript is built from OUR OWN bundle fields + SELF caps and the
+        // placeholder epoch (see the EPOCH NOTE on the signing helpers). We stash
+        // it keyed by the lowercased callId so that, on the matching ACCEPT, the
+        // initiator recomputes `offer_binding = SHA-256(offerTranscript)` to bind
+        // the two halves (spec §3, step (d)). Stash only when we actually signed.
+        var bundleToSend = offerBundle
+        if signingEnabled, let idKey = localSignerIdentityKey,
+           let offerT = Self.offerTranscript(from: offerBundle, callId: callId, signerKeyRaw: idKey) {
+            bundleToSend = signedCopy(of: offerBundle, transcript: offerT)
+            // Only stash when the sig actually attached (signedCopy returns the
+            // input unchanged on signer failure → don't claim a signed OFFER).
+            if bundleToSend.signature != nil {
+                lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] = offerT }
+            }
+        }
+        let jsonWire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: bundleToSend)
 
         // 1. Ship JSON OFFER FIRST so any Android-peer dispatch race
         //    sees the parseable envelope before the QUAD bytes
@@ -636,6 +720,37 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 throw IntegrationError.invalidState(state)
             }
 
+            // Phase-10b (b) — VERIFY the incoming OFFER fail-closed BEFORE any
+            // crypto work (`pqc.encapsulate`) or ACCEPT emission (spec §4). When
+            // verification is not wired we skip entirely (legacy behaviour). The
+            // peer is `callerId`. `.abort` THROWS here → no ACCEPT is ever sent,
+            // no session is derived. `.authenticated` commits the TOFU pin / v4
+            // flag BEFORE completion and yields the offer_binding the ACCEPT must
+            // carry (spec §3). `.proceedUnsignedWarn` logs and continues with an
+            // EMPTY binding (legacy/unsigned-peer migration path).
+            var verifiedOfferBinding = Data()  // empty == "no signed offer to bind"
+            if verificationEnabled {
+                let verdict = evaluateVerdict(bundle: bundle, peerId: callerId) { key in
+                    Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: key)
+                }
+                switch verdict {
+                case .abort(let code):
+                    print("[QAudionCallIntegration] OFFER verify ABORT code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — dropping, no ACCEPT emitted")
+                    throw IntegrationError.handshakeAborted(code: code)
+                case .authenticated(let tofuPinKey, let v4Capable):
+                    applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
+                    // The signed OFFER's binding the ACCEPT will carry. Rebuilt
+                    // under the trusted key (= the bundle's signerIdentityKey,
+                    // which the verdict already confirmed == pinned/server key).
+                    if let sikB64 = bundle.signerIdentityKey, let trustedKey = Data(base64Encoded: sikB64),
+                       let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: trustedKey) {
+                        verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
+                    }
+                case .proceedUnsignedWarn(let reason):
+                    print("[QAudionCallIntegration] OFFER unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
+                }
+            }
+
             // 3. iOS dual-hybrid encapsulate — drop X448 + StrongBox legs.
             let pqcResult = try pqc.encapsulate(remotePublicKey: pqcPub)
             let x25519Result = try Self.x25519Encap(remotePub: x25519Pub)
@@ -694,7 +809,29 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
                 selectedPskFingerprint: selectedFp
             )
-            let wire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: accept)
+
+            // Phase-10b (c) — SIGN the ACCEPT, binding it to the verified OFFER
+            // (`verifiedOfferBinding` from step (b); EMPTY when the OFFER was
+            // unsigned/legacy). W527 INVARIANT PRESERVED: `accept` keeps
+            // pqcPublicKey:""/x25519PublicKey:"" EXACTLY — `signedCopy` only
+            // APPENDS the two sig fields and copies every other field verbatim
+            // (including the "" pubkeys), so Android's kotlinx deserializer never
+            // sees them as absent. No-op (acceptToSend == accept, sig fields nil)
+            // when signing is not wired → byte-identical legacy ACCEPT.
+            //
+            // BINDING-FORGERY NOTE (mirrors the Android reference): binding to
+            // EMPTY when the OFFER was unsigned is NOT a hole. A signing-capable
+            // initiator recomputes its REAL sent-offer binding, so our
+            // empty-binding ACCEPT signature MISMATCHES on its side → it aborts
+            // (a MITM that strips the OFFER signature is caught initiator-side).
+            // A genuinely-legacy initiator does not verify at all. callId + the
+            // signed ciphertext already bind the ACCEPT to this exact call.
+            var acceptToSend = accept
+            if signingEnabled, let idKey = localSignerIdentityKey,
+               let acceptT = Self.acceptTranscript(from: accept, callId: callId, signerKeyRaw: idKey, offerBinding: verifiedOfferBinding) {
+                acceptToSend = signedCopy(of: accept, transcript: acceptT)
+            }
+            let wire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: acceptToSend)
 
             // W529 — stash the ACCEPT wire BEFORE checking the
             // session-init guard so a duplicate OFFER replays this
@@ -783,6 +920,41 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 return
             }
 
+            // Phase-10b (d) — VERIFY the incoming ACCEPT (+ offer_binding) BEFORE
+            // any crypto work or session init (spec §4). Skipped entirely when
+            // verification is not wired (legacy behaviour). The peer is
+            // `callerId` (AppState threads `senderId` into this path). We
+            // recompute the binding from the OFFER WE SENT (stashed in step (a))
+            // so the policy rebuilds the ACCEPT transcript with the SAME
+            // expected binding the responder signed; a real ACCEPT cannot be
+            // paired with a forged OFFER (spec §3 / threat §7). `.abort` LOGS and
+            // RETURNS WITHOUT initSession (no session is installed for an aborted
+            // handshake). `.authenticated` commits the pin / v4 flag, then falls
+            // through to the existing decapsulate + initSession.
+            if verificationEnabled {
+                // Recompute the binding from the OFFER we sent (empty when we
+                // sent an unsigned OFFER / no stash). Split into explicit steps so
+                // the type-checker never explores the `withLock`→`map`→`??` chain
+                // as one expression (CLAUDE.md §13).
+                let sentOfferT: Data? = lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] }
+                var expectedBinding = Data()
+                if let t = sentOfferT {
+                    expectedBinding = HandshakeTranscript.offerBinding(t)
+                }
+                let verdict = evaluateVerdict(bundle: bundle, peerId: callerId) { key in
+                    Self.acceptTranscript(from: bundle, callId: callId, signerKeyRaw: key, offerBinding: expectedBinding)
+                }
+                switch verdict {
+                case .abort(let code):
+                    print("[QAudionCallIntegration] ACCEPT verify ABORT code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — NOT initialising session")
+                    return
+                case .authenticated(let tofuPinKey, let v4Capable):
+                    applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
+                case .proceedUnsignedWarn(let reason):
+                    print("[QAudionCallIntegration] ACCEPT unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
+                }
+            }
+
             // 1. ML-KEM-1024 decapsulate with our local PQC priv.
             let pqcSs = try pqc.decapsulate(ciphertext: pqcCt, privateKey: local.pqcPair.privateKey)
 
@@ -858,6 +1030,222 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // any outstanding 5 s OFFER retry.
             offerRetryTask?.cancel()
             offerRetryTask = nil
+        }
+    }
+
+    // MARK: - Phase-10b handshake-signing helpers (additive)
+    //
+    // HANDSHAKE-SIGNING-SPEC.md §3–§5. These pure helpers keep the four wire
+    // insertion points (OFFER sign, OFFER verify, ACCEPT sign, ACCEPT verify)
+    // to a few lines each so the big `onAndroidBundleReceived`/`onAndroid…`
+    // bodies don't grow another type-checker-heavy branch (CLAUDE.md §13/§14).
+    //
+    // EPOCH NOTE (READ — this is a documented cross-platform divergence): the
+    // signed transcript binds a 16-byte per-direction epochId that the wire
+    // bundle does NOT carry. iOS feeds `HandshakeSigningPolicy.placeholderEpochId`
+    // (16 zero bytes), exactly as the iOS baseline + the transcript KAT builder
+    // were authored. Android derives `SHA-256("qaudion-hs-epoch-v1"||role||callId)`
+    // and Desktop derives `SHA-256("qaudion-hs-epoch-v1"||callId||role)` — these
+    // three DISAGREE, so a SIGNED bundle from Android/Desktop will NOT verify on
+    // iOS (and Android↔Desktop already mismatch each other). This is harmless
+    // TODAY because the `require_signed_handshake` flag defaults OFF on every
+    // platform AND no platform emits signed bundles in production yet, so the
+    // only inbound bundles are unsigned → WarnLegacy → proceed. It becomes a
+    // HARD cross-platform interop break the moment ANY platform starts emitting
+    // signed bundles: a present-but-(epoch-)mismatched signature is fatal by
+    // spec §4 (anti-downgrade — intentionally NOT relaxed here). The epochId
+    // derivation MUST be unified across all three platforms BEFORE signing is
+    // turned on anywhere. Tracked as the release-gating blocker in the wiring
+    // report. Until then iOS only ever SENDS signed bundles when explicitly
+    // wired (closures set), and only ABORTS on a cryptographically-invalid
+    // present signature, never on a missing one.
+
+    /// Capability triplet reconstructed from a received bundle (spec §5b:
+    /// absent OR null capabilities → false).
+    private static func capsFromBundle(
+        _ caps: AndroidHandshakeBundle.Capabilities?
+    ) -> (ratchetV3: Bool, sframeV1: Bool, vkeyV1: Bool) {
+        return (
+            ratchetV3: caps?.ratchetV3 ?? false,
+            sframeV1: caps?.sframeV1 ?? false,
+            vkeyV1: caps?.vkeyV1 ?? false
+        )
+    }
+
+    /// Build the §3 OFFER transcript from an OFFER bundle's RAW (base64-decoded)
+    /// fields, signed/verified under `signerKeyRaw` (the LOCAL pub when signing,
+    /// the PINNED/server peer pub when verifying — NEVER blindly the bundle key).
+    /// Returns nil if a required public-key field fails to base64-decode.
+    private static func offerTranscript(
+        from bundle: AndroidHandshakeBundle,
+        callId: String,
+        signerKeyRaw: Data
+    ) -> Data? {
+        guard let pqcB64 = bundle.pqcPublicKey, let pqcRaw = Data(base64Encoded: pqcB64),
+              let x25B64 = bundle.x25519PublicKey, let x25Raw = Data(base64Encoded: x25B64) else {
+            return nil
+        }
+        let strongBox = bundle.strongBoxPublicKey.flatMap { Data(base64Encoded: $0) }
+        let dualCurve = bundle.dualCurvePublicKey.flatMap { Data(base64Encoded: $0) }
+        let caps = capsFromBundle(bundle.capabilities)
+        return HandshakeTranscript.offer(
+            callId: callId,
+            signerIdentityKey: signerKeyRaw,
+            epochId: HandshakeSigningPolicy.placeholderEpochId,
+            pqcPublicKey: pqcRaw,
+            x25519PublicKey: x25Raw,
+            strongBoxPublicKey: strongBox,
+            dualCurvePublicKey: dualCurve,
+            ratchetV3: caps.ratchetV3,
+            sframeV1: caps.sframeV1,
+            vkeyV1: caps.vkeyV1,
+            ratchetV: HandshakeSigningPolicy.ratchetV,
+            suiteId: HandshakeSigningPolicy.suiteId,
+            pskFingerprints: bundle.pskFingerprints
+        )
+    }
+
+    /// Build the §3 ACCEPT transcript from an ACCEPT bundle's RAW (base64-decoded)
+    /// ciphertext fields + the `offerBinding` it must answer. Returns nil if a
+    /// required ciphertext field fails to base64-decode.
+    private static func acceptTranscript(
+        from bundle: AndroidHandshakeBundle,
+        callId: String,
+        signerKeyRaw: Data,
+        offerBinding: Data
+    ) -> Data? {
+        guard let ct = bundle.ciphertext,
+              let pqcRaw = Data(base64Encoded: ct.pqc),
+              let x25Raw = Data(base64Encoded: ct.x25519) else {
+            return nil
+        }
+        let strongBox = ct.strongBox.flatMap { Data(base64Encoded: $0) }
+        let dualCurve = ct.dualCurve.flatMap { Data(base64Encoded: $0) }
+        let caps = capsFromBundle(bundle.capabilities)
+        return HandshakeTranscript.accept(
+            callId: callId,
+            signerIdentityKey: signerKeyRaw,
+            epochId: HandshakeSigningPolicy.placeholderEpochId,
+            ctPqc: pqcRaw,
+            ctX25519: x25Raw,
+            ctStrongBox: strongBox,
+            ctDualCurve: dualCurve,
+            ratchetV3: caps.ratchetV3,
+            sframeV1: caps.sframeV1,
+            vkeyV1: caps.vkeyV1,
+            ratchetV: HandshakeSigningPolicy.ratchetV,
+            suiteId: HandshakeSigningPolicy.suiteId,
+            selectedPskFingerprint: bundle.selectedPskFingerprint,
+            offerBinding: offerBinding
+        )
+    }
+
+    /// Compute `require_signed(peer)` (spec §4) from the wired policy closures.
+    private func requireSigned(forPeer peerId: String) -> Bool {
+        let v4 = isPeerV4Pinned?(peerId) ?? false
+        let verified = isPeerVerifiedChannel?(peerId) ?? false
+        return HandshakeSigningPolicy.requireSigned(
+            v4CapablePinned: v4,
+            flagForcesSigned: requireSignedHandshakeFlag,
+            peerVerifiedChannel: verified
+        )
+    }
+
+    /// Whether THIS integration is configured to sign (local identity wired).
+    /// When false the OFFER/ACCEPT go out UNSIGNED (legacy byte-identical wire).
+    private var signingEnabled: Bool {
+        return signTranscript != nil && localSignerIdentityKey != nil
+    }
+
+    /// Whether THIS integration is configured to VERIFY inbound bundles. When
+    /// false an inbound bundle is treated as a legacy unsigned peer (proceed —
+    /// no abort), so an unwired integration is behaviourally unchanged.
+    private var verificationEnabled: Bool {
+        return resolvePinnedPeerKey != nil || resolveServerPeerKey != nil
+    }
+
+    /// Attach `signerIdentityKey` + `signature` to a bundle by signing `transcript`.
+    /// Returns the ORIGINAL bundle unchanged on any failure (degrade to unsigned)
+    /// so signing can never break a call. No-op (returns input) when signing is
+    /// not wired.
+    private func signedCopy(of bundle: AndroidHandshakeBundle, transcript: Data) -> AndroidHandshakeBundle {
+        guard let idKey = localSignerIdentityKey, let sign = signTranscript,
+              let sig = sign(transcript), sig.count == 64 else {
+            return bundle
+        }
+        return AndroidHandshakeBundle(
+            kind: bundle.kind,
+            callId: bundle.callId,
+            pqcPublicKey: bundle.pqcPublicKey,
+            x25519PublicKey: bundle.x25519PublicKey,
+            strongBoxPublicKey: bundle.strongBoxPublicKey,
+            dualCurvePublicKey: bundle.dualCurvePublicKey,
+            ciphertext: bundle.ciphertext,
+            capabilities: bundle.capabilities,
+            pskFingerprints: bundle.pskFingerprints,
+            selectedPskFingerprint: bundle.selectedPskFingerprint,
+            signerIdentityKey: idKey.base64EncodedString(),
+            signature: sig.base64EncodedString()
+        )
+    }
+
+    /// Apply the spec §4 verdict to a received bundle for `peerId`, rebuilding
+    /// the §3 transcript via `transcriptFor(trustedKey)`. Returns the policy
+    /// verdict; the caller acts on it (abort / pin / warn). `advertisedV4` is
+    /// whether the bundle advertised v4+suite-1 (here always our advertised
+    /// values, since the wire carries no ratchetV/suiteId and both ends agree on
+    /// the placeholder constants).
+    private func evaluateVerdict(
+        bundle: AndroidHandshakeBundle,
+        peerId: String,
+        transcriptFor: (Data) -> Data?
+    ) -> HandshakeSigningPolicy.Verdict {
+        let pinned = resolvePinnedPeerKey?(peerId)
+        let server = resolveServerPeerKey?(peerId)
+        // Pick the trusted key the same way the policy will, so the transcript
+        // we hand the policy is built under that exact key (the policy verifies
+        // against the trusted key, never the bundle key). On genuine first
+        // contact (no pin, no server) the bundle's own key is the TOFU candidate.
+        let trustedKey: Data
+        if let p = pinned {
+            trustedKey = p
+        } else if let s = server {
+            trustedKey = s
+        } else if let sikB64 = bundle.signerIdentityKey, let bk = Data(base64Encoded: sikB64) {
+            trustedKey = bk
+        } else {
+            // No signature/identity at all → policy will hit the ABSENT branch;
+            // the transcript bytes are irrelevant there. Use empty so a
+            // present-but-unparseable case still flows to `sig_malformed`.
+            trustedKey = Data()
+        }
+        let transcript = transcriptFor(trustedKey) ?? Data()
+        let advertisedV4 = (HandshakeSigningPolicy.ratchetV >= 0x04)
+            && (HandshakeSigningPolicy.suiteId == 0x01)
+        return HandshakeSigningPolicy.evaluate(
+            signerIdentityKeyB64: bundle.signerIdentityKey,
+            signatureB64: bundle.signature,
+            transcript: transcript,
+            pinnedKey: pinned,
+            serverFetchedKey: server,
+            requireSigned: requireSigned(forPeer: peerId),
+            advertisedV4: advertisedV4
+        )
+    }
+
+    /// Commit the side effects of a `.authenticated` verdict (spec §2 / §4):
+    /// first-contact TOFU pin, then v4-capable-pin — BOTH before the handshake
+    /// completes. Pure side-effect; safe to call when closures are nil.
+    private func applyAuthenticatedSideEffects(
+        peerId: String,
+        tofuPinKey: Data?,
+        v4Capable: Bool
+    ) {
+        if let pinKey = tofuPinKey {
+            commitTofuPin?(peerId, pinKey)
+        }
+        if v4Capable {
+            setPeerV4Pinned?(peerId)
         }
     }
 
@@ -1034,6 +1422,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // re-runs key generation + session init from scratch.
         sessionInitializedByCall.removeAll()
         localHybridKeysByCall.removeAll()
+        // Phase-10b: clear the stashed sent-OFFER transcripts so a reused
+        // integration does not leak a prior call's offer_binding into the next
+        // call's ACCEPT verification.
+        sentOfferTranscriptByCall.removeAll()
         // W529 / W531: clear handshake retry state so the next call
         // starts with a fresh stash.
         lastSentOfferWire = nil
@@ -1301,4 +1693,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 }
 
-public enum IntegrationError: Error { case invalidState(QAudionCallIntegration.CallState) }
+public enum IntegrationError: Error {
+    case invalidState(QAudionCallIntegration.CallState)
+    /// Phase-10b fail-closed handshake abort (spec §4). `code` is one of
+    /// `sig_invalid`, `identity_key_mismatch`, `sig_required_missing`,
+    /// `sig_malformed`. Thrown BEFORE any session-key derivation / `initSession`,
+    /// so an aborted handshake never installs a session.
+    case handshakeAborted(code: String)
+}
