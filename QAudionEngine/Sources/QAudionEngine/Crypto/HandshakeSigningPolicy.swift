@@ -28,9 +28,9 @@ public enum HandshakeSigningPolicy {
     /// Advertised ratchet version once Phase-18 ships (0x04). Today the deployed
     /// handshake advertises v3, but a SIGNED bundle declares v4 per §3/§4 so the
     /// verifier can set `v4_capable_pinned`.
-    public static let ratchetV: UInt8 = 0x04
+    public static let ratchetV: UInt8 = 0x03
     /// suite_id 0x01 = the Phase-18 suite.
-    public static let suiteId: UInt8 = 0x01
+    public static let suiteId: UInt8 = 0x00
 
     /// `require_signed(peer)` (§4): a missing signature is fatal only when one of
     /// these holds. A present-but-invalid signature is ALWAYS fatal regardless.
