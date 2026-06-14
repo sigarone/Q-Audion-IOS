@@ -96,9 +96,9 @@ struct VpnApiService {
     ///   - accessToken: Main session JWT (HS256), NOT the VPN sub-token.
     ///   - clientPubkey: base64 WireGuard (Curve25519) public key.
     ///   - nodeId: target VPN node id.
-    ///   - mlkemPubkey: OPTIONAL base64 of a 1184-byte ML-KEM-768 (FIPS 203)
+    ///   - mlkemPubkey: OPTIONAL base64 of a 1568-byte ML-KEM-1024 (FIPS 203)
     ///     encapsulation key for the PQC-hybrid PSK. Omitted (nil) when the
-    ///     client cannot do ML-KEM-768; the server then returns the classical
+    ///     client cannot do ML-KEM-1024; the server then returns the classical
     ///     `psk` only. The field is encoded only when non-nil so an old server
     ///     (which ignores unknown keys) is unaffected.
     func registerWgPeer(

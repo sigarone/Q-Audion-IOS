@@ -54,7 +54,7 @@ struct WgConfigResponse: Codable {
     /// Classical preshared key. NEVER log. Used as the WireGuard PSK when the
     /// PQC path is inactive (`mlkemCiphertext == nil`).
     let psk: String
-    /// OPTIONAL base64 of a 1088-byte ML-KEM-768 (FIPS 203) ciphertext. Present
+    /// OPTIONAL base64 of a 1568-byte ML-KEM-1024 (FIPS 203) ciphertext. Present
     /// only when the client offered an `mlkem_pubkey` AND the server is PQC-
     /// capable. When present, the client decapsulates it and derives the WG PSK
     /// via HKDF — that derived PSK SUPERSEDES `psk`. When absent (old/un-

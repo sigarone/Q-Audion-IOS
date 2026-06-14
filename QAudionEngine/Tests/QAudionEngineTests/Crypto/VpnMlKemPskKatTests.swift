@@ -5,16 +5,16 @@ import CryptoKit
 /// KAT for the VPN WireGuard PSK derivation (`VpnMlKem.deriveWgPsk`).
 ///
 /// The VPN PQC-hybrid handshake derives the WireGuard PresharedKey from the
-/// ML-KEM-768 shared secret as:
+/// ML-KEM-1024 shared secret as:
 ///   PSK = HKDF-SHA256(IKM = sharedSecret(32),
 ///                     salt = <EMPTY>,
 ///                     info = UTF8("bcrypto-wg-psk-v1"),
 ///                     L = 32)
 ///
-/// This test pins the HKDF step to a frozen cross-platform vector so it can be
-/// verified WITHOUT a live ML-KEM-768 KEM (the vendored liboqs build may be
-/// 1024-only, in which case the keygen/decap path is unavailable but the HKDF
-/// contract still must match the server + Android byte-for-byte).
+/// This test pins the HKDF step to a frozen cross-platform vector — the part
+/// that must match the server, Android and desktop byte-for-byte — independently
+/// of the ML-KEM KEM itself (the shared secret is 32 bytes regardless of the
+/// parameter set, so the same vector holds for ML-KEM-1024).
 ///
 /// FROZEN VECTOR (independently cross-checked with python `cryptography` HKDF):
 ///   sharedSecret = 0x00..0x1f
@@ -51,11 +51,11 @@ final class VpnMlKemPskKatTests: XCTestCase {
         XCTAssertEqual(VpnMlKem.deriveWgPsk(fromSharedSecret: sharedSecret), reference)
     }
 
-    /// `decapsulate` must reject a ciphertext whose length is not the ML-KEM-768
-    /// size (1088), independent of liboqs availability.
+    /// `decapsulate` must reject a ciphertext whose length is not the ML-KEM-1024
+    /// size (1568), independent of liboqs availability.
     func testDecapsulateRejectsWrongCiphertextLength() {
         XCTAssertThrowsError(
-            try VpnMlKem.decapsulate(ciphertext: Data(count: 1087), secretKey: Data(count: 2400))
+            try VpnMlKem.decapsulate(ciphertext: Data(count: 1567), secretKey: Data(count: 3168))
         ) { error in
             XCTAssertEqual(error as? VpnMlKemError, .invalidCiphertext)
         }

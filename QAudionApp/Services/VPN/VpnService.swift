@@ -28,7 +28,7 @@
 import Foundation
 @preconcurrency import NetworkExtension
 import CryptoKit // for SHA256/random bytes only
-import QAudionEngine // VpnMlKem — ephemeral ML-KEM-768 PSK handshake
+import QAudionEngine // VpnMlKem — ephemeral ML-KEM-1024 PSK handshake
 
 /// App Group ID shared between the main app and the VPN extension.
 /// Both targets must declare this in their entitlements.
@@ -92,8 +92,8 @@ final class VpnService: ObservableObject {
             // Step 2 — WireGuard key pair.
             let (privateKeyB64, publicKeyB64) = try generateWgKeyPair()
 
-            // Step 2b — Ephemeral ML-KEM-768 keypair for the PQC-hybrid PSK.
-            // Only offered when liboqs in this build actually has ML-KEM-768
+            // Step 2b — Ephemeral ML-KEM-1024 keypair for the PQC-hybrid PSK.
+            // Only offered when liboqs in this build actually has ML-KEM-1024
             // (VpnMlKem.isSupported). When unsupported we send no mlkem_pubkey;
             // the server omits mlkem_ciphertext and we use the classical psk —
             // exactly the documented fallback. Generated fresh per connection;
@@ -197,7 +197,7 @@ final class VpnService: ObservableObject {
         proto.providerConfiguration = [
             WgProviderKey.privateKeyB64:   privateKeyB64,
             WgProviderKey.serverPubKeyB64: wgConfig.serverPubkey,
-            // Resolved PSK: the HKDF-derived ML-KEM-768 PSK when the server did
+            // Resolved PSK: the HKDF-derived ML-KEM-1024 PSK when the server did
             // PQC, otherwise the classical wgConfig.psk.
             WgProviderKey.pskB64:          pskB64,
             WgProviderKey.clientAddresses: clientAddresses,
@@ -261,7 +261,7 @@ final class VpnService: ObservableObject {
     /// Resolves the base64 WireGuard PSK from the server response.
     ///
     /// - If the server returned `mlkem_ciphertext`, decapsulate it with our
-    ///   ephemeral ML-KEM-768 secret key and derive the PSK via HKDF-SHA256.
+    ///   ephemeral ML-KEM-1024 secret key and derive the PSK via HKDF-SHA256.
     ///   This PQC-derived PSK SUPERSEDES `wgConfig.psk`.
     /// - Otherwise return `wgConfig.psk` unchanged (classical / old-server path).
     ///
