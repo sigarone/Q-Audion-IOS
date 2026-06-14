@@ -92,24 +92,44 @@ struct VpnApiService {
     /// Registers a WireGuard public key with the selected node.
     /// Returns server WG config (pubkey, endpoint, assigned IP, PSK).
     ///
-    /// - Parameter accessToken: Main session JWT (HS256), NOT the VPN sub-token.
+    /// - Parameters:
+    ///   - accessToken: Main session JWT (HS256), NOT the VPN sub-token.
+    ///   - clientPubkey: base64 WireGuard (Curve25519) public key.
+    ///   - nodeId: target VPN node id.
+    ///   - mlkemPubkey: OPTIONAL base64 of a 1184-byte ML-KEM-768 (FIPS 203)
+    ///     encapsulation key for the PQC-hybrid PSK. Omitted (nil) when the
+    ///     client cannot do ML-KEM-768; the server then returns the classical
+    ///     `psk` only. The field is encoded only when non-nil so an old server
+    ///     (which ignores unknown keys) is unaffected.
     func registerWgPeer(
         accessToken: String,
         clientPubkey: String,
-        nodeId: String
+        nodeId: String,
+        mlkemPubkey: String? = nil
     ) async throws -> WgConfigResponse {
         struct Body: Encodable {
             let clientPubkey: String
             let nodeId: String
+            let mlkemPubkey: String?
             enum CodingKeys: String, CodingKey {
                 case clientPubkey = "client_pubkey"
                 case nodeId       = "node_id"
+                case mlkemPubkey  = "mlkem_pubkey"
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(clientPubkey, forKey: .clientPubkey)
+                try c.encode(nodeId, forKey: .nodeId)
+                // Encode mlkem_pubkey only when present — keeps the request
+                // byte-identical to the legacy shape when PQC is unavailable.
+                try c.encodeIfPresent(mlkemPubkey, forKey: .mlkemPubkey)
             }
         }
         return try await post(
             "vpn/wg-register",
             bearerToken: accessToken,
-            body: Body(clientPubkey: clientPubkey, nodeId: nodeId)
+            body: Body(clientPubkey: clientPubkey, nodeId: nodeId, mlkemPubkey: mlkemPubkey)
         )
     }
 

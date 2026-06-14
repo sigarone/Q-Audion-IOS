@@ -28,6 +28,7 @@
 import Foundation
 @preconcurrency import NetworkExtension
 import CryptoKit // for SHA256/random bytes only
+import QAudionEngine // VpnMlKem — ephemeral ML-KEM-768 PSK handshake
 
 /// App Group ID shared between the main app and the VPN extension.
 /// Both targets must declare this in their entitlements.
@@ -91,17 +92,45 @@ final class VpnService: ObservableObject {
             // Step 2 — WireGuard key pair.
             let (privateKeyB64, publicKeyB64) = try generateWgKeyPair()
 
+            // Step 2b — Ephemeral ML-KEM-768 keypair for the PQC-hybrid PSK.
+            // Only offered when liboqs in this build actually has ML-KEM-768
+            // (VpnMlKem.isSupported). When unsupported we send no mlkem_pubkey;
+            // the server omits mlkem_ciphertext and we use the classical psk —
+            // exactly the documented fallback. Generated fresh per connection;
+            // never the device's long-term ML-KEM-1024 identity key.
+            var mlkemSecretKey: Data?
+            var mlkemPubkeyB64: String?
+            if VpnMlKem.isSupported {
+                let mlkemPair = try VpnMlKem.generateKeyPair()
+                mlkemSecretKey = mlkemPair.secretKey
+                mlkemPubkeyB64 = mlkemPair.publicKey.base64EncodedString()
+            }
+
             // Step 3 — Register WG peer; receive server config.
             let wgConfig = try await api.registerWgPeer(
                 accessToken: accessToken,
                 clientPubkey: publicKeyB64,
-                nodeId: node.id
+                nodeId: node.id,
+                mlkemPubkey: mlkemPubkeyB64
+            )
+
+            // Step 3b — Resolve the WireGuard PSK.
+            // If the server returned an ML-KEM ciphertext, decapsulate it with
+            // our ephemeral secret key and derive the PSK via HKDF — this PQC
+            // PSK SUPERSEDES wgConfig.psk. A decapsulation failure here is FATAL
+            // (the server committed to PQC): we throw rather than silently
+            // dropping to the classical psk. If no ciphertext is present, use
+            // the classical psk unchanged.
+            let resolvedPskB64 = try resolveWgPsk(
+                wgConfig: wgConfig,
+                mlkemSecretKey: mlkemSecretKey
             )
 
             // Step 4 — Pass raw crypto params to the extension.
             try await startTunnel(
                 node: node,
                 privateKeyB64: privateKeyB64,
+                pskB64: resolvedPskB64,
                 wgConfig: wgConfig
             )
 
@@ -151,7 +180,7 @@ final class VpnService: ObservableObject {
     /// Stores individual WireGuard parameters in `providerConfiguration` so the
     /// `PacketTunnelProvider` extension can build a `TunnelConfiguration` using
     /// the public WireGuardKit API without the private wg-quick string parser.
-    private func startTunnel(node: VpnNode, privateKeyB64: String, wgConfig: WgConfigResponse) async throws {
+    private func startTunnel(node: VpnNode, privateKeyB64: String, pskB64: String, wgConfig: WgConfigResponse) async throws {
         guard let mgr = manager else { throw NSError(domain: "VpnService", code: -1) }
 
         let ip4Bare = wgConfig.assignedIp4.components(separatedBy: "/").first ?? wgConfig.assignedIp4
@@ -168,7 +197,9 @@ final class VpnService: ObservableObject {
         proto.providerConfiguration = [
             WgProviderKey.privateKeyB64:   privateKeyB64,
             WgProviderKey.serverPubKeyB64: wgConfig.serverPubkey,
-            WgProviderKey.pskB64:          wgConfig.psk,
+            // Resolved PSK: the HKDF-derived ML-KEM-768 PSK when the server did
+            // PQC, otherwise the classical wgConfig.psk.
+            WgProviderKey.pskB64:          pskB64,
             WgProviderKey.clientAddresses: clientAddresses,
             WgProviderKey.serverEndpoint:  wgConfig.serverEndpoint,
             WgProviderKey.dns:             dnsServers.joined(separator: ","),
@@ -225,6 +256,40 @@ final class VpnService: ObservableObject {
         }
     }
 
+    // MARK: - PQC PSK resolution
+
+    /// Resolves the base64 WireGuard PSK from the server response.
+    ///
+    /// - If the server returned `mlkem_ciphertext`, decapsulate it with our
+    ///   ephemeral ML-KEM-768 secret key and derive the PSK via HKDF-SHA256.
+    ///   This PQC-derived PSK SUPERSEDES `wgConfig.psk`.
+    /// - Otherwise return `wgConfig.psk` unchanged (classical / old-server path).
+    ///
+    /// FATAL-on-failure semantics: when a ciphertext is present the handshake
+    /// is committed to PQC, so any decode/decapsulation problem throws. We never
+    /// silently fall back to the classical PSK once the server has answered with
+    /// a ciphertext — doing so would mask a key-agreement failure and produce a
+    /// PSK mismatch the tunnel could never recover from.
+    private func resolveWgPsk(
+        wgConfig: WgConfigResponse,
+        mlkemSecretKey: Data?
+    ) throws -> String {
+        guard let ciphertextB64 = wgConfig.mlkemCiphertext, !ciphertextB64.isEmpty else {
+            // No PQC ciphertext → classical PSK, exactly as before.
+            return wgConfig.psk
+        }
+        // Server committed to PQC. We MUST have a secret key and a valid
+        // ciphertext; anything else is fatal (no classical fallback).
+        guard let secretKey = mlkemSecretKey else {
+            throw VpnError.pqcStateMismatch
+        }
+        guard let ciphertext = Data(base64Encoded: ciphertextB64) else {
+            throw VpnError.invalidMlkemCiphertext
+        }
+        let psk = try VpnMlKem.derivePsk(ciphertext: ciphertext, secretKey: secretKey)
+        return psk.base64EncodedString()
+    }
+
     // MARK: - WireGuard X25519 keypair
 
     /// Generates a Curve25519 keypair compatible with WireGuard.
@@ -242,5 +307,24 @@ final class VpnService: ObservableObject {
             privData.base64EncodedString(),
             pubData.base64EncodedString()
         )
+    }
+}
+
+/// Errors specific to the VPN connect flow's PQC PSK handshake.
+enum VpnError: LocalizedError {
+    /// Server returned an ML-KEM ciphertext but the client has no ephemeral
+    /// secret key for this connection (should be impossible — the pubkey is
+    /// only sent when a keypair was generated). Treated as fatal.
+    case pqcStateMismatch
+    /// The `mlkem_ciphertext` field was not valid base64.
+    case invalidMlkemCiphertext
+
+    var errorDescription: String? {
+        switch self {
+        case .pqcStateMismatch:
+            return "VPN PQC: ciphertext senza chiave ML-KEM locale"
+        case .invalidMlkemCiphertext:
+            return "VPN PQC: ciphertext ML-KEM non valido"
+        }
     }
 }
