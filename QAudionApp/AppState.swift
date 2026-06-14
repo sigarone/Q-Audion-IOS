@@ -3,6 +3,7 @@ import SwiftUI
 import CryptoKit
 import AVFoundation
 import AudioToolbox  // AudioServicesPlayAlertSound (in-app ringtone)
+import BackgroundTasks
 import QAudionEngine
 #if canImport(WebRTC)
 // W412: needed by the W411 RTCIceServer references inside the
@@ -257,6 +258,41 @@ final class AppState: ObservableObject {
     /// audio-only call. See
     /// `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
     @Published public private(set) var peerScreenShareActive: Bool = false
+
+    // ─── media-consent v1 ─────────────────────────────────────────────
+    /// The peer asked to turn their camera on mid-call. Non-nil while the
+    /// consent dialog is on screen; cleared by accept / decline / timeout /
+    /// call teardown. Receiving this NEVER touches the local camera.
+    struct PendingIncomingUpgrade: Equatable {
+        let callId: String
+        let senderId: String
+        let sdp: String
+    }
+    @Published var pendingIncomingUpgrade: PendingIncomingUpgrade?
+
+    /// True once camera video has been consented to in THIS call (either
+    /// direction). Later camera renegotiations auto-accept instead of
+    /// re-prompting. Reset on call teardown.
+    private var videoConsentGranted: Bool = false
+
+    /// Auto-decline timer for [pendingIncomingUpgrade] (25s — below the
+    /// initiator's 30s response window so it sees an explicit decline).
+    private var pendingUpgradeAutoDeclineTask: Task<Void, Never>?
+
+    /// Initiator-side watchdog for OUR camera upgrade request: if no
+    /// call_upgrade_response lands within 30s, roll the camera back.
+    private var upgradeResponseTimeoutTask: Task<Void, Never>?
+
+    /// What OUR outstanding `call_upgrade_request` was for ("camera" |
+    /// "screen"), so the response handler knows whether to unpause the
+    /// camera pipeline / roll it back. nil when nothing is in flight.
+    private var pendingOutgoingUpgradeMedia: String?
+
+    /// True when [videoPipeline] was started decode-only (external source,
+    /// paused) just to RENDER a WS-relay peer's screen share on an
+    /// audio-only call — torn down again on SCREEN_SHARE:stop.
+    private var decodeOnlyPipelineForPeerScreen: Bool = false
+
     #if os(iOS)
     private let screenShareController = ScreenShareController()
     /// Camera-frame closure captured BEFORE starting screen share, so
@@ -587,6 +623,20 @@ final class AppState: ObservableObject {
             }
         }
         #endif
+
+        // W-BGK: BGAppRefreshTask handler routing.
+        // QAudionApp.init() registers the BGTask with a closure that posts
+        // AppState.bgWsKeepalive; we observe here so handleWsKeepaliveTask can
+        // access the live auth state without a static reference to AppState.
+        NotificationCenter.default.addObserver(
+            forName: AppState.bgWsKeepalive,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
+            guard let task = notification.object as? BGAppRefreshTask else { return }
+            self?.handleWsKeepaliveTask(task)
+        }
+        scheduleWsKeepalive()
 
         callService.onDeepfakeAlert = { [weak self] isAlert in
             Task { @MainActor in
@@ -1269,6 +1319,40 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - W-BGK: Background WS keepalive
+
+    /// Schedule the next BGAppRefreshTask. Called on launch and at the end of
+    /// each BGTask run so the chain is self-sustaining. iOS picks the actual
+    /// fire time; the `earliestBeginDate` sets a lower bound only — the system
+    /// may defer up to ~15 min based on power / usage patterns.
+    func scheduleWsKeepalive() {
+        let request = BGAppRefreshTaskRequest(identifier: "com.bcrypto.qaudion.ws-keepalive")
+        // Ask iOS to fire within the next 5 minutes; system may delay further.
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 5 * 60)
+        try? BGTaskScheduler.shared.submit(request)
+    }
+
+    /// BGAppRefreshTask handler. Ensures the WS is authenticated (reconnects if
+    /// stale), completes the task, and schedules the next run. The iOS budget
+    /// for a BGAppRefreshTask is ~30 s of CPU — ensureAuthenticated is capped
+    /// at 10 s to stay safely within it.
+    private func handleWsKeepaliveTask(_ task: BGAppRefreshTask) {
+        // Schedule the next run first — if this handler crashes or expires,
+        // the chain is already queued for next time.
+        scheduleWsKeepalive()
+
+        task.expirationHandler = { task.setTaskCompleted(success: false) }
+
+        Task { @MainActor [weak self] in
+            guard let self, self.isAuthenticated, let live = self.liveProvider else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            let ok = await live.persistentConnection.ensureAuthenticated(timeoutSec: 10)
+            task.setTaskCompleted(success: ok)
+        }
+    }
+
     /// W74: register the WS dispatch handlers that turn server-relayed
     /// call signaling into CallKit + ring on the responder side. Three
     /// inbound types matter:
@@ -1542,11 +1626,11 @@ final class AppState: ObservableObject {
         // start the local VideoCallPipeline so the WS HEVC path is
         // populated too (the WebRTC RTP path is what the peer
         // actually consumes; the WS path serves iOS↔iOS peers).
-        ws.onCallUpgradeRequest = { [weak self] callId, senderId, sdp in
+        ws.onCallUpgradeRequest = { [weak self] callId, senderId, sdp, media in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.handleIncomingUpgradeRequest(
-                    callId: callId, senderId: senderId, sdp: sdp)
+                    callId: callId, senderId: senderId, sdp: sdp, media: media)
             }
         }
         // W536 — caller side: peer accepted/rejected our upgrade
@@ -1560,79 +1644,216 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// W536 — responder side of audio→video upgrade. Builds the
-    /// answer SDP via the WebRTC controller, ships it back via
-    /// `sendCallUpgradeResponse(accepted: true)`, and starts the
-    /// local VideoCallPipeline. If the WebRTC controller is not
-    /// available we ship `accepted: false` with empty SDP so the
-    /// peer sees an explicit reject instead of waiting on a timeout.
+    /// media-consent v1 — responder side of a mid-call renegotiation.
+    /// Routes on the request's `media` tag:
+    ///   - "screen": peer is sharing their screen. Viewing exposes nothing
+    ///     of ours → answer immediately, NEVER open the local camera.
+    ///   - "camera", consent already granted this call: benign renegotiation
+    ///     (camera off→on / re-offer) → accept with the bidirectional flow
+    ///     the user already approved.
+    ///   - "camera", first time: PRIVACY GATE — publish
+    ///     [pendingIncomingUpgrade] so the UI shows the consent dialog.
+    ///     Nothing is answered and no camera opens until the user decides;
+    ///     a 25s timer auto-declines.
+    /// Works on both transports: WebRTC (sdp carries the peer's offer) and
+    /// the iOS↔iOS WS-HEVC relay (sdp is empty; the response carries an
+    /// empty answer and pipelines start on each side independently).
     @MainActor
     private func handleIncomingUpgradeRequest(
-        callId: String, senderId: String, sdp: String
+        callId: String, senderId: String, sdp: String, media: String
     ) {
-        #if canImport(WebRTC)
-        guard let controller = webRtcController as? QAudionWebRtcCallController,
-              let provider = liveProvider,
-              let impl = provider.callingApi as? BCryptoCallingApiImpl
-        else {
-            RTLog.warn("call", "onCallUpgradeRequest: WebRTC controller unavailable — sending reject")
+        guard isInCall, callContactId == senderId else {
+            RTLog.warn("call", "onCallUpgradeRequest: not in a call with \(senderId.prefix(8))… — sending reject")
             Task {
                 try? await (liveProvider?.callingApi as? BCryptoCallingApiImpl)?
                     .sendCallUpgradeResponse(
-                        callId: callId,
-                        recipientId: senderId,
-                        sdp: "",
-                        accepted: false)
+                        callId: callId, recipientId: senderId, sdp: "", accepted: false)
             }
             return
         }
+        if media == "screen" {
+            acceptIncomingScreenShareRenegotiation(
+                callId: callId, senderId: senderId, sdp: sdp)
+            return
+        }
+        // A call that is ALREADY in video (born as a video call, or upgraded
+        // earlier) counts as granted consent — re-offers don't re-prompt.
+        if videoConsentGranted || isVideoCall {
+            RTLog.info("call", "onCallUpgradeRequest: camera consent already granted this call — auto-accepting")
+            acceptPendingIncomingUpgrade(
+                PendingIncomingUpgrade(callId: callId, senderId: senderId, sdp: sdp))
+            return
+        }
+        // First camera request this call → consent dialog. Duplicate
+        // requests (re-offer retransmits) just refresh the pending state.
+        RTLog.info("call", "onCallUpgradeRequest: camera upgrade from \(senderId.prefix(8))… — awaiting user consent")
+        pendingIncomingUpgrade = PendingIncomingUpgrade(
+            callId: callId, senderId: senderId, sdp: sdp)
+        pendingUpgradeAutoDeclineTask?.cancel()
+        pendingUpgradeAutoDeclineTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 25_000_000_000)
+            guard !Task.isCancelled, let self = self,
+                  self.pendingIncomingUpgrade?.callId == callId else { return }
+            RTLog.info("call", "incoming upgrade consent timed out — auto-declining")
+            self.declineIncomingUpgrade()
+        }
+    }
+
+    /// media-consent v1 — user tapped ACCEPT on the consent dialog (or the
+    /// consent was already granted this call). Answers the renegotiation,
+    /// then opens OUR camera too: per spec, accepting means bidirectional
+    /// video. Camera permission is pre-checked; on denial the upgrade is
+    /// declined so the peer is not left waiting.
+    @MainActor
+    func acceptIncomingUpgrade() {
+        guard let pending = pendingIncomingUpgrade else { return }
+        pendingUpgradeAutoDeclineTask?.cancel()
+        pendingUpgradeAutoDeclineTask = nil
+        pendingIncomingUpgrade = nil
+        let camStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        if camStatus == .denied || camStatus == .restricted {
+            errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
+            declinePending(pending)
+            return
+        }
+        acceptPendingIncomingUpgrade(pending)
+    }
+
+    /// media-consent v1 — user tapped DECLINE (or the timer fired, or the
+    /// camera permission was missing). Ships `accepted=false`; the call
+    /// continues voice-only and nothing local changes.
+    @MainActor
+    func declineIncomingUpgrade() {
+        guard let pending = pendingIncomingUpgrade else { return }
+        pendingUpgradeAutoDeclineTask?.cancel()
+        pendingUpgradeAutoDeclineTask = nil
+        pendingIncomingUpgrade = nil
+        declinePending(pending)
+    }
+
+    @MainActor
+    private func declinePending(_ pending: PendingIncomingUpgrade) {
+        Task {
+            try? await (liveProvider?.callingApi as? BCryptoCallingApiImpl)?
+                .sendCallUpgradeResponse(
+                    callId: pending.callId,
+                    recipientId: pending.senderId,
+                    sdp: "",
+                    accepted: false)
+        }
+    }
+
+    /// Shared accept body: WebRTC answer (when a controller is live) or the
+    /// WS-relay empty-SDP accept, then local camera pipeline up.
+    @MainActor
+    private func acceptPendingIncomingUpgrade(_ pending: PendingIncomingUpgrade) {
+        guard let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl else { return }
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             do {
-                let answerSdp = try await controller.acceptUpgradeOffer(remoteSdp: sdp)
+                var answerSdp = ""
+                #if canImport(WebRTC)
+                if let controller = self.webRtcController as? QAudionWebRtcCallController,
+                   !pending.sdp.isEmpty {
+                    answerSdp = try await controller.acceptUpgradeOffer(remoteSdp: pending.sdp)
+                }
+                #endif
                 try await impl.sendCallUpgradeResponse(
-                    callId: callId,
-                    recipientId: senderId,
+                    callId: pending.callId,
+                    recipientId: pending.senderId,
                     sdp: answerSdp,
                     accepted: true)
+                self.videoConsentGranted = true
                 self.isVideoCall = true
                 self.setCamera(true)
-                await self.startVideoPipeline(for: senderId)
+                await self.startVideoPipeline(for: pending.senderId)
                 if self.videoPipeline == nil {
-                    // Camera permission denied or hardware unavailable —
-                    // revert video state. The peer accepted the upgrade
-                    // so audio continues; UI returns to audio-only mode.
-                    self.isVideoCall = false
+                    // Camera permission denied at request time or hardware
+                    // unavailable — the peer's video still shows (consent
+                    // was given); our side simply sends nothing.
+                    self.isVideoCall = self.peerScreenShareActive
                     self.setCamera(false)
                 }
-                RTLog.info("call", "onCallUpgradeRequest accepted — local video pipeline up")
+                RTLog.info("call", "incoming upgrade accepted — local video pipeline up")
             } catch {
                 let desc: String = error.localizedDescription
-                RTLog.warn("call", "onCallUpgradeRequest failed: " + desc)
+                RTLog.warn("call", "incoming upgrade accept failed: " + desc)
                 try? await impl.sendCallUpgradeResponse(
-                    callId: callId,
-                    recipientId: senderId,
+                    callId: pending.callId,
+                    recipientId: pending.senderId,
                     sdp: "",
                     accepted: false)
             }
         }
-        #endif
     }
 
-    /// W536 — caller side. Apply peer's answer SDP or revert the
-    /// local UI if the peer rejected.
+    /// media-consent v1 — auto-accept a `media="screen"` renegotiation.
+    /// The WebRTC answer wires our RECEIVE side; with external video source
+    /// the controller never opens a camera. On the WS-relay path (no
+    /// controller) the accept is an empty-SDP ack — the decode-only
+    /// pipeline mounts when the SCREEN_SHARE:start announce arrives.
+    @MainActor
+    private func acceptIncomingScreenShareRenegotiation(
+        callId: String, senderId: String, sdp: String
+    ) {
+        guard let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl else { return }
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            do {
+                var answerSdp = ""
+                #if canImport(WebRTC)
+                if let controller = self.webRtcController as? QAudionWebRtcCallController,
+                   !sdp.isEmpty {
+                    controller.useExternalVideoSource = true
+                    answerSdp = try await controller.acceptUpgradeOffer(remoteSdp: sdp)
+                }
+                #endif
+                try await impl.sendCallUpgradeResponse(
+                    callId: callId, recipientId: senderId,
+                    sdp: answerSdp, accepted: true)
+                RTLog.info("call", "screen-share renegotiation auto-accepted (no camera)")
+            } catch {
+                RTLog.warn("call", "screen-share renegotiation accept failed: " + error.localizedDescription)
+                try? await impl.sendCallUpgradeResponse(
+                    callId: callId, recipientId: senderId, sdp: "", accepted: false)
+            }
+        }
+    }
+
+    /// media-consent v1 — caller side. On accept: unpause the (preview-only)
+    /// pipeline so frames finally leave the device, and apply the answer SDP
+    /// when the WebRTC leg is in play (the iOS↔iOS WS-relay accept carries
+    /// an EMPTY sdp — that is still an accept, not a reject). On decline or
+    /// timeout: roll the camera/preview back; the call stays voice-only.
     @MainActor
     private func handleUpgradeResponse(
         callId: String, accepted: Bool, sdp: String
     ) {
+        upgradeResponseTimeoutTask?.cancel()
+        upgradeResponseTimeoutTask = nil
+        let isCameraUpgrade = pendingOutgoingUpgradeMedia == "camera"
+        pendingOutgoingUpgradeMedia = nil
+        if !accepted {
+            RTLog.info("call", "onCallUpgradeResponse: peer declined — reverting to audio-only UI")
+            if isCameraUpgrade {
+                self.isVideoCall = false
+                self.setCamera(false)
+                self.videoPipeline?.stop()
+                self.videoPipeline = nil
+                self.errorMessage = "Il peer non ha attivato il video — la chiamata continua in voce."
+            }
+            return
+        }
+        if isCameraUpgrade {
+            videoConsentGranted = true
+            // Frames were held back (paused preview) until this consent.
+            videoPipeline?.setVideoPaused(false)
+        }
         #if canImport(WebRTC)
-        guard let controller = webRtcController as? QAudionWebRtcCallController else { return }
-        if !accepted || sdp.isEmpty {
-            RTLog.info("call", "onCallUpgradeResponse: peer rejected — reverting to audio-only UI")
-            self.isVideoCall = false
-            self.setCamera(false)
-            self.videoPipeline?.stop()
-            self.videoPipeline = nil
+        guard let controller = webRtcController as? QAudionWebRtcCallController,
+              !sdp.isEmpty else {
+            RTLog.info("call", "onCallUpgradeResponse: accepted (WS-relay path, no SDP) — video flowing")
             return
         }
         Task { @MainActor [weak self] in
@@ -2672,6 +2893,11 @@ final class AppState: ObservableObject {
     /// `qa_grp:1` marker and routes to GroupChatService.
     static let groupSenderKeyCtlNotification = Notification.Name("qaudion.group.senderKeyCtl")
 
+    /// W-BGK: BGAppRefreshTask notification. QAudionApp.init() posts this when
+    /// iOS fires the ws-keepalive background task; AppState.handleWsKeepaliveTask
+    /// is the observer.
+    static let bgWsKeepalive = Notification.Name("com.bcrypto.qaudion.bgWsKeepalive")
+
     /// W77: dispatch inbound `opaque_message` envelopes. The QUAD frame
     /// inside the payload carries either:
     /// 2026-05-06 — KMS pipeline orchestrator. Closes the
@@ -2958,6 +3184,25 @@ final class AppState: ObservableObject {
         guard peerScreenShareActive != active else { return }
         peerScreenShareActive = active
         print("[AppState] SCREEN_SHARE \(active ? "start" : "stop") from=\(senderId.prefix(8))… callId=\(callId.prefix(8))…")
+        // media-consent v1 — iOS↔iOS WS-relay leg: on an audio-only call no
+        // pipeline exists, so the peer's screen `video_frame`s would decode
+        // to nowhere. Bring up a decode-only pipeline (external source ⇒ no
+        // camera, paused ⇒ its encoder can never emit) just to render, and
+        // tear it down again on stop. WebRTC peers don't need this — their
+        // screen rides the RTP track into WebRTCRemoteVideoView.
+        if active, videoPipeline == nil, webRtcController == nil {
+            decodeOnlyPipelineForPeerScreen = true
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                await self.startVideoPipeline(
+                    for: senderId, sourceMode: .external, startPaused: true)
+            }
+        } else if !active, decodeOnlyPipelineForPeerScreen,
+                  !isVideoCall, !isScreenSharing {
+            decodeOnlyPipelineForPeerScreen = false
+            videoPipeline?.stop()
+            videoPipeline = nil
+        }
     }
 
     /// W534 — outbound announce primitive. Builds
@@ -4057,6 +4302,16 @@ final class AppState: ObservableObject {
         // teardown; we do NOT need (and the spec explicitly says not to
         // send) a final `SCREEN_SHARE:stop` here.
         peerScreenShareActive = false
+        // media-consent v1 — per-call consent + pending dialogs/watchdogs
+        // die with the call.
+        videoConsentGranted = false
+        pendingIncomingUpgrade = nil
+        pendingUpgradeAutoDeclineTask?.cancel()
+        pendingUpgradeAutoDeclineTask = nil
+        upgradeResponseTimeoutTask?.cancel()
+        upgradeResponseTimeoutTask = nil
+        pendingOutgoingUpgradeMedia = nil
+        decodeOnlyPipelineForPeerScreen = false
         // W339: drop the PQC session key so the SAS panel hides on the
         // next call setup. Holding stale key material across calls
         // would otherwise let one call's verified SAS appear on the
@@ -4226,18 +4481,13 @@ final class AppState: ObservableObject {
         }
         // iOS↔iOS WS-relay path: WebRTC controller is nil — start
         // VideoCallPipeline directly (camera → HEVC → WS relay → HEVC decode).
-        // WebRTC renegotiation is skipped because there is no RTP transceiver.
+        // WebRTC renegotiation is skipped because there is no RTP transceiver,
+        // but media-consent v1 STILL ships a `call_upgrade_request` (empty
+        // sdp): the pipeline starts PAUSED (camera + mirror preview only,
+        // nothing leaves the device) and unpauses only when the peer accepts.
         if webRtcController == nil {
-            RTLog.info("call", "upgradeToVideo: iOS↔iOS WS relay — starting VideoCallPipeline directly")
+            RTLog.info("call", "upgradeToVideo: iOS↔iOS WS relay — starting VideoCallPipeline (paused until consent)")
             // W571 — check camera permission BEFORE flipping isVideoCall.
-            // Previously, isVideoCall=true was set before ensurePermission()
-            // ran inside VideoCallPipeline.start(). On permission denial,
-            // startVideoPipeline returned early but isVideoCall stayed true →
-            // ContentView routed to VideoCallView with no pipeline, showing
-            // a permanently black UI. Now: permission is pre-checked here;
-            // only on .authorized do we flip the flag and start the pipeline.
-            // On .notDetermined we request access inline; on .denied/.restricted
-            // we surface the settings prompt and abort without touching isVideoCall.
             let camStatus = AVCaptureDevice.authorizationStatus(for: .video)
             if camStatus == .denied || camStatus == .restricted {
                 errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
@@ -4246,13 +4496,16 @@ final class AppState: ObservableObject {
             isVideoCall = true
             setCamera(true)
             Task { @MainActor [weak self] in
-                await self?.startVideoPipeline(for: peerId)
+                guard let self = self else { return }
+                await self.startVideoPipeline(for: peerId, startPaused: true)
                 // Rollback if the pipeline failed to start (permission denied
                 // at requestAccess time, or camera unavailable).
-                if let self = self, self.videoPipeline == nil {
+                guard self.videoPipeline != nil else {
                     self.isVideoCall = false
                     self.setCamera(false)
+                    return
                 }
+                await self.sendUpgradeConsentRequest(to: peerId, sdp: "", media: "camera")
             }
             return
         }
@@ -4323,7 +4576,10 @@ final class AppState: ObservableObject {
         }
         self.isVideoCall = true
         self.setCamera(true)
-        await startVideoPipeline(for: peerId)
+        // media-consent v1: the pipeline starts PAUSED — camera + mirror
+        // preview are live locally, but no frame leaves the device (neither
+        // WS-HEVC fragments nor WebRTC bridge pushes) until the peer accepts.
+        await startVideoPipeline(for: peerId, startPaused: true)
         // W571 — rollback if the pipeline failed (permission denied at request
         // time, camera unavailable, WS missing). videoPipeline is set inside
         // startVideoPipeline only on success.
@@ -4332,37 +4588,73 @@ final class AppState: ObservableObject {
             self.setCamera(false)
             return
         }
-        RTLog.info("call", "upgradeToVideo: WS-HEVC pipeline started for \(peerId.prefix(8))…")
+        RTLog.info("call", "upgradeToVideo: WS-HEVC pipeline started (paused) for \(peerId.prefix(8))…")
 
         // Attempt WebRTC SDP renegotiation for Android/desktop cross-platform.
         // Failure is non-fatal — the WS-HEVC path above already carries video.
         guard let controller = webRtcController as? QAudionWebRtcCallController else {
             RTLog.info("call", "upgradeToVideo: no WebRTC controller — WS-HEVC only (iOS↔iOS)")
+            await sendUpgradeConsentRequest(to: peerId, sdp: "", media: "camera")
             return
         }
         do {
             let offerSdp = try await controller.upgradeToVideo()
-            try await impl.sendCallUpgradeRequest(
-                callId: callId,
-                recipientId: peerId,
-                sdp: offerSdp
-            )
-            RTLog.info("call", "upgradeToVideo: call_upgrade_request shipped — awaiting response")
+            await sendUpgradeConsentRequest(to: peerId, sdp: offerSdp, media: "camera")
         } catch QAudionWebRtcCallController.ControllerError.alreadyHasVideo {
             // Peer raced us; their upgrade offer arrives via wireUpgradeHandlers.
+            // Their request will show OUR consent dialog (or auto-accept if
+            // consent is already granted) — hold our frames meanwhile.
             RTLog.info("call", "upgradeToVideo: already in video — peer raced us")
         } catch {
-            // WebRTC renegotiation failed — not fatal for iOS↔iOS (WS-HEVC
-            // is already live). Log and continue without surfacing an error.
+            // WebRTC renegotiation failed — the WS-HEVC path still works for
+            // iOS↔iOS, but consent is required either way.
             RTLog.warn("call", "upgradeToVideo WebRTC renegotiation failed (non-fatal): " + error.localizedDescription)
+            await sendUpgradeConsentRequest(to: peerId, sdp: "", media: "camera")
         }
         #else
-        // No WebRTC: go straight to WS-HEVC.
+        // No WebRTC: go straight to WS-HEVC (paused until consent).
         self.isVideoCall = true
         self.setCamera(true)
-        await startVideoPipeline(for: peerId)
+        await startVideoPipeline(for: peerId, startPaused: true)
+        await sendUpgradeConsentRequest(to: peerId, sdp: "", media: "camera")
         RTLog.warn("call", "upgradeToVideo: WebRTC not available — WS-HEVC only")
         #endif
+    }
+
+    /// media-consent v1 — ship OUR `call_upgrade_request` and arm the 30s
+    /// response watchdog. On timeout the camera/preview roll back exactly
+    /// like an explicit decline.
+    @MainActor
+    private func sendUpgradeConsentRequest(
+        to peerId: String, sdp: String, media: String
+    ) async {
+        guard let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId() else {
+            RTLog.warn("call", "sendUpgradeConsentRequest: no active callId — rolling back")
+            if media == "camera" {
+                isVideoCall = false
+                setCamera(false)
+                videoPipeline?.stop()
+                videoPipeline = nil
+            }
+            return
+        }
+        pendingOutgoingUpgradeMedia = media
+        do {
+            try await impl.sendCallUpgradeRequest(
+                callId: callId, recipientId: peerId, sdp: sdp, media: media)
+            RTLog.info("call", "call_upgrade_request shipped media=\(media) — awaiting response")
+        } catch {
+            RTLog.warn("call", "sendCallUpgradeRequest failed: " + error.localizedDescription)
+        }
+        upgradeResponseTimeoutTask?.cancel()
+        upgradeResponseTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled, let self = self,
+                  self.pendingOutgoingUpgradeMedia != nil else { return }
+            RTLog.info("call", "upgrade response timeout — treating as decline")
+            self.handleUpgradeResponse(callId: callId, accepted: false, sdp: "")
+        }
     }
 
     // MARK: - W533: Screen Share
@@ -4390,42 +4682,69 @@ final class AppState: ObservableObject {
             RTLog.warn("call", "startScreenShare: not in a call — refusing")
             return
         }
-        #if canImport(WebRTC)
-        // W538: audio-call screen-share — if there's no video transceiver
-        // yet, upgrade the call to video first (same path as the
-        // upgrade-to-video button). The WebRTC capturer is only created
-        // after `startCameraCapture` (which `upgradeToVideo` triggers),
-        // so without this step `webrtcPixelBufferCapturer` is nil on
-        // audio calls and ReplayKit has nowhere to push frames.
-        if !isVideoCall {
-            RTLog.info("call", "startScreenShare: upgrading audio→video before capture")
-            guard let peerId = callContactId, !peerId.isEmpty else {
-                RTLog.warn("call", "startScreenShare: callContactId nil — aborting")
-                errorMessage = "Impossibile avviare la condivisione: peer sconosciuto."
-                return
-            }
-            await performWebRtcVideoUpgrade(for: peerId)
-            // Give the renegotiation a brief moment to wire the
-            // capturer; bail with a clear error if it didn't land.
-            try? await Task.sleep(nanoseconds: 400_000_000)
-        }
-        guard let controller = webRtcController as? QAudionWebRtcCallController,
-              let capturer = controller.webrtcPixelBufferCapturer
-        else {
-            RTLog.warn("call", "startScreenShare: WebRTC capturer unavailable")
-            errorMessage = "Condivisione schermo non disponibile: video non pronto."
+        guard let peerId = callContactId, !peerId.isEmpty else {
+            RTLog.warn("call", "startScreenShare: callContactId nil — aborting")
+            errorMessage = "Impossibile avviare la condivisione: peer sconosciuto."
             return
         }
-        // Capture (and clear) the current camera-frame closure so we
-        // can restore it on stop. AppState owns the source of truth
-        // here — videoPipeline writes to onCapturedPixelBuffer when
-        // startVideoPipeline runs.
+        // media-consent v1: screen share works from an AUDIO-ONLY call and
+        // NEVER opens the camera (the old W538 flow ran a full camera
+        // upgrade first — privacy bug). Transport setup without camera:
+        //   - WebRTC peers: add the video transceiver with
+        //     useExternalVideoSource=true (creates the pixel-buffer capturer,
+        //     no camera) and ship a media="screen" re-offer — peers
+        //     auto-accept without a consent dialog.
+        //   - iOS↔iOS WS relay: bring the pipeline up in .external mode
+        //     (encoder only, no camera/permission) and feed ReplayKit
+        //     frames via submitExternalFrame.
+        #if canImport(WebRTC)
+        var capturer: WebRTCPixelBufferCapturer?
+        if let controller = webRtcController as? QAudionWebRtcCallController {
+            if controller.webrtcPixelBufferCapturer == nil {
+                RTLog.info("call", "startScreenShare: adding camera-less video transceiver (media=screen)")
+                controller.useExternalVideoSource = true
+                do {
+                    let offerSdp = try await controller.upgradeToVideo()
+                    await sendUpgradeConsentRequest(to: peerId, sdp: offerSdp, media: "screen")
+                } catch QAudionWebRtcCallController.ControllerError.alreadyHasVideo {
+                    // Transceiver already negotiated — capturer exists below.
+                } catch {
+                    RTLog.warn("call", "startScreenShare: screen renegotiation failed: " + error.localizedDescription)
+                }
+            }
+            capturer = controller.webrtcPixelBufferCapturer
+        }
+        #else
+        let capturer: WebRTCPixelBufferCapturer? = nil
+        #endif
+        // WS-HEVC leg (iOS↔iOS): make sure an encoding pipeline exists.
+        // On a video call the camera pipeline is already up — we suspend its
+        // camera feed below. On an audio call bring up an external-source
+        // pipeline (no camera, no permission prompt).
+        if videoPipeline == nil {
+            await startVideoPipeline(for: peerId, sourceMode: .external)
+        }
+        guard capturer != nil || videoPipeline != nil else {
+            RTLog.warn("call", "startScreenShare: no transport available (WebRTC capturer nil, pipeline nil)")
+            errorMessage = "Condivisione schermo non disponibile: trasporto video non pronto."
+            return
+        }
+        // Capture (and clear) the current camera-frame closure so we can
+        // restore it on stop; suspend the camera→encoder feed so screen and
+        // camera frames don't interleave in the HEVC stream.
         preScreenShareCameraClosure = videoPipeline?.onCapturedPixelBuffer
         videoPipeline?.onCapturedPixelBuffer = nil
+        videoPipeline?.externalFeedActive = true
+        // Screen frames must flow even if the camera path was consent-paused
+        // (sharing the screen is itself the user's explicit choice).
+        videoPipeline?.setVideoPaused(false)
+        screenShareController.onFrame = { [weak self] pixelBuffer, ts in
+            self?.videoPipeline?.submitExternalFrame(pixelBuffer, presentationTimeNs: ts)
+        }
         do {
             try await screenShareController.start(into: capturer)
             isScreenSharing = true
-            RTLog.info("call", "startScreenShare: ReplayKit capture live — pushing into WebRTC")
+            RTLog.info("call", "startScreenShare: ReplayKit capture live (camera untouched)")
             // W538: fire-and-forget peer announce so cross-platform
             // peers can mount the screen-share video sink with the
             // right badge. If the peer doesn't support the SCREEN_SHARE
@@ -4435,17 +4754,16 @@ final class AppState: ObservableObject {
                 await self?.announceScreenShare(active: true)
             }
         } catch {
-            // Restore the camera closure if start failed so the call
+            // Restore the camera path if start failed so the call
             // doesn't get stuck without any video producer.
             videoPipeline?.onCapturedPixelBuffer = preScreenShareCameraClosure
+            videoPipeline?.externalFeedActive = false
+            screenShareController.onFrame = nil
             preScreenShareCameraClosure = nil
             let msg: String = error.localizedDescription
             RTLog.warn("call", "startScreenShare failed: " + msg)
             errorMessage = msg
         }
-        #else
-        RTLog.warn("call", "startScreenShare: WebRTC not available in this build")
-        #endif
         #endif
     }
 
@@ -4456,8 +4774,19 @@ final class AppState: ObservableObject {
         // Restore the camera path so VideoCallPipeline frames once
         // again flow to the WebRTC capturer.
         videoPipeline?.onCapturedPixelBuffer = preScreenShareCameraClosure
+        videoPipeline?.externalFeedActive = false
         preScreenShareCameraClosure = nil
         isScreenSharing = false
+        // media-consent v1: if the pipeline existed only to encode the
+        // screen on an audio-only call (external mode, no camera), tear it
+        // down — the call drops cleanly back to voice.
+        if !isVideoCall, let p = videoPipeline, p.sourceMode == .external,
+           !peerScreenShareActive {
+            p.stop()
+            videoPipeline = nil
+            abrController?.stop()
+            abrController = nil
+        }
         RTLog.info("call", "stopScreenShare: camera frame closure restored")
         // W538: symmetric announce so the peer can swap the screen-share
         // sink back to the normal camera video badge. Fire-and-forget —
@@ -5137,11 +5466,22 @@ extension AppState {
     /// Best-effort: a failure here doesn't abort the call (the audio
     /// path keeps working; the SwiftUI placeholders stay visible).
     @MainActor
-    func startVideoPipeline(for peerId: String) async {
+    func startVideoPipeline(
+        for peerId: String,
+        sourceMode: VideoCallPipeline.SourceMode = .camera,
+        startPaused: Bool = false
+    ) async {
         // Tear down any leftover pipeline from a previous call.
         videoPipeline?.stop()
 
         let pipeline = VideoCallPipeline()
+        // media-consent v1:
+        //  - sourceMode .external = no camera ever (screen-share encode, or
+        //    decode-only rendering of a WS peer's screen).
+        //  - startPaused = camera + local mirror preview run, but NOTHING
+        //    leaves the device until the peer accepts the upgrade.
+        pipeline.sourceMode = sourceMode
+        if startPaused { pipeline.setVideoPaused(true) }
 
         // Resolve transport (WS client). Reuse the already-authenticated
         // liveProvider WS — creating a new BCryptoBackendProvider would
@@ -5227,6 +5567,14 @@ extension AppState {
             self.videoPipeline = pipeline
             // W398: spin up ABR loop on the same lifecycle.
             let abr = AbrController(pipeline: pipeline)
+            // W574o — attach the active call_id so call.video.tune telemetry
+            // lands on the per-call server timeline (same source the audio
+            // tuner + wire audio_frame use).
+            abr.callIdProvider = { [weak self] in
+                guard let live = self?.liveProvider,
+                      let impl = live.callingApi as? BCryptoCallingApiImpl else { return nil }
+                return impl.getActiveCallId()
+            }
             abr.start()
             self.abrController = abr
             print("[AppState] video pipeline up for peer \(peerId), ABR active")

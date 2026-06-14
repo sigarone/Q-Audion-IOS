@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation  // AVAudioSession for speaker override
+import CryptoKit     // W574l — one-way key fingerprint for seal-key diagnostics
 import QAudionEngine
 
 final class CallService {
@@ -186,19 +187,96 @@ final class CallService {
     private var relaySealerSend: PqcRtpFrameSealer?
     private var relaySealerRecv: PqcRtpFrameSealer?
 
+    /// W574h — the (lowercased) callId the current relay sealers are bound to.
+    /// The M-15 seal key is `HKDF(pqcSessionKey, info="…:<callId>")`, so the
+    /// sealer is only valid for ONE call. Tracking the bound callId lets the
+    /// installer re-key when the active call changes (call glare / retry leave
+    /// more than one callId in flight) instead of staying locked to a dead
+    /// call's key — the v1.0.624→632 "connected but silent both ways" bug.
+    private var relaySealerCallId: String?
+
+    /// W574l — fingerprint (8 hex of SHA-256) of the session key the current
+    /// sealers were built from. The call handshake fires `onRelaySessionReady`
+    /// from MULTIPLE sites with DIFFERENT key material (QUAD raw ML-KEM
+    /// `sharedSecret` vs JSON dual-hybrid `combined`); the old per-callId
+    /// idempotency locked the sealer to whichever fired FIRST, so if a
+    /// contact-key-exchange `sharedSecret` install beat the real audio
+    /// `combined` key, the seal was keyed wrong while the audio engine used
+    /// `combined` → 100% M-15 unseal failure even on a clean same-callId call.
+    /// Tracking the key fingerprint lets the installer re-key when the KEY
+    /// changes for the same call (last-write-wins on key); logging it lets the
+    /// two peers' seal keys be compared across devices.
+    private var relaySealerKeyFp: String?
+
+    /// One-way 8-hex fingerprint of a key — safe to log (does NOT reveal key
+    /// bytes). Used only to compare seal keys across the two peers' logs.
+    private static func sealKeyFingerprint(_ key: Data) -> String {
+        let digest = SHA256.hash(data: key)
+        var hex = ""
+        for b in digest.prefix(4) {
+            let s = String(b, radix: 16)
+            hex += (s.count == 1 ? "0" + s : s)
+        }
+        return hex
+    }
+
     /// Build the WS-relay sealers from the established PQC session key and
     /// the wire call_id. MUST use the lowercase wire call_id (same string
     /// Android feeds `PqcRtpFrameSealer.create`) or the HKDF info diverges
-    /// and interop fails. Idempotent: a second call with the same key is a
-    /// no-op (the handshake completion can fire more than once).
+    /// and interop fails.
+    ///
+    /// W574h — the sealer MUST track the ACTIVE call. The M-15 seal key is
+    /// `HKDF(pqcSessionKey, info="q-audion-srtp-master-v1:<callId>")`, so a
+    /// sealer built for callId A can NEVER open/seal frames for callId B.
+    /// Under call glare or retry there can be more than one callId in flight
+    /// (e.g. a superseded outgoing call whose handshake completed first, then
+    /// the call actually answered) — the old `guard relaySealerSend == nil`
+    /// locked onto whichever fired first and silently skipped the live call,
+    /// so the peer's frames failed 100% AEAD (M-15 unseal failed) in BOTH
+    /// directions with NO fallback (W574d disabled SRTP audio). This installer
+    /// now:
+    ///   • IGNORES installs for a callId that isn't the active call
+    ///     (`getActiveCallId()` is set by bindIncomingCallId /
+    ///     sendCallOfferWithId BEFORE the handshake completes, so it is
+    ///     authoritative here) — a dead call's late handshake can't clobber
+    ///     the live sealer, and can't leave us keyed to a stale call;
+    ///   • is IDEMPOTENT for the SAME call — re-firing must NOT rebuild,
+    ///     because that would reset the AES-GCM send counter to 0 and risk
+    ///     (key, nonce) reuse (catastrophic for confidentiality);
+    ///   • RE-KEYS when the active call's id genuinely changes.
+    /// Pure iOS-side logic — no wire-format / HKDF change, so Android, the
+    /// firmware earbud counterparty, Desktop and the server are unaffected.
     public func installRelaySealers(sessionKey: Data, callId: String) {
-        guard relaySealerSend == nil else { return }
         let cid = callId.lowercased()
+        // Stale-call guard: only (re)key for the call media actually flows on.
+        if let active = getCallId?()?.lowercased(), !active.isEmpty, active != cid {
+            let a: String = String(cid.prefix(8))
+            let b: String = String(active.prefix(8))
+            let line: String = "[CallService] W574h: relay sealer install IGNORED for non-active callId=" + a + "… (active=" + b + "…)"
+            print(line)
+            return
+        }
+        // W574l — idempotent ONLY when the callId AND the key are both
+        // unchanged (rebuilding with the same key would reset the AES-GCM
+        // counter → (key,nonce) reuse). Re-key when the call's session key
+        // changes: the handshake fires onRelaySessionReady from several sites
+        // with different key material, and the seal MUST end up on the audio
+        // session key the engine actually uses — last write wins. A new key
+        // means a brand-new sealer with counter 0, which is safe (the key,
+        // and therefore the whole nonce space, is new).
+        let kfp: String = Self.sealKeyFingerprint(sessionKey)
+        if relaySealerSend != nil, relaySealerCallId == cid, relaySealerKeyFp == kfp { return }
+        let hadSealer: Bool = (relaySealerSend != nil)
         do {
             let send = try PqcRtpFrameSealer(pqcSessionKey: sessionKey, callId: cid)
             relaySealerSend = send
             relaySealerRecv = send.makeSibling()
-            print("[CallService] W574e: WS-relay PQC sealers installed (callId=\(cid.prefix(8))…)")
+            relaySealerCallId = cid
+            relaySealerKeyFp = kfp
+            let verb: String = hadSealer ? "re-keyed" : "installed"
+            let p: String = String(cid.prefix(8))
+            let line: String = "[CallService] W574e: WS-relay PQC sealers " + verb + " (callId=" + p + "… keyfp=" + kfp + ")"
+            print(line)
         } catch {
             print("[CallService] W574e: relay sealer install failed: \(error) — relay runs unsealed (Android interop will fail)")
         }
@@ -424,8 +502,39 @@ final class CallService {
     ///   - integration: The responder integration built during ringing.
     func activateIncomingCallAudio(engine: QAudionEngine,
                                    integration: QAudionCallIntegration) throws {
+        // W574i — preserve the M-15 relay sealers across the defensive
+        // teardown. On the CALLEE the PQC handshake completes DURING ringing,
+        // so onRelaySessionReady -> installRelaySealers has ALREADY run by the
+        // time the user answers and this method fires. teardownAudioStack()
+        // nils relaySealer{Send,Recv,CallId} — and the handshake will NOT fire
+        // again (it's done), so without this the callee runs with NIL sealers:
+        // it sends UNSEALED relay frames (159 B) and cannot unseal the caller's
+        // SEALED frames (187 B) -> 100% RX failure, no audio in either
+        // direction (the v1.0.624->633 callee-side "connected but silent" bug).
+        // The CALLER never hit this because it installs its sealers AFTER its
+        // own startCall() teardown. Save the sealers, run the teardown, then
+        // restore them iff they still belong to the call being answered.
+        let _savedSealerSend = relaySealerSend
+        let _savedSealerRecv = relaySealerRecv
+        let _savedSealerCallId = relaySealerCallId
+        let _savedSealerKeyFp = relaySealerKeyFp
         // Defensive cleanup: stop any leftover capture from a previous call.
         teardownAudioStack()
+        if let cid = _savedSealerCallId, _savedSealerSend != nil {
+            let active: String = getCallId?()?.lowercased() ?? ""
+            // Restore when the sealer matches the active call, or when the
+            // active id is unknown (the sealer was installed by W574h only for
+            // the active call, so it cannot belong to a superseded one here).
+            if active.isEmpty || active == cid {
+                relaySealerSend = _savedSealerSend
+                relaySealerRecv = _savedSealerRecv
+                relaySealerCallId = cid
+                relaySealerKeyFp = _savedSealerKeyFp
+                let p: String = String(cid.prefix(8))
+                let line: String = "[CallService] W574i: preserved M-15 relay sealers across answer teardown (callId=" + p + "…)"
+                print(line)
+            }
+        }
 
         let pipeline = AudioProcessingPipeline()
         pipeline.voiceProcessingOverride = CallsGate.anyVoiceProcessingEnabled
@@ -864,6 +973,8 @@ final class CallService {
         peerAnswered = false  // W574b — re-arm the pre-answer mic gate for the next call
         relaySealerSend = nil  // W574e — fresh M-15 sealers per call (new key)
         relaySealerRecv = nil
+        relaySealerCallId = nil  // W574h — unbind so the next call re-keys cleanly
+        relaySealerKeyFp = nil   // W574l
         // W67: reset transport binding. Nota: NON disconnect-iamo il
         // wsClient (può restare connesso per signaling / chat / contacts).
         // Solo facciamo nil-out i riferimenti così future audio frames

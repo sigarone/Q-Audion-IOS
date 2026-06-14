@@ -141,6 +141,14 @@ struct PrivacySettingsScreen: View {
         ("30 minuti", 1_800_000)
     ]
 
+    // MARK: - IOS-SE biometric key protection (audit 2026-06-12)
+    // Opt-in, default OFF. Enabling re-protects the SOVEREIGN PSK vault items
+    // with a `.userPresence` access control (biometry/passcode, survives
+    // re-enrollment). Migration is non-destructive — see SovereignKeyVault.
+    @State private var keyProtectionEnabled: Bool = KeychainProtectionPolicy.shared.isEnabled
+    @State private var keyProtectionBusy: Bool = false
+    @State private var keyProtectionError: String?
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -247,6 +255,28 @@ struct PrivacySettingsScreen: View {
                         }
                     }
 
+                    // IOS-SE: hardware-gated custody of session keys. Default OFF
+                    // (opt-in). Disabled if the device has no Face ID/Touch ID/
+                    // passcode configured.
+                    SettingsSectionHeader("CHIAVI SICURE")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Protezione biometrica chiavi",
+                            subtitle: "Richiede Face ID / Touch ID (o codice) per le chiavi di sessione, una volta per sessione",
+                            isOn: Binding(
+                                get: { keyProtectionEnabled },
+                                set: { setKeyProtection($0) }
+                            )
+                        )
+                        .disabled(keyProtectionBusy || !KeychainProtectionPolicy.shared.isAuthenticationAvailable)
+                        if !KeychainProtectionPolicy.shared.isAuthenticationAvailable {
+                            Text("Nessuna autenticazione dispositivo configurata (Face ID / Touch ID / codice).")
+                                .qaudionStyle(type.labelSmall)
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                                .padding(.horizontal, 14)
+                        }
+                    }
+
                     if !container.viewModel.blockedUserIds.isEmpty {
                         SettingsSectionHeader("UTENTI BLOCCATI")
                         kvRow(label: "Bloccati",
@@ -296,6 +326,53 @@ struct PrivacySettingsScreen: View {
             }
         }
         .navigationTitle("Privacy")
+        .alert("Protezione chiavi", isPresented: Binding(
+            get: { keyProtectionError != nil },
+            set: { if !$0 { keyProtectionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { keyProtectionError = nil }
+        } message: {
+            Text(keyProtectionError ?? "")
+        }
+    }
+
+    /// IOS-SE: enable/disable biometric key protection. Re-protects (or
+    /// un-protects) the existing PSK items via a NON-DESTRUCTIVE migration and
+    /// reverts the toggle on any failure — keys are never lost. Default OFF.
+    private func setKeyProtection(_ enable: Bool) {
+        guard !keyProtectionBusy else { return }
+        keyProtectionBusy = true
+        keyProtectionEnabled = enable // optimistic; reverted on error
+        Task { @MainActor in
+            let policy = KeychainProtectionPolicy.shared
+            let vault = SovereignKeyVault()
+            do {
+                if enable {
+                    // Existing items are currently unprotected → readable freely.
+                    try vault.migratePskProtection(enable: true)
+                    policy.setEnabledFlag(true)
+                } else {
+                    // Items are protected → authenticate once to read them.
+                    let ok = await policy.prepareSession(
+                        reason: "Conferma per disattivare la protezione biometrica delle chiavi")
+                    if !ok {
+                        // Auth cancelled/failed: leave protection ON, keys intact.
+                        keyProtectionEnabled = policy.isEnabled
+                        keyProtectionError = "Autenticazione annullata. La protezione resta attiva."
+                        keyProtectionBusy = false
+                        return
+                    }
+                    try vault.migratePskProtection(enable: false, context: policy.authenticationContext())
+                    policy.setEnabledFlag(false)
+                    policy.invalidateSession()
+                }
+            } catch {
+                // Keys are intact (migration is non-destructive). Revert the UI.
+                keyProtectionEnabled = policy.isEnabled
+                keyProtectionError = "Operazione non riuscita: \(error). Le chiavi non sono state modificate."
+            }
+            keyProtectionBusy = false
+        }
     }
 
     /// W284: open iOS Settings → Q-Audion entry. Same URL as W169 but

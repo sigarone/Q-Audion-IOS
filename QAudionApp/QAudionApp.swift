@@ -1,4 +1,5 @@
 import SwiftUI
+import BackgroundTasks
 import QAudionEngine
 
 @main
@@ -20,6 +21,24 @@ struct QAudionApp: App {
         // the W417 telemetry on the NEXT launch (see `flushPendingReport`
         // in `.onAppear`, which must run AFTER the stdout tee attaches).
         CrashReporter.installHandlers()
+
+        // W-BGK: BGAppRefreshTask must be registered before the app finishes
+        // launching (Apple requirement). We forward it via NotificationCenter
+        // so AppState.handleWsKeepaliveTask() can access the live auth state
+        // without a static reference to AppState.
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: "com.bcrypto.qaudion.ws-keepalive",
+            using: nil
+        ) { task in
+            guard let refreshTask = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            NotificationCenter.default.post(
+                name: AppState.bgWsKeepalive,
+                object: refreshTask
+            )
+        }
     }
 
     var body: some Scene {

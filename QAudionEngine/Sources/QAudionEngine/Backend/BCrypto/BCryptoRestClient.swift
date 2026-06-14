@@ -310,6 +310,22 @@ final class CertPinningDelegate: NSObject, URLSessionDelegate {
             return
         }
 
+        // IOS-MEDIUM (audit 2026-06-12): require the system's standard trust
+        // evaluation to PASS before the pin check. The serverTrust carried by a
+        // URLSession server-trust challenge already has the default SSL policy
+        // (hostname + validity + chain-to-trusted-anchor) attached, so this
+        // enforces that the cert is genuinely valid for THIS host. Without it,
+        // because the pin set anchors on a public root (ISRG Root X1 / LE
+        // intermediates) to survive 90-day leaf rotation, any cert chaining to
+        // that public root for ANY hostname would satisfy the pin. The pin is
+        // an ADDITIONAL constraint layered on top of — not a replacement for —
+        // standard trust. Fail closed on evaluation error.
+        var trustEvalError: CFError?
+        guard SecTrustEvaluateWithError(serverTrust, &trustEvalError) else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
         // Walk every cert in the server's TLS chain; accept if ANY cert's
         // DER SHA-256 matches one of the pinned hashes.
         guard let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],

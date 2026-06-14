@@ -36,6 +36,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// state machine routes them to the right peer. Cleared on hangup.
     private var activeCallId: String?
     private let callIdLock = NSLock()
+    /// Guard against sending call_answer more than once per call session.
+    /// Reset alongside activeCallId in clearActiveCallId().
+    private var _answerSent = false
 
     init(ws: BCryptoWebSocketClient, rest: BCryptoRestClient) { self.ws = ws; self.rest = rest }
 
@@ -146,6 +149,16 @@ public final class BCryptoCallingApiImpl: CallingApi {
         capabilities: [String],
         hasVideo: Bool
     ) async throws {
+        // Idempotency: drop duplicate answers for the same call session.
+        // Can occur if the WebRTC onAnswerCreated callback fires twice or
+        // if AppState logic races after receiving call_incoming twice.
+        callIdLock.lock()
+        guard !_answerSent else {
+            callIdLock.unlock()
+            return
+        }
+        _answerSent = true
+        callIdLock.unlock()
         let cid = currentCallId()
         var data: [String: Any] = [
             "recipient_id": recipientId,
@@ -327,11 +340,17 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// format byte-for-byte identical to desktop
     /// CallController.requestUpgradeToVideo + Android
     /// WsCommand.CallUpgradeRequest.
-    public func sendCallUpgradeRequest(callId: String, recipientId: String, sdp: String) async throws {
+    public func sendCallUpgradeRequest(
+        callId: String,
+        recipientId: String,
+        sdp: String,
+        media: String = "camera"
+    ) async throws {
         ws.send(type: "call_upgrade_request", data: [
             "call_id":      callId,
             "recipient_id": recipientId,
             "sdp":          sdp,
+            "media":        media,
         ])
     }
 
@@ -401,6 +420,6 @@ public final class BCryptoCallingApiImpl: CallingApi {
     }
 
     private func clearActiveCallId() {
-        callIdLock.lock(); activeCallId = nil; callIdLock.unlock()
+        callIdLock.lock(); activeCallId = nil; _answerSent = false; callIdLock.unlock()
     }
 }

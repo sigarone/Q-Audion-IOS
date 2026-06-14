@@ -120,6 +120,32 @@ struct LiveInCallScreen: View {
             // between successive calls on the same showcase entry).
             resolvePeerDisplayName()
         }
+        // media-consent v1 — the peer asked to turn their camera on.
+        // NOTHING (no camera, no answer) happens until the user decides
+        // here; AppState auto-declines after 25s.
+        .alert(
+            "Videochiamata richiesta",
+            isPresented: incomingUpgradeAlertBinding
+        ) {
+            Button("Attiva video") {
+                cameraOn = true
+                appState.acceptIncomingUpgrade()
+            }
+            Button("Rifiuta", role: .cancel) {
+                appState.declineIncomingUpgrade()
+            }
+        } message: {
+            Text("\(cachedPeerDisplayName) vuole attivare il video. Se accetti, si attiva anche la tua fotocamera.")
+        }
+    }
+
+    /// Bridge AppState.pendingIncomingUpgrade ↔ the SwiftUI alert. Setting
+    /// false (swipe/dismiss) declines so the peer isn't left waiting.
+    private var incomingUpgradeAlertBinding: Binding<Bool> {
+        Binding(
+            get: { appState.pendingIncomingUpgrade != nil },
+            set: { shown in if !shown { appState.declineIncomingUpgrade() } }
+        )
     }
 
     // MARK: - Sub-views (extracted to keep TimelineView body shallow,

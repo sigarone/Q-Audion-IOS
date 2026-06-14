@@ -104,6 +104,14 @@ public final class HevcEncoder: @unchecked Sendable {
         try setProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue!)
         try setProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_HEVC_Main_AutoLevel)
         try setProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: NSNumber(value: bitrateBps))
+        // W574n — cap the 1-second peak at 1.5x the average. Without a peak
+        // limit VideoToolbox lets keyframe / high-motion bursts overshoot the
+        // average badly; over the TCP WebSocket relay those bursts cause
+        // head-of-line blocking → arrival jitter → choppy playback. Capping
+        // the peak smooths the on-wire byte cadence (quality-neutral — the
+        // AVERAGE bitrate is unchanged).
+        try setProperty(session, key: kVTCompressionPropertyKey_DataRateLimits,
+                         value: Self.dataRateLimits(forBitrateBps: bitrateBps))
         try setProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: NSNumber(value: fps))
         try setProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
                          value: NSNumber(value: keyframeIntervalSec))
@@ -202,6 +210,20 @@ public final class HevcEncoder: @unchecked Sendable {
         if status != noErr {
             print("[HevcEncoder] setBitrate(\(clamped)) failed status=\(status)")
         }
+        // W574n — keep the peak cap proportional to the new average.
+        _ = VTSessionSetProperty(
+            session,
+            key: kVTCompressionPropertyKey_DataRateLimits,
+            value: Self.dataRateLimits(forBitrateBps: clamped))
+    }
+
+    /// W574n — DataRateLimits payload: `[maxBytesPerWindow, windowSeconds]`.
+    /// Caps the encoder's 1-second peak at 1.5x the average bitrate so
+    /// keyframe / motion bursts don't congest the WS relay.
+    private static func dataRateLimits(forBitrateBps bps: Int) -> CFArray {
+        let bytesPerSecond = NSNumber(value: Int(Double(bps) * 1.5 / 8.0))
+        let oneSecond = NSNumber(value: 1)
+        return [bytesPerSecond, oneSecond] as CFArray
     }
 
     /// W524 — adjust expected frame rate mid-stream. Bounded to a sane

@@ -84,6 +84,14 @@ public final class ScreenShareController {
     /// WebRTC capturer (which is owned by the QAudionWebRtcCallController).
     private weak var targetCapturer: WebRTCPixelBufferCapturer?
 
+    /// media-consent v1 — secondary frame sink for the WS-HEVC transport
+    /// (iOS↔iOS peers receive video as `video_frame` envelopes, not WebRTC
+    /// RTP). AppState points this at `VideoCallPipeline.submitExternalFrame`
+    /// so an audio-only screen share reaches iOS peers too. Invoked on
+    /// RPScreenRecorder's private queue — the pipeline entry point is
+    /// nonisolated and thread-safe.
+    public nonisolated(unsafe) var onFrame: ((CVPixelBuffer, Int64) -> Void)?
+
     /// First sample timestamp anchor — used to produce monotonically
     /// increasing nanosecond timestamps relative to the start of the
     /// share. WebRTC accepts arbitrary monotonic values; we just
@@ -93,11 +101,12 @@ public final class ScreenShareController {
     public init() {}
 
     /// Start streaming the in-app screen into the given WebRTC
-    /// capturer. Returns once `startCapture` has succeeded (the
-    /// handler closure is called per-frame from then on).
+    /// capturer (nil on the iOS↔iOS WS-relay path — frames then flow
+    /// only through [onFrame]). Returns once `startCapture` has
+    /// succeeded (the handler closure is called per-frame from then on).
     /// Throws `.alreadyRunning`, `.recorderUnavailable`, or
     /// `.captureFailed` on the documented failure modes.
-    public func start(into capturer: WebRTCPixelBufferCapturer) async throws {
+    public func start(into capturer: WebRTCPixelBufferCapturer?) async throws {
         if isRunning { throw ScreenShareError.alreadyRunning }
         let recorder = RPScreenRecorder.shared()
         guard recorder.isAvailable else {
@@ -164,6 +173,7 @@ public final class ScreenShareController {
             })
         }
         targetCapturer = nil
+        onFrame = nil
         startReferenceCmTime = nil
         isRunning = false
         print("[ScreenShareController] capture stopped — restoring camera path")
@@ -181,6 +191,8 @@ public final class ScreenShareController {
         else { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
         let nanos: Int64 = Int64(CMTimeGetSeconds(pts) * 1_000_000_000)
+        // WS-HEVC sink first (no actor hop needed — see onFrame docs).
+        onFrame?(pixelBuffer, nanos)
         // Hop a read of `targetCapturer` through the actor — this is
         // safe because the property is set only on MainActor and only
         // before/after capture lifecycle transitions. We deliberately
