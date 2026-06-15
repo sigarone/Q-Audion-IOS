@@ -199,6 +199,34 @@ jobs:
           cache: false
 
       # ----------------------------------------------------------
+      # 3c) Build quiche.xcframework — MASQUE CONNECT-UDP backend.
+      #     Cached by QUICHE_REF so repeat builds skip the ~10 min
+      #     cargo + BoringSSL compile. Produces QAudionApp/Vendor/
+      #     quiche.xcframework (the `Cquiche` module imported by
+      #     AppMasqueQuicheTransport). Runs BEFORE xcodegen so the
+      #     project.yml framework reference resolves. macos runners
+      #     ship rustup/cargo preinstalled.
+      # ----------------------------------------------------------
+      - name: Cache quiche xcframework
+        id: cache-quiche
+        uses: actions/cache@v5
+        with:
+          path: QAudionApp/Vendor/quiche.xcframework
+          key: quiche-xcframework-${{ runner.os }}-0.22.0-${{ hashFiles('scripts/build-quiche-xcframework.sh') }}
+
+      - name: Build quiche xcframework
+        if: steps.cache-quiche.outputs.cache-hit != 'true'
+        env:
+          QUICHE_REF: '0.22.0'
+        run: |
+          set -e
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source "$HOME/.cargo/env"
+          fi
+          bash scripts/build-quiche-xcframework.sh
+
+      # ----------------------------------------------------------
       # 4) Generate the Xcode project from project.yml.
       # ----------------------------------------------------------
       - name: Generate Xcode project

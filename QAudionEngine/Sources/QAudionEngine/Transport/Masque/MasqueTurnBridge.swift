@@ -108,10 +108,10 @@ public final class MasqueTurnBridge: @unchecked Sendable {
         udpFD = fd
         running = true
 
-        // 3. Tunnel → UDP: deliver inbound datagrams to libwebrtc's last src.
-        transport.onDatagram = { [weak self] payload in
+        // 3. Tunnel → UDP: the transport hands us the raw UDP packet
+        //    (it owns the H3/QUIC datagram framing); route it to libwebrtc.
+        transport.onDatagram = { [weak self] udp in
             guard let self else { return }
-            guard let udp = MasqueDatagramCodec.decode(payload) else { return }
             self.sendToLoopback(udp)
         }
 
@@ -152,8 +152,10 @@ public final class MasqueTurnBridge: @unchecked Sendable {
             }
             if n <= 0 { break }
             lastSrcLock.withLock { lastSrc = src }
+            // Pass the raw UDP packet; the transport applies the H3/QUIC
+            // datagram framing (quarter-stream-id + context-id) itself.
             let udp = Data(bytes: buf, count: n)
-            transport.sendDatagram(MasqueDatagramCodec.encode(udpPayload: udp))
+            transport.sendDatagram(udp)
         }
     }
 
