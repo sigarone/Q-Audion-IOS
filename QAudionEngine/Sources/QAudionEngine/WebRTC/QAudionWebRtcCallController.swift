@@ -198,6 +198,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private let relayProvider: RelayCredentialsProvider?
     private var peerConnection: QAudionPeerConnection?
     private var wssTurnBridge: WssTurnBridge?
+    private var masqueTurnBridge: MasqueTurnBridge?
     private var recipientId: String?
     #if os(iOS)
     private var localVideoCapturer: RTCCameraVideoCapturer?
@@ -615,6 +616,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         stopVideoStatsTelemetry()
         wssTurnBridge?.stop()
         wssTurnBridge = nil
+        masqueTurnBridge?.stop()
+        masqueTurnBridge = nil
         peerConnection?.close()
         peerConnection = nil
         recipientId = nil
@@ -915,6 +918,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
         var servers = QAudionPeerConnectionFactory.iceServers(from: bundle.servers)
 
+        // MASQUE CONNECT-UDP bridge — preferred firewall bypass (UDP over
+        // HTTP/3 / QUIC datagrams; no TCP-over-TCP head-of-line blocking like
+        // WSS-TURN). Inert in the default build (MasqueFeature disabled + no
+        // QUIC backend) — see MasqueDatagramTransport.swift for the activation
+        // steps. Tried first so it wins over WSS-TURN when both are available.
+        if let masqueIce = await startMasqueBridgeIfAvailable(bundle: bundle) {
+            servers.insert(masqueIce, at: 0)
+        }
+
         // WSS-TURN bridge — last-resort bypass for corporate firewalls
         // that block UDP 3478, TCP 3478, and TURNS 5349. The server
         // exposes a WebSocket TURN proxy at /api/v1/turn-ws; we relay
@@ -952,6 +964,47 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
 
         return servers
+    }
+
+    /// MASQUE CONNECT-UDP bridge (gated). Returns an ICE server entry that
+    /// routes TURN over an HTTP/3 tunnel when MASQUE is enabled and a QUIC/H3
+    /// backend is compiled in; otherwise `nil`. Inert in the default build:
+    /// `MasqueFeature.isEnabled` is false and `MasqueTransportFactory.make()`
+    /// returns nil, so every guard below short-circuits to nil with no effect
+    /// on call setup. Mirrors Android `CronetMasqueDriver`.
+    private func startMasqueBridgeIfAvailable(
+        bundle: RelayCredentialsProvider.RelayBundle
+    ) async -> RTCIceServer? {
+        guard MasqueFeature.isEnabled else { return nil }
+        guard let masqueUrlStr = bundle.masqueUrl,
+              let masqueUrl = URL(string: masqueUrlStr),
+              let host = masqueUrl.host else { return nil }
+        guard let transport = MasqueTransportFactory.make() else { return nil }
+        // Tunnel target = the first TURN relay with credentials. libwebrtc
+        // needs real TURN creds inside its ALLOCATE; STUN-only entries are skipped.
+        guard let firstTurn = bundle.servers.first(where: { server in
+            server.urls.contains { $0.hasPrefix("turn:") || $0.hasPrefix("turns:") }
+        }) else { return nil }
+        guard let turnUrl = firstTurn.urls.first(where: {
+            $0.hasPrefix("turn:") || $0.hasPrefix("turns:")
+        }) else { return nil }
+        guard let target = MasqueConnectUdpRequest.parseTurnTarget(turnUrl) else { return nil }
+        guard let username = firstTurn.username,
+              let credential = firstTurn.credential else { return nil }
+
+        var authority: String = host
+        if let port = masqueUrl.port { authority = host + ":" + "\(port)" }
+
+        let request = MasqueConnectUdpRequest(
+            proxyAuthority: authority,
+            targetHost: target.host,
+            targetPort: target.port,
+            bearerToken: accessToken)
+        let bridge = MasqueTurnBridge(transport: transport, request: request)
+        guard let result = try? await bridge.start() else { return nil }
+        masqueTurnBridge?.stop()
+        masqueTurnBridge = bridge
+        return RTCIceServer(urlStrings: [result.iceUrl], username: username, credential: credential)
     }
 
     public enum ControllerError: Error, Equatable {

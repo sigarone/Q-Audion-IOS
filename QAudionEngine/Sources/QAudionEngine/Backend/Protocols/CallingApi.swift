@@ -341,11 +341,16 @@ public struct RelayResponse: Decodable, Equatable {
     public let relays: [RelayServer]
     public let wssTurnUrl: String?
     public let onionAddress: String?
+    /// Top-level `masque_url` — the MASQUE proxy endpoint for the HTTP/3
+    /// CONNECT-UDP TURN fallback. Optional: older servers omit it; the
+    /// MASQUE path is gated and inert when this is nil. Mirrors Android.
+    public let masqueUrl: String?
 
-    public init(relays: [RelayServer], wssTurnUrl: String? = nil, onionAddress: String? = nil) {
+    public init(relays: [RelayServer], wssTurnUrl: String? = nil, onionAddress: String? = nil, masqueUrl: String? = nil) {
         self.relays = relays
         self.wssTurnUrl = wssTurnUrl
         self.onionAddress = onionAddress
+        self.masqueUrl = masqueUrl
     }
 
     public init(from decoder: Decoder) throws {
@@ -355,11 +360,14 @@ public struct RelayResponse: Decodable, Equatable {
             ?? c.decodeIfPresent(String.self, forKey: .wss_turn_url)
         self.onionAddress = try c.decodeIfPresent(String.self, forKey: .onionAddress)
             ?? c.decodeIfPresent(String.self, forKey: .onion_address)
+        self.masqueUrl = try c.decodeIfPresent(String.self, forKey: .masqueUrl)
+            ?? c.decodeIfPresent(String.self, forKey: .masque_url)
     }
 
     private enum CodingKeys: String, CodingKey {
         case relays
         case wssTurnUrl, wss_turn_url
         case onionAddress, onion_address
+        case masqueUrl, masque_url
     }
 }
