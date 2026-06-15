@@ -23,6 +23,13 @@ struct VpnToggleChip: View {
 
     @State private var busy = false
 
+    // Manual exit selection. '' = Auto (NodePicker best). Persisted in UserDefaults,
+    // mirroring Desktop `vpnPreferredNodeId` and Android's node picker.
+    @AppStorage("vpn.preferredNodeId") private var preferredNodeId: String = ""
+    @State private var nodes: [VpnNode] = []
+    @State private var showPicker = false
+    @State private var pickerLoading = false
+
     // MARK: - Body
 
     var body: some View {
@@ -40,6 +47,13 @@ struct VpnToggleChip: View {
         .buttonStyle(.plain)
         .disabled(busy || vpnService.state.isConnecting)
         .animation(.easeInOut(duration: 0.2), value: vpnService.state)
+        // Long-press the chip to choose the exit. highPriorityGesture (not
+        // simultaneous) so a long-press opens the picker WITHOUT also firing the
+        // button's tap action (connect/disconnect); a short tap still falls through.
+        .highPriorityGesture(
+            LongPressGesture(minimumDuration: 0.45).onEnded { _ in openPicker() }
+        )
+        .sheet(isPresented: $showPicker) { pickerSheet }
     }
 
     // MARK: - Icon
@@ -101,18 +115,96 @@ struct VpnToggleChip: View {
             do {
                 // Fetch node list via VpnService (reuses its persistent
                 // cert-pinned session — no per-tap URLSession allocation).
-                let nodes: [VpnNode]
+                let list: [VpnNode]
                 do {
-                    nodes = try await vpnService.fetchNodes(accessToken: accessToken)
+                    list = try await vpnService.fetchNodes(accessToken: accessToken)
                 } catch {
-                    nodes = [.frankfurtFallback]
+                    list = [.frankfurtFallback]
                 }
-                // Pick the best exit (latency + load + jurisdiction, mirrors Android
-                // NodePicker) instead of nodes.first — lets it-mi-2 win over de-1.
-                guard let node = await VpnNodePicker.selectBest(nodes) else { return }
+                nodes = list  // cache for the picker UI
+                // Honour the manual exit choice when its node is still in the live list;
+                // otherwise auto-select the best (latency + load + jurisdiction).
+                let node: VpnNode
+                if let preferred = chooseNode(in: list) {
+                    node = preferred
+                } else if let best = await VpnNodePicker.selectBest(list) {
+                    node = best
+                } else {
+                    return
+                }
                 await vpnService.connect(to: node, accessToken: accessToken)
             }
         }
+    }
+
+    // MARK: - Manual exit picker
+
+    private func openPicker() {
+        showPicker = true
+        guard nodes.isEmpty else { return }
+        pickerLoading = true
+        Task {
+            defer { pickerLoading = false }
+            nodes = (try? await vpnService.fetchNodes(accessToken: accessToken)) ?? []
+        }
+    }
+
+    /// The preferred node when it's still in the live list; nil → caller uses auto-best.
+    private func chooseNode(in list: [VpnNode]) -> VpnNode? {
+        guard !preferredNodeId.isEmpty else { return nil }
+        return list.first { $0.id == preferredNodeId }
+    }
+
+    @ViewBuilder
+    private var pickerSheet: some View {
+        NavigationStack {
+            List {
+                Button {
+                    preferredNodeId = ""
+                    showPicker = false
+                } label: {
+                    pickerRow(title: "Auto", subtitle: "Best node · latency + load", selected: preferredNodeId.isEmpty)
+                }
+                ForEach(nodes) { n in
+                    Button {
+                        preferredNodeId = n.id
+                        showPicker = false
+                    } label: {
+                        pickerRow(
+                            title: n.city.isEmpty ? n.id : n.city,
+                            subtitle: "\(n.country) · \(Int((n.loadPct * 100).rounded()))% load",
+                            selected: preferredNodeId == n.id
+                        )
+                    }
+                }
+                if pickerLoading && nodes.isEmpty {
+                    Text("Loading locations…").foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("VPN exit")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showPicker = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    @ViewBuilder
+    private func pickerRow(title: String, subtitle: String, selected: Bool) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).foregroundStyle(.primary)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if selected {
+                Image(systemName: "checkmark").foregroundStyle(.green)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
 
