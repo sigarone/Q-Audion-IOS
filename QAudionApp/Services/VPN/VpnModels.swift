@@ -51,18 +51,27 @@ struct WgConfigResponse: Codable {
     let assignedIp4: String
     /// Empty string when server doesn't assign IPv6.
     let assignedIp6: String
-    /// Preshared key for PQC-hybrid. NEVER log.
+    /// Classical preshared key. NEVER log. Used as the WireGuard PSK when the
+    /// PQC path is inactive (`mlkemCiphertext == nil`).
     let psk: String
+    /// OPTIONAL base64 of a 1568-byte ML-KEM-1024 (FIPS 203) ciphertext. Present
+    /// only when the client offered an `mlkem_pubkey` AND the server is PQC-
+    /// capable. When present, the client decapsulates it and derives the WG PSK
+    /// via HKDF — that derived PSK SUPERSEDES `psk`. When absent (old/un-
+    /// deployed server) the client falls back to `psk` unchanged. NEVER log.
+    let mlkemCiphertext: String?
     let dns: [String]
     let expiresAt: String
 
     enum CodingKeys: String, CodingKey {
-        case serverPubkey   = "server_pubkey"
-        case serverEndpoint = "server_endpoint"
-        case assignedIp4    = "assigned_ip4"
-        case assignedIp6    = "assigned_ip6"
-        case psk, dns
-        case expiresAt      = "expires_at"
+        case serverPubkey    = "server_pubkey"
+        case serverEndpoint  = "server_endpoint"
+        case assignedIp4     = "assigned_ip4"
+        case assignedIp6     = "assigned_ip6"
+        case psk
+        case mlkemCiphertext = "mlkem_ciphertext"
+        case dns
+        case expiresAt       = "expires_at"
     }
 
     init(from decoder: Decoder) throws {
@@ -73,6 +82,8 @@ struct WgConfigResponse: Codable {
         // Default to empty string when server omits the IPv6 field.
         assignedIp6     = (try? c.decode(String.self, forKey: .assignedIp6)) ?? ""
         psk             = try c.decode(String.self, forKey: .psk)
+        // Optional: absent on an old/un-deployed (non-PQC) server.
+        mlkemCiphertext = try c.decodeIfPresent(String.self, forKey: .mlkemCiphertext)
         dns             = try c.decode([String].self, forKey: .dns)
         expiresAt       = try c.decode(String.self, forKey: .expiresAt)
     }

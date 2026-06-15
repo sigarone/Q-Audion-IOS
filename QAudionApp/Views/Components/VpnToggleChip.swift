@@ -107,7 +107,9 @@ struct VpnToggleChip: View {
                 } catch {
                     nodes = [.frankfurtFallback]
                 }
-                guard let node = nodes.first else { return }
+                // Pick the best exit (latency + load + jurisdiction, mirrors Android
+                // NodePicker) instead of nodes.first — lets it-mi-2 win over de-1.
+                guard let node = await VpnNodePicker.selectBest(nodes) else { return }
                 await vpnService.connect(to: node, accessToken: accessToken)
             }
         }
