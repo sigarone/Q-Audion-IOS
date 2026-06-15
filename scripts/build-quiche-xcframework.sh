@@ -23,7 +23,14 @@ fi
 command -v cargo >/dev/null || { echo "ERROR: Rust (rustup/cargo) required"; exit 1; }
 command -v xcodebuild >/dev/null || { echo "ERROR: macOS + Xcode required"; exit 1; }
 
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+# Device-only (aarch64-apple-ios). The TestFlight pipeline archives for a
+# generic iOS device, so a device slice is all the build needs. We skip the
+# simulator slice on purpose: cargo's C deps (BoringSSL/ring) for the
+# *-ios-sim target get tagged with the iOS (device) platform, which makes
+# `xcodebuild -create-xcframework` reject the archive with "binaries with
+# multiple platforms are not supported". Add the sim slice later only if
+# simulator runs are needed (requires per-dep -mios-simulator-version-min).
+rustup target add aarch64-apple-ios
 
 rm -rf "$WORK"; mkdir -p "$WORK"
 git clone --depth 1 --branch "$QUICHE_REF" --recursive \
@@ -41,12 +48,9 @@ grep -n "crate-type" quiche/Cargo.toml || true
 
 # FFI feature builds the C API (quiche.h + libquiche.a). BoringSSL builds from
 # the bundled submodule — no system OpenSSL needed.
-for TARGET in aarch64-apple-ios aarch64-apple-ios-sim; do
-  cargo build --release --features ffi --target "$TARGET" -p quiche
-done
+cargo build --release --features ffi --target aarch64-apple-ios -p quiche
 
 DEV_LIB="$WORK/quiche/target/aarch64-apple-ios/release/libquiche.a"
-SIM_LIB="$WORK/quiche/target/aarch64-apple-ios-sim/release/libquiche.a"
 
 # Headers dir with quiche.h + a module map naming the module `Cquiche`.
 HDRS="$WORK/include"
@@ -63,7 +67,6 @@ mkdir -p "$(dirname "$OUT_XC")"
 rm -rf "$OUT_XC"
 xcodebuild -create-xcframework \
   -library "$DEV_LIB" -headers "$HDRS" \
-  -library "$SIM_LIB" -headers "$HDRS" \
   -output "$OUT_XC"
 
 echo "OK: $OUT_XC"
