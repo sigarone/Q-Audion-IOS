@@ -54,9 +54,20 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
 
     public struct Capabilities: Codable, Equatable {
         public let ratchetV3: Bool?
+        // Phase-10b handshake-signing (§5b / §6 of HANDSHAKE-SIGNING-SPEC.md): the signed
+        // CAPS byte triplet is `ratchetV3,sframeV1,vkeyV1`. iOS previously modelled only
+        // `ratchetV3`; the verifier MUST reconstruct CAPS from the SAME received bundle the
+        // signer encoded, so all three are needed. Both new fields are OPTIONAL → an inbound
+        // bundle that omits them decodes fine (absent → nil → CAPS byte 0, matching Android's
+        // "absent OR null capabilities → 0" rule), and JSONEncoder omits nil so the existing
+        // wire bytes for legacy peers are unchanged.
+        public let sframeV1: Bool?
+        public let vkeyV1: Bool?
 
-        public init(ratchetV3: Bool?) {
+        public init(ratchetV3: Bool?, sframeV1: Bool? = nil, vkeyV1: Bool? = nil) {
             self.ratchetV3 = ratchetV3
+            self.sframeV1 = sframeV1
+            self.vkeyV1 = vkeyV1
         }
     }
 
@@ -100,6 +111,16 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     public let pskFingerprints: [String]?
     public let selectedPskFingerprint: String?
 
+    // Phase-10b handshake signing (§1 of HANDSHAKE-SIGNING-SPEC.md) — TWO OPTIONAL fields,
+    // appended LAST to mirror Android's additive `HandshakeBundleCodec` change. Both default
+    // to nil; `JSONEncoder` omits nil keys, so a bundle that doesn't carry them is byte-wire-
+    // identical to the legacy unsigned bundle (no break for already-deployed peers).
+    //
+    // The signature is computed over the explicit §3 length-prefixed `HandshakeTranscript`
+    // (NOT this JSON), so JSON canonicalization is irrelevant to cross-platform parity.
+    public let signerIdentityKey: String?   // base64 (no-wrap, padded) of the 32-byte Ed25519 long-term identity pubkey
+    public let signature: String?           // base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature
+
     public init(
         kind: Kind,
         callId: String,
@@ -110,7 +131,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         ciphertext: Ciphertext? = nil,
         capabilities: Capabilities? = nil,
         pskFingerprints: [String]? = nil,
-        selectedPskFingerprint: String? = nil
+        selectedPskFingerprint: String? = nil,
+        signerIdentityKey: String? = nil,
+        signature: String? = nil
     ) {
         self.kind = kind
         self.callId = callId
@@ -122,6 +145,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.capabilities = capabilities
         self.pskFingerprints = pskFingerprints
         self.selectedPskFingerprint = selectedPskFingerprint
+        self.signerIdentityKey = signerIdentityKey
+        self.signature = signature
     }
 }
 

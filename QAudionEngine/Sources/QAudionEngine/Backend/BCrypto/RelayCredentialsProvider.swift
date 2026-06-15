@@ -21,6 +21,9 @@ public actor RelayCredentialsProvider {
         public let servers: [RelayServer]
         public let wssTurnUrl: String?
         public let onionAddress: String?
+        /// MASQUE proxy endpoint (`masque_url`) for the HTTP/3 CONNECT-UDP
+        /// TURN fallback. nil when the server doesn't advertise MASQUE.
+        public let masqueUrl: String?
         /// Epoch milliseconds at which the freshest server expires.
         public let expiresAtEpochMs: Int64
 
@@ -28,11 +31,13 @@ public actor RelayCredentialsProvider {
             servers: [RelayServer],
             wssTurnUrl: String?,
             onionAddress: String?,
+            masqueUrl: String? = nil,
             expiresAtEpochMs: Int64
         ) {
             self.servers = servers
             self.wssTurnUrl = wssTurnUrl
             self.onionAddress = onionAddress
+            self.masqueUrl = masqueUrl
             self.expiresAtEpochMs = expiresAtEpochMs
         }
 
@@ -113,6 +118,7 @@ public actor RelayCredentialsProvider {
             servers: response.relays,
             wssTurnUrl: response.wssTurnUrl,
             onionAddress: response.onionAddress,
+            masqueUrl: response.masqueUrl,
             expiresAtEpochMs: now + shortestTtl * 1000
         )
     }

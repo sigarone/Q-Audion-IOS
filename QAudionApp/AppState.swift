@@ -120,6 +120,20 @@ final class AppState: ObservableObject {
     /// rebuilt by an explicit "Rotate key" action.
     private lazy var sovereignIdentity = SovereignIdentityManager()
 
+    /// Phase-10b handshake signing — Keychain-backed TOFU pin store for peer
+    /// long-term Ed25519 identity keys (HANDSHAKE-SIGNING-SPEC.md §2/§5c). Shared
+    /// across both call-integration construction sites so the caller-side and
+    /// responder-side handshakes pin/resolve against ONE store.
+    private lazy var peerPinStore = PeerIdentityPinStore()
+
+    /// Phase-10b `v4_capable_pinned` set (spec §4) — the set of peer contactIds
+    /// for which a SIGNED v4 bundle has ever verified. Persisted in UserDefaults
+    /// (never cleared by the policy), so once a peer is v4-pinned a later
+    /// unsigned handshake from it is rejected. Read/written directly via
+    /// UserDefaults inside the integration closures (`wireHandshakeSigning`),
+    /// which run off-main, so it is NOT wrapped in a MainActor-isolated helper.
+    private static let peerV4PinnedDefaultsKey = "qaudion.hs.v4pinned.peers"
+
     /// W75: cached PushKit VoIP token. PushKit emits this on first
     /// launch BEFORE the user is authenticated — we stash it here and
     /// retry the server POST after every auth-success transition. Once
@@ -3112,6 +3126,11 @@ final class AppState: ObservableObject {
                 try await integration.onAndroidBundleReceived(
                     bundle: parsed.bundle,
                     callId: parsed.callId,
+                    // Phase-10b (d): thread the peer id into the ACCEPT path so
+                    // the signature verify resolves the right peer identity. Was
+                    // previously omitted (defaulted to ""), which left the .accept
+                    // branch with no peer to verify against.
+                    callerId: senderId,
                     eligiblePsks: [:],
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
@@ -3347,8 +3366,95 @@ final class AppState: ObservableObject {
                 }
             }
         }
+        // Phase-10b: wire the handshake-signing closures (sign + verify + TOFU
+        // pin) for this responder integration. peerContactId = the caller.
+        wireHandshakeSigning(on: integration)
         responderCallIntegration = integration
         return integration
+    }
+
+    /// Phase-10b handshake-signing wiring (HANDSHAKE-SIGNING-SPEC.md §2/§4/§6).
+    ///
+    /// Installs the sign/verify/pin closures on a `QAudionCallIntegration`.
+    /// Called at BOTH integration construction sites (responder via
+    /// `ensureResponderIntegration`, caller via `startCall`) so both directions
+    /// sign with the local identity and verify against the shared
+    /// `PeerIdentityPinStore` + `ContactsStore` trust sources.
+    ///
+    /// CLAUDE.md §16: takes ONLY the integration (an existing type with a baked-in
+    /// AppState reference graph) — every value it captures is a primitive (`Data`,
+    /// `String`, `Bool`) or a closure over `self`-weak; no NEW AppState-typed
+    /// parameter is introduced, so the new wiring cannot trip the Swift-6
+    /// Sendable-inference silent build break.
+    ///
+    /// ADDITIVE / DEFAULT-OFF: `requireSignedHandshakeFlag` stays `false` (the
+    /// integration's default), so a missing signature is a WARN, not an abort.
+    /// If the local sovereign identity is absent, `signTranscript` returns nil →
+    /// the OFFER/ACCEPT go out UNSIGNED (byte-identical legacy wire).
+    private func wireHandshakeSigning(on integration: QAudionCallIntegration) {
+        // CONCURRENCY: AppState is `@MainActor`, but the integration invokes
+        // these closures synchronously from its (non-main) WS-dispatch path. So
+        // we must NOT dereference `self` (AppState) inside the closures. Instead
+        // we capture the backing STORES by value here, while we are on MainActor.
+        // Each is a plain `final class` whose operations are Keychain / UserDefaults
+        // reads+writes (themselves thread-safe), with no MainActor-isolated state,
+        // so they are safe to call off-main. The persisted v4-pin set is also
+        // read/written directly via UserDefaults inside the closures (thread-safe)
+        // rather than through the MainActor-isolated helper methods.
+        let identityManager = sovereignIdentity         // SovereignIdentityManager
+        let pinStore = peerPinStore                       // PeerIdentityPinStore
+        let v4Key = Self.peerV4PinnedDefaultsKey
+
+        // Local signer: sign a raw transcript with the long-term Ed25519 seed.
+        // Returns nil (→ unsigned) when no identity is loaded or the sign throws.
+        integration.signTranscript = { transcript in
+            guard let id = identityManager.loadIdentity() else { return nil }
+            return try? HandshakeTranscript.sign(
+                transcript: transcript,
+                signingPrivateKeyRaw: id.signingPrivate)
+        }
+        // Local signer identity pubkey (32-byte raw Ed25519) for the bundle's
+        // signerIdentityKey field. Captured by value now (we are on MainActor).
+        // nil → unsigned.
+        integration.localSignerIdentityKey = identityManager.loadIdentity()?.signingPublic
+
+        // Trust sources (spec §5c): pinned key first, then server/QR-fetched key.
+        integration.resolvePinnedPeerKey = { peerId in
+            pinStore.pinnedKey(contactId: peerId)
+        }
+        integration.resolveServerPeerKey = { peerId in
+            // ContactsStore is cheap to construct (UserDefaults-backed); mirror
+            // the existing `ContactsStore().load()` usage elsewhere in AppState.
+            ContactsStore().findPubkey(userId: peerId)
+        }
+        // First-contact TOFU pin commit (AFTER a signature verified under it).
+        integration.commitTofuPin = { peerId, key in
+            _ = pinStore.pinOrMatch(contactId: peerId, ed25519Pub: key)
+        }
+
+        // v4_capable_pinned set (spec §4), persisted in UserDefaults (thread-safe).
+        integration.isPeerV4Pinned = { peerId in
+            guard !peerId.isEmpty else { return false }
+            let set = UserDefaults.standard.stringArray(forKey: v4Key) ?? []
+            return set.contains(peerId)
+        }
+        integration.setPeerV4Pinned = { peerId in
+            guard !peerId.isEmpty else { return }
+            var set = UserDefaults.standard.stringArray(forKey: v4Key) ?? []
+            if !set.contains(peerId) {
+                set.append(peerId)
+                UserDefaults.standard.set(set, forKey: v4Key)
+            }
+        }
+        // Verified-channel = the user has confirmed the SAS at least once for
+        // this peer (existing SAS-verification state). A stored fingerprint is
+        // the proxy for trust ≥ VERIFIED_CHANNEL. `SasVerificationStore.shared`
+        // is a Keychain-backed singleton — safe to read off-main.
+        integration.isPeerVerifiedChannel = { peerId in
+            SasVerificationStore.shared.storedFingerprint(peerUserId: peerId) != nil
+        }
+        // Global enforcement flag DEFAULTS OFF (migration / WARN-only). Left at
+        // the integration's default `false` — do NOT set it true here.
     }
 
     /// W450: boot the audio capture/playback stack for an incoming call
@@ -3827,6 +3933,9 @@ final class AppState: ObservableObject {
             // builds the integration.
             if let integration = callService.callIntegration,
                let provider = liveProvider {
+                // Phase-10b: wire the handshake-signing closures (sign OFFER +
+                // verify ACCEPT + TOFU pin) on the caller-side integration.
+                wireHandshakeSigning(on: integration)
                 integration.sendCallProcessing = { callId, callerId in
                     // Forward via the calling API (which routes through WS).
                     Task {

@@ -112,7 +112,8 @@ let package = Package(
             path: "Tests/QAudionEngineTests",
             resources: [
                 .copy("../Resources/cross_platform_vectors.json"),
-                .copy("Video/Resources/sframe-video-kat.json")
+                .copy("Video/Resources/sframe-video-kat.json"),
+                .copy("Crypto/Resources/handshake-sig-kat.json")
             ]
         )
     ]
