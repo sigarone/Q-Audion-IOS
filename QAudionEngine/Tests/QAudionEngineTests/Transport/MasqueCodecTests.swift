@@ -71,6 +71,35 @@ final class MasqueCodecTests: XCTestCase {
         XCTAssertEqual(MasqueDatagramCodec.decode(Data([0x00])), Data())
     }
 
+    // MARK: - HTTP/3 datagram framing (RFC 9297 §2.1)
+
+    func testHttp3DatagramEncodeLayout() {
+        let udp = Data([0xaa, 0xbb])
+        // quarter-stream-id 0 (varint 0x00) || context-id 0 (0x00) || payload
+        XCTAssertEqual(
+            MasqueDatagramCodec.encodeHttp3Datagram(quarterStreamID: 0, udpPayload: udp),
+            Data([0x00, 0x00, 0xaa, 0xbb]))
+    }
+
+    func testHttp3DatagramRoundTripWithMultiByteQSID() {
+        // quarter stream id 15293 → 2-byte varint 0x7b 0xbd
+        let udp = Data((0..<200).map { UInt8($0 & 0xFF) })
+        let wire = MasqueDatagramCodec.encodeHttp3Datagram(quarterStreamID: 15293, udpPayload: udp)
+        XCTAssertEqual(wire.prefix(2), Data([0x7b, 0xbd]))
+        let decoded = MasqueDatagramCodec.decodeHttp3Datagram(wire)
+        XCTAssertEqual(decoded?.quarterStreamID, 15293)
+        XCTAssertEqual(decoded?.udpPayload, udp)
+    }
+
+    func testHttp3DatagramDecodeRejectsUnknownContext() {
+        // qsid 0 (0x00) then context 1 (0x01) → not UDP → nil
+        XCTAssertNil(MasqueDatagramCodec.decodeHttp3Datagram(Data([0x00, 0x01, 0xff])))
+    }
+
+    func testHttp3DatagramDecodeRejectsTruncated() {
+        XCTAssertNil(MasqueDatagramCodec.decodeHttp3Datagram(Data()))
+    }
+
     // MARK: - CONNECT-UDP request descriptor (RFC 9298 §3)
 
     func testConnectUdpPathTemplate() {

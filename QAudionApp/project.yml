@@ -57,8 +57,19 @@ targets:
         # toolchain rotations. Pin it so TestFlight/App Store always
         # accepts iPad installs alongside iPhone.
         TARGETED_DEVICE_FAMILY: "1,2"
+        # MASQUE: quiche (static lib) bundles BoringSSL; link the C++ runtime
+        # and the resolver it needs. -lresolv satisfies res_* symbols; -lc++
+        # satisfies BoringSSL's C++ bits. Harmless if unused.
+        OTHER_LDFLAGS: $(inherited) -lresolv -lc++
     dependencies:
       - package: QAudionEngine
+      # MASQUE CONNECT-UDP backend. quiche.xcframework is built in CI by the
+      # "Build quiche xcframework" step (scripts/build-quiche-xcframework.sh)
+      # into QAudionApp/Vendor/ BEFORE `xcodegen generate`. It exposes the
+      # `Cquiche` Clang module imported by AppMasqueQuicheTransport.swift
+      # (gated `#if canImport(Cquiche)`). Static lib → embed: false.
+      - framework: Vendor/quiche.xcframework
+        embed: false
       - sdk: CoreAudio.framework
       - sdk: AudioToolbox.framework
       - sdk: Accelerate.framework

@@ -36,4 +36,32 @@ public enum MasqueDatagramCodec {
         guard ctx == udpContextID else { return nil }
         return Data(bytes[length...])
     }
+
+    // MARK: - HTTP/3 Datagram framing (RFC 9297 §2.1)
+
+    /// A full HTTP/3 Datagram carried in a QUIC DATAGRAM frame is:
+    ///
+    ///     Quarter Stream ID (varint) || HTTP Datagram Payload
+    ///
+    /// where the Quarter Stream ID is `request_stream_id / 4` and the payload
+    /// is the CONNECT-UDP framing above. The raw QUIC datagram backend
+    /// (`quiche_conn_dgram_send`/`recv`) needs these exact bytes; quiche's
+    /// higher-level h3 helper is bypassed so the wire format is fully ours and
+    /// matches the server's masque-go (quic-go HTTP datagrams) byte-for-byte.
+
+    /// Build the full HTTP/3 datagram bytes for an outbound UDP packet.
+    public static func encodeHttp3Datagram(quarterStreamID: UInt64, udpPayload: Data) -> Data {
+        var out = Data(MasqueVarint.encode(quarterStreamID))
+        out.append(encode(udpPayload: udpPayload))
+        return out
+    }
+
+    /// Parse a full inbound HTTP/3 datagram. Returns the quarter stream ID and
+    /// the raw UDP packet, or `nil` on a malformed prefix / unknown context.
+    public static func decodeHttp3Datagram(_ datagram: Data) -> (quarterStreamID: UInt64, udpPayload: Data)? {
+        let bytes = [UInt8](datagram)
+        guard let (qsid, qLen) = MasqueVarint.decode(bytes[...]) else { return nil }
+        guard let udp = decode(Data(bytes[qLen...])) else { return nil }
+        return (qsid, udp)
+    }
 }

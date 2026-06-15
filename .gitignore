@@ -19,6 +19,11 @@ DerivedData/
 # Graphify (AST graph cache)
 graphify-out/
 
+# MASQUE: quiche QUIC/H3 backend — built in CI (or locally) by
+# scripts/build-quiche-xcframework.sh, never committed (large binary).
+QAudionApp/Vendor/
+.quiche-build/
+
 # Local Stitch reference screenshots (not committed)
 .stitch_*.png
 .stitch_*.html

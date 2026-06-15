@@ -8,31 +8,27 @@ import Foundation
 /// Quarter-Stream-ID wrapping is the backend's responsibility — callers pass
 /// only the `MasqueDatagramCodec`-framed payload).
 ///
-/// Apple's `NWProtocolQUIC` does NOT expose QUIC datagrams, so there is no
-/// first-party iOS implementation; a real backend wraps a datagram-capable
-/// QUIC/H3 library (quiche — wire-compatible with the Android Cronet client).
-///
-/// FINISH LINE to activate MASQUE on iOS:
-///   1. Build libquiche as an xcframework (cargo build --features ffi for
-///      ios-arm64 + ios-sim-arm64; `xcodebuild -create-xcframework`).
-///   2. Add a `CQuiche` C-shim SwiftPM target (mirror `CLiboqs`) + a
-///      `.binaryTarget(name: "quiche", path: ...)` in Package.swift.
-///   3. Add `MasqueQuicheTransport: MasqueDatagramTransport` driving quiche's
-///      h3 extended-CONNECT + `quiche_h3_send_dgram`/`recv_dgram`.
-///   4. Compile with `-D QAUDION_MASQUE_QUICHE` and set `MasqueFeature.isEnabled`.
-///   5. Validate on-device against the live masque-go proxy (RFC 9298/9221).
-/// Until then `MasqueTransportFactory.make()` returns `nil` and the MASQUE
-/// call path is inert — the standard TestFlight build is unaffected.
+/// Apple's `NWProtocolQUIC` does NOT expose QUIC datagrams, so the backend
+/// wraps Cloudflare quiche (datagram + HTTP/3, wire-compatible with the
+/// Android Cronet client). To keep `engine-tests` quiche-free, the concrete
+/// transport (`AppMasqueQuicheTransport`) lives in the APP target and is
+/// registered via `MasqueTransportFactory.register(_:)` at launch. quiche is
+/// built as `QAudionApp/Vendor/quiche.xcframework` by the CI step
+/// "Build quiche xcframework" (scripts/build-quiche-xcframework.sh) and linked
+/// into the app via project.yml.
 public protocol MasqueDatagramTransport: AnyObject {
 
     /// Open the HTTP/3 connection + extended-CONNECT stream. Throws on
     /// handshake / CONNECT failure; the caller falls back to WSS-TURN / Tor.
     func connect(_ request: MasqueConnectUdpRequest) async throws
 
-    /// Send one RFC 9298 HTTP Datagram payload (Context ID + UDP packet).
-    func sendDatagram(_ payload: Data)
+    /// Send one raw UDP packet. The transport applies the full H3/QUIC
+    /// datagram framing (quarter-stream-id + context-id, via
+    /// `MasqueDatagramCodec.encodeHttp3Datagram`) before transmission.
+    func sendDatagram(_ udpPayload: Data)
 
-    /// Invoked for each inbound HTTP Datagram payload received on the tunnel.
+    /// Invoked with each inbound raw UDP packet (the transport has already
+    /// stripped the H3/QUIC datagram framing).
     var onDatagram: ((Data) -> Void)? { get set }
 
     /// Tear down the stream and the underlying HTTP/3 connection.
@@ -59,15 +55,24 @@ public enum MasqueFeature {
     public static var isEnabled: Bool = false
 }
 
-/// Produces a concrete `MasqueDatagramTransport` when a QUIC/H3 backend is
-/// linked, else `nil`. The default (CI / TestFlight) build links no QUIC
-/// library, so this returns `nil` and the MASQUE path is a no-op.
+/// Produces a concrete `MasqueDatagramTransport`.
+///
+/// The QUIC/H3 backend (quiche) lives in the APP target, not this package, so
+/// the engine stays QUIC-free and `engine-tests` never has to build quiche.
+/// The app registers its quiche-backed maker into `register(_:)` at launch
+/// (guarded by `#if canImport(Cquiche)`); until then `make()` returns nil and
+/// the MASQUE path is inert.
 public enum MasqueTransportFactory {
+    /// App-supplied maker for the quiche-backed transport. Set once at launch.
+    private static var maker: (() -> MasqueDatagramTransport?)?
+
+    /// Register the backend maker (called by the app when Cquiche is linked).
+    public static func register(_ maker: @escaping () -> MasqueDatagramTransport?) {
+        self.maker = maker
+    }
+
     public static func make() -> MasqueDatagramTransport? {
-        #if QAUDION_MASQUE_QUICHE
-        return MasqueQuicheTransport()   // provided when the quiche backend is added
-        #else
-        return nil
-        #endif
+        guard let maker else { return nil }
+        return maker()
     }
 }

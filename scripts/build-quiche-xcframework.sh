@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
-# Build libquiche as an iOS XCFramework for the MASQUE CONNECT-UDP backend.
+# Build Cloudflare quiche as QAudionApp/Vendor/quiche.xcframework, exposing the
+# `Cquiche` Clang module imported by AppMasqueQuicheTransport (MASQUE backend).
 #
-# MUST run on macOS with Rust + the iOS SDK. Produces:
-#   QAudionEngine/Vendor/quiche.xcframework   (device arm64 + sim arm64)
-#   QAudionEngine/Sources/CQuiche/include/quiche.h
-#
-# After this succeeds, finish wiring per QAudionEngine/Sources/QAudionEngine/
-# Transport/Masque/MasqueDatagramTransport.swift (add the SwiftPM targets,
-# implement MasqueQuicheTransport, compile with -D QAUDION_MASQUE_QUICHE).
+# Runs in CI ("Build quiche xcframework" step) on macos-latest BEFORE
+# `xcodegen generate`, and can be run locally on macOS + Rust. Idempotent:
+# skips the build if the xcframework already exists (CI caches it).
 #
 # quiche is wire-compatible with the Android Cronet MASQUE client and the
 # server's masque-go (RFC 9298 over QUIC DATAGRAM, RFC 9221/9297).
 set -euo pipefail
 
-QUICHE_REF="${QUICHE_REF:-0.22.0}"          # pin an audited tag, not a moving branch
-WORK="${WORK:-$(pwd)/.quiche-build}"
-OUT_XC="$(pwd)/QAudionEngine/Vendor/quiche.xcframework"
-OUT_HDR_DIR="$(pwd)/QAudionEngine/Sources/CQuiche/include"
+QUICHE_REF="${QUICHE_REF:-0.22.0}"
+ROOT="${ROOT:-$(pwd)}"
+OUT_XC="$ROOT/QAudionApp/Vendor/quiche.xcframework"
+WORK="${WORK:-$ROOT/.quiche-build}"
 
-command -v cargo >/dev/null || { echo "ERROR: install Rust (rustup) first"; exit 1; }
-command -v xcodebuild >/dev/null || { echo "ERROR: run on macOS with Xcode"; exit 1; }
+if [ -d "$OUT_XC" ]; then
+  echo "quiche.xcframework already present at $OUT_XC — skipping build."
+  exit 0
+fi
+
+command -v cargo >/dev/null || { echo "ERROR: Rust (rustup/cargo) required"; exit 1; }
+command -v xcodebuild >/dev/null || { echo "ERROR: macOS + Xcode required"; exit 1; }
 
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 
@@ -28,25 +30,31 @@ git clone --depth 1 --branch "$QUICHE_REF" --recursive \
   https://github.com/cloudflare/quiche "$WORK/quiche"
 cd "$WORK/quiche"
 
-# FFI feature exposes the C API (quiche.h + libquiche.a). BoringSSL builds
-# from the bundled submodule; no system OpenSSL needed.
+# FFI feature builds the C API (quiche.h + libquiche.a). BoringSSL builds from
+# the bundled submodule — no system OpenSSL needed.
 for TARGET in aarch64-apple-ios aarch64-apple-ios-sim; do
-  cargo build --release --features ffi,pkg-config-meta --target "$TARGET" -p quiche
+  cargo build --release --features ffi --target "$TARGET" -p quiche
 done
 
 DEV_LIB="$WORK/quiche/target/aarch64-apple-ios/release/libquiche.a"
 SIM_LIB="$WORK/quiche/target/aarch64-apple-ios-sim/release/libquiche.a"
-HDR="$WORK/quiche/quiche/include/quiche.h"
 
+# Headers dir with quiche.h + a module map naming the module `Cquiche`.
+HDRS="$WORK/include"
+mkdir -p "$HDRS"
+cp "$WORK/quiche/quiche/include/quiche.h" "$HDRS/quiche.h"
+cat > "$HDRS/module.modulemap" <<'MODMAP'
+module Cquiche {
+    header "quiche.h"
+    export *
+}
+MODMAP
+
+mkdir -p "$(dirname "$OUT_XC")"
 rm -rf "$OUT_XC"
 xcodebuild -create-xcframework \
-  -library "$DEV_LIB" -headers "$WORK/quiche/quiche/include" \
-  -library "$SIM_LIB" -headers "$WORK/quiche/quiche/include" \
+  -library "$DEV_LIB" -headers "$HDRS" \
+  -library "$SIM_LIB" -headers "$HDRS" \
   -output "$OUT_XC"
 
-mkdir -p "$OUT_HDR_DIR"
-cp "$HDR" "$OUT_HDR_DIR/quiche.h"
-
 echo "OK: $OUT_XC"
-echo "Next: add CQuiche + quiche binaryTarget to Package.swift, implement"
-echo "      MasqueQuicheTransport, build with -D QAUDION_MASQUE_QUICHE."
