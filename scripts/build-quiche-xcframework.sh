@@ -30,6 +30,15 @@ git clone --depth 1 --branch "$QUICHE_REF" --recursive \
   https://github.com/cloudflare/quiche "$WORK/quiche"
 cd "$WORK/quiche"
 
+# quiche's [lib] crate-type includes `cdylib`, whose iOS cross-link fails
+# ("symbol(s) not found for architecture arm64" — a standalone .dylib must
+# resolve every system symbol). We only need the `staticlib` (libquiche.a)
+# for the xcframework, so strip cdylib from the crate-type list. Robust to
+# token order / spacing.
+perl -0pi -e 's/("(?:lib|staticlib)")\s*,\s*"cdylib"/$1/g; s/"cdylib"\s*,\s*//g' quiche/Cargo.toml
+echo "--- quiche [lib] crate-type after patch ---"
+grep -n "crate-type" quiche/Cargo.toml || true
+
 # FFI feature builds the C API (quiche.h + libquiche.a). BoringSSL builds from
 # the bundled submodule — no system OpenSSL needed.
 for TARGET in aarch64-apple-ios aarch64-apple-ios-sim; do
