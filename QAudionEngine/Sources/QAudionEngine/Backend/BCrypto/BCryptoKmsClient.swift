@@ -33,11 +33,18 @@ public final class BCryptoKmsClient {
         publicKey: Data,
         mlkemEncapKey: Data? = nil,
         keyType: String = "x25519",
-        ed25519PubKey: Data? = nil
+        ed25519PubKey: Data? = nil,
+        kmsProtoVersion: Int = 2
     ) async throws {
+        // KMS Rotation v2 (§3.6): advertise the proto version so the
+        // server emits v1 (no-AAD) packages to legacy devices and v2
+        // (AAD-bound, real-hybrid) packages to upgraded ones. Mixed
+        // fleet supported during rollout. The ML-KEM encapsulation key
+        // field name is the FROZEN `mlkem_encapsulation_key` (§3.0).
         var dict: [String: Any] = [
             "public_key": publicKey.base64EncodedString(),
-            "key_type": keyType
+            "key_type": keyType,
+            "kms_proto_version": kmsProtoVersion
         ]
         if let mlkemEncapKey = mlkemEncapKey {
             dict["mlkem_encapsulation_key"] = mlkemEncapKey.base64EncodedString()
@@ -69,10 +76,51 @@ public final class BCryptoKmsClient {
         return response.keys
     }
 
-    /// Acknowledge receipt of a KMS key.
+    /// Acknowledge receipt of a KMS key (v1 / legacy path).
     /// POST /api/v1/kms/acknowledge/{keyId}
     public func acknowledgeKey(keyId: String) async throws {
         _ = try await rest.post("/api/v1/kms/acknowledge/\(keyId)", body: nil)
+    }
+
+    /// §3.6 POST /api/v1/kms/ack-pop response.
+    ///
+    /// FROZEN 2026-06-16 (§3.0): `epoch` is a DECIMAL STRING (uint64
+    /// exceeds JS safe-integer range; cross-platform parity). Callers
+    /// parse it with `UInt64(resp.epoch)`.
+    public struct AckPopResponse: Codable {
+        public let verified: Bool
+        public let commit: Bool
+        public let epoch: String
+    }
+
+    /// Build the §3.6 ack-pop request body. `static` so it is unit-testable
+    /// without a live REST client. `epoch` is serialized as a DECIMAL
+    /// STRING (§3.0 freeze).
+    public static func encodeAckPopBody(
+        keyId: String, deviceId: String, epoch: UInt64, txnId: String, popB64: String
+    ) throws -> Data {
+        let dict: [String: Any] = [
+            "key_id": keyId,
+            "device_id": deviceId,
+            "epoch": String(epoch),
+            "txn_id": txnId,
+            "pop": popB64
+        ]
+        return try JSONSerialization.data(withJSONObject: dict)
+    }
+
+    /// §3.6 POST /api/v1/kms/ack-pop — replaces the bare /acknowledge for
+    /// v2 devices. Returns the server's verify/commit verdict. The server
+    /// ignores the request `epoch` for verification (reads its ledger
+    /// row); we still send it per the wire shape.
+    public func ackPop(
+        keyId: String, deviceId: String, epoch: UInt64, txnId: String, pop: Data
+    ) async throws -> AckPopResponse {
+        let body = try Self.encodeAckPopBody(
+            keyId: keyId, deviceId: deviceId, epoch: epoch,
+            txnId: txnId, popB64: pop.base64EncodedString())
+        let data = try await rest.post("/api/v1/kms/ack-pop", body: body)
+        return try JSONDecoder().decode(AckPopResponse.self, from: data)
     }
 }
 
