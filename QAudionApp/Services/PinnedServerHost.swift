@@ -3,18 +3,11 @@ import Foundation
 /// Server URL that the app is **pinned** to. Single source of truth for
 /// every network call and the security gate for fast-setup QR validation.
 ///
-/// W413 — robust pinning that does NOT break when the server emits a QR
-/// containing a raw IP literal (e.g. `https://217.160.65.35`) instead of
-/// the canonical hostname. Until W413 the gate compared `candidateHost`
-/// strictly to the literal `voip.bcrypto.com` string — any IP-form QR
-/// failed the check, blocking onboarding for users whose server-side
-/// admin panel emitted IP-form invites (production-staging, demo, dev).
-///
 /// **Acceptance ladder** (first match wins):
 ///   1. Hostname match — `candidate.host` lowercases to `host` (fast path).
 ///   2. Static allowlist — `candidate.host` is one of `knownAddresses`
-///      (canonical hostname + admin-curated IP fallbacks). Useful when
-///      DNS is unavailable (offline scan, CGNAT DNS poisoning).
+///      (canonical hostname). Extend via reviewed code change if the
+///      backend hostname ever changes.
 ///
 /// SECURITY H-4 + L-1 — the former step 3 (DNS-resolved match via
 /// `getaddrinfo`) was REMOVED. Resolving an attacker-controlled
@@ -81,18 +74,12 @@ public enum PinnedServerHost {
     }
 
     /// Static allowlist consulted before DNS lookup. Contains the
-    /// canonical hostname plus admin-curated IP fallbacks. Add new
-    /// IPs here when the backend rotates and you want offline scans
-    /// to keep working without a fresh DNS resolve.
+    /// canonical hostname. Add entries here when the backend moves to
+    /// a new hostname (reviewed code change, no runtime DNS lookup).
     ///
     /// Sorted for human readability; comparison is case-insensitive.
     public static let knownAddresses: [String] = [
         "voip.bcrypto.com",
-        // Production backend IPv4 (osservato nei QR fast-setup
-        // emessi dal server admin panel quando il DNS punta lì).
-        // Allargare quando si fa rotation IP o si aggiunge un
-        // bilanciatore.
-        "217.160.65.35",
     ]
 
     /// True if `candidate` (the `server` field from a scanned QR payload)
