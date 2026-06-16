@@ -71,8 +71,9 @@ public final class LiveKitVideoFrameCryptor: @unchecked Sendable {
     private static let hkdfInfo: Data = Data(count: 128)
     /// Native: ratchet_salt; Q-Audion passes an empty salt on all platforms.
     private static let hkdfSalt: Data = Data()
-    /// Native ratchet uses `DeriveKeys(…, 128)` → 16-byte AES-128-GCM key.
-    private static let derivedKeyBytes: Int = 16
+    /// Native (AES-256 patch) `DeriveKeys(…, 256)` → 32-byte AES-256-GCM key,
+    /// byte-matching Android's AES-256-patched native FrameCryptor (WS-7).
+    private static let derivedKeyBytes: Int = 32
 
     private let keyProvider: () -> Data
     private let ivGen = FrameCryptorIvGenerator()
@@ -86,7 +87,7 @@ public final class LiveKitVideoFrameCryptor: @unchecked Sendable {
 
     // MARK: - Key derivation
 
-    /// Derive the AES-128-GCM frame key from the 32-byte PQC session key,
+    /// Derive the AES-256-GCM frame key from the 32-byte PQC session key,
     /// byte-identical to native `DeriveHkdfSha256FromSecret`.
     public static func deriveFrameCryptorKey(pqcSessionKey: Data) -> Data {
         precondition(pqcSessionKey.count == 32, "pqcSessionKey must be 32 bytes, got \(pqcSessionKey.count)")
