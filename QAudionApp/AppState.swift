@@ -2967,10 +2967,37 @@ final class AppState: ObservableObject {
         do {
             let keys = try await manager.ensureProvisioned()
             let poller = KmsPollerService(kmsClient: provider.kmsClient, vault: vault)
-            let stats = try await poller.pollOnce(deviceKeys: keys)
+            // KMS Rotation v2 (§3.2/§3.4/§3.5): build the v2 identity
+            // context. user/device ids are the 16-byte UUIDs persisted at
+            // login; serverId is the PROVISIONED CONSTANT
+            // SHA-256("qa-kms-server-id-v1|" || KMS.ServerIdentity) (§3.0)
+            // — NOT cert-pin-derived. When the context is available, v2
+            // phone-held keys decrypt with the AAD-bound path and commit
+            // staged→active on a verified PoP; legacy v1 keys still use the
+            // bare /acknowledge path.
+            let v2ctx: KmsPollerService.V2Context? = {
+                guard let uidStr = UserDefaults.standard.string(forKey: "com.qaudion.auth.user_id"),
+                      let didStr = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+                      let uid = UUID(uuidString: uidStr), let did = UUID(uuidString: didStr) else {
+                    return nil
+                }
+                return KmsPollerService.V2Context(
+                    userId: uid, deviceId: did, serverId: CryptoConstants.kmsServerId())
+            }()
+            let stats = try await poller.pollOnce(deviceKeys: keys, v2Context: v2ctx)
             if stats.processed > 0 {
                 print("[AppState] KMS sweep: processed=\(stats.processed) stored=\(stats.stored) acked=\(stats.acknowledged) decryptFailed=\(stats.decryptFailed) ackFailed=\(stats.ackFailed)")
             }
+            // Sovereign earbud (hw_only) keys are v2-routed to the GATT
+            // relay (EarbudKeyImportService), which the phone CANNOT
+            // decrypt. BLOCKER (recorded): no concrete
+            // SovereignEarbudGattRelay (CoreBluetooth client for the
+            // QAUDION crypto service f2c0aaaa…) exists yet, and the
+            // firmware does not yet expose the qa-kms-pop-v1 SE PoP over
+            // GATT (KEY_IMPORT returns [status][slot]; ATTEST_POP 0xc1 is
+            // the device-attestation PoP). When both land, instantiate
+            // EarbudKeyImportService(relay:kmsClient:) here and loop over
+            // `KmsPollerService.route(for:) == .v2Sovereign` entries.
             // 2026-05-06 session-renewal Phase 2 — wire the Ed25519
             // device-bound silent re-auth fallback into the REST
             // client. From now on a 401 from /auth/refresh (or a
