@@ -96,6 +96,11 @@ final class AppState: ObservableObject {
     /// emission (W84). Set by `attachPersistentBackend`; cleared on
     /// logout / token refresh.
     internal var liveProvider: BCryptoBackendProvider?
+    /// Phase-0 — steady-cadence KMS sweep driver. Fills the gap where keys
+    /// were only fetched on a WS `kms_key_available` event or app launch;
+    /// a dropped WS notification (background, flaky link) now still gets
+    /// keys within the interval. Started after the initial sweep.
+    private let kmsPeriodicPoller = KmsPeriodicPoller(intervalSeconds: 300)
     /// W90: peer userId of the currently-open chat. ChatContainer.markRead
     /// sets this on .onAppear; ChatContainer deinits clear it. Used by
     /// `handleIncomingMessage` to suppress local-notification banners
@@ -2068,6 +2073,15 @@ final class AppState: ObservableObject {
         // admin provisioned while the app was offline.
         Task { @MainActor [weak self] in
             await self?.runKmsSweep()
+        }
+
+        // Phase-0 — steady-cadence KMS poll so a dropped WS
+        // kms_key_available still gets keys within the interval.
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            await self.kmsPeriodicPoller.start { [weak self] in
+                await self?.runKmsSweep()
+            }
         }
 
         // W347: route call_offer / call_answer / call_ice through the

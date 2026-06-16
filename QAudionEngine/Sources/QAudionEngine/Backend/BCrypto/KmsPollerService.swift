@@ -131,3 +131,38 @@ public final class KmsPollerService {
         case malformedPackage
     }
 }
+
+/// Lightweight interval driver for the KMS sweep. Phase-0: replaces the
+/// "poll only on WS event / app launch" gap with a steady cadence so a
+/// dropped WS notification (background, flaky link) still gets keys
+/// within `intervalSeconds`. Honors a server-supplied interval when the
+/// caller passes one; defaults to 300s.
+public actor KmsPeriodicPoller {
+    private let intervalSeconds: Double
+    private var task: Task<Void, Never>?
+
+    public init(intervalSeconds: Double = 300) {
+        // Floor guards against a zero/negative interval (busy-loop) while
+        // staying below the test's fast 0.05s cadence. Production callers
+        // pass the 300s default or a server-supplied `kms_poll_interval_sec`.
+        self.intervalSeconds = max(0.01, intervalSeconds)
+    }
+
+    public func start(_ tick: @escaping @Sendable () async -> Void) {
+        task?.cancel()
+        let interval = intervalSeconds
+        task = Task {
+            while !Task.isCancelled {
+                let ns = UInt64(interval * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: ns)
+                if Task.isCancelled { break }
+                await tick()
+            }
+        }
+    }
+
+    public func stop() {
+        task?.cancel()
+        task = nil
+    }
+}
