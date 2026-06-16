@@ -46,6 +46,42 @@ let package = Package(
         //             or a third-party SPM mirror of the Tor binary.
     ],
     targets: [
+        // ─────────────────────────────────────────────────────────────────────────────────────
+        //  PHASE-3 INTEGRATION — v4 PQ "continuum" ratchet C ABI (default-OFF; see RatchetNative)
+        //
+        //  `CQaudionCryptoCore` exposes the shared Rust crypto core's stable C ABI
+        //  (sigarone/qaudion-crypto-core, src/ffi.rs) to Swift via the cbindgen header
+        //  (include/qaudion_crypto_core.h) + module.modulemap. `RatchetNative.swift` imports it.
+        //
+        //  ⚠ The header is the byte-identical cbindgen output; the .c is a FAIL-CLOSED PLACEHOLDER
+        //    stub (qaudion_crypto_core_stub.c) so the package compiles + links + tests GREEN before
+        //    the real binary is published. `RatchetNative.available` is `false` while only the stub
+        //    is linked, so the v4 path is inert (exactly like Android when libqaudion_crypto_core.so
+        //    is absent). `MessageRatchet.v4NativeRatchetEnabled` is `false` regardless.
+        //
+        //  TO ACTIVATE THE REAL CORE (when the XCFramework is published from crypto-core ios.yml):
+        //    1. Remove this `CQaudionCryptoCore` plain C target.
+        //    2. Add a binaryTarget instead, e.g.:
+        //         .binaryTarget(
+        //             name: "CQaudionCryptoCore",
+        //             url: "https://github.com/sigarone/qaudion-crypto-core/releases/download/<tag>/QaudionCryptoCore.xcframework.zip",
+        //             checksum: "<value from `swift package compute-checksum` printed by ios.yml>"
+        //         )
+        //       (SwiftPM binaryTargets accept a remote zip+checksum OR a local .xcframework path.)
+        //    3. Delete Sources/CQaudionCryptoCore/ (the XCFramework carries its own header+modulemap).
+        //    The `RatchetNative.swift` Swift source is unchanged across this swap — it links the same
+        //    `import CQaudionCryptoCore` module name either way.
+        // ─────────────────────────────────────────────────────────────────────────────────────
+        .target(
+            name: "CQaudionCryptoCore",
+            path: "Sources/CQaudionCryptoCore",
+            publicHeadersPath: "include",
+            cSettings: [
+                // The stub .c does `#include "qaudion_crypto_core.h"`; ensure include/ is on its
+                // own compile search path (same pattern as the CLiboqs target below).
+                .headerSearchPath("include"),
+            ]
+        ),
         .target(
             name: "CLiboqs",
             path: "Sources/CLiboqs",
@@ -95,6 +131,7 @@ let package = Package(
             dependencies: [
                 "CLiboqs",
                 "COpus",
+                "CQaudionCryptoCore",  // Phase 3: v4 PQ ratchet C ABI (default-OFF; see above)
                 .product(name: "onnxruntime", package: "onnxruntime-spm"),
                 .product(name: "WebRTC", package: "webrtc-spm"),
                 .product(name: "GRDB", package: "GRDB.swift"),
