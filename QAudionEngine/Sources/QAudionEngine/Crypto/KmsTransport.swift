@@ -155,7 +155,7 @@ public enum KmsTransport {
         mlkemPub: Data
     ) throws -> Data {
         let parts = try parseHeader(pkg, kemCtBytes: 0)
-        let dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
+        var dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
         var ikm = Data(capacity: 64)
         ikm.append(dh)
         ikm.append(contentsOf: SHA256.hash(data: mlkemPub))
@@ -165,6 +165,8 @@ public enum KmsTransport {
             info: HYBRID_INFO,
             outputByteCount: 32
         )
+        CryptoConstants.zeroize(&ikm)
+        CryptoConstants.zeroize(&dh)
         return try aeadOpen(nonce: parts.nonce, ctTag: parts.ctTag, key: aesKey)
     }
 
@@ -174,14 +176,15 @@ public enum KmsTransport {
         mlkemPriv: Data
     ) throws -> Data {
         let parts = try parseHeader(pkg, kemCtBytes: ML_KEM_CT_BYTES)
-        let dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
-        let kemSs: Data
+        var dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
+        var kemSs: Data
         do {
             kemSs = try PqcKeyExchange().decapsulate(
                 ciphertext: parts.kemCt!,
                 privateKey: mlkemPriv
             )
         } catch {
+            CryptoConstants.zeroize(&dh)
             throw Error.legacyKemDecryptFailed(underlying: error)
         }
         var ikm = Data(capacity: dh.count + kemSs.count)
@@ -193,6 +196,9 @@ public enum KmsTransport {
             info: HYBRID_INFO,
             outputByteCount: 32
         )
+        CryptoConstants.zeroize(&ikm)
+        CryptoConstants.zeroize(&kemSs)
+        CryptoConstants.zeroize(&dh)
         return try aeadOpen(nonce: parts.nonce, ctTag: parts.ctTag, key: aesKey)
     }
 
