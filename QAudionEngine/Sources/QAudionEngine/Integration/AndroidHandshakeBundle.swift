@@ -64,10 +64,17 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         public let sframeV1: Bool?
         public let vkeyV1: Bool?
 
-        public init(ratchetV3: Bool?, sframeV1: Bool? = nil, vkeyV1: Bool? = nil) {
+        // KMS-rotation-v2 Phase-1 (D6) — schema:3 session-KDF capability. OPTIONAL
+        // → absent (nil) decodes fine and JSONEncoder omits it, so a legacy bundle
+        // is byte-wire-identical. A peer that sets this true is treated as
+        // v3-capable; both legs must set it (else mixed-fleet falls back to v2).
+        public let sessionKdfV3: Bool?
+
+        public init(ratchetV3: Bool?, sframeV1: Bool? = nil, vkeyV1: Bool? = nil, sessionKdfV3: Bool? = nil) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
             self.vkeyV1 = vkeyV1
+            self.sessionKdfV3 = sessionKdfV3
         }
     }
 
