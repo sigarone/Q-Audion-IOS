@@ -53,6 +53,32 @@ public final class MessageRatchet {
     /// `direction_flag` advertised by the lex-max peer.
     public static let dirHiToLo: UInt8 = 0x02
 
+    // ───────────────────────────────────────────────────────────────────
+    //  Phase 3 (iOS) — v4 PQ "continuum" ratchet feature gate. ADDITIVE.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// Phase 3 (iOS) — master kill-switch for the **v4 native PQ ratchet** (the shared Rust core
+    /// via ``RatchetNative``). DEFAULT **OFF**.
+    ///
+    /// While `false` (the shipped state) NOTHING routes through the v4 path:
+    /// ``ensureSessionV4(root:firstSsXwing:transcriptHash:isA:)`` / ``encryptV4(_:plaintext:)`` /
+    /// ``decryptV4(_:frame:)`` all fail-closed (`nil` / `0`) and the entire live messaging path is
+    /// the v3.1 engine below, bit-for-bit unchanged. This mirrors the existing magic-byte
+    /// versioning the dispatcher already uses (v2 = 0xE2, v3 = 0xE3) — v4 is simply the next,
+    /// currently-disabled tier (0xE5), and the Android engine's `V4_NATIVE_RATCHET_ENABLED = false`.
+    ///
+    /// Flip to `true` ONLY for the on-device v4 round-trip test; it must NOT ship enabled until the
+    /// v4 wire is negotiated cross-platform (Android / Desktop / firmware), the real
+    /// ``RatchetNative`` core is linked (a published XCFramework, not the placeholder stub), and the
+    /// human crypto audit (Pavel) signs off.
+    public static let v4NativeRatchetEnabled: Bool = false
+
+    /// v4 wire magic byte — distinct from v3 (0xE3), v2 (0xE2), v1. Matches the Rust core's frame
+    /// magic (`0xE5`, see qaudion-crypto-core `src/wire.rs` `MAGIC_V4`). Lets a dispatcher tell a v4
+    /// frame apart on byte 0 without parsing. NOTE: the v4 wire is owned end-to-end by the native
+    /// core; this Swift side only forwards opaque frame bytes.
+    public static let magicV4: UInt8 = 0xE5
+
     public static let keyLen = 32
     public static let nonceLen = 12
     public static let tagLen = 16
@@ -98,6 +124,13 @@ public final class MessageRatchet {
     public static func isV3Wire(_ wire: Data) -> Bool {
         guard !wire.isEmpty else { return false }
         return wire[wire.startIndex] == magicV3
+    }
+
+    /// True iff `wire[0] == 0xE5` (a v4 native-ratchet frame). Cheap probe for a future dispatcher;
+    /// the v4 frame body is parsed only by the native core (``RatchetNative``). ADDITIVE (Phase 3).
+    public static func isV4Wire(_ wire: Data) -> Bool {
+        guard !wire.isEmpty else { return false }
+        return wire[wire.startIndex] == magicV4
     }
 
     /// Build the v3.1 AAD: canonical CBOR
@@ -572,5 +605,89 @@ public final class MessageRatchet {
             lastSeenRecvIdx: snap.lastSeenRecvIdx,
             skippedKeys: ordered.map { ($0.idx, SkippedKey(key: $0.key, nonce: $0.nonce, expiresAtMs: $0.expiresAtMs)) }
         )
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  v4 PQ "continuum" ratchet — ADDITIVE, DEFAULT-OFF native path
+    //
+    //  Everything below is gated behind [v4NativeRatchetEnabled] (false in the shipped build) and
+    //  delegates to the shared Rust core via [RatchetNative]. It does NOT touch any v3.1 state
+    //  above — the v3.1 engine is byte-for-byte unchanged. When the flag is off (or the real native
+    //  core is not linked, only the placeholder stub), every method here fail-closes (nil / 0), so
+    //  the live messaging path is exactly the v3.1 logic above. The v4 ratchet is not exercised
+    //  until a device-test flips the flag ON.
+    //
+    //  The v4 session is an opaque native handle (UInt); the v4 wire frame is opaque bytes owned
+    //  end-to-end by the native core (magic 0xE5). This Swift layer only marshals Data in/out and
+    //  forwards the handle — it re-implements none of the ratchet, so there is ONE engine across
+    //  iOS / Android / Desktop. Mirrors Android's MessageRatchet `*V4` surface 1:1.
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// True iff the v4 native path is both compiled-in-enabled (``v4NativeRatchetEnabled``) AND the
+    /// real native core actually linked (``RatchetNative/available``). A caller should branch on
+    /// this before using any `*V4` method; when false, stay on the v3.1 engine above.
+    public func isV4Enabled() -> Bool {
+        Self.v4NativeRatchetEnabled && RatchetNative.available
+    }
+
+    /// Open (or, via ``deserializeV4Session(_:)``, resume) a v4 native session. Returns the opaque
+    /// handle, or `0` when the v4 path is disabled/unavailable or the inputs are invalid. The caller
+    /// MUST ``freeV4Session(_:)`` the returned handle exactly once.
+    ///
+    /// - Parameters:
+    ///   - root: the post-handshake `ROOT_0` (32 bytes — derive via ``RatchetNative/root0(ssHandshake:)``
+    ///     from the handshake shared secret).
+    ///   - firstSsXwing: the first epoch's X-Wing secret (32 bytes).
+    ///   - transcriptHash: the handshake transcript hash (32 bytes).
+    ///   - isA: `true` for the "A" direction peer (A's send chain == B's recv chain).
+    public func ensureSessionV4(root: Data, firstSsXwing: Data, transcriptHash: Data, isA: Bool) -> UInt {
+        guard isV4Enabled() else { return 0 }
+        return RatchetNative.initSession(
+            root: root, firstSsXwing: firstSsXwing, transcriptHash: transcriptHash, isA: isA)
+    }
+
+    /// Encrypt `plaintext` on a v4 session's send chain. Returns the opaque v4 wire frame
+    /// (magic 0xE5), or `nil` on any failure / disabled path.
+    ///
+    /// Write-ahead contract (same as v3.1): the native core advances the send chain on success — the
+    /// caller MUST ``serializeV4Session(_:)`` + persist the new state BEFORE transmitting the frame.
+    public func encryptV4(_ handle: UInt, plaintext: Data) -> Data? {
+        guard isV4Enabled() else { return nil }
+        return RatchetNative.encrypt(handle, plaintext: plaintext)
+    }
+
+    /// Decrypt a v4 wire frame on a session's receive chain. Returns the recovered plaintext, or
+    /// `nil` (fail-closed) on auth/replay/parse/skip failure or a disabled path. No security state
+    /// mutates on failure.
+    public func decryptV4(_ handle: UInt, frame: Data) -> Data? {
+        guard isV4Enabled() else { return nil }
+        return RatchetNative.decrypt(handle, frame: frame)
+    }
+
+    /// Advance a v4 session into the next epoch with a fresh 32-byte X-Wing secret + 32-byte
+    /// transcript hash (both peers call with identical inputs). Returns `true` on success, `false`
+    /// when disabled / on error.
+    public func dhRatchetV4(_ handle: UInt, ssXwing: Data, transcriptHash: Data) -> Bool {
+        guard isV4Enabled() else { return false }
+        return RatchetNative.dhRatchet(handle, ssXwing: ssXwing, transcriptHash: transcriptHash)
+    }
+
+    /// Serialize a v4 session to durable bytes (write-ahead / crash-resume). `nil` when disabled.
+    public func serializeV4Session(_ handle: UInt) -> Data? {
+        guard isV4Enabled() else { return nil }
+        return RatchetNative.serialize(handle)
+    }
+
+    /// Rebuild a v4 session handle from ``serializeV4Session(_:)`` bytes. `0` on error / disabled.
+    public func deserializeV4Session(_ data: Data) -> UInt {
+        guard isV4Enabled() else { return 0 }
+        return RatchetNative.deserialize(data)
+    }
+
+    /// Release a v4 session handle (safe with `0`). Call exactly once per handle. Free is allowed
+    /// even if the flag was toggled off after init, so a handle can never leak; ``RatchetNative/free(_:)``
+    /// no-ops on `0` / when the core is unavailable.
+    public func freeV4Session(_ handle: UInt) {
+        RatchetNative.free(handle)
     }
 }
