@@ -178,6 +178,7 @@ extension EarbudDiagViewModel: CBCentralManagerDelegate {
         _ central: CBCentralManager,
         didConnect peripheral: CBPeripheral
     ) {
+        let identifier = peripheral.identifier
         Task { @MainActor in
             self.connectionState = .connected
             self.metrics = EarbudMetrics(
@@ -187,6 +188,10 @@ extension EarbudDiagViewModel: CBCentralManagerDelegate {
                 axonOk: false, batteryPct: 0, uptimeSec: 0,
                 firmwareVersion: "—", lastUpdated: Date()
             )
+            // KMS Rotation v2 (§5 iOS): remember this earbud's CB identifier so
+            // the background KMS sweep can relay pending sovereign keys to it
+            // (CoreBluetoothSovereignRelay resolves the peripheral by identifier).
+            AppState.rememberEarbudIdentifier(identifier)
         }
         peripheral.delegate = self
         peripheral.discoverServices([EarbudDiagViewModel.serviceUUID])

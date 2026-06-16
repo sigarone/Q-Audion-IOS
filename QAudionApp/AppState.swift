@@ -2988,16 +2988,22 @@ final class AppState: ObservableObject {
             if stats.processed > 0 {
                 print("[AppState] KMS sweep: processed=\(stats.processed) stored=\(stats.stored) acked=\(stats.acknowledged) decryptFailed=\(stats.decryptFailed) ackFailed=\(stats.ackFailed)")
             }
-            // Sovereign earbud (hw_only) keys are v2-routed to the GATT
-            // relay (EarbudKeyImportService), which the phone CANNOT
-            // decrypt. BLOCKER (recorded): no concrete
-            // SovereignEarbudGattRelay (CoreBluetooth client for the
-            // QAUDION crypto service f2c0aaaa…) exists yet, and the
-            // firmware does not yet expose the qa-kms-pop-v1 SE PoP over
-            // GATT (KEY_IMPORT returns [status][slot]; ATTEST_POP 0xc1 is
-            // the device-attestation PoP). When both land, instantiate
-            // EarbudKeyImportService(relay:kmsClient:) here and loop over
-            // `KmsPollerService.route(for:) == .v2Sovereign` entries.
+            // Sovereign earbud (hw_only) keys are v2-routed to the GATT relay
+            // (EarbudKeyImportService), which the phone CANNOT decrypt — it
+            // relays the sealed package to the earbud SE and forwards the SE
+            // PoP. RESOLVED: firmware 3677d2a exposes the qa-kms-pop-v1 SE PoP
+            // over GATT (write 82-B PoP-INPUTS to KEY_IMPORT 0xc3, then read
+            // the 32-B PoP from ATTEST_POP 0xc1) and CoreBluetoothSovereignRelay
+            // is the concrete client. The relay needs a CONNECTED/bonded earbud
+            // (chars are ENCRYPT-permissioned + the SE must be reachable). The
+            // background sweep has no peripheral handle, so it can only run the
+            // relay opportunistically when a last-known earbud identifier is
+            // persisted (written by the EarbudDiag connect flow). Otherwise it
+            // logs the deferral and the relay runs from the connected-earbud
+            // path (relaySovereignKeysToEarbud(identifier:)).
+            await sweepSovereignEarbudKeys(
+                kmsClient: provider.kmsClient,
+                earbudIdentifier: Self.lastKnownEarbudIdentifier())
             // 2026-05-06 session-renewal Phase 2 — wire the Ed25519
             // device-bound silent re-auth fallback into the REST
             // client. From now on a 401 from /auth/refresh (or a
@@ -3026,6 +3032,99 @@ final class AppState: ObservableObject {
         } catch {
             print("[AppState] KMS sweep failed: \(error)")
         }
+    }
+
+    // MARK: - KMS Rotation v2 — sovereign earbud relay (§5 iOS, Phase-2)
+
+    /// UserDefaults key for the last-connected QAUDION earbud's CoreBluetooth
+    /// peripheral identifier (per-host stable UUID, NOT the BLE MAC — iOS hides
+    /// the MAC). Written by the EarbudDiag connect flow so the background KMS
+    /// sweep can opportunistically relay sovereign keys without a UI handle.
+    static let lastEarbudIdentifierKey = "com.qaudion.earbud.last_identifier"
+
+    /// Persist the connected earbud's CB identifier so the next KMS sweep can
+    /// reach it. Call this from the EarbudDiag connect path (didConnect) with
+    /// `peripheral.identifier`.
+    static func rememberEarbudIdentifier(_ id: UUID) {
+        UserDefaults.standard.set(id.uuidString, forKey: lastEarbudIdentifierKey)
+    }
+
+    static func lastKnownEarbudIdentifier() -> UUID? {
+        guard let s = UserDefaults.standard.string(forKey: lastEarbudIdentifierKey) else {
+            return nil
+        }
+        return UUID(uuidString: s)
+    }
+
+    /// Public entry for the connected-earbud path: when the user has the earbud
+    /// connected (EarbudDiag), relay any pending sovereign keys to it. `identifier`
+    /// is the connected peripheral's `identifier`.
+    @MainActor
+    public func relaySovereignKeysToEarbud(identifier: UUID) async {
+        guard let provider = liveProvider else { return }
+        await sweepSovereignEarbudKeys(
+            kmsClient: provider.kmsClient, earbudIdentifier: identifier)
+    }
+
+    /// Fetch pending keys, filter the v2 sovereign (earbud) entries, and relay
+    /// each to the earbud SE over GATT (write PoP-INPUTS → package fragments →
+    /// read status → read SE PoP → /kms/ack-pop). The phone NEVER decrypts a
+    /// sovereign package. No-op (with a log) when there are no sovereign entries
+    /// or no reachable earbud.
+    @MainActor
+    private func sweepSovereignEarbudKeys(
+        kmsClient: BCryptoKmsClient, earbudIdentifier: UUID?
+    ) async {
+        let pending: [PendingKey]
+        do {
+            pending = try await kmsClient.getPendingKeys()
+        } catch {
+            print("[AppState] sovereign sweep: getPendingKeys failed: \(error)")
+            return
+        }
+        let sovereign = pending.filter { KmsPollerService.route(for: $0) == .v2Sovereign }
+        guard !sovereign.isEmpty else { return }
+        guard let earbudIdentifier = earbudIdentifier else {
+            print("[AppState] sovereign sweep: \(sovereign.count) pending earbud key(s) but no connected/known earbud — deferred to EarbudDiag connect")
+            return
+        }
+        // Concrete CoreBluetooth client against the f2c0aaaa crypto service.
+        let relay = CoreBluetoothSovereignRelay(identifier: earbudIdentifier)
+        do {
+            try await relay.prepare()
+        } catch {
+            print("[AppState] sovereign sweep: earbud GATT prepare failed: \(error)")
+            return
+        }
+        // serverId defaults to CryptoConstants.kmsServerId() — the SAME
+        // provisioned constant used for the phone-held PoP (§3.0).
+        let importer = EarbudKeyImportService(relay: relay, kmsClient: kmsClient)
+        // ATT MTU-bounded fragment payload (minus the 2-byte frag-offset header,
+        // already accounted for by maxWritePayload).
+        let mtuPayload = relay.maxWritePayload
+        for entry in sovereign {
+            // Task D reconciliation: the ack-pop `device_id` is the ROW-LOOKUP
+            // key — the server matches it by STRING EQUALITY against the row it
+            // persisted (handleKMSAckPoP: row.DeviceID == req.DeviceID). This is
+            // SEPARATE from the device_id = earbud_id[:16] (G2) the PoP BYTES are
+            // bound to internally on firmware (sovkey_import.c) + server
+            // (precomputed ExpectedPoP). So send the server-authoritative
+            // entry.deviceId verbatim, falling back to entry.earbudId only when
+            // the server omits device_id (older row).
+            let ackDeviceId = entry.deviceId ?? entry.earbudId
+            guard let ackDeviceId = ackDeviceId, !ackDeviceId.isEmpty else {
+                print("[AppState] sovereign relay: key=\(entry.keyId.prefix(8))… missing device_id/earbud_id — skip")
+                continue
+            }
+            do {
+                let resp = try await importer.relay(
+                    entry: entry, earbudDeviceId: ackDeviceId, mtuPayload: mtuPayload)
+                print("[AppState] sovereign relay: key=\(entry.keyId.prefix(8))… verified=\(resp.verified) commit=\(resp.commit)")
+            } catch {
+                print("[AppState] sovereign relay: key=\(entry.keyId.prefix(8))… failed: \(error)")
+            }
+        }
+        relay.close()
     }
 
     ///   - KEY_EXCHANGE_OFFER  → derive PSK + reply with ACCEPT
