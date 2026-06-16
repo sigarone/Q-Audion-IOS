@@ -1,0 +1,43 @@
+{
+  "schema": "kms-pop-v1-kat:1",
+  "server_identity": "qa-kms-test-server-2026-06-16",
+  "server_id_hex": "94b4000e40b5a716d3d806bb79c50f2904a4c8d8fdc5f429383d105f61997a7e",
+  "vectors": [
+    {
+      "origin": "app-classical",
+      "delivery_wrap_secret_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "device_id_hex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+      "txn_id_hex": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+      "key_id_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "key_epoch": "7",
+      "server_nonce_hex": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "server_id_hex": "94b4000e40b5a716d3d806bb79c50f2904a4c8d8fdc5f429383d105f61997a7e",
+      "pop_key_hex": "91107210f081567b91a84d76fad8fcfe8ff5bdf8bb86a4e672768850fbbf54b7",
+      "pop_hex": "6875e86989489d646d608787cde3dd2710c2bc9fcdef7dbe845bcadf6ba9256d"
+    },
+    {
+      "origin": "app-hybrid",
+      "delivery_wrap_secret_hex": "33333333333333333333333333333333333333333333333333333333333333334444444444444444444444444444444444444444444444444444444444444444",
+      "device_id_hex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+      "txn_id_hex": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+      "key_id_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "key_epoch": "7",
+      "server_nonce_hex": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "server_id_hex": "94b4000e40b5a716d3d806bb79c50f2904a4c8d8fdc5f429383d105f61997a7e",
+      "pop_key_hex": "2b3953ba83e96aa009b4046e59e140db352a8da791faa2083e4c997472f5ada1",
+      "pop_hex": "2ae4d86696396be19466eeae07fa0db6b23198f62283d28c13d61e74ebb0820a"
+    },
+    {
+      "origin": "earbud",
+      "delivery_wrap_secret_hex": "44444444444444444444444444444444444444444444444444444444444444445555555555555555555555555555555555555555555555555555555555555555",
+      "device_id_hex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+      "txn_id_hex": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+      "key_id_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "key_epoch": "7",
+      "server_nonce_hex": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+      "server_id_hex": "94b4000e40b5a716d3d806bb79c50f2904a4c8d8fdc5f429383d105f61997a7e",
+      "pop_key_hex": "121ae3196702e5dbd666e7a6c782cc011b68890673a13e350946aac4a825bc17",
+      "pop_hex": "b0554f57f0c250e646509890d09de584b2d50bea21a07e4763be5d29605e466d"
+    }
+  ]
+}
