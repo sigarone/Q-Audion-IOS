@@ -1324,6 +1324,83 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return key.withUnsafeBytes { Data($0) }
     }
 
+    // MARK: - KMS-rotation-v2 Phase-1 (D6) — schema:3 session-KDF
+
+    /// `selected_fp_or_zero32` — the 32-byte negotiation outcome folded into the
+    /// schema:3 HKDF `info`. `SHA-256(selectedPSK)` when a PSK was negotiated,
+    /// else 32 × 0x00. FROZEN by `session-key-v3-kat.json`; mirrors Android /
+    /// Desktop / firmware. `internal` so the KAT can exercise it directly.
+    static func selectedFpOrZero32(selectedPsk: Data?) -> Data {
+        guard let psk = selectedPsk, !psk.isEmpty else {
+            return Data(repeating: 0x00, count: 32)
+        }
+        return Data(SHA256.hash(data: psk))
+    }
+
+    /// Schema:3 hybrid session-key derivation (KMS-rotation-v2 Phase-1, D6).
+    ///
+    /// Identical to ``deriveHybridSessionKey`` (schema:2) EXCEPT the HKDF `info`
+    /// gains a trailing `selected_fp_or_zero32(32)`:
+    ///
+    ///   ct_bind     = HMAC-SHA256("q-audion-ct-bind-v1", pqcCiphertext)        [32B]
+    ///   ikm         = pqcSs(32) || x25519Ss(32)                                [64B]
+    ///   salt        = psk  if (psk != nil && !psk.isEmpty)  else "q-audion-hybrid-pqc-v1"
+    ///   info_v3     = "q-audion-session-key"(20) || ct_bind(32)
+    ///                 || selected_fp_or_zero32(32)                             [84B]
+    ///   key         = HKDF-SHA256(ikm, salt, info_v3, 32)
+    ///
+    /// `selected_fp_or_zero32 = SHA-256(psk)` (the negotiated PSK's frozen
+    /// fingerprint) or 32×0x00 when no PSK was selected. Folding the outcome into
+    /// `info` makes any ASYMMETRIC negotiation tamper diverge the key even if the
+    /// signature (C) is bypassed — defense-in-depth. It does NOT alone stop the
+    /// symmetric strip (both legs fold zeros); C+D do.
+    ///
+    /// The PSK is STILL the HKDF Extract salt (additive composition, D2). When a
+    /// PSK is present it appears BOTH as the salt AND, hashed, in the info tail —
+    /// that double-use is intentional and frozen by the KAT.
+    ///
+    /// Byte-identical to Android `deriveSessionKeyV3` / Desktop /
+    /// firmware in-SE `psa_mac_compute` HKDF-Extract. `internal` so the KAT can
+    /// exercise the exact production path via `@testable import`.
+    static func deriveHybridSessionKeyV3(
+        pqcSs: Data,
+        x25519Ss: Data,
+        pqcCiphertext: Data,
+        psk: Data?
+    ) -> Data {
+        let ctBind = Data(
+            HMAC<SHA256>.authenticationCode(
+                for: pqcCiphertext,
+                using: SymmetricKey(data: HkdfLabels.hybridCtBindV1)
+            )
+        )
+
+        var ikm = Data(capacity: pqcSs.count + x25519Ss.count)
+        ikm.append(pqcSs)
+        ikm.append(x25519Ss)
+
+        let salt: Data
+        if let psk = psk, !psk.isEmpty {
+            salt = psk
+        } else {
+            salt = HkdfLabels.hybridPqcSaltV1
+        }
+
+        let selFp = Self.selectedFpOrZero32(selectedPsk: psk)
+        var info = Data(capacity: HkdfLabels.hybridPqcSessionKey.count + ctBind.count + selFp.count)
+        info.append(HkdfLabels.hybridPqcSessionKey)
+        info.append(ctBind)
+        info.append(selFp)
+
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: salt,
+            info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
     /// `vkey-v1` — derive the dedicated 32-byte earbud-video key K_video.
     ///
     /// Byte-identical to Android `deriveVideoKey` and the Desktop port.
