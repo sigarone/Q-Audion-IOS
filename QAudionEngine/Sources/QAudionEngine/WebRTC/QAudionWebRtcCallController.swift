@@ -179,8 +179,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         /// This is the format Desktop (`LiveKitFrameCryptor.ts`) and
         /// Android (libwebrtc native `FrameCryptor`) actually emit and
         /// consume on 1:1 video calls; we MUST use it on iOS too so
-        /// cross-platform calls render. AES-128-GCM, HKDF-SHA256
-        /// (empty salt, 128-byte zero info), keyIndex=0.
+        /// cross-platform calls render. AES-256-GCM (WS-7; was AES-128 —
+        /// matches Android's AES-256-patched native FrameCryptor),
+        /// HKDF-SHA256 (empty salt, 128-byte zero info, L=32), keyIndex=0.
         case livekit(LiveKitVideoFrameCryptor)
     }
     public private(set) var videoSealer: VideoCallSealer?
