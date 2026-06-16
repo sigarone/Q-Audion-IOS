@@ -77,6 +77,13 @@ public final class BCryptoKmsClient {
 }
 
 /// Single pending-key entry. Matches Android `KmsKeyDto`.
+///
+/// v2 (KMS Rotation v2, §3.1) extends this with the rotation primitives
+/// (`key_class`/`key_epoch`/`slot_id`/`txn_id`/`supersedes`/`server_nonce`)
+/// and the server-authoritative identity bytes (`user_id`/`device_id`)
+/// the client MUST use verbatim for the AAD + PoP. All v2 fields are
+/// OPTIONAL so a legacy v1 entry (none of them present) still decodes;
+/// `proto_version` defaults to 1 when absent.
 public struct PendingKey: Codable {
     public let keyId: String
     public let keyName: String
@@ -86,6 +93,21 @@ public struct PendingKey: Codable {
     public let ephemeralPubkey: String
     public let nonce: String
     public let createdAt: String?
+    // -- v2 fields (§3.1). Optional so v1 (legacy) entries still decode. --
+    public let keyType: String?
+    public let earbudId: String?
+    public let keyClass: String?
+    public let keyEpoch: String?      // decimal uint64 STRING
+    public let slotId: String?
+    public let txnId: String?
+    public let supersedes: String?
+    public let serverNonce: String?   // base64, 16 bytes
+    /// FROZEN 2026-06-16 (§3.0): server-authoritative identity bytes used
+    /// verbatim in this row's AES-GCM AAD + the qa-kms-pop-v1 PoP. The
+    /// client NEVER sources these locally for a v2 entry.
+    public let userId: String?
+    public let deviceId: String?
+    public let protoVersion: Int
 
     enum CodingKeys: String, CodingKey {
         case keyId = "key_id"
@@ -96,26 +118,58 @@ public struct PendingKey: Codable {
         case ephemeralPubkey = "ephemeral_pubkey"
         case nonce
         case createdAt = "created_at"
+        case keyType = "key_type"
+        case earbudId = "earbud_id"
+        case keyClass = "key_class"
+        case keyEpoch = "key_epoch"
+        case slotId = "slot_id"
+        case txnId = "txn_id"
+        case supersedes
+        case serverNonce = "server_nonce"
+        case userId = "user_id"
+        case deviceId = "device_id"
+        case protoVersion = "proto_version"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        keyId = try c.decode(String.self, forKey: .keyId)
+        keyName = try c.decode(String.self, forKey: .keyName)
+        fingerprint = try c.decode(String.self, forKey: .fingerprint)
+        status = try c.decode(String.self, forKey: .status)
+        encryptedPackage = try c.decode(String.self, forKey: .encryptedPackage)
+        ephemeralPubkey = (try? c.decode(String.self, forKey: .ephemeralPubkey)) ?? ""
+        nonce = (try? c.decode(String.self, forKey: .nonce)) ?? ""
+        createdAt = try? c.decode(String.self, forKey: .createdAt)
+        keyType = try? c.decode(String.self, forKey: .keyType)
+        earbudId = try? c.decode(String.self, forKey: .earbudId)
+        keyClass = try? c.decode(String.self, forKey: .keyClass)
+        keyEpoch = try? c.decode(String.self, forKey: .keyEpoch)
+        slotId = try? c.decode(String.self, forKey: .slotId)
+        txnId = try? c.decode(String.self, forKey: .txnId)
+        supersedes = try? c.decode(String.self, forKey: .supersedes)
+        serverNonce = try? c.decode(String.self, forKey: .serverNonce)
+        userId = try? c.decode(String.self, forKey: .userId)
+        deviceId = try? c.decode(String.self, forKey: .deviceId)
+        protoVersion = (try? c.decode(Int.self, forKey: .protoVersion)) ?? 1
     }
 
     public init(
-        keyId: String,
-        keyName: String,
-        fingerprint: String,
-        status: String = "pending",
-        encryptedPackage: String,
-        ephemeralPubkey: String,
-        nonce: String,
-        createdAt: String? = nil
+        keyId: String, keyName: String, fingerprint: String, status: String = "pending",
+        encryptedPackage: String, ephemeralPubkey: String, nonce: String,
+        createdAt: String? = nil, keyType: String? = nil, earbudId: String? = nil,
+        keyClass: String? = nil, keyEpoch: String? = nil, slotId: String? = nil,
+        txnId: String? = nil, supersedes: String? = nil, serverNonce: String? = nil,
+        userId: String? = nil, deviceId: String? = nil, protoVersion: Int = 1
     ) {
-        self.keyId = keyId
-        self.keyName = keyName
-        self.fingerprint = fingerprint
-        self.status = status
-        self.encryptedPackage = encryptedPackage
-        self.ephemeralPubkey = ephemeralPubkey
-        self.nonce = nonce
-        self.createdAt = createdAt
+        self.keyId = keyId; self.keyName = keyName; self.fingerprint = fingerprint
+        self.status = status; self.encryptedPackage = encryptedPackage
+        self.ephemeralPubkey = ephemeralPubkey; self.nonce = nonce; self.createdAt = createdAt
+        self.keyType = keyType; self.earbudId = earbudId; self.keyClass = keyClass
+        self.keyEpoch = keyEpoch; self.slotId = slotId; self.txnId = txnId
+        self.supersedes = supersedes; self.serverNonce = serverNonce
+        self.userId = userId; self.deviceId = deviceId
+        self.protoVersion = protoVersion
     }
 }
 
