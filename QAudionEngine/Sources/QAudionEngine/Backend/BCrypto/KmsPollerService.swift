@@ -182,7 +182,17 @@ public final class KmsPollerService {
         var wrap = out.wrapSecret
         // Stage: persist PSK under keyId (idempotent).
         let fp = SHA256.hash(data: psk).map { String(format: "%02x", $0) }.joined()
-        try vault.storePsk(name: entry.keyId, key: psk, fingerprint: fp)
+        // D1 (Phase-1): persist the server-declared key_class alongside the PSK
+        // so the per-call negotiation (D2) and the require-hw-only policy (D4)
+        // can tell a hw_only contact key from a plain shared one. `kc` is the
+        // §3.2 KeyClassV2 already validated above; map it onto the vault class.
+        let vaultClass: SovereignKeyVault.KeyClass
+        switch kc {
+        case .hwOnly: vaultClass = .hwOnly
+        case .swOnly: vaultClass = .swOnly
+        case .shared: vaultClass = .shared
+        }
+        try vault.storePsk(name: entry.keyId, key: psk, fingerprint: fp, keyClass: vaultClass)
         stats.stored += 1
         // PoP over the per-delivery wrap secret (NOT over K).
         let pop = KmsPoPV1.compute(
