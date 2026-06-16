@@ -5,7 +5,14 @@ let package = Package(
     name: "QAudionEngine",
     platforms: [
         .iOS(.v16),
-        .macOS(.v13)
+        // macOS floor raised 13 -> 14 so `swift build` / `swift test` on the macOS CI runner
+        // (engine-tests.yml) actually RESOLVES: the onnxruntime-spm product requires macOS 14,
+        // and SwiftPM refuses to resolve when the library floor (13) is below a dependency's (14).
+        // iOS floor is unchanged (.v16); the iOS app ships from xcodebuild, not `swift build`, so
+        // this only affects the macOS Swift-package test build. (Without this, engine-tests.yml
+        // fails at resolution but the `swift build 2>&1 | tail -100` pipe masked the exit code,
+        // so it reported a false green — see Phase-3 PR notes.)
+        .macOS(.v14)
     ],
     products: [
         .library(
