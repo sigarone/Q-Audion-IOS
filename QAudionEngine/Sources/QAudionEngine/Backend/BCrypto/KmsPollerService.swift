@@ -157,8 +157,8 @@ public final class KmsPollerService {
     ) async throws {
         // Server-authoritative identity from the entry (§3.0), else the
         // caller's context (legacy server that omits the fields).
-        let userId = entry.userId.flatMap(UUID.init(uuidString:)) ?? context.userId
-        let deviceId = entry.deviceId.flatMap(UUID.init(uuidString:)) ?? context.deviceId
+        let userId = entry.userId.flatMap { UUID(uuidString: $0) } ?? context.userId
+        let deviceId = entry.deviceId.flatMap { UUID(uuidString: $0) } ?? context.deviceId
         guard let slotId = entry.slotId, let epochStr = entry.keyEpoch,
               let epoch = UInt64(epochStr), let txnStr = entry.txnId,
               let txn = UUID(uuidString: txnStr),
