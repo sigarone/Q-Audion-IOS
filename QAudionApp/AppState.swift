@@ -2047,9 +2047,21 @@ final class AppState: ObservableObject {
                 await self.runKmsSweep()
             }
         }
-        ws.registerHandler(type: "kms_key_revoked") { [weak self] _, _ in
-            DispatchQueue.main.async {
-                self?.errorMessage = "Una chiave KMS è stata revocata."
+        ws.registerHandler(type: "kms_key_revoked") { [weak self] _, data in
+            let keyId = (data["key_id"] as? String) ?? ""
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.errorMessage = "Una chiave KMS è stata revocata."
+                guard !keyId.isEmpty else {
+                    print("[AppState] kms_key_revoked without key_id — nothing to delete")
+                    return
+                }
+                do {
+                    try SovereignKeyVault().deletePsk(name: keyId)
+                    print("[AppState] kms_key_revoked: deleted vault PSK key_id=\(keyId.prefix(8))…")
+                } catch {
+                    print("[AppState] kms_key_revoked: vault delete failed for key_id=\(keyId.prefix(8))…: \(error)")
+                }
             }
         }
         // Initial sweep right after WS auth — covers any keys the
