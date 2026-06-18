@@ -663,6 +663,25 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             return
         }
 
+        // Built-in auth-failure guard: when the server rejects our token it
+        // closes the connection and sends {"type":"error","code":"auth_failed"}.
+        // Without this check the handleDisconnect reconnect loop would fire
+        // all 20 attempts before stopping, but connectPersistentSocket() (called
+        // on foreground) would reset the counter and restart the cycle — giving
+        // the observed 90-minute reconnect storm with a stale/expired token.
+        // Setting reconnectAttempt = maxReconnectAttempts here means the very
+        // next handleDisconnect (which fires when the server closes the socket)
+        // exits without scheduling another reconnect.
+        if type == "error" {
+            let errData = json["data"] as? [String: Any] ?? [:]
+            let code = errData["code"] as? String ?? ""
+            if code == "auth_failed" {
+                lock.lock()
+                reconnectAttempt = maxReconnectAttempts
+                lock.unlock()
+            }
+        }
+
         lock.lock()
         let handler = messageHandlers[type]
         lock.unlock()
