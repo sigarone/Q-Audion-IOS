@@ -126,13 +126,27 @@ public final class BCryptoKmsClient {
     /// Acknowledge earbud-exclusive hw_only key delivery with SE PoP.
     /// POST /api/v1/kms/earbud-ack-pop
     ///
-    /// FLAG-2: body uses txnId, NOT keyId, per the frozen PoP-INPUTS frame contract.
-    public func ackPopEarbud(txnId: String, earbudId: String, epoch: Int64, popB64: String) async throws {
+    /// CL-5.4 — frozen server contract (FLAG-2):
+    ///   key_id  = rowID (entry.keyId)  — server looks up the row by PK
+    ///   txn_id  = keyIDStr (entry.txnId) — matches the PoP-INPUTS frame binding
+    ///
+    /// The PoP-INPUTS frame uses uuid16(txnId) in BOTH the +0 and +16 slots
+    /// (FLAG-2 contract). The ACK body uses keyId for the DB lookup and txnId
+    /// for the server's ExpectedPoP verification — they differ for earbud_pair
+    /// rows where rowID != keyIDStr.
+    public func earbudAckPop(
+        keyId: String,      // rowID = entry.keyId (server PK for row lookup)
+        earbudId: String,   // hex of SHA-256(pkSe)
+        epoch: String,      // decimal epoch string
+        txnId: String,      // keyIDStr = entry.txnId (PoP-INPUTS binding)
+        pop: Data           // 32B SE PoP
+    ) async throws {
         let dict: [String: Any] = [
-            "txn_id": txnId,
+            "key_id": keyId,
             "earbud_id": earbudId,
             "epoch": epoch,
-            "pop": popB64
+            "txn_id": txnId,
+            "pop": pop.base64EncodedString()
         ]
         let body = try JSONSerialization.data(withJSONObject: dict)
         _ = try await rest.post("/api/v1/kms/earbud-ack-pop", body: body)

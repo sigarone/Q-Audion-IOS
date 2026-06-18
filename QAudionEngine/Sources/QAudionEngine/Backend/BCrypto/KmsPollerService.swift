@@ -222,8 +222,9 @@ public final class KmsPollerService {
         deviceKeys: DeviceKeys,
         stats: inout Stats
     ) async throws {
-        // hw_only: relay blind to earbud — phone cannot decrypt K''-wrapped package.
-        if entry.keyClass == "hw_only" {
+        // hw_only / earbud_pair: relay blind to earbud — phone cannot decrypt K''-wrapped package.
+        // CL-5.4: earbud_pair key_type also routes here (same 1668B blind relay path as hw_only).
+        if entry.keyClass == "hw_only" || entry.keyType == "earbud_pair" {
             guard let relay = earbudRelay else {
                 print("[KmsPollerService] hw_only key=\(entry.keyId.prefix(8))… no earbudRelay — skip")
                 return
@@ -231,18 +232,30 @@ public final class KmsPollerService {
             let result = await relay.handle(key: entry)
             switch result {
             case .popVerified(let popB64):
-                // POST /kms/earbud-ack-pop — FLAG-2: txnId, not keyId
+                // POST /kms/earbud-ack-pop — CL-5.4 / FLAG-2 frozen contract:
+                //   key_id  = entry.keyId (rowID) — server PK lookup
+                //   txn_id  = entry.txnId (keyIDStr) — PoP-INPUTS binding
                 guard let txnId = entry.txnId, let earbudId = entry.earbudId else {
-                    print("[KmsPollerService] hw_only key missing txnId/earbudId for ack-pop")
+                    print("[KmsPollerService] hw_only/earbud_pair key missing txnId/earbudId for ack-pop")
                     return
                 }
-                let epoch = entry.keyEpoch ?? 0
+                guard let popData = Data(base64Encoded: popB64) else {
+                    print("[KmsPollerService] ack-pop: bad base64 PoP — dropped")
+                    return
+                }
+                let epochStr = entry.keyEpoch.map { String($0) } ?? "0"
                 do {
-                    try await kmsClient.ackPopEarbud(txnId: txnId, earbudId: earbudId, epoch: epoch, popB64: popB64)
+                    try await kmsClient.earbudAckPop(
+                        keyId: entry.keyId,
+                        earbudId: earbudId,
+                        epoch: epochStr,
+                        txnId: txnId,
+                        pop: popData
+                    )
                     stats.acknowledged += 1
                 } catch {
                     stats.ackFailed += 1
-                    print("[KmsPollerService] hw_only ack-pop failed: \(error)")
+                    print("[KmsPollerService] hw_only/earbud_pair ack-pop failed: \(error)")
                 }
             case .success:
                 stats.acknowledged += 1
