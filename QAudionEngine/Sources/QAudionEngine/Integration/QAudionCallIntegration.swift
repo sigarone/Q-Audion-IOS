@@ -486,7 +486,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             pqcPublicKey: pqcRawPub.base64EncodedString(),
             x25519PublicKey: x25519RawPub.base64EncodedString(),
             capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
-            pskFingerprints: []  // iOS has no SovereignKeyVault yet (see WIRE_SPEC §5)
+            pskFingerprints: SovereignKeyVault().listPskNames().compactMap {
+                SovereignKeyVault().getFingerprint(name: $0)
+            }
         )
 
         // Phase-10b (a) — SIGN the OFFER over the §3 transcript before serialize.
@@ -1113,14 +1115,26 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let combined: Data
             if keyClassAccept != 0 {
                 let nd = Self.negDigest(fpSetInit: fpSetInitAccept, fpSetResp: fpSetRespAccept)
-                // selected_fp = SHA-256(psk) — iOS originator has no psk raw material yet;
-                // use zeros (will mismatch responder if psk was used; tracked WIRE_SPEC §5 P1).
-                let selFpRaw = Data(repeating: 0, count: 32)
+                // WIRE_SPEC §5 P1 fix: look up PSK by fingerprint from SovereignKeyVault.
+                let vault = SovereignKeyVault()
+                let vaultPsk: Data? = {
+                    guard let name = vault.listPskNames().first(where: {
+                        vault.getFingerprint(name: $0) == selectedFpStr
+                    }) else { return nil }
+                    return (try? vault.loadPsk(name: name)) ?? nil
+                }()
+                let selFpRaw: Data
+                if let psk = vaultPsk, !psk.isEmpty {
+                    selFpRaw = Data(SHA256.hash(data: psk))
+                } else {
+                    print("[QAudionCallIntegration] ACCEPT V4: no local PSK for fp=\(selectedFpStr.prefix(16))… — selFpRaw=zeros (will diverge)")
+                    selFpRaw = Data(repeating: 0, count: 32)
+                }
                 combined = Self.deriveHybridSessionKeyV4(
                     pqcSs: pqcSs,
                     x25519Ss: x25519Ss,
                     pqcCiphertext: pqcCt,
-                    psk: nil,
+                    psk: vaultPsk,
                     selectedFp: selFpRaw,
                     keyClass: keyClassAccept,
                     negDigest: nd

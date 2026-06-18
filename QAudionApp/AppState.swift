@@ -3109,11 +3109,20 @@ final class AppState: ObservableObject {
         }
         Task {
             do {
+                let vault = SovereignKeyVault()
+                let eligiblePsks: [String: Data] = Dictionary(
+                    uniqueKeysWithValues: vault.listPskNames().compactMap { name -> (String, Data)? in
+                        guard let fp = vault.getFingerprint(name: name),
+                              let raw = (try? vault.loadPsk(name: name)) ?? nil,
+                              !raw.isEmpty else { return nil }
+                        return (fp, raw)
+                    }
+                )
                 try await integration.onAndroidBundleReceived(
                     bundle: parsed.bundle,
                     callId: parsed.callId,
                     callerId: senderId,
-                    eligiblePsks: [:],
+                    eligiblePsks: eligiblePsks,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
                 print("[AppState] routeInboundAndroidOffer failed: \(error)")
@@ -3143,6 +3152,15 @@ final class AppState: ObservableObject {
         }
         Task {
             do {
+                let vault = SovereignKeyVault()
+                let eligiblePsks: [String: Data] = Dictionary(
+                    uniqueKeysWithValues: vault.listPskNames().compactMap { name -> (String, Data)? in
+                        guard let fp = vault.getFingerprint(name: name),
+                              let raw = (try? vault.loadPsk(name: name)) ?? nil,
+                              !raw.isEmpty else { return nil }
+                        return (fp, raw)
+                    }
+                )
                 try await integration.onAndroidBundleReceived(
                     bundle: parsed.bundle,
                     callId: parsed.callId,
@@ -3151,7 +3169,7 @@ final class AppState: ObservableObject {
                     // previously omitted (defaulted to ""), which left the .accept
                     // branch with no peer to verify against.
                     callerId: senderId,
-                    eligiblePsks: [:],
+                    eligiblePsks: eligiblePsks,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
                 print("[AppState] routeInboundAndroidAccept failed: \(error)")
