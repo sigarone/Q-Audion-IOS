@@ -151,6 +151,126 @@ final class EarbudExclKatTests: XCTestCase {
     // The KAT JSON contains those fields for firmware/server-side verification only.
 }
 
+// MARK: - Schema:4 session KDF KAT
+
+/// CL-5.6 — KAT guard for the schema:4 session-key derivation primitives.
+///
+/// Pins `negDigest`, `sessionInfoV4`, and `deriveHybridSessionKeyV4` against
+/// the frozen `session_v4` array in `earbud-excl-v2-kat.json` (3 entries:
+/// none / shared-K / exclusive-Kpp).
+///
+/// These are CLIENT-COMPUTABLE values that the phone assembles before
+/// forwarding to the earbud.  All three are tested here to catch any
+/// byte-ordering or label drift early, before the full cross-platform
+/// integration test on firmware.
+final class SessionV4KatTests: XCTestCase {
+
+    // MARK: - Decodable model for session_v4 entries
+
+    private struct KatSessionV4: Decodable {
+        let name: String
+        let mlkem_ss_hex: String
+        let x25519_ss_hex: String
+        let mlkem_ct_hex: String
+        let selected_key_hex: String?
+        let key_class: Int
+        let fp_set_init_hex: String
+        let fp_set_resp_hex: String
+        let neg_digest_hex: String
+        let selected_fp_hex: String
+        let ct_bind_hex: String
+        let info_hex: String
+        let session_key_hex: String
+    }
+
+    private struct KatSessionV4Root: Decodable {
+        let session_v4: [KatSessionV4]
+    }
+
+    private func loadSessionV4Vectors() throws -> [KatSessionV4] {
+        guard let url = Bundle.module.url(forResource: "earbud-excl-v2-kat", withExtension: "json") else {
+            throw XCTestError(.timeoutWhileWaiting, userInfo: [
+                NSLocalizedDescriptionKey: "earbud-excl-v2-kat.json not found in Bundle.module"
+            ])
+        }
+        let root = try JSONDecoder().decode(KatSessionV4Root.self, from: Data(contentsOf: url))
+        XCTAssertFalse(root.session_v4.isEmpty, "session_v4 array must not be empty")
+        return root.session_v4
+    }
+
+    // MARK: - negDigest
+
+    func testSessionV4NegDigest() throws {
+        let vectors = try loadSessionV4Vectors()
+        for vec in vectors {
+            let fpInit     = Data(hex: vec.fp_set_init_hex)
+            let fpResp     = Data(hex: vec.fp_set_resp_hex)
+            let expected   = Data(hex: vec.neg_digest_hex)
+
+            let got = QAudionCallIntegration.negDigest(fpSetInit: fpInit, fpSetResp: fpResp)
+            XCTAssertEqual(expected, got,
+                           "[\(vec.name)] negDigest mismatch — " +
+                           "expected \(vec.neg_digest_hex)")
+        }
+    }
+
+    // MARK: - sessionInfoV4
+
+    func testSessionV4InfoHex() throws {
+        let vectors = try loadSessionV4Vectors()
+        for vec in vectors {
+            let ctBind      = Data(hex: vec.ct_bind_hex)
+            let selectedFp  = Data(hex: vec.selected_fp_hex)
+            let keyClass    = UInt8(vec.key_class)
+            let negDigest   = Data(hex: vec.neg_digest_hex)
+            let expected    = Data(hex: vec.info_hex)
+
+            let got = QAudionCallIntegration.sessionInfoV4(
+                ctBind: ctBind,
+                selectedFp: selectedFp,
+                keyClass: keyClass,
+                negDigest: negDigest
+            )
+            XCTAssertEqual(117, got.count,
+                           "[\(vec.name)] info_v4 must be exactly 117 bytes, got \(got.count)")
+            XCTAssertEqual(expected, got,
+                           "[\(vec.name)] sessionInfoV4 mismatch — " +
+                           "expected \(vec.info_hex)")
+        }
+    }
+
+    // MARK: - deriveHybridSessionKeyV4
+
+    func testSessionV4DeriveKey() throws {
+        let vectors = try loadSessionV4Vectors()
+        for vec in vectors {
+            let pqcSs      = Data(hex: vec.mlkem_ss_hex)
+            let x25519Ss   = Data(hex: vec.x25519_ss_hex)
+            let pqcCt      = Data(hex: vec.mlkem_ct_hex)
+            let psk: Data? = vec.selected_key_hex.map { Data(hex: $0) }
+            let selectedFp = Data(hex: vec.selected_fp_hex)
+            let keyClass   = UInt8(vec.key_class)
+            let negDigest  = Data(hex: vec.neg_digest_hex)
+            let expected   = Data(hex: vec.session_key_hex)
+
+            let got = QAudionCallIntegration.deriveHybridSessionKeyV4(
+                pqcSs: pqcSs,
+                x25519Ss: x25519Ss,
+                pqcCiphertext: pqcCt,
+                psk: psk,
+                selectedFp: selectedFp,
+                keyClass: keyClass,
+                negDigest: negDigest
+            )
+            XCTAssertEqual(32, got.count,
+                           "[\(vec.name)] session key must be 32 bytes")
+            XCTAssertEqual(expected, got,
+                           "[\(vec.name)] deriveHybridSessionKeyV4 mismatch — " +
+                           "expected \(vec.session_key_hex)")
+        }
+    }
+}
+
 // MARK: - Hex helper (file-private, same pattern as other KAT test files)
 
 private extension Data {
