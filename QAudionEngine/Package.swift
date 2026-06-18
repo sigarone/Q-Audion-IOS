@@ -62,8 +62,8 @@ let package = Package(
         // ─────────────────────────────────────────────────────────────────────────────────────
         .binaryTarget(
             name: "CQaudionCryptoCore",
-            url: "https://github.com/sigarone/qaudion-crypto-core-spm/releases/download/v0.1.1/QaudionCryptoCore.xcframework.zip",
-            checksum: "a32aaccd320e83d2a579a16aedb3218c5b89f93867fb65447105a00cc3767f09"
+            url: "https://github.com/sigarone/qaudion-crypto-core-spm/releases/download/v0.1.2/QaudionCryptoCore.xcframework.zip",
+            checksum: "5dd5f9de91c706b85d934ae95f3e8dd30b34c64bd31ee579601ade7e75ac4b4a"
         ),
         .target(
             name: "CLiboqs",
