@@ -1489,6 +1489,81 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return key.withUnsafeBytes { Data($0) }
     }
 
+    // MARK: - Schema:4 session KDF primitives
+
+    /// neg_digest = SHA-256(fp_set_init(32) || fp_set_resp(32))
+    ///
+    /// Binds the full negotiated fingerprint set from both sides into the
+    /// session-key info, preventing downgrade-via-fp-selection attacks.
+    /// Byte-identical to Android `HybridPqcKeyExchange.negDigest` and
+    /// firmware `qa_session_neg_digest_v4`.
+    /// `internal` so `SessionV4KatTests` can exercise it via `@testable import`.
+    static func negDigest(fpSetInit: Data, fpSetResp: Data) -> Data {
+        var combined = Data(capacity: fpSetInit.count + fpSetResp.count)
+        combined.append(fpSetInit)
+        combined.append(fpSetResp)
+        return Data(SHA256.hash(data: combined))
+    }
+
+    /// info_v4 = "q-audion-session-key"(20) || ct_bind(32) || selected_fp(32) || key_class(1) || neg_digest(32) [117B]
+    static func sessionInfoV4(
+        ctBind: Data,
+        selectedFp: Data,
+        keyClass: UInt8,
+        negDigest: Data
+    ) -> Data {
+        precondition(selectedFp.count == 32, "selectedFp must be 32 bytes")
+        precondition(negDigest.count  == 32, "negDigest must be 32 bytes")
+        var info = Data(capacity: 20 + 32 + 32 + 1 + 32)
+        info.append(HkdfLabels.hybridPqcSessionKey)
+        info.append(ctBind)
+        info.append(selectedFp)
+        info.append(keyClass)
+        info.append(contentsOf: negDigest)
+        return info
+    }
+
+    /// Schema:4 hybrid session-key derivation.
+    /// Pinned by `session_v4` array in `earbud-excl-v2-kat.json`.
+    static func deriveHybridSessionKeyV4(
+        pqcSs: Data,
+        x25519Ss: Data,
+        pqcCiphertext: Data,
+        psk: Data?,
+        selectedFp: Data,
+        keyClass: UInt8,
+        negDigest: Data
+    ) -> Data {
+        let ctBind = Data(
+            HMAC<SHA256>.authenticationCode(
+                for: pqcCiphertext,
+                using: SymmetricKey(data: HkdfLabels.hybridCtBindV1)
+            )
+        )
+        var ikm = Data(capacity: 64)
+        ikm.append(pqcSs)
+        ikm.append(x25519Ss)
+        let salt: Data
+        if let psk = psk, !psk.isEmpty {
+            salt = psk
+        } else {
+            salt = HkdfLabels.hybridPqcSaltV1
+        }
+        let info = sessionInfoV4(
+            ctBind: ctBind,
+            selectedFp: selectedFp,
+            keyClass: keyClass,
+            negDigest: negDigest
+        )
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: salt,
+            info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
     // MARK: - Phase-1 live-call seam (D4 abort + v2/v3 derive selection)
 
     /// Phase-1 derive decision for the responder/caller: enforce the D4
