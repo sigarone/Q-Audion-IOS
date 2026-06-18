@@ -183,6 +183,17 @@ public enum RatchetNative {
         }
     }
 
+    /// Derive the 32-byte media session secret for a call.
+    /// `HKDF-SHA256(root, "qa/v4/media/"‖callId, L=32)`. Read-only — no ratchet chain mutates.
+    public static func mediaKey(_ handle: UInt, callId: Data) -> Data? {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
+        return queryThenFill { out, outLen in
+            callId.withUnsafeBytesU8Len { cidPtr, cidLen in
+                qa_media_key(p, cidPtr, cidLen, out, outLen)
+            }
+        }
+    }
+
     // MARK: - Internals
 
     /// Reconstitute the opaque `QaSession*` from the integer handle.
