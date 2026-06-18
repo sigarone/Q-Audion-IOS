@@ -165,7 +165,8 @@ let package = Package(
                 // session-KDF schema:3 (info_v3 = label||ct_bind||selected_fp_or_zero32)
                 // + the D3-WIRE signed hs-bundle-v1 canon (Ed25519 OFFER/ACCEPT).
                 .copy("Resources/kat/session-key-v3-kat.json"),
-                .copy("Resources/kat/hs-bundle-v1-kat.json")
+                .copy("Resources/kat/hs-bundle-v1-kat.json"),
+                .copy("Integration/Resources/earbud-excl-v2-kat.json")
             ]
         )
     ]
