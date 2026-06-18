@@ -235,15 +235,16 @@ public final class KmsPollerService {
                 // POST /kms/earbud-ack-pop — CL-5.4 / FLAG-2 frozen contract:
                 //   key_id  = entry.keyId (rowID) — server PK lookup
                 //   txn_id  = entry.txnId (keyIDStr) — PoP-INPUTS binding
-                guard let txnId = entry.txnId, let earbudId = entry.earbudId else {
-                    print("[KmsPollerService] hw_only/earbud_pair key missing txnId/earbudId for ack-pop")
+                guard let txnId = entry.txnId, let earbudId = entry.earbudId,
+                      let keyEpoch = entry.keyEpoch else {
+                    print("[KmsPollerService] hw_only/earbud_pair key missing txnId/earbudId/epoch for ack-pop — dropped")
                     return
                 }
                 guard let popData = Data(base64Encoded: popB64) else {
                     print("[KmsPollerService] ack-pop: bad base64 PoP — dropped")
                     return
                 }
-                let epochStr = entry.keyEpoch.map { String($0) } ?? "0"
+                let epochStr = String(keyEpoch)
                 do {
                     try await kmsClient.earbudAckPop(
                         keyId: entry.keyId,
