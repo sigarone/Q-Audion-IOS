@@ -1350,6 +1350,7 @@ final class AppState: ObservableObject {
     /// fire time; the `earliestBeginDate` sets a lower bound only — the system
     /// may defer up to ~15 min based on power / usage patterns.
     func scheduleWsKeepalive() {
+        guard PrivacyGate.autoStartEnabled else { return }
         let request = BGAppRefreshTaskRequest(identifier: "com.bcrypto.qaudion.ws-keepalive")
         // Ask iOS to fire within the next 5 minutes; system may delay further.
         request.earliestBeginDate = Date(timeIntervalSinceNow: 5 * 60)

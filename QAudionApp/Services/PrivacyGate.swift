@@ -36,6 +36,9 @@ public enum PrivacyGate {
     /// Grace period before the lock triggers, in milliseconds. Default 60 000 (1 min).
     public static let keyAppLockTimeoutMs     = "qaudion.privacy.app_lock_timeout_ms"
 
+    // MARK: - General / Connectivity
+    public static let keyAutoStartEnabled = "qaudion.general.auto_start_enabled"
+
     // MARK: - Reads (with safe defaults)
 
     /// Default ON — current shipped behavior emits read receipts.
@@ -95,6 +98,15 @@ public enum PrivacyGate {
     public static var appLockTimeoutMs: Int {
         let v = readSecureInt(keyAppLockTimeoutMs)
         return v > 0 ? v : 60_000
+    }
+
+    /// Default ON — BGAppRefreshTask scheduled so WS stays alive and calls never missed.
+    public static var autoStartEnabled: Bool {
+        return readBoolWithDefault(keyAutoStartEnabled, default: true)
+    }
+
+    public static func setAutoStartEnabled(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: keyAutoStartEnabled)
     }
 
     // MARK: - Writes

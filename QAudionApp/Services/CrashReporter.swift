@@ -111,7 +111,13 @@ enum CrashReporter {
     private static func persist(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
         try? data.write(to: URL(fileURLWithPath: reportPath))
+        let crashKey = "qaudion.crash_count"
+        let count = UserDefaults.standard.integer(forKey: crashKey) + 1
+        UserDefaults.standard.set(count, forKey: crashKey)
     }
+
+    static var crashCount: Int { UserDefaults.standard.integer(forKey: "qaudion.crash_count") }
+    static func resetCrashCount() { UserDefaults.standard.set(0, forKey: "qaudion.crash_count") }
 
     private static func signalName(_ sig: Int32) -> String {
         switch sig {

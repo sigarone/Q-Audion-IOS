@@ -128,6 +128,17 @@ struct NotificationsSettingsScreen: View {
             scheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    SettingsSectionHeader("CONNETTIVITA")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Mantieni connessione in background",
+                            subtitle: "L'app si riconnette e riceve chiamate anche in background",
+                            isOn: Binding(
+                                get: { PrivacyGate.autoStartEnabled },
+                                set: { PrivacyGate.setAutoStartEnabled($0) }
+                            )
+                        )
+                    }
                     SettingsSectionHeader("BANNER")
                     VStack(spacing: 8) {
                         SettingsToggleRow(
