@@ -424,6 +424,11 @@ final class AppState: ObservableObject {
             } catch {
                 print("[AppState] completeEarbudCounterparty failed: \(error.localizedDescription)")
             }
+            // Phase 6: deliver sealed PQ media key to earbud via EARBUDMKD relay.
+            // Flag-gated: V4_NATIVE_RATCHET_ENABLED = false until Pavel sign-off.
+            if let peerId = self.callContactId {
+                self.deliverEarbudMediaKeyPhase6(callId: callId, sessionKey: key, peerId: peerId)
+            }
         }
         svc.onFailed = { callId, reason in
             // Diagnostic only — mirrors a PQC handshake timeout: the call
@@ -3330,6 +3335,43 @@ final class AppState: ObservableObject {
                 return
             }
             earbudCounterparty.handleInbound(callId: callId, pdu: pdu)
+        case .earbudMkd(let callId, _):
+            // Phase 6: iOS is always the SW counterparty (sender), never the earbud side.
+            // EARBUDMKD arriving here means a peer sent it to us — silently drop.
+            print("[AppState] EARBUDMKD dropped — iOS has no earbud BLE transport (callId=\(callId.prefix(8))…)")
+        }
+    }
+
+    /// Phase 6: derive PQ media key via HKDF-SHA256 and deliver sealed
+    /// 60-byte package to the earbud-side peer via EARBUDMKD WS relay.
+    /// Flag-gated: `MessageRatchet.v4NativeRatchetEnabled = false` until
+    /// cross-platform negotiation + Pavel crypto audit sign-off.
+    /// IKM = sessionKey (BLE K_counter); salt = none (zeroed HashLen);
+    /// info = "qa/v4/media/<callId>". Wire format: nonce[12]||ct[32]||tag[16].
+    @MainActor
+    private func deliverEarbudMediaKeyPhase6(callId: String, sessionKey: Data, peerId: String) {
+        guard MessageRatchet.v4NativeRatchetEnabled, sessionKey.count == 32 else { return }
+        guard let api = liveProvider?.callingApi else { return }
+        Task {
+            do {
+                let infoStr = "qa/v4/media/" + callId
+                let info = Data(infoStr.utf8)
+                let ikm = SymmetricKey(data: sessionKey)
+                let derived = HKDF<SHA256>.deriveKey(inputKeyMaterial: ikm, info: info, outputByteCount: 32)
+                let mediaKey = derived.withUnsafeBytes { Data($0) }
+                let aad = Data("qa/v4/mkd/v1".utf8)
+                let wrapKey = SymmetricKey(data: sessionKey)
+                let box = try AES.GCM.seal(mediaKey, using: wrapKey, authenticating: aad)
+                var pkg = Data()
+                pkg.append(contentsOf: box.nonce)
+                pkg.append(box.ciphertext)
+                pkg.append(box.tag)
+                guard pkg.count == 60 else { return }
+                let wire = CallPiggyBack.serializeEarbudMkd(callId: callId, pkg: pkg)
+                try await api.sendOpaqueMessageString(recipientId: peerId, payload: wire)
+            } catch {
+                // Fail-silent: Phase 6 is best-effort; call audio continues without it.
+            }
         }
     }
 
