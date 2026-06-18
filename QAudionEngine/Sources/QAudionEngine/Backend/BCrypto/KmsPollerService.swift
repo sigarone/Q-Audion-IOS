@@ -56,10 +56,12 @@ public final class KmsPollerService {
 
     private let kmsClient: BCryptoKmsClient
     private let vault: SovereignKeyVault
+    private let earbudRelay: EarbudAckPopRelay?
 
-    public init(kmsClient: BCryptoKmsClient, vault: SovereignKeyVault) {
+    public init(kmsClient: BCryptoKmsClient, vault: SovereignKeyVault, earbudRelay: EarbudAckPopRelay? = nil) {
         self.kmsClient = kmsClient
         self.vault = vault
+        self.earbudRelay = earbudRelay
     }
 
     /// One-shot sweep. Returns aggregated stats so the caller can
@@ -220,6 +222,36 @@ public final class KmsPollerService {
         deviceKeys: DeviceKeys,
         stats: inout Stats
     ) async throws {
+        // hw_only: relay blind to earbud — phone cannot decrypt K''-wrapped package.
+        if entry.keyClass == "hw_only" {
+            guard let relay = earbudRelay else {
+                print("[KmsPollerService] hw_only key=\(entry.keyId.prefix(8))… no earbudRelay — skip")
+                return
+            }
+            let result = await relay.handle(key: entry)
+            switch result {
+            case .popVerified(let popB64):
+                // POST /kms/earbud-ack-pop — FLAG-2: txnId, not keyId
+                guard let txnId = entry.txnId, let earbudId = entry.earbudId else {
+                    print("[KmsPollerService] hw_only key missing txnId/earbudId for ack-pop")
+                    return
+                }
+                let epoch = entry.keyEpoch ?? 0
+                do {
+                    try await kmsClient.ackPopEarbud(txnId: txnId, earbudId: earbudId, epoch: epoch, popB64: popB64)
+                    stats.acknowledged += 1
+                } catch {
+                    stats.ackFailed += 1
+                    print("[KmsPollerService] hw_only ack-pop failed: \(error)")
+                }
+            case .success:
+                stats.acknowledged += 1
+            case .defer(let reason):
+                print("[KmsPollerService] hw_only key=\(entry.keyId.prefix(8))… deferred: \(reason)")
+            }
+            return
+        }
+
         // 1. Decode the encrypted_package bytes (server emits base64).
         guard let pkg = Data(base64Encoded: entry.encryptedPackage) else {
             throw KmsPollerError.malformedPackage

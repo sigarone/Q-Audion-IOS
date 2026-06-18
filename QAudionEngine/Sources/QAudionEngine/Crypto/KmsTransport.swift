@@ -262,6 +262,33 @@ public enum KmsTransport {
         throw Error.packageTooShort(actual: pkg.count, minClassical: MIN_CLASSICAL)
     }
 
+    // MARK: - UUID helpers
+
+    /// Parse a UUID (dashed RFC 4122 or bare 32-hex) into raw 16 bytes (network order).
+    /// Mirrors Android KmsTransport.uuid16().
+    /// - Throws: `Error.invalidUuid` if the string is not 32 hex chars (after removing dashes).
+    public static func uuid16(_ uuid: String) throws -> Data {
+        let hex = uuid.replacingOccurrences(of: "-", with: "")
+        guard hex.count == 32 else {
+            throw UuidError.invalidLength(hex.count)
+        }
+        var result = Data(count: 16)
+        for i in 0..<16 {
+            let lo = hex.index(hex.startIndex, offsetBy: i * 2)
+            let hi = hex.index(lo, offsetBy: 2)
+            guard let byte = UInt8(hex[lo..<hi], radix: 16) else {
+                throw UuidError.invalidHex(position: i * 2)
+            }
+            result[i] = byte
+        }
+        return result
+    }
+
+    public enum UuidError: Swift.Error {
+        case invalidLength(Int)
+        case invalidHex(position: Int)
+    }
+
     // MARK: - Tier impls
 
     private static func decryptClassical(

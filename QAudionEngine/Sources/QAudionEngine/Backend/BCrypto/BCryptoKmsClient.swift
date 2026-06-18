@@ -122,6 +122,21 @@ public final class BCryptoKmsClient {
         let data = try await rest.post("/api/v1/kms/ack-pop", body: body)
         return try JSONDecoder().decode(AckPopResponse.self, from: data)
     }
+
+    /// Acknowledge earbud-exclusive hw_only key delivery with SE PoP.
+    /// POST /api/v1/kms/earbud-ack-pop
+    ///
+    /// FLAG-2: body uses txnId, NOT keyId, per the frozen PoP-INPUTS frame contract.
+    public func ackPopEarbud(txnId: String, earbudId: String, epoch: Int64, popB64: String) async throws {
+        let dict: [String: Any] = [
+            "txn_id": txnId,
+            "earbud_id": earbudId,
+            "epoch": epoch,
+            "pop": popB64
+        ]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        _ = try await rest.post("/api/v1/kms/earbud-ack-pop", body: body)
+    }
 }
 
 /// Single pending-key entry. Matches Android `KmsKeyDto`.
