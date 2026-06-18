@@ -261,10 +261,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// SAS-verification state.
     public var isPeerVerifiedChannel: ((String) -> Bool)?
 
-    /// Global `require_signed_handshake` enforcement flag (spec §4). DEFAULTS
-    /// `false` (WARN-only migration mode) so legacy unsigned peers still
-    /// connect; enforcement only kicks in once the fleet has rolled signing out.
-    public var requireSignedHandshakeFlag: Bool = false
+    /// Global `require_signed_handshake` enforcement flag (spec §4). DEFAULT ON
+    /// (Gate #16 enabled 2026-06-18) — no legacy unsigned peers in the fleet.
+    public var requireSignedHandshakeFlag: Bool = true
 
     /// Stash of the OFFER transcript WE SENT, keyed by lowercased callId, so the
     /// initiator can recompute `offer_binding = SHA-256(offerTranscript)` when it
