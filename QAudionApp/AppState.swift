@@ -3188,6 +3188,17 @@ final class AppState: ObservableObject {
                 return
             }
             earbudCounterparty.handleInbound(callId: callId, pdu: pdu)
+        case .fpSet(let callId, let fpAdv):
+            // Phase B — remote fp_adv for neg_digest computation.
+            // Forward to whichever integration is active (caller or responder).
+            // Sender guard mirrors EARBUDPDU: must be the current call peer.
+            guard callContactId == senderId else {
+                print("[AppState] FPSET dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
+            }
+            let integration = callService.callIntegration ?? responderCallIntegration
+            integration?.handleInboundFpSet(callId: callId, fpAdv: fpAdv)
+            print("[AppState] FPSET received callId=\(callId.prefix(8))… from=\(senderId.prefix(8))…")
         }
     }
 
@@ -3389,6 +3400,10 @@ final class AppState: ObservableObject {
         // Phase-10b: wire the handshake-signing closures (sign + verify + TOFU
         // pin) for this responder integration. peerContactId = the caller.
         wireHandshakeSigning(on: integration)
+        // Phase B: wire the earbud GATT proxy so onAndroidBundleReceived
+        // can perform fp_adv GATT operations (c8 write/read) during the
+        // V4 KDF wiring. Nil when no earbud is connected → keyClass=0 fallback.
+        integration.earbudPairingGattProxy = earbudGattProxy.isConnected ? earbudGattProxy : nil
         responderCallIntegration = integration
         return integration
     }
@@ -3956,6 +3971,8 @@ final class AppState: ObservableObject {
                 // Phase-10b: wire the handshake-signing closures (sign OFFER +
                 // verify ACCEPT + TOFU pin) on the caller-side integration.
                 wireHandshakeSigning(on: integration)
+                // Phase B: wire the earbud GATT proxy for V4 KDF fp_adv operations.
+                integration.earbudPairingGattProxy = earbudGattProxy.isConnected ? earbudGattProxy : nil
                 integration.sendCallProcessing = { callId, callerId in
                     // Forward via the calling API (which routes through WS).
                     Task {

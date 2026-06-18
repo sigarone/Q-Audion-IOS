@@ -20,6 +20,10 @@ public enum EarbudGattConstants {
     public static let PAIR_RESP_UUID    = "f2c0aaaa-bcc0-4001-8000-0000000000c6"
     /// PAIR_FIN (c7) — writes 32B confirm hash
     public static let PAIR_FIN_UUID     = "f2c0aaaa-bcc0-4001-8000-0000000000c7"
+    /// FP_ADV_REQUEST (c8) — Phase B fp_adv GATT char
+    ///   WRITE 32B = ct_bind (phone writes this, earbud computes fp_adv in-SE)
+    ///   READ  40B = fp_adv[32] || key_epoch_le[8] (little-endian UInt64)
+    public static let FP_ADV_UUID       = "f2c0aaaa-bcc0-4001-8000-0000000000c8"
 
     // ── KEY_IMPORT sizes (FROZEN) ─────────────────────────────────────────────
     /// Total package size expected by firmware KEY_IMPORT
