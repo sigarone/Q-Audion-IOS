@@ -64,14 +64,21 @@ enum VpnNodePicker {
         let start = Date()
         return await withCheckedContinuation { (cont: CheckedContinuation<Int, Never>) in
             let conn = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
-            let lock = NSLock()
-            var resumed = false
             let timer = DispatchSource.makeTimerSource()
 
+            // FinishOnce: @unchecked Sendable because NSLock manually guards `done`.
+            final class FinishOnce: @unchecked Sendable {
+                private let lock = NSLock()
+                private var done = false
+                func tryFire() -> Bool {
+                    lock.lock(); defer { lock.unlock() }
+                    if done { return false }
+                    done = true; return true
+                }
+            }
+            let once = FinishOnce()
             let finish: @Sendable (Int) -> Void = { ms in
-                lock.lock(); defer { lock.unlock() }
-                if resumed { return }
-                resumed = true
+                guard once.tryFire() else { return }
                 timer.cancel()
                 conn.cancel()
                 cont.resume(returning: ms)
