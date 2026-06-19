@@ -34,6 +34,26 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     @Published var connectionState: ConnectionState = .disconnected
     @Published var blePermissionDenied: Bool = false
 
+    // MARK: - Pairing state (FE-5 earbud-exclusive pairing)
+
+    @Published var pairingStatus: PairingStatus = .idle
+
+    enum PairingStatus: Equatable {
+        case idle
+        case inProgress
+        case success(pairId: String)
+        case failed(String)
+
+        static func == (lhs: PairingStatus, rhs: PairingStatus) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle), (.inProgress, .inProgress): return true
+            case (.success(let a), .success(let b)): return a == b
+            case (.failed(let a), .failed(let b)):   return a == b
+            default: return false
+            }
+        }
+    }
+
     // MARK: - Model types
 
     enum ScanState: Equatable {
@@ -81,6 +101,10 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
 
     private var central: CBCentralManager?
     private var connectedPeripheral: CBPeripheral?
+
+    // FE-5: GATT proxy for earbud-exclusive pairing operations (c5/c6/c7/c8).
+    // Created when a peripheral connects; torn down on disconnect.
+    private var gattProxy: (any EarbudPairingGattProxy)? = nil
 
     // W511: client-side CRACEN fps tracking (mirrors Android LaunchedEffect pattern).
     @Published var cracenFps: Int? = nil
@@ -136,6 +160,61 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
         connectedEarbud = nil
         connectionState = .disconnected
         metrics = nil
+        gattProxy = nil
+        pairingStatus = .idle
+    }
+
+    // MARK: - FE-5 Earbud Pairing
+
+    /// Execute one GATT pairing exchange against the currently-connected earbud.
+    ///
+    /// Phase-1 diagnostic mode: both earbuds are owned by the same phone, so
+    /// peer/own material fields are zero-filled placeholders and isConfirmed
+    /// is { _ in true } (SAS gate bypassed). The firmware still exercises the
+    /// full c5/c6/c7 exchange; pair_id is recorded in pairingStatus.
+    ///
+    /// Production note: for Phase-2 cross-user pairing, replace the isConfirmed
+    /// closure with:
+    ///   { SasVerificationStore.shared.isEarbudPairConfirmed(pairId: $0) }
+    /// and supply real attestation material from the server in the six Data fields.
+    func pairWithConnectedEarbud() async {
+        guard connectedEarbud != nil else {
+            pairingStatus = .failed("nessun auricolare connesso")
+            return
+        }
+        guard let proxy = gattProxy else {
+            pairingStatus = .failed("proxy GATT non disponibile")
+            return
+        }
+
+        pairingStatus = .inProgress
+
+        // Phase-1 placeholders: 32-byte pkSe / eid and 1568-byte material, all zeros.
+        // Replace with real attestation data from the server for Phase-2.
+        let zeroPkSe     = Data(count: 32)
+        let zeroMaterial = Data(count: 1568)
+        let zeroEid      = Data(count: 32)
+
+        let relay = EarbudPairingRelay(gatt: proxy)
+        let result = await relay.pairWithPeer(
+            peerPkSe:     zeroPkSe,
+            peerMaterial: zeroMaterial,
+            peerEid:      zeroEid,
+            ownPkSe:      zeroPkSe,
+            ownMaterial:  zeroMaterial,
+            ownEid:       zeroEid,
+            // Phase-1 diagnostic: SAS gate bypassed.
+            // Phase-2 production: { SasVerificationStore.shared.isEarbudPairConfirmed(pairId: $0) }
+            isConfirmed: { _ in true }
+        )
+
+        switch result {
+        case .success(let pairId):
+            let hex = pairId.prefix(8).map { String(format: "%02x", $0) }.joined() + "…"
+            pairingStatus = .success(pairId: hex)
+        case .defer(let reason):
+            pairingStatus = .failed(reason)
+        }
     }
 }
 
@@ -188,10 +267,11 @@ extension EarbudDiagViewModel: CBCentralManagerDelegate {
                 axonOk: false, batteryPct: 0, uptimeSec: 0,
                 firmwareVersion: "—", lastUpdated: Date()
             )
-            // KMS Rotation v2 (§5 iOS): remember this earbud's CB identifier so
-            // the background KMS sweep can relay pending sovereign keys to it
-            // (CoreBluetoothSovereignRelay resolves the peripheral by identifier).
             AppState.rememberEarbudIdentifier(identifier)
+            let proxy = IOSEarbudGattProxy()
+            proxy.connect(peripheral)
+            self.gattProxy = proxy
+            self.pairingStatus = .idle
         }
         peripheral.delegate = self
         peripheral.discoverServices([EarbudDiagViewModel.serviceUUID])
@@ -206,6 +286,8 @@ extension EarbudDiagViewModel: CBCentralManagerDelegate {
             self.connectionState = .disconnected
             self.connectedEarbud = nil
             self.metrics = nil
+            self.gattProxy = nil
+            self.pairingStatus = .idle
         }
     }
 
@@ -352,6 +434,9 @@ struct EarbudDiagScreen: View {
                         connectingSection
                     } else if vm.scanState != .scanning && vm.discoveredEarbuds.isEmpty {
                         emptyStateSection
+                    }
+                    if vm.connectionState == .connected {
+                        pairingSection
                     }
                     Spacer().frame(height: 32)
                 }
@@ -642,6 +727,95 @@ struct EarbudDiagScreen: View {
             .qaudionStyle(type.labelSmall)
             .foregroundStyle(scheme.onSurfaceVariant)
             .padding(.horizontal, 4)
+    }
+
+    // MARK: - Pairing section (FE-5 earbud-exclusive pairing)
+
+    private var pairingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SettingsSectionHeader("PAIRING AURICOLARE (FE-5)")
+            pairingCard
+        }
+    }
+
+    private var pairingCard: some View {
+        let isPairing = vm.pairingStatus == .inProgress
+        return VStack(alignment: .leading, spacing: 12) {
+            Button {
+                Task { await vm.pairWithConnectedEarbud() }
+            } label: {
+                HStack(spacing: 8) {
+                    if isPairing {
+                        ProgressView()
+                            .tint(scheme.onPrimary)
+                            .scaleEffect(0.8)
+                    } else {
+                        Image(systemName: "lock.shield.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                    Text(isPairing ? "Pairing in corso…" : "Avvia Pairing")
+                        .qaudionStyle(type.labelLarge)
+                }
+                .foregroundStyle(scheme.onPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(isPairing
+                              ? extras.pqcAccent.opacity(0.6)
+                              : extras.pqcAccent.opacity(0.85))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isPairing)
+
+            pairingStatusRow
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(pairingBorderColor.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private var pairingBorderColor: Color {
+        switch vm.pairingStatus {
+        case .idle:       return scheme.outline
+        case .inProgress: return extras.pqcAccent
+        case .success:    return extras.success
+        case .failed:     return extras.riskHigh
+        }
+    }
+
+    private var pairingStatusRow: some View {
+        let (icon, label, color) = pairingStatusContent
+        return HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(color)
+            Text(label)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(color)
+                .lineLimit(2)
+        }
+        .padding(.top, 2)
+    }
+
+    private var pairingStatusContent: (icon: String, label: String, color: Color) {
+        switch vm.pairingStatus {
+        case .idle:
+            return ("circle", "In attesa · premere Avvia Pairing per eseguire c5/c6/c7", scheme.onSurfaceVariant)
+        case .inProgress:
+            return ("arrow.triangle.2.circlepath", "Scambio GATT in corso (PAIR_BEGIN → PAIR_RESP → PAIR_FIN)…", extras.pqcAccent)
+        case .success(let pairId):
+            return ("checkmark.shield.fill", "Pairing completato · pair_id: " + pairId, extras.success)
+        case .failed(let reason):
+            return ("xmark.circle.fill", "Errore: " + reason, extras.riskHigh)
+        }
     }
 
     // MARK: - Connecting placeholder
