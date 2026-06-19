@@ -219,6 +219,64 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// owns the actual download/UI.
     public var qaudionDidReceiveFile: ((_ marker: FileTransfer.FileMarker, _ from: String) -> Void)?
 
+    // MARK: - Phase-1 live-call seam (D4 abort / D6 v2-v3 KDF selection)
+
+    /// Result type for `phase1DeriveSessionKey`.
+    public enum Phase1Result {
+        case success(Data)
+        case abort(String)
+    }
+
+    /// Whether this client advertises KMS-rotation-v2 schema:3 KDF support.
+    /// Wired `true` by AppState when the local version supports schema:3.
+    /// Left `false` (default) in tests that exercise the legacy schema:2 path.
+    public var localSupportsSessionKdfV3: Bool = false
+
+    /// D4 abort gate resolver for hw_only contacts.
+    /// Signature: `(peerId: String) -> (isHwOnly: Bool, expectedFp: String?)`.
+    /// When `isHwOnly == true` and the negotiated `selectedFp` does NOT match
+    /// `expectedFp`, `phase1DeriveSessionKey` returns `.abort("hw_only_required")`.
+    /// `nil` (default) → non-hw_only path, no abort.
+    public var resolveHwOnlyContact: ((String) -> (Bool, String?))? = nil
+
+    /// D4 + D6 live-call session-key derivation seam.
+    ///
+    /// 1. (D4) If `resolveHwOnlyContact` is set and returns `(true, expectedFp)` but
+    ///    `selectedFp != expectedFp` → `.abort("hw_only_required")`.
+    /// 2. (D6) If `localSupportsSessionKdfV3 && peerSupportsV3` → schema:3 key.
+    /// 3. Otherwise → schema:2 key (legacy path, mixed fleet / old peer).
+    ///
+    /// All parameters mirror the Android `HybridPqcKeyExchange.phase1DeriveSessionKey` signature.
+    public func phase1DeriveSessionKey(
+        peerId: String,
+        pqcSs: Data,
+        x25519Ss: Data,
+        pqcCiphertext: Data,
+        selectedFp: String?,
+        selectedPsk: Data?,
+        peerSupportsV3: Bool
+    ) -> Phase1Result {
+        // D4 abort gate — hw_only contact with wrong/missing fp.
+        if let resolve = resolveHwOnlyContact {
+            let (isHwOnly, expectedFp) = resolve(peerId)
+            if isHwOnly, selectedFp != expectedFp {
+                return .abort("hw_only_required")
+            }
+        }
+        // D6 KDF selection.
+        let key: Data
+        if localSupportsSessionKdfV3 && peerSupportsV3 {
+            key = QAudionCallIntegration.deriveHybridSessionKeyV3(
+                pqcSs: pqcSs, x25519Ss: x25519Ss, pqcCiphertext: pqcCiphertext,
+                psk: selectedPsk)
+        } else {
+            key = QAudionCallIntegration.deriveHybridSessionKey(
+                pqcSs: pqcSs, x25519Ss: x25519Ss, pqcCiphertext: pqcCiphertext,
+                psk: selectedPsk)
+        }
+        return .success(key)
+    }
+
     // MARK: - Phase-10b handshake signing (additive, all nil/off by default)
     //
     // HANDSHAKE-SIGNING-SPEC.md §2–§6. EVERY property below is nil/false by
@@ -1472,6 +1530,81 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         var info = Data(capacity: HkdfLabels.hybridPqcSessionKey.count + ctBind.count)
         info.append(HkdfLabels.hybridPqcSessionKey)
         info.append(ctBind)
+
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: salt,
+            info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
+    // MARK: - Schema:3 session KDF primitives
+
+    /// selected_fp_or_zero32 = SHA-256(selectedPsk) if non-nil/non-empty, else 32×0x00.
+    ///
+    /// Byte-identical to Android `HybridPqcKeyExchange.selectedFpOrZero32` and
+    /// firmware path in `qa_session_info_v3`. `internal` so KAT tests can exercise it.
+    static func selectedFpOrZero32(selectedPsk: Data?) -> Data {
+        guard let psk = selectedPsk, !psk.isEmpty else {
+            return Data(repeating: 0, count: 32)
+        }
+        return Data(SHA256.hash(data: psk))
+    }
+
+    /// info_v3 = "q-audion-session-key"(20) || ct_bind(32) || selected_fp_or_zero32(32) [84B]
+    ///
+    /// Extends schema:2 `info` with the 32-byte fp tail, producing a distinct
+    /// HKDF output that a schema:2 peer cannot accidentally derive.
+    static func sessionInfoV3(ctBind: Data, selectedFpOrZero32: Data) -> Data {
+        precondition(selectedFpOrZero32.count == 32, "selectedFpOrZero32 must be 32 bytes")
+        var info = Data(capacity: HkdfLabels.hybridPqcSessionKey.count + ctBind.count + 32)
+        info.append(HkdfLabels.hybridPqcSessionKey)
+        info.append(ctBind)
+        info.append(selectedFpOrZero32)
+        return info
+    }
+
+    /// Schema:3 hybrid session-key derivation.
+    ///
+    /// Byte-identical to Android `HybridPqcKeyExchange.deriveSessionKeyV3` and
+    /// firmware `qa_session_handshake_complete` (v3 path).
+    /// Pinned by `session-key-v3-kat.json` (3 vectors: no-psk / K1 / K2).
+    ///
+    ///   ct_bind            = HMAC-SHA256("q-audion-ct-bind-v1", pqcCiphertext) [32B]
+    ///   selected_fp_or_z32 = SHA-256(psk) if non-nil/non-empty else 32×0x00   [32B]
+    ///   ikm                = pqcSs(32) || x25519Ss(32)                         [64B]
+    ///   salt               = psk  if non-nil/non-empty else "q-audion-hybrid-pqc-v1"
+    ///   info_v3            = "q-audion-session-key"(20) || ct_bind(32) || sel_fp_z32(32) [84B]
+    ///   key                = HKDF-SHA256(ikm, salt, info_v3, 32)
+    ///
+    /// `internal` so `SessionKeyV3KatTests` can exercise it via `@testable import`.
+    static func deriveHybridSessionKeyV3(
+        pqcSs: Data,
+        x25519Ss: Data,
+        pqcCiphertext: Data,
+        psk: Data?
+    ) -> Data {
+        let ctBind = Data(
+            HMAC<SHA256>.authenticationCode(
+                for: pqcCiphertext,
+                using: SymmetricKey(data: HkdfLabels.hybridCtBindV1)
+            )
+        )
+        let selFp = selectedFpOrZero32(selectedPsk: psk)
+        let info = sessionInfoV3(ctBind: ctBind, selectedFpOrZero32: selFp)
+
+        var ikm = Data(capacity: pqcSs.count + x25519Ss.count)
+        ikm.append(pqcSs)
+        ikm.append(x25519Ss)
+
+        let salt: Data
+        if let psk = psk, !psk.isEmpty {
+            salt = psk
+        } else {
+            salt = HkdfLabels.hybridPqcSaltV1
+        }
 
         let key = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: ikm),
