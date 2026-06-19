@@ -61,6 +61,11 @@ targets:
         # and the resolver it needs. -lresolv satisfies res_* symbols; -lc++
         # satisfies BoringSSL's C++ bits. Harmless if unused.
         OTHER_LDFLAGS: $(inherited) -lresolv -lc++
+        # Cquiche module map lives in Modules/module.modulemap (committed).
+        # quiche.xcframework omits its own module.modulemap to avoid an Xcode
+        # 26.3 "Multiple commands produce .../include/module.modulemap" error
+        # (both quiche and QaudionCryptoCore xcframeworks had the same filename).
+        SWIFT_INCLUDE_PATHS: $(inherited) $(SRCROOT)/Modules
     dependencies:
       - package: QAudionEngine
       # MASQUE CONNECT-UDP backend. quiche.xcframework is built in CI by the

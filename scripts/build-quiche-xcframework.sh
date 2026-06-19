@@ -52,23 +52,17 @@ cargo build --release --features ffi --target aarch64-apple-ios -p quiche
 
 DEV_LIB="$WORK/quiche/target/aarch64-apple-ios/release/libquiche.a"
 
-# Headers dir with quiche.h + a module map naming the module `Cquiche`.
-# Headers live in a Cquiche/ subdirectory so their module.modulemap does NOT
-# collide with other xcframeworks (e.g. QaudionCryptoCore.xcframework) that
-# also place a module.modulemap at the root of their Headers/ dir. Xcode 26.3
-# made this conflict a hard error ("Multiple commands produce .../include/
-# module.modulemap"). Clang discovers module.modulemap in subdirectories of
-# include paths, so `import Cquiche` in Swift continues to work.
+# Headers dir: only quiche.h — NO module.modulemap.
+# Xcode 26.3 made it a hard error when two xcframeworks both place
+# module.modulemap at the root of their Headers/ dir ("Multiple commands
+# produce .../include/module.modulemap"). xcodebuild -create-xcframework
+# flattens subdirectories into Headers/, so moving the file to a subdir
+# does not help. Solution: omit module.modulemap from the xcframework and
+# declare the Cquiche module via QAudionApp/Modules/module.modulemap
+# (committed), exposed to Swift via SWIFT_INCLUDE_PATHS in project.yml.
 HDRS="$WORK/include"
-QUICHE_HDRS="$HDRS/Cquiche"
-mkdir -p "$QUICHE_HDRS"
-cp "$WORK/quiche/quiche/include/quiche.h" "$QUICHE_HDRS/quiche.h"
-cat > "$QUICHE_HDRS/module.modulemap" <<'MODMAP'
-module Cquiche {
-    header "quiche.h"
-    export *
-}
-MODMAP
+mkdir -p "$HDRS"
+cp "$WORK/quiche/quiche/include/quiche.h" "$HDRS/quiche.h"
 
 mkdir -p "$(dirname "$OUT_XC")"
 rm -rf "$OUT_XC"

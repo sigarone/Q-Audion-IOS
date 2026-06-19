@@ -1,0 +1,11 @@
+// Cquiche module declaration for Cloudflare quiche C FFI.
+// quiche.xcframework (built in CI) omits module.modulemap from its Headers/
+// dir to avoid an Xcode 26.3 hard error ("Multiple commands produce
+// .../include/module.modulemap") caused by QaudionCryptoCore.xcframework
+// also placing a module.modulemap at the root of its Headers/ dir.
+// This file is found via SWIFT_INCLUDE_PATHS = $(SRCROOT)/Modules (project.yml).
+// quiche.h is available in the build's include path via ProcessXCFramework.
+module Cquiche {
+    header "quiche.h"
+    export *
+}
