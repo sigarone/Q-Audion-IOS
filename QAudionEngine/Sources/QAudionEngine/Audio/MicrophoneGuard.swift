@@ -8,7 +8,7 @@ public final class MicrophoneGuard {
 
     public func requestExclusiveAccess() throws {
         let session = AVAudioSession.sharedInstance()
-        #if os(iOS)
+        #if os(iOS) && !targetEnvironment(simulator)
         let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .defaultToSpeaker]
         #else
         let audioOpts: AVAudioSession.CategoryOptions = [.defaultToSpeaker]

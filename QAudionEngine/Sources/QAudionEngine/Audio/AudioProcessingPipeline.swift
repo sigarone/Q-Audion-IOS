@@ -158,7 +158,7 @@ public final class AudioProcessingPipeline {
         // environment, they can enable AEC in Settings → Chiamate →
         // Echo Cancellation to re-activate VP-IO. For the common
         // earpiece case, no AEC is needed.
-        #if os(iOS)
+        #if os(iOS) && !targetEnvironment(simulator)
         let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
         #else
         let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
