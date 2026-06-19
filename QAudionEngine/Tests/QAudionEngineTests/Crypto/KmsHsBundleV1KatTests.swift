@@ -111,9 +111,7 @@ final class KmsHsBundleV1KatTests: XCTestCase {
                            "[\(name)] OFFER transcript drift")
         }
 
-        // sign round-trip: verify self-consistency (seed→sign→verify with derived pubkey).
-        // Cross-platform sig comparison removed: the JSON seeds were generated with a
-        // key that corresponds to caller_id_pk_hex, which verify() validates below.
+        // sign round-trip: self-consistency + cross-platform bit-exact KAT.
         if expectVerify, let seedHex = v["caller_id_seed_hex"] as? String {
             let idSeed = hex(seedHex)
             let computed = try KmsHsBundleV1.sign(canon: canon, idSeed: idSeed)
@@ -122,6 +120,15 @@ final class KmsHsBundleV1KatTests: XCTestCase {
             XCTAssertTrue(
                 KmsHsBundleV1.verify(canon: canon, signature: computed, signerIdPk: derivedPk),
                 "[\(name)] OFFER sign→verify self-consistency")
+            // Cross-platform bit-exact check (pyca/cryptography reference vectors confirmed).
+            // arm64 Simulator produces non-RFC-8032-identical bytes from CryptoKit — tracked
+            // in issue #14. Skip on Simulator; assertion MUST pass on physical device.
+            #if !targetEnvironment(simulator)
+            if let sigHex = v["sig_hex"] as? String {
+                XCTAssertEqual(computed.hexHB(), sigHex.lowercased(),
+                               "[\(name)] OFFER frozen sig KAT — cross-platform bit identity (issue #14)")
+            }
+            #endif
         }
 
         // verify against the frozen sig + the verifier pubkey.
@@ -167,6 +174,15 @@ final class KmsHsBundleV1KatTests: XCTestCase {
             XCTAssertTrue(
                 KmsHsBundleV1.verify(canon: canon, signature: computed, signerIdPk: derivedPk),
                 "[\(name)] ACCEPT sign→verify self-consistency")
+            // Cross-platform bit-exact check (pyca/cryptography reference vectors confirmed).
+            // arm64 Simulator produces non-RFC-8032-identical bytes from CryptoKit — tracked
+            // in issue #14. Skip on Simulator; assertion MUST pass on physical device.
+            #if !targetEnvironment(simulator)
+            if let sigHex = v["sig_hex"] as? String {
+                XCTAssertEqual(computed.hexHB(), sigHex.lowercased(),
+                               "[\(name)] ACCEPT frozen sig KAT — cross-platform bit identity (issue #14)")
+            }
+            #endif
         }
         let sig = hex(v["sig_hex"])
         let verifierPk = hex(v["verifier_pub_hex"] ?? v["callee_id_pk_hex"])
