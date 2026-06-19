@@ -2054,9 +2054,26 @@ final class AppState: ObservableObject {
                 await self.runKmsSweep()
             }
         }
-        ws.registerHandler(type: "kms_key_revoked") { [weak self] _, _ in
-            DispatchQueue.main.async {
-                self?.errorMessage = "Una chiave KMS è stata revocata."
+        // Phase-0 KMS Rotation v2 §3.6 — on revoke: delete the vault PSK so
+        // any subsequent handshake cannot use a key the server has invalidated.
+        // Best-effort: a missing key (sovereign / not-yet-delivered) is a no-op;
+        // a Keychain error is logged but never surfaced to the caller.
+        ws.registerHandler(type: "kms_key_revoked") { [weak self] _, data in
+            let keyId = (data["key_id"] as? String) ?? ""
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.errorMessage = "Una chiave KMS è stata revocata."
+                guard !keyId.isEmpty else {
+                    print("[AppState] kms_key_revoked: missing key_id in payload — nothing to delete")
+                    return
+                }
+                guard let provider = self.liveProvider else {
+                    print("[AppState] kms_key_revoked: no liveProvider (logout race) — key_id=\(keyId.prefix(8))… skip")
+                    return
+                }
+                let vault = SovereignKeyVault()
+                let poller = KmsPollerService(kmsClient: provider.kmsClient, vault: vault)
+                await poller.notifyRevoked(keyId: keyId)
             }
         }
         // Initial sweep right after WS auth — covers any keys the

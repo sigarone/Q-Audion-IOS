@@ -308,6 +308,38 @@ public final class KmsPollerService {
         }
     }
 
+    /// Phase-0 KMS Rotation v2 §3.6 — on a `kms_key_revoked` WS event the
+    /// caller passes the wire `key_id` here. The vault item stored under that
+    /// name is zeroized then deleted. Fail-closed: a missing item is a harmless
+    /// no-op (the key may never have reached this device); any other vault error
+    /// is logged and swallowed so the caller's event loop is never disrupted.
+    ///
+    /// Naming contract: phone-held and v2-phone-held PSKs are stored under the
+    /// server's `keyId` string directly (see `processSingle` / `processV2PhoneHeld`
+    /// `vault.storePsk(name: entry.keyId, ...)`). Sovereign (earbud) keys are
+    /// never stored on the phone — so a sovereign revoke is a no-op on iOS.
+    public func notifyRevoked(keyId: String) async {
+        guard !keyId.isEmpty else {
+            print("[KmsPollerService] notifyRevoked: empty keyId — nothing to delete")
+            return
+        }
+        // Load first so we can zeroize the material in memory before deletion.
+        // loadPsk returns nil when the item doesn't exist, so this is a no-op
+        // for keys that were never stored on this device (sovereign/not delivered).
+        if var material = try? vault.loadPsk(name: keyId), !material.isEmpty {
+            CryptoConstants.zeroize(&material)
+        }
+        // deletePsk tolerates errSecItemNotFound internally — it only throws on
+        // genuine Keychain errors. Log and continue on any failure (fail-open for
+        // the caller's event loop, but the warning surfaces the issue).
+        do {
+            try vault.deletePsk(name: keyId)
+            print("[KmsPollerService] notifyRevoked: deleted vault PSK key_id=\(keyId.prefix(8))…")
+        } catch {
+            print("[KmsPollerService] notifyRevoked: vault delete failed for key_id=\(keyId.prefix(8))…: \(error)")
+        }
+    }
+
     public enum KmsPollerError: Error {
         case malformedPackage
         case missingV2Context
