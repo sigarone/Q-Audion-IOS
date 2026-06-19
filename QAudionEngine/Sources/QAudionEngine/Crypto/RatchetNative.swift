@@ -110,7 +110,7 @@ public enum RatchetNative {
         guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
         return queryThenFill { out, outLen in
             plaintext.withUnsafeBytesU8Len { ptPtr, ptLen in
-                qa_ratchet_encrypt(p, ptPtr, ptLen, out, outLen)
+                qaStatusCode(qa_ratchet_encrypt(p, ptPtr, ptLen, out, outLen))
             }
         }
     }
@@ -121,7 +121,7 @@ public enum RatchetNative {
         guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
         return queryThenFill { out, outLen in
             frame.withUnsafeBytesU8Len { fPtr, fLen in
-                qa_ratchet_decrypt(p, fPtr, fLen, out, outLen)
+                qaStatusCode(qa_ratchet_decrypt(p, fPtr, fLen, out, outLen))
             }
         }
     }
@@ -144,7 +144,7 @@ public enum RatchetNative {
     public static func serialize(_ handle: UInt) -> Data? {
         guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
         return queryThenFill { out, outLen in
-            qa_session_serialize(p, out, outLen)
+            qaStatusCode(qa_session_serialize(p, out, outLen))
         }
     }
 
@@ -163,7 +163,7 @@ public enum RatchetNative {
         return queryThenFill { out, outLen in
             fileId.withUnsafeBytesU8Len { fidPtr, fidLen in
                 plaintext.withUnsafeBytesU8Len { ptPtr, ptLen in
-                    qa_file_encrypt(p, fidPtr, fidLen, ptPtr, ptLen, counter, out, outLen)
+                    qaStatusCode(qa_file_encrypt(p, fidPtr, fidLen, ptPtr, ptLen, counter, out, outLen))
                 }
             }
         }
@@ -176,8 +176,8 @@ public enum RatchetNative {
         guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
         return queryThenFill { out, outLen in
             fileId.withUnsafeBytesU8Len { fidPtr, fidLen in
-                ctTag.withUnsafeBytesU8Len { blobPtr, blobLen in
-                    qa_file_decrypt(p, fidPtr, fidLen, blobPtr, blobLen, counter, out, outLen)
+                ctTag.withUnsafeBytesU8Len { ctPtr, ctLen in
+                    qaStatusCode(qa_file_decrypt(p, fidPtr, fidLen, ctPtr, ctLen, counter, out, outLen))
                 }
             }
         }
@@ -189,7 +189,7 @@ public enum RatchetNative {
         guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
         return queryThenFill { out, outLen in
             callId.withUnsafeBytesU8Len { cidPtr, cidLen in
-                qa_media_key(p, cidPtr, cidLen, out, outLen)
+                qaStatusCode(qa_media_key(p, cidPtr, cidLen, out, outLen))
             }
         }
     }
@@ -211,34 +211,38 @@ public enum RatchetNative {
     /// to fill. Mirrors the documented C-host usage and `src/android_jni.rs`'s `query_then_fill` /
     /// `tests/ffi_kat.rs::call_qtf`.
     // Reads the raw Int32 from a QaStatus value regardless of how Swift's Clang importer
-    // resolves the mixed enum-typedef in qaudion_crypto_core.h:
-    //   enum QaStatus : int32_t { ... };  typedef int32_t QaStatus;
-    // In swift test (macOS) QaStatus collapses to Int32; in xcodebuild (iOS Simulator)
-    // it stays the enum struct. Both cases store the same 4 bytes in memory.
+    // resolves the mixed enum-typedef in qaudion_crypto_core.h.
+    // On macOS (swift test): QaStatus == Int32 (typedef wins).
+    // On iOS Simulator (xcodebuild): the enum and the typedef are BOTH exported as
+    // distinct `CQaudionCryptoCore.QaStatus` candidates — writing `QaStatus` in a Swift
+    // type annotation is ambiguous. Using a generic parameter avoids any annotation while
+    // still reading the 4 raw bytes correctly in both cases.
     @inline(__always)
-    private static func qaStatusCode(_ s: QaStatus) -> Int32 {
+    private static func qaStatusCode<T>(_ s: T) -> Int32 {
         var v = s
         return withUnsafeMutableBytes(of: &v) { $0.load(as: Int32.self) }
     }
 
+    // `op` returns Int32 so no QaStatus type annotation is needed here.
+    // Call sites wrap the C function result with qaStatusCode() before passing.
     private static func queryThenFill(
-        _ op: (UnsafeMutablePointer<UInt8>?, UnsafeMutablePointer<UInt>) -> QaStatus
+        _ op: (UnsafeMutablePointer<UInt8>?, UnsafeMutablePointer<UInt>) -> Int32
     ) -> Data? {
         // 1) size query — NULL buffer, capacity 0. OK (empty output) or BufferTooSmall are valid.
         let lenPtr = UnsafeMutablePointer<UInt>.allocate(capacity: 1)
         defer { lenPtr.deallocate() }
         lenPtr.pointee = 0
         let st = op(nil, lenPtr)
-        guard qaStatusCode(st) == 0 || qaStatusCode(st) == -2 else { return nil }
+        guard st == 0 || st == -2 else { return nil }
         let need = Int(lenPtr.pointee)
         if need == 0 { return Data() }
         // 2) allocate + fill.
         var buf = [UInt8](repeating: 0, count: need)
         lenPtr.pointee = UInt(need)
-        let st2 = buf.withUnsafeMutableBufferPointer { mb -> QaStatus in
+        let st2 = buf.withUnsafeMutableBufferPointer { mb -> Int32 in
             op(mb.baseAddress, lenPtr)
         }
-        guard qaStatusCode(st2) == 0 else { return nil }
+        guard st2 == 0 else { return nil }
         return Data(buf.prefix(Int(lenPtr.pointee)))
     }
 }

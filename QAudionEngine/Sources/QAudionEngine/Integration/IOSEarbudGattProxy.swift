@@ -191,8 +191,11 @@ public final class IOSEarbudGattProxy: NSObject, EarbudPairingGattProxy {
                     try await writeChar(char, data: frame)
                     break
                 } catch GattError.gattError(let msg)
-                    where msg.contains("busy") || msg.contains("congested"),
-                      _ where retries < 6 {
+                    where msg.contains("busy") || msg.contains("congested") {
+                    retries += 1
+                    let backoffMs = 200 + retries * 300
+                    try await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
+                } catch where retries < 6 {
                     retries += 1
                     let backoffMs = 200 + retries * 300
                     try await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
