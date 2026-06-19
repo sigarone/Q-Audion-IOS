@@ -123,6 +123,26 @@ public final class BCryptoKmsClient {
         return try JSONDecoder().decode(AckPopResponse.self, from: data)
     }
 
+    /// Publish the user-level Ed25519 identity key.
+    /// POST /api/v1/users/me/identity-key
+    ///
+    /// This is distinct from the device key registered via `registerPublicKey`.
+    /// Callee clients (Android, iOS) call GET /api/v1/users/{id}/identity-key
+    /// during call setup to verify the caller's identity. Without this
+    /// registration the callee receives a 404 and hangs up immediately.
+    ///
+    /// Idempotent — a second publish overwrites the previous record server-side.
+    public func publishUserIdentityKey(ed25519PubKey: Data, deviceId: String) async throws {
+        precondition(ed25519PubKey.count == 32, "Ed25519 public key must be 32 bytes")
+        let dict: [String: Any] = [
+            "public_key_b64": ed25519PubKey.base64EncodedString(),
+            "alg": "Ed25519",
+            "device_id": deviceId
+        ]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
+    }
+
     /// Acknowledge earbud-exclusive hw_only key delivery with SE PoP.
     /// POST /api/v1/kms/earbud-ack-pop
     ///
