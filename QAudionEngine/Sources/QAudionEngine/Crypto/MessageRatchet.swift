@@ -690,4 +690,24 @@ public final class MessageRatchet {
     public func freeV4Session(_ handle: UInt) {
         RatchetNative.free(handle)
     }
+
+    /// Encrypt `plaintext` as a standalone file blob keyed from the v4 session root + `fileId`.
+    ///
+    /// Returns `ciphertext ‖ tag` (`plaintext.count + 16` bytes), or `nil` on disabled/error.
+    /// Does NOT advance the ratchet chain — no write-ahead / persist needed after this call.
+    /// `counter` is the AES-GCM nonce counter; use `0` for a single-chunk file.
+    ///
+    /// Key derivation: `HKDF-SHA256(root, info="qa/v4/file/"‖fileId, L=32)`.
+    public func fileEncryptV4(_ handle: UInt, fileId: Data, plaintext: Data, counter: UInt64 = 0) -> Data? {
+        guard isV4Enabled() else { return nil }
+        return RatchetNative.fileEncrypt(handle, fileId: fileId, plaintext: plaintext, counter: counter)
+    }
+
+    /// Decrypt a ``fileEncryptV4(_:fileId:plaintext:counter:)`` blob. `ctTag` is `ciphertext ‖ tag`.
+    /// Returns the plaintext, or `nil` (fail-closed) on any auth/parse error or disabled path.
+    /// Does NOT advance the ratchet chain.
+    public func fileDecryptV4(_ handle: UInt, fileId: Data, ctTag: Data, counter: UInt64 = 0) -> Data? {
+        guard isV4Enabled() else { return nil }
+        return RatchetNative.fileDecrypt(handle, fileId: fileId, ctTag: ctTag, counter: counter)
+    }
 }

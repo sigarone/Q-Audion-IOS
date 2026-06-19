@@ -148,6 +148,41 @@ public enum RatchetNative {
         }
     }
 
+    // MARK: - File encryption (Phase 4)
+
+    /// Encrypt `plaintext` as a standalone file blob keyed from the session root + `fileId`.
+    ///
+    /// Returns `ciphertext ‖ tag` (`plaintext.count + 16` bytes), or `nil` on error. Does NOT
+    /// advance the ratchet chain — the session root provides the key material (stable within an
+    /// epoch). `counter` is the AES-GCM nonce counter; use `0` for a single-chunk file.
+    ///
+    /// Key derivation: `HKDF-SHA256(root, info="qa/v4/file/"‖fileId, L=32)`. Both peers derive the
+    /// same key given the same `fileId` — no extra coordination required.
+    public static func fileEncrypt(_ handle: UInt, fileId: Data, plaintext: Data, counter: UInt64 = 0) -> Data? {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
+        return queryThenFill { out, outLen in
+            fileId.withUnsafeBytesU8Len { fidPtr, fidLen in
+                plaintext.withUnsafeBytesU8Len { ptPtr, ptLen in
+                    qa_file_encrypt(p, fidPtr, fidLen, ptPtr, ptLen, counter, out, outLen)
+                }
+            }
+        }
+    }
+
+    /// Decrypt a ``fileEncrypt(_:fileId:plaintext:counter:)`` blob. `ctTag` is `ciphertext ‖ tag`.
+    /// Returns the plaintext, or `nil` (fail-closed) on any auth/parse error. Does NOT advance the
+    /// ratchet chain.
+    public static func fileDecrypt(_ handle: UInt, fileId: Data, ctTag: Data, counter: UInt64 = 0) -> Data? {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
+        return queryThenFill { out, outLen in
+            fileId.withUnsafeBytesU8Len { fidPtr, fidLen in
+                ctTag.withUnsafeBytesU8Len { blobPtr, blobLen in
+                    qa_file_decrypt(p, fidPtr, fidLen, blobPtr, blobLen, counter, out, outLen)
+                }
+            }
+        }
+    }
+
     // MARK: - Internals
 
     /// Reconstitute the opaque `QaSession*` from the integer handle.
