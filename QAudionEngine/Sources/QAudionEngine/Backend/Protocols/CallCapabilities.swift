@@ -53,6 +53,32 @@ public enum CallCapabilities {
     /// Android `CallCapabilities.kt`.
     public static let earbudRelayV1: String = "earbud-relay-v1"
 
+    /// AES-256-GCM video FrameCryptor upgrade v1 (Phase 2 kill-switch, OFF by default).
+    ///
+    /// Advertised only when ``v4SFrameAes256Enabled`` is `true`. Mirrors
+    /// `SFRAME_AES256_V1` / `"sframe-aes256-v1"` in Android `CallCapabilities.kt`
+    /// and `CAP_SFRAME_AES256_V1` in Desktop `CallCapabilities.ts`.
+    ///
+    /// INTEROP: advertising this tag requires the peer to also run AES-256
+    /// FrameCryptor. A mismatch causes the native FrameCryptor `open()` to fail
+    /// on every received frame. Only enable once all platforms ship AES-256.
+    public static let sframeAes256V1: String = "sframe-aes256-v1"
+
+    /// Phase 2 kill-switch — AES-256 SFrame video path.
+    ///
+    /// `false` (DEFAULT / OFF): AES-128 LiveKit FrameCryptor active. ``sframeAes256V1``
+    ///   is NOT included in ``local``. Legacy Android / Desktop peers can video-call normally.
+    ///
+    /// `true` (ON): AES-256 path active (LiveKit FrameCryptor with a 32-byte key driving
+    ///   AES-256-GCM). ``sframeAes256V1`` IS included in ``local``. A call with a peer
+    ///   that does NOT advertise this tag will have video disabled fail-closed inside
+    ///   ``QAudionPeerConnection``.
+    ///
+    /// Mirrors `V4_SFRAME_AES256_ENABLED` in Android `CallCapabilities.kt` and
+    /// `V4_SFRAME_AES256_ENABLED` in Desktop `CallCapabilities.ts`.
+    /// Cross-platform: ALL three platforms must use the same setting simultaneously.
+    public static let v4SFrameAes256Enabled: Bool = true
+
     /// Capabilities advertised by THIS build of the iOS client.
     ///
     /// NOTE: `vkeyV1` is advertised by default but may be stripped at
@@ -60,7 +86,12 @@ public enum CallCapabilities {
     /// `CallsGate.sovereignOnlyEnabled`), enforced at the app layer when
     /// it builds the outgoing `capabilities` array.
     /// `earbudRelayV1` is deliberately ABSENT — detection-only on iOS.
-    public static let local: [String] = [sframeV1, ratchetV3, vkeyV1]
+    /// `sframeAes256V1` is included only when `v4SFrameAes256Enabled` is `true`.
+    public static let local: [String] = {
+        var caps: [String] = [sframeV1, ratchetV3, vkeyV1]
+        if v4SFrameAes256Enabled { caps.append(sframeAes256V1) }
+        return caps
+    }()
 
     /// #2a gate (Android parity): did the PEER advertise
     /// ``earbudRelayV1`` in its RAW call-setup capability list,
@@ -93,6 +124,18 @@ public enum CallCapabilities {
         /// the audio/control PQC session key. Derived from ``agreedTags``
         /// — no wire or init change.
         public var useVideoKey: Bool { agreedTags.contains(CallCapabilities.vkeyV1) }
+
+        /// True iff BOTH peers advertised ``sframeAes256V1``. This is the
+        /// Phase 2 gate for the AES-256-GCM FrameCryptor path.
+        ///
+        /// - `true`  → both sides run AES-256 LiveKit FrameCryptor.
+        /// - `false` → either side is on AES-128; when ``v4SFrameAes256Enabled``
+        ///             is `true` (this build IS AES-256) the video track is
+        ///             disabled fail-closed inside ``QAudionPeerConnection``
+        ///             rather than silently sending incompatible ciphertext.
+        ///
+        /// Derived from ``agreedTags`` — no wire or init change.
+        public var useSFrameAes256: Bool { agreedTags.contains(CallCapabilities.sframeAes256V1) }
     }
 
     /// Compute the agreed capability set from the local list and the peer
