@@ -185,7 +185,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// re-runs harmlessly (the engine guards on its own `isRunning`).
     private func activateAudioSessionForAnswer() async {
         let session = AVAudioSession.sharedInstance()
+        #if !targetEnvironment(simulator)
         let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        #else
+        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        #endif
         try? session.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         for attempt in 0..<4 {
             do {
@@ -226,7 +230,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
 
     public func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         let audioSession = AVAudioSession.sharedInstance()
+        #if !targetEnvironment(simulator)
         let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        #else
+        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        #endif
         try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
@@ -264,7 +272,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // AudioProcessingPipeline.configureForVoIP(): if CallKit installs
         // a poorer category (e.g. no .defaultToSpeaker) it silently
         // downgrades the routing the app just configured.
+        #if !targetEnvironment(simulator)
         let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        #else
+        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        #endif
         try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         try? audioSession.setActive(true)
         // W464 — the session is now active: this is the moment
