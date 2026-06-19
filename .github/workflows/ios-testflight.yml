@@ -60,7 +60,7 @@ jobs:
 
     env:
       BUNDLE_ID: com.qaudion.app
-      APP_APPLE_ID: 'REDACTED_APP_ID'
+      APP_APPLE_ID: '6762266299'
       XCODE_PROJECT: QAudionApp.xcodeproj
       # Pin to Xcode 26.x family — accept ANY 26.x minor version
       # available on the runner (the discovery step picks the latest
