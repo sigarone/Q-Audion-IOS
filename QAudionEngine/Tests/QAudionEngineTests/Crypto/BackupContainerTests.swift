@@ -8,7 +8,7 @@ final class BackupContainerTests: XCTestCase {
                       "Skip scrypt-heavy test in fast mode")
         let container = try BackupContainer.seal(plaintext: Data("hello".utf8), password: "test-pwd")
         XCTAssertEqual(Array(container.prefix(4)), [0x51, 0x41, 0x55, 0x44])
-        XCTAssertEqual(container[4], 1)  // version
+        XCTAssertEqual(container[4], 2)  // version (SECURITY M-21: seal() always emits v2)
     }
 
     func test_seal_thenOpen_roundTrip() throws {

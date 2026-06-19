@@ -71,18 +71,21 @@ final class ConversationStoreTests: XCTestCase {
     }
 
     func test_appendMessage_persists() {
+        store.upsertConversation(makeConv(id: convId))
         let msg = makeMsg(in: convId)
         store.appendMessage(msg)
         XCTAssertEqual(store.loadMessages(conversationId: convId), [msg])
     }
 
     func test_appendMessage_appendsToExistingList() {
+        store.upsertConversation(makeConv(id: convId))
         store.appendMessage(makeMsg(in: convId))
         store.appendMessage(makeMsg(in: convId))
         XCTAssertEqual(store.loadMessages(conversationId: convId).count, 2)
     }
 
     func test_updateMessageStatus_changesStatusOnly() {
+        store.upsertConversation(makeConv(id: convId))
         let mid = UUID()
         let msg = makeMsg(id: mid, in: convId, status: .sending)
         store.appendMessage(msg)
