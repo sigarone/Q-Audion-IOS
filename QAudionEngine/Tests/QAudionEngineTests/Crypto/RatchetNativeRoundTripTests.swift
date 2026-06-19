@@ -129,4 +129,60 @@ final class RatchetNativeRoundTripTests: XCTestCase {
         try XCTSkipUnless(RatchetNative.available)
         RatchetNative.free(0)  // must not crash
     }
+
+    // MARK: - Phase 4/5 — file encryption + media key
+
+    func testFileEncryptDecryptRoundTrip() throws {
+        try XCTSkipUnless(RatchetNative.available)
+        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
+        let fileId  = Data("invoice-2026-06-19.pdf".utf8)
+        let pt      = Data("sensitive content".utf8)
+        let ctTag   = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: pt, counter: 0)
+        XCTAssertNotNil(ctTag, "fileEncrypt returned nil")
+        XCTAssertEqual(ctTag?.count, pt.count + 16, "ctTag must be plaintext.count + 16 bytes")
+        let got = RatchetNative.fileDecrypt(handleA, fileId: fileId, ctTag: ctTag!, counter: 0)
+        XCTAssertNotNil(got, "fileDecrypt returned nil")
+        XCTAssertEqual(got, pt, "file round-trip plaintext mismatch")
+    }
+
+    func testFileEncryptTamperedTagFailsClosed() throws {
+        try XCTSkipUnless(RatchetNative.available)
+        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
+        let fileId = Data("doc.txt".utf8)
+        var ctTag  = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: Data("secret".utf8), counter: 0)!
+        ctTag[ctTag.count - 1] ^= 0xFF
+        XCTAssertNil(RatchetNative.fileDecrypt(handleA, fileId: fileId, ctTag: ctTag, counter: 0),
+                     "tampered ctTag must fail-closed (nil)")
+    }
+
+    func testFileEncryptCounterIsolation() throws {
+        try XCTSkipUnless(RatchetNative.available)
+        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
+        let fileId = Data("shared.bin".utf8)
+        let pt     = Data("payload".utf8)
+        let ct0    = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: pt, counter: 0)!
+        let ct1    = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: pt, counter: 1)!
+        XCTAssertNotEqual(ct0, ct1, "different counters must produce different ciphertexts")
+        XCTAssertNil(RatchetNative.fileDecrypt(handleA, fileId: fileId, ctTag: ct1, counter: 0),
+                     "counter mismatch must fail-closed")
+    }
+
+    func testMediaKeyIs32Bytes() throws {
+        try XCTSkipUnless(RatchetNative.available)
+        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
+        let key = RatchetNative.mediaKey(handleA, callId: Data("call-uuid-abc123".utf8))
+        XCTAssertNotNil(key, "mediaKey returned nil")
+        XCTAssertEqual(key?.count, 32, "mediaKey must be 32 bytes")
+    }
+
+    func testMediaKeyDeterministicBothPeers() throws {
+        try XCTSkipUnless(RatchetNative.available)
+        handleA  = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
+        handleB2 = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: false)
+        let callId = Data("call-determinism".utf8)
+        let keyA = RatchetNative.mediaKey(handleA,  callId: callId)
+        let keyB = RatchetNative.mediaKey(handleB2, callId: callId)
+        XCTAssertNotNil(keyA); XCTAssertNotNil(keyB)
+        XCTAssertEqual(keyA, keyB, "both peers must derive identical media key")
+    }
 }

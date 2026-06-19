@@ -9,6 +9,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # macOS swift test — pure-Swift + pure-C tests (WebRTC has no macOS slice so
+  # swift build fails; exit code is masked intentionally — this job verifies
+  # logic that doesn't require WebRTC or the native XCFramework).
   test:
     runs-on: macos-14
     timeout-minutes: 120
@@ -55,3 +58,70 @@ jobs:
         run: |
           cd QAudionEngine
           swift test 2>&1 | tail -100
+
+  # iOS Simulator job — runs xcodebuild test targeting arm64 simulator.
+  # This uses the ios-arm64-simulator slice of QaudionCryptoCore.xcframework
+  # (v0.1.2) so RatchetNative.available = true and RatchetNativeRoundTripTests
+  # run fully (not skipped). WebRTC's iOS-simulator slice is present, so this
+  # job does NOT share the macOS-slice-missing issue.
+  ios-simulator-tests:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache SPM (iOS Simulator)
+        id: cache-spm-ios
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            QAudionEngine/.build
+          key: ios-sim-spm-v1-${{ hashFiles('QAudionEngine/Package.swift') }}
+          restore-keys: ios-sim-spm-v1-
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve dependencies
+        if: steps.cache-spm-ios.outputs.cache-hit != 'true'
+        run: |
+          cd QAudionEngine
+          swift package resolve
+
+      - name: Select iPhone Simulator
+        id: sim
+        run: |
+          # Pick the newest available iPhone simulator — works on both macos-14 (Xcode 16.x)
+          # and macos-15 / macos-26 runners without hardcoding an OS version string.
+          SIM_ID=$(xcrun simctl list devices available -j \
+            | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+candidates = []
+for runtime, devs in d['devices'].items():
+    if 'iOS' not in runtime:
+        continue
+    for dev in devs:
+        if dev.get('isAvailable') and 'iPhone' in dev['name']:
+            candidates.append((runtime, dev['name'], dev['udid']))
+if not candidates:
+    sys.exit(1)
+# Sort newest runtime first (runtime strings are sortable)
+candidates.sort(key=lambda x: x[0], reverse=True)
+print(candidates[0][2])
+")
+          echo "SIM_ID=$SIM_ID" >> "$GITHUB_OUTPUT"
+          xcrun simctl list devices | grep "$SIM_ID" || true
+
+      - name: Run Tests (iOS Simulator)
+        run: |
+          cd QAudionEngine
+          set -o pipefail
+          xcodebuild test \
+            -scheme "QAudionEngine-Package" \
+            -destination "id=${{ steps.sim.outputs.SIM_ID }}" \
+            -derivedDataPath /tmp/dd-ios-sim \
+            -resultBundlePath /tmp/ios-sim-results.xcresult \
+            2>&1 | tee /tmp/xcodebuild-ios-sim.log
+        # Note: set -o pipefail ensures xcodebuild exit code propagates through tee.
