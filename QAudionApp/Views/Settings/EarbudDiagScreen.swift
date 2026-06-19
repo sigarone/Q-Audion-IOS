@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreBluetooth
+import CryptoKit
 
 // MARK: - EarbudDiagScreen
 //
@@ -37,6 +38,8 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     // MARK: - Pairing state (FE-5 earbud-exclusive pairing)
 
     @Published var pairingStatus: PairingStatus = .idle
+    /// Human-readable step label emitted by startAutoRelay(); nil when no relay is running.
+    @Published var relayStatus: String? = nil
 
     enum PairingStatus: Equatable {
         case idle
@@ -105,6 +108,8 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     // FE-5: GATT proxy for earbud-exclusive pairing operations (c5/c6/c7/c8).
     // Created when a peripheral connects; torn down on disconnect.
     private var gattProxy: (any EarbudPairingGattProxy)? = nil
+    private let fe5Exchange = Fe5ExchangeService()
+    private var relayTask: Task<Void, Never>? = nil
 
     // W511: client-side CRACEN fps tracking (mirrors Android LaunchedEffect pattern).
     @Published var cracenFps: Int? = nil
@@ -153,6 +158,9 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     }
 
     func disconnect() {
+        relayTask?.cancel()
+        relayTask = nil
+        relayStatus = nil
         if let p = connectedPeripheral {
             central?.cancelPeripheralConnection(p)
         }
@@ -209,12 +217,157 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
         )
 
         switch result {
-        case .success(let pairId):
+        case .success(let pairId, _):
             let hex = pairId.prefix(8).map { String(format: "%02x", $0) }.joined() + "…"
             pairingStatus = .success(pairId: hex)
         case .defer(let reason):
             pairingStatus = .failed(reason)
         }
+    }
+
+    // MARK: - FE-5 Auto-relay (two-phone cross-earbud pairing via server exchange)
+
+    /// Two-stage auto relay:
+    ///   1. Read connected earbud's pk_se/pk_pq/eid from c6 (pre-populated at boot).
+    ///   2. Publish to server; poll for peer's data.
+    ///   3. Role: if connEid > peerEid → RESPONDER phone (Stage 1 → publish ct_ee).
+    ///            if connEid < peerEid → INITIATOR phone (wait for ct_ee → Stage 2).
+    func startAutoRelay() {
+        relayTask?.cancel()
+        relayTask = Task { await self.runAutoRelay() }
+    }
+
+    private func runAutoRelay() async {
+        guard let proxy = gattProxy else {
+            relayStatus = "proxy GATT non disponibile"
+            return
+        }
+
+        relayStatus = "Lettura chiavi auricolare connesso…"
+        let pairRespRaw: Data
+        do {
+            pairRespRaw = try await proxy.readPairResp()
+        } catch {
+            relayStatus = "Errore lettura c6: \(error)"
+            return
+        }
+        guard let conn = EarbudPairGatt.parsePairResp(pairRespRaw) else {
+            relayStatus = "Parse PAIR_RESP fallito"
+            return
+        }
+        let connPkSe = conn.pkSe
+        let connMat  = conn.material  // pk_pq (pre-encap)
+        let connEid  = conn.eid
+
+        let connPkSeHex = connPkSe.map { String(format: "%02x", $0) }.joined()
+        let connMatB64  = connMat.base64EncodedString()
+
+        relayStatus = "Pubblicazione chiavi auricolare…"
+        guard await fe5Exchange.publish(pkSeHex: connPkSeHex, materialB64: connMatB64) else {
+            relayStatus = "Pubblicazione fallita"
+            return
+        }
+
+        relayStatus = "In attesa del peer (120s)…"
+        var peerData: Fe5ExchangeService.PeerData? = nil
+        for _ in 0..<60 {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if Task.isCancelled { return }
+            peerData = await fe5Exchange.fetchPeer(myPkSeHex: connPkSeHex)
+            if peerData != nil { break }
+        }
+        guard let peer = peerData,
+              let peerPkSe = Self.dataFromHex(peer.pkSe),
+              let peerMat  = Data(base64Encoded: peer.material) else {
+            relayStatus = "Timeout: nessun peer trovato"
+            return
+        }
+        let peerEid = Data(SHA256.hash(data: peerPkSe))
+
+        let relay = EarbudPairingRelay(gatt: proxy)
+        let weAreResponderPhone = Self.lexGreater(connEid, peerEid)
+
+        if weAreResponderPhone {
+            // Connected earbud is RESPONDER: send peer's pkPq → get ct_ee → publish
+            relayStatus = "Stage 1: Pairing GATT (RESPONDER)…"
+            pairingStatus = .inProgress
+            let result = await relay.pairWithPeer(
+                peerPkSe: connPkSe, peerMaterial: connMat, peerEid: connEid,
+                ownPkSe: peerPkSe, ownMaterial: peerMat, ownEid: peerEid,
+                isConfirmed: { _ in true }
+            )
+            switch result {
+            case .success(let pairId, let ctEe):
+                if let ct = ctEe {
+                    _ = await fe5Exchange.publishCt(
+                        pkSeHex: connPkSeHex, ctB64: ct.base64EncodedString())
+                    let hex = pairId.prefix(8).map { String(format: "%02x", $0) }.joined() + "…"
+                    pairingStatus = .success(pairId: hex)
+                    relayStatus = "Completato (RESPONDER) · ct_ee pubblicato"
+                } else {
+                    pairingStatus = .failed("ct_ee assente (Stage 1)")
+                    relayStatus = "Errore: ct_ee assente dopo Stage 1"
+                }
+            case .defer(let reason):
+                pairingStatus = .failed(reason)
+                relayStatus = "Pairing fallito: \(reason)"
+            }
+        } else {
+            // Connected earbud is INITIATOR: wait for peer's ct_ee, then Stage 2
+            relayStatus = "Attesa ct_ee dal RESPONDER (120s)…"
+            var ctBase64: String? = nil
+            for _ in 0..<60 {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if Task.isCancelled { return }
+                if let p = await fe5Exchange.fetchPeer(myPkSeHex: connPkSeHex),
+                   let ct = p.ct, !ct.isEmpty {
+                    ctBase64 = ct
+                    break
+                }
+            }
+            guard let ctB64 = ctBase64, let ctEe = Data(base64Encoded: ctB64) else {
+                relayStatus = "Timeout: ct_ee non ricevuto"
+                return
+            }
+            relayStatus = "Stage 2: Pairing GATT (INITIATOR)…"
+            pairingStatus = .inProgress
+            let result = await relay.pairWithPeer(
+                peerPkSe: connPkSe, peerMaterial: connMat, peerEid: connEid,
+                ownPkSe: peerPkSe, ownMaterial: ctEe, ownEid: peerEid,
+                isConfirmed: { _ in true }
+            )
+            switch result {
+            case .success(let pairId, _):
+                let hex = pairId.prefix(8).map { String(format: "%02x", $0) }.joined() + "…"
+                pairingStatus = .success(pairId: hex)
+                relayStatus = "Completato (INITIATOR)"
+            case .defer(let reason):
+                pairingStatus = .failed(reason)
+                relayStatus = "Pairing fallito: \(reason)"
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private static func lexGreater(_ a: Data, _ b: Data) -> Bool {
+        for i in 0..<min(a.count, b.count) {
+            if a[i] != b[i] { return Int(a[i]) > Int(b[i]) }
+        }
+        return a.count > b.count
+    }
+
+    private static func dataFromHex(_ hex: String) -> Data? {
+        guard hex.count % 2 == 0 else { return nil }
+        var result = Data(capacity: hex.count / 2)
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            let next = hex.index(index, offsetBy: 2)
+            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
+            result.append(byte)
+            index = next
+        }
+        return result
     }
 }
 
@@ -741,6 +894,7 @@ struct EarbudDiagScreen: View {
     private var pairingCard: some View {
         let isPairing = vm.pairingStatus == .inProgress
         return VStack(alignment: .leading, spacing: 12) {
+            // Manual single-earbud pairing (Phase-1 diagnostic)
             Button {
                 Task { await vm.pairWithConnectedEarbud() }
             } label: {
@@ -768,6 +922,52 @@ struct EarbudDiagScreen: View {
             }
             .buttonStyle(.plain)
             .disabled(isPairing)
+
+            // Auto-relay: two-phone cross-earbud pairing via server exchange (FE-5 Phase-2)
+            Button {
+                vm.startAutoRelay()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Auto-relay (cross-phone)")
+                        .qaudionStyle(type.labelLarge)
+                }
+                .foregroundStyle(scheme.onPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(extras.success.opacity(isPairing ? 0.4 : 0.75))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isPairing)
+
+            // Relay status banner (visible while auto-relay is running or just finished)
+            if let status = vm.relayStatus {
+                HStack(spacing: 8) {
+                    if vm.pairingStatus == .inProgress {
+                        ProgressView()
+                            .tint(extras.pqcAccent)
+                            .scaleEffect(0.75)
+                    } else {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(extras.pqcAccent)
+                    }
+                    Text(status)
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(extras.pqcAccent)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(extras.pqcAccent.opacity(0.08))
+                )
+            }
 
             pairingStatusRow
         }
