@@ -31,8 +31,21 @@ public final class ConversationStore {
 
     public func loadConversations() -> [Conversation] {
         do {
-            return try db.reader.read { db in
+            let convs = try db.reader.read { db in
                 try Conversation.order(Column("lastActivity").desc).fetchAll(db)
+            }
+            // Reverse the nil→"" coercion applied at write time so callers see
+            // nil (not Optional("")) for conversations with no preview yet.
+            return convs.map { conv in
+                guard conv.lastMessagePreview == "" else { return conv }
+                return Conversation(id: conv.id, peerUserId: conv.peerUserId,
+                                    peerDisplayName: conv.peerDisplayName,
+                                    lastMessagePreview: nil,
+                                    lastActivity: conv.lastActivity,
+                                    unreadCount: conv.unreadCount, pinned: conv.pinned,
+                                    kind: conv.kind, muted: conv.muted,
+                                    ephemeralTimerSeconds: conv.ephemeralTimerSeconds,
+                                    screenshotGrantedByPeer: conv.screenshotGrantedByPeer)
             }
         } catch {
             print("[ConversationStore] loadConversations failed: \(error)")
