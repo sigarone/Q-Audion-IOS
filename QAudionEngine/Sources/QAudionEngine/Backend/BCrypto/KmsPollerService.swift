@@ -56,10 +56,12 @@ public final class KmsPollerService {
 
     private let kmsClient: BCryptoKmsClient
     private let vault: SovereignKeyVault
+    private let earbudRelay: EarbudAckPopRelay?
 
-    public init(kmsClient: BCryptoKmsClient, vault: SovereignKeyVault) {
+    public init(kmsClient: BCryptoKmsClient, vault: SovereignKeyVault, earbudRelay: EarbudAckPopRelay? = nil) {
         self.kmsClient = kmsClient
         self.vault = vault
+        self.earbudRelay = earbudRelay
     }
 
     /// One-shot sweep. Returns aggregated stats so the caller can
@@ -220,6 +222,50 @@ public final class KmsPollerService {
         deviceKeys: DeviceKeys,
         stats: inout Stats
     ) async throws {
+        // hw_only / earbud_pair: relay blind to earbud — phone cannot decrypt K''-wrapped package.
+        // CL-5.4: earbud_pair key_type also routes here (same 1668B blind relay path as hw_only).
+        if entry.keyClass == "hw_only" || entry.keyType == "earbud_pair" {
+            guard let relay = earbudRelay else {
+                print("[KmsPollerService] hw_only key=\(entry.keyId.prefix(8))… no earbudRelay — skip")
+                return
+            }
+            let result = await relay.handle(key: entry)
+            switch result {
+            case .popVerified(let popB64):
+                // POST /kms/earbud-ack-pop — CL-5.4 / FLAG-2 frozen contract:
+                //   key_id  = entry.keyId (rowID) — server PK lookup
+                //   txn_id  = entry.txnId (keyIDStr) — PoP-INPUTS binding
+                guard let txnId = entry.txnId, let earbudId = entry.earbudId,
+                      let keyEpoch = entry.keyEpoch else {
+                    print("[KmsPollerService] hw_only/earbud_pair key missing txnId/earbudId/epoch for ack-pop — dropped")
+                    return
+                }
+                guard let popData = Data(base64Encoded: popB64) else {
+                    print("[KmsPollerService] ack-pop: bad base64 PoP — dropped")
+                    return
+                }
+                let epochStr = String(keyEpoch)
+                do {
+                    try await kmsClient.earbudAckPop(
+                        keyId: entry.keyId,
+                        earbudId: earbudId,
+                        epoch: epochStr,
+                        txnId: txnId,
+                        pop: popData
+                    )
+                    stats.acknowledged += 1
+                } catch {
+                    stats.ackFailed += 1
+                    print("[KmsPollerService] hw_only/earbud_pair ack-pop failed: \(error)")
+                }
+            case .success:
+                stats.acknowledged += 1
+            case .defer(let reason):
+                print("[KmsPollerService] hw_only key=\(entry.keyId.prefix(8))… deferred: \(reason)")
+            }
+            return
+        }
+
         // 1. Decode the encrypted_package bytes (server emits base64).
         guard let pkg = Data(base64Encoded: entry.encryptedPackage) else {
             throw KmsPollerError.malformedPackage

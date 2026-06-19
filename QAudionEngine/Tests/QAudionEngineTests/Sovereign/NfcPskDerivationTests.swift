@@ -66,21 +66,3 @@ final class NfcPskDerivationTests: XCTestCase {
         let _ = try NfcPskDerivation.derivePsk(myPriv: aPriv, peerPub: bPriv.publicKey)
     }
 }
-
-// MARK: - Private hex-decode helper (used by KAT tests)
-
-private extension Data {
-    init?(hexString: String) {
-        let hex = hexString.replacingOccurrences(of: " ", with: "")
-        guard hex.count % 2 == 0 else { return nil }
-        var data = Data(capacity: hex.count / 2)
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let nextIndex = hex.index(index, offsetBy: 2)
-            guard let byte = UInt8(hex[index..<nextIndex], radix: 16) else { return nil }
-            data.append(byte)
-            index = nextIndex
-        }
-        self = data
-    }
-}

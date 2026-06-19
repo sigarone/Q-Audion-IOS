@@ -96,11 +96,6 @@ final class AppState: ObservableObject {
     /// emission (W84). Set by `attachPersistentBackend`; cleared on
     /// logout / token refresh.
     internal var liveProvider: BCryptoBackendProvider?
-    /// Phase-0 — steady-cadence KMS sweep driver. Fills the gap where keys
-    /// were only fetched on a WS `kms_key_available` event or app launch;
-    /// a dropped WS notification (background, flaky link) now still gets
-    /// keys within the interval. Started after the initial sweep.
-    private let kmsPeriodicPoller = KmsPeriodicPoller(intervalSeconds: 300)
     /// W90: peer userId of the currently-open chat. ChatContainer.markRead
     /// sets this on .onAppear; ChatContainer deinits clear it. Used by
     /// `handleIncomingMessage` to suppress local-notification banners
@@ -424,11 +419,6 @@ final class AppState: ObservableObject {
             } catch {
                 print("[AppState] completeEarbudCounterparty failed: \(error.localizedDescription)")
             }
-            // Phase 6: deliver sealed PQ media key to earbud via EARBUDMKD relay.
-            // Flag-gated: V4_NATIVE_RATCHET_ENABLED = false until Pavel sign-off.
-            if let peerId = self.callContactId {
-                self.deliverEarbudMediaKeyPhase6(callId: callId, sessionKey: key, peerId: peerId)
-            }
         }
         svc.onFailed = { callId, reason in
             // Diagnostic only — mirrors a PQC handshake timeout: the call
@@ -443,6 +433,12 @@ final class AppState: ObservableObject {
         }
         return svc
     }()
+    /// CL-5.4 — earbud BLE GATT proxy for KMS hw_only/earbud_pair key relay.
+    /// Shared across KMS sweeps so a single CBCentralManager instance handles all
+    /// earbud connection state (avoids duplicate BLE stacks). Nil until first KMS
+    /// sweep that needs it (lazy instantiation via runKmsSweep).
+    lazy var earbudGattProxy: IOSEarbudGattProxy = IOSEarbudGattProxy()
+
     /// VPN service — manages WireGuard tunnel lifecycle via NetworkExtension.
     /// Bare `let` because `VpnService` is itself `ObservableObject`; HomeView
     /// passes it directly to `VpnToggleChip(@ObservedObject)` so the chip
@@ -2058,36 +2054,15 @@ final class AppState: ObservableObject {
                 await self.runKmsSweep()
             }
         }
-        ws.registerHandler(type: "kms_key_revoked") { [weak self] _, data in
-            let keyId = (data["key_id"] as? String) ?? ""
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                self.errorMessage = "Una chiave KMS è stata revocata."
-                guard !keyId.isEmpty else {
-                    print("[AppState] kms_key_revoked without key_id — nothing to delete")
-                    return
-                }
-                do {
-                    try SovereignKeyVault().deletePsk(name: keyId)
-                    print("[AppState] kms_key_revoked: deleted vault PSK key_id=\(keyId.prefix(8))…")
-                } catch {
-                    print("[AppState] kms_key_revoked: vault delete failed for key_id=\(keyId.prefix(8))…: \(error)")
-                }
+        ws.registerHandler(type: "kms_key_revoked") { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.errorMessage = "Una chiave KMS è stata revocata."
             }
         }
         // Initial sweep right after WS auth — covers any keys the
         // admin provisioned while the app was offline.
         Task { @MainActor [weak self] in
             await self?.runKmsSweep()
-        }
-
-        // Phase-0 — steady-cadence KMS poll so a dropped WS
-        // kms_key_available still gets keys within the interval.
-        Task { @MainActor [weak self] in
-            guard let self = self else { return }
-            await self.kmsPeriodicPoller.start { [weak self] in
-                await self?.runKmsSweep()
-            }
         }
 
         // W347: route call_offer / call_answer / call_ice through the
@@ -2972,44 +2947,14 @@ final class AppState: ObservableObject {
         let manager = DeviceKeyManager(vault: vault, kmsClient: provider.kmsClient)
         do {
             let keys = try await manager.ensureProvisioned()
-            let poller = KmsPollerService(kmsClient: provider.kmsClient, vault: vault)
-            // KMS Rotation v2 (§3.2/§3.4/§3.5): build the v2 identity
-            // context. user/device ids are the 16-byte UUIDs persisted at
-            // login; serverId is the PROVISIONED CONSTANT
-            // SHA-256("qa-kms-server-id-v1|" || KMS.ServerIdentity) (§3.0)
-            // — NOT cert-pin-derived. When the context is available, v2
-            // phone-held keys decrypt with the AAD-bound path and commit
-            // staged→active on a verified PoP; legacy v1 keys still use the
-            // bare /acknowledge path.
-            let v2ctx: KmsPollerService.V2Context? = {
-                guard let uidStr = UserDefaults.standard.string(forKey: "com.qaudion.auth.user_id"),
-                      let didStr = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
-                      let uid = UUID(uuidString: uidStr), let did = UUID(uuidString: didStr) else {
-                    return nil
-                }
-                return KmsPollerService.V2Context(
-                    userId: uid, deviceId: did, serverId: CryptoConstants.kmsServerId())
-            }()
-            let stats = try await poller.pollOnce(deviceKeys: keys, v2Context: v2ctx)
+            // CL-5.4 — wire the earbud relay so hw_only/earbud_pair keys are
+            // forwarded to the SE via GATT rather than attempting SW decryption.
+            let relay = EarbudAckPopRelay(gatt: earbudGattProxy)
+            let poller = KmsPollerService(kmsClient: provider.kmsClient, vault: vault, earbudRelay: relay)
+            let stats = try await poller.pollOnce(deviceKeys: keys)
             if stats.processed > 0 {
                 print("[AppState] KMS sweep: processed=\(stats.processed) stored=\(stats.stored) acked=\(stats.acknowledged) decryptFailed=\(stats.decryptFailed) ackFailed=\(stats.ackFailed)")
             }
-            // Sovereign earbud (hw_only) keys are v2-routed to the GATT relay
-            // (EarbudKeyImportService), which the phone CANNOT decrypt — it
-            // relays the sealed package to the earbud SE and forwards the SE
-            // PoP. RESOLVED: firmware 3677d2a exposes the qa-kms-pop-v1 SE PoP
-            // over GATT (write 82-B PoP-INPUTS to KEY_IMPORT 0xc3, then read
-            // the 32-B PoP from ATTEST_POP 0xc1) and CoreBluetoothSovereignRelay
-            // is the concrete client. The relay needs a CONNECTED/bonded earbud
-            // (chars are ENCRYPT-permissioned + the SE must be reachable). The
-            // background sweep has no peripheral handle, so it can only run the
-            // relay opportunistically when a last-known earbud identifier is
-            // persisted (written by the EarbudDiag connect flow). Otherwise it
-            // logs the deferral and the relay runs from the connected-earbud
-            // path (relaySovereignKeysToEarbud(identifier:)).
-            await sweepSovereignEarbudKeys(
-                kmsClient: provider.kmsClient,
-                earbudIdentifier: Self.lastKnownEarbudIdentifier())
             // 2026-05-06 session-renewal Phase 2 — wire the Ed25519
             // device-bound silent re-auth fallback into the REST
             // client. From now on a 401 from /auth/refresh (or a
@@ -3038,99 +2983,6 @@ final class AppState: ObservableObject {
         } catch {
             print("[AppState] KMS sweep failed: \(error)")
         }
-    }
-
-    // MARK: - KMS Rotation v2 — sovereign earbud relay (§5 iOS, Phase-2)
-
-    /// UserDefaults key for the last-connected QAUDION earbud's CoreBluetooth
-    /// peripheral identifier (per-host stable UUID, NOT the BLE MAC — iOS hides
-    /// the MAC). Written by the EarbudDiag connect flow so the background KMS
-    /// sweep can opportunistically relay sovereign keys without a UI handle.
-    static let lastEarbudIdentifierKey = "com.qaudion.earbud.last_identifier"
-
-    /// Persist the connected earbud's CB identifier so the next KMS sweep can
-    /// reach it. Call this from the EarbudDiag connect path (didConnect) with
-    /// `peripheral.identifier`.
-    static func rememberEarbudIdentifier(_ id: UUID) {
-        UserDefaults.standard.set(id.uuidString, forKey: lastEarbudIdentifierKey)
-    }
-
-    static func lastKnownEarbudIdentifier() -> UUID? {
-        guard let s = UserDefaults.standard.string(forKey: lastEarbudIdentifierKey) else {
-            return nil
-        }
-        return UUID(uuidString: s)
-    }
-
-    /// Public entry for the connected-earbud path: when the user has the earbud
-    /// connected (EarbudDiag), relay any pending sovereign keys to it. `identifier`
-    /// is the connected peripheral's `identifier`.
-    @MainActor
-    public func relaySovereignKeysToEarbud(identifier: UUID) async {
-        guard let provider = liveProvider else { return }
-        await sweepSovereignEarbudKeys(
-            kmsClient: provider.kmsClient, earbudIdentifier: identifier)
-    }
-
-    /// Fetch pending keys, filter the v2 sovereign (earbud) entries, and relay
-    /// each to the earbud SE over GATT (write PoP-INPUTS → package fragments →
-    /// read status → read SE PoP → /kms/ack-pop). The phone NEVER decrypts a
-    /// sovereign package. No-op (with a log) when there are no sovereign entries
-    /// or no reachable earbud.
-    @MainActor
-    private func sweepSovereignEarbudKeys(
-        kmsClient: BCryptoKmsClient, earbudIdentifier: UUID?
-    ) async {
-        let pending: [PendingKey]
-        do {
-            pending = try await kmsClient.getPendingKeys()
-        } catch {
-            print("[AppState] sovereign sweep: getPendingKeys failed: \(error)")
-            return
-        }
-        let sovereign = pending.filter { KmsPollerService.route(for: $0) == .v2Sovereign }
-        guard !sovereign.isEmpty else { return }
-        guard let earbudIdentifier = earbudIdentifier else {
-            print("[AppState] sovereign sweep: \(sovereign.count) pending earbud key(s) but no connected/known earbud — deferred to EarbudDiag connect")
-            return
-        }
-        // Concrete CoreBluetooth client against the f2c0aaaa crypto service.
-        let relay = CoreBluetoothSovereignRelay(identifier: earbudIdentifier)
-        do {
-            try await relay.prepare()
-        } catch {
-            print("[AppState] sovereign sweep: earbud GATT prepare failed: \(error)")
-            return
-        }
-        // serverId defaults to CryptoConstants.kmsServerId() — the SAME
-        // provisioned constant used for the phone-held PoP (§3.0).
-        let importer = EarbudKeyImportService(relay: relay, kmsClient: kmsClient)
-        // ATT MTU-bounded fragment payload (minus the 2-byte frag-offset header,
-        // already accounted for by maxWritePayload).
-        let mtuPayload = relay.maxWritePayload
-        for entry in sovereign {
-            // Task D reconciliation: the ack-pop `device_id` is the ROW-LOOKUP
-            // key — the server matches it by STRING EQUALITY against the row it
-            // persisted (handleKMSAckPoP: row.DeviceID == req.DeviceID). This is
-            // SEPARATE from the device_id = earbud_id[:16] (G2) the PoP BYTES are
-            // bound to internally on firmware (sovkey_import.c) + server
-            // (precomputed ExpectedPoP). So send the server-authoritative
-            // entry.deviceId verbatim, falling back to entry.earbudId only when
-            // the server omits device_id (older row).
-            let ackDeviceId = entry.deviceId ?? entry.earbudId
-            guard let ackDeviceId = ackDeviceId, !ackDeviceId.isEmpty else {
-                print("[AppState] sovereign relay: key=\(entry.keyId.prefix(8))… missing device_id/earbud_id — skip")
-                continue
-            }
-            do {
-                let resp = try await importer.relay(
-                    entry: entry, earbudDeviceId: ackDeviceId, mtuPayload: mtuPayload)
-                print("[AppState] sovereign relay: key=\(entry.keyId.prefix(8))… verified=\(resp.verified) commit=\(resp.commit)")
-            } catch {
-                print("[AppState] sovereign relay: key=\(entry.keyId.prefix(8))… failed: \(error)")
-            }
-        }
-        relay.close()
     }
 
     ///   - KEY_EXCHANGE_OFFER  → derive PSK + reply with ACCEPT
@@ -3257,11 +3109,20 @@ final class AppState: ObservableObject {
         }
         Task {
             do {
+                let vault = SovereignKeyVault()
+                let eligiblePsks: [String: Data] = Dictionary(
+                    uniqueKeysWithValues: vault.listPskNames().compactMap { name -> (String, Data)? in
+                        guard let fp = vault.getFingerprint(name: name),
+                              let raw = (try? vault.loadPsk(name: name)) ?? nil,
+                              !raw.isEmpty else { return nil }
+                        return (fp, raw)
+                    }
+                )
                 try await integration.onAndroidBundleReceived(
                     bundle: parsed.bundle,
                     callId: parsed.callId,
                     callerId: senderId,
-                    eligiblePsks: [:],
+                    eligiblePsks: eligiblePsks,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
                 print("[AppState] routeInboundAndroidOffer failed: \(error)")
@@ -3291,6 +3152,15 @@ final class AppState: ObservableObject {
         }
         Task {
             do {
+                let vault = SovereignKeyVault()
+                let eligiblePsks: [String: Data] = Dictionary(
+                    uniqueKeysWithValues: vault.listPskNames().compactMap { name -> (String, Data)? in
+                        guard let fp = vault.getFingerprint(name: name),
+                              let raw = (try? vault.loadPsk(name: name)) ?? nil,
+                              !raw.isEmpty else { return nil }
+                        return (fp, raw)
+                    }
+                )
                 try await integration.onAndroidBundleReceived(
                     bundle: parsed.bundle,
                     callId: parsed.callId,
@@ -3299,7 +3169,7 @@ final class AppState: ObservableObject {
                     // previously omitted (defaulted to ""), which left the .accept
                     // branch with no peer to verify against.
                     callerId: senderId,
-                    eligiblePsks: [:],
+                    eligiblePsks: eligiblePsks,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
                 print("[AppState] routeInboundAndroidAccept failed: \(error)")
@@ -3336,43 +3206,17 @@ final class AppState: ObservableObject {
                 return
             }
             earbudCounterparty.handleInbound(callId: callId, pdu: pdu)
-        case .earbudMkd(let callId, _):
-            // Phase 6: iOS is always the SW counterparty (sender), never the earbud side.
-            // EARBUDMKD arriving here means a peer sent it to us — silently drop.
-            print("[AppState] EARBUDMKD dropped — iOS has no earbud BLE transport (callId=\(callId.prefix(8))…)")
-        }
-    }
-
-    /// Phase 6: derive PQ media key via HKDF-SHA256 and deliver sealed
-    /// 60-byte package to the earbud-side peer via EARBUDMKD WS relay.
-    /// Flag-gated: `MessageRatchet.v4NativeRatchetEnabled = false` until
-    /// cross-platform negotiation + Pavel crypto audit sign-off.
-    /// IKM = sessionKey (BLE K_counter); salt = none (zeroed HashLen);
-    /// info = "qa/v4/media/<callId>". Wire format: nonce[12]||ct[32]||tag[16].
-    @MainActor
-    private func deliverEarbudMediaKeyPhase6(callId: String, sessionKey: Data, peerId: String) {
-        guard MessageRatchet.v4NativeRatchetEnabled, sessionKey.count == 32 else { return }
-        guard let api = liveProvider?.callingApi else { return }
-        Task {
-            do {
-                let infoStr = "qa/v4/media/" + callId
-                let info = Data(infoStr.utf8)
-                let ikm = SymmetricKey(data: sessionKey)
-                let derived = HKDF<SHA256>.deriveKey(inputKeyMaterial: ikm, info: info, outputByteCount: 32)
-                let mediaKey = derived.withUnsafeBytes { Data($0) }
-                let aad = Data("qa/v4/mkd/v1".utf8)
-                let wrapKey = SymmetricKey(data: sessionKey)
-                let box = try AES.GCM.seal(mediaKey, using: wrapKey, authenticating: aad)
-                var pkg = Data()
-                pkg.append(contentsOf: box.nonce)
-                pkg.append(box.ciphertext)
-                pkg.append(box.tag)
-                guard pkg.count == 60 else { return }
-                let wire = CallPiggyBack.serializeEarbudMkd(callId: callId, pkg: pkg)
-                try await api.sendOpaqueMessageString(recipientId: peerId, payload: wire)
-            } catch {
-                // Fail-silent: Phase 6 is best-effort; call audio continues without it.
+        case .fpSet(let callId, let fpAdv):
+            // Phase B — remote fp_adv for neg_digest computation.
+            // Forward to whichever integration is active (caller or responder).
+            // Sender guard mirrors EARBUDPDU: must be the current call peer.
+            guard callContactId == senderId else {
+                print("[AppState] FPSET dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
             }
+            let integration = callService.callIntegration ?? responderCallIntegration
+            integration?.handleInboundFpSet(callId: callId, fpAdv: fpAdv)
+            print("[AppState] FPSET received callId=\(callId.prefix(8))… from=\(senderId.prefix(8))…")
         }
     }
 
@@ -3574,6 +3418,10 @@ final class AppState: ObservableObject {
         // Phase-10b: wire the handshake-signing closures (sign + verify + TOFU
         // pin) for this responder integration. peerContactId = the caller.
         wireHandshakeSigning(on: integration)
+        // Phase B: wire the earbud GATT proxy so onAndroidBundleReceived
+        // can perform fp_adv GATT operations (c8 write/read) during the
+        // V4 KDF wiring. Nil when no earbud is connected → keyClass=0 fallback.
+        integration.earbudPairingGattProxy = earbudGattProxy.isConnected ? earbudGattProxy : nil
         responderCallIntegration = integration
         return integration
     }
@@ -4141,6 +3989,8 @@ final class AppState: ObservableObject {
                 // Phase-10b: wire the handshake-signing closures (sign OFFER +
                 // verify ACCEPT + TOFU pin) on the caller-side integration.
                 wireHandshakeSigning(on: integration)
+                // Phase B: wire the earbud GATT proxy for V4 KDF fp_adv operations.
+                integration.earbudPairingGattProxy = earbudGattProxy.isConnected ? earbudGattProxy : nil
                 integration.sendCallProcessing = { callId, callerId in
                     // Forward via the calling API (which routes through WS).
                     Task {
@@ -4763,10 +4613,16 @@ final class AppState: ObservableObject {
         //    to earpiece even after the user explicitly tapped "speaker".
         let session = AVAudioSession.sharedInstance()
         do {
+            #if !targetEnvironment(simulator)
             var opts: AVAudioSession.CategoryOptions = [
                 .allowBluetoothHFP,
                 .interruptSpokenAudioAndMixWithOthers
             ]
+            #else
+            var opts: AVAudioSession.CategoryOptions = [
+                .interruptSpokenAudioAndMixWithOthers
+            ]
+            #endif
             if enabled { opts.insert(.defaultToSpeaker) }
             try session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
             try session.overrideOutputAudioPort(enabled ? .speaker : .none)

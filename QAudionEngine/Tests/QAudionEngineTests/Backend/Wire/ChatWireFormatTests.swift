@@ -5,34 +5,30 @@ import XCTest
 
 final class MessageSendEnvelopeTests: XCTestCase {
 
-    private let messageId = UUID(uuidString: "12345678-1234-1234-1234-123456789abc")!
+    private let clientMsgId = "12345678-1234-1234-1234-123456789abc"
     private let recipientId = "user-aabbccdd-1122-3344-5566-778899aabbcc"
-    private let ciphertext = Data((0..<32).map { UInt8($0 & 0xFF) })
-    private let clientTs: Int64 = 1_745_000_000_000
+    private let encryptedPayload = Data((0..<32).map { UInt8($0 & 0xFF) })
 
     func test_encode_producesCanonicalJson() throws {
         let env = MessageSendEnvelope(
-            messageId: messageId,
             recipientId: recipientId,
-            ciphertext: ciphertext,
-            clientTs: clientTs
+            encryptedPayload: encryptedPayload,
+            clientMsgId: clientMsgId
         )
         let json = try env.encodeAsJsonString()
         XCTAssertTrue(json.contains("\"type\":\"msg_send\""))
-        XCTAssertTrue(json.contains("\"message_id\":\"12345678-1234-1234-1234-123456789abc\""))
+        XCTAssertTrue(json.contains("\"client_msg_id\":\"12345678-1234-1234-1234-123456789abc\""))
         XCTAssertTrue(json.contains("\"recipient_id\":\"\(recipientId)\""))
-        XCTAssertTrue(json.contains("\"ciphertext\":\"\(ciphertext.base64EncodedString())\""))
-        XCTAssertTrue(json.contains("\"client_ts\":1745000000000"))
-        // No top-level id field (lite-server contract)
+        XCTAssertTrue(json.contains("\"encrypted_payload\":\"\(encryptedPayload.base64EncodedString())\""))
+        XCTAssertTrue(json.contains("\"expires_in_sec\":0"))
         XCTAssertFalse(json.contains("\"id\""))
     }
 
     func test_decode_roundTrip() throws {
         let original = MessageSendEnvelope(
-            messageId: messageId,
             recipientId: recipientId,
-            ciphertext: ciphertext,
-            clientTs: clientTs
+            encryptedPayload: encryptedPayload,
+            clientMsgId: clientMsgId
         )
         let json = try original.encodeAsJsonString()
         let decoded = try MessageSendEnvelope.decode(jsonString: json)
@@ -41,7 +37,7 @@ final class MessageSendEnvelopeTests: XCTestCase {
 
     func test_decode_rejectsWrongType() {
         let badJson = """
-        {"type":"msg_delivered","data":{"message_id":"12345678-1234-1234-1234-123456789abc","recipient_id":"x","ciphertext":"AAAA","client_ts":0}}
+        {"type":"msg_delivered","data":{"client_msg_id":"12345678-1234-1234-1234-123456789abc","recipient_id":"x","encrypted_payload":"AAAA"}}
         """
         XCTAssertThrowsError(try MessageSendEnvelope.decode(jsonString: badJson)) { err in
             guard case MessageSendEnvelope.Error.wrongType = err else {
@@ -50,21 +46,21 @@ final class MessageSendEnvelopeTests: XCTestCase {
         }
     }
 
-    func test_decode_rejectsMissingField_messageId() {
+    func test_decode_rejectsMissingField_clientMsgId() {
         let badJson = """
-        {"type":"msg_send","data":{"recipient_id":"x","ciphertext":"AAAA","client_ts":0}}
+        {"type":"msg_send","data":{"recipient_id":"x","encrypted_payload":"AAAA"}}
         """
         XCTAssertThrowsError(try MessageSendEnvelope.decode(jsonString: badJson)) { err in
             guard case MessageSendEnvelope.Error.missingField(let f) = err else {
                 XCTFail("Expected .missingField, got \(err)"); return
             }
-            XCTAssertEqual(f, "message_id")
+            XCTAssertEqual(f, "client_msg_id")
         }
     }
 
     func test_decode_rejectsInvalidBase64() {
         let badJson = """
-        {"type":"msg_send","data":{"message_id":"12345678-1234-1234-1234-123456789abc","recipient_id":"x","ciphertext":"not_base64_!@#","client_ts":0}}
+        {"type":"msg_send","data":{"client_msg_id":"12345678-1234-1234-1234-123456789abc","recipient_id":"x","encrypted_payload":"not_base64_!@#"}}
         """
         XCTAssertThrowsError(try MessageSendEnvelope.decode(jsonString: badJson)) { err in
             guard case MessageSendEnvelope.Error.invalidBase64 = err else {
@@ -75,12 +71,12 @@ final class MessageSendEnvelopeTests: XCTestCase {
 
     func test_decode_toleratesExtraFields() throws {
         let json = """
-        {"type":"msg_send","data":{"message_id":"12345678-1234-1234-1234-123456789abc","recipient_id":"\(recipientId)","ciphertext":"\(ciphertext.base64EncodedString())","client_ts":1745000000000,"server_ts":1745000000500,"unknown_future":true}}
+        {"type":"msg_send","data":{"client_msg_id":"\(clientMsgId)","recipient_id":"\(recipientId)","encrypted_payload":"\(encryptedPayload.base64EncodedString())","expires_in_sec":0,"unknown_future":true}}
         """
         let decoded = try MessageSendEnvelope.decode(jsonString: json)
-        XCTAssertEqual(decoded.messageId, messageId)
+        XCTAssertEqual(decoded.clientMsgId, clientMsgId)
         XCTAssertEqual(decoded.recipientId, recipientId)
-        XCTAssertEqual(decoded.clientTs, clientTs)
+        XCTAssertEqual(decoded.expiresInSec, 0)
     }
 }
 

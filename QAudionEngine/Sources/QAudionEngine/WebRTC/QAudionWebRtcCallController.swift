@@ -786,6 +786,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 // `pqcSessionKey` didSet will call us again once it does.
                 return nil
             }
+
+            // Phase 2 — AES-256 kill-switch gate (v4SFrameAes256Enabled).
+            // When this build uses AES-256 LiveKit FrameCryptor but the peer
+            // did NOT advertise sframe-aes256-v1, the native FrameCryptor
+            // open() will fail on every inbound frame (key-size mismatch).
+            // Disable video fail-closed rather than silently decrypt-failing.
+            if CallCapabilities.v4SFrameAes256Enabled && !negotiated.useSFrameAes256 {
+                print("[WebRtcCallController] AES-256 FAIL-CLOSED — peer does not advertise sframe-aes256-v1 (agreed=\(negotiated.agreedTags)); video DISABLED")
+                videoSealer = .legacy  // no video E2EE, caller must disable the track
+                return videoSealer
+            }
+
             // The `sframe-v1` capability tag is a misnomer kept for
             // backwards compatibility with peers (Desktop / Android emit
             // it from `LOCAL_CAPABILITIES` / `local`). The actual wire
@@ -799,8 +811,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // `ensureVideoSealerInternal` already swaps to K_video when
             // `useVideoKey` is true; this flag just surfaces that fact.
             videoKeyIsPhoneLevel = negotiated.useVideoKey
+            let aes256Active = CallCapabilities.v4SFrameAes256Enabled && negotiated.useSFrameAes256
             let keyKind = negotiated.useVideoKey ? "K_video (phone-level)" : "session-key (legacy)"
-            print("[WebRtcCallController] video pipeline → LiveKit FrameCryptor key=\(keyKind) (peerCaps=\(negotiated.agreedTags))")
+            print("[WebRtcCallController] video pipeline → LiveKit FrameCryptor key=\(keyKind) aes256=\(aes256Active) (peerCaps=\(negotiated.agreedTags))")
             return videoSealer
         }
 

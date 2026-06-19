@@ -9,7 +9,7 @@ final class FastSetupQrCodeTests: XCTestCase {
             userId: "user-aabbccdd-1122-3344-5566-778899aabbcc",
             dialExtension: "4242",
             initialPsk: Data((0..<32).map { UInt8($0) }),
-            expiresAtUnixMs: 1_745_000_000_000,
+            expiresAtUnixMs: 9_999_999_999_000,
             serverUrl: URL(string: "https://qaudion.example.com")!
         )
         let url = try FastSetupQrCode.encode(payload: payload)

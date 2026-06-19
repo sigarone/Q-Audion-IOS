@@ -254,11 +254,13 @@ public enum CallPiggyBack: Equatable {
 
     /// `<callId>|EARBUDMKD:<base64>` — Phase 6 sealed PQ media key
     /// package (exactly 60 bytes: nonce[12] || AES-256-GCM[48]).
-    /// Sent by the SW counterparty (iOS) to the earbud-side phone
-    /// (Android), which writes it to GATT characteristic 0xc4.
-    /// iOS never receives this as the earbud side — silently dropped
-    /// in `routeInboundCallPiggyBack` if it ever arrives.
     case earbudMkd(callId: String, pkg: Data)
+
+    /// `<callId>|FPSET:<base64(fp_adv[32])>` — Phase B fp_adv exchange.
+    /// Both sides send their local fp_adv (from the earbud GATT c8 READ)
+    /// so each can compute neg_digest = SHA-256(fpSetInit || fpSetResp).
+    /// If no earbud: fp_adv = 32 zero bytes (keyClass falls back to 0).
+    case fpSet(callId: String, fpAdv: Data)
 
     /// Parse the literal `opaque_message.data` UTF-8 string.
     ///
@@ -298,10 +300,14 @@ public enum CallPiggyBack: Equatable {
             return .earbudPdu(callId: callId, pdu: bytes)
         }
         // EARBUDMKD:<base64> — Phase 6 sealed PQ media key package (60 bytes).
-        // Wrong size dropped fail-closed: firmware will simply not receive the key.
         if let v = stripPrefix(payload, "EARBUDMKD:") {
             guard let bytes = Data(base64Encoded: v), bytes.count == 60 else { return nil }
             return .earbudMkd(callId: callId, pkg: bytes)
+        }
+        // FPSET:<base64(fp_adv[32])> — Phase B fp_adv exchange.
+        if let v = stripPrefix(payload, "FPSET:") {
+            guard let bytes = Data(base64Encoded: v), bytes.count == 32 else { return nil }
+            return .fpSet(callId: callId, fpAdv: bytes)
         }
         return nil
     }
@@ -325,10 +331,12 @@ public enum CallPiggyBack: Equatable {
         return "\(callId)|EARBUDPDU:\(pdu.base64EncodedString())"
     }
 
-    /// Build a wire string for a Phase 6 PQ media key package — the inverse
-    /// of the `.earbudMkd` parse branch. Mirrors Android
-    /// `WsCallSignaller.sendEarbudMediaKeyActive` framing.
     public static func serializeEarbudMkd(callId: String, pkg: Data) -> String {
         return "\(callId)|EARBUDMKD:\(pkg.base64EncodedString())"
+    }
+
+    public static func serializeFpSet(callId: String, fpAdv: Data) -> String {
+        precondition(fpAdv.count == 32, "fpAdv must be 32 bytes")
+        return "\(callId)|FPSET:\(fpAdv.base64EncodedString())"
     }
 }

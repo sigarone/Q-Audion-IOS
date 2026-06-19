@@ -204,4 +204,32 @@ public final class SasVerificationStore {
         ]
         SecItemDelete(query as CFDictionary)
     }
+
+    // MARK: - Earbud-pair SAS (CL-5.3)
+
+    /// Record that the user confirmed the earbud-pair SAS ceremony for `pairId`.
+    /// Stored in the Keychain under the `earbud.pair.` namespace, separate from
+    /// per-user-call SAS records, so a relay-MITM who swaps ct_ee before the user
+    /// verifies cannot pre-populate a confirmation.
+    public func recordEarbudPairConfirmed(pairId: Data) {
+        let key = "earbud.pair." + pairId.hexString
+        Self.keychainSet(account: prefix + key, value: "confirmed")
+    }
+
+    /// Returns true if the user previously confirmed the earbud-pair SAS ceremony
+    /// for `pairId`. Called by `EarbudPairingRelay` (via an `isConfirmed` closure)
+    /// before sending PAIR_FIN, ensuring the ct_ee binding was out-of-band verified.
+    public func isEarbudPairConfirmed(pairId: Data) -> Bool {
+        let key = "earbud.pair." + pairId.hexString
+        return Self.keychainGet(account: prefix + key) == "confirmed"
+    }
+}
+
+// MARK: - Data hex helper (CL-5.3)
+
+extension Data {
+    /// Lower-case hex encoding, e.g. for Keychain account keys.
+    /// Named `hexString` to avoid collision with the private `hexEncodedString()`
+    /// extensions used in test files.
+    var hexString: String { map { String(format: "%02x", $0) }.joined() }
 }

@@ -187,9 +187,6 @@ final class BCryptoOtaModelClientTests: XCTestCase {
     }
 }
 
-// Manifest needs Encodable for fixture JSON generation (Decodable already there).
-extension BCryptoOtaModelClient.Manifest: Encodable {}
-
 // Stub URLProtocol
 private final class StubProtocol: URLProtocol {
     static var handler: ((URLRequest) -> (HTTPURLResponse, Data?))?

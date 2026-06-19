@@ -16,7 +16,7 @@ import CryptoKit
 /// 3. Only then expose to caller.
 public final class BCryptoOtaModelClient {
 
-    public struct Manifest: Equatable, Decodable {
+    public struct Manifest: Equatable, Codable {
         public let modelName: String
         public let version: String
         public let sha256: String

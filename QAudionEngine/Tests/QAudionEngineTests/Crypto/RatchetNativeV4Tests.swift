@@ -97,4 +97,20 @@ final class RatchetNativeV4Tests: XCTestCase {
         XCTAssertEqual(RatchetNative.initSession(root: short, firstSsXwing: ssXwing, transcriptHash: th, isA: true), 0)
         XCTAssertFalse(RatchetNative.dhRatchet(1, ssXwing: short, transcriptHash: th))
     }
+
+    // MARK: - Phase 4/5 fail-closed wiring (stub OR unavailable core)
+
+    func testPhase45FailClosedWhenUnavailable() {
+        guard !RatchetNative.available else { return }
+        let fakeHandle: UInt = 42
+        let fileId = Data("f".utf8)
+        let pt     = Data("p".utf8)
+        XCTAssertNil(RatchetNative.fileEncrypt(fakeHandle, fileId: fileId, plaintext: pt, counter: 0))
+        XCTAssertNil(RatchetNative.fileDecrypt(fakeHandle, fileId: fileId, ctTag: Data([0x00]), counter: 0))
+        XCTAssertNil(RatchetNative.mediaKey(fakeHandle, callId: Data("c".utf8)))
+        // handle 0 must also fail-close
+        XCTAssertNil(RatchetNative.fileEncrypt(0, fileId: fileId, plaintext: pt, counter: 0))
+        XCTAssertNil(RatchetNative.fileDecrypt(0, fileId: fileId, ctTag: pt, counter: 0))
+        XCTAssertNil(RatchetNative.mediaKey(0, callId: Data("c".utf8)))
+    }
 }

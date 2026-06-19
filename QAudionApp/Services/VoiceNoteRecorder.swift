@@ -55,11 +55,19 @@ final class VoiceNoteRecorder: ObservableObject {
         // immediately preview before send. `.allowBluetoothHFP` lets the
         // user record via a Bluetooth headset.
         do {
+            #if !targetEnvironment(simulator)
             try session.setCategory(
                 .playAndRecord,
                 mode: .default,
                 options: [.allowBluetoothHFP, .defaultToSpeaker]
             )
+            #else
+            try session.setCategory(
+                .playAndRecord,
+                mode: .default,
+                options: [.defaultToSpeaker]
+            )
+            #endif
             try session.setActive(true, options: [])
         } catch {
             throw RecorderError.sessionFailure(error.localizedDescription)

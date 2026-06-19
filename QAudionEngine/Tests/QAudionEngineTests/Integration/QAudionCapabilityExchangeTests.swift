@@ -11,7 +11,7 @@ final class QAudionCapabilityExchangeTests: XCTestCase {
         guard let message = QAudionCapabilityExchange.parse(data) else {
             XCTFail("Failed to parse offer"); return
         }
-        if case .offer(let parsedPk, let parsedFps) = message {
+        if case .offer(let parsedPk, _, let parsedFps) = message {
             XCTAssertEqual(parsedPk, pk)
             XCTAssertEqual(parsedFps, fps)
         } else { XCTFail("Expected offer") }

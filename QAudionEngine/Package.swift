@@ -54,40 +54,16 @@ let package = Package(
     ],
     targets: [
         // ─────────────────────────────────────────────────────────────────────────────────────
-        //  PHASE-3 INTEGRATION — v4 PQ "continuum" ratchet C ABI (default-OFF; see RatchetNative)
+        //  PHASE-1 INTEGRATION — v4 PQ ratchet C ABI (default-OFF; see RatchetNative)
         //
-        //  `CQaudionCryptoCore` exposes the shared Rust crypto core's stable C ABI
-        //  (sigarone/qaudion-crypto-core, src/ffi.rs) to Swift via the cbindgen header
-        //  (include/qaudion_crypto_core.h) + module.modulemap. `RatchetNative.swift` imports it.
-        //
-        //  ⚠ The header is the byte-identical cbindgen output; the .c is a FAIL-CLOSED PLACEHOLDER
-        //    stub (qaudion_crypto_core_stub.c) so the package compiles + links + tests GREEN before
-        //    the real binary is published. `RatchetNative.available` is `false` while only the stub
-        //    is linked, so the v4 path is inert (exactly like Android when libqaudion_crypto_core.so
-        //    is absent). `MessageRatchet.v4NativeRatchetEnabled` is `false` regardless.
-        //
-        //  TO ACTIVATE THE REAL CORE (when the XCFramework is published from crypto-core ios.yml):
-        //    1. Remove this `CQaudionCryptoCore` plain C target.
-        //    2. Add a binaryTarget instead, e.g.:
-        //         .binaryTarget(
-        //             name: "CQaudionCryptoCore",
-        //             url: "https://github.com/sigarone/qaudion-crypto-core/releases/download/<tag>/QaudionCryptoCore.xcframework.zip",
-        //             checksum: "<value from `swift package compute-checksum` printed by ios.yml>"
-        //         )
-        //       (SwiftPM binaryTargets accept a remote zip+checksum OR a local .xcframework path.)
-        //    3. Delete Sources/CQaudionCryptoCore/ (the XCFramework carries its own header+modulemap).
-        //    The `RatchetNative.swift` Swift source is unchanged across this swap — it links the same
-        //    `import CQaudionCryptoCore` module name either way.
+        //  Real XCFramework published to sigarone/qaudion-crypto-core v0.1.0 (2026-06-19).
+        //  `RatchetNative.available` returns true when this binary is linked on arm64.
+        //  `V4_NATIVE_RATCHET_ENABLED = false` — the path remains inert until Pavel sign-off.
         // ─────────────────────────────────────────────────────────────────────────────────────
-        .target(
+        .binaryTarget(
             name: "CQaudionCryptoCore",
-            path: "Sources/CQaudionCryptoCore",
-            publicHeadersPath: "include",
-            cSettings: [
-                // The stub .c does `#include "qaudion_crypto_core.h"`; ensure include/ is on its
-                // own compile search path (same pattern as the CLiboqs target below).
-                .headerSearchPath("include"),
-            ]
+            url: "https://github.com/sigarone/qaudion-crypto-core-spm/releases/download/v0.1.2/QaudionCryptoCore.xcframework.zip",
+            checksum: "5dd5f9de91c706b85d934ae95f3e8dd30b34c64bd31ee579601ade7e75ac4b4a"
         ),
         .target(
             name: "CLiboqs",
@@ -165,7 +141,8 @@ let package = Package(
                 // session-KDF schema:3 (info_v3 = label||ct_bind||selected_fp_or_zero32)
                 // + the D3-WIRE signed hs-bundle-v1 canon (Ed25519 OFFER/ACCEPT).
                 .copy("Resources/kat/session-key-v3-kat.json"),
-                .copy("Resources/kat/hs-bundle-v1-kat.json")
+                .copy("Resources/kat/hs-bundle-v1-kat.json"),
+                .copy("Integration/Resources/earbud-excl-v2-kat.json")
             ]
         )
     ]

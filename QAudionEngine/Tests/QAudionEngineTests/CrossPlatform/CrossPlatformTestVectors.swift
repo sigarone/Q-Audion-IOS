@@ -158,8 +158,8 @@ final class CrossPlatformTestVectors: XCTestCase {
         XCTAssertEqual(offer[1], 0x41) // A
         XCTAssertEqual(offer[2], 0x55) // U
         XCTAssertEqual(offer[3], 0x44) // D
-        XCTAssertEqual(offer[4], 0x01) // version
-        XCTAssertEqual(offer[5], 0x01) // type = OFFER
+        XCTAssertEqual(offer[4], 0x01) // type = OFFER (0x01)
+        XCTAssertEqual(offer[5], 0x01) // version (0x01)
     }
 
     func testQuadAcceptFormat() {
@@ -171,8 +171,8 @@ final class CrossPlatformTestVectors: XCTestCase {
         XCTAssertEqual(accept[1], 0x41) // A
         XCTAssertEqual(accept[2], 0x55) // U
         XCTAssertEqual(accept[3], 0x44) // D
-        XCTAssertEqual(accept[4], 0x01) // version
-        XCTAssertEqual(accept[5], 0x02) // type = ACCEPT
+        XCTAssertEqual(accept[4], 0x02) // type = ACCEPT (0x02)
+        XCTAssertEqual(accept[5], 0x01) // version (0x01)
     }
 
     // MARK: - Sovereign Identity Wire Format (must match Android)

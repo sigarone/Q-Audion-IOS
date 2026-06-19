@@ -18,17 +18,20 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
     }
 
     func test_fetchPepper_decodesResponse() async throws {
+        // "global-pepper-xyz" in base64 — fetchPepper() decodes it to Data
+        let pepperB64 = Data("global-pepper-xyz".utf8).base64EncodedString()
         StubProtocol.responseHandler = { _ in
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-             "{\"pepper\":\"global-pepper-xyz\"}".data(using: .utf8))
+             "{\"pepper\":\"\(pepperB64)\"}".data(using: .utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { "token123" }
         )
-        let pepper = try await client.fetchPepper()
-        XCTAssertEqual(pepper, "global-pepper-xyz")
+        let bundle = try await client.fetchPepper()
+        XCTAssertEqual(bundle.pepperBytes, Data("global-pepper-xyz".utf8))
+        XCTAssertEqual(bundle.alg, "sha256")
     }
 
     func test_fetchPepper_emptyPepperThrows() async {
