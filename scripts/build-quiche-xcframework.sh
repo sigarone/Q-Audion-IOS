@@ -53,10 +53,17 @@ cargo build --release --features ffi --target aarch64-apple-ios -p quiche
 DEV_LIB="$WORK/quiche/target/aarch64-apple-ios/release/libquiche.a"
 
 # Headers dir with quiche.h + a module map naming the module `Cquiche`.
+# Headers live in a Cquiche/ subdirectory so their module.modulemap does NOT
+# collide with other xcframeworks (e.g. QaudionCryptoCore.xcframework) that
+# also place a module.modulemap at the root of their Headers/ dir. Xcode 26.3
+# made this conflict a hard error ("Multiple commands produce .../include/
+# module.modulemap"). Clang discovers module.modulemap in subdirectories of
+# include paths, so `import Cquiche` in Swift continues to work.
 HDRS="$WORK/include"
-mkdir -p "$HDRS"
-cp "$WORK/quiche/quiche/include/quiche.h" "$HDRS/quiche.h"
-cat > "$HDRS/module.modulemap" <<'MODMAP'
+QUICHE_HDRS="$HDRS/Cquiche"
+mkdir -p "$QUICHE_HDRS"
+cp "$WORK/quiche/quiche/include/quiche.h" "$QUICHE_HDRS/quiche.h"
+cat > "$QUICHE_HDRS/module.modulemap" <<'MODMAP'
 module Cquiche {
     header "quiche.h"
     export *
