@@ -89,14 +89,15 @@ public final class TorObfsTransport: @unchecked Sendable {
     /// Blocks the calling thread up to 20 s.
     @discardableResult
     public func connectSync() -> Bool {
+        final class Box: @unchecked Sendable { var value = false }
+        let box = Box()
         let semaphore = DispatchSemaphore(value: 0)
-        var result = false
         Task {
-            result = await connect()
+            box.value = await connect()
             semaphore.signal()
         }
         semaphore.wait()
-        return result
+        return box.value
     }
 
     /// Close the Tor tunnel and stop any pending auto-reconnect.

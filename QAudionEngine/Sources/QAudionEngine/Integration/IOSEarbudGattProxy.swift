@@ -1,4 +1,4 @@
-import CoreBluetooth
+@preconcurrency import CoreBluetooth
 import Foundation
 
 /// CL-5.X — Concrete CoreBluetooth implementation of EarbudPairingGattProxy.
@@ -235,7 +235,7 @@ public final class IOSEarbudGattProxy: NSObject, EarbudPairingGattProxy {
 
 // MARK: - CBCentralManagerDelegate
 
-@preconcurrency extension IOSEarbudGattProxy: CBCentralManagerDelegate {
+extension IOSEarbudGattProxy: CBCentralManagerDelegate {
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state != .poweredOn {
@@ -267,7 +267,7 @@ public final class IOSEarbudGattProxy: NSObject, EarbudPairingGattProxy {
 
 // MARK: - CBPeripheralDelegate
 
-@preconcurrency extension IOSEarbudGattProxy: CBPeripheralDelegate {
+extension IOSEarbudGattProxy: CBPeripheralDelegate {
 
     public func peripheral(_ peripheral: CBPeripheral,
                            didDiscoverServices error: Error?) {

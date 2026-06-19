@@ -158,14 +158,8 @@ public final class AudioProcessingPipeline {
         // environment, they can enable AEC in Settings → Chiamate →
         // Echo Cancellation to re-activate VP-IO. For the common
         // earpiece case, no AEC is needed.
-        try session.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: [
-                .allowBluetoothHFP,
-                .interruptSpokenAudioAndMixWithOthers
-            ]
-        )
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
 
         // Low-latency I/O buffer for real-time VoIP
         try session.setPreferredIOBufferDuration(config.preferredBufferDuration)
