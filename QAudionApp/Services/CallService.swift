@@ -916,20 +916,20 @@ final class CallService {
         // Only emit when the call actually had an audio stack (skip the
         // defensive pre-call cleanups that would log all-zeros).
         if audioEnginesStarted || framesReceivedRx > 0 || framesEncryptedTx > 0 {
-            TelemetryService.shared.emit(
-                kind: "call.audio.counts",
-                callId: getCallId?(),
-                attrs: [
-                    "tx_enc":          framesEncryptedTx,
-                    "rx_recv":         framesReceivedRx,
-                    "rx_dec":          framesDecryptedRx,
-                    "rx_dec_err":      rxDecryptErrorCount,
-                    "tx_enc_err":      txEncryptErrorCount,
-                    "engines_started": audioEnginesStarted,
-                    "fallback_fired":  didActivateFallbackFired,
-                    "session_active":  audioSessionActive
-                ]
-            )
+            let _callId = getCallId?()
+            let _attrs: [String: Any] = [
+                "tx_enc":          framesEncryptedTx,
+                "rx_recv":         framesReceivedRx,
+                "rx_dec":          framesDecryptedRx,
+                "rx_dec_err":      rxDecryptErrorCount,
+                "tx_enc_err":      txEncryptErrorCount,
+                "engines_started": audioEnginesStarted,
+                "fallback_fired":  didActivateFallbackFired,
+                "session_active":  audioSessionActive
+            ]
+            Task { @MainActor in
+                TelemetryService.shared.emit(kind: "call.audio.counts", callId: _callId, attrs: _attrs)
+            }
             // Post-call Opus tuning — must run BEFORE counters reset below.
             // W574c: callId attached so the tune decision (or skip reason)
             // shows up on the server's per-call telemetry timeline.

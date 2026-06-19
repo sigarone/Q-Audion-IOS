@@ -199,9 +199,10 @@ public final class VideoCallPipeline: NSObject {
         // @MainActor, so without this hop the blocking call lands on the
         // main thread. Hopping to captureQueue makes it non-blocking for
         // the caller AND puts the call on the queue that owns the session.
+        let session = captureSession
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            captureQueue.async { [weak self] in
-                self?.captureSession.startRunning()
+            captureQueue.async {
+                session.startRunning()
                 cont.resume()
             }
         }
@@ -261,12 +262,12 @@ public final class VideoCallPipeline: NSObject {
         guard isRunning else { return }
         // W565 — same thread-safety fix as start(): never call
         // startRunning/stopRunning on the main thread (watchdog risk).
-        captureQueue.async { [weak self] in
-            guard let self = self else { return }
+        let session = captureSession
+        captureQueue.async {
             if enabled {
-                if !self.captureSession.isRunning { self.captureSession.startRunning() }
+                if !session.isRunning { session.startRunning() }
             } else {
-                if self.captureSession.isRunning { self.captureSession.stopRunning() }
+                if session.isRunning { session.stopRunning() }
             }
         }
     }

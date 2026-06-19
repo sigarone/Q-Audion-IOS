@@ -675,7 +675,7 @@ final class AppState: ObservableObject {
             queue: nil
         ) { [weak self] notification in
             guard let task = notification.object as? BGAppRefreshTask else { return }
-            self?.handleWsKeepaliveTask(task)
+            Task { @MainActor [weak self] in self?.handleWsKeepaliveTask(task) }
         }
         scheduleWsKeepalive()
 
@@ -4766,7 +4766,7 @@ final class AppState: ObservableObject {
         #if canImport(WebRTC)
         guard let provider = liveProvider,
               let impl = provider.callingApi as? BCryptoCallingApiImpl,
-              let callId = impl.getActiveCallId()
+              impl.getActiveCallId() != nil
         else {
             RTLog.warn("call", "upgradeToVideo: callId unavailable — leaving call audio-only")
             return

@@ -152,13 +152,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
         // Idempotency: drop duplicate answers for the same call session.
         // Can occur if the WebRTC onAnswerCreated callback fires twice or
         // if AppState logic races after receiving call_incoming twice.
-        callIdLock.lock()
-        guard !_answerSent else {
-            callIdLock.unlock()
-            return
-        }
-        _answerSent = true
-        callIdLock.unlock()
+        guard !checkAndMarkAnswerSent() else { return }
         let cid = currentCallId()
         var data: [String: Any] = [
             "recipient_id": recipientId,
@@ -415,6 +409,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// `async` functions ("instance method 'lock' is unavailable from
     /// asynchronous contexts"). Wrapping the mutation in a sync method
     /// makes the lock call a sync→sync call which is allowed.
+    private func checkAndMarkAnswerSent() -> Bool {
+        callIdLock.lock(); defer { callIdLock.unlock() }
+        if _answerSent { return true }
+        _answerSent = true
+        return false
+    }
+
     private func setActiveCallId(_ cid: String) {
         callIdLock.lock(); activeCallId = cid; callIdLock.unlock()
     }

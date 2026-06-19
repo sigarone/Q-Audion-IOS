@@ -68,7 +68,7 @@ enum VpnNodePicker {
             var resumed = false
             let timer = DispatchSource.makeTimerSource()
 
-            func finish(_ ms: Int) {
+            let finish: @Sendable (Int) -> Void = { ms in
                 lock.lock(); defer { lock.unlock() }
                 if resumed { return }
                 resumed = true

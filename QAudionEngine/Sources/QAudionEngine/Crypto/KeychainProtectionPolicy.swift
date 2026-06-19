@@ -142,13 +142,15 @@ public final class KeychainProtectionPolicy: @unchecked Sendable {
                 cont.resume(returning: success)
             }
         }
-        if ok {
-            lock.lock(); sessionContext = ctx; lock.unlock()
-        }
+        if ok { setSessionContext(ctx) }
         return ok
         #else
         return false
         #endif
+    }
+
+    private func setSessionContext(_ ctx: AnyObject) {
+        lock.lock(); sessionContext = ctx; lock.unlock()
     }
 
     /// Drop the authenticated session (e.g. on app background / lock). The next

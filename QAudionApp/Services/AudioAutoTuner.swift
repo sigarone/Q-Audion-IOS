@@ -123,10 +123,8 @@ public final class AudioAutoTuner {
     /// skipped) lands on the per-call telemetry timeline as
     /// `call.audio.tune`.
     private func emitTelemetry(callId: String?, attrs: [String: Any]) {
-        TelemetryService.shared.emit(
-            kind: "call.audio.tune",
-            callId: callId,
-            attrs: attrs
-        )
+        Task { @MainActor in
+            TelemetryService.shared.emit(kind: "call.audio.tune", callId: callId, attrs: attrs)
+        }
     }
 }
