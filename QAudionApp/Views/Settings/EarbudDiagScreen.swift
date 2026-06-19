@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreBluetooth
 import CryptoKit
+import QAudionEngine
 
 // MARK: - EarbudDiagScreen
 //

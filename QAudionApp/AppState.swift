@@ -439,6 +439,13 @@ final class AppState: ObservableObject {
     /// sweep that needs it (lazy instantiation via runKmsSweep).
     lazy var earbudGattProxy: IOSEarbudGattProxy = IOSEarbudGattProxy()
 
+    /// Persist the Bluetooth peripheral UUID of the most-recently connected
+    /// earbud so the app can offer auto-reconnect on subsequent launches.
+    static func rememberEarbudIdentifier(_ identifier: UUID) {
+        UserDefaults.standard.set(identifier.uuidString,
+                                  forKey: "qaudion_paired_earbud_uuid")
+    }
+
     /// Phase-0 §6 — keeps a periodic KMS sweep running in the background.
     /// Started once after WS auth; stopped implicitly when AppState is freed.
     private var kmsPeriodicPoller: KmsPeriodicPoller?
@@ -3247,6 +3254,14 @@ final class AppState: ObservableObject {
             let integration = callService.callIntegration ?? responderCallIntegration
             integration?.handleInboundFpSet(callId: callId, fpAdv: fpAdv)
             print("[AppState] FPSET received callId=\(callId.prefix(8))… from=\(senderId.prefix(8))…")
+        case .earbudMkd(let callId, let pkg):
+            // Phase 6: sealed PQ media key package from earbud-side phone.
+            // Full KMS integration pending; guard sender and log.
+            guard callContactId == senderId else {
+                print("[AppState] EARBUDMKD dropped — sender not call peer")
+                return
+            }
+            print("[AppState] EARBUDMKD callId=\(callId.prefix(8))… \(pkg.count)B")
         }
     }
 
