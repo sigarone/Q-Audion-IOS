@@ -4613,10 +4613,16 @@ final class AppState: ObservableObject {
         //    to earpiece even after the user explicitly tapped "speaker".
         let session = AVAudioSession.sharedInstance()
         do {
+            #if !targetEnvironment(simulator)
             var opts: AVAudioSession.CategoryOptions = [
                 .allowBluetoothHFP,
                 .interruptSpokenAudioAndMixWithOthers
             ]
+            #else
+            var opts: AVAudioSession.CategoryOptions = [
+                .interruptSpokenAudioAndMixWithOthers
+            ]
+            #endif
             if enabled { opts.insert(.defaultToSpeaker) }
             try session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
             try session.overrideOutputAudioPort(enabled ? .speaker : .none)
