@@ -185,14 +185,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// re-runs harmlessly (the engine guards on its own `isRunning`).
     private func activateAudioSessionForAnswer() async {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: [
-                .allowBluetoothHFP,
-                .interruptSpokenAudioAndMixWithOthers
-            ] as AVAudioSession.CategoryOptions
-        )
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         for attempt in 0..<4 {
             do {
                 try session.setActive(true)
@@ -232,14 +226,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
 
     public func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         let audioSession = AVAudioSession.sharedInstance()
-        try? audioSession.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: [
-                .allowBluetoothHFP,
-                .interruptSpokenAudioAndMixWithOthers
-            ] as AVAudioSession.CategoryOptions
-        )
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
     }
@@ -276,14 +264,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // AudioProcessingPipeline.configureForVoIP(): if CallKit installs
         // a poorer category (e.g. no .defaultToSpeaker) it silently
         // downgrades the routing the app just configured.
-        try? audioSession.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: [
-                .allowBluetoothHFP,
-                .interruptSpokenAudioAndMixWithOthers
-            ] as AVAudioSession.CategoryOptions
-        )
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         try? audioSession.setActive(true)
         // W464 — the session is now active: this is the moment
         // CallService may safely start its AVAudioEngine capture/playback.
