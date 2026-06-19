@@ -191,7 +191,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             options: [
                 .allowBluetoothHFP,
                 .interruptSpokenAudioAndMixWithOthers
-            ]
+            ] as AVAudioSession.CategoryOptions
         )
         for attempt in 0..<4 {
             do {
@@ -238,7 +238,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             options: [
                 .allowBluetoothHFP,
                 .interruptSpokenAudioAndMixWithOthers
-            ]
+            ] as AVAudioSession.CategoryOptions
         )
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
@@ -282,7 +282,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             options: [
                 .allowBluetoothHFP,
                 .interruptSpokenAudioAndMixWithOthers
-            ]
+            ] as AVAudioSession.CategoryOptions
         )
         try? audioSession.setActive(true)
         // W464 — the session is now active: this is the moment

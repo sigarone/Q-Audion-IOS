@@ -58,7 +58,7 @@ public enum RatchetNative {
         let st = ssHandshake.withUnsafeBytesU8 { inPtr in
             qa_root_0(inPtr, &out)
         }
-        guard st == QA_STATUS_OK else { return nil }
+        guard qaStatusCode(st) == 0 else { return nil }
         return Data(out)
     }
 
@@ -78,7 +78,7 @@ public enum RatchetNative {
                 }
             }
         }
-        guard st == QA_STATUS_OK, let h = handle else { return 0 }
+        guard qaStatusCode(st) == 0, let h = handle else { return 0 }
         return UInt(bitPattern: Int(bitPattern: h))
     }
 
@@ -90,7 +90,7 @@ public enum RatchetNative {
         let st = data.withUnsafeBytesU8Len { ptr, len in
             qa_session_deserialize(ptr, len, &handle)
         }
-        guard st == QA_STATUS_OK, let h = handle else { return 0 }
+        guard qaStatusCode(st) == 0, let h = handle else { return 0 }
         return UInt(bitPattern: Int(bitPattern: h))
     }
 
@@ -136,7 +136,7 @@ public enum RatchetNative {
                 qa_dh_ratchet(p, sPtr, tPtr)
             }
         }
-        return st == QA_STATUS_OK
+        return qaStatusCode(st) == 0
     }
 
     /// Serialize the session into the durable vault format (write-ahead / crash-resume). Returns
@@ -205,30 +205,41 @@ public enum RatchetNative {
     /// Run a query-then-fill C-ABI op and return the filled bytes, or `nil` on any non-OK status.
     ///
     /// `op(out, out_len) -> QaStatus` is the raw FFI call; `out_len` is a real
-    /// `UnsafeMutablePointer<Int>` (so call sites forward it straight into the C `uintptr_t *out_len`
-    /// parameter — no `&` of a captured inout). We invoke it once with a 0-capacity buffer (NULL
+    /// `UnsafeMutablePointer<UInt>` (maps to the C `uintptr_t *out_len` parameter directly
+    /// — no `&` of a captured inout). We invoke it once with a 0-capacity buffer (NULL
     /// `out`, `*out_len == 0`) to learn the required size, allocate exactly that, then invoke again
     /// to fill. Mirrors the documented C-host usage and `src/android_jni.rs`'s `query_then_fill` /
     /// `tests/ffi_kat.rs::call_qtf`.
+    // Reads the raw Int32 from a QaStatus value regardless of how Swift's Clang importer
+    // resolves the mixed enum-typedef in qaudion_crypto_core.h:
+    //   enum QaStatus : int32_t { ... };  typedef int32_t QaStatus;
+    // In swift test (macOS) QaStatus collapses to Int32; in xcodebuild (iOS Simulator)
+    // it stays the enum struct. Both cases store the same 4 bytes in memory.
+    @inline(__always)
+    private static func qaStatusCode(_ s: QaStatus) -> Int32 {
+        var v = s
+        return withUnsafeMutableBytes(of: &v) { $0.load(as: Int32.self) }
+    }
+
     private static func queryThenFill(
-        _ op: (UnsafeMutablePointer<UInt8>?, UnsafeMutablePointer<Int>) -> Int32
+        _ op: (UnsafeMutablePointer<UInt8>?, UnsafeMutablePointer<UInt>) -> QaStatus
     ) -> Data? {
         // 1) size query — NULL buffer, capacity 0. OK (empty output) or BufferTooSmall are valid.
-        let lenPtr = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        let lenPtr = UnsafeMutablePointer<UInt>.allocate(capacity: 1)
         defer { lenPtr.deallocate() }
         lenPtr.pointee = 0
         let st = op(nil, lenPtr)
-        guard st == QA_STATUS_OK || st == QA_STATUS_BUFFER_TOO_SMALL else { return nil }
-        let need = lenPtr.pointee
+        guard qaStatusCode(st) == 0 || qaStatusCode(st) == -2 else { return nil }
+        let need = Int(lenPtr.pointee)
         if need == 0 { return Data() }
         // 2) allocate + fill.
         var buf = [UInt8](repeating: 0, count: need)
-        lenPtr.pointee = need
-        let st2 = buf.withUnsafeMutableBufferPointer { mb -> Int32 in
+        lenPtr.pointee = UInt(need)
+        let st2 = buf.withUnsafeMutableBufferPointer { mb -> QaStatus in
             op(mb.baseAddress, lenPtr)
         }
-        guard st2 == QA_STATUS_OK else { return nil }
-        return Data(buf.prefix(lenPtr.pointee))
+        guard qaStatusCode(st2) == 0 else { return nil }
+        return Data(buf.prefix(Int(lenPtr.pointee)))
     }
 }
 
@@ -244,7 +255,7 @@ private extension Data {
     /// Pass the bytes as `(const uint8_t *, uintptr_t)`. An empty `Data` yields `(NULL, 0)` — the C
     /// ABI accepts a NULL pointer when the length is 0 (empty plaintext / empty frame is rejected
     /// downstream as a parse error, fail-closed).
-    func withUnsafeBytesU8Len<R>(_ body: (UnsafePointer<UInt8>?, Int) -> R) -> R {
-        withUnsafeBytes { raw in body(raw.bindMemory(to: UInt8.self).baseAddress, raw.count) }
+    func withUnsafeBytesU8Len<R>(_ body: (UnsafePointer<UInt8>?, UInt) -> R) -> R {
+        withUnsafeBytes { raw in body(raw.bindMemory(to: UInt8.self).baseAddress, UInt(raw.count)) }
     }
 }
