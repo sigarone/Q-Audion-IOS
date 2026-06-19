@@ -495,16 +495,30 @@ jobs:
           cd "$WORK"
           unzip -q "$GITHUB_WORKSPACE/$IPA_PATH"
 
+          # Patch onnxruntime.framework MinimumOSVersion (CLAUDE.md sec 4).
           FW="Payload/QAudionApp.app/Frameworks/onnxruntime.framework"
-          if [ ! -d "$FW" ]; then
-            echo "onnxruntime.framework not in IPA — skipping patch"
-            exit 0
+          if [ -d "$FW" ]; then
+            plutil -replace MinimumOSVersion -string "16.0" "$FW/Info.plist"
+          else
+            echo "onnxruntime.framework not in IPA — skipping MinimumOSVersion patch"
           fi
-          plutil -replace MinimumOSVersion -string "16.0" "$FW/Info.plist"
+
+          # Remove libquiche.a from the app bundle root.
+          # Xcode 26 copies the static xcframework's .a into the bundle even with
+          # embed:false in project.yml. Apple validation (altool 409) rejects any
+          # standalone .a in the bundle. The symbols are already linked into the
+          # QAudionApp binary; the .a copy is spurious and safe to delete.
+          if [ -f "Payload/QAudionApp.app/libquiche.a" ]; then
+            rm "Payload/QAudionApp.app/libquiche.a"
+            echo "Removed spurious Payload/QAudionApp.app/libquiche.a"
+          fi
 
           IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
                      | awk -F'"' '/Apple Distribution|iPhone Distribution/ {print $2; exit}')
-          codesign --force --sign "$IDENTITY" "$FW"
+
+          if [ -d "$FW" ]; then
+            codesign --force --sign "$IDENTITY" "$FW"
+          fi
 
           ENT_FILE="$WORK/app.entitlements.plist"
           codesign -d --entitlements :- --xml "Payload/QAudionApp.app" > "$ENT_FILE" 2>/dev/null || true
