@@ -48,9 +48,9 @@ final class EarbudAckPopRelayKatTests: XCTestCase {
             ephemeralPubkey: "",
             nonce: "",
             keyClass: "hw_only",
-            earbudId: "ear-1",
             txnId: effectiveTxnId,
-            serverNonce: effectiveNonce
+            serverNonce: effectiveNonce,
+            earbudId: "ear-1"
         )
     }
 
@@ -152,9 +152,10 @@ final class EarbudAckPopRelayKatTests: XCTestCase {
             keyId: keyId, keyName: "hw", fingerprint: "fp",
             encryptedPackage: Data(count: EarbudGattConstants.KEYIMPORT_PKG_LEN).base64EncodedString(),
             ephemeralPubkey: "", nonce: "",
-            keyClass: "hw_only", earbudId: "ear-1",
+            keyClass: "hw_only",
             txnId: nil,
-            serverNonce: nonce16.base64EncodedString()
+            serverNonce: nonce16.base64EncodedString(),
+            earbudId: "ear-1"
         )
         XCTAssertNil(relay().buildPopInputsFrame(key: noTxn), "nil txnId must return nil frame")
     }
@@ -164,9 +165,10 @@ final class EarbudAckPopRelayKatTests: XCTestCase {
             keyId: keyId, keyName: "hw", fingerprint: "fp",
             encryptedPackage: Data(count: EarbudGattConstants.KEYIMPORT_PKG_LEN).base64EncodedString(),
             ephemeralPubkey: "", nonce: "",
-            keyClass: "hw_only", earbudId: "ear-1",
+            keyClass: "hw_only",
             txnId: "",
-            serverNonce: nonce16.base64EncodedString()
+            serverNonce: nonce16.base64EncodedString(),
+            earbudId: "ear-1"
         )
         XCTAssertNil(relay().buildPopInputsFrame(key: key), "empty txnId must return nil frame")
     }
@@ -176,9 +178,10 @@ final class EarbudAckPopRelayKatTests: XCTestCase {
             keyId: keyId, keyName: "hw", fingerprint: "fp",
             encryptedPackage: Data(count: EarbudGattConstants.KEYIMPORT_PKG_LEN).base64EncodedString(),
             ephemeralPubkey: "", nonce: "",
-            keyClass: "hw_only", earbudId: "ear-1",
+            keyClass: "hw_only",
             txnId: "not-a-uuid",
-            serverNonce: nonce16.base64EncodedString()
+            serverNonce: nonce16.base64EncodedString(),
+            earbudId: "ear-1"
         )
         XCTAssertNil(relay().buildPopInputsFrame(key: key), "malformed txnId must return nil frame")
     }
@@ -188,9 +191,10 @@ final class EarbudAckPopRelayKatTests: XCTestCase {
             keyId: keyId, keyName: "hw", fingerprint: "fp",
             encryptedPackage: Data(count: EarbudGattConstants.KEYIMPORT_PKG_LEN).base64EncodedString(),
             ephemeralPubkey: "", nonce: "",
-            keyClass: "hw_only", earbudId: "ear-1",
+            keyClass: "hw_only",
             txnId: txnId,
-            serverNonce: nil
+            serverNonce: nil,
+            earbudId: "ear-1"
         )
         XCTAssertNil(relay().buildPopInputsFrame(key: key), "nil serverNonce must return nil frame")
     }
@@ -202,9 +206,10 @@ final class EarbudAckPopRelayKatTests: XCTestCase {
             keyId: keyId, keyName: "hw", fingerprint: "fp",
             encryptedPackage: Data(count: EarbudGattConstants.KEYIMPORT_PKG_LEN).base64EncodedString(),
             ephemeralPubkey: "", nonce: "",
-            keyClass: "hw_only", earbudId: "ear-1",
+            keyClass: "hw_only",
             txnId: txnId,
-            serverNonce: short
+            serverNonce: short,
+            earbudId: "ear-1"
         )
         XCTAssertNil(relay().buildPopInputsFrame(key: key), "15B nonce must return nil frame")
     }
@@ -214,9 +219,10 @@ final class EarbudAckPopRelayKatTests: XCTestCase {
             keyId: keyId, keyName: "hw", fingerprint: "fp",
             encryptedPackage: Data(count: EarbudGattConstants.KEYIMPORT_PKG_LEN).base64EncodedString(),
             ephemeralPubkey: "", nonce: "",
-            keyClass: "hw_only", earbudId: "ear-1",
+            keyClass: "hw_only",
             txnId: txnId,
-            serverNonce: "not-valid-base64!!!"
+            serverNonce: "not-valid-base64!!!",
+            earbudId: "ear-1"
         )
         XCTAssertNil(relay().buildPopInputsFrame(key: key), "bad base64 nonce must return nil frame")
     }
