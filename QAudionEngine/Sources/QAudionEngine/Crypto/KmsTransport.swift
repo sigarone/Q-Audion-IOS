@@ -296,7 +296,8 @@ public enum KmsTransport {
         x25519Priv: Data
     ) throws -> Data {
         let parts = try parseHeader(pkg, kemCtBytes: 0)
-        let dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
+        var dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
+        defer { CryptoConstants.zeroize(&dh) }
         let aesKey = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: dh),
             salt: CLASSICAL_SALT,
