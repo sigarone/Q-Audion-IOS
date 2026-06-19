@@ -3,7 +3,6 @@ import Foundation
 /// Abstraction over the earbud BLE GATT operations needed for KEY_IMPORT relay.
 /// The concrete iOS implementation (using CoreBluetooth) wires into this via
 /// the app layer. Tests use a stub conformance.
-@MainActor
 public protocol EarbudKeyGattProxy: AnyObject, Sendable {
     /// True when a BLE connection to the earbud is active.
     var isConnected: Bool { get }

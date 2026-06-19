@@ -19,7 +19,7 @@ import Foundation
 /// Thread safety: all CoreBluetooth callbacks arrive on the main queue (queue: nil in init).
 /// @MainActor ensures all properties and continuations are accessed on the main actor.
 @MainActor
-public final class IOSEarbudGattProxy: NSObject, EarbudPairingGattProxy {
+public final class IOSEarbudGattProxy: NSObject {
 
     // MARK: - Error
 
@@ -337,3 +337,7 @@ extension IOSEarbudGattProxy: @preconcurrency CBPeripheralDelegate {
         readCont = nil
     }
 }
+
+// @preconcurrency suppresses "conformance crosses into main actor-isolated code" (Swift 5.9).
+// IOSEarbudGattProxy is @MainActor; EarbudPairingGattProxy/EarbudKeyGattProxy are not.
+extension IOSEarbudGattProxy: @preconcurrency EarbudPairingGattProxy { }
