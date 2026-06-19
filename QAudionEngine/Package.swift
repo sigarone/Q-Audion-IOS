@@ -157,7 +157,15 @@ let package = Package(
             resources: [
                 .copy("../Resources/cross_platform_vectors.json"),
                 .copy("Video/Resources/sframe-video-kat.json"),
-                .copy("Crypto/Resources/handshake-sig-kat.json")
+                .copy("Crypto/Resources/handshake-sig-kat.json"),
+                .copy("Resources/kat/kms-psk-v2-kat.json"),
+                .copy("Resources/kat/kms-pop-v1-kat.json"),
+                // kms-rotation-v2 Phase-1 frozen KATs (byte-copies of
+                // apps/qaudion-firmware/tools/kat/kms-v2/{session-key-v3,hs-bundle-v1}-kat.json).
+                // session-KDF schema:3 (info_v3 = label||ct_bind||selected_fp_or_zero32)
+                // + the D3-WIRE signed hs-bundle-v1 canon (Ed25519 OFFER/ACCEPT).
+                .copy("Resources/kat/session-key-v3-kat.json"),
+                .copy("Resources/kat/hs-bundle-v1-kat.json")
             ]
         )
     ]

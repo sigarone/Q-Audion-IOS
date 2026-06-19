@@ -72,6 +72,136 @@ public enum KmsTransport {
     private static let MIN_CLASSICAL    = CLASSICAL_HEADER + GCM_TAG_BYTES          // 60
     private static let MIN_LEGACY       = LEGACY_HEADER + GCM_TAG_BYTES             // 1628
 
+    // MARK: - v2 constants (§3.2 frozen wire — KMS Rotation v2)
+
+    static let V2_CLASSICAL_INFO = Data("bcrypto-kms-psk-v2".utf8)
+    static let V2_CLASSICAL_SALT = Data("bcrypto-kms-salt-v1".utf8)
+    static let V2_HYBRID_INFO    = Data("bcrypto-kms-hybrid-pqc-v2".utf8)
+    static let V2_HYBRID_SALT    = Data("bcrypto-kms-hybrid-salt-v1".utf8)
+    static let V2_AAD_PREFIX     = Data("qa-kms-psk-v2".utf8)   // 13 B
+
+    /// §3.2 key_class wire byte. Used both as the AAD trailing byte and
+    /// as the routing class for the v2 phone-held / sovereign split.
+    public enum KeyClassV2: String {
+        case shared = "shared"
+        case hwOnly = "hw_only"
+        case swOnly = "sw_only"
+        public var byte: UInt8 {
+            switch self {
+            case .shared: return 0x01
+            case .hwOnly: return 0x02
+            case .swOnly: return 0x03
+            }
+        }
+        public init?(wire: String?) {
+            switch wire {
+            case "shared":  self = .shared
+            case "hw_only": self = .hwOnly
+            case "sw_only": self = .swOnly
+            default: return nil
+            }
+        }
+    }
+
+    /// RFC 4122 network-order 16 raw bytes (matches §3 "UUIDs encoded as
+    /// raw 16 bytes"). Single source of truth for the v2 byte encoders;
+    /// reused by `KmsPoPV1`. `internal` so same-module code can call it.
+    static func uuidBytes(_ uuid: UUID) -> Data {
+        let u = uuid.uuid
+        return Data([u.0,u.1,u.2,u.3,u.4,u.5,u.6,u.7,u.8,u.9,u.10,u.11,u.12,u.13,u.14,u.15])
+    }
+
+    /// 8-byte big-endian uint64 (the `key_epoch(8 BE)` field).
+    static func epochBE(_ epoch: UInt64) -> Data {
+        var be = epoch.bigEndian
+        return withUnsafeBytes(of: &be) { Data($0) }
+    }
+
+    /// §3.2 AAD (identical for classical and hybrid v2):
+    ///   "qa-kms-psk-v2"(13) || key_id(16) || user_id(16) || device_id(16)
+    ///   || key_epoch(8 BE) || txn_id(16) || key_class_byte(1)   = 86 B
+    public static func buildAadV2(
+        keyId: UUID, userId: UUID, deviceId: UUID,
+        keyEpoch: UInt64, txnId: UUID, keyClass: KeyClassV2
+    ) -> Data {
+        var aad = Data(capacity: 86)
+        aad.append(V2_AAD_PREFIX)
+        aad.append(uuidBytes(keyId))
+        aad.append(uuidBytes(userId))
+        aad.append(uuidBytes(deviceId))
+        aad.append(epochBE(keyEpoch))
+        aad.append(uuidBytes(txnId))
+        aad.append(keyClass.byte)
+        return aad
+    }
+
+    public struct V2Result {
+        public let psk: Data
+        /// The IKM fed to the wrap HKDF for THIS delivery — also fed to
+        /// the qa-kms-pop-v1 PoP HKDF (§3.4). classical = 32B (ECDH),
+        /// hybrid = 64B (ECDH || ss_pq).
+        public let wrapSecret: Data
+    }
+
+    /// v2 decrypt (§3.2). Tier (classical vs hybrid) is selected by the
+    /// presence of an ML-KEM private key AND the package length:
+    ///   hybrid wire = ephPub(32) || ct_pq(1568) || nonce(12) || ct+tag
+    ///   classical   = ephPub(32) || nonce(12) || ct+tag
+    /// Returns the recovered PSK AND the per-delivery wrap secret (for PoP).
+    public static func decryptPackageV2(
+        pkg: Data,
+        x25519Priv: Data,
+        mlkemPriv: Data?,
+        mlkemPub: Data?,
+        keyId: UUID, userId: UUID, deviceId: UUID,
+        keyEpoch: UInt64, txnId: UUID, keyClass: KeyClassV2
+    ) throws -> V2Result {
+        let aad = buildAadV2(keyId: keyId, userId: userId, deviceId: deviceId,
+                             keyEpoch: keyEpoch, txnId: txnId, keyClass: keyClass)
+        let hybridMin = X25519_PUB_BYTES + ML_KEM_CT_BYTES + GCM_NONCE_BYTES + GCM_TAG_BYTES // 1628
+        if let priv = mlkemPriv, pkg.count >= hybridMin {
+            let parts = try parseHeader(pkg, kemCtBytes: ML_KEM_CT_BYTES)
+            var dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
+            var ssPq: Data
+            do {
+                ssPq = try PqcKeyExchange().decapsulate(ciphertext: parts.kemCt!, privateKey: priv)
+            } catch {
+                CryptoConstants.zeroize(&dh)
+                throw Error.legacyKemDecryptFailed(underlying: error)
+            }
+            var ikm = Data(capacity: dh.count + ssPq.count)
+            ikm.append(dh); ikm.append(ssPq)
+            let aead = HKDF<SHA256>.deriveKey(
+                inputKeyMaterial: SymmetricKey(data: ikm),
+                salt: V2_HYBRID_SALT, info: V2_HYBRID_INFO, outputByteCount: 32)
+            let psk = try aeadOpenAad(nonce: parts.nonce, ctTag: parts.ctTag, key: aead, aad: aad)
+            let wrap = Data(ikm)            // 64B copy for the PoP step
+            CryptoConstants.zeroize(&ikm); CryptoConstants.zeroize(&ssPq); CryptoConstants.zeroize(&dh)
+            return V2Result(psk: psk, wrapSecret: wrap)
+        }
+        // classical
+        let parts = try parseHeader(pkg, kemCtBytes: 0)
+        var dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
+        let aead = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: dh),
+            salt: V2_CLASSICAL_SALT, info: V2_CLASSICAL_INFO, outputByteCount: 32)
+        let psk = try aeadOpenAad(nonce: parts.nonce, ctTag: parts.ctTag, key: aead, aad: aad)
+        let wrap = Data(dh)                 // 32B copy for the PoP step
+        CryptoConstants.zeroize(&dh)
+        return V2Result(psk: psk, wrapSecret: wrap)
+    }
+
+    /// AEAD open with AAD (v2 binding). Mirrors `aeadOpen` but feeds AAD.
+    private static func aeadOpenAad(nonce: Data, ctTag: Data, key: SymmetricKey, aad: Data) throws -> Data {
+        guard ctTag.count >= GCM_TAG_BYTES else { throw Error.malformedHeader }
+        let tag = ctTag.suffix(GCM_TAG_BYTES)
+        let ct  = ctTag.prefix(ctTag.count - GCM_TAG_BYTES)
+        let sealed = try AES.GCM.SealedBox(
+            nonce: try AES.GCM.Nonce(data: nonce),
+            ciphertext: Data(ct), tag: Data(tag))
+        return try AES.GCM.open(sealed, using: key, authenticating: aad)
+    }
+
     // MARK: - Public entry point
 
     /// Decrypt a server-issued KMS package, auto-detecting the wire
@@ -155,7 +285,7 @@ public enum KmsTransport {
         mlkemPub: Data
     ) throws -> Data {
         let parts = try parseHeader(pkg, kemCtBytes: 0)
-        let dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
+        var dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
         var ikm = Data(capacity: 64)
         ikm.append(dh)
         ikm.append(contentsOf: SHA256.hash(data: mlkemPub))
@@ -165,6 +295,8 @@ public enum KmsTransport {
             info: HYBRID_INFO,
             outputByteCount: 32
         )
+        CryptoConstants.zeroize(&ikm)
+        CryptoConstants.zeroize(&dh)
         return try aeadOpen(nonce: parts.nonce, ctTag: parts.ctTag, key: aesKey)
     }
 
@@ -174,14 +306,15 @@ public enum KmsTransport {
         mlkemPriv: Data
     ) throws -> Data {
         let parts = try parseHeader(pkg, kemCtBytes: ML_KEM_CT_BYTES)
-        let dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
-        let kemSs: Data
+        var dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
+        var kemSs: Data
         do {
             kemSs = try PqcKeyExchange().decapsulate(
                 ciphertext: parts.kemCt!,
                 privateKey: mlkemPriv
             )
         } catch {
+            CryptoConstants.zeroize(&dh)
             throw Error.legacyKemDecryptFailed(underlying: error)
         }
         var ikm = Data(capacity: dh.count + kemSs.count)
@@ -193,6 +326,9 @@ public enum KmsTransport {
             info: HYBRID_INFO,
             outputByteCount: 32
         )
+        CryptoConstants.zeroize(&ikm)
+        CryptoConstants.zeroize(&kemSs)
+        CryptoConstants.zeroize(&dh)
         return try aeadOpen(nonce: parts.nonce, ctTag: parts.ctTag, key: aesKey)
     }
 

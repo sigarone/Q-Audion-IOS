@@ -6,15 +6,51 @@ import Security
 public final class SovereignKeyVault {
     private static let service = "com.bcrypto.qaudion.psk"
 
+    /// KMS-rotation-v2 Phase-1 (D1) — per-entry key_class persisted alongside
+    /// each PSK. Mirrors Android `SovereignKeyVault` key_class column (captured
+    /// from `KmsKey.keyClass` at import) and the firmware KMU `contact_meta`
+    /// key_class byte. SW-only on iOS/desktop never holds `hwOnly` storage; the
+    /// class is what the negotiation (D2) and the local require-hw-only policy
+    /// (D4) consult.
+    ///
+    /// Wire-neutral: stored ONLY in the Keychain item's `kSecAttrGeneric` slot
+    /// (a byte blob attribute distinct from `kSecAttrLabel`, which carries the
+    /// fingerprint). Reading a legacy item that predates Phase-1 yields no
+    /// generic blob → `.shared` (the safe, additive-default class — a contact
+    /// without a recorded class is treated as a plain shared PSK, never
+    /// hw_only, so the D4 abort can't misfire on legacy entries).
+    public enum KeyClass: String {
+        case shared = "shared"
+        case hwOnly = "hw_only"
+        case swOnly = "sw_only"
+
+        /// Lenient parse: unknown / nil wire string → `.shared` (safe default).
+        public static func parse(_ wire: String?) -> KeyClass {
+            switch wire {
+            case "hw_only": return .hwOnly
+            case "sw_only": return .swOnly
+            default:        return .shared
+            }
+        }
+    }
+
     public init() {}
 
-    public func storePsk(name: String, key: Data, fingerprint: String) throws {
+    /// Phase-1 (D1) overload — store a PSK WITH its key_class. The class is
+    /// persisted in `kSecAttrGeneric`; everything else is byte-identical to the
+    /// legacy `storePsk(name:key:fingerprint:)` path (which now forwards here
+    /// with `keyClass: nil`, leaving the generic slot empty → reads back as
+    /// `.shared`).
+    public func storePsk(name: String, key: Data, fingerprint: String, keyClass: KeyClass?) throws {
         // IOS-SE: fresh writes honor the current protection policy. When
         // biometric key protection is enabled, attach a `.userPresence`
         // access control; otherwise the plain WhenUnlockedThisDeviceOnly path
         // (byte-identical to the pre-IOS-SE behavior). Existing items are
         // re-protected via `migratePskProtection(enable:)`, not here, because
         // SecItemUpdate cannot change an item's access-control class.
+        // D1: the key_class string (if any) goes into kSecAttrGeneric — a raw
+        // byte blob attribute that does NOT collide with the fingerprint label.
+        let classBlob: Data? = keyClass.map { Data($0.rawValue.utf8) }
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -22,6 +58,7 @@ public final class SovereignKeyVault {
             kSecValueData as String: key,
             kSecAttrLabel as String: fingerprint
         ]
+        if let classBlob { query[kSecAttrGeneric as String] = classBlob }
         if let ac = KeychainProtectionPolicy.shared.makeAccessControl() {
             query[kSecAttrAccessControl as String] = ac
         } else {
@@ -29,7 +66,12 @@ public final class SovereignKeyVault {
         }
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecDuplicateItem {
-            let update: [String: Any] = [kSecValueData as String: key, kSecAttrLabel as String: fingerprint]
+            var update: [String: Any] = [kSecValueData as String: key, kSecAttrLabel as String: fingerprint]
+            // Only touch the generic slot when a class is supplied, so a legacy
+            // 3-arg re-store (keyClass == nil) NEVER clears an already-recorded
+            // class — once a contact is tagged hw_only it stays hw_only across
+            // idempotent PSK refreshes.
+            if let classBlob { update[kSecAttrGeneric as String] = classBlob }
             let searchQuery: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: Self.service,
@@ -40,6 +82,41 @@ public final class SovereignKeyVault {
         } else if status != errSecSuccess {
             throw KeyVaultError.storeFailed(status)
         }
+    }
+
+    /// Legacy 3-arg overload — preserves the EXACT pre-Phase-1 call sites
+    /// (`storePsk(name:key:fingerprint:)`). Forwards with `keyClass: nil`, so
+    /// the generic slot is left untouched and a subsequent `getKeyClass` reads
+    /// back `.shared` (the additive-safe default).
+    public func storePsk(name: String, key: Data, fingerprint: String) throws {
+        try storePsk(name: name, key: key, fingerprint: fingerprint, keyClass: nil)
+    }
+
+    /// D1 reader — the persisted key_class for a PSK entry, or `.shared` when
+    /// the item has no recorded class (legacy entry or never tagged). Never
+    /// throws: a missing item / read failure also yields `.shared`, so the D4
+    /// require-hw-only policy is the ONLY thing that can escalate, and it can
+    /// never spuriously treat an absent class as hw_only.
+    public func getKeyClass(name: String) -> KeyClass {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: name,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let attrs = item as? [String: Any],
+              let blob = attrs[kSecAttrGeneric as String] as? Data,
+              let wire = String(data: blob, encoding: .utf8) else {
+            return .shared
+        }
+        return KeyClass.parse(wire)
+        #else
+        return .shared
+        #endif
     }
 
     public func loadPsk(name: String) throws -> Data? {
@@ -144,6 +221,10 @@ public final class SovereignKeyVault {
                 throw KeyVaultError.loadFailed(rs)
             }
             let fingerprint = attrs[kSecAttrLabel as String] as? String ?? ""
+            // D1: carry the persisted key_class blob through the delete→re-add so
+            // a biometric-protection toggle does NOT silently reset a hw_only
+            // contact back to .shared (which would defeat the D4 abort).
+            let classBlob = attrs[kSecAttrGeneric as String] as? Data
 
             // value is now in memory — safe to delete then re-add.
             let del = SecItemDelete([
@@ -162,6 +243,7 @@ public final class SovereignKeyVault {
                 kSecValueData as String: value,
                 kSecAttrLabel as String: fingerprint
             ]
+            if let classBlob { add[kSecAttrGeneric as String] = classBlob }
             if let ac = targetAC {
                 add[kSecAttrAccessControl as String] = ac
             } else {
@@ -178,6 +260,7 @@ public final class SovereignKeyVault {
                     kSecValueData as String: value,
                     kSecAttrLabel as String: fingerprint
                 ]
+                if let classBlob { restore[kSecAttrGeneric as String] = classBlob }
                 if enable {
                     restore[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
                 } else {

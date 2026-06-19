@@ -64,10 +64,17 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         public let sframeV1: Bool?
         public let vkeyV1: Bool?
 
-        public init(ratchetV3: Bool?, sframeV1: Bool? = nil, vkeyV1: Bool? = nil) {
+        // KMS-rotation-v2 Phase-1 (D6) — schema:3 session-KDF capability. OPTIONAL
+        // → absent (nil) decodes fine and JSONEncoder omits it, so a legacy bundle
+        // is byte-wire-identical. A peer that sets this true is treated as
+        // v3-capable; both legs must set it (else mixed-fleet falls back to v2).
+        public let sessionKdfV3: Bool?
+
+        public init(ratchetV3: Bool?, sframeV1: Bool? = nil, vkeyV1: Bool? = nil, sessionKdfV3: Bool? = nil) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
             self.vkeyV1 = vkeyV1
+            self.sessionKdfV3 = sessionKdfV3
         }
     }
 
@@ -245,6 +252,14 @@ public enum CallPiggyBack: Equatable {
     /// `WsCallSignaller.EARBUD_PDU_PAYLOAD_PREFIX`.
     case earbudPdu(callId: String, pdu: Data)
 
+    /// `<callId>|EARBUDMKD:<base64>` — Phase 6 sealed PQ media key
+    /// package (exactly 60 bytes: nonce[12] || AES-256-GCM[48]).
+    /// Sent by the SW counterparty (iOS) to the earbud-side phone
+    /// (Android), which writes it to GATT characteristic 0xc4.
+    /// iOS never receives this as the earbud side — silently dropped
+    /// in `routeInboundCallPiggyBack` if it ever arrives.
+    case earbudMkd(callId: String, pkg: Data)
+
     /// Parse the literal `opaque_message.data` UTF-8 string.
     ///
     /// Returns `nil` for shapes that are NOT a `<callId>|<TAG>:...`
@@ -282,6 +297,12 @@ public enum CallPiggyBack: Equatable {
             guard let bytes = Data(base64Encoded: v) else { return nil }
             return .earbudPdu(callId: callId, pdu: bytes)
         }
+        // EARBUDMKD:<base64> — Phase 6 sealed PQ media key package (60 bytes).
+        // Wrong size dropped fail-closed: firmware will simply not receive the key.
+        if let v = stripPrefix(payload, "EARBUDMKD:") {
+            guard let bytes = Data(base64Encoded: v), bytes.count == 60 else { return nil }
+            return .earbudMkd(callId: callId, pkg: bytes)
+        }
         return nil
     }
 
@@ -302,5 +323,12 @@ public enum CallPiggyBack: Equatable {
     /// `WsCallSignaller.sendEarbudPdu` (`"<callId>|EARBUDPDU:<base64>"`).
     public static func serializeEarbudPdu(callId: String, pdu: Data) -> String {
         return "\(callId)|EARBUDPDU:\(pdu.base64EncodedString())"
+    }
+
+    /// Build a wire string for a Phase 6 PQ media key package — the inverse
+    /// of the `.earbudMkd` parse branch. Mirrors Android
+    /// `WsCallSignaller.sendEarbudMediaKeyActive` framing.
+    public static func serializeEarbudMkd(callId: String, pkg: Data) -> String {
+        return "\(callId)|EARBUDMKD:\(pkg.base64EncodedString())"
     }
 }

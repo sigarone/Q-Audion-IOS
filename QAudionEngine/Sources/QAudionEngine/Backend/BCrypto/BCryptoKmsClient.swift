@@ -33,11 +33,18 @@ public final class BCryptoKmsClient {
         publicKey: Data,
         mlkemEncapKey: Data? = nil,
         keyType: String = "x25519",
-        ed25519PubKey: Data? = nil
+        ed25519PubKey: Data? = nil,
+        kmsProtoVersion: Int = 2
     ) async throws {
+        // KMS Rotation v2 (§3.6): advertise the proto version so the
+        // server emits v1 (no-AAD) packages to legacy devices and v2
+        // (AAD-bound, real-hybrid) packages to upgraded ones. Mixed
+        // fleet supported during rollout. The ML-KEM encapsulation key
+        // field name is the FROZEN `mlkem_encapsulation_key` (§3.0).
         var dict: [String: Any] = [
             "public_key": publicKey.base64EncodedString(),
-            "key_type": keyType
+            "key_type": keyType,
+            "kms_proto_version": kmsProtoVersion
         ]
         if let mlkemEncapKey = mlkemEncapKey {
             dict["mlkem_encapsulation_key"] = mlkemEncapKey.base64EncodedString()
@@ -69,14 +76,62 @@ public final class BCryptoKmsClient {
         return response.keys
     }
 
-    /// Acknowledge receipt of a KMS key.
+    /// Acknowledge receipt of a KMS key (v1 / legacy path).
     /// POST /api/v1/kms/acknowledge/{keyId}
     public func acknowledgeKey(keyId: String) async throws {
         _ = try await rest.post("/api/v1/kms/acknowledge/\(keyId)", body: nil)
     }
+
+    /// §3.6 POST /api/v1/kms/ack-pop response.
+    ///
+    /// FROZEN 2026-06-16 (§3.0): `epoch` is a DECIMAL STRING (uint64
+    /// exceeds JS safe-integer range; cross-platform parity). Callers
+    /// parse it with `UInt64(resp.epoch)`.
+    public struct AckPopResponse: Codable {
+        public let verified: Bool
+        public let commit: Bool
+        public let epoch: String
+    }
+
+    /// Build the §3.6 ack-pop request body. `static` so it is unit-testable
+    /// without a live REST client. `epoch` is serialized as a DECIMAL
+    /// STRING (§3.0 freeze).
+    public static func encodeAckPopBody(
+        keyId: String, deviceId: String, epoch: UInt64, txnId: String, popB64: String
+    ) throws -> Data {
+        let dict: [String: Any] = [
+            "key_id": keyId,
+            "device_id": deviceId,
+            "epoch": String(epoch),
+            "txn_id": txnId,
+            "pop": popB64
+        ]
+        return try JSONSerialization.data(withJSONObject: dict)
+    }
+
+    /// §3.6 POST /api/v1/kms/ack-pop — replaces the bare /acknowledge for
+    /// v2 devices. Returns the server's verify/commit verdict. The server
+    /// ignores the request `epoch` for verification (reads its ledger
+    /// row); we still send it per the wire shape.
+    public func ackPop(
+        keyId: String, deviceId: String, epoch: UInt64, txnId: String, pop: Data
+    ) async throws -> AckPopResponse {
+        let body = try Self.encodeAckPopBody(
+            keyId: keyId, deviceId: deviceId, epoch: epoch,
+            txnId: txnId, popB64: pop.base64EncodedString())
+        let data = try await rest.post("/api/v1/kms/ack-pop", body: body)
+        return try JSONDecoder().decode(AckPopResponse.self, from: data)
+    }
 }
 
 /// Single pending-key entry. Matches Android `KmsKeyDto`.
+///
+/// v2 (KMS Rotation v2, §3.1) extends this with the rotation primitives
+/// (`key_class`/`key_epoch`/`slot_id`/`txn_id`/`supersedes`/`server_nonce`)
+/// and the server-authoritative identity bytes (`user_id`/`device_id`)
+/// the client MUST use verbatim for the AAD + PoP. All v2 fields are
+/// OPTIONAL so a legacy v1 entry (none of them present) still decodes;
+/// `proto_version` defaults to 1 when absent.
 public struct PendingKey: Codable {
     public let keyId: String
     public let keyName: String
@@ -86,6 +141,21 @@ public struct PendingKey: Codable {
     public let ephemeralPubkey: String
     public let nonce: String
     public let createdAt: String?
+    // -- v2 fields (§3.1). Optional so v1 (legacy) entries still decode. --
+    public let keyType: String?
+    public let earbudId: String?
+    public let keyClass: String?
+    public let keyEpoch: String?      // decimal uint64 STRING
+    public let slotId: String?
+    public let txnId: String?
+    public let supersedes: String?
+    public let serverNonce: String?   // base64, 16 bytes
+    /// FROZEN 2026-06-16 (§3.0): server-authoritative identity bytes used
+    /// verbatim in this row's AES-GCM AAD + the qa-kms-pop-v1 PoP. The
+    /// client NEVER sources these locally for a v2 entry.
+    public let userId: String?
+    public let deviceId: String?
+    public let protoVersion: Int
 
     enum CodingKeys: String, CodingKey {
         case keyId = "key_id"
@@ -96,26 +166,58 @@ public struct PendingKey: Codable {
         case ephemeralPubkey = "ephemeral_pubkey"
         case nonce
         case createdAt = "created_at"
+        case keyType = "key_type"
+        case earbudId = "earbud_id"
+        case keyClass = "key_class"
+        case keyEpoch = "key_epoch"
+        case slotId = "slot_id"
+        case txnId = "txn_id"
+        case supersedes
+        case serverNonce = "server_nonce"
+        case userId = "user_id"
+        case deviceId = "device_id"
+        case protoVersion = "proto_version"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        keyId = try c.decode(String.self, forKey: .keyId)
+        keyName = try c.decode(String.self, forKey: .keyName)
+        fingerprint = try c.decode(String.self, forKey: .fingerprint)
+        status = try c.decode(String.self, forKey: .status)
+        encryptedPackage = try c.decode(String.self, forKey: .encryptedPackage)
+        ephemeralPubkey = (try? c.decode(String.self, forKey: .ephemeralPubkey)) ?? ""
+        nonce = (try? c.decode(String.self, forKey: .nonce)) ?? ""
+        createdAt = try? c.decode(String.self, forKey: .createdAt)
+        keyType = try? c.decode(String.self, forKey: .keyType)
+        earbudId = try? c.decode(String.self, forKey: .earbudId)
+        keyClass = try? c.decode(String.self, forKey: .keyClass)
+        keyEpoch = try? c.decode(String.self, forKey: .keyEpoch)
+        slotId = try? c.decode(String.self, forKey: .slotId)
+        txnId = try? c.decode(String.self, forKey: .txnId)
+        supersedes = try? c.decode(String.self, forKey: .supersedes)
+        serverNonce = try? c.decode(String.self, forKey: .serverNonce)
+        userId = try? c.decode(String.self, forKey: .userId)
+        deviceId = try? c.decode(String.self, forKey: .deviceId)
+        protoVersion = (try? c.decode(Int.self, forKey: .protoVersion)) ?? 1
     }
 
     public init(
-        keyId: String,
-        keyName: String,
-        fingerprint: String,
-        status: String = "pending",
-        encryptedPackage: String,
-        ephemeralPubkey: String,
-        nonce: String,
-        createdAt: String? = nil
+        keyId: String, keyName: String, fingerprint: String, status: String = "pending",
+        encryptedPackage: String, ephemeralPubkey: String, nonce: String,
+        createdAt: String? = nil, keyType: String? = nil, earbudId: String? = nil,
+        keyClass: String? = nil, keyEpoch: String? = nil, slotId: String? = nil,
+        txnId: String? = nil, supersedes: String? = nil, serverNonce: String? = nil,
+        userId: String? = nil, deviceId: String? = nil, protoVersion: Int = 1
     ) {
-        self.keyId = keyId
-        self.keyName = keyName
-        self.fingerprint = fingerprint
-        self.status = status
-        self.encryptedPackage = encryptedPackage
-        self.ephemeralPubkey = ephemeralPubkey
-        self.nonce = nonce
-        self.createdAt = createdAt
+        self.keyId = keyId; self.keyName = keyName; self.fingerprint = fingerprint
+        self.status = status; self.encryptedPackage = encryptedPackage
+        self.ephemeralPubkey = ephemeralPubkey; self.nonce = nonce; self.createdAt = createdAt
+        self.keyType = keyType; self.earbudId = earbudId; self.keyClass = keyClass
+        self.keyEpoch = keyEpoch; self.slotId = slotId; self.txnId = txnId
+        self.supersedes = supersedes; self.serverNonce = serverNonce
+        self.userId = userId; self.deviceId = deviceId
+        self.protoVersion = protoVersion
     }
 }
 

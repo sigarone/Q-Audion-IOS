@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -115,6 +116,26 @@ public enum CryptoConstants {
     public static let replayWindowSize: UInt32 = 256
     /// Alert threshold for unexpected gaps in the sequence counter.
     public static let maxSequenceGap: UInt32 = 1000
+
+    // MARK: - KMS Rotation v2 server identity (§3.0/§3.4 FROZEN 2026-06-16)
+    /// The provisioned KMS.ServerIdentity string — the SAME value MUST be
+    /// configured server-side ([kms] server_identity) AND baked into every
+    /// client build. `server_id = SHA-256("qa-kms-server-id-v1|" ||
+    /// KMS.ServerIdentity)` is computed by all 5 surfaces and NEVER echoed
+    /// on the wire (echoing would defeat anti-rogue-KMS). Cert-pin /
+    /// JWTSecret-derived / zeros placeholders are REJECTED by the contract.
+    ///
+    /// NOTE: this default is the KAT/test identity. A production build MUST
+    /// override it with the deployment's `[kms] server_identity`.
+    public static let kmsServerIdentity = "qa-kms-test-server-2026-06-16"
+
+    /// §3.0/§3.4: server_id = SHA-256("qa-kms-server-id-v1|" || identity).
+    /// 32-byte provisioned constant fed into the qa-kms-pop-v1 PoP input.
+    public static func kmsServerId(identity: String = kmsServerIdentity) -> Data {
+        var input = Data("qa-kms-server-id-v1|".utf8)
+        input.append(Data(identity.utf8))
+        return Data(SHA256.hash(data: input))
+    }
 
     /// Securely zeroize data to prevent recovery of sensitive material.
     ///

@@ -272,6 +272,55 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// of the per-call state in `onCallEnded`.
     private var sentOfferTranscriptByCall: [String: Data] = [:]
 
+    // MARK: - KMS-rotation-v2 Phase-1 wiring (additive, all nil/off by default)
+    //
+    // Like the Phase-10b signing hooks above, EVERY property here is nil/false by
+    // default so an integration constructed without wiring them (tests, legacy
+    // call paths) behaves EXACTLY as before: v2 KDF, no D4 abort, no key_class
+    // lookups. The app layer wires these from AppState once the SovereignKeyVault
+    // key_class + the v3 capability are available.
+
+    /// THIS device implements the schema:3 session KDF (D6). True for any
+    /// Phase-1+ build that wires Phase-1; gated additionally on the peer
+    /// advertising v3 (mixed-fleet falls back to v2). Defaults false so an
+    /// unwired integration stays on the v2 KDF (byte-identical to today).
+    public var localSupportsSessionKdfV3: Bool = false
+
+    /// Resolve, for a peer contactId, the (hasHwOnlyKey, expectedHwOnlyFp)
+    /// needed by the D4 require-hw-only abort. `hasHwOnlyKey` is true iff this
+    /// device holds a key whose D1 key_class == hw_only for the peer;
+    /// `expectedHwOnlyFp` is that key's fingerprint (the negotiation MUST land on
+    /// it). nil closure ⇒ no contact is treated as hw_only (D4 never fires).
+    /// Wired from `SovereignKeyVault.getKeyClass` + the contact→fp map.
+    public var resolveHwOnlyContact: ((String) -> (hasHwOnlyKey: Bool, expectedHwOnlyFp: String?))?
+
+    /// Fired when the Phase-1 policy (D3 verify-fail or D4 require-hw-only)
+    /// decides to ABORT the call before any session-key derivation. The app
+    /// layer tears the call down. (callId, reasonCode). Reason codes:
+    /// "verify_failed", "hw_only_required".
+    public var onPhase1Abort: ((_ callId: String, _ reason: String) -> Void)?
+
+    /// Resolve THIS device's eligible (fingerprint, key_class) PSK list for the
+    /// OUTGOING OFFER advertisement (D2). Wired from `SovereignKeyVault`
+    /// (listPskNames → getFingerprint + getKeyClass). nil ⇒ advertise [] (the
+    /// pre-Phase-1 iOS behaviour — no vault). The list is re-ordered hw_only-first
+    /// by `phase1AdvertisedFingerprints()` so the additive single-salt
+    /// negotiation prefers the hw_only key.
+    public var resolveEligibleFingerprints: (() -> [(fingerprint: String, keyClass: SovereignKeyVault.KeyClass)])?
+
+    /// D2 — the OFFER's advertised `pskFingerprints[]`, hw_only-first. Empty when
+    /// `resolveEligibleFingerprints` is unwired (legacy iOS OFFER advertised []).
+    private func phase1AdvertisedFingerprints() -> [String] {
+        guard let resolve = resolveEligibleFingerprints else { return [] }
+        return KmsHandshakePolicyV1.advertiseOrder(eligible: resolve())
+    }
+
+    /// Resolve a negotiated fingerprint to its 32-byte PSK bytes (the HKDF salt),
+    /// for the CALLER side that receives `selectedPskFingerprint` in the ACCEPT.
+    /// Wired from `SovereignKeyVault` (name→fp map → loadPsk). nil ⇒ caller can't
+    /// reproduce the mix → derives without it (legacy behaviour).
+    public var resolvePskByFingerprint: ((String) -> Data?)?
+
     public init() {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
         // Task #11 — head-start the ephemeral ML-KEM keypair off the
@@ -474,8 +523,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             callId: callId,
             pqcPublicKey: pqcRawPub.base64EncodedString(),
             x25519PublicKey: x25519RawPub.base64EncodedString(),
-            capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
-            pskFingerprints: []  // iOS has no SovereignKeyVault yet (see WIRE_SPEC §5)
+            // Advertise our schema:3 session-KDF support (Phase-1 D6). Additive:
+            // nil when unwired → JSONEncoder omits → byte-identical legacy OFFER.
+            capabilities: AndroidHandshakeBundle.Capabilities(
+                ratchetV3: true,
+                sessionKdfV3: localSupportsSessionKdfV3 ? true : nil),
+            pskFingerprints: phase1AdvertisedFingerprints()  // D2: hw_only-first
         )
 
         // Phase-10b (a) — SIGN the OFFER over the §3 transcript before serialize.
@@ -773,16 +826,33 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
             }
 
-            // 5. Corrected single ct-bound derivation (schema :2). The
-            // ML-KEM ciphertext (pqcResult.ciphertext) is bound via the
-            // HKDF info; the negotiated PSK (if any) is the HKDF salt.
-            // Byte-identical to Android / iOS / Desktop / firmware.
-            let combined = Self.deriveHybridSessionKey(
+            // 5. Phase-1 derive seam — D4 require-hw-only abort + D6 v2/v3 KDF
+            // selection. When Phase-1 is NOT wired this is byte-identical to the
+            // schema:2 `deriveHybridSessionKey` (today's path). When wired:
+            //   - D4: a hw_only contact whose negotiation didn't land on its
+            //     hw_only fp ⇒ ABORT here, BEFORE any ACCEPT/session — fire
+            //     onPhase1Abort and throw (no key derived, no ACCEPT emitted).
+            //   - D6: v3 KDF (info_v3 with selected_fp) iff BOTH legs advertise it.
+            let peerV3 = SessionKdfNegotiation.peerAdvertisesV3(
+                capabilityV3: bundle.capabilities?.sessionKdfV3,
+                peerHandshakeVersion: SessionKdfNegotiation.v3HandshakeVersion)
+            let combined: Data
+            switch phase1DeriveSessionKey(
+                peerId: callerId,
                 pqcSs: pqcResult.sharedSecret,
                 x25519Ss: x25519Result.sharedSecret,
                 pqcCiphertext: pqcResult.ciphertext,
-                psk: selectedPsk
-            )
+                selectedFp: selectedFp,
+                selectedPsk: selectedPsk,
+                peerSupportsV3: peerV3
+            ) {
+            case .success(let key):
+                combined = key
+            case .abort(let reason):
+                print("[QAudionCallIntegration] Phase-1 ABORT (\(reason)) responder callId=\(callId.prefix(8))… peer=\(callerId.prefix(8))… — no ACCEPT, no session")
+                onPhase1Abort?(callId, reason)
+                throw IntegrationError.handshakeAborted(code: reason)
+            }
 
             // 7. Build ACCEPT JSON.
             // W527: Android's kotlinx.serialization HandshakeBundle data
@@ -805,7 +875,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     pqc: pqcResult.ciphertext.base64EncodedString(),
                     x25519: x25519Result.ephemeralPublicKey.base64EncodedString()
                 ),
-                capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
+                // Advertise our schema:3 session-KDF support so the caller's leg
+                // can negotiate v3 (additive: nil/false when Phase-1 unwired →
+                // JSONEncoder omits / encodes false → legacy-compatible).
+                capabilities: AndroidHandshakeBundle.Capabilities(
+                    ratchetV3: true,
+                    sessionKdfV3: localSupportsSessionKdfV3 ? true : nil),
                 selectedPskFingerprint: selectedFp
             )
 
@@ -970,26 +1045,40 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let x25519Secret = try local.x25519Priv.sharedSecretFromKeyAgreement(with: remoteEph)
             let x25519Ss = x25519Secret.withUnsafeBytes { Data($0) }
 
-            // 3. Corrected single ct-bound derivation (schema :2) —
-            //    byte-equal with the responder's deriveHybridSessionKey
-            //    and Android / Desktop / firmware. The ML-KEM ciphertext
-            //    we just decapsulated (pqcCt) is bound via the HKDF info.
-
-            // 4. iOS originator can't materialise the local PSK material
-            //    yet (no SovereignKeyVault on iOS — WIRE_SPEC §5 P1). When
-            //    the vault lands, look up selectedPskFingerprint and pass
-            //    it as `psk:` below (it becomes the HKDF salt). For now a
-            //    non-nil selectedPskFingerprint is a diagnostic warning:
-            //    the peer mixed a PSK we can't reproduce, so keys diverge.
-            if let selected = bundle.selectedPskFingerprint, !selected.isEmpty {
-                print("[QAudionCallIntegration] ACCEPT carried selectedPskFingerprint=\(selected.prefix(16))… but iOS originator has no PSK — deriving without it (will diverge from peer)")
+            // 3/4. Phase-1 caller-side derive — resolve the negotiated PSK (the
+            //    responder echoed `selectedPskFingerprint`) into its bytes via the
+            //    opt-in resolver (Phase-1: iOS now HAS a SovereignKeyVault), then
+            //    run the SAME D4 abort + D6 v2/v3 seam the responder uses so both
+            //    legs derive the identical key. When Phase-1 is unwired this is
+            //    byte-identical to the old `deriveHybridSessionKey(psk: nil)`.
+            let selectedFp = bundle.selectedPskFingerprint.flatMap { $0.isEmpty ? nil : $0 }
+            var selectedPsk: Data? = nil
+            if let fp = selectedFp {
+                selectedPsk = resolvePskByFingerprint?(fp)
+                if selectedPsk == nil {
+                    print("[QAudionCallIntegration] ACCEPT carried selectedPskFingerprint=\(fp.prefix(16))… but the resolver returned no PSK — deriving without it (will diverge from peer)")
+                }
             }
-            let combined = Self.deriveHybridSessionKey(
+            let peerV3 = SessionKdfNegotiation.peerAdvertisesV3(
+                capabilityV3: bundle.capabilities?.sessionKdfV3,
+                peerHandshakeVersion: SessionKdfNegotiation.v3HandshakeVersion)
+            let combined: Data
+            switch phase1DeriveSessionKey(
+                peerId: callerId,
                 pqcSs: pqcSs,
                 x25519Ss: x25519Ss,
                 pqcCiphertext: pqcCt,
-                psk: nil
-            )
+                selectedFp: selectedFp,
+                selectedPsk: selectedPsk,
+                peerSupportsV3: peerV3
+            ) {
+            case .success(let key):
+                combined = key
+            case .abort(let reason):
+                print("[QAudionCallIntegration] Phase-1 ABORT (\(reason)) caller callId=\(callId.prefix(8))… peer=\(callerId.prefix(8))… — NOT initialising session")
+                onPhase1Abort?(callId, reason)
+                return
+            }
 
             // 5. Double-ACCEPT guard — normalise to lowercase so both the
             //    original-case and lowercase-echo paths converge on one key.
@@ -1321,6 +1410,134 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             outputByteCount: 32
         )
         return key.withUnsafeBytes { Data($0) }
+    }
+
+    // MARK: - KMS-rotation-v2 Phase-1 (D6) — schema:3 session-KDF
+
+    /// `selected_fp_or_zero32` — the 32-byte negotiation outcome folded into the
+    /// schema:3 HKDF `info`. `SHA-256(selectedPSK)` when a PSK was negotiated,
+    /// else 32 × 0x00. FROZEN by `session-key-v3-kat.json`; mirrors Android /
+    /// Desktop / firmware. `internal` so the KAT can exercise it directly.
+    static func selectedFpOrZero32(selectedPsk: Data?) -> Data {
+        guard let psk = selectedPsk, !psk.isEmpty else {
+            return Data(repeating: 0x00, count: 32)
+        }
+        return Data(SHA256.hash(data: psk))
+    }
+
+    /// Schema:3 hybrid session-key derivation (KMS-rotation-v2 Phase-1, D6).
+    ///
+    /// Identical to ``deriveHybridSessionKey`` (schema:2) EXCEPT the HKDF `info`
+    /// gains a trailing `selected_fp_or_zero32(32)`:
+    ///
+    ///   ct_bind     = HMAC-SHA256("q-audion-ct-bind-v1", pqcCiphertext)        [32B]
+    ///   ikm         = pqcSs(32) || x25519Ss(32)                                [64B]
+    ///   salt        = psk  if (psk != nil && !psk.isEmpty)  else "q-audion-hybrid-pqc-v1"
+    ///   info_v3     = "q-audion-session-key"(20) || ct_bind(32)
+    ///                 || selected_fp_or_zero32(32)                             [84B]
+    ///   key         = HKDF-SHA256(ikm, salt, info_v3, 32)
+    ///
+    /// `selected_fp_or_zero32 = SHA-256(psk)` (the negotiated PSK's frozen
+    /// fingerprint) or 32×0x00 when no PSK was selected. Folding the outcome into
+    /// `info` makes any ASYMMETRIC negotiation tamper diverge the key even if the
+    /// signature (C) is bypassed — defense-in-depth. It does NOT alone stop the
+    /// symmetric strip (both legs fold zeros); C+D do.
+    ///
+    /// The PSK is STILL the HKDF Extract salt (additive composition, D2). When a
+    /// PSK is present it appears BOTH as the salt AND, hashed, in the info tail —
+    /// that double-use is intentional and frozen by the KAT.
+    ///
+    /// Byte-identical to Android `deriveSessionKeyV3` / Desktop /
+    /// firmware in-SE `psa_mac_compute` HKDF-Extract. `internal` so the KAT can
+    /// exercise the exact production path via `@testable import`.
+    static func deriveHybridSessionKeyV3(
+        pqcSs: Data,
+        x25519Ss: Data,
+        pqcCiphertext: Data,
+        psk: Data?
+    ) -> Data {
+        let ctBind = Data(
+            HMAC<SHA256>.authenticationCode(
+                for: pqcCiphertext,
+                using: SymmetricKey(data: HkdfLabels.hybridCtBindV1)
+            )
+        )
+
+        var ikm = Data(capacity: pqcSs.count + x25519Ss.count)
+        ikm.append(pqcSs)
+        ikm.append(x25519Ss)
+
+        let salt: Data
+        if let psk = psk, !psk.isEmpty {
+            salt = psk
+        } else {
+            salt = HkdfLabels.hybridPqcSaltV1
+        }
+
+        let selFp = Self.selectedFpOrZero32(selectedPsk: psk)
+        var info = Data(capacity: HkdfLabels.hybridPqcSessionKey.count + ctBind.count + selFp.count)
+        info.append(HkdfLabels.hybridPqcSessionKey)
+        info.append(ctBind)
+        info.append(selFp)
+
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: salt,
+            info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
+    // MARK: - Phase-1 live-call seam (D4 abort + v2/v3 derive selection)
+
+    /// Phase-1 derive decision for the responder/caller: enforce the D4
+    /// require-hw-only policy, then pick the schema:2 or schema:3 session KDF
+    /// (D6) and return the 32-byte session key — OR a non-nil abort reason.
+    ///
+    /// Additive: when Phase-1 is NOT wired (`resolveHwOnlyContact == nil` AND
+    /// `localSupportsSessionKdfV3 == false`) this is byte-identical to calling
+    /// `deriveHybridSessionKey` (schema:2) directly — exactly today's behaviour.
+    ///
+    /// - Parameters:
+    ///   - peerId: contactId, for the D4 hw_only lookup.
+    ///   - selectedFp: the negotiated fingerprint (D2), nil ⇒ no PSK.
+    ///   - selectedPsk: the negotiated PSK bytes (the HKDF salt), nil ⇒ none.
+    ///   - peerSupportsV3 / peerHandshakeVersion: from the inbound bundle, for the
+    ///     v2/v3 negotiation.
+    /// - Returns: `.success(sessionKey)` or `.abort(reason)`.
+    enum Phase1DeriveOutcome { case success(Data); case abort(String) }
+    func phase1DeriveSessionKey(
+        peerId: String,
+        pqcSs: Data,
+        x25519Ss: Data,
+        pqcCiphertext: Data,
+        selectedFp: String?,
+        selectedPsk: Data?,
+        peerSupportsV3: Bool
+    ) -> Phase1DeriveOutcome {
+        // D4 — require-hw-only. Only when wired AND the peer is a hw_only contact.
+        if let resolve = resolveHwOnlyContact {
+            let hw = resolve(peerId)
+            if hw.hasHwOnlyKey {
+                guard let expected = hw.expectedHwOnlyFp, selectedFp == expected else {
+                    return .abort("hw_only_required")
+                }
+            }
+        }
+        // D6 — v2/v3 negotiation. v3 only when BOTH legs support it.
+        let version = SessionKdfNegotiation.resolve(
+            localSupportsV3: localSupportsSessionKdfV3, peerSupportsV3: peerSupportsV3)
+        let key: Data
+        switch version {
+        case .v3:
+            key = Self.deriveHybridSessionKeyV3(
+                pqcSs: pqcSs, x25519Ss: x25519Ss, pqcCiphertext: pqcCiphertext, psk: selectedPsk)
+        case .v2:
+            key = Self.deriveHybridSessionKey(
+                pqcSs: pqcSs, x25519Ss: x25519Ss, pqcCiphertext: pqcCiphertext, psk: selectedPsk)
+        }
+        return .success(key)
     }
 
     /// `vkey-v1` — derive the dedicated 32-byte earbud-video key K_video.
