@@ -710,4 +710,12 @@ public final class MessageRatchet {
         guard isV4Enabled() else { return nil }
         return RatchetNative.fileDecrypt(handle, fileId: fileId, ctTag: ctTag, counter: counter)
     }
+
+    /// Derive the 32-byte v4 media session secret for a call.
+    /// `HKDF-SHA256(root, "qa/v4/media/"‖callId, L=32)`. Read-only — no ratchet chain mutates.
+    /// Returns `nil` when the v4 path is disabled or the native core is unavailable.
+    public func mediaKeyV4(_ handle: UInt, callId: Data) -> Data? {
+        guard isV4Enabled() else { return nil }
+        return RatchetNative.mediaKey(handle, callId: callId)
+    }
 }
