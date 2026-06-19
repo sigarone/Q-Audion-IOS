@@ -89,11 +89,16 @@ jobs:
           cd QAudionEngine
           swift package resolve
 
+      - name: List available schemes
+        run: |
+          cd QAudionEngine
+          xcodebuild -list 2>&1 || true
+
       - name: Run Tests (iOS Simulator)
         run: |
           cd QAudionEngine
           xcodebuild test \
-            -scheme "QAudionEngine-Package" \
+            -scheme "QAudionEngine" \
             -destination "platform=iOS Simulator,name=iPhone 16,OS=latest" \
             -derivedDataPath /tmp/dd-ios-sim \
             -resultBundlePath /tmp/ios-sim-results.xcresult
