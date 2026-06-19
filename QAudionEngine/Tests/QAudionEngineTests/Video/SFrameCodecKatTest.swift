@@ -51,6 +51,16 @@ final class SFrameCodecKatTest: XCTestCase {
         case "1to1":
             master = try SFrameCodec.deriveMaster1to1(masterInput)
             kid = Data()
+        case "1to1-dir":
+            // WS-6 directional master: senderId binds direction, callId binds
+            // per-call freshness. Same seal/round-trip path as plain "1to1"
+            // (empty KID — 1:1 calls carry no KID).
+            guard let senderId = v["sender_id"] as? String,
+                  let callId = v["call_id"] as? String else {
+                XCTFail("[\(name)] missing sender_id/call_id for 1to1-dir"); return
+            }
+            master = try SFrameCodec.deriveMaster1to1Directional(masterInput, senderId: senderId, callId: callId)
+            kid = Data()
         case "group":
             guard let groupIdHex = v["group_id_hex"] as? String,
                   let senderId = v["sender_id"] as? String,

@@ -56,6 +56,8 @@ public enum SFrameCodec {
     public enum SFrameError: Error, CustomStringConvertible {
         case invalidPqcKeyLength(Int)
         case invalidChainKeyLength(Int)
+        case emptySenderId
+        case emptyCallId
         case invalidKidLength(Int)
         case ctrTopFourBitsReserved(UInt64)
         case invalidLayer(Int)
@@ -72,6 +74,8 @@ public enum SFrameCodec {
             switch self {
             case .invalidPqcKeyLength(let n): return "pqcSessionKey must be 32 bytes, got \(n)"
             case .invalidChainKeyLength(let n): return "chainKey must be 32 bytes, got \(n)"
+            case .emptySenderId: return "senderId must not be empty"
+            case .emptyCallId: return "callId must not be empty"
             case .invalidKidLength(let n): return "KID must be 0..3 bytes, got \(n)"
             case .ctrTopFourBitsReserved(let c): return "CTR top 4 bits reserved for layer; got 0x\(String(c, radix: 16))"
             case .invalidLayer(let c): return "invalid SFrame layer code \(c)"
@@ -114,6 +118,37 @@ public enum SFrameCodec {
             throw SFrameError.invalidPqcKeyLength(pqcSessionKey.count)
         }
         return hkdf(ikm: pqcSessionKey, salt: saltV1, info: info1to1Master, len: masterLen)
+    }
+
+    /// Derive the DIRECTIONAL 1:1 SFrame master — the WS-6 (key, nonce)-reuse fix for
+    /// LIVE bidirectional video.
+    ///
+    /// Both call directions share one 32-byte PQC session key, so a non-directional
+    /// master would let the two senders pick the same `(frameKey, nonce)` for the same
+    /// CTR — a catastrophic AES-GCM nonce reuse. Binding the master to the **sender's**
+    /// identity makes the two directions derive disjoint key domains:
+    ///   - `senderId` binds the direction (caller vs callee never share a master);
+    ///   - `callId` binds per-call freshness (a new call re-keys even with the same peers).
+    ///
+    /// Construction (spec §3.1 directional variant):
+    /// ```
+    ///   info   = UTF8("1to1-master-dir|" + senderId + "|" + callId)
+    ///   master = HKDF-SHA256(ikm: pqcSessionKey, salt: saltV1, info: info, length: 32)
+    /// ```
+    /// `saltV1 = "qaudion-sframe-v1"`, `length = masterLen = 32`.
+    ///
+    /// Byte-exact cross-platform (Android == iOS == Desktop): the Kotlin reference
+    /// `SFrameCodec.deriveMaster1to1Directional` produces identical output for the same
+    /// inputs, proven by the shared `1to1-dir` vectors in `sframe-video-kat.json`.
+    /// Construction cross-checked via nim (security mode) and or (code mode).
+    public static func deriveMaster1to1Directional(_ pqcSessionKey: Data, senderId: String, callId: String) throws -> Data {
+        guard pqcSessionKey.count == 32 else {
+            throw SFrameError.invalidPqcKeyLength(pqcSessionKey.count)
+        }
+        guard !senderId.isEmpty else { throw SFrameError.emptySenderId }
+        guard !callId.isEmpty else { throw SFrameError.emptyCallId }
+        let info = Data(("1to1-master-dir|" + senderId + "|" + callId).utf8)
+        return hkdf(ikm: pqcSessionKey, salt: saltV1, info: info, len: masterLen)
     }
 
     /// Derive the per-sender group SFrame master from a `GroupSenderKey` chain key (spec §3.2).

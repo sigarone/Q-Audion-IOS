@@ -20,12 +20,13 @@ import QAudionEngine
 ///
 /// **PSK source**: the per-pair PSK is loaded from `SovereignKeyVault`
 /// using the peer userId as the keychain key (keychain account name).
-/// When no PSK is yet bound for the contact (e.g. unverified contacts
-/// without a completed `ContactKeyExchange` handshake) we fall back to a
-/// deterministic SHA-256(`peerUserId || senderUserId`) — the same
-/// degraded-but-functional path that `AppState.sendMessage` already uses.
-/// The fallback is logged so the UI can flag the message as `pskMissing`
-/// for the user, but the message still goes through.
+/// When no pairwise PSK is yet bound for the contact (e.g. unverified
+/// contacts without a completed `ContactKeyExchange` handshake) the send
+/// is REFUSED — it returns `.failed(reason: .pskMissing)` and triggers a
+/// `ContactKeyExchange` OFFER so a real X25519-derived PSK is negotiated.
+/// We never fall back to a server-derivable key (FIX H1): there is no
+/// silent confidentiality downgrade. The user retries once the exchange
+/// completes.
 @MainActor
 final class ChatMessageSendService {
 
@@ -68,32 +69,35 @@ final class ChatMessageSendService {
         }
         let plaintextData = Data(plaintext.utf8)
 
-        // Resolve PSK. Production path: pairwise PSK from the vault
-        // (populated by `ContactKeyExchange` after the QR/NFC handshake).
-        // Fallback: deterministic SHA-256(peer || self) so an unpaired
-        // contact can still exchange best-effort messages while the
-        // verification UX gets shipped — same degraded path as legacy
-        // `AppState.sendMessage`.
+        // Resolve PSK. Only a real pairwise PSK from the vault (populated by
+        // `ContactKeyExchange` after the QR/NFC/auto handshake) is acceptable.
+        // If none exists, we REFUSE to send and trigger a key exchange — we
+        // never derive a server-guessable fallback key (FIX H1).
         let psk: Data
-        let pskFallback: Bool
         do {
             // W77: ContactKeyExchange persists pairwise PSKs under the
             // `auto:<peerIdPrefix>:<peerId>` name (see
             // `ContactKeyExchange.keyName(for:)`). Check that first,
-            // then the bare peerId (legacy / manually-bound), then
-            // fall back to the deterministic insecure derivation.
+            // then the bare peerId (legacy / manually-bound); if neither
+            // exists, refuse the send and kick off a key exchange.
             let prefix = peerUserId.count > 8 ? String(peerUserId.prefix(8)) : peerUserId
             let autoName = "auto:\(prefix):\(peerUserId)"
             if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
                 psk = stored
-                pskFallback = false
             } else if let stored = try vault.loadPsk(name: peerUserId), !stored.isEmpty {
                 psk = stored
-                pskFallback = false
             } else {
-                psk = Self.fallbackPsk(peerUserId: peerUserId, senderId: senderId)
-                pskFallback = true
-                print("[ChatSend] PSK not found for \(peerUserId) — using deterministic fallback")
+                // FIX H1: refuse to send when no pairwise PSK exists. The old
+                // deterministic SHA-256(sorted(peer,self)) fallback was
+                // derivable by the server (and anyone who knows the two public
+                // userIds), so it gave NO confidentiality. Instead, kick off a
+                // ContactKeyExchange OFFER (W566 auto-identity) so a real
+                // X25519-derived PSK gets bound under `auto:<prefix>:<peerId>`,
+                // and fail this send. Once the peer's ACCEPT lands, the user's
+                // Retry succeeds against the real PSK (resolved above).
+                print("[ChatSend] PSK not found for \(peerUserId) — refusing to send, triggering key exchange")
+                appState.triggerKeyExchange(with: peerUserId)
+                return .failed(reason: .pskMissing)
             }
         } catch {
             // Vault failure is hard — keychain refusing access.
@@ -161,13 +165,6 @@ final class ChatMessageSendService {
                     clientMsgId: messageId.uuidString
                 )
             }
-            if pskFallback {
-                // Wire still went out — caller may decide to flag the
-                // message visually but should not roll back the local
-                // store. We surface as `.sent` (success) and let the
-                // ChatContainer decide if it wants to log a warning.
-                return .sent
-            }
             return .delivered(serverMessageId: serverMsgId)
         } catch {
             // Most likely: WS not connected, 401 token expired, or
@@ -178,29 +175,6 @@ final class ChatMessageSendService {
     }
 
     // MARK: - Internals
-
-    /// Deterministic PSK fallback used only when no pairwise PSK has been
-    /// negotiated yet. Symmetric in (peer, self) so both sides derive the
-    /// same key when neither has run `ContactKeyExchange`. Same shape as
-    /// the legacy `AppState.sendMessage` path — kept for compatibility
-    /// during the rollout of `ContactKeyExchange`-driven pairwise PSK
-    /// negotiation.
-    ///
-    /// **SECURITY NOTE** — derivable from public userIds, **does NOT
-    /// provide confidentiality against a network observer**. An external
-    /// reviewer correctly flagged this as a critical gap. The replacement
-    /// path is engine WT: route every chat-message send through
-    /// `SovereignKeyVault` and refuse to send when no pairwise PSK
-    /// exists (return `.failed(reason: .pskMissing)` instead). Until
-    /// the UX for bootstrap-the-PSK-via-QR is shipped, leaving the
-    /// fallback in place keeps iOS<->iOS chat functional in TestFlight,
-    /// at the explicit cost of confidentiality.
-    private static func fallbackPsk(peerUserId: String, senderId: String) -> Data {
-        // Sort so order doesn't matter — the receiver derives the same key.
-        let pair = [peerUserId, senderId].sorted().joined(separator: ":")
-        let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
-        return Data(digest)
-    }
 
     // MARK: - W352: v3 outbound ratchet
 
