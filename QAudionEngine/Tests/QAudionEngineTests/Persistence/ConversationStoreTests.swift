@@ -13,6 +13,7 @@ final class ConversationStoreTests: XCTestCase {
         UserDefaults().removePersistentDomain(forName: suite)
         defaults = UserDefaults(suiteName: suite)!
         store = ConversationStore(defaults: defaults)
+        store.wipeAll()  // ConversationStore.db is a shared singleton; reset between tests
     }
 
     override func tearDown() {
