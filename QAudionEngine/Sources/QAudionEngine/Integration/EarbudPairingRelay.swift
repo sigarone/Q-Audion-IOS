@@ -30,7 +30,9 @@ public final class EarbudPairingRelay {
 
     public enum PairResult {
         /// Pairing complete. `pairId` is the canonical 32-byte pair identifier.
-        case success(pairId: Data)
+        /// `ctEe` is non-nil when the connected earbud acted as RESPONDER —
+        /// caller should publish it so the INITIATOR phone can complete Stage-2.
+        case success(pairId: Data, ctEe: Data? = nil)
         /// Transient failure — retry after reconnection or fresh attestation.
         case `defer`(reason: String)
     }
@@ -129,7 +131,10 @@ public final class EarbudPairingRelay {
             return .defer(reason: "pair_fin_failed:\(error)")
         }
 
-        return .success(pairId: computedPairId)
+        // Pass ctEe only when connected earbud was RESPONDER (selfIsInitiator=true →
+        // ctEe came from resp.material, i.e. earbud generated ct_ee).
+        let ctEeOut: Data? = selfIsInitiator ? ctEe : nil
+        return .success(pairId: computedPairId, ctEe: ctEeOut)
     }
 }
 

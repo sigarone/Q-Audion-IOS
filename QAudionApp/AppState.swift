@@ -439,6 +439,10 @@ final class AppState: ObservableObject {
     /// sweep that needs it (lazy instantiation via runKmsSweep).
     lazy var earbudGattProxy: IOSEarbudGattProxy = IOSEarbudGattProxy()
 
+    /// Phase-0 §6 — keeps a periodic KMS sweep running in the background.
+    /// Started once after WS auth; stopped implicitly when AppState is freed.
+    private var kmsPeriodicPoller: KmsPeriodicPoller?
+
     /// VPN service — manages WireGuard tunnel lifecycle via NetworkExtension.
     /// Bare `let` because `VpnService` is itself `ObservableObject`; HomeView
     /// passes it directly to `VpnToggleChip(@ObservedObject)` so the chip
@@ -2054,15 +2058,41 @@ final class AppState: ObservableObject {
                 await self.runKmsSweep()
             }
         }
-        ws.registerHandler(type: "kms_key_revoked") { [weak self] _, _ in
-            DispatchQueue.main.async {
-                self?.errorMessage = "Una chiave KMS è stata revocata."
+        // Phase-0 KMS Rotation v2 §3.6 — on revoke: delete the vault PSK so
+        // any subsequent handshake cannot use a key the server has invalidated.
+        // Best-effort: a missing key (sovereign / not-yet-delivered) is a no-op;
+        // a Keychain error is logged but never surfaced to the caller.
+        ws.registerHandler(type: "kms_key_revoked") { [weak self] _, data in
+            let keyId = (data["key_id"] as? String) ?? ""
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.errorMessage = "Una chiave KMS è stata revocata."
+                guard !keyId.isEmpty else {
+                    print("[AppState] kms_key_revoked: missing key_id in payload — nothing to delete")
+                    return
+                }
+                guard let provider = self.liveProvider else {
+                    print("[AppState] kms_key_revoked: no liveProvider (logout race) — key_id=\(keyId.prefix(8))… skip")
+                    return
+                }
+                let vault = SovereignKeyVault()
+                let poller = KmsPollerService(kmsClient: provider.kmsClient, vault: vault)
+                await poller.notifyRevoked(keyId: keyId)
             }
         }
         // Initial sweep right after WS auth — covers any keys the
         // admin provisioned while the app was offline.
+        // Phase-0 §6: also start background periodic poller (default 300s).
         Task { @MainActor [weak self] in
             await self?.runKmsSweep()
+            guard let self else { return }
+            if self.kmsPeriodicPoller == nil {
+                let p = KmsPeriodicPoller()
+                self.kmsPeriodicPoller = p
+                await p.start { [weak self] in
+                    if let self = self { await self.runKmsSweep() }
+                }
+            }
         }
 
         // W347: route call_offer / call_answer / call_ice through the
