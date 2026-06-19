@@ -2984,6 +2984,19 @@ final class AppState: ObservableObject {
         let manager = DeviceKeyManager(vault: vault, kmsClient: provider.kmsClient)
         do {
             let keys = try await manager.ensureProvisioned()
+            // Publish user-level identity key so callee devices can verify the
+            // caller via GET /api/v1/users/{id}/identity-key. Without this the
+            // callee (Android) receives 404 and hangs up ~1 s after answering.
+            // Best-effort: a transient failure here must not block calls.
+            if let edPub = try? manager.currentEd25519Pub(),
+               let deviceId = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+               !deviceId.isEmpty {
+                do {
+                    try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: edPub, deviceId: deviceId)
+                } catch {
+                    print("[AppState] identity key publish failed (non-fatal): \(error)")
+                }
+            }
             // CL-5.4 — wire the earbud relay so hw_only/earbud_pair keys are
             // forwarded to the SE via GATT rather than attempting SW decryption.
             let relay = EarbudAckPopRelay(gatt: earbudGattProxy)
