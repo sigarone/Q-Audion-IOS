@@ -235,7 +235,7 @@ public final class IOSEarbudGattProxy: NSObject, EarbudPairingGattProxy {
 
 // MARK: - CBCentralManagerDelegate
 
-extension IOSEarbudGattProxy: @preconcurrency CBCentralManagerDelegate {
+@preconcurrency extension IOSEarbudGattProxy: CBCentralManagerDelegate {
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state != .poweredOn {
@@ -267,7 +267,7 @@ extension IOSEarbudGattProxy: @preconcurrency CBCentralManagerDelegate {
 
 // MARK: - CBPeripheralDelegate
 
-extension IOSEarbudGattProxy: @preconcurrency CBPeripheralDelegate {
+@preconcurrency extension IOSEarbudGattProxy: CBPeripheralDelegate {
 
     public func peripheral(_ peripheral: CBPeripheral,
                            didDiscoverServices error: Error?) {
