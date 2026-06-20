@@ -238,7 +238,7 @@ public final class IOSEarbudGattProxy: NSObject {
 
 // MARK: - CBCentralManagerDelegate
 
-extension IOSEarbudGattProxy: @preconcurrency CBCentralManagerDelegate {
+extension IOSEarbudGattProxy: CBCentralManagerDelegate {
 
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state != .poweredOn {
@@ -270,7 +270,7 @@ extension IOSEarbudGattProxy: @preconcurrency CBCentralManagerDelegate {
 
 // MARK: - CBPeripheralDelegate
 
-extension IOSEarbudGattProxy: @preconcurrency CBPeripheralDelegate {
+extension IOSEarbudGattProxy: CBPeripheralDelegate {
 
     public func peripheral(_ peripheral: CBPeripheral,
                            didDiscoverServices error: Error?) {
@@ -338,6 +338,11 @@ extension IOSEarbudGattProxy: @preconcurrency CBPeripheralDelegate {
     }
 }
 
-// @preconcurrency suppresses "conformance crosses into main actor-isolated code" (Swift 5.9).
-// IOSEarbudGattProxy is @MainActor; EarbudPairingGattProxy/EarbudKeyGattProxy are not.
-extension IOSEarbudGattProxy: @preconcurrency EarbudPairingGattProxy { }
+// NOTE: `@preconcurrency` on the conformance clause (`extension X: @preconcurrency P`)
+// is rejected by the iOS-simulator build's compiler ("attribute can only be applied
+// to declarations, not types") — it broke every ios-simulator-tests run. Under the
+// Swift 5 language mode (swift-tools 5.9) the main-actor-vs-nonisolated-protocol
+// crossing it suppressed is only a warning, not an error, so plain conformance
+// builds. CoreBluetooth conformances above rely on the `@preconcurrency import
+// CoreBluetooth` at the top of this file instead.
+extension IOSEarbudGattProxy: EarbudPairingGattProxy { }
