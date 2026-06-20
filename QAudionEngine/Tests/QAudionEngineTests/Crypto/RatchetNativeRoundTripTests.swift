@@ -51,16 +51,16 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
     func testInitReturnsNonZeroHandles() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
-        handleB = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: false)
+        handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
+        handleB = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
         XCTAssertNotEqual(handleA, 0)
         XCTAssertNotEqual(handleB, 0)
     }
 
     func test20RoundTripsEncryptADecryptB() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
-        handleB = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: false)
+        handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
+        handleB = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
 
         for i in 0..<20 {
             let pt = Data("msg-\(i)".utf8)
@@ -75,8 +75,8 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
     func testCrashResume() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
-        handleB = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: false)
+        handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
+        handleB = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
 
         let f0 = RatchetNative.encrypt(handleA, plaintext: Data("m0".utf8))!
         let f1 = RatchetNative.encrypt(handleA, plaintext: Data("m1".utf8))!
@@ -99,8 +99,8 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
     func testDhRatchetAdvancesEpoch() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA  = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
-        handleB2 = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: false)
+        handleA  = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
+        handleB2 = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
 
         XCTAssertTrue(RatchetNative.dhRatchet(handleA,  ssXwing: ss2, transcriptHash: th2))
         XCTAssertTrue(RatchetNative.dhRatchet(handleB2, ssXwing: ss2, transcriptHash: th2))
@@ -115,8 +115,8 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
     func testTamperedFrameFailsClosed() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA  = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
-        handleB2 = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: false)
+        handleA  = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
+        handleB2 = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
 
         var frame = RatchetNative.encrypt(handleA, plaintext: Data("secret".utf8))!
         frame[frame.count - 1] ^= 0xFF
@@ -134,7 +134,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
     func testFileEncryptDecryptRoundTrip() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
+        handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         let fileId  = Data("invoice-2026-06-19.pdf".utf8)
         let pt      = Data("sensitive content".utf8)
         let ctTag   = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: pt, counter: 0)
@@ -147,7 +147,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
     func testFileEncryptTamperedTagFailsClosed() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
+        handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         let fileId = Data("doc.txt".utf8)
         var ctTag  = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: Data("secret".utf8), counter: 0)!
         ctTag[ctTag.count - 1] ^= 0xFF
@@ -157,7 +157,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
     func testFileEncryptCounterIsolation() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
+        handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         let fileId = Data("shared.bin".utf8)
         let pt     = Data("payload".utf8)
         let ct0    = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: pt, counter: 0)!
@@ -169,7 +169,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
     func testMediaKeyIs32Bytes() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
+        handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         let key = RatchetNative.mediaKey(handleA, callId: Data("call-uuid-abc123".utf8))
         XCTAssertNotNil(key, "mediaKey returned nil")
         XCTAssertEqual(key?.count, 32, "mediaKey must be 32 bytes")
@@ -177,8 +177,8 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
     func testMediaKeyDeterministicBothPeers() throws {
         try XCTSkipUnless(RatchetNative.available)
-        handleA  = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: true)
-        handleB2 = RatchetNative.initSession(root: root, firstSsXwing: ss1, transcriptHash: th, isA: false)
+        handleA  = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
+        handleB2 = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
         let callId = Data("call-determinism".utf8)
         let keyA = RatchetNative.mediaKey(handleA,  callId: callId)
         let keyB = RatchetNative.mediaKey(handleB2, callId: callId)

@@ -635,15 +635,28 @@ public final class MessageRatchet {
     /// MUST ``freeV4Session(_:)`` the returned handle exactly once.
     ///
     /// - Parameters:
-    ///   - root: the post-handshake `ROOT_0` (32 bytes — derive via ``RatchetNative/root0(ssHandshake:)``
-    ///     from the handshake shared secret).
-    ///   - firstSsXwing: the first epoch's X-Wing secret (32 bytes).
+    ///   - root: the post-handshake `ROOT_0` (32 bytes — derive via ``RatchetNative/root0(ssHandshake:)``).
+    ///   - sessionEpochId: the canonical session_epoch_id (16 bytes — the lex-min party's epoch_id, §2.5).
     ///   - transcriptHash: the handshake transcript hash (32 bytes).
-    ///   - isA: `true` for the "A" direction peer (A's send chain == B's recv chain).
-    public func ensureSessionV4(root: Data, firstSsXwing: Data, transcriptHash: Data, isA: Bool) -> UInt {
+    ///   - isLexMin: `true` if this party is lex-min (its send chain == lex-max's recv chain).
+    ///
+    /// Model A (§4.1): epoch-1 chains derive directly from `ROOT_0` — no X-Wing at bootstrap.
+    public func ensureSessionV4(root: Data, sessionEpochId: Data, transcriptHash: Data, isLexMin: Bool) -> UInt {
         guard isV4Enabled() else { return 0 }
         return RatchetNative.initSession(
-            root: root, firstSsXwing: firstSsXwing, transcriptHash: transcriptHash, isA: isA)
+            root: root, sessionEpochId: sessionEpochId, transcriptHash: transcriptHash, isLexMin: isLexMin)
+    }
+
+    /// Bootstrap a v4 session from the Phase-10b handshake outputs (Model A §4.1 + §2.5), mirroring
+    /// Android `MessageRatchet.bootstrapV4` / iOS `RatchetNative.bootstrapV4`. Flag-gated.
+    public func bootstrapV4(
+        effectiveSecret: Data, selfEpochId: Data, peerEpochId: Data,
+        selfIdentityPub: Data, peerIdentityPub: Data, transcriptHash: Data
+    ) -> UInt {
+        guard isV4Enabled() else { return 0 }
+        return RatchetNative.bootstrapV4(
+            effectiveSecret: effectiveSecret, selfEpochId: selfEpochId, peerEpochId: peerEpochId,
+            selfIdentityPub: selfIdentityPub, peerIdentityPub: peerIdentityPub, transcriptHash: transcriptHash)
     }
 
     /// Encrypt `plaintext` on a v4 session's send chain. Returns the opaque v4 wire frame
