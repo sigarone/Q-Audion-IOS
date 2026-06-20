@@ -111,10 +111,31 @@ final class ChatMessageSendService {
         // from this peer (PeerCapabilityRegistry.probeInbound writes
         // the flag). This means v3 lights up incrementally as peers
         // upgrade, without any manual coordination per device.
+        //
+        // ── Phase 18 — v4 native PQ ratchet gate (checked BEFORE v3/v2) ──
+        // SYNCHRONOUS, fail-closed: route v4 ONLY when a persisted v4 session
+        // already exists for this peer (which implies the v4 path is enabled AND
+        // a negotiated+verified handshake bootstrapped it — `hasV4Session` is the
+        // per-peer v4 capability proof). We resolve this BEFORE any version
+        // selection so a peer that has a v4 session can NEVER be downgraded to v3
+        // (the "never downgrade a v4 PSK" rule). The 0xE5 frame is OPAQUE — emitted
+        // by the engine-routed method; we never build it here.
+        let useV4 = AppState.sharedV4Ratchet.hasV4Session(peerUserId)
         let useV3 = PeerCapabilityRegistry.shared.shouldUseV3Outbound(for: peerUserId)
         let wireBlob: Data
         do {
-            if useV3 {
+            if useV4 {
+                // FAIL CLOSED: if the engine returns nil (disabled mid-flight,
+                // deserialize/encrypt/persist error) we refuse the send rather
+                // than silently re-encrypting under a weaker v3/v2 epoch.
+                guard let frame = AppState.sharedV4Ratchet.encryptV4Routed(
+                    peerId: peerUserId, plaintext: plaintextData
+                ), let first = frame.first, first == MessageRatchet.magicV4 else {
+                    print("[ChatSend] v4 selected but encrypt failed/unroutable — failing closed (no downgrade)")
+                    return .failed(reason: .cryptoFailure)
+                }
+                wireBlob = frame
+            } else if useV3 {
                 wireBlob = try Self.ratchetEncryptV3(
                     plaintext: plaintextData,
                     psk: psk,

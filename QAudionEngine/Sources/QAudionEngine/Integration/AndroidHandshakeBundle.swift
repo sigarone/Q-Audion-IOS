@@ -70,11 +70,42 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // v3-capable; both legs must set it (else mixed-fleet falls back to v2).
         public let sessionKdfV3: Bool?
 
-        public init(ratchetV3: Bool?, sframeV1: Bool? = nil, vkeyV1: Bool? = nil, sessionKdfV3: Bool? = nil) {
+        // Phase 18 / WIRE-FORMAT §4 — whether this peer supports the v4 PQ Double
+        // Ratchet messaging wire format (magic=0xE5, ML-KEM-768 ⊕ X25519 X-Wing
+        // advance braid, Model A bootstrap). Negotiated as the AND of both peers'
+        // advertisements (see ``negotiate(self:peer:)`` on Android / the iOS
+        // equivalent): BOTH must advertise `true` for the dispatcher to switch to
+        // the v4 engine; otherwise the pair stays on v3 (0xE3) or v2.
+        //
+        // OPTIONAL, appended LAST, default-omitted: a peer that doesn't carry the
+        // field decodes to nil → treated as `false` (conservative fallback), and
+        // `JSONEncoder` omits a nil key, so the OFFER/ACCEPT bytes stay
+        // byte-IDENTICAL to the pre-Phase-18 wire for any peer not yet advertising
+        // v4. iOS only advertises this `true` once ``MessageRatchet/v4NativeRatchetEnabled``
+        // is set AND the real native core is linked (``RatchetNative/available``) —
+        // matching Android's `@EncodeDefault(NEVER) ratchetV4` field exactly. The
+        // key appears on the wire ONLY at the coordinated cross-platform go-live.
+        //
+        // NOTE (iOS deviation, intentional): Android omits the field via
+        // `@EncodeDefault(NEVER)` even at its `false` default. On iOS the same
+        // "omit when not advertising" behaviour falls out naturally because the
+        // field is `Bool?` and `JSONEncoder` skips `nil` — so the SENDER must pass
+        // `nil` (not `false`) for a non-v4 build. Use the convenience initializer
+        // default (`ratchetV4: nil`) for that; pass `true` only when live.
+        public let ratchetV4: Bool?
+
+        public init(
+            ratchetV3: Bool?,
+            sframeV1: Bool? = nil,
+            vkeyV1: Bool? = nil,
+            sessionKdfV3: Bool? = nil,
+            ratchetV4: Bool? = nil
+        ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
             self.vkeyV1 = vkeyV1
             self.sessionKdfV3 = sessionKdfV3
+            self.ratchetV4 = ratchetV4
         }
     }
 

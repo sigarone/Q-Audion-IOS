@@ -24,21 +24,48 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
     /// without disturbing PSKs.
     public static let service = "com.bcrypto.qaudion.ratchet.v1"
 
+    /// Keychain `kSecAttrService` for the v4 PQ-ratchet opaque session blobs.
+    /// A SEPARATE service from the v3.1 ``service`` (same Keystore-backed trust
+    /// boundary, `WhenUnlockedThisDeviceOnly`) so a v4 blob can never collide
+    /// with a v3.1 snapshot for the same `(epochId, peerId)` account. Mirrors
+    /// Android's `KEY_PREFIX_V4` separate keyspace in the same encrypted store.
+    public static let serviceV4 = "com.bcrypto.qaudion.ratchet.v4"
+
     public init() {}
 
     public func load(epochId: String, peerId: String) -> RatchetSnapshot? {
-        let blob = readBlob(account: Self.account(epochId: epochId, peerId: peerId))
+        let blob = readBlob(service: Self.service, account: Self.account(epochId: epochId, peerId: peerId))
         guard let blob = blob else { return nil }
         return try? RatchetSnapshotCodec.decode(blob)
     }
 
     public func save(epochId: String, peerId: String, snapshot: RatchetSnapshot) throws {
         let blob = RatchetSnapshotCodec.encode(snapshot)
-        try writeBlob(account: Self.account(epochId: epochId, peerId: peerId), blob: blob)
+        try writeBlob(service: Self.service, account: Self.account(epochId: epochId, peerId: peerId), blob: blob)
     }
 
     public func delete(epochId: String, peerId: String) {
-        deleteBlob(account: Self.account(epochId: epochId, peerId: peerId))
+        deleteBlob(service: Self.service, account: Self.account(epochId: epochId, peerId: peerId))
+    }
+
+    // ── v4 PQ-ratchet opaque session blob (separate Keychain service) ────────
+    //
+    // The v4 native session (``MessageRatchet/serializeV4Session(_:)``) is an
+    // opaque Rust-core blob — stored raw, NEVER parsed/decoded as a
+    // ``RatchetSnapshot``. Same write-ahead durability contract as ``save``:
+    // ``saveV4`` returns only after `SecItemAdd`/`SecItemUpdate` acknowledges.
+
+    public func loadV4(epochId: String, peerId: String) -> Data? {
+        return readBlob(service: Self.serviceV4, account: Self.account(epochId: epochId, peerId: peerId))
+    }
+
+    public func saveV4(epochId: String, peerId: String, blob: Data) throws {
+        // Store the opaque blob VERBATIM (no codec) under the v4 service.
+        try writeBlob(service: Self.serviceV4, account: Self.account(epochId: epochId, peerId: peerId), blob: blob)
+    }
+
+    public func deleteV4(epochId: String, peerId: String) {
+        deleteBlob(service: Self.serviceV4, account: Self.account(epochId: epochId, peerId: peerId))
     }
 
     // MARK: - Internal
@@ -47,10 +74,10 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
         return "\(epochId)|\(peerId)"
     }
 
-    private func readBlob(account: String) -> Data? {
+    private func readBlob(service: String, account: String) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
@@ -69,10 +96,10 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
     // crash we could resend a frame whose CK_{n+1} never persisted and
     // reuse a deterministic GCM nonce. `MessageRatchet.encrypt` treats a
     // throw here as fatal and never returns the wire blob.
-    private func writeBlob(account: String, blob: Data) throws {
+    private func writeBlob(service: String, account: String, blob: Data) throws {
         let baseAttrs: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         var addAttrs = baseAttrs
@@ -97,10 +124,10 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
         }
     }
 
-    private func deleteBlob(account: String) {
+    private func deleteBlob(service: String, account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         _ = SecItemDelete(query as CFDictionary)

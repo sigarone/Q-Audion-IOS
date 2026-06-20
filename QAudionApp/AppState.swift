@@ -2328,6 +2328,19 @@ final class AppState: ObservableObject {
             // both engines reject the other's format up front.
             let pt: Data
             switch MessageWireFormat.detect(cipher) {
+            case .v4:
+                // ── Phase 18 — v4 native PQ ratchet (opaque 0xE5 frame) ──
+                // The frame is OPAQUE (owned by the Rust core); we route by PEER
+                // id (senderId) only and NEVER parse it. The session was
+                // bootstrapped + persisted at handshake time; here we resume-by-
+                // peer and decrypt through the engine-routed method. FAIL CLOSED:
+                // a 0xE5 frame with no local v4 session (or the v4 path disabled)
+                // yields nil → throw → surfaced as a decrypt failure, NEVER a
+                // silent downgrade to v2/v1.
+                guard let plain = ratchetDecryptV4(wire: cipher, senderId: senderId) else {
+                    throw RatchetV4DispatchError.unroutableOrFailedClosed
+                }
+                pt = plain
             case .v3:
                 pt = try ratchetDecryptV3(
                     wire: cipher,
@@ -3457,6 +3470,20 @@ final class AppState: ObservableObject {
                     sharedSecret, for: peerId)
             }
         }
+        // Phase 18 — v4 ratchet bootstrap (fail-closed; no-op while v4NativeRatchetEnabled=false).
+        integration.onV4BootstrapReady = { peerId, effectiveSecret in
+            Task {
+                _ = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
+                    peerId: peerId,
+                    effectiveSecret: effectiveSecret,
+                    selfEpochId: Data(count: 16),
+                    peerEpochId: Data(count: 16),
+                    selfIdentityPub: Data(),
+                    peerIdentityPub: Data(),
+                    transcriptHash: Data()
+                )
+            }
+        }
         // Pre-negotiation hooks — same shape the caller-side block in
         // startCall uses, but mirrored for the responder.
         if let provider = liveProvider {
@@ -4122,6 +4149,21 @@ final class AppState: ObservableObject {
                         )
                         CallSessionKeyBroker.shared.registerPqcSessionKey(
                             sharedSecret, for: peerId)
+                    }
+                }
+
+                // Phase 18 — v4 ratchet bootstrap (fail-closed; no-op while v4NativeRatchetEnabled=false).
+                integration.onV4BootstrapReady = { peerId, effectiveSecret in
+                    Task {
+                        _ = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
+                            peerId: peerId,
+                            effectiveSecret: effectiveSecret,
+                            selfEpochId: Data(count: 16),
+                            peerEpochId: Data(count: 16),
+                            selfIdentityPub: Data(),
+                            peerIdentityPub: Data(),
+                            transcriptHash: Data()
+                        )
                     }
                 }
 
@@ -5905,6 +5947,20 @@ extension AppState {
     private static let ratchetVault: RatchetVault = KeychainRatchetVault()
     private static let ratchet: MessageRatchet = MessageRatchet(vault: ratchetVault)
 
+    /// Phase 18 — the SINGLE shared `MessageRatchet` instance used for v4 routed
+    /// dispatch on BOTH the send (``ChatMessageSendService``) and receive (this
+    /// file) sides. Android serializes both directions through one `MessageRatchet`
+    /// + `@Synchronized`; on iOS the v3.1 send/receive use two separate instances,
+    /// which is safe there because each v3.1 direction is a SEPARATE chain key
+    /// inside ONE serialized snapshot only when the same instance owns both — but
+    /// the v4 routed methods persist the WHOLE opaque session blob per op, so a
+    /// concurrent send and receive on DIFFERENT instances could last-writer-wins
+    /// clobber each other's chain advance. Routing all v4 ops through this one
+    /// shared instance restores Android's single-lock invariant (its
+    /// `v4RoutingLock` then serializes both directions). Same Keychain-backed
+    /// vault as ``ratchet`` so v3.1 and v4 share the device trust boundary.
+    static let sharedV4Ratchet: MessageRatchet = MessageRatchet(vault: KeychainRatchetVault())
+
     /// Decrypt a v3.1 wire blob. Bootstraps the per-peer session from
     /// `psk` if the vault has no snapshot yet. Throws on AEAD failure /
     /// replay / wire malformation, matching the v1 path's error
@@ -5922,6 +5978,29 @@ extension AppState {
         return try Self.ratchet.decryptOrThrow(
             session: session, wire: wire, aad: aad)
     }
+
+    /// Phase 18 — decrypt a v4 native PQ-ratchet frame (opaque 0xE5). Routes by
+    /// PEER id (`senderId`) only through the engine-encapsulated
+    /// ``MessageRatchet/decryptV4Routed(peerId:frame:)`` on the SHARED v4 instance.
+    /// The frame is NEVER parsed here. Returns `nil` (fail-closed) when the v4 path
+    /// is disabled, no v4 session exists for this peer, or auth/replay/parse fails —
+    /// the caller surfaces that as a decrypt failure (NEVER a downgrade).
+    ///
+    /// NOTE: unlike v3.1, there is NO `psk`/`ensureSession` lazy bootstrap here —
+    /// a v4 session must already have been bootstrapped + persisted by the
+    /// handshake (it carries identity pubkeys + transcript hash the message PSK
+    /// alone cannot supply). No session ⇒ fail closed.
+    func ratchetDecryptV4(wire: Data, senderId: String) -> Data? {
+        return Self.sharedV4Ratchet.decryptV4Routed(peerId: senderId, frame: wire)
+    }
+}
+
+/// Phase 18 — fail-closed sentinel thrown when an inbound 0xE5 v4 frame cannot be
+/// routed/decrypted (v4 disabled, no per-peer session, or auth failure). Kept
+/// distinct from `MessageWireFormat.WireError` so the surrounding catch treats it
+/// as a hard decrypt failure and never falls through to a weaker version.
+enum RatchetV4DispatchError: Error {
+    case unroutableOrFailedClosed
 }
 
 // MARK: - W347: WebRTC bridge

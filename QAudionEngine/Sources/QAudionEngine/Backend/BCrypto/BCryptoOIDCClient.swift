@@ -24,7 +24,8 @@ public final class BCryptoOIDCClient {
         let data = try await rest.get("/api/v1/auth/oidc/authorize")
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let urlString = json["authorize_url"] as? String,
-              let url = URL(string: urlString) else {
+              let url = URL(string: urlString),
+              url.scheme == "https" else {
             throw OIDCError.invalidResponse
         }
         return url
