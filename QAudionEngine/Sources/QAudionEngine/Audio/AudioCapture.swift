@@ -39,6 +39,19 @@ public final class AudioCapture {
     // the tap format matches the new hardware route.
     private var routeChangeObserver: NSObjectProtocol?
 
+    // W574o — route-change anti-thrash. A flapping Bluetooth HFP link (and the
+    // engine restart itself re-running AVAudioSession route selection) fired
+    // new/oldDeviceAvailable several times per second; restarting on each one
+    // thrashed the audio path so decrypted voice never played steadily (device
+    // telemetry 1.0.658: route flapped BT↔built-in every ~1-2s while frames were
+    // decrypting fine). Two purely time-based guards, no timers / no thread change:
+    //   * throttle  — at most one route-driven restart per second;
+    //   * suppress  — ignore the route change our OWN restart provokes (~0.6s),
+    //                 which breaks the self-induced restart loop.
+    private var lastEngineRestart: Date = .distantPast
+    private var restartSuppressUntil: Date = .distantPast
+    private let routeRestartThrottle: TimeInterval = 1.0
+
     /// Initialize with an optional audio processing pipeline.
     /// When provided, the pipeline configures AVAudioSession for VoIP and
     /// enables Apple's Voice Processing I/O (hardware AEC, NS, AGC) on the
@@ -251,50 +264,56 @@ public final class AudioCapture {
         case .oldDeviceUnavailable:
             // A device that was in use (Bluetooth HFP, wired headset) was removed.
             // AVAudioEngine may go silent if it was using the now-missing device.
-            // Restart to pick up the new route (built-in mic/speaker).
+            // Restart to pick up the new route (built-in mic/speaker) — but throttle
+            // so a flapping route doesn't thrash the engine (W574o).
+            if shouldSkipRouteRestart() { return }
             print("[AudioCapture] route change: old device unavailable — restarting engine")
-            guard isRunning else { return }
-            engine?.inputNode.removeTap(onBus: 0)
-            playerNode?.stop()
-            if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
-            engine?.stop()
-            engine = nil; playerNode = nil; playFormat = nil; isRunning = false
-            do { try start() }
-            catch { print("[AudioCapture] restart after route change failed: \(error.localizedDescription)") }
+            restartEngineForRoute()
         case .newDeviceAvailable:
-            // New device connected (e.g. Bluetooth HFP). The engine may be
-            // using a lower-quality route; restart to prefer the new device.
-            // This is best-effort — if the user just plugged in headphones
-            // mid-call a single engine restart is fast enough to be imperceptible.
-            guard isRunning else { return }
+            // New device connected (e.g. Bluetooth HFP). The engine may be using a
+            // lower-quality route; restart to prefer the new device. Throttled (W574o).
+            if shouldSkipRouteRestart() { return }
             print("[AudioCapture] route change: new device available — restarting engine")
-            engine?.inputNode.removeTap(onBus: 0)
-            playerNode?.stop()
-            if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
-            engine?.stop()
-            engine = nil; playerNode = nil; playFormat = nil; isRunning = false
-            do { try start() }
-            catch { print("[AudioCapture] restart after new device failed: \(error.localizedDescription)") }
+            restartEngineForRoute()
         case .override:
-            // W574c — the output route was overridden: this is the in-call
-            // speaker button (`overrideOutputAudioPort(.speaker)` / `.none`).
-            // The VP-IO decision is route-dependent ("regola vivavoce":
-            // speaker → AEC forced ON, earpiece → user toggle), and VP-IO
-            // can only be (un)set BEFORE engine start — so restart the
-            // engine to re-evaluate `enableVoiceProcessing` on the new
-            // route. Same teardown/rebuild sequence as the cases above.
-            guard isRunning else { return }
+            // W574c — the output route was overridden: this is the in-call speaker
+            // button (`overrideOutputAudioPort(.speaker)` / `.none`). VP-IO is
+            // route-dependent and can only be (un)set BEFORE engine start, so restart
+            // to re-evaluate `enableVoiceProcessing`. User-initiated + one-shot → honor
+            // immediately (no throttle), but still arm the suppress window so the
+            // override's own route echo doesn't trigger a second restart.
             print("[AudioCapture] route change: output override (speaker toggle) — restarting engine to re-evaluate VP-IO")
-            engine?.inputNode.removeTap(onBus: 0)
-            playerNode?.stop()
-            if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
-            engine?.stop()
-            engine = nil; playerNode = nil; playFormat = nil; isRunning = false
-            do { try start() }
-            catch { print("[AudioCapture] restart after speaker override failed: \(error.localizedDescription)") }
+            restartEngineForRoute()
         default:
             break
         }
+    }
+
+    /// W574o — skip a route-driven engine restart if we just restarted (the route
+    /// change is the echo of our own `setActive`) or if we restarted < 1s ago (a
+    /// flapping Bluetooth link). Keeps the genuine isolated headset plug/unplug case
+    /// (W571) working — those are not rapid repeats.
+    private func shouldSkipRouteRestart() -> Bool {
+        let now = Date()
+        if now < restartSuppressUntil { return true }
+        if now.timeIntervalSince(lastEngineRestart) < routeRestartThrottle { return true }
+        return false
+    }
+
+    /// Tear down and rebuild the engine on the current hardware route. Records the
+    /// restart time and arms a short suppress window so the route change this restart
+    /// itself provokes is ignored (breaks the self-induced thrash loop).
+    private func restartEngineForRoute() {
+        guard isRunning else { return }
+        lastEngineRestart = Date()
+        restartSuppressUntil = Date().addingTimeInterval(0.6)
+        engine?.inputNode.removeTap(onBus: 0)
+        playerNode?.stop()
+        if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
+        engine?.stop()
+        engine = nil; playerNode = nil; playFormat = nil; isRunning = false
+        do { try start() }
+        catch { print("[AudioCapture] restart after route change failed: \(error.localizedDescription)") }
     }
 
     private func handleInterruption(_ note: Notification) {
