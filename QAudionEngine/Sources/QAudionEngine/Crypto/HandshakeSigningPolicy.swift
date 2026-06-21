@@ -25,12 +25,14 @@ public enum HandshakeSigningPolicy {
     /// Confirmed least-bad by the cross-platform review 2026-06-14.
     public static let placeholderEpochId = Data(count: 16)
 
-    /// Advertised ratchet version once Phase-18 ships (0x04). Today the deployed
-    /// handshake advertises v3, but a SIGNED bundle declares v4 per §3/§4 so the
-    /// verifier can set `v4_capable_pinned`.
-    public static let ratchetV: UInt8 = 0x03
+    /// Phase-18 GO-LIVE 2026-06-21 (Pavel sign-off): advertised v4 in the SIGNED
+    /// transcript, bumped 0x03→0x04 in lockstep with Android + Desktop. A SIGNED v4
+    /// bundle trips `v4_capable_pinned` and makes stripping the capability bit
+    /// detectable. MUST stay identical on all 3 platforms (verifier rebuilds the
+    /// transcript with its own constant → mismatch = fatal sig failure).
+    public static let ratchetV: UInt8 = 0x04
     /// suite_id 0x01 = the Phase-18 suite.
-    public static let suiteId: UInt8 = 0x00
+    public static let suiteId: UInt8 = 0x01
 
     /// `require_signed(peer)` (§4): a missing signature is fatal only when one of
     /// these holds. A present-but-invalid signature is ALWAYS fatal regardless.

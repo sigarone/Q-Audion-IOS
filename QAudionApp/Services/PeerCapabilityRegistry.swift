@@ -128,6 +128,15 @@ public extension PeerCapabilityRegistry {
     func probeInbound(_ wire: Data, from peerId: String) {
         let v = MessageWireFormat.detect(wire)
         switch v {
+        case .v4:
+            // A v4 (0xE5) inbound is the strongest capability signal there is —
+            // the peer ran a negotiated+verified v4 handshake. Treat it as v3 for
+            // the registry's purposes (v4 strictly supersedes v3). The actual v4
+            // SEND gate is `MessageRatchet.hasV4Session(peerId)` in
+            // ChatMessageSendService, not this registry — so we don't need a
+            // separate `.v4` capability state here; flagging v3 keeps the legacy
+            // v3 outbound coherent if the v4 session is ever absent.
+            observedV3(from: peerId)
         case .v3:
             observedV3(from: peerId)
         case .v1, .v2:

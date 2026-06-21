@@ -31,11 +31,11 @@ final class HandshakeTranscriptKatTests: XCTestCase {
 
     /// C1 guard: ratchet_v/suite_id are signed into the transcript but NOT on the wire,
     /// so each platform's verifier rebuilds with its OWN constant. They MUST be identical
-    /// across Android/iOS/Desktop or signed calls fail cross-platform. Canonical today =
-    /// 0x03/0x00 (pre-Phase-18). Bump all 3 in lockstep + regen the golden KAT at Phase-18.
+    /// across Android/iOS/Desktop or signed calls fail cross-platform. Canonical =
+    /// 0x04/0x01 (Phase-18 GO-LIVE 2026-06-21, bumped in lockstep across all 3).
     func testRatchetVSuiteIdAreCrossPlatformCanonical() {
-        XCTAssertEqual(HandshakeSigningPolicy.ratchetV, 0x03)
-        XCTAssertEqual(HandshakeSigningPolicy.suiteId, 0x00)
+        XCTAssertEqual(HandshakeSigningPolicy.ratchetV, 0x04)
+        XCTAssertEqual(HandshakeSigningPolicy.suiteId, 0x01)
     }
 
     func testHandshakeSigKatMatchesCrossPlatformContract() throws {

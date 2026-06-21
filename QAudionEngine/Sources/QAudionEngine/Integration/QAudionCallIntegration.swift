@@ -114,6 +114,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// the secret; the caller is responsible for lifecycle.
     public var onPqcSessionKeyEstablished: ((Data) -> Void)?
 
+    /// Phase 18 — v4 bootstrap signal. Fires at every JSON handshake-completion
+    /// site (OFFER accepted = responder, ACCEPT decapsulated = originator) AFTER
+    /// ``onPqcSessionKeyEstablished``. Carries `(peerId, effectiveSecret)` so the
+    /// app layer can call
+    /// ``MessageRatchet/bootstrapV4AndPersist(peerId:effectiveSecret:…)`` without
+    /// needing access to the raw handshake internals. Only fires on the JSON
+    /// (AndroidHandshakeBundle) paths — not the QUAD or earbud paths, where v4
+    /// capability is not negotiated. No-op when nil.
+    public var onV4BootstrapReady: ((String, Data) -> Void)?
+
     /// `vkey-v1` — fired alongside ``onPqcSessionKeyEstablished`` at every
     /// handshake-completion site. Carries the SAME 32-byte post-PSK-mix
     /// session key, which is the **IKM** for the dedicated earbud-video
@@ -1021,6 +1031,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             offerRetryTask = nil
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
+            onV4BootstrapReady?(callerId, combined)
             // vkey-v1: JSON responder — `combined` is the post-PSK-mix
             // session key and the IKM for K_video.
             onVideoKeyEstablished?(combined)
@@ -1240,6 +1251,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
+            onV4BootstrapReady?(callerId, combined)
             // vkey-v1: JSON caller — `combined` is the IKM for K_video.
             onVideoKeyEstablished?(combined)
             // W529: caller's ACCEPT decapsulation succeeded → cancel

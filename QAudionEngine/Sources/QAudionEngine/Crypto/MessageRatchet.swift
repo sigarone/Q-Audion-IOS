@@ -79,6 +79,16 @@ public final class MessageRatchet {
     /// core; this Swift side only forwards opaque frame bytes.
     public static let magicV4: UInt8 = 0xE5
 
+    /// Vault routing-epoch tag for the v4 native session. UNLIKE v3 (whose epoch_id rides on the
+    /// Swift wire header so the receiver can route on it), the v4 frame is OPAQUE — owned end-to-end
+    /// by the native core — so the dispatcher cannot read an epoch off the wire. There is therefore
+    /// exactly ONE active v4 session per peer (the latest negotiated call epoch); both the send and
+    /// receive routes resolve it by `(this tag, peerId)`. A fresh handshake overwrites it (epoch
+    /// rotation). Kept short and CONSTANT so encrypt/decrypt/bootstrap all agree on the key. MUST
+    /// equal Android `MessageRatchet.V4_ROUTING_EPOCH` byte-for-byte ("v4") — both platforms key the
+    /// vault under the same routing tag.
+    public static let v4RoutingEpoch = "v4"
+
     public static let keyLen = 32
     public static let nonceLen = 12
     public static let tagLen = 16
@@ -100,6 +110,14 @@ public final class MessageRatchet {
     // MARK: - State
 
     private let vault: RatchetVault
+
+    /// Serializes the v4 routed `load → native-op → save` triple within this
+    /// instance, mirroring Android's `@Synchronized` on `bootstrapV4AndPersist` /
+    /// `encryptV4Routed` / `decryptV4Routed`. A concurrent send (advances the send
+    /// chain) and receive (advances the recv chain) must not clobber each other's
+    /// serialized blob. Only the v4 routed methods take this lock; the v3.1 path is
+    /// unchanged (its callers serialize).
+    private let v4RoutingLock = NSLock()
 
     public init(vault: RatchetVault) {
         self.vault = vault
@@ -635,15 +653,28 @@ public final class MessageRatchet {
     /// MUST ``freeV4Session(_:)`` the returned handle exactly once.
     ///
     /// - Parameters:
-    ///   - root: the post-handshake `ROOT_0` (32 bytes — derive via ``RatchetNative/root0(ssHandshake:)``
-    ///     from the handshake shared secret).
-    ///   - firstSsXwing: the first epoch's X-Wing secret (32 bytes).
+    ///   - root: the post-handshake `ROOT_0` (32 bytes — derive via ``RatchetNative/root0(ssHandshake:)``).
+    ///   - sessionEpochId: the canonical session_epoch_id (16 bytes — the lex-min party's epoch_id, §2.5).
     ///   - transcriptHash: the handshake transcript hash (32 bytes).
-    ///   - isA: `true` for the "A" direction peer (A's send chain == B's recv chain).
-    public func ensureSessionV4(root: Data, firstSsXwing: Data, transcriptHash: Data, isA: Bool) -> UInt {
+    ///   - isLexMin: `true` if this party is lex-min (its send chain == lex-max's recv chain).
+    ///
+    /// Model A (§4.1): epoch-1 chains derive directly from `ROOT_0` — no X-Wing at bootstrap.
+    public func ensureSessionV4(root: Data, sessionEpochId: Data, transcriptHash: Data, isLexMin: Bool) -> UInt {
         guard isV4Enabled() else { return 0 }
         return RatchetNative.initSession(
-            root: root, firstSsXwing: firstSsXwing, transcriptHash: transcriptHash, isA: isA)
+            root: root, sessionEpochId: sessionEpochId, transcriptHash: transcriptHash, isLexMin: isLexMin)
+    }
+
+    /// Bootstrap a v4 session from the Phase-10b handshake outputs (Model A §4.1 + §2.5), mirroring
+    /// Android `MessageRatchet.bootstrapV4` / iOS `RatchetNative.bootstrapV4`. Flag-gated.
+    public func bootstrapV4(
+        effectiveSecret: Data, selfEpochId: Data, peerEpochId: Data,
+        selfIdentityPub: Data, peerIdentityPub: Data, transcriptHash: Data
+    ) -> UInt {
+        guard isV4Enabled() else { return 0 }
+        return RatchetNative.bootstrapV4(
+            effectiveSecret: effectiveSecret, selfEpochId: selfEpochId, peerEpochId: peerEpochId,
+            selfIdentityPub: selfIdentityPub, peerIdentityPub: peerIdentityPub, transcriptHash: transcriptHash)
     }
 
     /// Encrypt `plaintext` on a v4 session's send chain. Returns the opaque v4 wire frame
@@ -717,5 +748,116 @@ public final class MessageRatchet {
     public func mediaKeyV4(_ handle: UInt, callId: Data) -> Data? {
         guard isV4Enabled() else { return nil }
         return RatchetNative.mediaKey(handle, callId: callId)
+    }
+
+    // ─── v4 vault-routed dispatch (used by the message dispatcher) ──────────────
+    //
+    // Mirrors Android `MessageRatchet.bootstrapV4AndPersist / encryptV4Routed /
+    // decryptV4Routed` 1:1. These own ALL v4 vault I/O so the dispatcher never
+    // juggles native handles or the write-ahead order. Each resolves the single
+    // per-peer v4 session by (``v4RoutingEpoch``, peerId), runs one native op, and
+    // persists the advanced state. The ``v4RoutingLock`` serializes the
+    // load→mutate→save triple within this instance so a concurrent send (advances
+    // the send chain) and receive (advances the recv chain) cannot clobber each
+    // other's serialized blob — the Swift equivalent of Android's `@Synchronized`.
+    //
+    // ABSOLUTE CONTRACT: the v4 0xE5 frame is OPAQUE (owned by the Rust core) —
+    // NEVER parsed here. Routing is by PEER id only; the blob is the raw
+    // ``serializeV4Session(_:)`` output, stored verbatim (never decoded).
+
+    /// Bootstrap a v4 session from the handshake outputs and PERSIST it (write-ahead),
+    /// keyed by [peerId] under ``v4RoutingEpoch``. Returns `true` on success, `false`
+    /// when the v4 path is disabled/unavailable or any input/serialization/persist
+    /// fails. The native handle is always freed. Mirrors Android `bootstrapV4AndPersist`.
+    public func bootstrapV4AndPersist(
+        peerId: String,
+        effectiveSecret: Data,
+        selfEpochId: Data,
+        peerEpochId: Data,
+        selfIdentityPub: Data,
+        peerIdentityPub: Data,
+        transcriptHash: Data
+    ) -> Bool {
+        v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
+        // bootstrapV4 itself fail-closes (returns 0) when the v4 path is disabled.
+        let handle = bootstrapV4(
+            effectiveSecret: effectiveSecret,
+            selfEpochId: selfEpochId,
+            peerEpochId: peerEpochId,
+            selfIdentityPub: selfIdentityPub,
+            peerIdentityPub: peerIdentityPub,
+            transcriptHash: transcriptHash
+        )
+        guard handle != 0 else { return false }
+        defer { freeV4Session(handle) }
+        guard let blob = serializeV4Session(handle) else { return false }
+        do {
+            try vault.saveV4(epochId: Self.v4RoutingEpoch, peerId: peerId, blob: blob)
+            return true
+        } catch {
+            // Persist failed — treat as a failed bootstrap so the dispatcher can
+            // retry lazily; nothing usable is on disk.
+            return false
+        }
+    }
+
+    /// True iff a persisted v4 session exists for [peerId] (and the v4 path is enabled).
+    /// Used by the SEND dispatcher to gate the v4 branch synchronously BEFORE any
+    /// version selection — a v4 session only EXISTS for a peer once a negotiated +
+    /// verified handshake bootstrapped it, so this doubles as the per-peer v4
+    /// capability proof (mirrors Android, where `ratchetVersion==4` was only set
+    /// after `negotiated.ratchetV4`). Mirrors Android `hasV4Session`.
+    public func hasV4Session(_ peerId: String) -> Bool {
+        guard isV4Enabled() else { return false }
+        return vault.loadV4(epochId: Self.v4RoutingEpoch, peerId: peerId) != nil
+    }
+
+    /// Resume the persisted v4 session for [peerId], encrypt [plaintext], persist the
+    /// advanced send chain BEFORE returning (write-ahead), and return the opaque 0xE5
+    /// frame. Returns `nil` when disabled / no stored session / any error — in which
+    /// case NOTHING was transmitted and NO state was advanced on disk, so the caller
+    /// may fail closed without risking nonce reuse. Mirrors Android `encryptV4Routed`.
+    public func encryptV4Routed(peerId: String, plaintext: Data) -> Data? {
+        v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
+        guard isV4Enabled() else { return nil }
+        guard let blob = vault.loadV4(epochId: Self.v4RoutingEpoch, peerId: peerId) else { return nil }
+        let handle = RatchetNative.deserialize(blob)
+        guard handle != 0 else { return nil }
+        defer { RatchetNative.free(handle) }
+        guard let frame = RatchetNative.encrypt(handle, plaintext: plaintext) else { return nil }
+        // WRITE-AHEAD: the native send chain has advanced; persist the new state
+        // BEFORE returning the frame so a crash between here and the network send
+        // can never re-use a chain index / nonce.
+        guard let advanced = RatchetNative.serialize(handle) else { return nil }
+        do {
+            try vault.saveV4(epochId: Self.v4RoutingEpoch, peerId: peerId, blob: advanced)
+        } catch {
+            // Durable write failed — fail closed: do NOT return a frame whose
+            // advanced send chain didn't persist (nonce-reuse hazard on crash).
+            return nil
+        }
+        return frame
+    }
+
+    /// Resume the persisted v4 session for [peerId], decrypt [frame], persist the
+    /// advanced receive chain, and return the plaintext. Returns `nil` (fail-closed)
+    /// on disabled path / no stored session / auth-replay-parse failure; no state is
+    /// persisted on a decrypt failure. Mirrors Android `decryptV4Routed`.
+    public func decryptV4Routed(peerId: String, frame: Data) -> Data? {
+        v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
+        guard isV4Enabled() else { return nil }
+        guard let blob = vault.loadV4(epochId: Self.v4RoutingEpoch, peerId: peerId) else { return nil }
+        let handle = RatchetNative.deserialize(blob)
+        guard handle != 0 else { return nil }
+        defer { RatchetNative.free(handle) }
+        guard let pt = RatchetNative.decrypt(handle, frame: frame) else { return nil }
+        // Persist the advanced recv chain after a successful decrypt. A persist
+        // failure here is non-fatal to the returned plaintext (the message WAS
+        // authenticated); on the next inbound the worst case is a re-derive from
+        // the last durable state. Best-effort, matching Android's `?.let { save }`.
+        if let advanced = RatchetNative.serialize(handle) {
+            try? vault.saveV4(epochId: Self.v4RoutingEpoch, peerId: peerId, blob: advanced)
+        }
+        return pt
     }
 }

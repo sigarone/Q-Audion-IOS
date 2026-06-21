@@ -62,24 +62,54 @@ public enum RatchetNative {
         return Data(out)
     }
 
-    /// Open a v4 session. `root` / `firstSsXwing` / `transcriptHash` are each exactly 32 bytes;
-    /// `isA` selects the "A" direction (A's send chain == B's recv chain). Returns the handle, or
-    /// `0` on error. Free exactly once with ``free(_:)``.
+    /// Bootstrap a v4 session (Model A, §4.1). `root` (ROOT_0) / `transcriptHash` are 32 bytes;
+    /// `sessionEpochId` is 16 bytes (the lex-min party's epoch_id, §2.5). `isLexMin` selects this
+    /// party's direction. Epoch-1 chains derive directly from ROOT_0 — NO X-Wing at bootstrap.
+    /// Returns the handle, or `0` on error. Free exactly once with ``free(_:)``.
     public static func initSession(
-        root: Data, firstSsXwing: Data, transcriptHash: Data, isA: Bool
+        root: Data, sessionEpochId: Data, transcriptHash: Data, isLexMin: Bool
     ) -> UInt {
-        guard available, root.count == 32, firstSsXwing.count == 32, transcriptHash.count == 32
+        guard available, root.count == 32, sessionEpochId.count == 16, transcriptHash.count == 32
         else { return 0 }
         var handle: OpaquePointer? = nil
         let st = root.withUnsafeBytesU8 { rPtr in
-            firstSsXwing.withUnsafeBytesU8 { sPtr in
+            sessionEpochId.withUnsafeBytesU8 { sPtr in
                 transcriptHash.withUnsafeBytesU8 { tPtr in
-                    qa_session_init(rPtr, sPtr, tPtr, isA ? 1 : 0, &handle)
+                    qa_session_init(rPtr, sPtr, tPtr, isLexMin ? 1 : 0, &handle)
                 }
             }
         }
         guard qaStatusCode(st) == 0, let h = handle else { return 0 }
         return UInt(bitPattern: Int(bitPattern: h))
+    }
+
+    /// Bootstrap a v4 session directly from the Phase-10b handshake outputs (Model A §4.1 + §2.5),
+    /// mirroring Android `MessageRatchet.bootstrapV4`. Derives `ROOT_0 = root0(effectiveSecret)`,
+    /// the lex-order from the long-term identity public keys (unsigned-byte compare; lex-min =
+    /// lexicographically smaller), and `session_epoch_id` = the lex-min party's 16-byte `epochId`.
+    /// `selfEpochId` / `peerEpochId` are the per-direction epoch_ids from the signed handshake
+    /// transcript. Returns the handle, or `0` (disabled / malformed input).
+    public static func bootstrapV4(
+        effectiveSecret: Data, selfEpochId: Data, peerEpochId: Data,
+        selfIdentityPub: Data, peerIdentityPub: Data, transcriptHash: Data
+    ) -> UInt {
+        guard available, selfEpochId.count == 16, peerEpochId.count == 16,
+              let root0 = root0(ssHandshake: effectiveSecret) else { return 0 }
+        let isLexMin = lexLessBytes([UInt8](selfIdentityPub), [UInt8](peerIdentityPub))
+        let sessionEpochId = isLexMin ? selfEpochId : peerEpochId
+        return initSession(root: root0, sessionEpochId: sessionEpochId,
+                           transcriptHash: transcriptHash, isLexMin: isLexMin)
+    }
+
+    /// §2.5 lex-order on long-term identity public keys: unsigned-byte compare, `true` iff a < b.
+    private static func lexLessBytes(_ a: [UInt8], _ b: [UInt8]) -> Bool {
+        let lim = min(a.count, b.count)
+        var i = 0
+        while i < lim {
+            if a[i] != b[i] { return a[i] < b[i] }
+            i += 1
+        }
+        return a.count < b.count
     }
 
     /// Rebuild a session handle from a ``serialize(_:)`` buffer (app restart). Returns the new
@@ -194,9 +224,112 @@ public enum RatchetNative {
         }
     }
 
+    // MARK: - Advance braid (X-Wing dh_ratchet, ratchet_gen >= 1)
+    //
+    // Bootstrap needs no braid (Model A, epoch-1 = ROOT_0-direct). The braid derives the 32-byte
+    // SS_xwing both peers feed to ``dhRatchet(_:ssXwing:transcriptHash:)``; the caller applies
+    // dhRatchet itself. ``braidResponderOffer`` is progress-oblivious — poll ``braidResponderIsReady``.
+
+    /// Encapsulate against the peer's published per-advance ephemeral ratchet pubkeys. Returns the
+    /// initiator handle, or `0` on error. Free via ``braidInitiatorFree(_:)``.
+    public static func braidInitiate(
+        peerMlkemPk: Data, peerX25519Pk: Data, mlkemSeed: Data, x25519Seed: Data,
+        ratchetGen: UInt32, callId: Data
+    ) -> UInt {
+        guard available, peerMlkemPk.count == 1184, peerX25519Pk.count == 32,
+              mlkemSeed.count == 32, x25519Seed.count == 32, callId.count == 16 else { return 0 }
+        var handle: OpaquePointer? = nil
+        let st = peerMlkemPk.withUnsafeBytesU8 { pk in
+            peerX25519Pk.withUnsafeBytesU8 { xpk in
+                mlkemSeed.withUnsafeBytesU8 { ms in
+                    x25519Seed.withUnsafeBytesU8 { xs in
+                        callId.withUnsafeBytesU8 { cid in
+                            qa_braid_initiate(pk, xpk, ms, xs, ratchetGen, cid, &handle)
+                        }
+                    }
+                }
+            }
+        }
+        guard qaStatusCode(st) == 0, let h = handle else { return 0 }
+        return UInt(bitPattern: Int(bitPattern: h))
+    }
+
+    /// The flattened shard frames to transmit, or `nil`.
+    public static func braidInitiatorFrames(_ handle: UInt) -> Data? {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
+        return queryThenFill { out, outLen in qaStatusCode(qa_braid_initiator_frames(p, out, outLen)) }
+    }
+
+    /// The 32-byte SS_xwing to feed to ``dhRatchet(_:ssXwing:transcriptHash:)``, or `nil`.
+    public static func braidInitiatorSecret(_ handle: UInt) -> Data? {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
+        return braidSecret { out32 in qaStatusCode(qa_braid_initiator_secret(p, out32)) }
+    }
+
+    /// Free an initiator braid handle (no-op on `0`).
+    public static func braidInitiatorFree(_ handle: UInt) {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return }
+        qa_braid_initiator_free(p)
+    }
+
+    /// Responder accumulator holding this party's per-advance ephemeral ratchet privates. `0` on error.
+    public static func braidResponderNew(
+        ratchetGen: UInt32, callId: Data, mlkemSk: Data, x25519Secret: Data, x25519Pub: Data
+    ) -> UInt {
+        guard available, callId.count == 16, mlkemSk.count == 2400,
+              x25519Secret.count == 32, x25519Pub.count == 32 else { return 0 }
+        var handle: OpaquePointer? = nil
+        let st = callId.withUnsafeBytesU8 { cid in
+            mlkemSk.withUnsafeBytesU8 { sk in
+                x25519Secret.withUnsafeBytesU8 { xsec in
+                    x25519Pub.withUnsafeBytesU8 { xpub in
+                        qa_braid_responder_new(ratchetGen, cid, sk, xsec, xpub, &handle)
+                    }
+                }
+            }
+        }
+        guard qaStatusCode(st) == 0, let h = handle else { return 0 }
+        return UInt(bitPattern: Int(bitPattern: h))
+    }
+
+    /// Absorb one received frame (progress-oblivious). `false` only on an invalid handle.
+    public static func braidResponderOffer(_ handle: UInt, frame: Data) -> Bool {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return false }
+        let st = frame.withUnsafeBytesU8Len { fPtr, fLen in
+            qaStatusCode(qa_braid_responder_offer(p, fPtr, fLen))
+        }
+        return st == 0
+    }
+
+    /// `true` once `>= RS_K` shards are collected.
+    public static func braidResponderIsReady(_ handle: UInt) -> Bool {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return false }
+        return qa_braid_responder_is_ready(p) == 1
+    }
+
+    /// Reconstruct + decapsulate → the 32-byte SS_xwing to feed to dhRatchet, or `nil`.
+    public static func braidResponderSecret(_ handle: UInt) -> Data? {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
+        return braidSecret { out32 in qaStatusCode(qa_braid_responder_secret(p, out32)) }
+    }
+
+    /// Free a responder braid handle (no-op on `0`).
+    public static func braidResponderFree(_ handle: UInt) {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return }
+        qa_braid_responder_free(p)
+    }
+
     // MARK: - Internals
 
-    /// Reconstitute the opaque `QaSession*` from the integer handle.
+    /// Read a fixed 32-byte secret out-param (the SS_xwing). `op(out32) -> QaStatus`; `nil` on error.
+    private static func braidSecret(_ op: (UnsafeMutablePointer<UInt8>) -> Int32) -> Data? {
+        var out = [UInt8](repeating: 0, count: 32)
+        let st = out.withUnsafeMutableBufferPointer { mb -> Int32 in op(mb.baseAddress!) }
+        guard st == 0 else { return nil }
+        return Data(out)
+    }
+
+    /// Reconstitute the opaque `QaSession*` / braid handle from the integer handle.
     private static func pointer(_ handle: UInt) -> OpaquePointer? {
         guard handle != 0 else { return nil }
         return OpaquePointer(bitPattern: handle)

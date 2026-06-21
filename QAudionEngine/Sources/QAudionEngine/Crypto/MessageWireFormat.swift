@@ -26,6 +26,9 @@ public enum MessageWireFormat {
 
     public static let magicV2: UInt8 = 0xE2
     public static let magicV3: UInt8 = 0xE3
+    /// 0xE5 — v4 native PQ ratchet frame. OPAQUE (owned by the Rust core); detected
+    /// only by first byte, never parsed here. Mirrors ``MessageRatchet/magicV4``.
+    public static let magicV4: UInt8 = 0xE5
 
     public enum Version: Equatable {
         /// No magic byte (iOS-only legacy path).
@@ -34,6 +37,10 @@ public enum MessageWireFormat {
         case v2
         /// 0xE3 — v3.1 wire (canonical CBOR AAD + nonce derivation).
         case v3
+        /// 0xE5 — v4 native PQ ratchet wire (opaque frame, native core owns it).
+        /// The dispatcher routes this to `MessageRatchet.decryptV4Routed(peerId:frame:)`
+        /// by PEER id only — it MUST NOT attempt to parse the frame.
+        case v4
     }
 
     /// Cheap probe: read the first byte and classify.
@@ -42,6 +49,7 @@ public enum MessageWireFormat {
         switch wire[wire.startIndex] {
         case magicV2: return .v2
         case magicV3: return .v3
+        case magicV4: return .v4
         default:      return .v1
         }
     }
@@ -50,6 +58,7 @@ public enum MessageWireFormat {
     public static func isV1(_ wire: Data) -> Bool { detect(wire) == .v1 }
     public static func isV2(_ wire: Data) -> Bool { detect(wire) == .v2 }
     public static func isV3(_ wire: Data) -> Bool { detect(wire) == .v3 }
+    public static func isV4(_ wire: Data) -> Bool { detect(wire) == .v4 }
 
     // MARK: - Parsed v3 header (no decryption — just structural parsing)
 

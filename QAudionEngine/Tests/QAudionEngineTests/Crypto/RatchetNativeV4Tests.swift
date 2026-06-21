@@ -36,7 +36,7 @@ final class RatchetNativeV4Tests: XCTestCase {
     func testV4SessionOpsFailClosedWhenDisabled() {
         let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
 
-        let handle = ratchet.ensureSessionV4(root: root, firstSsXwing: ssXwing, transcriptHash: th, isA: true)
+        let handle = ratchet.ensureSessionV4(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         XCTAssertEqual(handle, 0, "ensureSessionV4 must return 0 (no session) while v4 is disabled")
 
         XCTAssertNil(ratchet.encryptV4(handle, plaintext: Data("hi".utf8)))
@@ -80,7 +80,7 @@ final class RatchetNativeV4Tests: XCTestCase {
             XCTAssertEqual(v, 0, "stub core reports version 0 and available == false")
             // Every wrapper call must fail-close when the core is unavailable.
             XCTAssertNil(RatchetNative.root0(ssHandshake: root))
-            XCTAssertEqual(RatchetNative.initSession(root: root, firstSsXwing: ssXwing, transcriptHash: th, isA: true), 0)
+            XCTAssertEqual(RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true), 0)
             XCTAssertNil(RatchetNative.encrypt(0, plaintext: Data("x".utf8)))
             XCTAssertNil(RatchetNative.decrypt(0, frame: Data([0xE5])))
             XCTAssertFalse(RatchetNative.dhRatchet(0, ssXwing: ssXwing, transcriptHash: th))
@@ -94,7 +94,7 @@ final class RatchetNativeV4Tests: XCTestCase {
     func testRatchetNativeRejectsWrongLengthInputs() {
         let short = Data(repeating: 0x01, count: 16)
         XCTAssertNil(RatchetNative.root0(ssHandshake: short))
-        XCTAssertEqual(RatchetNative.initSession(root: short, firstSsXwing: ssXwing, transcriptHash: th, isA: true), 0)
+        XCTAssertEqual(RatchetNative.initSession(root: short, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true), 0)
         XCTAssertFalse(RatchetNative.dhRatchet(1, ssXwing: short, transcriptHash: th))
     }
 

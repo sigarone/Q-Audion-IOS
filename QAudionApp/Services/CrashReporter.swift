@@ -1,4 +1,5 @@
 import Foundation
+import MachO
 
 /// W472 — lightweight in-app native-crash catcher.
 ///
@@ -103,9 +104,55 @@ enum CrashReporter {
         var report = "=== QAUDION CRASH — signal "
         report += sig.description
         report += " (" + signalName(sig) + ") ===\n"
+        // W574k — a Swift logic trap (force-unwrap nil, index out of range,
+        // precondition, fatalError) raises SIGTRAP. The runtime writes its
+        // pinpoint message ("Fatal error: … file X, line Y") to stderr AND to
+        // the __DATA,__crash_info section BEFORE trapping. stderr is lost (the
+        // async stdout/stderr tee can't drain the pipe before the process dies),
+        // but the section is still in memory: read it here so the persisted
+        // report names the exact crashing line — no dSYM needed.
+        let fatal = swiftCrashInfoMessage()
+        if !fatal.isEmpty {
+            report += "fatal: "
+            report += fatal
+            report += "\n"
+        }
         report += "stack:\n"
         report += Thread.callStackSymbols.joined(separator: "\n")
         persist(report)
+    }
+
+    /// Read the Swift runtime fatal-error message from every loaded image's
+    /// `__DATA,__crash_info` (`crashreporter_annotations_t`: version, then the
+    /// `message` and `message2` `char*` fields). This is the same annotation
+    /// Apple's crash reporter surfaces as "Application Specific Information".
+    /// Best-effort: only pointer reads + `getsectiondata`, adequate for a logic
+    /// crash (which is not inside the allocator).
+    private static func swiftCrashInfoMessage() -> String {
+        var msgs: [String] = []
+        let imageCount = _dyld_image_count()
+        var i: UInt32 = 0
+        while i < imageCount {
+            defer { i += 1 }
+            guard let hdr = _dyld_get_image_header(i) else { continue }
+            let mh = UnsafeRawPointer(hdr).assumingMemoryBound(to: mach_header_64.self)
+            var size: UInt = 0
+            var data = getsectiondata(mh, "__DATA", "__crash_info", &size)
+            if data == nil {
+                data = getsectiondata(mh, "__DATA_DIRTY", "__crash_info", &size)
+            }
+            guard let sect = data, size >= 40 else { continue }
+            let words = UnsafeRawPointer(sect).assumingMemoryBound(to: UInt64.self)
+            // crashreporter_annotations_t: [0]=version [1]=message [4]=message2
+            for idx in [1, 4] {
+                let ptrVal = words[idx]
+                guard ptrVal != 0,
+                      let cstr = UnsafePointer<CChar>(bitPattern: UInt(ptrVal)) else { continue }
+                let s = String(cString: cstr)
+                if !s.isEmpty { msgs.append(s) }
+            }
+        }
+        return msgs.joined(separator: " | ")
     }
 
     private static func persist(_ text: String) {
