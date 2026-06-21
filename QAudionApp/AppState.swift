@@ -3174,12 +3174,25 @@ final class AppState: ObservableObject {
             do {
                 let vault = SovereignKeyVault()
                 let eligiblePsks: [String: Data] = Dictionary(
-                    uniqueKeysWithValues: vault.listPskNames().compactMap { name -> (String, Data)? in
+                    vault.listPskNames().compactMap { name -> (String, Data)? in
+                        // W574m — skip the device's own long-term identity keys
+                        // (__device.x25519/.mlkem/.ed25519, all tagged with the
+                        // CONSTANT "device-key" fingerprint). They are NOT per-peer
+                        // call PSKs — no peer ever advertises "device-key", so they
+                        // can never be selected at line ~851 — but keying all six by
+                        // that one shared fingerprint trapped Dictionary init
+                        // ("Fatal error: Duplicate values for key: 'device-key'")
+                        // → SIGTRAP that crashed the callee mid-handshake, so the
+                        // two phones never connected.
+                        guard !name.hasPrefix("__device.") else { return nil }
                         guard let fp = vault.getFingerprint(name: name),
                               let raw = (try? vault.loadPsk(name: name)) ?? nil,
                               !raw.isEmpty else { return nil }
                         return (fp, raw)
-                    }
+                    },
+                    // Belt-and-suspenders: tolerate any future duplicate fingerprint
+                    // instead of trapping (keep the first match).
+                    uniquingKeysWith: { first, _ in first }
                 )
                 try await integration.onAndroidBundleReceived(
                     bundle: parsed.bundle,
@@ -3217,12 +3230,25 @@ final class AppState: ObservableObject {
             do {
                 let vault = SovereignKeyVault()
                 let eligiblePsks: [String: Data] = Dictionary(
-                    uniqueKeysWithValues: vault.listPskNames().compactMap { name -> (String, Data)? in
+                    vault.listPskNames().compactMap { name -> (String, Data)? in
+                        // W574m — skip the device's own long-term identity keys
+                        // (__device.x25519/.mlkem/.ed25519, all tagged with the
+                        // CONSTANT "device-key" fingerprint). They are NOT per-peer
+                        // call PSKs — no peer ever advertises "device-key", so they
+                        // can never be selected at line ~851 — but keying all six by
+                        // that one shared fingerprint trapped Dictionary init
+                        // ("Fatal error: Duplicate values for key: 'device-key'")
+                        // → SIGTRAP that crashed the callee mid-handshake, so the
+                        // two phones never connected.
+                        guard !name.hasPrefix("__device.") else { return nil }
                         guard let fp = vault.getFingerprint(name: name),
                               let raw = (try? vault.loadPsk(name: name)) ?? nil,
                               !raw.isEmpty else { return nil }
                         return (fp, raw)
-                    }
+                    },
+                    // Belt-and-suspenders: tolerate any future duplicate fingerprint
+                    // instead of trapping (keep the first match).
+                    uniquingKeysWith: { first, _ in first }
                 )
                 try await integration.onAndroidBundleReceived(
                     bundle: parsed.bundle,
