@@ -1211,11 +1211,28 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 print("[QAudionCallIntegration] ACCEPT V4 KDF keyClass=\(keyClassAccept) callId=\(callId.prefix(8))…")
             } else {
                 // Schema:2 — byte-identical to Android / Desktop / firmware.
+                // W574n: if the responder selected a PSK (selectedFpStr non-empty) and
+                // we fell back to schema:2 from the hw_only V4 attempt (no earbud GATT
+                // proxy on a phone↔phone call), we MUST still mix that PSK. The
+                // responder's schema:2 derivation (OFFER path above) uses `selectedPsk`,
+                // so passing psk:nil here derives a DIFFERENT session key → the M-15
+                // relay sealer keys diverge → every RX audio frame fails to unseal →
+                // the call connects but no audio is heard. Look the PSK up from our own
+                // vault by the responder's selected fingerprint (same lookup the V4
+                // branch uses) so both sides mix the identical PSK.
+                let fallbackPsk: Data? = {
+                    guard !selectedFpStr.isEmpty else { return nil }
+                    let vault = SovereignKeyVault()
+                    guard let name = vault.listPskNames().first(where: {
+                        vault.getFingerprint(name: $0) == selectedFpStr
+                    }) else { return nil }
+                    return (try? vault.loadPsk(name: name)) ?? nil
+                }()
                 combined = Self.deriveHybridSessionKey(
                     pqcSs: pqcSs,
                     x25519Ss: x25519Ss,
                     pqcCiphertext: pqcCt,
-                    psk: nil
+                    psk: fallbackPsk
                 )
             }
 
