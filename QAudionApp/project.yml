@@ -66,6 +66,17 @@ targets:
         # 26.3 "Multiple commands produce .../include/module.modulemap" error
         # (both quiche and QaudionCryptoCore xcframeworks had the same filename).
         SWIFT_INCLUDE_PATHS: $(inherited) $(SRCROOT)/Modules
+        # CarPlay (Tier B custom in-car app) is gated behind QAUDION_CARPLAY and
+        # is OFF by default so `v*` TestFlight builds stay green WITHOUT the
+        # Apple-approval-gated `com.apple.developer.carplay-communication`
+        # entitlement. CarPlay/CarPlayScene.swift is excluded from compilation
+        # while the flag is absent. To ENABLE (after Apple grants the entitlement
+        # — see the header of CarPlay/CarPlayScene.swift for the full checklist):
+        #   1. SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) QAUDION_CARPLAY
+        #   2. add `- sdk: CarPlay.framework` to the dependencies list below
+        #   3. add the entitlement + Info.plist CarPlay scene config
+        # CallKit-driven incoming/active calls already surface on CarPlay with
+        # NONE of the above (Tier A) — that path needs no flag and no entitlement.
     dependencies:
       - package: QAudionEngine
       # MASQUE CONNECT-UDP backend. quiche.xcframework is built in CI by the
