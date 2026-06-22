@@ -141,6 +141,67 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         self.masterKey = derived
     }
 
+    /// SECURITY (W574x) — directional per-direction keys.
+    ///
+    /// The legacy `init` + ``makeSibling()`` pair derives ONE master key shared
+    /// by both call legs, so caller frame N and callee frame N reuse the same
+    /// (key, nonce = 4 zero bytes || counter-from-0) — catastrophic for AES-GCM
+    /// (plaintext-XOR leak + GHASH H recovery → forgery) and visible to the
+    /// untrusted relay. This factory derives TWO independent keys via distinct
+    /// HKDF info labels and assigns one per direction:
+    ///
+    ///   A→B key = HKDF(sessionKey, salt, "q-audion-srtp-master-v1:<callId>:a2b")
+    ///   B→A key = HKDF(sessionKey, salt, "q-audion-srtp-master-v1:<callId>:b2a")
+    ///
+    /// Role "A" = peer with the lexicographically-smaller userId (see
+    /// ``selfIsRoleA(_:_:)``). Returns (send, recv); A.send key == B.recv key.
+    /// Byte-identical KAT with Android/Desktop `createDirectional`.
+    public static func createDirectional(
+        pqcSessionKey: Data,
+        callId: String,
+        selfIsRoleA: Bool
+    ) throws -> (send: PqcRtpFrameSealer, recv: PqcRtpFrameSealer) {
+        guard pqcSessionKey.count == 32 else {
+            throw SealerError.wrongKeyLength(pqcSessionKey.count)
+        }
+        let base = callId.isEmpty
+            ? "q-audion-srtp-master-v1"
+            : "q-audion-srtp-master-v1:\(callId)"
+        let infoA2B = Data("\(base):a2b".utf8)
+        let infoB2A = Data("\(base):b2a".utf8)
+        let ikm = SymmetricKey(data: pqcSessionKey)
+        let keyA2B = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: ikm, salt: Self.salt, info: infoA2B,
+            outputByteCount: Self.masterKeySize
+        )
+        let keyB2A = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: ikm, salt: Self.salt, info: infoB2A,
+            outputByteCount: Self.masterKeySize
+        )
+        let send = selfIsRoleA
+            ? PqcRtpFrameSealer(reusingMasterKey: keyA2B, info: infoA2B)
+            : PqcRtpFrameSealer(reusingMasterKey: keyB2A, info: infoB2A)
+        let recv = selfIsRoleA
+            ? PqcRtpFrameSealer(reusingMasterKey: keyB2A, info: infoB2A)
+            : PqcRtpFrameSealer(reusingMasterKey: keyA2B, info: infoA2B)
+        return (send, recv)
+    }
+
+    /// Deterministic direction-role assignment shared by all platforms. Role "A"
+    /// = the peer whose userId is lexicographically smaller compared unsigned,
+    /// byte-wise, over the lowercase UTF-8 bytes. Identical on iOS/Android/Desktop.
+    public static func selfIsRoleA(_ selfUserId: String, _ peerUserId: String) -> Bool {
+        let a = Array(selfUserId.lowercased().utf8)
+        let b = Array(peerUserId.lowercased().utf8)
+        let n = min(a.count, b.count)
+        var i = 0
+        while i < n {
+            if a[i] != b[i] { return a[i] < b[i] }
+            i += 1
+        }
+        return a.count <= b.count
+    }
+
     /// Private designated init reusing an already-derived master key —
     /// used by ``makeSibling()`` so the recv direction shares the key
     /// material AND the call-bound info string (M-13, M-15).
