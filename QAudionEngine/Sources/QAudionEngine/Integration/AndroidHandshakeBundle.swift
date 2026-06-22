@@ -93,19 +93,28 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // `nil` (not `false`) for a non-v4 build. Use the convenience initializer
         // default (`ratchetV4: nil`) for that; pass `true` only when live.
         public let ratchetV4: Bool?
+        /// W574x — whether this peer derives DIRECTIONAL per-direction PQC RTP
+        /// sealer keys (fixes the bidirectional AES-GCM nonce reuse on the relay
+        /// path). Additive + omit-when-false (Codable nil → key absent), so the
+        /// signed transcript (which folds only ratchetV3/sframeV1/vkeyV1) is
+        /// unaffected and old peers stay byte-compatible. Both peers must
+        /// advertise `true` for the pair to use directional sealer keys.
+        public let srtpDirKeyV1: Bool?
 
         public init(
             ratchetV3: Bool?,
             sframeV1: Bool? = nil,
             vkeyV1: Bool? = nil,
             sessionKdfV3: Bool? = nil,
-            ratchetV4: Bool? = nil
+            ratchetV4: Bool? = nil,
+            srtpDirKeyV1: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
             self.vkeyV1 = vkeyV1
             self.sessionKdfV3 = sessionKdfV3
             self.ratchetV4 = ratchetV4
+            self.srtpDirKeyV1 = srtpDirKeyV1
         }
     }
 

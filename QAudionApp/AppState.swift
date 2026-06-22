@@ -547,6 +547,22 @@ final class AppState: ObservableObject {
             getUserId: { [weak self] in self?.currentUserId }
         )
 
+        // CarPlay — wire the call bridge so the in-car CarPlay scene (a separate
+        // UIScene that must NOT import AppState, CLAUDE.md §16) can place
+        // outgoing PQC calls. Pure closure injection, same primitives-only
+        // pattern as LiveLogStreamer above. Harmless when the QAUDION_CARPLAY
+        // flag is off: no CarPlay scene is ever created without the entitlement,
+        // so `placeCall` simply stays unused.
+        CarPlayBridge.shared.placeCall = { [weak self] peerUserId, displayName in
+            guard let self = self else { return }
+            Task { @MainActor in
+                // Mirror dialAndCall's label handling: seed the call UI name
+                // before routing keys off peerUserId.
+                if !displayName.isEmpty { self.incomingCallerName = displayName }
+                await self.startCall(contactId: peerUserId)
+            }
+        }
+
         // MASQUE CONNECT-UDP — register the quiche-backed transport (linked
         // only in the app target via Vendor/quiche.xcframework) and enable the
         // gated MASQUE TURN fallback. If Cquiche isn't linked, the factory
@@ -3461,10 +3477,20 @@ final class AppState: ObservableObject {
         // session-init regardless of whether AppState.callContactId has
         // been set yet (the old onPqcSessionKeyEstablished install raced
         // it and skipped the callee → Android→iOS 100% AEAD fail).
-        integration.onRelaySessionReady = { [weak self] sessionKey, cid in
-            Task { @MainActor [weak self] in
+        integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid in
+            Task { @MainActor [weak self, weak integration] in
                 guard let self = self, !cid.isEmpty else { return }
-                self.callService.installRelaySealers(sessionKey: sessionKey, callId: cid)
+                // W574x — directional relay-sealer keys when both peers
+                // negotiated srtpDirKeyV1. Role A = the lexicographically-smaller
+                // userId (same rule as Android/Desktop). peerId = the CALLER.
+                let selfId: String = self.currentUserId ?? ""
+                let peerId: String = callerId
+                let neg: Bool = integration?.negotiatedSrtpDirKey ?? false
+                let useDir: Bool = neg && !selfId.isEmpty && !peerId.isEmpty
+                let roleA: Bool = useDir ? PqcRtpFrameSealer.selfIsRoleA(selfId, peerId) : false
+                self.callService.installRelaySealers(
+                    sessionKey: sessionKey, callId: cid,
+                    srtpDirKeyV1: useDir, selfIsRoleA: roleA)
             }
         }
         // W389: forward the ML-KEM secret to the broker. peerId is the
@@ -4146,10 +4172,21 @@ final class AppState: ObservableObject {
                 // callService → integration → closure. The peerId is
                 // captured by-value from `contactId`.
                 // W574g — race-free M-15 relay sealer install (caller side).
-                integration.onRelaySessionReady = { [weak self] sessionKey, cid in
-                    Task { @MainActor [weak self] in
+                integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid in
+                    Task { @MainActor [weak self, weak integration] in
                         guard let self = self, !cid.isEmpty else { return }
-                        self.callService.installRelaySealers(sessionKey: sessionKey, callId: cid)
+                        // W574x — directional relay-sealer keys when both peers
+                        // negotiated srtpDirKeyV1. Role A = the lexicographically-
+                        // smaller userId (same rule as Android/Desktop). peerId =
+                        // the callee (contactId).
+                        let selfId: String = self.currentUserId ?? ""
+                        let peerId: String = contactId
+                        let neg: Bool = integration?.negotiatedSrtpDirKey ?? false
+                        let useDir: Bool = neg && !selfId.isEmpty && !peerId.isEmpty
+                        let roleA: Bool = useDir ? PqcRtpFrameSealer.selfIsRoleA(selfId, peerId) : false
+                        self.callService.installRelaySealers(
+                            sessionKey: sessionKey, callId: cid,
+                            srtpDirKeyV1: useDir, selfIsRoleA: roleA)
                     }
                 }
                 integration.onPqcSessionKeyEstablished = { [weak self] sharedSecret in

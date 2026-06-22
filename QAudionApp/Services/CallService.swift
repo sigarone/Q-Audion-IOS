@@ -246,7 +246,8 @@ final class CallService {
     ///   • RE-KEYS when the active call's id genuinely changes.
     /// Pure iOS-side logic — no wire-format / HKDF change, so Android, the
     /// firmware earbud counterparty, Desktop and the server are unaffected.
-    public func installRelaySealers(sessionKey: Data, callId: String) {
+    public func installRelaySealers(sessionKey: Data, callId: String,
+                                    srtpDirKeyV1: Bool = false, selfIsRoleA: Bool = false) {
         let cid = callId.lowercased()
         // Stale-call guard: only (re)key for the call media actually flows on.
         if let active = getCallId?()?.lowercased(), !active.isEmpty, active != cid {
@@ -268,9 +269,23 @@ final class CallService {
         if relaySealerSend != nil, relaySealerCallId == cid, relaySealerKeyFp == kfp { return }
         let hadSealer: Bool = (relaySealerSend != nil)
         do {
-            let send = try PqcRtpFrameSealer(pqcSessionKey: sessionKey, callId: cid)
+            // W574x — directional per-direction keys when both peers negotiated
+            // srtpDirKeyV1 (fixes bidirectional AES-GCM nonce reuse). Role A =
+            // the lexicographically-smaller userId (computed by the caller, same
+            // rule as Android/Desktop). Otherwise the legacy single-key sealer.
+            let send: PqcRtpFrameSealer
+            let recv: PqcRtpFrameSealer
+            if srtpDirKeyV1 {
+                let pair = try PqcRtpFrameSealer.createDirectional(
+                    pqcSessionKey: sessionKey, callId: cid, selfIsRoleA: selfIsRoleA)
+                send = pair.send
+                recv = pair.recv
+            } else {
+                send = try PqcRtpFrameSealer(pqcSessionKey: sessionKey, callId: cid)
+                recv = send.makeSibling()
+            }
             relaySealerSend = send
-            relaySealerRecv = send.makeSibling()
+            relaySealerRecv = recv
             relaySealerCallId = cid
             relaySealerKeyFp = kfp
             let verb: String = hadSealer ? "re-keyed" : "installed"

@@ -63,6 +63,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// current call. Used to gate pre-negotiation event handling.
     private var isCaller: Bool = false
 
+    /// W574x — go-live gate for directional per-direction PQC RTP sealer keys
+    /// (fixes the bidirectional AES-GCM nonce reuse on the relay path). Mirrors
+    /// Android `PqcHandshake.SRTP_DIR_KEYS_ENABLED` / Desktop
+    /// `AndroidBundleHandshake.SRTP_DIR_KEYS_ENABLED`.
+    public static let srtpDirKeysEnabled = true
+
+    /// W574x — whether the PEER advertised `srtpDirKeyV1` in its last received
+    /// OFFER/ACCEPT bundle (set in `onAndroidBundleReceived`, before
+    /// `onRelaySessionReady` fires).
+    private var peerAdvertisedSrtpDirKey: Bool = false
+
+    /// W574x — directional sealer keys are used only when BOTH peers advertise
+    /// support. Read by AppState at relay-sealer install time.
+    public var negotiatedSrtpDirKey: Bool {
+        Self.srtpDirKeysEnabled && peerAdvertisedSrtpDirKey
+    }
+
     // MARK: - W529 / W531: handshake retry & WS-reconnect replay state
 
     /// Last serialized OFFER wire bundle (`"<callId>|<JSON>"`) actually
@@ -553,7 +570,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             callId: callId,
             pqcPublicKey: pqcRawPub.base64EncodedString(),
             x25519PublicKey: x25519RawPub.base64EncodedString(),
-            capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
+            capabilities: AndroidHandshakeBundle.Capabilities(
+                ratchetV3: true,
+                srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
+            ),
             pskFingerprints: SovereignKeyVault().listPskNames().compactMap {
                 SovereignKeyVault().getFingerprint(name: $0)
             }
@@ -768,6 +788,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         eligiblePsks: [String: Data] = [:],
         sendOpaqueRaw: @escaping (String) async throws -> Void
     ) async throws {
+        // W574x — capture the peer's directional-PQC-RTP-key advertisement so
+        // the relay sealer can be built directional when both sides support it.
+        // This runs before onRelaySessionReady fires for this bundle.
+        self.peerAdvertisedSrtpDirKey = (bundle.capabilities?.srtpDirKeyV1 ?? false)
 
         switch bundle.kind {
         case .offer:
@@ -957,7 +981,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     pqc: pqcResult.ciphertext.base64EncodedString(),
                     x25519: x25519Result.ephemeralPublicKey.base64EncodedString()
                 ),
-                capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
+                capabilities: AndroidHandshakeBundle.Capabilities(
+                    ratchetV3: true,
+                    srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
+                ),
                 selectedPskFingerprint: selectedFp
             )
 
