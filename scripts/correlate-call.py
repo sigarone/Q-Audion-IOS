@@ -443,6 +443,326 @@ def read_server_lines(client, predicate, service_lines):
 
 
 # ---------------------------------------------------------------------------
+# Loki query backend (ADDITIVE -- selected by --loki; the SSH path above stays
+# the default). Pure stdlib: urllib for HTTP, base64 for HTTP Basic. No new dep.
+#
+# Topology (all anchors verified in-tree):
+#   * Query route: GET https://dash.bcrypto.com/loki/api/v1/query_range
+#     -> Caddy @lq path /loki/* -> basic_auth { admin ... } -> reverse_proxy
+#     loki:3100 (caddy/Caddyfile:35-42). So HTTP Basic, user 'admin'.
+#   * Loki 3.4.1, schema v13, allow_structured_metadata: true (loki/loki.yml:39,
+#     compose :125). No *_as_index_labels promotion is configured, so the OTLP
+#     record attribute qa.call.short8 lands in STRUCTURED METADATA keyed
+#     qa_call_short8 (OTLP dots->underscores), NOT as a stream-label selector.
+#     => the maintainer-intended query (ship-server-logs.py:12) is
+#          {service_name=~"qaudion.*"} | qa_call_short8=`<short8>`
+#     We run THIS pipeline-filter form as the single source of truth: in Loki
+#     3.x the `| qa_call_short8=` filter matches qa_call_short8 whether it is a
+#     stream label OR structured metadata, so no label-selector fast path is
+#     needed (and one would risk returning a partial, stream-label-only result).
+#   * service.name emitted: qaudion-ios (ship-ios-logs.py:754),
+#     qaudion-server (ship-server-logs.py:763). Android/Desktop are mapped for
+#     forward-compat even though no shipper exists yet.
+# ---------------------------------------------------------------------------
+
+import urllib.request   # noqa: E402  (kept local to the Loki backend block)
+import urllib.error     # noqa: E402
+import urllib.parse     # noqa: E402
+import base64           # noqa: E402
+import time             # noqa: E402
+
+
+# service_name (OTLP service.name -> Loki stream label service_name) -> the
+# short side-tag used in the rendered timeline. Forward-compat: the android /
+# desktop names have no shipper yet but are mapped so the renderer is ready.
+_SERVICE_TAG = {
+    "qaudion-ios": "IOS",
+    "qaudion-server": "SRV",
+    "qaudion-android": "AND",
+    "qaudion-desktop": "DESK",
+}
+
+
+def _service_tag(service_name):
+    """Map a Loki service_name label to a [IOS]/[AND]/[DESK]/[SRV] side tag.
+    Anything unrecognized renders as [unknown] so a new shipper is never hidden."""
+    return _SERVICE_TAG.get((service_name or "").strip(), "unknown")
+
+
+_SHORT8_HEX_RE = re.compile(r"^[0-9a-f]{8}$")
+
+
+def _loki_logql(short8, line_grep=False):
+    """Build the LogQL query string for one short8.
+
+    CALLER CONTRACT: short8 MUST be a validated 8-char lowercase hex string
+    (^[0-9a-f]{8}$). On the EMIT side this is guaranteed by ship-ios-logs.py's
+    _RE_CALLID_VALUE ([0-9a-fA-F][0-9a-fA-F-]{3,}) gating call_short8. On the
+    QUERY side normalize_id()/build_matcher() do NOT enforce hex (they only
+    lowercase + strip), so run_loki_backend() validates short8 against
+    _SHORT8_HEX_RE BEFORE any query is built. This function re-asserts the
+    invariant as a defense-in-depth guard: a stray double-quote or backtick in
+    short8 would otherwise break the LogQL literal. With the hex guarantee the
+    value is injection-safe; it is still backtick-wrapped (raw string literal)
+    and the whole query= param is urlencoded by the caller.
+
+      line_grep=True : {service_name=~"qaudion.*"} |~ `(?i)X`
+          opt-in (--loki-linegrep) CASE-INSENSITIVE regex grep for legs that put
+          short8 in the body but never as an attribute (e.g. raw journald lines
+          that did not pass through the shipper). short8 is lowercased by
+          normalize_id() but 1:1 call sites log the call_id in its original
+          UPPERCASE form, so a case-SENSITIVE |= would miss exactly those raw
+          lines; (?i) makes the filter match both cases. short8 is [0-9a-f]{8}
+          so it is already regex-safe (no metacharacters).
+      default        : {service_name=~"qaudion.*"} | qa_call_short8=`X`
+          the pipeline / structured-metadata filter -- the SOURCE OF TRUTH here.
+          Matches both stream-label and structured-metadata placements of
+          qa_call_short8 in Loki 3.x. Byte-for-byte the maintainer-intended
+          query (ship-server-logs.py:12).
+    """
+    if not _SHORT8_HEX_RE.match(short8 or ""):
+        raise ValueError(
+            "refusing to build LogQL for non-hex short8 %r (expected ^[0-9a-f]{8}$)"
+            % (short8,))
+    if line_grep:
+        return '{service_name=~"qaudion.*"} |~ `(?i)%s`' % short8
+    return '{service_name=~"qaudion.*"} | qa_call_short8=`%s`' % short8
+
+
+def _loki_query_once(url, user, pw, logql, start_ns, end_ns, limit=5000):
+    """One GET to Loki query_range. Returns (status_int, json_obj_or_None,
+    raw_body_text). Never raises on HTTP error status -- HTTPError bodies are
+    captured so the caller can inspect a 400 'unknown label' parse error and
+    decide to fall back. Network/decode failures raise so main() can report."""
+    params = urllib.parse.urlencode({
+        "query": logql,
+        "start": str(start_ns),
+        "end": str(end_ns),
+        "limit": str(limit),
+        "direction": "forward",
+    })
+    full = url + ("&" if "?" in url else "?") + params
+    req = urllib.request.Request(full, method="GET")
+    basic = base64.b64encode(("%s:%s" % (user, pw)).encode("utf-8")).decode("ascii")
+    req.add_header("Authorization", "Basic " + basic)
+    req.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            status = resp.getcode()
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        status = e.code
+        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+    obj = None
+    try:
+        obj = json.loads(body)
+    except ValueError:
+        obj = None
+    return status, obj, body
+
+
+def _loki_streams(obj):
+    """Extract the stream list from a query_range JSON response, or [] if the
+    shape is not the expected success/streams result. Tolerates missing keys."""
+    if not isinstance(obj, dict):
+        return []
+    if obj.get("status") != "success":
+        return []
+    data = obj.get("data") or {}
+    if data.get("resultType") != "streams":
+        # query_range on a log selector always yields 'streams'; anything else
+        # (e.g. 'matrix' from a metric query) carries no log lines for us.
+        return []
+    result = data.get("result")
+    return result if isinstance(result, list) else []
+
+
+def query_loki(url, user, pw, short8, minutes, line_grep=False):
+    """Run the ONE source-of-truth LogQL query and return a flat list of
+    timeline records: dicts with ms, side, lvl, text. Window = max(minutes, 120)
+    ending now. Raises RuntimeError with a clear message on a hard HTTP/transport
+    error so main() prints it and exits non-zero (never crashes a traceback).
+
+    Single query by design. The default pipeline-filter form
+        {service_name=~"qaudion.*"} | qa_call_short8=`X`
+    already matches qa_call_short8 whether Loki stores it as a stream label OR
+    as structured metadata (Loki 3.x), so there is NO label-selector fast path:
+    a fast path could short-circuit on a PARTIAL stream-label-only result and
+    silently drop the structured-metadata legs. --loki-linegrep swaps in the
+    case-insensitive body-regex form instead (opt-in)."""
+    window_min = max(minutes, 120)
+    end_ns = int(time.time() * 1_000_000_000)
+    start_ns = end_ns - window_min * 60 * 1_000_000_000
+
+    logql = _loki_logql(short8, line_grep=line_grep)
+    label = "line-grep" if line_grep else "pipeline-filter"
+
+    status, obj, body = _loki_query_once(url, user, pw, logql, start_ns, end_ns)
+
+    if status == 401 or status == 403:
+        raise RuntimeError(
+            "Loki auth failed (HTTP %d). Check --loki-user/--loki-pw "
+            "(QA_LOKI_QUERY_PW). Caddy basic_auth gates /loki/*." % status)
+    if status >= 500:
+        raise RuntimeError(
+            "Loki server error (HTTP %d): %s"
+            % (status, (body or "").strip()[:300]))
+    if status >= 400:
+        raise RuntimeError(
+            "Loki query rejected (HTTP %d) for %s form: %s"
+            % (status, label, (body or "").strip()[:300]))
+
+    streams = _loki_streams(obj)
+    if not streams:
+        return []  # 200 with no match in the window
+    return _loki_records_from_streams(streams)
+
+
+def _loki_records_from_streams(streams):
+    """Flatten Loki streams [{stream:{labels}, values:[[ts_ns, line], ...]}] into
+    timeline records. ts_ns is a nanosecond string; we store ms (float) so the
+    merge sort matches the device/server ms convention. Sorting on ts_ns is
+    preserved exactly because ms is monotonic in ns."""
+    records = []
+    for s in streams:
+        if not isinstance(s, dict):
+            continue
+        labels = s.get("stream") or {}
+        service_name = labels.get("service_name", "")
+        side = _service_tag(service_name)
+        # severity/level may arrive as a label (detected_level) or structured
+        # metadata; fall back to a neutral tag.
+        lvl = (labels.get("detected_level")
+               or labels.get("level")
+               or labels.get("severity")
+               or "")
+        values = s.get("values") or []
+        for pair in values:
+            if not (isinstance(pair, list) and len(pair) >= 2):
+                continue
+            ts_ns_raw, line = pair[0], pair[1]
+            try:
+                ts_ns = int(ts_ns_raw)
+            except (TypeError, ValueError):
+                continue
+            records.append({
+                "ms": ts_ns / 1_000_000.0,
+                "ts_ns": ts_ns,
+                "side": side,
+                "service_name": service_name,
+                "lvl": lvl or "",
+                "text": line if isinstance(line, str) else str(line),
+            })
+    return records
+
+
+def render_loki(timeline, short8, norm, window_min, line_grep):
+    """Render the unified cross-platform Loki timeline. Tags each leg
+    [IOS]/[AND]/[DESK]/[SRV]/[unknown] by its service_name."""
+    out()
+    out("=" * 72)
+    out("CALL CORRELATION TIMELINE  (backend: Loki / dash.bcrypto.com)")
+    out("times are UTC; legs are tagged by OTLP service.name")
+    out("matcher: full='%s'  short8='%s'  window=%d min  query=%s"
+        % (norm or "(none)", short8 or "(none)", window_min,
+           "line-grep" if line_grep else "pipeline-filter"))
+    out("=" * 72)
+
+    if not timeline:
+        out()
+        out("0 correlated lines from Loki for short8='%s'." % short8)
+        out("  Nothing matched in the last %d min on any qaudion.* service."
+            % window_min)
+        out()
+        out("Checks: (1) widen --minutes; (2) confirm a shipper "
+            "(ship-ios-logs.py / ship-server-logs.py) is running and POSTing")
+        out("        to the OTLP ingest; (3) try --loki-linegrep for legs that "
+            "carry short8 only in the body, not as an attribute.")
+        return
+
+    # Per-service counts for the summary.
+    counts = {}
+    for rec in timeline:
+        counts[rec["side"]] = counts.get(rec["side"], 0) + 1
+
+    for rec in timeline:
+        hms = ms_to_hms(rec["ms"])
+        lvl = rec.get("lvl", "") or "-"
+        label = ("%s/%s" % (lvl, rec["side"]))[:14]
+        out("%s [%-7s] %-14s %s" % (hms, rec["side"], label, rec["text"]))
+
+    first = ms_to_hms(timeline[0]["ms"])
+    last = ms_to_hms(timeline[-1]["ms"])
+    span_ms = timeline[-1]["ms"] - timeline[0]["ms"]
+    out()
+    out("-" * 72)
+    out("SUMMARY")
+    parts = ", ".join("%d %s" % (counts[k], k) for k in sorted(counts))
+    out("  %d lines (%s)" % (len(timeline), parts))
+    out("  window [%s .. %s]  span %.3fs" % (first, last, span_ms / 1000.0))
+    out("  outcome guess: %s" % guess_outcome(timeline))
+    out("-" * 72)
+
+
+def run_loki_backend(args, call_id):
+    """Pure-HTTP Loki path. Derives short8 the SAME way as the SSH path (reuse
+    build_matcher -> normalize_id), validates it is 8-char hex, queries Loki
+    with the single pipeline-filter source-of-truth form, and renders the
+    cross-platform timeline. Returns an exit code."""
+    predicate, norm, short8 = build_matcher(call_id)
+    if not short8:
+        # build_matcher only yields short8 when len(norm) >= 8 (line 213) -- the
+        # SAME >= 8 floor the shippers honor (ship-ios-logs.py:617-635). Without
+        # it there is no join key the emit side ever produced.
+        print("ERROR: need >= 8 chars (full UUID or 8-char prefix) for a Loki "
+              "join. Got normalized id '%s'." % (norm or ""), file=sys.stderr)
+        return 1
+
+    # HEX GUARD (must-fix): normalize_id()/build_matcher() only lowercase + strip
+    # -- they do NOT enforce hex. The emit-side join key, by contrast, is gated
+    # by ship-ios-logs.py:_RE_CALLID_VALUE to [0-9a-fA-F-]{4,}, so the only short8
+    # that can EVER appear in Loki is 8-char lowercase hex. Reject anything else
+    # here: (1) a non-hex prefix can never match a value the shipper produced, so
+    # it is a guaranteed-empty query; (2) a stray double-quote/backtick would
+    # break the LogQL literal. Fail fast on the same >= 8-char error path.
+    if not _SHORT8_HEX_RE.match(short8):
+        print("ERROR: call-id prefix '%s' is not 8-char hex. The Loki join key "
+              "(qa.call.short8) is always [0-9a-f]{8} (ship-ios-logs.py emit "
+              "regex); pass the real UUID or its 8-char hex prefix."
+              % short8, file=sys.stderr)
+        return 1
+
+    loki_pw = args.loki_pw or os.environ.get("QA_LOKI_QUERY_PW", "")
+    if not loki_pw:
+        print("ERROR: no Loki password. Set env QA_LOKI_QUERY_PW or pass "
+              "--loki-pw.", file=sys.stderr)
+        return 1
+
+    window_min = max(args.minutes, 120)
+    print("=== Loki query @ %s (basic_auth user=%s) ==="
+          % (args.loki_url, args.loki_user))
+    print("short8=%s  window=%d min  query=%s"
+          % (short8, window_min,
+             "line-grep" if args.loki_linegrep else "pipeline-filter"))
+    try:
+        timeline = query_loki(args.loki_url, args.loki_user, loki_pw, short8,
+                              args.minutes, line_grep=args.loki_linegrep)
+    except urllib.error.URLError as e:
+        print("ERROR: cannot reach Loki at %s: %s"
+              % (args.loki_url, getattr(e, "reason", e)), file=sys.stderr)
+        return 1
+    except RuntimeError as e:
+        print("ERROR: %s" % e, file=sys.stderr)
+        return 1
+
+    # Stable ascending sort by nanosecond timestamp (ts_ns is the authoritative
+    # key; ms is derived and monotonic in ns).
+    timeline.sort(key=lambda r: r.get("ts_ns", int(r["ms"] * 1_000_000)))
+    render_loki(timeline, short8, norm, window_min, args.loki_linegrep)
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Merge + render
 # ---------------------------------------------------------------------------
 
@@ -522,7 +842,29 @@ def main():
     ap.add_argument("--minutes", type=int, default=120, help="lookback window in minutes")
     ap.add_argument("--limit", type=int, default=200, help="max device chunks to download")
     ap.add_argument("--service-lines", type=int, default=4000, help="journalctl -n value")
+    # --- Loki backend (additive; the SSH path above stays the default) ------
+    ap.add_argument("--loki", action="store_true",
+                    help="query the Loki backend (dash.bcrypto.com) instead of "
+                         "the SSH journal/blob path; unified cross-platform timeline")
+    ap.add_argument("--loki-url", type=str,
+                    default="https://dash.bcrypto.com/loki/api/v1/query_range",
+                    help="Loki query_range endpoint")
+    ap.add_argument("--loki-user", type=str, default="admin",
+                    help="Loki basic_auth user (default admin)")
+    ap.add_argument("--loki-pw", type=str, default="",
+                    help="Loki basic_auth password; overrides env QA_LOKI_QUERY_PW")
+    ap.add_argument("--loki-linegrep", action="store_true",
+                    help="opt-in: use a |= line-grep on short8 instead of the "
+                         "qa_call_short8 attribute filter (matches legs that put "
+                         "short8 only in the body; may yield substring false hits)")
     args = ap.parse_args()
+
+    # === Loki backend branch ===============================================
+    # With an explicit --call-id this is a pure-HTTP path: no SSH, no VPS creds.
+    # With --last-failed we still need the device chunks to resolve the failed
+    # id, so we fall through to the SSH device-pull first, then branch.
+    if args.loki and not args.last_failed:
+        sys.exit(run_loki_backend(args, args.call_id))
 
     print("=== bcrypto-server SSH @ %s (read-only) ===" % VPS_HOST)
     client = ssh_connect()
@@ -550,6 +892,14 @@ def main():
             print("\n--last-failed picked call id: %s" % call_id)
         else:
             call_id = args.call_id
+
+        # --loki --last-failed: the SSH device-pull above only resolved the
+        # failed call id; the actual cross-platform timeline comes from Loki.
+        # Close the SSH client (the finally below also closes it; close() is
+        # idempotent) and hand off to the pure-HTTP backend.
+        if args.loki:
+            client.close()
+            sys.exit(run_loki_backend(args, call_id))
 
         predicate, norm, short8 = build_matcher(call_id)
         if not norm:
