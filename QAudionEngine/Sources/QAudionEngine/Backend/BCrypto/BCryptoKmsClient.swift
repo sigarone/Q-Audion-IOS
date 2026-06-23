@@ -143,6 +143,39 @@ public final class BCryptoKmsClient {
         _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
     }
 
+    /// Fetch a peer's published long-term Ed25519 identity key (RAW 32 bytes),
+    /// or `nil` when the peer has not published one (404) or on any transport /
+    /// decode error. This is the iOS mirror of Android
+    /// `BCryptoApi.fetchIdentityKey` + Desktop `BCryptoApi.fetchIdentityKey`,
+    /// used as the spec-§5c "server" trust source for the call handshake
+    /// (`integration.resolveServerPeerKey`).
+    ///
+    /// GET /api/v1/users/{id}/identity-key returns either the v2 bundle
+    /// (`ed25519_pub_b64` + ik_* + self_sig) or the v1 fallback shape
+    /// (`ed25519_pub_b64` only). Both carry the Ed25519 SIGNING key under
+    /// `ed25519_pub_b64`; after the 2026-06-23 publish fix every platform's
+    /// published key equals its handshake signing key, so this is a safe
+    /// cross-check. Returns nil (never a partial/garbage key) so the caller
+    /// falls through to bundle-TOFU on first contact rather than aborting.
+    public func fetchUserIdentityKey(userId: String) async -> Data? {
+        guard !userId.isEmpty else { return nil }
+        do {
+            let data = try await rest.get("/api/v1/users/\(userId)/identity-key")
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            let b64: String? = (json["ed25519_pub_b64"] as? String) ?? (json["public_key_b64"] as? String)
+            guard let keyB64 = b64,
+                  let raw = Data(base64Encoded: keyB64),
+                  raw.count == 32 else {
+                return nil
+            }
+            return raw
+        } catch {
+            return nil
+        }
+    }
+
     /// Acknowledge earbud-exclusive hw_only key delivery with SE PoP.
     /// POST /api/v1/kms/earbud-ack-pop
     ///

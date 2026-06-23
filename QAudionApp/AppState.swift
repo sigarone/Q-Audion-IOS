@@ -1431,6 +1431,11 @@ final class AppState: ObservableObject {
             // A blocked caller must not be able to ring the device or
             // trigger key-exchange side effects.
             if BlockedContactsStore.isBlocked(senderId) { return }
+            // #2 (server-fetch trust source): warm the caller's server identity
+            // key now, BEFORE handleIncomingWebRtcOffer runs the §5c verify, so
+            // resolveServerPeerKey can cross-check the OFFER's signer key. Race
+            // loser (verify before fetch lands) → cache miss → bundle-TOFU.
+            self.prefetchServerPeerKey(senderId)
             let callType = data["call_type"] as? String ?? "audio"
             let callUUID = UUID(uuidString: callIdStr) ?? UUID()
             // Caller-id resolution priority for the CallKit display name:
@@ -3629,9 +3634,23 @@ final class AppState: ObservableObject {
             pinStore.pinnedKey(contactId: peerId)
         }
         integration.resolveServerPeerKey = { peerId in
-            // ContactsStore is cheap to construct (UserDefaults-backed); mirror
-            // the existing `ContactsStore().load()` usage elsewhere in AppState.
-            ContactsStore().findPubkey(userId: peerId)
+            // Spec §5c "server" trust source (iOS parity with Android
+            // EnsurePeerTrustPinnedUseCase / Desktop server-fetch). Read the
+            // server-fetched RAW 32-byte Ed25519 identity key from the
+            // thread-safe UserDefaults cache populated by
+            // `prefetchServerPeerKey(_:)` (kicked at call_incoming / startCall).
+            // Falls back to any QR-paired ContactsStore key. A cache MISS
+            // returns nil so the verifier falls through to bundle-TOFU on
+            // genuine first contact (never a hard abort). NOTE: this is gated
+            // on the 2026-06-23 publish fix being fleet-wide — the server must
+            // hold each peer's SIGNING key (== its handshake bundle key), else
+            // a cached pre-fix device key would trip identity_key_mismatch.
+            guard !peerId.isEmpty else { return nil }
+            if let raw = UserDefaults.standard.data(forKey: Self.serverPeerKeyDefaultsKey(peerId)),
+               raw.count == 32 {
+                return raw
+            }
+            return ContactsStore().findPubkey(userId: peerId)
         }
         // First-contact TOFU pin commit (AFTER a signature verified under it).
         integration.commitTofuPin = { peerId, key in
@@ -3920,8 +3939,36 @@ final class AppState: ObservableObject {
         await startCall(contactId: trimmed, video: video)
     }
 
+    /// UserDefaults key namespace for the server-fetched peer Ed25519 identity
+    /// key cache (spec §5c server trust source). Per-peer key so reads are O(1)
+    /// and thread-safe (UserDefaults synchronises its own access).
+    private static func serverPeerKeyDefaultsKey(_ userId: String) -> String {
+        "qaudion.serverpeerkey." + userId
+    }
+
+    /// Best-effort warm of the server-fetched identity-key cache for `userId`
+    /// BEFORE the handshake verify needs it (kicked at call_incoming for the
+    /// caller and at startCall for the callee). Safe to call repeatedly; ONLY a
+    /// valid RAW 32-byte key is ever written (404 / transport error / garbage →
+    /// no write, so the verifier falls through to bundle-TOFU rather than
+    /// aborting). Fire-and-forget; captures only locals so it never retains
+    /// self.
+    private func prefetchServerPeerKey(_ userId: String) {
+        guard !userId.isEmpty, let provider = liveProvider else { return }
+        let defaultsKey = Self.serverPeerKeyDefaultsKey(userId)
+        Task {
+            if let raw = await provider.kmsClient.fetchUserIdentityKey(userId: userId),
+               raw.count == 32 {
+                UserDefaults.standard.set(raw, forKey: defaultsKey)
+            }
+        }
+    }
+
     func startCall(contactId: String, video: Bool = false) async {
         RTLog.info("call", "startCall contactId=\(contactId.prefix(8))… video=\(video)")
+        // #2 (server-fetch trust source): warm the peer's server identity key
+        // so the handshake verify of the callee's ACCEPT has the §5c server key.
+        prefetchServerPeerKey(contactId)
         // W541-3: telemetry event marking outgoing-call dial. callId
         // isn't minted yet at this point — bound later via the same
         // session_id. Useful for measuring dial-to-active duration.
