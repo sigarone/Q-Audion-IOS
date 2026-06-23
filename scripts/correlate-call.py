@@ -96,12 +96,24 @@ def _load_vps_creds():
     sys.exit(1)
 
 
-VPS_HOST, VPS_USER, VPS_PASS = _load_vps_creds()
+VPS_HOST = None
+VPS_USER = None
+VPS_PASS = None
 DATA_DIR = "/opt/bcrypto/data/files"
 SERVICE_UNIT = "bcrypto-server"  # systemd unit name (binary is bcrypto-lite)
 
 
+def _ensure_creds():
+    """Lazy-load VPS creds so --loki (pure HTTP, no SSH) never needs the VPS /
+    VPS_ACCESS.md -- honors the tool's 'no SSH / no VPS creds needed' contract.
+    Only the SSH-blob backend (ssh_connect) triggers the load."""
+    global VPS_HOST, VPS_USER, VPS_PASS
+    if VPS_HOST is None:
+        VPS_HOST, VPS_USER, VPS_PASS = _load_vps_creds()
+
+
 def ssh_connect():
+    _ensure_creds()
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)

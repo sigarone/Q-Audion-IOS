@@ -130,11 +130,22 @@ def _load_vps_creds():
     sys.exit(1)
 
 
-VPS_HOST, VPS_USER, VPS_PASS = _load_vps_creds()
+VPS_HOST = None
+VPS_USER = None
+VPS_PASS = None
 DATA_DIR = "/opt/bcrypto/data/files"
 
 
+def _ensure_creds():
+    """Lazy-load VPS creds so --selftest / --dry-run-less paths never need the
+    VPS / VPS_ACCESS.md. Only ssh_connect (the prod blob pull) triggers it."""
+    global VPS_HOST, VPS_USER, VPS_PASS
+    if VPS_HOST is None:
+        VPS_HOST, VPS_USER, VPS_PASS = _load_vps_creds()
+
+
 def ssh_connect():
+    _ensure_creds()
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)
