@@ -34,11 +34,29 @@ public final class HevcPreferredVideoEncoderFactory: NSObject, RTCVideoEncoderFa
     }
 
     public func createEncoder(_ info: RTCVideoCodecInfo) -> RTCVideoEncoder? {
+        // H265/HEVC: build the VideoToolbox encoder directly. The webrtc-sdk
+        // (LiveKit) binary ships RTCVideoEncoderH265 but its
+        // RTCDefaultVideoEncoderFactory does NOT list/handle H265 by default
+        // (it's gated, same as upstream libwebrtc), so the delegate would return
+        // nil. Constructing it here is what actually lets iOS ENCODE H265.
+        if info.name.uppercased() == "H265" {
+            return RTCVideoEncoderH265(codecInfo: info)
+        }
         return delegate.createEncoder(info)
     }
 
     public func supportedCodecs() -> [RTCVideoCodecInfo] {
-        let base = delegate.supportedCodecs()
+        var base = delegate.supportedCodecs()
+        // The default factory does not advertise H265 even though the binary has
+        // the VideoToolbox HEVC encoder — so ADD it explicitly. Without this the
+        // iOS SDP offers only H264/VP8/VP9/AV1 and never negotiates video with an
+        // H265-only Android peer (observed: A36 VideoStats codec=null, 0 frames).
+        if !base.contains(where: { $0.name.uppercased() == "H265" }) {
+            base.append(RTCVideoCodecInfo(name: "H265"))
+            print("[HevcPreferredCodecFactories] H265 absent from default encoder list — added explicitly (webrtc-sdk binary)")
+        } else {
+            print("[HevcPreferredCodecFactories] H265 already in default encoder list")
+        }
         // Push H265 to front so SDP negotiation prefers it.
         let h265 = base.filter { $0.name.uppercased() == "H265" }
         let other = base.filter { $0.name.uppercased() != "H265" }
@@ -60,11 +78,20 @@ public final class HevcPreferredVideoDecoderFactory: NSObject, RTCVideoDecoderFa
     }
 
     public func createDecoder(_ info: RTCVideoCodecInfo) -> RTCVideoDecoder? {
+        // H265/HEVC: build the VideoToolbox decoder directly (the default factory
+        // does not handle H265 — see the encoder factory note). This is what lets
+        // iOS DECODE an Android H265 stream.
+        if info.name.uppercased() == "H265" {
+            return RTCVideoDecoderH265()
+        }
         return delegate.createDecoder(info)
     }
 
     public func supportedCodecs() -> [RTCVideoCodecInfo] {
-        let base = delegate.supportedCodecs()
+        var base = delegate.supportedCodecs()
+        if !base.contains(where: { $0.name.uppercased() == "H265" }) {
+            base.append(RTCVideoCodecInfo(name: "H265"))
+        }
         let h265 = base.filter { $0.name.uppercased() == "H265" }
         let other = base.filter { $0.name.uppercased() != "H265" }
         return h265 + other
