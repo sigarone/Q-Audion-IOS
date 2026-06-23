@@ -34,6 +34,7 @@ import sys
 import time
 import argparse
 import io
+import subprocess
 from pathlib import Path
 
 try:
@@ -91,12 +92,51 @@ def run(client, cmd):
     return stdout.read().decode("utf-8", errors="replace"), stderr.read().decode("utf-8", errors="replace")
 
 
+def _maybe_symbolicate(dump_path, skip):
+    """If the pulled telemetry contains a [CrashReporter] (W472) crash dump, auto-run
+    scripts/symbolicate.py on it so the stripped 'QAudionApp + <offset>' frames come back
+    as file:line -- no Mac required (symbolicate.py downloads the build's dSYM artifact
+    dsyms-<ver>, uploaded by ios-testflight.yml from v1.0.663+). Best-effort: never fails
+    the telemetry pull."""
+    if skip:
+        return
+    try:
+        text = dump_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return
+    has_crash = ("[CrashReporter]" in text and "QAudionApp + " in text) \
+        or bool(re.search(r"signal\s*5|SIGTRAP|SIGSEGV|SIGABRT", text))
+    if not has_crash:
+        return
+    sym = Path(__file__).resolve().parent / "symbolicate.py"
+    if not sym.exists():
+        return
+    print("\n=== crash detected -> auto-symbolicating (scripts/symbolicate.py) ===")
+    try:
+        r = subprocess.run([sys.executable, str(sym), "--crash", str(dump_path)],
+                           capture_output=True, text=True, timeout=180)
+        out = (r.stdout or "").strip()
+        err = (r.stderr or "").strip()
+        if out:
+            print(out)
+        if r.returncode != 0:
+            print(f"(symbolicate.py exit {r.returncode})")
+            if err:
+                print(err[:500])
+            print("Note: needs the crashing build's dSYM (artifact dsyms-<ver>, from "
+                  "v1.0.663+). Pre-1.0.663 builds have no staged dSYM to symbolicate against.")
+    except Exception as e:
+        print(f"(auto-symbolication skipped: {e})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=int, default=60, help="lookback window in minutes")
     ap.add_argument("--user-prefix", type=str, default="", help="filter chunks containing this user-id prefix in body")
     ap.add_argument("--limit", type=int, default=50, help="max chunks to download")
     ap.add_argument("--service-log", action="store_true", help="also pull bcrypto-server journalctl tail")
+    ap.add_argument("--no-symbolicate", action="store_true",
+                    help="skip auto-symbolication of any crash dump found in the pulled telemetry")
     args = ap.parse_args()
 
     print(f"=== bcrypto-server SSH @ {VPS_HOST} ===")
@@ -212,6 +252,7 @@ def main():
             for tag, cnt in top:
                 print(f"  {tag:20} {cnt}")
         print(f"\nFull dump: {out_path}")
+        _maybe_symbolicate(out_path, args.no_symbolicate)
     else:
         print("\nNo W417 chunks found in window. Possible reasons:")
         print("  1. v1.0.398+ not yet installed on iPhone")
