@@ -50,7 +50,12 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
             failureTolerance: -1,                // infinite (never auto-disable)
             keyRingSize: 16,
             discardFrameWhenCryptorNotReady: true,
-            keyDerivationAlgorithm: .hkdf
+            // RTCKeyDerivationAlgorithm NS_ENUM(NSUInteger): PBKDF2=0, HKDF=1
+            // (RTCFrameCryptorKeyProvider.h, webrtc-sdk m144). The Swift bridge
+            // rejects `.hkdf` (all-caps acronym case isn't lowercased like
+            // `.aesGcm`), so construct by rawValue — bridge-spelling-proof.
+            // HKDF matches Android FrameCryptorKeyDerivationAlgorithm.HKDF.
+            keyDerivationAlgorithm: RTCKeyDerivationAlgorithm(rawValue: 1)!
         )
     }
 
