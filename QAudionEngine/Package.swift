@@ -29,10 +29,13 @@ let package = Package(
         // Binaries hosted on GitHub Releases (sigarone CDN) — no more throttling
         // from download.onnxruntime.ai which was capping CI runners at ~5 KB/s.
         .package(url: "https://github.com/sigarone/onnxruntime-spm", exact: "1.24.2"),
-        // W347: WebRTC binary framework. Thin fork of stasel/WebRTC with 1 commit
-        // and binary hosted on GitHub Releases (sigarone CDN) for fast CI downloads.
-        // Same checksum as stasel/WebRTC 147.0.0 — binary is identical.
-        .package(url: "https://github.com/sigarone/webrtc-spm", exact: "147.0.0"),
+        // WebRTC is a local .binaryTarget (see `targets`) — webrtc-sdk (LiveKit
+        // ecosystem) build 144.7559.10 WITH H265/HEVC (VideoToolbox
+        // RTCVideoEncoderH265/RTCVideoDecoderH265). The old stasel/sigarone fork
+        // (M147) had NO H265 encoder → iOS offered only H264/VP8/VP9/AV1 while
+        // Android is H265-only → SDP video negotiated codec=null. Module/API
+        // unchanged (`import WebRTC`, RTC*) so it is a drop-in. (No `.package`
+        // line — a binaryTarget needs no dependency entry.)
         // W500: GRDB for local persistence (conversation + message store).
         // Note: GRDB-SQLCipher is NOT a valid SPM product in groue/GRDB.swift —
         // SQLCipher integration is available only via CocoaPods/xcframework.
@@ -109,6 +112,18 @@ let package = Package(
                 .define("OPUS_BUILD"),
             ]
         ),
+        // WebRTC with H265/HEVC — webrtc-sdk (LiveKit) prebuilt xcframework
+        // 144.7559.10. Drop-in for the old stasel/sigarone fork (same `WebRTC`
+        // module + RTC* API) but the iOS device slice ships the VideoToolbox H265
+        // encoder/decoder (verified: RTCVideoEncoderH265 + 133 H265 refs in the
+        // ios-arm64 binary). Lets iOS negotiate H265 on the WebRTC RTP rail with
+        // Android (H265-only). URL = webrtc-sdk GitHub release; checksum = SHA256
+        // of WebRTC.xcframework.zip.
+        .binaryTarget(
+            name: "WebRTC",
+            url: "https://github.com/webrtc-sdk/Specs/releases/download/144.7559.10/WebRTC.xcframework.zip",
+            checksum: "64e9150f5ad467a11f5adfdf41c251d74278060368777727a981a3320df1d5ff"
+        ),
         .target(
             name: "QAudionEngine",
             dependencies: [
@@ -116,7 +131,7 @@ let package = Package(
                 "COpus",
                 "CQaudionCryptoCore",  // Phase 3: v4 PQ ratchet C ABI (default-OFF; see above)
                 .product(name: "onnxruntime", package: "onnxruntime-spm"),
-                .product(name: "WebRTC", package: "webrtc-spm"),
+                "WebRTC",  // local binaryTarget (webrtc-sdk H265 build) — see below
                 .product(name: "GRDB", package: "GRDB.swift"),
                 // Tor.swift removed — see W610 note in dependencies above.
             ],
