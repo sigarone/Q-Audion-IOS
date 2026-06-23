@@ -3017,11 +3017,27 @@ final class AppState: ObservableObject {
             // caller via GET /api/v1/users/{id}/identity-key. Without this the
             // callee (Android) receives 404 and hangs up ~1 s after answering.
             // Best-effort: a transient failure here must not block calls.
-            if let edPub = try? manager.currentEd25519Pub(),
+            //
+            // ROOT-CAUSE FIX (2026-06-23, cross-platform call reject): publish
+            // the SOVEREIGN Ed25519 signing key — the EXACT same key used to
+            // sign the call handshake (see configureHandshakeSigning:
+            // `integration.localSignerIdentityKey = identityManager
+            // .loadIdentity()?.signingPublic`). Previously this published the
+            // DeviceKeyManager DEVICE key (`manager.currentEd25519Pub()`), a
+            // different keypair. A peer (Android/Desktop) GETting our
+            // identity-key then received the device key while our signed bundle
+            // carried the sovereign key → `bundleKey != trustedKey` →
+            // `identity_key_mismatch` abort at HandshakeSigningPolicy:129 BEFORE
+            // the signature was even checked → call rejected ~immediately.
+            // Sourcing both publish and sign from `sovereignIdentity
+            // .loadIdentity()?.signingPublic` makes them a single source of
+            // truth so a peer's verify reaches the real Ed25519 signature check.
+            if let signingPub = sovereignIdentity.loadIdentity()?.signingPublic,
+               signingPub.count == 32,
                let deviceId = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
                !deviceId.isEmpty {
                 do {
-                    try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: edPub, deviceId: deviceId)
+                    try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: signingPub, deviceId: deviceId)
                 } catch {
                     print("[AppState] identity key publish failed (non-fatal): \(error)")
                 }
@@ -3643,8 +3659,13 @@ final class AppState: ObservableObject {
         integration.isPeerVerifiedChannel = { peerId in
             SasVerificationStore.shared.storedFingerprint(peerUserId: peerId) != nil
         }
-        // Global enforcement flag DEFAULTS OFF (migration / WARN-only). Left at
-        // the integration's default `false` — do NOT set it true here.
+        // Global enforcement flag: the integration default is `true` (Gate #16,
+        // enabled 2026-06-18 — see QAudionCallIntegration.requireSignedHandshakeFlag).
+        // We intentionally do NOT touch it here. Signed-handshake enforcement is
+        // ON: unsigned/legacy peers are rejected (sig_required_missing) and a
+        // key swap is caught fail-closed (identity_key_mismatch). NEVER set this
+        // to `false` — that re-opens the fleet to unsigned/MITM peers (security
+        // downgrade). (The previous comment here wrongly said "DEFAULTS OFF".)
     }
 
     /// W450: boot the audio capture/playback stack for an incoming call
