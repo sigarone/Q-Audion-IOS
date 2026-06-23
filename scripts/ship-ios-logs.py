@@ -336,6 +336,16 @@ RE_NUM_TOKEN = re.compile(r"^[+\-]?\d[\d.,:]*[A-Za-z%]*$")
 RE_PLACEHOLDER_TOKEN = re.compile(r"^\[REDACTED:[a-z]+\]$")
 RE_PUNCT_TOKEN = re.compile(r"^[\W_]+$")
 RE_FREEWORD = re.compile(r"^[A-Za-z][A-Za-z'\-]{2,}$")  # candidate NL word
+# A bare mixed-alphanumeric token (letters AND digits, >=8 chars, no kv '='/':'
+# and not a [REDACTED:*] placeholder) has the exact shape of a truncated PSK
+# prefix / short device PIN / base32 secret fragment that is too short (8-11) to
+# trip the >=12 blob/residual sweeps yet too high-entropy to ship. The gate
+# treats it as a HARD FAIL (fall back to the attribute summary), closing the
+# "free <= structural" escape hatch that would otherwise let one such token ride
+# alongside a single structural token. Letters-only or digits-only tokens do NOT
+# match (those are caught as free words / numbers respectively).
+RE_MIXED_ALNUM_SECRET = re.compile(
+    r"^(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{8,}$")
 
 # 1f. hard length cap.
 BODY_CAP = 512
@@ -426,7 +436,14 @@ def _passes_structured_gate(scrubbed):
         if RE_PUNCT_TOKEN.match(tok):
             run = 0
             continue
+        # HARD FAIL on a bare mixed-alnum secret-shaped token (8-11 chars slip
+        # the >=12 blob sweeps). Checked on the RAW token (before strip) so an
+        # embedded digit+letter run is not masked by surrounding punctuation.
+        if RE_MIXED_ALNUM_SECRET.match(tok):
+            return False
         core = tok.strip("[](){}<>.,:;!?\"'").lower()
+        if RE_MIXED_ALNUM_SECRET.match(core):
+            return False
         if core in TELEMETRY_VOCAB:
             run = 0
             structural += 1
@@ -579,12 +596,51 @@ def map_severity(lvl):
 # ---------------------------------------------------------------------------
 
 ALLOWED_ATTR_KEYS = (
-    "qa.call.h8", "qa.role", "qa.net", "qa.media.mode",
+    "qa.call.h8", "qa.call.short8", "qa.role", "qa.net", "qa.media.mode",
     "qa.retry.count", "qa.node", "qa.ice.state", "qa.call.state",
 )
 
+# CROSS-LEG JOIN KEY. The bcrypto-server slog logs the plaintext call_id and
+# ship-server-logs.py emits qa.call.short8 = canon(call_id)[:8] (lowercased,
+# ellipsis/dot-stripped first-8). correlate-call.py already keys on that same
+# prefix. To JOIN the iOS leg to the server leg in Loki, BOTH legs must carry
+# qa.call.short8 with the IDENTICAL value, so we compute it here from the SAME
+# canonical call_id we already extract for qa.call.h8 -- using the SAME
+# canonicalization as ship-server-logs.py / correlate-call.py (idempotent,
+# case-folding) so an uppercase device UUID and a lowercase server id collapse
+# to the same 8 chars. This prefix is NOT secret (already in journald + already
+# what correlate-call.py matches on); qa.call.h8 (a non-reversible HMAC) is kept
+# alongside it as a secondary, harmless key.
+_ELLIPSIS = "\u2026"  # HORIZONTAL ELLIPSIS (source stays pure-ASCII)
+
+
+def call_short8(raw):
+    """THE JOIN KEY. canon(call_id)[:8]: strip + lower, strip trailing ellipsis
+    (U+2026) / ASCII dots, take first 8 chars.
+
+    MUST be byte-identical to ship-server-logs.py:call_short8 AND to
+    correlate-call.py:build_matcher's short8 (norm[:8] if len(norm) >= 8 else "").
+    The >= 8 floor (NOT >= 6) is load-bearing: correlate-call.py only produces a
+    short8 when the normalized id is >= 8 chars, so a 6/7-char id must yield ""
+    here too -- otherwise this leg would emit a join value the canonical matcher
+    can never reproduce (a silent cross-tool reconcile failure). Fail-closed:
+    when in doubt, emit no key rather than a non-joinable one."""
+    if raw is None:
+        return ""
+    s = raw.strip().rstrip()
+    s = s.rstrip(_ELLIPSIS)
+    s = s.rstrip(".")
+    s = s.rstrip(_ELLIPSIS)
+    s = s.strip().lower()
+    return s[:8] if len(s) >= 8 else ""
+
+# Optional opening-quote (\"?) MUST be present so a quoted device value
+# call_id="91FE5CF7-..." captures identically to the server leg (whose regex
+# also has \"?). Without it, a quoted iOS value matches NOTHING while the server
+# emits qa.call.short8 -> a one-sided SILENT join failure (= NO-GO). The closing
+# quote is naturally excluded by the [0-9a-fA-F\-] character class.
 _RE_CALLID_VALUE = re.compile(
-    r"call[ _]?id\s*[=:]\s*([0-9a-fA-F][0-9a-fA-F\-]{3,})", re.IGNORECASE)
+    r"call[ _]?id\s*[=:]\s*\"?([0-9a-fA-F][0-9a-fA-F\-]{3,})", re.IGNORECASE)
 _RE_ROLE = re.compile(r"\brole\s*[=:]\s*(caller|callee|offerer|answerer)\b",
                       re.IGNORECASE)
 _RE_MEDIA_MODE = re.compile(
@@ -629,6 +685,11 @@ def extract_attributes(orig_msg):
         h8 = hmac8(m.group(1))
         if h8:
             attrs["qa.call.h8"] = h8
+        # JOIN KEY: plaintext first-8, identical to the server leg's value so a
+        # single Loki query joins iOS + server for one call.
+        s8 = call_short8(m.group(1))
+        if s8:
+            attrs["qa.call.short8"] = s8
 
     m = _RE_ROLE.search(msg)
     if m and m.group(1).lower() in _ROLE_ENUM:
@@ -1104,6 +1165,39 @@ def run_selftest():
     if not kept or not body:
         failures.append("REGRESS: structured telemetry was dropped: %r" % msg)
 
+    # 15. QUOTED call_id value (the regex-asymmetry MUST-FIX). A device line
+    #     carrying call_id="91FE5CF7-..." MUST extract the SAME join key the
+    #     server leg extracts from the same quoted value -> 91fe5cf7. Before the
+    #     \"? fix this matched NOTHING and the iOS leg shipped no key (silent
+    #     one-sided join failure).
+    quoted = 'call_id="91FE5CF7-3572-42F1-9B84-29883F47BAB6" role=caller'
+    aq = extract_attributes(quoted)
+    if aq.get("qa.call.short8") != "91fe5cf7":
+        failures.append("JOIN-FAIL[quoted]: quoted call_id short8 %r != 91fe5cf7"
+                        % aq.get("qa.call.short8"))
+    # the bare (unquoted) form MUST yield the identical join key.
+    ab = extract_attributes("call_id=91fe5cf7-3572-42f1-9b84-29883f47bab6")
+    if ab.get("qa.call.short8") != aq.get("qa.call.short8"):
+        failures.append("JOIN-FAIL[quoted]: bare vs quoted short8 disagree: "
+                        "%r != %r" % (ab.get("qa.call.short8"),
+                                      aq.get("qa.call.short8")))
+
+    # 16. LENGTH-FLOOR reconcile with correlate-call.py / server leg (>= 8). A
+    #     6/7-char id yields "" (no non-joinable key emitted); exactly 8 is kept.
+    for short_id in ("91fe5c", "91fe5cf"):
+        if call_short8(short_id) != "":
+            failures.append("JOIN-FAIL[floor]: %r should yield '' (>=8 floor) "
+                            "but got %r" % (short_id, call_short8(short_id)))
+    if call_short8("91fe5cf7") != "91fe5cf7":
+        failures.append("JOIN-FAIL[floor]: 8-char id should be kept verbatim")
+
+    # 17. BARE mixed-alnum secret-shaped token (8-11 chars) must NOT ship even
+    #     with surrounding structure (closes the >=12-threshold escape hatch).
+    must_drop_or_summary("call", "role=caller state=active k7Gq9Lp2Zx1",
+                         ["k7gq9lp2zx1"], "bare_mixed_secret")
+    must_drop_or_summary("crypto", "pin a1B2c3D4 state=active",
+                         ["a1b2c3d4"], "bare_pin")
+
     out("=" * 72)
     out("SELF-TEST: privacy redaction regression")
     out("=" * 72)
@@ -1113,8 +1207,10 @@ def run_selftest():
         out("")
         out("  RESULT: NO-GO (%d leak/regression)" % len(failures))
         return 1
-    out("  14/14 cases pass: no forbidden value survived; structured telemetry")
-    out("  still ships; call_id hashed; SSID/serial/SDP/SAS/plaintext blocked.")
+    out("  18/18 cases pass: no forbidden value survived; structured telemetry")
+    out("  still ships; call_id hashed; SSID/serial/SDP/SAS/plaintext blocked;")
+    out("  join key matches the server leg incl. QUOTED form; 6/7-char floored;")
+    out("  bare mixed-alnum secret tokens (8-11 char) hard-failed.")
     out("  RESULT: GO")
     return 0
 
