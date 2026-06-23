@@ -1,22 +1,22 @@
-# GitHub Actions — Q-Audion iOS TestFlight build pipeline.
+# GitHub Actions -- Q-Audion iOS TestFlight build pipeline.
 #
 # THIS IS THE ACTIVE iOS BUILD PIPELINE. Codemagic was decommissioned
 # 2026-05-06 (codemagic.yaml removed from the repo). Xcode Cloud was
 # evaluated (see XCODE_CLOUD_MIGRATION.md) but never adopted. The
-# ci_scripts/ directory is unused dead code — only this file is wired
-# into the runner. See CLAUDE.md § "CI / BUILD PLATFORM" for the
+# ci_scripts/ directory is unused dead code -- only this file is wired
+# into the runner. See CLAUDE.md ? "CI / BUILD PLATFORM" for the
 # authoritative description.
 #
 # This workflow uses the `codemagic-cli-tools` Python package (a CLI
 # library for App Store Connect API + keychain helpers) inside the
-# macOS runner. That is NOT the Codemagic hosted-build service — the
+# macOS runner. That is NOT the Codemagic hosted-build service -- the
 # build itself runs on GitHub Actions' macos-latest runner.
 #
 # Bash steps are intentionally close to the old codemagic.yaml so the
 # Hard-won lessons in CLAUDE.md (sec 1-15) stay directly applicable.
 #
 # Trigger: push of a tag matching `v*` (same as Codemagic).
-# Runner:  macos-14 (Apple Silicon) — Xcode 15.x default; pin via
+# Runner:  macos-14 (Apple Silicon) -- Xcode 15.x default; pin via
 #          `sudo xcode-select -s /Applications/Xcode_X.Y.app` if needed.
 #
 # Required GitHub Secrets (mirror Codemagic asc_credentials env group):
@@ -29,7 +29,7 @@
 #   github.com/sigarone/Q-Audion-IOS/settings/secrets/actions
 #
 # Free-tier note: macOS runners cost 10x credit multiplier on private
-# repos (200 macOS minutes/month for free → ~40 builds at 5min each).
+# repos (200 macOS minutes/month for free -> ~40 builds at 5min each).
 # For unlimited free macOS minutes, make the repo public (sensitive
 # Q-Audion code is encrypted-by-design, but server URLs and bundle
 # id would become discoverable).
@@ -46,6 +46,11 @@ on:
       tag:
         description: 'Tag to build (e.g. v1.0.398). Leave empty to use HEAD.'
         required: false
+      download_dsyms:
+        description: 'Recover dSYMs from App Store Connect (expired-artifact rescue). Does NOT build/upload -- runs the fastlane recovery step only.'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -62,7 +67,7 @@ jobs:
       BUNDLE_ID: com.qaudion.app
       APP_APPLE_ID: '6762266299'
       XCODE_PROJECT: QAudionApp.xcodeproj
-      # Pin to Xcode 26.x family — accept ANY 26.x minor version
+      # Pin to Xcode 26.x family -- accept ANY 26.x minor version
       # available on the runner (the discovery step picks the latest
       # 26.x found in /Applications). Hard-pin to e.g. "26.4" if you
       # need deterministic builds across runner image rotations.
@@ -70,7 +75,7 @@ jobs:
       # Opt into Node.js 24 for JavaScript actions (setup-go etc.) to
       # silence the Node.js 20 deprecation warning. Node.js 20 support
       # on GH Actions runners ends 2026-09-16. Once upstream actions
-      # (setup-go@v5, upload-artifact@v7 …) ship native Node 24 builds,
+      # (setup-go@v5, upload-artifact@v7 ...) ship native Node 24 builds,
       # this env var can be removed.
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
@@ -88,7 +93,7 @@ jobs:
       # ----------------------------------------------------------
       # 1b) Cache SPM packages (git repos + binary artifacts).
       #     save-always: true ensures partial downloads are cached
-      #     even if the job times out or fails — so each run makes
+      #     even if the job times out or fails -- so each run makes
       #     progress until the cache is fully warm.
       # ----------------------------------------------------------
       - name: Cache SPM packages
@@ -107,10 +112,10 @@ jobs:
       # 1c) NO git credential injection. All SPM deps are PUBLIC.
       #     The url.insteadOf token rewrite ALSO rewrites binaryTarget
       #     download URLs, sending an Authorization header to GitHub's
-      #     release-asset S3 redirect → 401 Unauthorized → SPM hangs for
-      #     hours retrying. Verified: plain URL → 200 OK; auth-injected
-      #     URL → 401. Public repos clone fine without credentials.
-      #     (Removed 2026-05-29 — root cause of CI binary-download hang.)
+      #     release-asset S3 redirect -> 401 Unauthorized -> SPM hangs for
+      #     hours retrying. Verified: plain URL -> 200 OK; auth-injected
+      #     URL -> 401. Public repos clone fine without credentials.
+      #     (Removed 2026-05-29 -- root cause of CI binary-download hang.)
       # ----------------------------------------------------------
 
       # ----------------------------------------------------------
@@ -133,7 +138,7 @@ jobs:
           MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
 
           if [ -z "$MATCH" ]; then
-            echo "❌ No Xcode matching '${PIN}*' found on this runner."
+            echo "? No Xcode matching '${PIN}*' found on this runner."
             echo "Apple requires Xcode 26+ since 2026-04-28 for App Store submissions."
             echo "Available Xcodes:"
             ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
@@ -150,13 +155,13 @@ jobs:
       # ----------------------------------------------------------
       # 3) Install xcodegen + codemagic-cli-tools.
       #    codemagic-cli-tools provides `app-store-connect`,
-      #    `xcode-project`, and `keychain` CLIs — same tools the
+      #    `xcode-project`, and `keychain` CLIs -- same tools the
       #    codemagic.yaml steps invoke.
       # ----------------------------------------------------------
       - name: Install build tools
         run: |
           set -e
-          # Install xcodegen if missing — runners have it sometimes,
+          # Install xcodegen if missing -- runners have it sometimes,
           # sometimes not, depending on image rotation.
           if command -v xcodegen >/dev/null 2>&1; then
             echo "xcodegen already installed: $(xcodegen --version)"
@@ -166,7 +171,7 @@ jobs:
 
           # macOS runner enforces PEP 668 (externally-managed Python),
           # so we use pipx to install codemagic-cli-tools in an isolated
-          # venv. pipx is preinstalled on macos-15+ runners — only
+          # venv. pipx is preinstalled on macos-15+ runners -- only
           # install if missing.
           if command -v pipx >/dev/null 2>&1; then
             echo "pipx already installed: $(pipx --version)"
@@ -199,7 +204,7 @@ jobs:
           cache: false
 
       # ----------------------------------------------------------
-      # 3c) Build quiche.xcframework — MASQUE CONNECT-UDP backend.
+      # 3c) Build quiche.xcframework -- MASQUE CONNECT-UDP backend.
       #     Cached by QUICHE_REF so repeat builds skip the ~10 min
       #     cargo + BoringSSL compile. Produces QAudionApp/Vendor/
       #     quiche.xcframework (the `Cquiche` module imported by
@@ -238,11 +243,12 @@ jobs:
 
       # ----------------------------------------------------------
       # 5) Bump marketing version + build number into Info.plist.
-      #    Same pattern as codemagic.yaml — write directly via
+      #    Same pattern as codemagic.yaml -- write directly via
       #    plutil because Info.plist hard-codes the values rather
       #    than referencing $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION).
       # ----------------------------------------------------------
       - name: Bump version
+        id: version
         working-directory: QAudionApp
         env:
           APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
@@ -251,7 +257,7 @@ jobs:
         run: |
           set -e
           # Marketing version from tag (strip leading "v" + any "-suffix").
-          # Refuse to fall back to a hard-coded "1.0.0" — historical
+          # Refuse to fall back to a hard-coded "1.0.0" -- historical
           # incident 2026-05-07: a workflow_dispatch run with no `tag`
           # input produced TestFlight build "1.0.0 (54)" which polluted
           # the version timeline alongside proper 1.0.4xx builds and
@@ -294,8 +300,15 @@ jobs:
           echo "--- extension ---"
           plutil -extract CFBundleVersion raw -o - "$EXT_PLIST"
 
+          # Expose the resolved version + build number as step outputs so the
+          # dSYM-archival step below can name its artifact by version
+          # (dsyms-<MARKETING_VERSION>) for later `gh run download` lookup.
+          # Additive only -- reads values already written to Info.plist above.
+          echo "marketing_version=$MARKETING_VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$NEW_BUILD"             >> "$GITHUB_OUTPUT"
+
       # ----------------------------------------------------------
-      # 6) Set up signing — fetch or create Distribution cert + App
+      # 6) Set up signing -- fetch or create Distribution cert + App
       #    Store provisioning profile via the ASC API. Same flow as
       #    codemagic.yaml.
       # ----------------------------------------------------------
@@ -321,21 +334,21 @@ jobs:
             --certificate-key "@file:$CERT_KEY_PATH" \
             --strict-match-identifier
 
-          # ── VPN extension: App Groups + Network Extensions ───────────────────
+          # ?? VPN extension: App Groups + Network Extensions ???????????????????
           # QAudionPacketTunnel.entitlements requires both capabilities.
           # fetch-signing-files --create creates the Bundle ID but NOT the
-          # capabilities — the profile it produces has no entitlements, and
+          # capabilities -- the profile it produces has no entitlements, and
           # xcodebuild archive rejects it immediately (~3s failure) with:
           #   "requires a provisioning profile with the App Groups and
           #    Network Extensions features"
           #
           # Fix:
-          #   Phase 1 — run fetch-signing-files to create/find the Bundle ID
+          #   Phase 1 -- run fetch-signing-files to create/find the Bundle ID
           #             and (stale) profile; capture output to extract IDs.
-          #   Phase 2 — enable APP_GROUPS + NETWORK_EXTENSIONS on the Bundle ID.
-          #   Phase 3 — delete the stale profile (no capabilities) so --create
+          #   Phase 2 -- enable APP_GROUPS + NETWORK_EXTENSIONS on the Bundle ID.
+          #   Phase 3 -- delete the stale profile (no capabilities) so --create
           #             makes a fresh one with capabilities in Phase 4.
-          #   Phase 4 — re-run fetch-signing-files; new profile includes caps.
+          #   Phase 4 -- re-run fetch-signing-files; new profile includes caps.
           EXT_BID="com.qaudion.app.packet-tunnel"
 
           # Phase 1: run first fetch so Bundle ID definitely exists; capture output.
@@ -355,7 +368,7 @@ jobs:
           # whether codemagic-cli-tools colourises its output.
           PLAIN=$(printf '%s\n' "$EXT_FETCH_OUT" | sed 's/\x1b\[[0-9;]*m//g')
 
-          # Extract Bundle ID resource ID — two possible formats:
+          # Extract Bundle ID resource ID -- two possible formats:
           #   new:      "Created Bundle ID XXXXXXXXXX"
           #   existing: "- Name identifier (XXXXXXXXXX)"
           EXT_BID_RES=$(printf '%s\n' "$PLAIN" \
@@ -368,7 +381,7 @@ jobs:
           fi
           echo "Extension Bundle ID res-id: ${EXT_BID_RES:-UNKNOWN}"
 
-          # Extract Profile resource ID — two possible formats:
+          # Extract Profile resource ID -- two possible formats:
           #   new:      "Created Profile XXXXXXXXXX"
           #   reused:   "- IOS_APP_STORE ... (XXXXXXXXXX)"
           EXT_PROF_RES=$(printf '%s\n' "$PLAIN" \
@@ -381,7 +394,7 @@ jobs:
           fi
           echo "Extension Profile res-id: ${EXT_PROF_RES:-UNKNOWN}"
 
-          # Phase 2: enable capabilities (idempotent — safe to re-run).
+          # Phase 2: enable capabilities (idempotent -- safe to re-run).
           # Diagnostic: print available bundle-ids subcommands on first run so
           # we can verify 'add-capability' exists if the command fails below.
           if [ -n "$EXT_BID_RES" ]; then
@@ -420,7 +433,7 @@ jobs:
               --certificate-key "@file:$CERT_KEY_PATH" \
               --strict-match-identifier
           else
-            echo "WARNING: could not resolve Extension Bundle ID resource — archive may fail."
+            echo "WARNING: could not resolve Extension Bundle ID resource -- archive may fail."
           fi
 
           keychain add-certificates
@@ -439,7 +452,7 @@ jobs:
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
             --scheme QAudionApp 2>&1 | tee build.log \
-          || (echo ""; echo "=== BUILD FAILED — full build.log ==="; cat build.log; exit 1)
+          || (echo ""; echo "=== BUILD FAILED -- full build.log ==="; cat build.log; exit 1)
 
       # ----------------------------------------------------------
       # 7b) Diagnose Swift compile errors ONLY when Build IPA fails.
@@ -447,7 +460,7 @@ jobs:
       #     xcodebuild with CODE_SIGNING_ALLOWED=NO so Swift errors
       #     appear without xcbeautify filtering them away). That paid
       #     ~2:10 of full re-compilation on EVERY build, including
-      #     green ones — ~22% of total wall time wasted when nothing
+      #     green ones -- ~22% of total wall time wasted when nothing
       #     is broken. By gating on `if: failure()`, the diag pass
       #     runs only when actually needed (the build-log tail above
       #     gives a first hint; this gives the full Swift output).
@@ -500,7 +513,7 @@ jobs:
           if [ -d "$FW" ]; then
             plutil -replace MinimumOSVersion -string "16.0" "$FW/Info.plist"
           else
-            echo "onnxruntime.framework not in IPA — skipping MinimumOSVersion patch"
+            echo "onnxruntime.framework not in IPA -- skipping MinimumOSVersion patch"
           fi
 
           # Remove libquiche.a from the app bundle root.
@@ -567,7 +580,7 @@ jobs:
             --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
 
           echo ""
-          echo "✅ Upload complete. Build will appear in TestFlight Internal"
+          echo "? Upload complete. Build will appear in TestFlight Internal"
           echo "   group 'Q-Audion testers' automatically once Apple"
           echo "   finishes processing (~5-10 min)."
 
@@ -580,10 +593,10 @@ jobs:
         # Non-fatal: this step runs AFTER the TestFlight altool upload
         # (step 9 above), so the IPA is already on App Store Connect by
         # the time we get here. A storage-quota hit must not turn an
-        # otherwise-successful TestFlight build into a red CI run —
+        # otherwise-successful TestFlight build into a red CI run --
         # `continue-on-error: true` keeps the workflow green and lets
         # the human download the artifacts only when storage allows.
-        # retention-days dropped 14 → 7 to be a good citizen now that
+        # retention-days dropped 14 -> 7 to be a good citizen now that
         # we've observed the org's quota cap fill up.
         continue-on-error: true
         uses: actions/upload-artifact@v7
@@ -594,4 +607,189 @@ jobs:
             QAudionApp/build/ios/dsym/*.zip
             QAudionApp/build.log
           retention-days: 7
+          if-no-files-found: warn
+
+      # ----------------------------------------------------------
+      # 11) P0-A -- Versioned dSYM archive for Mac-free crash
+      #     symbolication. The IPA pipeline (xcode-project build-ipa)
+      #     already produces dSYM zip(s) under QAudionApp/build/ios/dsym/,
+      #     but step 10 bundles them into ios-build-<run_number> with a
+      #     7-day retention that can be skipped on a storage-quota hit.
+      #     That makes the *exact* dSYM for an old TestFlight build hard
+      #     to find (you must know the run number) and short-lived.
+      #
+      #     This step publishes a SEPARATE artifact named by version
+      #     (dsyms-<CFBundleShortVersionString>) retained 90 days, so any
+      #     later crash can fetch the matching dSYM with:
+      #         gh run download <run-id> -n dsyms-<version> -D ./dsyms
+      #     No Mac required to symbolicate afterwards (atos / symbolicate,
+      #     or scripts/symbolicate.py).
+      #
+      #     Robust collection: prefer codemagic's dsym/*.zip output; also
+      #     scan the whole build tree + any .xcarchive for *.dSYM bundles
+      #     so a runner-layout change can't silently drop the dSYM. Each
+      #     found bundle is staged under a UNIQUE subdir so two .dSYMs
+      #     with the same basename can never clobber one another.
+      #
+      #     `if: always()` + continue-on-error keeps an otherwise-green
+      #     TestFlight build green on a storage-quota miss (CLAUDE.md:
+      #     the pipeline is fragile -- additive, non-fatal only). The
+      #     collect step always creates $GITHUB_WORKSPACE/dsyms-out and
+      #     the upload uses a STATIC path glob (never a cross-step env
+      #     var), so the upload can never run with an empty path input.
+      # ----------------------------------------------------------
+      - name: Archive dSYMs (versioned, 90d)
+        if: always()
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          OUT="$GITHUB_WORKSPACE/dsyms-out"
+          mkdir -p "$OUT"
+
+          # 1) codemagic build-ipa writes ready-made dSYM zip(s) here.
+          if ls QAudionApp/build/ios/dsym/*.zip >/dev/null 2>&1; then
+            cp QAudionApp/build/ios/dsym/*.zip "$OUT/" || true
+            echo "Copied codemagic dSYM zip(s) from build/ios/dsym/"
+          fi
+
+          # 2) Fallback: collect any raw *.dSYM bundles from the build
+          #    tree and from any .xcarchive the build may have produced.
+          #    Process substitution keeps the loop in the MAIN shell (no
+          #    subshell counter), and each bundle goes to its own subdir
+          #    (n=0,1,2,...) so same-basename bundles never collide.
+          STAGE="$(mktemp -d)"
+          n=0
+          found_any=0
+          while IFS= read -r d; do
+            [ -z "$d" ] && continue
+            mkdir -p "$STAGE/found_$n"
+            cp -R "$d" "$STAGE/found_$n/" 2>/dev/null && found_any=1
+            n=$((n + 1))
+          done < <(find QAudionApp/build "$HOME/Library/Developer/Xcode/Archives" \
+                     -type d -name '*.dSYM' 2>/dev/null || true)
+
+          if [ "$found_any" = "1" ]; then
+            ( cd "$STAGE" && zip -qry "$OUT/QAudionApp.dSYMs.raw.zip" . ) || true
+            echo "Zipped raw .dSYM bundle(s) from build tree / xcarchive"
+          fi
+
+          echo "=== Collected dSYM payload ==="
+          ls -lh "$OUT" || true
+          if ! ls "$OUT"/* >/dev/null 2>&1; then
+            echo "::warning::No dSYMs found to archive (build may have failed before producing them)."
+          fi
+
+      - name: Upload versioned dSYMs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          # Named by version so a future crash can do:
+          #   gh run download --name dsyms-<version>
+          # Falls back to run_number when the version output is empty
+          # (e.g. the build failed before the Bump version step ran).
+          # `||` returns the right operand when the left is the empty
+          # string -- this IS the correct GitHub Actions fallback idiom.
+          name: dsyms-${{ steps.version.outputs.marketing_version || github.run_number }}
+          # STATIC path glob -- never a cross-step env var. The collect
+          # step always creates dsyms-out/, so this input is never empty.
+          path: dsyms-out/*
+          retention-days: 90
+          if-no-files-found: warn
+
+      # ----------------------------------------------------------
+      # 12) P0-A FALLBACK -- recover dSYMs from App Store Connect for a
+      #     build whose 90-day artifact already expired. OPT-IN ONLY:
+      #     runs solely on a manual workflow_dispatch with
+      #     download_dsyms=true (never on a normal tag push). Uses
+      #     fastlane download_dsyms (stable, documented ASC dSYM API;
+      #     fastlane is preinstalled on macos runners) authenticated via
+      #     an App Store Connect API-key JSON (key_id + issuer_id + key
+      #     content). NOTE: this app does not use Bitcode, so Apple does
+      #     not recompile -- the build dSYMs from step 11 are already
+      #     final; this path exists only for expired-artifact recovery.
+      #
+      #     The guard is an explicit event_name + string compare so it is
+      #     null-safe on tag-push (github.event.inputs is null there) and
+      #     documents intent. Boolean dispatch inputs serialize to the
+      #     strings 'true'/'false'.
+      # ----------------------------------------------------------
+      - name: Recover dSYMs from App Store Connect (opt-in)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.download_dsyms == 'true' }}
+        continue-on-error: true
+        env:
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          # NB: intentionally NO `set -x` -- it would echo the .p8 secret.
+          set -uo pipefail
+
+          # Write the .p8 + an App Store Connect API-key JSON under
+          # RUNNER_TEMP (NOT the build tree) so the step-11 `find
+          # QAudionApp/build` dSYM scan and the upload globs can never
+          # capture the secret.
+          KEY_DIR="$RUNNER_TEMP/asc_keys"
+          mkdir -p "$KEY_DIR"
+          chmod 700 "$KEY_DIR"
+          KEY_FILE="$KEY_DIR/AuthKey_${APP_STORE_CONNECT_KEY_IDENTIFIER}.p8"
+          printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+
+          # fastlane download_dsyms needs key_id + issuer_id + key, not a
+          # bare .p8 path. The documented stable shape is an ASC API-key
+          # JSON consumed via api_key_path:. Build it here (in_house:false
+          # for App Store / TestFlight builds).
+          API_JSON="$KEY_DIR/asc_api_key.json"
+          python3 - "$KEY_FILE" > "$API_JSON" <<'PY'
+          import json, sys, os
+          key_id = os.environ["APP_STORE_CONNECT_KEY_IDENTIFIER"]
+          issuer = os.environ["APP_STORE_CONNECT_ISSUER_ID"]
+          with open(sys.argv[1], "r") as f:
+              key = f.read()
+          json.dump({
+              "key_id": key_id,
+              "issuer_id": issuer,
+              "key": key,
+              "in_house": False,
+          }, sys.stdout)
+          PY
+          chmod 600 "$API_JSON"
+
+          REC_OUT="$GITHUB_WORKSPACE/dsyms-recovered"
+          mkdir -p "$REC_OUT"
+
+          # version: prefer the bumped value, else parse the dispatch tag.
+          VER="${{ steps.version.outputs.marketing_version }}"
+          if [ -z "$VER" ]; then
+            VER="$(echo "${{ github.event.inputs.tag }}" | sed -E 's/^v//; s/-[A-Za-z].*$//')"
+          fi
+          echo "Recovering dSYMs for app $BUNDLE_ID${VER:+ version $VER}"
+
+          # download_dsyms pulls every dSYM Apple holds for the app
+          # (optionally filtered by version) into output_directory. The
+          # ASC API key JSON carries the auth (key_id/issuer_id/key).
+          fastlane run download_dsyms \
+            api_key_path:"$API_JSON" \
+            app_identifier:"$BUNDLE_ID" \
+            output_directory:"$REC_OUT" \
+            ${VER:+version:"$VER"} \
+            || echo "::warning::download_dsyms returned non-zero (no matching build, or no dSYMs on ASC)."
+
+          echo "=== Recovered dSYMs ==="
+          ls -lhR "$REC_OUT" || true
+          # Ensure the upload below always has a non-empty path input even
+          # when nothing was recovered (avoids an empty-path input error).
+          if ! ls "$REC_OUT"/* >/dev/null 2>&1; then
+            echo "No dSYMs recovered from App Store Connect for ${VER:-<any version>}." > "$REC_OUT/README.txt"
+          fi
+
+      - name: Upload recovered dSYMs (opt-in)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.download_dsyms == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: dsyms-recovered-${{ steps.version.outputs.marketing_version || github.run_number }}
+          path: dsyms-recovered/*
+          retention-days: 90
           if-no-files-found: warn
