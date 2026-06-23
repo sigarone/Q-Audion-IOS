@@ -72,6 +72,14 @@ struct QAudionApp: App {
                 // attachStdoutTee() so the per-payload prints are captured
                 // by the W417 telemetry, same rationale as the crash flush.
                 MetricKitDiagnostics.start()
+                // W-FLAGS — start the remote feature-flag poll. Primitive-only
+                // signature (CLAUDE.md §16): a compile-time flags URL String,
+                // NO AppState. Plain URLSession (public, un-authed, NOT the
+                // pinned voip host) — see FeatureFlags.swift header. Placed
+                // after attachStdoutTee() so the "[FeatureFlags] fetched: ..."
+                // line is captured by the W417 telemetry. Fire-and-forget:
+                // never blocks launch, fails safe to the compiled defaults.
+                FeatureFlags.shared.start(flagsUrl: "https://dash.bcrypto.com/flags.json")
                 appState.initialize()
                 // W441: sweep expired messages immediately + every 60s.
                 EphemeralMessageJanitor.shared.start()
