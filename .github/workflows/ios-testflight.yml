@@ -275,12 +275,19 @@ jobs:
           echo "Marketing version = $MARKETING_VERSION"
 
           # Build number = TestFlight latest + 1 (mirrors codemagic.yaml).
+          # 2026-06-23: bound the ASC API call with `timeout`. App Store Connect's
+          # get-latest-testflight-build-number hung indefinitely (no client-side
+          # timeout) during an ASC slowdown and wedged the build at this step for
+          # 45+ min. `timeout 120` kills a hung call so the fallback runs. If the
+          # runner lacks a `timeout` binary the command fails fast (rc=127) and we
+          # ALSO fall back — safe either way. Fallback = commit count (monotonic,
+          # > any prior build number) → valid TestFlight build (unique+increasing).
           set +e
-          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID")
+          LATEST=$(timeout 120 app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID")
           rc=$?
           set -e
           if [ "$rc" -ne 0 ] || [ -z "$LATEST" ]; then
-            echo "WARN: ASC fetch failed, falling back to commit count"
+            echo "WARN: ASC fetch failed/timed out (rc=$rc), falling back to commit count"
             LATEST=$(git rev-list --count HEAD)
           fi
           NEW_BUILD=$((LATEST + 1))
