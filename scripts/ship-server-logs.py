@@ -841,6 +841,71 @@ def build_export_request(records, node_id, env_name):
 
 
 # ---------------------------------------------------------------------------
+# HEARTBEAT -- ONE synthetic OTLP record emitted EVERY run (even when 0
+# call-relevant lines were found), so a Grafana
+#   absent_over_time({service_name="qaudion-server"} | scope="qaudion.shipper.heartbeat" [15m])
+# alert can distinguish 'shipper DEAD' (no heartbeat) from 'no calls happened'
+# (heartbeat present, records_read=0). The body is PRE-CLEARED structured
+# telemetry: it is built ENTIRELY from integers this script computed about its
+# OWN run (cursor_advanced / records_read / shipped / dropped / dropped_redact)
+# -- it never touches journald text, so no user/crypto plaintext can enter it.
+# It carries NO ingested attributes, only qa.node (the cluster node id).
+# ---------------------------------------------------------------------------
+
+HEARTBEAT_SCOPE = "qaudion.shipper.heartbeat"
+
+
+def build_heartbeat_record(node_id, records_read, shipped, dropped,
+                           dropped_redact, cursor_advanced, now_ms=None):
+    """Return (otlp_logRecord, HEARTBEAT_SCOPE).
+
+    The body is a fixed-shape ASCII string of integers/booleans this script
+    derived about its own run -- NO journald text flows in, so it is provably
+    safe and bypasses the redact gate as pre-cleared structured telemetry.
+    `dropped_redact` (lines dropped BY redaction) is surfaced so over-redaction
+    trends are observable in Grafana."""
+    if now_ms is None:
+        now_ms = time.time() * 1000.0
+    time_unix_nano = int(now_ms * 1_000_000)  # ms -> ns
+
+    body = ("[heartbeat] cursor_advanced=%s records_read=%d shipped=%d "
+            "dropped=%d dropped_redact=%d"
+            % ("true" if cursor_advanced else "false",
+               int(records_read), int(shipped), int(dropped),
+               int(dropped_redact)))
+
+    attrs = [_attr_str("qa.node", node_id)] if node_id else []
+    sev_num, sev_text = map_severity("INFO")
+    return {
+        "timeUnixNano": str(time_unix_nano),
+        "severityNumber": sev_num,
+        "severityText": sev_text,
+        "body": {"stringValue": body},
+        "attributes": attrs,
+    }, HEARTBEAT_SCOPE
+
+
+def build_heartbeat_request(node_id, env_name, records_read, shipped, dropped,
+                            dropped_redact, cursor_advanced, now_ms=None):
+    """Assemble a standalone ExportLogsServiceRequest carrying ONLY the
+    heartbeat record. Shipped separately so it lands even when the call-relevant
+    batch is empty (0 shippable lines) OR is being POSTed one-by-one under the
+    poison-pill fallback."""
+    lr, scope_name = build_heartbeat_record(
+        node_id, records_read, shipped, dropped, dropped_redact,
+        cursor_advanced, now_ms=now_ms)
+    return {
+        "resourceLogs": [{
+            "resource": build_resource(node_id, env_name),
+            "scopeLogs": [{
+                "scope": {"name": scope_name},
+                "logRecords": [lr],
+            }],
+        }]
+    }
+
+
+# ---------------------------------------------------------------------------
 # Loki OTLP/JSON POST.
 # ---------------------------------------------------------------------------
 
@@ -957,25 +1022,45 @@ def default_state_path():
 
 
 def load_state(path):
-    """Load shipped cursor state. Shape: {"cursor": "<__CURSOR>", "ts": <epoch>}.
-    Returns an empty skeleton if absent/corrupt."""
+    """Load shipped cursor state. Shape:
+        {"cursor": "<__CURSOR>", "ts": <epoch>,
+         "fail_cursor": "<__CURSOR>", "fail_count": <int>}.
+
+    fail_cursor / fail_count track the POISON-PILL guard: how many CONSECUTIVE
+    runs the SAME un-advanced cursor failed its POST. Returns an empty skeleton
+    if absent/corrupt."""
     try:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                fc = data.get("fail_count", 0)
+                try:
+                    fc = int(fc)
+                except (TypeError, ValueError):
+                    fc = 0
                 return {"cursor": data.get("cursor", ""),
-                        "ts": data.get("ts", 0)}
+                        "ts": data.get("ts", 0),
+                        "fail_cursor": data.get("fail_cursor", ""),
+                        "fail_count": fc}
     except Exception as e:
         print("WARN: state file unreadable (%s); starting fresh." % e,
               file=sys.stderr)
-    return {"cursor": "", "ts": 0}
+    return {"cursor": "", "ts": 0, "fail_cursor": "", "fail_count": 0}
 
 
-def save_state(path, cursor):
+def save_state(path, cursor, fail_cursor="", fail_count=0):
+    """Persist the cursor watermark AND the poison-pill consecutive-fail count.
+
+    fail_cursor is the cursor whose POST is currently failing; fail_count is how
+    many consecutive runs it has failed. Both reset to ""/0 once delivery
+    succeeds (the cursor advances)."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps({"cursor": cursor, "ts": int(time.time())},
+        tmp.write_text(json.dumps({"cursor": cursor,
+                                   "ts": int(time.time()),
+                                   "fail_cursor": fail_cursor,
+                                   "fail_count": int(fail_count)},
                                   indent=2), encoding="utf-8")
         tmp.replace(path)
     except Exception as e:
@@ -1154,6 +1239,104 @@ def run_selftest():
     if call_short8("91fe5cf7") != "91fe5cf7":         # exactly 8 -> kept
         failures.append("JOIN-FAIL[floor]: 8-char id should be kept verbatim")
 
+    # 15. HEARTBEAT shape: ONE record, correct scope, body is fixed integer
+    #     telemetry, node attr only, severity INFO. It carries NO journald text,
+    #     so by construction it cannot leak -- assert the exact safe shape.
+    hb_req = build_heartbeat_request(
+        NODE, "production", records_read=7, shipped=4, dropped=3,
+        dropped_redact=3, cursor_advanced=True, now_ms=1_700_000_000_000.0)
+    rls = hb_req.get("resourceLogs", [])
+    if len(rls) != 1:
+        failures.append("HEARTBEAT: expected 1 resourceLogs, got %d" % len(rls))
+    else:
+        sls = rls[0].get("scopeLogs", [])
+        if len(sls) != 1 or sls[0]["scope"]["name"] != HEARTBEAT_SCOPE:
+            failures.append("HEARTBEAT: wrong/missing scope %r"
+                            % (sls[0]["scope"]["name"] if sls else None))
+        else:
+            lrs = sls[0]["logRecords"]
+            if len(lrs) != 1:
+                failures.append("HEARTBEAT: expected 1 logRecord, got %d"
+                                % len(lrs))
+            else:
+                hb = lrs[0]
+                hb_body = hb["body"]["stringValue"]
+                expect = ("[heartbeat] cursor_advanced=true records_read=7 "
+                          "shipped=4 dropped=3 dropped_redact=3")
+                if hb_body != expect:
+                    failures.append("HEARTBEAT: body %r != %r"
+                                    % (hb_body, expect))
+                # PROVE the body is, by construction, pre-cleared structured
+                # telemetry: it is built ONLY from the fixed prefix + booleans +
+                # integer counters this script computed about its OWN run. Match
+                # it against an EXACT whitelist regex -- if it ever stops matching
+                # this shape, a non-integer (i.e. ingested) value slipped in.
+                HB_SHAPE_RE = re.compile(
+                    r"^\[heartbeat\] cursor_advanced=(?:true|false) "
+                    r"records_read=\d+ shipped=\d+ dropped=\d+ "
+                    r"dropped_redact=\d+$")
+                if not HB_SHAPE_RE.match(hb_body):
+                    failures.append("HEARTBEAT: body not int-only safe shape: %r"
+                                    % hb_body)
+                hb_keys = sorted(a["key"] for a in hb["attributes"])
+                if hb_keys != ["qa.node"]:
+                    failures.append("HEARTBEAT: attrs %r != ['qa.node']"
+                                    % hb_keys)
+                if hb["severityText"] != "INFO":
+                    failures.append("HEARTBEAT: severity %r != INFO"
+                                    % hb["severityText"])
+
+    # 15b. Heartbeat reports cursor_advanced=false + zeroed counters on a no-call
+    #      run (the 'shipper alive, no calls' case the absent_over_time alert
+    #      relies on).
+    hb_idle = build_heartbeat_request(
+        NODE, "production", records_read=0, shipped=0, dropped=0,
+        dropped_redact=0, cursor_advanced=False, now_ms=1_700_000_000_000.0)
+    idle_body = (hb_idle["resourceLogs"][0]["scopeLogs"][0]
+                 ["logRecords"][0]["body"]["stringValue"])
+    if idle_body != ("[heartbeat] cursor_advanced=false records_read=0 "
+                     "shipped=0 dropped=0 dropped_redact=0"):
+        failures.append("HEARTBEAT[idle]: wrong body %r" % idle_body)
+
+    # 16. POISON-PILL state round-trip: fail_count persists and reloads as int.
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        sp = Path(td) / "state.json"
+        save_state(sp, "CURSOR_A", fail_cursor="CURSOR_A", fail_count=2)
+        st = load_state(sp)
+        if st.get("cursor") != "CURSOR_A":
+            failures.append("POISON: cursor not persisted")
+        if st.get("fail_cursor") != "CURSOR_A":
+            failures.append("POISON: fail_cursor not persisted")
+        if st.get("fail_count") != 2:
+            failures.append("POISON: fail_count %r != 2"
+                            % st.get("fail_count"))
+        # Legacy state file (no fail_* keys) must load with zeroed streak.
+        sp.write_text(json.dumps({"cursor": "C", "ts": 1}), encoding="utf-8")
+        st2 = load_state(sp)
+        if st2.get("fail_count") != 0 or st2.get("fail_cursor") != "":
+            failures.append("POISON: legacy state did not default streak to 0")
+
+    # 17. POISON-PILL record-shape disclosure is SHAPE-ONLY: it must report the
+    #     body LENGTH and attr KEYS but NEVER any body text / attr VALUE. Feed a
+    #     record whose body carries a (hypothetical) secret-shaped string and a
+    #     short8 value, and assert neither leaks into the shape string.
+    fake_lr = {
+        "severityText": "INFO",
+        "body": {"stringValue": "secretword k7Gq9Lp2Zx1 sas=hunter2"},
+        "attributes": [_attr_str("qa.call.short8", "91fe5cf7"),
+                       _attr_str("qa.node", NODE)],
+    }
+    shape = _redacted_record_shape(fake_lr)
+    for leak in ("secretword", "k7Gq9Lp2Zx1", "hunter2", "91fe5cf7", NODE):
+        if leak in shape:
+            failures.append("POISON[shape-leak]: %r leaked into %r"
+                            % (leak, shape))
+    if "body_len=34" not in shape:
+        failures.append("POISON[shape]: body_len missing/wrong in %r" % shape)
+    if "qa.call.short8" not in shape or "qa.node" not in shape:
+        failures.append("POISON[shape]: attr KEYS missing in %r" % shape)
+
     out("=" * 72)
     out("SELF-TEST: server-leg privacy redaction + join-key reconcile")
     out("=" * 72)
@@ -1163,18 +1346,69 @@ def run_selftest():
         out("")
         out("  RESULT: NO-GO (%d leak/regression)" % len(failures))
         return 1
-    out("  16/16 cases pass: full call_id/user-uuid/pubkey/panic/auth/SDP all")
+    out("  20/20 cases pass: full call_id/user-uuid/pubkey/panic/auth/SDP all")
     out("  blocked; bare mixed-alnum secret tokens hard-failed; non-call lines")
     out("  dropped; node id validated; structured call telemetry still ships;")
     out("  qa.call.short8 == iOS-leg short8 incl. the QUOTED form; 6/7-char ids")
-    out("  floored to '' to match correlate-call.py.")
+    out("  floored to '' to match correlate-call.py; heartbeat emits pre-cleared")
+    out("  int-only telemetry (idle + active) of exact safe shape; poison-pill")
+    out("  fail_count round-trips through state; record-shape disclosure is")
+    out("  shape-only (no body/value leak).")
     out("  RESULT: GO")
     return 0
 
 
 # ---------------------------------------------------------------------------
-# Main.
+# POISON-PILL GUARD. If the SAME un-advanced cursor fails its POST this many
+# CONSECUTIVE runs, the next run drops to --batch 1 to isolate the offending
+# record, ships every batch that DOES deliver, and SKIPs (logging only the
+# redacted SHAPE, never the body) the single record that keeps failing so one
+# malformed line cannot wedge the pipeline forever.
 # ---------------------------------------------------------------------------
+
+POISON_PILL_THRESHOLD = 3
+
+
+def _redacted_record_shape(lr):
+    """Describe a logRecord for an operator WITHOUT leaking its body. Returns
+    only structural facts: severity, body LENGTH, and the attribute KEYS present
+    (keys are the fixed allow-list; values are NOT included)."""
+    body = ""
+    try:
+        body = lr.get("body", {}).get("stringValue", "") or ""
+    except Exception:
+        body = ""
+    keys = []
+    for a in lr.get("attributes", []) or []:
+        k = a.get("key")
+        if k:
+            keys.append(k)
+    return ("sev=%s body_len=%d attr_keys=[%s]"
+            % (lr.get("severityText", "?"), len(body), ",".join(sorted(keys))))
+
+
+def _post_isolating(endpoint, token, request_dict, http_results):
+    """Poison-pill fallback: POST the request one logRecord at a time
+    (effective --batch 1). Ship every record that delivers; SKIP the record(s)
+    that fail, logging ONLY the redacted shape. Returns
+    (all_ok, skipped_count) -- all_ok is True only if NOTHING was skipped."""
+    skipped = 0
+    for sub in _split_request_into_batches(request_dict, 1):
+        status, resp_body = post_otlp(endpoint, token, sub)
+        http_results.append(status)
+        if status != 204:
+            skipped += 1
+            # Isolate: describe the single bad record by SHAPE only, never body.
+            try:
+                bad = sub["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
+                shape = _redacted_record_shape(bad)
+            except Exception:
+                shape = "(unparseable record)"
+            snippet = (resp_body or "").strip().replace("\n", " ")
+            print("  POISON-PILL skip: HTTP %s  %s  resp=%s"
+                  % (status, shape, _ascii(snippet[:120])), file=sys.stderr)
+    return (skipped == 0), skipped
+
 
 def main():
     ap = argparse.ArgumentParser(
@@ -1233,17 +1467,32 @@ def main():
     state = load_state(state_path)
     cursor = "" if args.reset_state else state.get("cursor", "")
 
+    # POISON-PILL guard: how many CONSECUTIVE prior runs the SAME un-advanced
+    # cursor failed its POST. If we are about to re-read that exact stuck cursor
+    # and it has already failed >= threshold times, drop to --batch 1 to isolate
+    # and skip the single bad record. --reset-state clears the streak.
+    prior_fail_cursor = "" if args.reset_state else state.get("fail_cursor", "")
+    prior_fail_count = 0 if args.reset_state else state.get("fail_count", 0)
+    isolate_mode = (bool(cursor) and cursor == prior_fail_cursor
+                    and prior_fail_count >= POISON_PILL_THRESHOLD)
+
     print("=== bcrypto-server SSH @ %s (read-only) ===" % VPS_HOST)
     client = ssh_connect()
-    print("Connected. node=%s  cursor=%s"
+    print("Connected. node=%s  cursor=%s%s"
           % (node_id, "(none, --since %d min)" % args.since if not cursor
-             else cursor[:24] + "..."))
+             else cursor[:24] + "...",
+             "  [POISON-PILL: isolate mode, --batch 1, fail_count=%d]"
+             % prior_fail_count if isolate_mode else ""))
 
     lines_total = 0
     lines_shipped = 0
     lines_dropped = 0
     http_results = []
     new_cursor = cursor
+    poison_skipped = 0
+    # Carry the poison-pill streak forward by default; reset on success below.
+    out_fail_cursor = prior_fail_cursor
+    out_fail_count = prior_fail_count
 
     try:
         print("\n=== Reading journal (-o json, %s) ==="
@@ -1259,15 +1508,39 @@ def main():
         lines_dropped = dropped
 
         if args.dry_run:
+            # Show the heartbeat that WOULD ship alongside the call batch.
+            hb_req = build_heartbeat_request(
+                node_id, args.env_name, lines_total, kept, dropped,
+                lines_dropped, cursor_advanced=False)
+            print_dry_run(hb_req)
             print_dry_run(request)
         else:
+            # Effective batch size: drop to 1 under the poison-pill guard so a
+            # single malformed record is isolated rather than wedging the batch.
+            eff_batch = 1 if isolate_mode else args.batch
+
             if kept == 0:
                 # Nothing shippable, but advance the cursor so we do not re-scan
-                # the same window forever (no delivery to gate on).
+                # the same window forever (no delivery to gate on). Clears any
+                # poison-pill streak: there is no stuck batch to retry.
                 new_cursor = last_cursor
+                out_fail_cursor = ""
+                out_fail_count = 0
+            elif isolate_mode:
+                # POISON-PILL fallback: POST one record at a time, ship what
+                # delivers, SKIP (shape-only log) the record(s) that fail. The
+                # cursor advances regardless so the bad line cannot wedge the
+                # pipeline forever; the streak resets.
+                _, poison_skipped = _post_isolating(
+                    args.endpoint, token, request, http_results)
+                new_cursor = last_cursor
+                out_fail_cursor = ""
+                out_fail_count = 0
+                print("  POISON-PILL: isolated this window; %d record(s) skipped,"
+                      " cursor force-advanced." % poison_skipped, file=sys.stderr)
             else:
                 blob_ok = True
-                for sub in _split_request_into_batches(request, args.batch):
+                for sub in _split_request_into_batches(request, eff_batch):
                     status, resp_body = post_otlp(args.endpoint, token, sub)
                     http_results.append(status)
                     if status != 204:
@@ -1279,11 +1552,39 @@ def main():
                 # a failed POST does not advance, so a re-run retries the window).
                 if blob_ok:
                     new_cursor = last_cursor
+                    out_fail_cursor = ""
+                    out_fail_count = 0
+                else:
+                    # Delivery failed: bump the consecutive-fail streak for THIS
+                    # exact cursor so a future run can trip the poison-pill guard.
+                    if cursor == prior_fail_cursor:
+                        out_fail_count = prior_fail_count + 1
+                    else:
+                        out_fail_count = 1
+                    out_fail_cursor = cursor
+
+            # HEARTBEAT: ship ONE synthetic record EVERY non-dry run, AFTER the
+            # call batch, so a Grafana absent_over_time alert can tell 'shipper
+            # dead' from 'no calls'. It ships even when kept == 0. It is its own
+            # request so an empty/failed call batch does not suppress it.
+            hb_advanced = (new_cursor != cursor)
+            hb_req = build_heartbeat_request(
+                node_id, args.env_name, lines_total, kept, dropped,
+                lines_dropped, cursor_advanced=hb_advanced)
+            hb_status, hb_body = post_otlp(args.endpoint, token, hb_req)
+            if hb_status != 204:
+                snippet = (hb_body or "").strip().replace("\n", " ")
+                print("  HEARTBEAT POST -> HTTP %s %s"
+                      % (hb_status, _ascii(snippet[:200])), file=sys.stderr)
     finally:
         client.close()
 
-    if not args.dry_run and new_cursor and new_cursor != cursor:
-        save_state(state_path, new_cursor)
+    if not args.dry_run:
+        # Persist cursor + poison-pill streak whenever EITHER changed.
+        if (new_cursor != cursor or out_fail_cursor != prior_fail_cursor
+                or out_fail_count != prior_fail_count):
+            save_state(state_path, new_cursor or cursor,
+                       fail_cursor=out_fail_cursor, fail_count=out_fail_count)
 
     out()
     out("=" * 72)
@@ -1303,12 +1604,23 @@ def main():
         out("  HTTP non-204 (failed):   %d" % bad)
         out("  cursor advanced:         %s"
             % ("yes" if new_cursor != cursor else "no"))
+        out("  poison-pill fail_count:  %d%s"
+            % (out_fail_count,
+               " (>= %d -> isolate next run)" % POISON_PILL_THRESHOLD
+               if out_fail_count >= POISON_PILL_THRESHOLD else ""))
+        if isolate_mode:
+            out("  poison-pill isolated:    yes (%d record(s) skipped)"
+                % poison_skipped)
+        out("  heartbeat:               emitted (scope %s)" % HEARTBEAT_SCOPE)
         out("  state file:              %s" % state_path)
         if bad:
             out()
             out("  NOTE: %d POST(s) did not return 204. Cursor was NOT advanced,"
                 % bad)
-            out("        so a re-run retries this window.")
+            out("        so a re-run retries this window. After %d consecutive"
+                % POISON_PILL_THRESHOLD)
+            out("        failures of the SAME cursor, the next run isolates at")
+            out("        --batch 1 and skips the single bad record (shape-only).")
     else:
         out()
         out("  (dry-run: nothing shipped, cursor untouched. Eyeball the OTLP")
