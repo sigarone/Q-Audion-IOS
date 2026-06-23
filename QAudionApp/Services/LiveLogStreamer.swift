@@ -213,13 +213,12 @@ public final class LiveLogStreamer {
         }
 
         let model = UIDevice.current.model
-        let deviceName = UIDevice.current.name
         let os = "ios-" + UIDevice.current.systemVersion
         let net = getNetworkType()
         let metered = currentPath?.isExpensive ?? false
         let appVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
 
-        let header = "{\"type\":\"header\",\"session\":\"\(bootSessionId)\",\"model\":\"\(model)\",\"device_name\":\"\(deviceName)\",\"brand\":\"Apple\",\"os\":\"\(os)\",\"net\":\"\(net)\",\"metered\":\(metered),\"app_ver\":\"\(appVer)\"}"
+        let header = "{\"type\":\"header\",\"session\":\"\(bootSessionId)\",\"model\":\"\(model)\",\"brand\":\"Apple\",\"os\":\"\(os)\",\"net\":\"\(net)\",\"metered\":\(metered),\"app_ver\":\"\(appVer)\"}"
         
         var body: String = ""
         body.reserveCapacity(lines.count * 220 + 256)
