@@ -112,17 +112,16 @@ let package = Package(
                 .define("OPUS_BUILD"),
             ]
         ),
-        // WebRTC with H265/HEVC — webrtc-sdk (LiveKit) prebuilt xcframework
-        // 144.7559.10. Drop-in for the old stasel/sigarone fork (same `WebRTC`
-        // module + RTC* API) but the iOS device slice ships the VideoToolbox H265
-        // encoder/decoder (verified: RTCVideoEncoderH265 + 133 H265 refs in the
-        // ios-arm64 binary). Lets iOS negotiate H265 on the WebRTC RTP rail with
-        // Android (H265-only). URL = webrtc-sdk GitHub release; checksum = SHA256
-        // of WebRTC.xcframework.zip.
+        // WebRTC with H265/HEVC + AES-256-GCM FrameCryptor — patched build of
+        // webrtc-sdk M144 (same RTC* API as 144.7559.10). Single-hunk patch:
+        // DeriveKeys(..., password.size()==32?256:128) forces AES-256-GCM when
+        // a 32-byte K_video is set (stock binary hardcodes 128). H265 enabled
+        // (rtc_use_h265=true). Built via sigarone/webrtc-aes256-build@webrtc-ios-aes256-m144.
+        // Checksum = SHA256(WebRTC.xcframework.zip).
         .binaryTarget(
             name: "WebRTC",
-            url: "https://github.com/webrtc-sdk/Specs/releases/download/144.7559.10/WebRTC.xcframework.zip",
-            checksum: "64e9150f5ad467a11f5adfdf41c251d74278060368777727a981a3320df1d5ff"
+            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-aes256-m144/WebRTC.xcframework.zip",
+            checksum: "44f0779e18e86c9b65e03592ee8d28d667d8bc3218fc401f4c7f393353fbb410"
         ),
         .target(
             name: "QAudionEngine",
