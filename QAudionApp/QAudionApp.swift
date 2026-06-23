@@ -68,6 +68,10 @@ struct QAudionApp: App {
                 // MUST be after attachStdoutTee() so the prints are
                 // captured by the W417 telemetry and shipped to the server.
                 CrashReporter.flushPendingReport()
+                // W-MK — register the MetricKit subscriber. MUST be after
+                // attachStdoutTee() so the per-payload prints are captured
+                // by the W417 telemetry, same rationale as the crash flush.
+                MetricKitDiagnostics.start()
                 appState.initialize()
                 // W441: sweep expired messages immediately + every 60s.
                 EphemeralMessageJanitor.shared.start()
