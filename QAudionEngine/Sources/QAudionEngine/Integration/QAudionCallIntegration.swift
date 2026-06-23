@@ -572,6 +572,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             x25519PublicKey: x25519RawPub.base64EncodedString(),
             capabilities: AndroidHandshakeBundle.Capabilities(
                 ratchetV3: true,
+                // ROOT-CAUSE FIX (2026-06-23, cross-platform sig_invalid): advertise
+                // sframeV1 + vkeyV1 EXPLICITLY. iOS supports both (CallCapabilities
+                // .local = [sframe-v1, ratchet-v3, vkey-v1, …]) and the signed CAPS
+                // triplet is (ratchetV3, sframeV1, vkeyV1). Omitting them made iOS
+                // sign (true,false,false) [capsFromBundle: absent → false], but
+                // Android decodes absent caps to its data-class DEFAULTS
+                // (sframeV1=true, vkeyV1=true) → it reconstructs (true,true,true) →
+                // the Ed25519 signature fails over the diverging transcript
+                // (hs-sig OFFER abort: sig_invalid) → no PQC session → call dropped.
+                // Sending them true makes the signed CAPS == the reconstructed CAPS.
+                sframeV1: true,
+                vkeyV1: true,
                 srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
             ),
             pskFingerprints: SovereignKeyVault().listPskNames().compactMap {
@@ -983,6 +995,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 ),
                 capabilities: AndroidHandshakeBundle.Capabilities(
                     ratchetV3: true,
+                    // ROOT-CAUSE FIX (2026-06-23): advertise sframeV1 + vkeyV1
+                    // explicitly on the ACCEPT too — same reason as the OFFER above.
+                    // Otherwise iOS signs CAPS (true,false,false) while the peer
+                    // reconstructs (true,true,true) from its true-defaults →
+                    // hs-sig ACCEPT abort: sig_invalid → handshake fails.
+                    sframeV1: true,
+                    vkeyV1: true,
                     srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
                 ),
                 selectedPskFingerprint: selectedFp
