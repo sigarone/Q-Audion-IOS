@@ -337,7 +337,11 @@ public final class RuntimeLogSink: ObservableObject {
     private static let residualRegex = try! NSRegularExpression(
         pattern: #"(?<![0-9a-fA-Fx])[A-Za-z0-9+/=_-]{20,}"#)
 
-    private static func redactStructured(_ line: String) -> String {
+    /// P2 EGRESS redactor, also reused by `TelemetryService.emit()` so the
+    /// structured-event path gets the SAME fail-closed scrub as the text
+    /// path before `sealBatch`. Exposed (public) for that second egress;
+    /// the implementation and its UNCONDITIONAL nature are unchanged.
+    public static func redactStructured(_ line: String) -> String {
         var work: String = line
         var stash: [String] = []
 

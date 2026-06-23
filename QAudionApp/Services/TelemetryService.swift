@@ -167,6 +167,15 @@ public final class TelemetryService {
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard self.started else { return }
+            // P2 SECOND EGRESS -- run every attribute STRING value through
+            // the SAME fail-closed scrub the text path uses
+            // (`RuntimeLogSink.redactStructured`) BEFORE the batch is
+            // sealed. `sanitize(_:)` only coerces JSON types; without this
+            // the structured path would ship JWT/bearer/psk/base64 in attr
+            // values un-redacted. UNCONDITIONAL (never flag-gated). Done
+            // here (MainActor) because `redactStructured` is MainActor-
+            // isolated; `sanitize` is `nonisolated`.
+            let attrsRedacted = Self.redactAttrs(attrsJSONSafe)
             let ev = TelemetryEvent(
                 tsMs: tsMs,
                 sessionId: self.sessionId,
@@ -176,7 +185,7 @@ public final class TelemetryService {
                 userId: self.getUserId?(),
                 callId: callId,
                 kind: kind,
-                attrs: attrsJSONSafe
+                attrs: attrsRedacted
             )
             if self.buffer.count >= self.maxBufferedEvents {
                 // Drop oldest non-error event to make room for new.
@@ -338,6 +347,37 @@ public final class TelemetryService {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         return v ?? "0.0.0"
     }()
+
+    /// P2 -- recursively scrub every STRING value in a sanitized attrs
+    /// dict through `RuntimeLogSink.redactStructured`, the SAME fail-closed
+    /// egress redactor the text path (`entriesSince`) uses. Keys are
+    /// app-controlled identifiers and are NOT redacted; only values.
+    /// Non-string scalars (Int/Int64/Double/Bool) pass through untouched.
+    /// MainActor-isolated because `redactStructured` is. Preserves
+    /// call_id UUIDs (-> short8) and crash frames per the redactor's
+    /// stash rules.
+    @MainActor
+    private static func redactAttrs(_ attrs: [String: Any]) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for (k, v) in attrs {
+            switch v {
+            case let s as String:
+                out[k] = RuntimeLogSink.redactStructured(s)
+            case let dict as [String: Any]:
+                out[k] = redactAttrs(dict)
+            case let arr as [Any]:
+                out[k] = arr.map { element -> Any in
+                    if let es = element as? String {
+                        return RuntimeLogSink.redactStructured(es)
+                    }
+                    return element
+                }
+            default:
+                out[k] = v
+            }
+        }
+        return out
+    }
 
     /// JSON-sanitize attrs: convert non-Encodable values to strings,
     /// strip nested closures / classes / NS-types CryptoKit might

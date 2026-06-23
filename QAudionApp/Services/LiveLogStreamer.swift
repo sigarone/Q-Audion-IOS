@@ -185,6 +185,18 @@ public final class LiveLogStreamer {
     }
 
     private func flushOnce() {
+        // W-FLAGS -- RUNTIME kill-switch for the log SHIPPER. Checked on
+        // EVERY flush (not just start()) so a VPS edit to flags.json can
+        // STOP/allow uploads on an already-shipped TestFlight build within
+        // the FeatureFlags refresh window, without a rebuild. The compiled
+        // default is the existing consent gate (`isEnabled`), so absent /
+        // unparseable flag => unchanged behaviour (fail-safe to consent).
+        //
+        // SECURITY -- this gates SHIP only. Egress REDACTION
+        // (`RuntimeLogSink.entriesSince` -> `redactStructured`) is the
+        // load-bearing privacy control and stays UNCONDITIONAL: returning
+        // here skips an UPLOAD, never a scrub. Redaction is never flagged.
+        guard FeatureFlags.bool("LOG_OTLP_EXPORT_ENABLED", LiveLogStreamer.isEnabled) else { return }
         if inflight {
             skippedDueToInflight += 1
             return

@@ -37,6 +37,14 @@ import Foundation
 /// place (or the compiled defaults on first run). Flags never block app
 /// launch -- the refresh is fire-and-forget on a background `Task`, and the
 /// periodic refresh runs on a `Timer` off the launch path.
+///
+/// **Known keys** (the ONLY keys the app reads from flags.json; any other
+/// key in the remote file is ignored, and an absent key resolves to the
+/// caller's compiled default):
+///
+///   | key                      | type | default               | effect                                   |
+///   |--------------------------|------|-----------------------|------------------------------------------|
+///   | `LOG_OTLP_EXPORT_ENABLED`| Bool | `LiveLogStreamer.isEnabled` (build-channel consent) | RUNTIME kill-switch for the log SHIPPER (`LiveLogStreamer.flushOnce`). `false` STOPS uploads on an already-shipped TestFlight build within the ~15 min refresh window; `true`/absent allow them. **Gates SHIP only -- egress REDACTION (`RuntimeLogSink.redactStructured`) is unconditional and is NEVER gated on this or any flag.** |
 @MainActor
 public final class FeatureFlags {
 
