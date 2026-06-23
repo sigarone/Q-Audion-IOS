@@ -34,19 +34,21 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// frame sealer provider. The provider is consulted per-frame so
     /// mid-call sealer changes (e.g. legacy → LiveKit after the cap
     /// handshake completes) are picked up without rebuilding the factory.
+    /// `sealerProvider` is retained for source-compatibility with existing call
+    /// sites but is NO LONGER USED: 1:1 video E2EE moved from the codec-layer
+    /// `SFrameVideoEncoder/DecoderFactoryDecorator` to the native RTP-layer
+    /// `RTCFrameCryptor` (NativeVideoFrameCryptor). Wrapping the codec factories
+    /// would DOUBLE-ENCRYPT (codec-layer seal + native FrameCryptor). So we
+    /// return the plain HEVC-preferred factories — they still advertise/build
+    /// H265 (RTCVideoEncoderH265/Decoder), which the native cryptor then encrypts
+    /// after packetization (codec-agnostic). See NativeVideoFrameCryptor.swift.
     public func createFactory(sealerProvider: @escaping () -> VideoFrameSealer? = { nil }) -> RTCPeerConnectionFactory {
         // RTCInitializeSSL is idempotent — safe to call once on first use.
         RTCInitializeSSL()
-        
-        let encoderFactory = SFrameVideoEncoderFactoryDecorator(
-            delegate: HevcPreferredVideoEncoderFactory(),
-            sealerProvider: sealerProvider
-        )
-        let decoderFactory = SFrameVideoDecoderFactoryDecorator(
-            delegate: HevcPreferredVideoDecoderFactory(),
-            sealerProvider: sealerProvider
-        )
-        
+
+        let encoderFactory = HevcPreferredVideoEncoderFactory()
+        let decoderFactory = HevcPreferredVideoDecoderFactory()
+
         return RTCPeerConnectionFactory(
             encoderFactory: encoderFactory,
             decoderFactory: decoderFactory

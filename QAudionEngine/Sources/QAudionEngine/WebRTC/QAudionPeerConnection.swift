@@ -45,6 +45,12 @@ public final class QAudionPeerConnection: NSObject {
         /// Remote video track (only fired when video is negotiated).
         func peerConnection(_ pc: QAudionPeerConnection,
                              didReceiveRemoteVideoTrack track: RTCVideoTrack)
+        /// Remote video RTP receiver — the attach point for the native
+        /// `RTCFrameCryptor` (decrypts inbound video). Fires on the WebRTC
+        /// signalling thread alongside `didReceiveRemoteVideoTrack`. Default
+        /// no-op so non-video conformers need not implement it.
+        func peerConnection(_ pc: QAudionPeerConnection,
+                             didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver)
     }
 
     public weak var delegate: Delegate?
@@ -56,6 +62,15 @@ public final class QAudionPeerConnection: NSObject {
     private let factory: RTCPeerConnectionFactory
     private var localAudioTrack: RTCAudioTrack?
     private var localVideoTrack: RTCVideoTrack?
+    /// The local video RTP sender — captured when `addLocalVideoTrack` runs, so
+    /// the native FrameCryptor can be attached to it (Android attaches to
+    /// `videoTransceiver.sender`). nil until a video track is added.
+    public private(set) var videoSender: RTCRtpSender?
+    /// Native libwebrtc FrameCryptor for the 1:1 video sender+receiver. Created
+    /// lazily (without the key) via `ensureNativeVideoCryptor`; the key is
+    /// published later via `setKey`, and the sender/receiver cryptors are
+    /// attached when their tracks exist. Replaces the codec-layer seal.
+    public private(set) var nativeVideoCryptor: NativeVideoFrameCryptor?
     private let mediaConstraints = RTCMediaConstraints(
         mandatoryConstraints: nil,
         optionalConstraints: ["DtlsSrtpKeyAgreement": "true"]
@@ -223,14 +238,49 @@ public final class QAudionPeerConnection: NSObject {
         track.isEnabled = true
         pc.add(track, streamIds: [stableStreamId])
         localVideoTrack = track
+        // Capture the RTP sender for the native FrameCryptor attach (Android
+        // attaches to videoTransceiver.sender). The track is added
+        // synchronously so the sender exists immediately.
+        videoSender = pc.senders.first { $0.track?.kind == kRTCMediaStreamTrackKindVideo }
         if let capturer = capturer {
             // Hook the capturer's frames to the source.
             capturer.delegate = source
         }
         // W466 — confirm the local camera track was plumbed into the
         // peer connection.
-        print("[WebRTC] local VIDEO track added to peer connection")
+        print("[WebRTC] local VIDEO track added to peer connection (sender=\(videoSender != nil))")
         return source
+    }
+
+    // MARK: - Native video FrameCryptor (insertable streams)
+
+    /// Create the per-call native FrameCryptor holder (idempotent). Does NOT
+    /// require the K_video key yet — the key is published later via `setKey` on
+    /// the returned holder. Creating it early (at call setup) avoids the
+    /// receiver-attach-before-key deadlock.
+    @discardableResult
+    public func ensureNativeVideoCryptor(participantId: String) -> NativeVideoFrameCryptor {
+        if let c = nativeVideoCryptor { return c }
+        let c = NativeVideoFrameCryptor(factory: factory, participantId: participantId)
+        nativeVideoCryptor = c
+        return c
+    }
+
+    /// Attach + enable the native cryptor on the local video sender. Idempotent;
+    /// safe to call repeatedly (e.g. after setLocalDescription). No-op until the
+    /// holder exists (`ensureNativeVideoCryptor`) and the sender is present.
+    @discardableResult
+    public func attachVideoSenderCryptor() -> Bool {
+        guard let s = videoSender, let c = nativeVideoCryptor else { return false }
+        return c.attachSender(s)
+    }
+
+    /// Attach + enable the native cryptor on an inbound video receiver. Call
+    /// from the `didReceiveRemoteVideoReceiver` delegate (signalling thread).
+    @discardableResult
+    public func attachVideoReceiverCryptor(_ receiver: RTCRtpReceiver) -> Bool {
+        guard let c = nativeVideoCryptor else { return false }
+        return c.attachReceiver(receiver)
     }
 
     public func setVideoMuted(_ muted: Bool) {
@@ -329,10 +379,16 @@ public final class QAudionPeerConnection: NSObject {
     // MARK: - Close
 
     public func close() {
+        // Dispose the FrameCryptor BEFORE closing the PC — it holds a native
+        // ref into the sender/receiver (Android dispose order
+        // PeerConnectionHolder.kt:993-997).
+        nativeVideoCryptor?.dispose()
+        nativeVideoCryptor = nil
         peerConnection?.close()
         peerConnection = nil
         localAudioTrack = nil
         localVideoTrack = nil
+        videoSender = nil
     }
 
     // MARK: - Errors
@@ -379,7 +435,18 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
         }
         if let video = rtpReceiver.track as? RTCVideoTrack {
             delegate?.peerConnection(self, didReceiveRemoteVideoTrack: video)
+            // Attach point for the native FrameCryptor (decrypts inbound video).
+            // This runs on the WebRTC signalling thread — the correct place to
+            // create RTCFrameCryptor (mirrors Android enableVideoFrameCryptorOnReceiver).
+            delegate?.peerConnection(self, didReceiveRemoteVideoReceiver: rtpReceiver)
         }
     }
+}
+
+// Default no-op so Delegate conformers that don't handle video need not
+// implement the receiver-cryptor hook.
+public extension QAudionPeerConnection.Delegate {
+    func peerConnection(_ pc: QAudionPeerConnection,
+                        didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver) {}
 }
 #endif

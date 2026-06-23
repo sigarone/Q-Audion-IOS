@@ -183,6 +183,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         /// matches Android's AES-256-patched native FrameCryptor),
         /// HKDF-SHA256 (empty salt, 128-byte zero info, L=32), keyIndex=0.
         case livekit(LiveKitVideoFrameCryptor)
+        /// Native libwebrtc RTCFrameCryptor (insertable streams), attached to
+        /// the RTP video sender/receiver — the DEFAULT cross-platform 1:1 path
+        /// on the webrtc-sdk binary. Replaces the codec-layer `.livekit` path
+        /// (which the H265 RTP packetizer broke). Encrypts post-packetization so
+        /// it is codec-agnostic (H265-safe) and byte-compatible with Android's
+        /// native FrameCryptor. The cryptor objects live on `QAudionPeerConnection`.
+        case native
     }
     public private(set) var videoSealer: VideoCallSealer?
 
@@ -768,52 +775,57 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public func ensureVideoSealer(
         pqcSessionKeyProvider: @escaping () -> Data
     ) -> VideoCallSealer? {
+        // REKEY: once the native cryptor is active, re-publish K_video on
+        // session-key rotation (the native KeyProvider replaces the shared key
+        // at index 0 in place — no cryptor rebuild). Do NOT no-op like the
+        // other cases below.
+        if case .native = videoSealer {
+            let k = pqcSessionKeyProvider()
+            if k.count == 32, let c = peerConnection?.nativeVideoCryptor {
+                c.setKey(k)
+                peerConnection?.attachVideoSenderCryptor()  // idempotent
+            }
+            return videoSealer
+        }
         if let existing = videoSealer { return existing }
         guard let negotiated = peerNegotiated() else { return nil }
 
-        // W539 — when the peer advertised `sframe-v1` we install LiveKit
-        // and only LiveKit (cross-platform-compatible wire format). Until
-        // the PQC key is available we DEFER (return nil) so that a later
-        // arrival of the key via the `pqcSessionKey` didSet still picks
-        // up the install. We must NOT latch `.legacy` while we are still
-        // waiting for the key — otherwise the cryptor would never come
-        // online and every video frame would silently mis-decode on the
-        // peer's side (the exact bug W539 is fixing).
+        // When the peer advertised `sframe-v1` we install the NATIVE
+        // RTCFrameCryptor (cross-platform-compatible, H265-safe). Until the PQC
+        // key is available we DEFER (return nil) so a later key arrival via the
+        // `pqcSessionKey` didSet retries — never latch `.legacy` while waiting.
         if negotiated.useSFrame {
-            let keyLen = pqcSessionKeyProvider().count
-            guard keyLen == 32 else {
-                // Defer — PQC handshake hasn't yielded a key yet. The
-                // `pqcSessionKey` didSet will call us again once it does.
-                return nil
+            let kVideo = pqcSessionKeyProvider()
+            // Fail closed: need a real 32-byte key; reject the all-zero
+            // earbud-SPE placeholder (Android PeerConnectionHolder.kt:346-353).
+            guard kVideo.count == 32, kVideo.contains(where: { $0 != 0 }) else {
+                return nil  // defer until a real key arrives
             }
 
-            // Phase 2 — AES-256 kill-switch gate (v4SFrameAes256Enabled).
-            // When this build uses AES-256 LiveKit FrameCryptor but the peer
-            // did NOT advertise sframe-aes256-v1, the native FrameCryptor
-            // open() will fail on every inbound frame (key-size mismatch).
-            // Disable video fail-closed rather than silently decrypt-failing.
+            // AES-256 kill-switch gate (v4SFrameAes256Enabled). When this build
+            // requires AES-256 but the peer didn't advertise sframe-aes256-v1,
+            // disable video fail-closed rather than emit a cipher the peer
+            // can't decrypt.
             if CallCapabilities.v4SFrameAes256Enabled && !negotiated.useSFrameAes256 {
                 print("[WebRtcCallController] AES-256 FAIL-CLOSED — peer does not advertise sframe-aes256-v1 (agreed=\(negotiated.agreedTags)); video DISABLED")
-                videoSealer = .legacy  // no video E2EE, caller must disable the track
+                videoSealer = .legacy
                 return videoSealer
             }
 
-            // The `sframe-v1` capability tag is a misnomer kept for
-            // backwards compatibility with peers (Desktop / Android emit
-            // it from `LOCAL_CAPABILITIES` / `local`). The actual wire
-            // format used on all platforms is the libwebrtc-native
-            // FrameCryptor envelope (ported in `LiveKitVideoFrameCryptor`).
-            let cryptor = LiveKitVideoFrameCryptor(keyProvider: pqcSessionKeyProvider)
-            videoSealer = .livekit(cryptor)
-            // vkey-v1: record whether this pipeline is keyed off the
-            // phone-level K_video (peer advertised vkey-v1) for the
-            // dual-trust UI indicator. The keyProvider passed by
-            // `ensureVideoSealerInternal` already swaps to K_video when
-            // `useVideoKey` is true; this flag just surfaces that fact.
+            // Native libwebrtc RTCFrameCryptor on the RTP sender (and the
+            // receiver, attached from the didReceiveRemoteVideoReceiver
+            // delegate). Encrypts AFTER packetization → codec-agnostic / H265-
+            // safe, byte-compatible with Android's native FrameCryptor. The
+            // codec-layer LiveKit decorator is NO LONGER used (it broke H265).
+            let participant = recipientId ?? "peer"
+            let cryptor = peerConnection?.ensureNativeVideoCryptor(participantId: participant)
+            cryptor?.setKey(kVideo)
+            peerConnection?.attachVideoSenderCryptor()
+            videoSealer = .native
             videoKeyIsPhoneLevel = negotiated.useVideoKey
             let aes256Active = CallCapabilities.v4SFrameAes256Enabled && negotiated.useSFrameAes256
             let keyKind = negotiated.useVideoKey ? "K_video (phone-level)" : "session-key (legacy)"
-            print("[WebRtcCallController] video pipeline → LiveKit FrameCryptor key=\(keyKind) aes256=\(aes256Active) (peerCaps=\(negotiated.agreedTags))")
+            print("[WebRtcCallController] video pipeline → NATIVE RTCFrameCryptor key=\(keyKind) aes256=\(aes256Active) (peerCaps=\(negotiated.agreedTags))")
             return videoSealer
         }
 
@@ -1208,6 +1220,25 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             "use_sframe": peerNegotiated()?.useSFrame ?? false,
         ])
         onRemoteVideoTrack?(track)
+    }
+
+    /// Attach the native RTCFrameCryptor to the inbound video receiver (decrypts
+    /// peer video). Runs on the WebRTC signalling thread (correct place to build
+    /// RTCFrameCryptor). Mirrors Android enableVideoFrameCryptorOnReceiver.
+    public func peerConnection(_ pc: QAudionPeerConnection,
+                                 didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver) {
+        // R-4: never attach a receiver cryptor when rejecting incoming video
+        // (the track is already disabled in didReceiveRemoteVideoTrack).
+        if shouldRejectIncomingVideo() { return }
+        // Create the cryptor holder now even if the PQC key hasn't arrived — the
+        // KeyProvider discards frames until setKey runs, so attaching the
+        // receiver early avoids the receiver-before-key deadlock.
+        _ = pc.ensureNativeVideoCryptor(participantId: recipientId ?? "peer")
+        // Publish K_video if we already hold a session key (idempotent); the
+        // pqcSessionKey didSet path (re)publishes it on arrival/rotation.
+        _ = ensureVideoSealerInternal()
+        let attached = pc.attachVideoReceiverCryptor(receiver)
+        print("[WebRtcCallController] native video receiver cryptor attached=\(attached)")
     }
 }
 #endif
