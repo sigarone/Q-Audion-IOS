@@ -255,11 +255,34 @@ public final class BCryptoRestClient {
     /// reads the freshest token without holding a config reference.
     public var accessToken: String? { config.accessToken }
 
+    /// Current refresh token — used by the WS auth-recovery bridge so the
+    /// provider can re-broadcast the post-recovery pair to every transport
+    /// (the cascade writes the fresh tokens into THIS client's config only).
+    public var refreshToken: String? { config.refreshToken }
+
     /// W443: underlying URLSession — shared with TusUploadClient so both
     /// use the same TLS delegate (cert-pinning / self-signed-cert).
     public var urlSession: URLSession { session }
 
     public func updateConfig(_ newConfig: BackendConfig) { config = newConfig }
+
+    /// Always-reachable Phase 2 — public entry point that runs the SAME silent
+    /// token-recovery cascade as the 401-retry path (primary `tokenRefresher`
+    /// POST /auth/refresh → Ed25519 `deviceRenewFallback` device-renew), used
+    /// by the WebSocket client when the server rejects its token with
+    /// `auth_failed`. Returns `true` if a fresh token was obtained (the
+    /// installed closures already wrote it into `config` and broadcast it via
+    /// the provider's `applyTokenPair`), `false` on genuine revocation.
+    /// Concurrent callers coalesce on the same in-flight Task as the 401 path.
+    /// Never throws to the caller — recovery failure is reported as `false` so
+    /// the WS client can park its loop without QR.
+    public func recoverAuth() async -> Bool {
+        do {
+            return try await tryRefreshToken()
+        } catch {
+            return false
+        }
+    }
 }
 
 public enum BCryptoError: Error {

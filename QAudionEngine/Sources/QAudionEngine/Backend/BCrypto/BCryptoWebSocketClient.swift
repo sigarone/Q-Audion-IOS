@@ -1,7 +1,18 @@
 import Foundation
+import Network
 
 public final class BCryptoWebSocketClient: @unchecked Sendable {
     public typealias MessageHandler = (String, [String: Any]) -> Void
+
+    /// Async silent token-recovery callback wired by the integration layer
+    /// (BCryptoBackendProvider) to the REST client's refresh → Ed25519
+    /// device-renew cascade. Invoked ONCE when the server rejects our token
+    /// with `auth_failed`, BEFORE we resume the reconnect loop. Returns
+    /// `true` if a fresh token was obtained (resume reconnect), `false` on
+    /// genuine revocation (stop — the app layer drives re-onboarding; this
+    /// class NEVER forces QR). A plain `() async -> Bool` so the AppState
+    /// type is never dragged into this file's symbol graph (CLAUDE.md sec 16).
+    public var onAuthFailedRecover: (@Sendable () async -> Bool)?
 
     // MARK: - Pre-negotiation callbacks
     // Wired by the integration/UI layer. Set on the client BEFORE connect() so
@@ -60,7 +71,45 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     private var messageHandlers: [String: MessageHandler] = [:]
     private var stateListeners: [(ConnectionState) -> Void] = []
     private var reconnectAttempt = 0
-    private let maxReconnectAttempts = 20
+    /// Always-reachable Phase 2: the persistent WS is a FOREGROUND latency
+    /// optimization layered on top of the OS push channel (PushKit-VoIP),
+    /// which is the real reachability spine. It must therefore retry
+    /// INDEFINITELY (no attempt cap) — but with exponential backoff + jitter
+    /// and a hard DELAY cap (`maxReconnectDelaySec`) so a wedged network or a
+    /// dead-auth socket can never become a reconnect storm. The old
+    /// `maxReconnectAttempts = 20` permanent give-up was removed: after 20
+    /// failures the device went silently un-connected and only the next
+    /// foreground/app-event could revive it.
+    private let maxReconnectDelaySec: TimeInterval = 30
+    /// Run-once guard for the silent token-recovery cascade. Set true the
+    /// first time `auth_failed` triggers `onAuthFailedRecover`; reset to false
+    /// on a successful `authenticated` so a *later* token expiry can recover
+    /// again. While `authRecoveryInFlight`, further `auth_failed` frames are
+    /// ignored (no parallel cascades).
+    private var authRecoveryInFlight: Bool = false
+    /// Cross-cycle anti-storm gate for the silent recovery cascade. Holds the
+    /// monotonic-ish timestamp (`Date.timeIntervalSinceReferenceDate`) of the
+    /// LAST time `handleAuthFailed()` actually *fired* the cascade. The
+    /// `authRecoveryInFlight` boolean only dedups concurrent/within-cycle
+    /// cascades; it is reset on every clean `authenticated` AND at the end of
+    /// every recovery completion, so it does NOT throttle the pathological
+    /// `auth_failed → recover → reconnectAttempt=0 → forceReconnect →
+    /// auth_failed` loop that arises when the server keeps rejecting even a
+    /// freshly-renewed token (clock skew / server-side account edge). Without a
+    /// gate that survives reconnect cycles the device would run the 2-network-
+    /// call cascade roughly every 1-2 s forever, draining radio/battery. This
+    /// timestamp is therefore deliberately NEVER reset on `authenticated` —
+    /// only advanced when the cascade fires — so consecutive auth_failed
+    /// recoveries are spaced at least `minAuthRecoveryIntervalSec` apart.
+    private var lastAuthRecoveryAt: TimeInterval = 0
+    /// Minimum spacing between two silent recovery cascades. A genuine one-off
+    /// token expiry still recovers in ~1 s (gate is open the first time); a
+    /// persistent reject is capped to one cascade per this window.
+    private let minAuthRecoveryIntervalSec: TimeInterval = 30
+    /// Set true only when the recovery cascade itself was rejected (genuine
+    /// revocation). Parks the reconnect loop until the app layer re-onboards
+    /// and calls `connect()` again. NEVER forces QR from this class.
+    private var authPermanentlyRejected: Bool = false
     private var pingTimer: DispatchSourceTimer?
     /// Timestamp (monotonic seconds) of the most recent inbound frame (pong or any
     /// server-sent message). Used to detect stale connections even if OS keepalive
@@ -73,14 +122,17 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// milliseconds after each `ping`/`pong` cycle. Consumers should dispatch
     /// to @MainActor before updating UI state.
     public var onLatencyMeasured: ((Int) -> Void)?
-    /// Interval between outbound ping keepalives. Server pings every 20 s with a
-    /// 45 s stale threshold; matching 20 s ensures we beat mobile-carrier NAT
-    /// idle timeouts (many are ~30 s) and keeps lastInboundAt fresh enough that
-    /// the server never marks this device stale before a foreground ping cycle.
-    private let pingIntervalSec: TimeInterval = 20
+    /// Interval between outbound ping keepalives. ADAPTIVE by transport (set by
+    /// `applyAdaptiveTiming(for:)` from the NWPathMonitor): WiFi 20 s (beats
+    /// carrier/NAT idle timeouts and keeps the server from marking us stale),
+    /// cellular 60 s (relaxed — carrier NAT is more forgiving and radio wakeups
+    /// drain battery), wired/other 30 s. Defaults to the WiFi value until the
+    /// first path update arrives. `var` (was `let`) so the keepalive can retune.
+    private var pingIntervalSec: TimeInterval = 20
     /// If no inbound traffic arrives within this window after a ping, treat the
     /// connection as dead and tear it down so the reconnect loop picks it up.
-    private let pongTimeoutSec: TimeInterval = 25
+    /// ADAPTIVE by transport: WiFi 30 s, cellular 120 s, wired/other 45 s.
+    private var pongTimeoutSec: TimeInterval = 30
     /// Debounce flag for `forceReconnect()`. iOS suspends URLSessionWebSocketTask
     /// silently when the app is backgrounded; the very first send() after
     /// foregrounding may discover task==nil and kick a reconnect. Without this
@@ -101,12 +153,34 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     ///   tasks fail ping together 50 s later.
     private var connectionGeneration: Int = 0
 
+    // MARK: - Network path monitoring (always-reachable Phase 2)
+
+    /// Watches for connectivity changes (path → satisfied, WiFi↔cellular
+    /// transport switch, wake) and reacts FAST — `forceReconnect()` instead of
+    /// waiting up to the `pingIntervalSec + pongTimeoutSec` staleness window to
+    /// notice the old socket is dead. Also drives adaptive ping timing.
+    private let pathMonitor = NWPathMonitor()
+    private let pathMonitorQueue = DispatchQueue(label: "com.qaudion.ws.pathmonitor", qos: .utility)
+    /// Last transport we tuned for / reconnected on. Guards against reacting to
+    /// duplicate path updates (NWPathMonitor can fire repeatedly with the same
+    /// transport) — only a genuine transport change kicks a reconnect.
+    private var lastTransport: NWInterface.InterfaceType?
+    /// True once the path is satisfied; used to detect the unsatisfied→satisfied
+    /// edge (network came back) so we reconnect immediately on recovery.
+    private var lastPathSatisfied: Bool = false
+    /// Debounce wall-clock of the most recent path-triggered reconnect. Anti-
+    /// hammer: a flapping interface (WiFi roaming, elevator) can emit many path
+    /// updates per second; we kick at most one path-driven reconnect per window.
+    private var lastPathReconnectAt: TimeInterval = 0
+    private let pathReconnectDebounceSec: TimeInterval = 2.0
+
     public init(config: BackendConfig) {
         self.config = config
         // Pre-negotiation dispatch — server emits these on top of the standard
         // call_offer / call_answer / call_hangup signaling envelopes.
         // See bcrypto-server cmd/bcrypto-lite/main.go pre-negotiation flow.
         registerPreNegotiationHandlers()
+        startPathMonitor()
     }
 
     deinit {
@@ -121,6 +195,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // (transient providers register none; avoids reentrancy during dealloc).
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         pingTimer?.cancel()
+        // Cancel the path monitor so its DispatchQueue handler stops firing
+        // after this instance is gone (no leak / no use-after-free of self).
+        pathMonitor.cancel()
     }
 
     /// Register the 5 pre-negotiation message handlers on the generic dispatcher.
@@ -642,6 +719,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             // Clear the debounce flag set by forceReconnect() — the recovery
             // is complete; a future suspension can trigger another reconnect.
             reconnectInFlight = false
+            // A clean auth means the token is good again: re-arm the one-shot
+            // recovery guards so a LATER expiry can recover once more.
+            authRecoveryInFlight = false
+            authPermanentlyRejected = false
             let listeners = stateListeners
             lock.unlock()
             listeners.forEach { $0(.authenticated) }
@@ -663,22 +744,24 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             return
         }
 
-        // Built-in auth-failure guard: when the server rejects our token it
+        // Built-in auth-failure handler: when the server rejects our token it
         // closes the connection and sends {"type":"error","code":"auth_failed"}.
-        // Without this check the handleDisconnect reconnect loop would fire
-        // all 20 attempts before stopping, but connectPersistentSocket() (called
-        // on foreground) would reset the counter and restart the cycle — giving
-        // the observed 90-minute reconnect storm with a stale/expired token.
-        // Setting reconnectAttempt = maxReconnectAttempts here means the very
-        // next handleDisconnect (which fires when the server closes the socket)
-        // exits without scheduling another reconnect.
+        //
+        // Always-reachable Phase 2 — DO NOT park the reconnect loop forever
+        // (the old code set reconnectAttempt = maxReconnectAttempts so the next
+        // handleDisconnect stopped scheduling). Hammering a dead-auth socket
+        // would just churn the server, but giving up permanently means the
+        // device silently falls off until the app is relaunched. Correct
+        // behaviour: fire the SILENT token-recovery cascade (REST refresh →
+        // Ed25519 device-renew, wired in BCryptoBackendProvider) exactly ONCE,
+        // then resume the normal backoff reconnect with the fresh token. Only a
+        // genuine revocation (the cascade itself rejected) parks the loop — and
+        // even then this class NEVER forces QR; the app layer drives re-onboard.
         if type == "error" {
             let errData = json["data"] as? [String: Any] ?? [:]
             let code = errData["code"] as? String ?? ""
             if code == "auth_failed" {
-                lock.lock()
-                reconnectAttempt = maxReconnectAttempts
-                lock.unlock()
+                handleAuthFailed()
             }
         }
 
@@ -712,6 +795,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let lastInbound = lastInboundAt
         let isAuthenticated = _state == .authenticated
         let gen = connectionGeneration
+        // Capture the adaptive timing under the lock — applyAdaptiveTiming()
+        // mutates these from the path-monitor queue.
+        let pingInterval = pingIntervalSec
+        let pongTimeout = pongTimeoutSec
         lock.unlock()
 
         guard isAuthenticated else { return }
@@ -719,7 +806,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let age = Date().timeIntervalSinceReferenceDate - lastInbound
         // If a full ping cycle has passed without any inbound traffic, treat the
         // socket as dead and force a reconnect.
-        if age > pingIntervalSec + pongTimeoutSec {
+        if age > pingInterval + pongTimeout {
             lock.lock()
             webSocketTask?.cancel(with: .abnormalClosure, reason: nil)
             webSocketTask = nil
@@ -732,6 +819,177 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         pingSentAt = Date().timeIntervalSinceReferenceDate
         lock.unlock()
         send(type: "ping", data: [:])
+    }
+
+    // MARK: - Silent token recovery (always-reachable Phase 2)
+
+    /// Handle a server `auth_failed`. Runs the silent token-recovery cascade
+    /// (REST refresh → Ed25519 device-renew, wired via `onAuthFailedRecover`)
+    /// at most ONCE per authenticated session, then either resumes reconnect
+    /// (recovery produced a fresh token) or parks the loop (genuine
+    /// revocation). NEVER forces QR — re-onboarding is the app layer's job.
+    private func handleAuthFailed() {
+        lock.lock()
+        // Already recovering, or no recovery hook wired → fall back to the old
+        // behaviour of just letting the reconnect loop continue with backoff.
+        // (Without a hook we cannot silently re-auth; indefinite backoff still
+        // beats a permanent give-up because the token may be renewed out-of-band
+        // by the app layer between probes.)
+        if authRecoveryInFlight {
+            lock.unlock()
+            return
+        }
+        // Cross-cycle anti-storm gate: even though `authRecoveryInFlight` is
+        // reset after each cascade, a server that keeps rejecting a freshly-
+        // renewed token would otherwise re-fire the (2-network-call) cascade
+        // every ~1-2 s because the success path resets `reconnectAttempt = 0`,
+        // restarting backoff. This timestamp gate survives reconnect cycles
+        // (it is never reset on `authenticated`) and caps cascades to one per
+        // `minAuthRecoveryIntervalSec`. The very first auth_failed after a long
+        // quiet period passes immediately (lastAuthRecoveryAt == 0), so a
+        // genuine one-off expiry still recovers in ~1 s. Subsequent rapid
+        // rejects fall through here; the reconnect loop continues with its
+        // normal exponential backoff (capped at maxReconnectDelaySec) so the
+        // socket still retries, just without re-running the cascade.
+        let now = Date().timeIntervalSinceReferenceDate
+        if lastAuthRecoveryAt != 0,
+           now - lastAuthRecoveryAt < minAuthRecoveryIntervalSec {
+            lock.unlock()
+            return
+        }
+        let hook = onAuthFailedRecover
+        guard let recover = hook else {
+            lock.unlock()
+            return
+        }
+        authRecoveryInFlight = true
+        lastAuthRecoveryAt = now
+        lock.unlock()
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            let ok = await recover()
+            self.lock.lock()
+            self.authRecoveryInFlight = false
+            if ok {
+                // Fresh token applied (updateConfig already broadcast by the
+                // provider). Reset backoff and reconnect immediately with the
+                // new credentials.
+                self.authPermanentlyRejected = false
+                self.reconnectAttempt = 0
+                self.lock.unlock()
+                let okLine: String = "[BCryptoWS] auth_failed → silent recovery OK, reconnecting"
+                print(okLine)
+                // forceReconnect() (not connect()) so the fresh token is used
+                // even if the auth_failed socket hasn't finished closing yet —
+                // connect() early-returns unless state is .disconnected, which
+                // would lose the recovery on that race. forceReconnect cancels
+                // any lingering task first and is debounced against storms.
+                self.forceReconnect()
+            } else {
+                // Genuine revocation — park the reconnect loop until the app
+                // layer re-onboards and calls connect() again. No QR forced.
+                self.authPermanentlyRejected = true
+                self.lock.unlock()
+                let failLine: String = "[BCryptoWS] auth_failed → silent recovery REJECTED (revoked); pausing reconnect"
+                print(failLine)
+            }
+        }
+    }
+
+    // MARK: - Network path monitoring (always-reachable Phase 2)
+
+    /// Begin watching the network path. On the unsatisfied→satisfied edge
+    /// (network came back) or a transport switch (WiFi↔cellular, wake), kick a
+    /// fast `forceReconnect()` instead of waiting out the staleness window, and
+    /// retune the adaptive ping cadence for the new transport.
+    private func startPathMonitor() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            self?.handlePathUpdate(path)
+        }
+        pathMonitor.start(queue: pathMonitorQueue)
+    }
+
+    /// React to an NWPathMonitor update. Anti-hammer: only a genuine edge
+    /// (network recovered, or transport changed) triggers a reconnect, and at
+    /// most one reconnect per `pathReconnectDebounceSec`.
+    private func handlePathUpdate(_ path: NWPath) {
+        let satisfied = (path.status == .satisfied)
+        // Primary transport: the first non-loopback interface on the path.
+        let transport: NWInterface.InterfaceType? = satisfied
+            ? path.availableInterfaces.first(where: { $0.type != .loopback })?.type
+            : nil
+
+        // Retune adaptive ping/dead-timeout for this transport (cheap; always).
+        applyAdaptiveTiming(for: transport)
+
+        lock.lock()
+        let wasSatisfied = lastPathSatisfied
+        let prevTransport = lastTransport
+        let now = Date().timeIntervalSinceReferenceDate
+        let sinceLastKick = now - lastPathReconnectAt
+        lastPathSatisfied = satisfied
+        lastTransport = transport
+        let rejected = authPermanentlyRejected
+        lock.unlock()
+
+        // Only act on a meaningful edge:
+        //   - network came back (unsatisfied → satisfied), OR
+        //   - the transport changed while still satisfied (WiFi↔cellular).
+        let networkRecovered = satisfied && !wasSatisfied
+        let transportSwitched = satisfied && wasSatisfied && (transport != prevTransport)
+        guard networkRecovered || transportSwitched else { return }
+
+        // Do not revive a deliberately-parked (revoked) socket — the app layer
+        // owns re-onboarding in that case.
+        if rejected { return }
+
+        // Debounce: ignore a flapping interface storming path updates.
+        if sinceLastKick < pathReconnectDebounceSec { return }
+        lock.lock()
+        lastPathReconnectAt = now
+        lock.unlock()
+
+        let reason: String = networkRecovered ? "network-recovered" : "transport-switch"
+        let line: String = "[BCryptoWS] path change (" + reason + ") → fast forceReconnect()"
+        print(line)
+        forceReconnect()
+    }
+
+    /// Map the current primary transport to (pingInterval, pongTimeout) and,
+    /// if it changed, re-arm the keepalive timer so the new cadence takes
+    /// effect immediately rather than on the next natural tick.
+    ///   WiFi      → 20 / 30   (beat carrier/NAT idle timeouts)
+    ///   cellular  → 60 / 120  (relaxed: carrier NAT forgiving, save radio/battery)
+    ///   wired/other → 30 / 45
+    private func applyAdaptiveTiming(for transport: NWInterface.InterfaceType?) {
+        let ping: TimeInterval
+        let pong: TimeInterval
+        switch transport {
+        case .wifi:
+            ping = 20; pong = 30
+        case .cellular:
+            ping = 60; pong = 120
+        case .wiredEthernet:
+            ping = 30; pong = 45
+        default:
+            // .loopback / .other / nil (no satisfied path yet) → conservative.
+            ping = 30; pong = 45
+        }
+
+        lock.lock()
+        let changed = (ping != pingIntervalSec) || (pong != pongTimeoutSec)
+        pingIntervalSec = ping
+        pongTimeoutSec = pong
+        let authed = (_state == .authenticated) && (webSocketTask != nil)
+        lock.unlock()
+
+        // Re-arm the keepalive only when the cadence actually changed AND we
+        // have a live authenticated socket to keep alive (startPingTimer is a
+        // no-op otherwise and would needlessly churn the timer).
+        if changed && authed {
+            startPingTimer()
+        }
     }
 
     private func handleDisconnect(generation: Int? = nil) {
@@ -753,13 +1011,25 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // finished or failed. The next forceReconnect() / send() can kick a
         // fresh attempt without being silently debounced.
         reconnectInFlight = false
+        let permanentlyRejected = authPermanentlyRejected
+        let recoveryRunning = authRecoveryInFlight
         pingTimer?.cancel()
         pingTimer = nil
         let listeners = stateListeners
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
 
-        guard attempt < maxReconnectAttempts else { return }
+        // Always-reachable Phase 2: NO attempt cap — the persistent WS retries
+        // indefinitely (push remains the reachability spine in the meantime).
+        // Two — and only two — conditions stop scheduling here:
+        //   1. The token-recovery cascade was genuinely rejected (revocation):
+        //      reconnecting would just earn another instant auth_failed. The
+        //      app layer re-onboards and calls connect() again (which resets
+        //      authPermanentlyRejected on the next successful authenticate).
+        //   2. The silent recovery is currently in flight — its completion
+        //      handler will call connect() once the fresh token is applied, so
+        //      scheduling a backoff reconnect here too would double-fire.
+        if permanentlyRejected || recoveryRunning { return }
         // W550 — real exponential backoff with jitter.
         //
         // OLD formula: `min(30, attempt * 0.5)` capped at attempt=10 →
@@ -769,13 +1039,16 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // devices behind the same provider, that's a slow DoS of the
         // app's own auth-deadline budget.
         //
-        // NEW formula: 1 s × 2^(attempt-1) capped at 30 s + ±25 %
-        // jitter. Recovery on a healthy network is fast (1-2 s) but
-        // a wedged token decays to a 30 s probe rate within 6
-        // attempts (saves 10x server load). Jitter prevents N
-        // devices on a network coming back from a blip from
-        // synchronizing into a thundering herd.
-        let baseDelay = min(30.0, pow(2.0, Double(min(attempt - 1, 5))))
+        // NEW formula: 1 s × 2^(attempt-1) capped at maxReconnectDelaySec
+        // (30 s) + ±25 % jitter. Recovery on a healthy network is fast
+        // (1-2 s) but a wedged token decays to a 30 s probe rate within 6
+        // attempts (saves 10x server load). The exponent is clamped at 5 so
+        // the now-unbounded attempt counter can never overflow `pow`; the
+        // delay plateaus at the 30 s cap and stays there forever — steady
+        // background probing, never a storm. Jitter prevents N devices on a
+        // network coming back from a blip from synchronizing into a
+        // thundering herd.
+        let baseDelay = min(maxReconnectDelaySec, pow(2.0, Double(min(attempt - 1, 5))))
         let jitter = baseDelay * (Double.random(in: -0.25...0.25))
         let delay = max(0.5, baseDelay + jitter)
         DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in

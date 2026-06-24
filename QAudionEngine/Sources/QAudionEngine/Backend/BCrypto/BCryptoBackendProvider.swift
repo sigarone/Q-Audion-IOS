@@ -57,6 +57,22 @@ public final class BCryptoBackendProvider: BackendProvider {
             self.applyTokenPair(access: pair.accessToken, refresh: pair.refreshToken)
             return (accessToken: pair.accessToken, refreshToken: pair.refreshToken)
         }
+
+        // Always-reachable Phase 2 — bridge the WebSocket's `auth_failed`
+        // handler to the SAME silent recovery cascade the REST 401 path uses
+        // (refresh → Ed25519 device-renew). The cascade writes the fresh tokens
+        // into the REST client's own config; we then broadcast them to EVERY
+        // transport (including the WS client) via `applyTokenPair` so the WS's
+        // next connect() authenticates with the new access token. Returns
+        // `true` on success → WS resumes reconnect; `false` on genuine
+        // revocation → WS parks its loop (never forces QR).
+        self.wsClient.onAuthFailedRecover = { [weak self] in
+            guard let self = self else { return false }
+            let ok = await self.restClient.recoverAuth()
+            guard ok, let fresh = self.restClient.accessToken else { return false }
+            self.applyTokenPair(access: fresh, refresh: self.restClient.refreshToken)
+            return true
+        }
     }
 
     /// Propagate a refreshed (access, refresh) pair to the internal clients so
