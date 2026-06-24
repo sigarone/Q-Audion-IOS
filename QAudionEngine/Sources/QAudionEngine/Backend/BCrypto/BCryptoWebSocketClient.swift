@@ -946,6 +946,17 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
 
         // Debounce: ignore a flapping interface storming path updates.
         if sinceLastKick < pathReconnectDebounceSec { return }
+
+        // CRITICAL anti-flap: a "recovered"/"switched" path event must NOT tear
+        // down a socket that is ALREADY authenticated and fresh. On VPN/Tor/
+        // flaky-WiFi setups iOS NWPathMonitor reports satisfied↔unsatisfied every
+        // few seconds; forceReconnect()ing a healthy socket on each "recovery"
+        // produced a ~3 s reconnect storm (logged as repeated
+        // "path change (network-recovered) → fast forceReconnect()") that churned
+        // the device "offline" and dropped in-flight call-setup/PQC-handshake
+        // frames. Only reconnect when the socket genuinely needs it (down/stale).
+        if isFreshlyAuthenticated() { return }
+
         lock.lock()
         lastPathReconnectAt = now
         lock.unlock()
