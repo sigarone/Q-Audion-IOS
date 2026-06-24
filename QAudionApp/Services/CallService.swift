@@ -145,6 +145,11 @@ final class CallService {
     public var getPeerId: PeerIdProvider?
     public var isCallActive: CallActiveProvider?
     public var getCallId: CallIdProvider?
+    /// W-DCAUDIO — send a sealed audio frame over the WebRTC DataChannel if it is
+    /// open; returns true if queued there, false to fall back to the WS relay.
+    /// Wired by AppState to `QAudionWebRtcCallController.sendAudioFrameData`. The
+    /// payload is the raw WireRelayFrameCodec envelope (same bytes as the WS path).
+    public var sendAudioOverDataChannel: ((Data) -> Bool)?
     /// Token usato per de-registrare il handler "audio_frame" su endCall
     /// — assumiamo che `registerHandler` sostituisca il precedente per
     /// type, quindi de-register è no-op (ma resettiamo wsClient così
@@ -428,12 +433,23 @@ final class CallService {
             case .error:
                 self.endCall()
             case .fallback:
-                // W461: PQC handshake timed out. WebRTC DTLS audio may still be
-                // flowing — do NOT tear down the call here. The 30s fallback is
-                // purely a "handshake slow" signal. Ending the call here caused
-                // the exact 30s drop bug (iPad→A50 calls always dropped at :30).
-                // The call will end normally when either side hangs up.
-                print("[CallService] PQC handshake fallback — keeping call alive, audio continues via WebRTC DTLS. Diagnose: check Android ACCEPT routing and callId case match.")
+                // W461: PQC handshake slow/timed out. Do NOT tear down the
+                // call here — the 30s fallback is purely a "handshake slow"
+                // signal. Ending the call here caused the exact 30s drop bug
+                // (iPad→A50 calls always dropped at :30). The call ends
+                // normally when either side hangs up.
+                //
+                // CORRECTION (audit wf_b1d38abe): there is NO "audio continues
+                // via WebRTC DTLS" invariant on iOS. The WebRTC SRTP audio
+                // track is added DISABLED (QAudionPeerConnection.addLocalAudioTrack,
+                // W574d) and the remote SRTP audio track is force-disabled on
+                // arrival — voice rides ONLY the sealed WS relay (PqcRtpFrameSealer
+                // M-15 seal over the engine's Opus+AEAD frames). While the relay
+                // sealer is not yet installed (G2 unmet) NO mic frame is sent at
+                // all (fail-closed, see startAudioIOIfReady / processAndSendEncryptedFrame).
+                // So this state means "still negotiating the PQC seal", never
+                // "falling back to plaintext/DTLS audio".
+                print("[CallService] PQC handshake fallback — keeping call alive; voice stays on the sealed relay (no DTLS-audio fallback exists). Diagnose: check Android ACCEPT routing and callId case match.")
             default:
                 break
             }
@@ -808,6 +824,16 @@ final class CallService {
     /// When present and mismatched against the active call, the frame is
     /// dropped immediately — this prevents x250+ CryptoKitError 3 storms
     /// caused by stale relay delivery from a previous/overlapping session.
+    /// W-DCAUDIO — inbound sealed audio frame received over the WebRTC
+    /// DataChannel. The bytes are the raw WireRelayFrameCodec envelope (identical
+    /// to what the WS "audio_frame" handler delivers after base64 decode), so we
+    /// route them through the same decrypt + playback path. The DataChannel is
+    /// per-call (one PC per call), so the active call_id applies. Wired by AppState
+    /// to `QAudionWebRtcCallController.onAudioDataChannelFrame`.
+    public func handleIncomingDataChannelAudio(_ data: Data) {
+        handleIncomingEncryptedFrame(data, callId: getCallId?())
+    }
+
     public func handleIncomingEncryptedFrame(_ serializedFrame: Data,
                                              callId: String? = nil) {
         // W69: dev network simulator hook RX. Stessa semantica del TX —
@@ -1212,7 +1238,16 @@ final class CallService {
                 // the frame. Their filter drops envelopes whose
                 // call_id doesn't match the active call.
                 let cid = getCallId?()
-                ws.sendAudioFrame(recipientId: peer, frame: sealedFrame, callId: cid)
+                // W-DCAUDIO — prefer the P2P sealed-audio DataChannel when it is
+                // open; fall back to the WS relay otherwise. Identical bytes on
+                // either path (the raw WireRelayFrameCodec envelope), so the peer
+                // decodes both the same way. The DataChannel is lower-latency and
+                // keeps media off the server; the WS relay guarantees delivery when
+                // ICE/DTLS cannot form a P2P link.
+                let sentOnDc: Bool = sendAudioOverDataChannel?(sealedFrame) ?? false
+                if !sentOnDc {
+                    ws.sendAudioFrame(recipientId: peer, frame: sealedFrame, callId: cid)
+                }
                 if !loggedFirstTxWire {
                     loggedFirstTxWire = true
                     let fmt: String = androidAudioWireCompat ? "WireRelayFrameCodec" : "FrameEncoder"

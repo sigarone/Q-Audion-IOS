@@ -1519,6 +1519,17 @@ final class AppState: ObservableObject {
             else { return nil }
             return impl.getActiveCallId()
         }
+        // W-DCAUDIO — route outbound voice over the WebRTC sealed-audio
+        // DataChannel when it is open (P2P, lower latency, media off the
+        // server). Returns false when no DC is open, so CallService falls back to
+        // the WS relay. Resolves the live controller dynamically so it tracks
+        // lazy per-call controller creation (the property is the gated `Any?`).
+        #if canImport(WebRTC)
+        callService.sendAudioOverDataChannel = { [weak self] data in
+            guard let controller = self?.webRtcController as? QAudionWebRtcCallController else { return false }
+            return controller.sendAudioFrameData(data)
+        }
+        #endif
         // W74: register inbound call handlers BEFORE the WS lands. The
         // server relays Android→iOS calls as `call_incoming`, NOT
         // `call_offer` (see bcrypto-server signaling/messages.go
@@ -4733,6 +4744,13 @@ final class AppState: ObservableObject {
                 controller.videoTelemetry = { kind, attrs in
                     TelemetryService.shared.emit(kind: kind, attrs: attrs)
                 }
+                // W-DCAUDIO — RX: inbound sealed-audio DataChannel frames →
+                // CallService decrypt + playback (same path as the WS
+                // "audio_frame" handler). TX is wired once in the callService
+                // config block (sendAudioOverDataChannel).
+                controller.onAudioDataChannelFrame = { [weak self] data in
+                    self?.callService.handleIncomingDataChannelAudio(data)
+                }
                 // R-4 (sovereign-only): reject incoming video when the
                 // policy is on. Read live (not captured) so a mid-session
                 // toggle takes effect on the next inbound track.
@@ -6503,6 +6521,11 @@ extension AppState {
         // Remote-readable video diagnostics (responder side, mirrors caller).
         controller.videoTelemetry = { kind, attrs in
             TelemetryService.shared.emit(kind: kind, attrs: attrs)
+        }
+        // W-DCAUDIO — RX: inbound sealed-audio DataChannel frames → CallService
+        // decrypt + playback (same path as the WS "audio_frame" handler).
+        controller.onAudioDataChannelFrame = { [weak self] data in
+            self?.callService.handleIncomingDataChannelAudio(data)
         }
         // R-4 (sovereign-only): reject incoming video when the policy is
         // on (responder side). Mirror of the caller-side wiring.

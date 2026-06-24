@@ -79,6 +79,25 @@ public final class QAudionPeerConnection: NSObject {
     private let audioTrackId = "audio0"
     private let videoTrackId = "video0"
 
+    // ── W-DCAUDIO: sealed-audio DataChannel ──────────────────────────────────
+    /// Cross-platform sealed-audio DataChannel label. MUST match Android's
+    /// `PeerConnectionHolder.DATA_CHANNEL_LABEL` and Desktop's `SEALED_DC_LABEL`
+    /// ("qaudion-audio") so the channel is recognised on both ends.
+    private let audioDataChannelLabel = "qaudion-audio"
+    /// The sealed-audio DataChannel. Carries the SAME `WireRelayFrameCodec`
+    /// envelope bytes as the WS relay, so it is byte-compatible with Android's
+    /// DefaultFrameRelayTransport DC and Desktop's SealedAudioPipeline. It is the
+    /// P2P primary path for voice; the WS relay is the fallback (the app sends on
+    /// the DC when open, else WS). Replaces the SRTP m=audio track entirely —
+    /// there is no plain DTLS-SRTP audio anywhere.
+    private var audioDataChannel: RTCDataChannel?
+    /// Invoked on the WebRTC signalling thread for each inbound sealed audio
+    /// frame received over the DataChannel. The `Data` is the raw
+    /// `WireRelayFrameCodec` envelope — identical to what the WS "audio_frame"
+    /// handler passes to `handleIncomingEncryptedFrame` after base64 decode — so
+    /// the app routes it straight there.
+    public var onAudioDataChannelFrame: ((Data) -> Void)?
+
     public init(factory: RTCPeerConnectionFactory,
                 iceServers: [RTCIceServer],
                 iceTransportPolicy: RTCIceTransportPolicy = .all,
@@ -107,32 +126,63 @@ public final class QAudionPeerConnection: NSObject {
 
     // MARK: - Audio track
 
-    /// Add the local microphone track. Required before createOffer / createAnswer
-    /// for an audio call so the SDP negotiates an `m=audio` section.
+    /// W-DCAUDIO — NO WebRTC SRTP audio track is created. Q-Audion voice rides
+    /// ONLY the sealed "qaudion-audio" DataChannel (see `createAudioDataChannel`),
+    /// byte-identical to Android/Desktop's sealed DC. A WebRTC m=audio track —
+    /// even a disabled/silent one — creates a redundant classical DTLS-SRTP media
+    /// section (non-PQC, relay-MITM-able, outside the SAS) and wastes an RTP flow,
+    /// so it must not exist at all (not merely be disabled). The PC negotiates
+    /// m=application (the DataChannel) + m=video; there is NO m=audio.
     ///
-    /// W574d — the track is added DISABLED. Q-Audion audio NEVER rides
-    /// plain DTLS-SRTP: iOS ships sealed Opus+AEAD frames over the WS
-    /// relay, Android over its FrameRelayTransport (DC/WS). The enabled
-    /// SRTP mic track caused two field bugs on Android→iOS calls
-    /// (report 2026-06-12): (1) the peer's SRTP voice played out of the
-    /// loudspeaker DURING RING (the responder builds its answer at
-    /// call_incoming time, so ICE+DTLS complete pre-answer and nothing
-    /// gated playback), and (2) WebRTC's voice-processing audio unit
-    /// owned the mic, starving the AVAudioEngine relay tap (tx_enc=0
-    /// on every cross call). m=audio still negotiates — the track just
-    /// carries silence, mirroring Android's earbud-relay behaviour
-    /// (`audioTrack.setEnabled(false)`).
+    /// Kept as a no-op (returns false) so existing call sites in
+    /// `QAudionWebRtcCallController` keep compiling; the caller now invokes
+    /// `createAudioDataChannel()` instead to populate the audio media section.
+    /// (History: pre-2026-06-24 this added a disabled silent SRTP track for "SDP
+    /// symmetry" — removed at source per the uniform "sealed-DataChannel audio
+    /// only" policy across iOS/Android/Desktop.)
     @discardableResult
     public func addLocalAudioTrack() -> Bool {
-        guard let pc = peerConnection, localAudioTrack == nil else { return false }
-        let audioConstraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-        let audioSource = factory.audioSource(with: audioConstraints)
-        let track = factory.audioTrack(with: audioSource, trackId: audioTrackId)
-        track.isEnabled = false  // W574d — sealed-relay-only audio; see doc above
-        pc.add(track, streamIds: [stableStreamId])
-        localAudioTrack = track
-        print("[WebRTC] local AUDIO track added to peer connection (disabled — sealed relay carries voice)")
+        return false
+    }
+
+    /// W-DCAUDIO — create the outbound sealed-audio DataChannel. CALLER side only
+    /// (the callee receives it via the `didOpen` delegate). Must run BEFORE
+    /// `createOffer` so the SDP carries the m=application section — which, now that
+    /// there is no m=audio track, is the call's audio media section.
+    /// `isOrdered = false` + `maxRetransmits = 0` = unreliable/unordered, matching
+    /// Android's DefaultFrameRelayTransport DC (VoIP tolerates loss far better than
+    /// head-of-line blocking).
+    @discardableResult
+    public func createAudioDataChannel() -> Bool {
+        guard let pc = peerConnection, audioDataChannel == nil else { return false }
+        let cfg = RTCDataChannelConfiguration()
+        cfg.isOrdered = false
+        cfg.maxRetransmits = 0
+        guard let dc = pc.dataChannel(forLabel: audioDataChannelLabel, configuration: cfg) else {
+            print("[WebRTC] createAudioDataChannel: dataChannel(forLabel:) returned nil")
+            return false
+        }
+        dc.delegate = self
+        audioDataChannel = dc
+        print("[WebRTC] sealed-audio DataChannel created (label=\(audioDataChannelLabel))")
         return true
+    }
+
+    /// W-DCAUDIO — send one sealed audio frame over the DataChannel if it is open.
+    /// Returns `true` if queued on the DC; `false` if the DC is not open (the
+    /// caller must then fall back to the WS relay). `data` is the raw
+    /// `WireRelayFrameCodec` envelope (the exact bytes the WS path base64-wraps).
+    @discardableResult
+    public func sendAudioFrameData(_ data: Data) -> Bool {
+        guard let dc = audioDataChannel, dc.readyState == .open else { return false }
+        return dc.sendData(RTCDataBuffer(data: data, isBinary: true))
+    }
+
+    /// W-DCAUDIO — true when the sealed-audio DataChannel is open (P2P voice is
+    /// live). When false the caller routes audio over the WS relay fallback.
+    public func isAudioDataChannelOpen() -> Bool {
+        guard let dc = audioDataChannel else { return false }
+        return dc.readyState == .open
     }
 
     /// W386 — placeholder for the W382 PQC sealer install hook.
@@ -426,11 +476,35 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
                                   sdpMLineIndex: candidate.sdpMLineIndex)
     }
     public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
+        // W-DCAUDIO — CALLEE side: the caller created the sealed-audio DataChannel;
+        // capture it and start receiving sealed frames. The label must match the
+        // cross-platform constant "qaudion-audio".
+        guard dataChannel.label == audioDataChannelLabel else {
+            let lbl = dataChannel.label
+            print("[WebRTC] didOpen: ignoring DataChannel with unknown label=\(lbl)")
+            return
+        }
+        dataChannel.delegate = self
+        audioDataChannel = dataChannel
+        let st = dataChannel.readyState.rawValue
+        print("[WebRTC] sealed-audio DataChannel received (state=\(st))")
+    }
 
     // Unified-plan track callback.
     public func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
         if let audio = rtpReceiver.track as? RTCAudioTrack {
+            // W574d HARDENING (audit wf_b1d38abe): disable the inbound SRTP
+            // audio track HERE — at the earliest point the receiver track
+            // exists, on the WebRTC signalling thread, BEFORE it is handed to
+            // any delegate. Voice rides ONLY the sealed WS relay; plain
+            // DTLS-SRTP audio must NEVER play out. The controller delegate
+            // (didReceiveRemoteAudioTrack) also sets isEnabled=false, but that
+            // is one stack frame later — a SRTP packet could decode and reach
+            // the output unit in that gap. Disabling structurally at receiver
+            // discovery closes that race window. The delegate disable stays as
+            // defense-in-depth.
+            audio.isEnabled = false
             delegate?.peerConnection(self, didReceiveRemoteAudioTrack: audio)
         }
         if let video = rtpReceiver.track as? RTCVideoTrack {
@@ -448,5 +522,19 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
 public extension QAudionPeerConnection.Delegate {
     func peerConnection(_ pc: QAudionPeerConnection,
                         didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver) {}
+}
+
+// MARK: - RTCDataChannelDelegate (W-DCAUDIO sealed-audio channel)
+extension QAudionPeerConnection: RTCDataChannelDelegate {
+    public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+        guard dataChannel === audioDataChannel else { return }
+        let st = dataChannel.readyState.rawValue
+        print("[WebRTC] sealed-audio DataChannel state → \(st)")
+    }
+    public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+        guard dataChannel === audioDataChannel else { return }
+        let cb = onAudioDataChannelFrame
+        cb?(buffer.data)
+    }
 }
 #endif

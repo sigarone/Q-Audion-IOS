@@ -48,6 +48,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onRemoteAudioTrack: ((RTCAudioTrack) -> Void)?
     public var onRemoteVideoTrack: ((RTCVideoTrack) -> Void)?
 
+    /// W-DCAUDIO — inbound sealed-audio frames received over the WebRTC
+    /// DataChannel ("qaudion-audio"). Set by the app layer (CallService) to route
+    /// the raw WireRelayFrameCodec bytes into `handleIncomingEncryptedFrame`,
+    /// exactly as the WS "audio_frame" handler does. Forwarded to the live
+    /// `QAudionPeerConnection.onAudioDataChannelFrame` when the PC is created.
+    public var onAudioDataChannelFrame: ((Data) -> Void)?
+
+    /// W-DCAUDIO — send a sealed audio frame over the DataChannel if it is open.
+    /// Returns `true` if queued on the DC; `false` if the DC is not open, in which
+    /// case the caller (CallService) falls back to the WS relay.
+    @discardableResult
+    public func sendAudioFrameData(_ data: Data) -> Bool {
+        return peerConnection?.sendAudioFrameData(data) ?? false
+    }
+
     /// Diagnostic telemetry sink for the video pipeline (kind, attrs).
     /// Mirrors the Android `PeerConnectionHolder.videoTelemetry` hook so an
     /// iOS↔Android video failure is diagnosable REMOTELY from the admin
@@ -303,6 +318,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             delegate: self)
         peerConnection = pc
         pc.addLocalAudioTrack()
+        // W-DCAUDIO — wire inbound DataChannel audio to the app, then create the
+        // outbound sealed-audio DataChannel (CALLER side, BEFORE createOffer so
+        // the SDP carries the m=application audio section). Voice rides this DC
+        // (P2P) with the WS relay as fallback; there is no m=audio SRTP track.
+        pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
+        pc.createAudioDataChannel()
         if !audioOnly {
             // Add the local camera track before creating the offer so the
             // SDP m=video section is populated. Mirrors Android
@@ -417,6 +438,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             delegate: self)
         peerConnection = pc
         pc.addLocalAudioTrack()
+        // W-DCAUDIO — CALLEE side: wire inbound DataChannel audio to the app. The
+        // caller created the sealed-audio DataChannel; we receive it via the PC's
+        // `didOpen` delegate. No m=audio SRTP track is added.
+        pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
         if !audioOnly {
             // Add the local camera track before creating the answer so the
             // SDP m=video section is populated. Mirrors Android
