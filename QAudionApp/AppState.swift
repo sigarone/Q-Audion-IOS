@@ -491,6 +491,28 @@ final class AppState: ObservableObject {
     /// and the native CallKit UI is suppressed).
     private var ringtoneTimer: DispatchSourceTimer?
 
+    /// FORCED-QR FIX (2026-06-24) — proactive access-token refresh.
+    /// Fires at ~60% of the token TTL so the next cold-launch (and any
+    /// in-flight request) never races an already-expired access token.
+    /// A failed proactive refresh NEVER clears the session — it only
+    /// reschedules with backoff. UserDefaults key for the persisted
+    /// access-token expiry epoch (seconds) so the schedule survives a
+    /// background→foreground hop or a relaunch.
+    private var proactiveRefreshTimer: DispatchSourceTimer?
+    /// Single-flight guard for `performProactiveRefresh` (FORCED-QR FIX
+    /// 2026-06-24, MED). Both the proactive timer and `willEnterForeground`
+    /// can fire near expiry; without this guard two concurrent invocations
+    /// each read the SAME single-use refresh token from storage and issue
+    /// independent POST /auth/refresh calls. That direct `accountApi`
+    /// refresh path does NOT go through the REST client's `refreshInFlight`
+    /// coalescing, so the second call is a replay of a consumed refresh
+    /// token — a server enforcing refresh-reuse detection could revoke the
+    /// token family and re-introduce a forced QR. Callers MUST funnel
+    /// through `runProactiveRefresh()` so the second caller awaits the
+    /// in-flight task instead of issuing a duplicate refresh.
+    private var proactiveRefreshTask: Task<Void, Never>?
+    private static let accessTokenExpiryEpochKey = "com.qaudion.auth.access_expiry_epoch"
+
     /// UUID string of the PersistentCallRecord for the current call.
     /// Set in startCall (outgoing) and wireIncomingCallHandlers (incoming).
     /// Cleared after endCall() writes the end timestamp.
@@ -511,6 +533,285 @@ final class AppState: ObservableObject {
             userId: userId,
             certPinSha256B64: PinnedServerHost.certChainPins
         )
+    }
+
+    /// FORCED-QR FIX (2026-06-24) — wire the Ed25519 device-bound silent
+    /// re-auth fallback onto a provider's REST client. Previously this was
+    /// only done LATE inside `runKmsSweep` (after the persistent socket was
+    /// up), so the cold-start launch `getProfile()` could hit a 401 with
+    /// `deviceRenewFallback == nil` and surface `BCryptoError.unauthorized`
+    /// even though the device credential was perfectly valid — which the
+    /// launch catch then "resolved" by clearing tokens and forcing a QR
+    /// re-pair. Wiring it at provider-build time means the very first
+    /// network request's 401 cascade (primary /auth/refresh → Ed25519
+    /// /auth/device-renew) runs in full before `.unauthorized` can surface.
+    ///
+    /// The primary `tokenRefresher` (POST /auth/refresh) is already wired by
+    /// `BCryptoBackendProvider.init`; it only fires when the config carries a
+    /// refresh token, so callers must build `pinnedConfig` with the stored
+    /// refresh token for the primary leg to be attempted.
+    ///
+    /// Idempotent: `setDeviceRenewFallback` just overwrites the stored
+    /// closure, so calling this again from `runKmsSweep` (on the live
+    /// provider) is harmless.
+    private func wireDeviceRenewFallback(on provider: BCryptoBackendProvider) {
+        let vault = SovereignKeyVault()
+        let manager = DeviceKeyManager(vault: vault, kmsClient: provider.kmsClient)
+        let renewClient = BCryptoDeviceRenewClient(
+            rest: provider.getRestClient(),
+            deviceKeyManager: manager
+        )
+        provider.getRestClient().setDeviceRenewFallback {
+            // deviceId is persisted by AuthService at login under
+            // "com.qaudion.auth.device_id". Read it lazily so a
+            // log-in / log-out cycle picks up the new value.
+            guard let did = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+                  !did.isEmpty else {
+                throw BCryptoError.unauthorized
+            }
+            let fresh = try await renewClient.renew(deviceId: did)
+            // Persist the rotated tokens so the next cold-launch does not
+            // replay a stale refresh token. MUST go to the Keychain
+            // (TokenVault), NOT UserDefaults: `AuthService.loadToken()`
+            // reads the Keychain, and `migrateTokensToKeychainIfNeeded()`
+            // only sweeps UserDefaults→Keychain when the Keychain slot is
+            // EMPTY — after a normal login it is populated, so a UD write
+            // here would land a fresh token in plaintext UserDefaults (dead
+            // + iCloud-backupable at rest) while the Keychain kept the
+            // STALE token, guaranteeing a 401 cascade on the next launch.
+            // TokenVault is static-only and primitive-typed, safe to call
+            // from this @Sendable closure (CLAUDE.md §16). Also record the
+            // access-token TTL so the proactive-refresh scheduler can renew
+            // ahead of expiry.
+            TokenVault.saveAccessToken(fresh.accessToken)
+            TokenVault.saveRefreshToken(fresh.refreshToken)
+            AppState.persistAccessTokenTtl(expiresInSec: fresh.expiresInSec)
+            return (accessToken: fresh.accessToken, refreshToken: fresh.refreshToken)
+        }
+    }
+
+    // MARK: - Proactive token refresh (FORCED-QR FIX 2026-06-24)
+
+    /// Format + emit a session-auth diagnostic line. Lives at top level
+    /// (nonisolated static) so the formatting `+`/interpolation happens OUTSIDE
+    /// any deeply-nested closure — Swift 6's type-checker times out on String
+    /// concatenation built inline inside `closure → Task → do/catch` bodies
+    /// (CLAUDE.md sec 16). Callers pass a pre-tag + the raw error.
+    nonisolated static func logAuthDiag(_ tag: String, _ error: Error) {
+        let desc: String = String(describing: error)
+        let line: String = tag + desc
+        print(line)
+    }
+
+    /// Persist the absolute expiry epoch (seconds since 1970) for the current
+    /// access token, computed from a server-provided `expires_in`. Nonisolated
+    /// + static so it can be called from the device-renew fallback closure
+    /// (which is `@Sendable` and must not touch main-actor state).
+    nonisolated static func persistAccessTokenTtl(expiresInSec: Int) {
+        guard expiresInSec > 0 else { return }
+        let expiry: Double = Date().timeIntervalSince1970 + Double(expiresInSec)
+        UserDefaults.standard.set(expiry, forKey: accessTokenExpiryEpochKey)
+    }
+
+    /// Best-effort extraction of the JWT `exp` (seconds-since-epoch) from the
+    /// middle (payload) segment of a compact JWS. Returns nil when the token
+    /// is opaque / malformed. Used as a fallback when no `expires_in` was
+    /// persisted (e.g. the access token came from a plain login, not a renew).
+    private static func jwtExpiryEpoch(_ token: String) -> Double? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        // Pad to a multiple of 4 for Data(base64Encoded:).
+        let rem = b64.count % 4
+        if rem > 0 { b64 += String(repeating: "=", count: 4 - rem) }
+        guard let data = Data(base64Encoded: b64),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let exp = obj["exp"] as? Double { return exp }
+        if let expInt = obj["exp"] as? Int { return Double(expInt) }
+        return nil
+    }
+
+    /// Resolve the access-token expiry epoch: prefer the persisted
+    /// `expires_in`-derived value, else parse the JWT `exp`.
+    private func currentAccessTokenExpiryEpoch() -> Double? {
+        let persisted = UserDefaults.standard.double(forKey: AppState.accessTokenExpiryEpochKey)
+        if persisted > 0 { return persisted }
+        if let token = authService.loadToken() {
+            return AppState.jwtExpiryEpoch(token)
+        }
+        return nil
+    }
+
+    /// True when the access token is within the last ~20% of its TTL (or its
+    /// expiry is unknown). Used on `willEnterForeground` to decide between an
+    /// immediate refresh vs. just (re)arming the timer.
+    private func tokenIsNearExpiry() -> Bool {
+        guard authService.loadToken() != nil else { return false }
+        guard let expiry = currentAccessTokenExpiryEpoch() else { return true }
+        let now: Double = Date().timeIntervalSince1970
+        // Within 5 minutes of expiry (or already past) ⇒ refresh now.
+        return (expiry - now) <= 300
+    }
+
+    /// (Re)arm the proactive-refresh timer to fire at ~60% of the remaining
+    /// TTL. If the token is already past 60% (or expiry is unknown) the
+    /// refresh runs almost immediately. Safe to call repeatedly — it cancels
+    /// any prior timer first.
+    func scheduleProactiveTokenRefresh() {
+        proactiveRefreshTimer?.cancel()
+        proactiveRefreshTimer = nil
+        guard authService.loadToken() != nil else { return }
+
+        let now: Double = Date().timeIntervalSince1970
+        // Default when expiry is INDETERMINATE (opaque token, no expires_in,
+        // no JWT exp): use a conservative long interval, NOT a short one
+        // (FORCED-QR FIX 2026-06-24, LOW). A short default caused a battery/
+        // traffic-draining poll loop — every successful refresh that yielded
+        // no usable expiry re-armed in 30s and refreshed again. 30 minutes is
+        // safe: the on-demand 401 cascade still recovers an actually-expired
+        // token immediately, so we don't need to poll aggressively here.
+        var fireInSec: Double = 1800
+        if let expiry = currentAccessTokenExpiryEpoch(), expiry > now {
+            let ttl: Double = expiry - now
+            // Fire at 60% of TTL; clamp so we neither thrash nor wait too long.
+            let target: Double = ttl * 0.6
+            fireInSec = min(max(target, 15), max(ttl - 30, 15))
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + fireInSec)
+        timer.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.runProactiveRefresh()
+            }
+        }
+        proactiveRefreshTimer = timer
+        timer.resume()
+    }
+
+    /// Single-flight entry point for the proactive refresh cascade
+    /// (FORCED-QR FIX 2026-06-24, MED). If a refresh is already in flight,
+    /// the caller awaits that task instead of starting a second one — this
+    /// prevents the timer path and the `willEnterForeground` path from each
+    /// replaying the same single-use refresh token. `@MainActor` isolation
+    /// makes the check-and-set atomic (no `await` between reading and
+    /// assigning `proactiveRefreshTask`), so there is no lost-update race.
+    /// Awaiting the in-flight task does not deadlock: the task body runs as
+    /// an independent unit of work, so a re-entrant MainActor caller simply
+    /// suspends until it completes.
+    func runProactiveRefresh() async {
+        if let inFlight = proactiveRefreshTask {
+            await inFlight.value
+            return
+        }
+        // Strong `self` capture is intentional and safe: the task is owned by
+        // `proactiveRefreshTask` (owned by self) and clears itself below, so
+        // there is no retain cycle beyond the refresh's lifetime. The body is
+        // a statement (not an expression) so the task is inferred as
+        // `Task<Void, Never>`, matching the property type.
+        let task: Task<Void, Never> = Task { @MainActor in
+            await self.performProactiveRefresh()
+        }
+        proactiveRefreshTask = task
+        await task.value
+        proactiveRefreshTask = nil
+    }
+
+    /// Run the refresh cascade ahead of expiry. NEVER clears the session on
+    /// failure — a failed proactive refresh just reschedules with backoff so
+    /// the eventual on-demand 401 cascade (or the next launch) can recover.
+    /// Do NOT call directly from concurrent contexts — go through
+    /// `runProactiveRefresh()` for single-flight coalescing.
+    private func performProactiveRefresh() async {
+        guard authService.loadToken() != nil else { return }
+        let provider: BCryptoBackendProvider
+        if let live = liveProvider {
+            provider = live
+        } else {
+            let cfg = pinnedConfig(
+                token: authService.loadToken(),
+                refreshToken: authService.loadRefreshToken()
+            )
+            let p = BCryptoBackendProvider(config: cfg)
+            wireDeviceRenewFallback(on: p)
+            self.liveProvider = p
+            provider = p
+        }
+
+        // Leg 1: primary refresh (POST /auth/refresh) when a refresh token
+        // is present.
+        if let refresh = authService.loadRefreshToken(), !refresh.isEmpty {
+            do {
+                let pair = try await (provider.accountApi as? BCryptoAccountApiImpl)?.refreshToken(refresh)
+                if let pair {
+                    provider.applyTokenPair(access: pair.accessToken, refresh: pair.refreshToken)
+                    authService.saveToken(pair.accessToken)
+                    if let r = pair.refreshToken, !r.isEmpty { authService.saveRefreshToken(r) }
+                    if let exp = pair.expiresIn {
+                        AppState.persistAccessTokenTtl(expiresInSec: exp)
+                    } else if let parsed = AppState.jwtExpiryEpoch(pair.accessToken) {
+                        UserDefaults.standard.set(parsed, forKey: AppState.accessTokenExpiryEpochKey)
+                    } else {
+                        // Indeterminate expiry (opaque token, no expires_in,
+                        // no JWT exp). Clear any STALE/past epoch left from a
+                        // prior token so `scheduleProactiveTokenRefresh()`
+                        // does not see a past value and fall into a tight
+                        // refresh loop. With the key cleared the scheduler
+                        // uses its conservative indeterminate-expiry interval.
+                        UserDefaults.standard.removeObject(forKey: AppState.accessTokenExpiryEpochKey)
+                    }
+                    scheduleProactiveTokenRefresh()
+                    return
+                }
+            } catch {
+                AppState.logAuthDiag("[AppState] proactive refresh (primary) failed, trying device-renew: ", error)
+            }
+        }
+
+        // Leg 2: Ed25519 device-renew.
+        guard let did = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+              !did.isEmpty else {
+            // No device credential to renew with: do NOT clear — just back off.
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + 120)
+            timer.setEventHandler { [weak self] in
+                Task { @MainActor [weak self] in self?.scheduleProactiveTokenRefresh() }
+            }
+            proactiveRefreshTimer = timer
+            timer.resume()
+            return
+        }
+        let vault = SovereignKeyVault()
+        let manager = DeviceKeyManager(vault: vault, kmsClient: provider.kmsClient)
+        let renewClient = BCryptoDeviceRenewClient(
+            rest: provider.getRestClient(),
+            deviceKeyManager: manager
+        )
+        do {
+            let fresh = try await renewClient.renew(deviceId: did)
+            provider.applyTokenPair(access: fresh.accessToken, refresh: fresh.refreshToken)
+            authService.saveToken(fresh.accessToken)
+            authService.saveRefreshToken(fresh.refreshToken)
+            AppState.persistAccessTokenTtl(expiresInSec: fresh.expiresInSec)
+            scheduleProactiveTokenRefresh()
+        } catch {
+            // Proactive renew failed — could be transient (offline). NEVER
+            // clear here; the device credential may still be valid. Back off
+            // and retry; an eventual hard rejection will surface via an
+            // on-demand 401 cascade in getProfile().
+            AppState.logAuthDiag("[AppState] proactive device-renew failed (non-fatal, keeping session): ", error)
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + 120)
+            timer.setEventHandler { [weak self] in
+                Task { @MainActor [weak self] in self?.scheduleProactiveTokenRefresh() }
+            }
+            proactiveRefreshTimer = timer
+            timer.resume()
+        }
     }
 
     func initialize() {
@@ -660,6 +961,16 @@ final class AppState: ObservableObject {
             // when the outer closure binds `[weak self]` and forwards.
             Task { @MainActor [weak self] in
                 guard let self = self, self.isAuthenticated else { return }
+                // FORCED-QR FIX (2026-06-24): refresh the access token ahead of
+                // any work on resume so a token that expired while backgrounded
+                // is renewed silently (via /auth/refresh → Ed25519 device-renew)
+                // instead of letting the next request 401-cascade. Never clears
+                // the session on failure.
+                if self.tokenIsNearExpiry() {
+                    await self.runProactiveRefresh()
+                } else {
+                    self.scheduleProactiveTokenRefresh()
+                }
                 if let live = self.liveProvider {
                     // Drop the provider only when its WS is already known
                     // dead — otherwise let `ensureAuthenticated` decide
@@ -932,8 +1243,19 @@ final class AppState: ObservableObject {
                !cachedExt.isEmpty {
                 self.currentUserDialExtension = cachedExt
             }
-            let backendConfig = pinnedConfig(token: token)
+            // FORCED-QR FIX (2026-06-24): build the config WITH the stored
+            // refresh token so the auto-wired primary refresher (POST
+            // /auth/refresh) can actually fire on the launch getProfile()'s
+            // 401, and wire the Ed25519 device-renew fallback BEFORE the call
+            // so the full cascade is available. Without both, a transient
+            // 401 here had no recovery path and the catch below force-cleared
+            // the session → QR re-pair.
+            let backendConfig = pinnedConfig(
+                token: token,
+                refreshToken: authService.loadRefreshToken()
+            )
             let provider = BCryptoBackendProvider(config: backendConfig)
+            wireDeviceRenewFallback(on: provider)
             Task {
                 do {
                     let profile = try await provider.accountApi.getProfile()
@@ -962,6 +1284,26 @@ final class AppState: ObservableObject {
                         UserDefaults.standard.removeObject(forKey: "currentUserDialExtension")
                     }
                     self.isAuthenticated = true
+                    // FORCED-QR FIX (2026-06-24): the cascade inside getProfile()
+                    // may have silently refreshed the access token. Persist the
+                    // freshest pair so the next cold-launch starts authenticated,
+                    // and schedule a proactive refresh ahead of expiry so a later
+                    // launch never races an already-expired token.
+                    let freshAccess: String? = provider.config.accessToken
+                    let freshRefresh: String? = provider.config.refreshToken
+                    if let acc = freshAccess, acc != token {
+                        authService.saveToken(acc)
+                        if let r = freshRefresh, !r.isEmpty { authService.saveRefreshToken(r) }
+                        if let parsed = AppState.jwtExpiryEpoch(acc) {
+                            UserDefaults.standard.set(parsed, forKey: AppState.accessTokenExpiryEpochKey)
+                        } else {
+                            // Opaque refreshed token: clear any stale epoch so
+                            // the scheduler uses its conservative indeterminate
+                            // interval, not a past value (FORCED-QR FIX LOW).
+                            UserDefaults.standard.removeObject(forKey: AppState.accessTokenExpiryEpochKey)
+                        }
+                    }
+                    self.scheduleProactiveTokenRefresh()
                     self.replayPendingTrackB()
                     // W74: open the long-lived WS so the server flips
                     // the user to `online`. Presence binding piggybacks
@@ -972,8 +1314,31 @@ final class AppState: ObservableObject {
                     // have a JWT — calls survive app-killed state.
                     self.retryPendingVoipPushTokenRegistration()
                 } catch {
-                    authService.clearToken()
-                    self.isAuthenticated = false
+                    // FORCED-QR FIX (2026-06-24): clear the session ONLY on a
+                    // GENUINE hard auth rejection — i.e. `BCryptoError.unauthorized`,
+                    // which the REST client throws ONLY after the full
+                    // refresh → Ed25519 device-renew cascade itself was rejected
+                    // by the server (device credential revoked/invalid). Every
+                    // other error (network/offline/timeout, 5xx, decode) is
+                    // TRANSIENT: keep the tokens and the device credential, keep
+                    // the user authenticated against the still-valid local token,
+                    // and schedule a reconnect. Bouncing to onboarding (QR
+                    // re-pair) on a transient blip was the forced-QR bug.
+                    if case BCryptoError.unauthorized = error {
+                        let line: String = "[AppState] getProfile: device credential rejected after full refresh+device-renew cascade — clearing session, QR re-pair required"
+                        print(line)
+                        authService.clearToken()
+                        self.isAuthenticated = false
+                    } else {
+                        AppState.logAuthDiag("[AppState] getProfile transient failure — keeping session, will retry: ", error)
+                        // Stay authenticated if a local token is still present;
+                        // the WS layer + proactive refresh will recover.
+                        self.isAuthenticated = (authService.loadToken() != nil)
+                        if self.isAuthenticated {
+                            self.scheduleProactiveTokenRefresh()
+                            self.connectPersistentSocket()
+                        }
+                    }
                 }
             }
         }
@@ -3051,30 +3416,20 @@ final class AppState: ObservableObject {
                 print("[AppState] KMS sweep: processed=\(stats.processed) stored=\(stats.stored) acked=\(stats.acknowledged) decryptFailed=\(stats.decryptFailed) ackFailed=\(stats.ackFailed)")
             }
             // 2026-05-06 session-renewal Phase 2 — wire the Ed25519
-            // device-bound silent re-auth fallback into the REST
-            // client. From now on a 401 from /auth/refresh (or a
-            // missing refresh token) cascades to /auth/device-renew
-            // before BCryptoError.unauthorized surfaces. Mirror of the
-            // Android SessionRenewerImpl Phase-1+Phase-2 cascade.
-            let renewClient = BCryptoDeviceRenewClient(
-                rest: provider.getRestClient(),
-                deviceKeyManager: manager
-            )
-            provider.getRestClient().setDeviceRenewFallback {
-                // deviceId is persisted by AuthService at login under
-                // "com.qaudion.auth.device_id". Read it lazily so a
-                // log-in / log-out cycle picks up the new value.
-                guard let did = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
-                      !did.isEmpty else {
-                    throw BCryptoError.unauthorized
-                }
-                let fresh = try await renewClient.renew(deviceId: did)
-                // Persist the rotated tokens so the next cold-launch
-                // does not replay a stale refresh token.
-                UserDefaults.standard.set(fresh.accessToken, forKey: "com.qaudion.auth.token")
-                UserDefaults.standard.set(fresh.refreshToken, forKey: "com.qaudion.auth.refresh_token")
-                return (accessToken: fresh.accessToken, refreshToken: fresh.refreshToken)
-            }
+            // device-bound silent re-auth fallback into the REST client.
+            // From now on a 401 from /auth/refresh (or a missing refresh
+            // token) cascades to /auth/device-renew before
+            // BCryptoError.unauthorized surfaces. Mirror of the Android
+            // SessionRenewerImpl Phase-1+Phase-2 cascade.
+            //
+            // FORCED-QR FIX (2026-06-24): this now delegates to the shared
+            // `wireDeviceRenewFallback(on:)` helper (which the cold-start
+            // launch path also calls at provider-build time). Idempotent —
+            // `setDeviceRenewFallback` just overwrites the closure. Also
+            // (re)arms the proactive-refresh timer now that the live
+            // provider + device credential are confirmed available.
+            wireDeviceRenewFallback(on: provider)
+            scheduleProactiveTokenRefresh()
         } catch {
             print("[AppState] KMS sweep failed: \(error)")
         }
