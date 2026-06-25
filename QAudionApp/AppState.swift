@@ -1211,16 +1211,31 @@ final class AppState: ObservableObject {
             },
             onIncomingCall: { [weak self] payload in
                 guard let self = self else { return }
-                await self.callKit?.reportIncomingCall(
-                    uuid: payload.callId,
-                    callerName: payload.callerName,
-                    hasVideo: payload.hasVideo
-                )
+                // Set activeCallKitId BEFORE reporting to CallKit so a racing WS
+                // `call_incoming` for the SAME call sees it already registered and
+                // dedups (skips its own report) — closes the window that produced
+                // the intermittent "seconda chiamata" double dialer in chiaro.
                 await MainActor.run {
                     self.activeCallKitId = payload.callId
                     self.callContactId = payload.callerId
                     self.isVideoCall = payload.hasVideo
                 }
+                await self.callKit?.reportIncomingCall(
+                    uuid: payload.callId,
+                    callerName: payload.callerName,
+                    hasVideo: payload.hasVideo
+                )
+            },
+            onMalformedPush: { [weak self] in
+                guard let self = self else { return }
+                // A VoIP push arrived that we cannot turn into a call (malformed /
+                // non-call payload). We MUST still report a call to CallKit to
+                // satisfy the PushKit contract, then end it immediately — otherwise
+                // iOS terminates the app and throttles future VoIP pushes, which
+                // silently makes the device unreachable for incoming calls.
+                let placeholder = UUID()
+                await self.callKit?.reportIncomingCall(uuid: placeholder, callerName: "Q-Audion", hasVideo: false)
+                await self.callKit?.reportCallEnded(uuid: placeholder, reason: .failed)
             }
         )
         #endif
