@@ -118,7 +118,18 @@ final class AppLockService: ObservableObject {
     /// - Parameter callState: the current `AppState.callState`. Pass it
     ///   from the scene-phase handler. `nil` = caller couldn't supply
     ///   state (legacy path, see TODO below).
-    func bypassForCall(callState: CallState? = nil) {
+    func bypassForCall(callState: CallState? = nil, answered: Bool = false) {
+        // An EXPLICIT CallKit answer (user accepted) may suppress the lock even
+        // before the handshake reaches .active/.encrypted, so a PushKit-woken,
+        // just-answered call surfaces the Q-Audion in-call screen (securing →
+        // SAS) instead of the biometric lock. `answered` is driven by
+        // AppState.callWasAnswered (answeredCallKitId), set ONLY in onAnswerCall —
+        // a mere incoming ring never trips it, so an unanswered call still holds
+        // the lock (SECURITY M-25/L-7 preserved).
+        if answered {
+            isLocked = false
+            return
+        }
         if let callState = callState {
             // Only an answered/established call may suppress the lock.
             guard callState == .active || callState == .encrypted else { return }

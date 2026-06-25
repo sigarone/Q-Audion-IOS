@@ -103,7 +103,10 @@ struct QAudionApp: App {
             // holding the device could dismiss the lock by triggering an
             // incoming call without answering it.
             if appState.isInCall {
-                lockService.bypassForCall(callState: appState.callState)
+                lockService.bypassForCall(
+                    callState: appState.callState,
+                    answered: appState.callWasAnswered
+                )
             } else {
                 lockService.handleForeground()
             }

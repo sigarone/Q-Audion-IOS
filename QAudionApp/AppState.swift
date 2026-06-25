@@ -491,6 +491,14 @@ final class AppState: ObservableObject {
     /// has actually started, so `consumeDeferredAnswerIfReady` runs exactly
     /// once. Reset in the call-reset block alongside `answeredCallKitId`.
     private var incomingAudioStarted = false
+    /// True once the user has explicitly answered the current incoming call via
+    /// CallKit (`onAnswerCall` sets `answeredCallKitId`). The app-lock scene gate
+    /// uses this to drop the biometric lock the MOMENT the call is answered —
+    /// even before the PQC handshake reaches `.encrypted` — so a PushKit-woken,
+    /// just-answered call surfaces the Q-Audion in-call screen (securing → SAS)
+    /// instead of the lock screen. A mere ring never sets it, so the lock still
+    /// holds for an unanswered incoming call (SECURITY M-25/L-7 preserved).
+    var callWasAnswered: Bool { answeredCallKitId != nil }
     /// In-app ringtone timer (fires every 3 s while callState == .ringing
     /// and the native CallKit UI is suppressed).
     private var ringtoneTimer: DispatchSourceTimer?
