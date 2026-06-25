@@ -974,10 +974,23 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         lastPathReconnectAt = now
         lock.unlock()
 
+        // W-PATHFLAP 2026-06-25: do NOT forceReconnect() on a path edge.
+        // On iPad / iOS-26.5 the path reported "network-recovered" every ~3 s
+        // (exactly periodic, WiFi, no VPN). Each forceReconnect() spawned a fresh
+        // URLSession socket whose setup itself re-triggered NWPathMonitor →
+        // another "network-recovered" → forceReconnect: a SELF-PERPETUATING ~3 s
+        // reconnect storm. The 15 s debounce + hasLiveAuthenticatedTask bail could
+        // NOT stop it because the cycle never lets the socket stay live and keeps
+        // re-arming the edge → 97% packet loss, dropped PQC/ACCEPT frames, the
+        // ACCEPT lost so one direction never reached SAS, dead calls (device
+        // reports on v1.0.677 AND v1.0.678). The reconnect storm was APP-amplified,
+        // not a genuine network change. Recovery of a genuinely dead socket is
+        // owned by the ping/pong staleness detector (pongTimeout) +
+        // willEnterForeground + the send()/ensureAuthenticated() reconnect paths —
+        // none of which self-loop. The path handler now ONLY retunes adaptive ping
+        // timing (applyAdaptiveTiming, above) and tracks state for logging.
         let reason: String = networkRecovered ? "network-recovered" : "transport-switch"
-        let line: String = "[BCryptoWS] path change (" + reason + ") → fast forceReconnect()"
-        print(line)
-        forceReconnect()
+        print("[BCryptoWS] path edge (" + reason + ") — adaptive-timing only, NOT reconnecting (ping/pong owns recovery)")
     }
 
     /// Map the current primary transport to (pingInterval, pongTimeout) and,
