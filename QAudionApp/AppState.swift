@@ -487,6 +487,10 @@ final class AppState: ObservableObject {
     /// `NSException` (SIGABRT). Tracking the answered UUID makes the answer
     /// idempotent. Reset to nil on call teardown.
     private var answeredCallKitId: UUID?
+    /// Cold-start answer race — set true once the deferred incoming-call audio
+    /// has actually started, so `consumeDeferredAnswerIfReady` runs exactly
+    /// once. Reset in the call-reset block alongside `answeredCallKitId`.
+    private var incomingAudioStarted = false
     /// In-app ringtone timer (fires every 3 s while callState == .ringing
     /// and the native CallKit UI is suppressed).
     private var ringtoneTimer: DispatchSourceTimer?
@@ -1111,29 +1115,15 @@ final class AppState: ObservableObject {
                             attrs: ["path": "answer-fastpath-w521"]
                         )
                     }
-                    // W450: boot audio pipeline for incoming call.
-                    // Outgoing calls do this inside startCall(contactId:) →
-                    // callService.startCall(engine:contactId:). For incoming
-                    // calls that path is never taken (isInCall guard blocks it).
-                    // We must start capture+playback here, when the user
-                    // explicitly accepts, so there is actual audio in the call.
-                    self.startIncomingCallAudioOnAnswer()
-                    // SAS-fix: tell the CALLER we answered. On the WS-relay path
-                    // (iOS↔iOS — no WebRTC controller) NOTHING else emits
-                    // call_answer (sendCallAnswer lives only in the WebRTC
-                    // controller), so the caller stays stuck in .ringing and its
-                    // SAS screen never completes ("il chiamante non completa mai
-                    // la schermata SAS"). A bare call_answer (empty SDP) makes the
-                    // caller's W528 handler advance .ringing → .encrypted and
-                    // render the 6 SAS words. WebRTC calls already send their own
-                    // SDP-bearing call_answer from the controller — skip those to
-                    // avoid a duplicate. The bound incoming call_id is attached by
-                    // sendCallAnswer (currentCallId), so the server routes it.
-                    if self.webRtcController == nil,
-                       let peer = self.callContactId,
-                       let calling = self.liveProvider?.callingApi {
-                        Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
-                    }
+                    // W450 + cold-start answer race: boot the audio pipeline and
+                    // notify the caller. Routed through consumeDeferredAnswerIfReady
+                    // so that when the user answers a PushKit-woken call BEFORE the
+                    // cold-start WS reconnect + SDP redelivery has built the
+                    // responder integration, the answer is latched and replayed the
+                    // moment the machinery is ready (WS call_incoming / SAS-ready)
+                    // instead of being silently lost. When the machinery is already
+                    // up (normal path) it runs immediately, identical to before.
+                    self.consumeDeferredAnswerIfReady("onAnswerCall")
                 }
             }
             provider.onEndCall = { [weak self] uuid in
@@ -2035,6 +2025,12 @@ final class AppState: ObservableObject {
                                 hasVideo: vid
                             )
                         }
+                        // Cold-start answer race — the responder integration +
+                        // callContactId are now set (engine was ready since init).
+                        // If the user already answered the PushKit-woken call
+                        // during the WS-reconnect gap, start its audio now rather
+                        // than letting the latched answer expire.
+                        self.consumeDeferredAnswerIfReady("ws-call-incoming")
                     }
                 }
             }
@@ -3888,6 +3884,10 @@ final class AppState: ObservableObject {
                 self.callService.installRelaySealers(
                     sessionKey: sessionKey, callId: cid,
                     srtpDirKeyV1: useDir, selfIsRoleA: roleA)
+                // Cold-start answer race — the relay session key is now live, so
+                // engine + integration + contactId are all ready. If the user
+                // already answered during the PushKit cold-start gap, replay it.
+                self.consumeDeferredAnswerIfReady("relay-session-ready")
             }
         }
         // W389: forward the ML-KEM secret to the broker. peerId is the
@@ -4085,6 +4085,53 @@ final class AppState: ObservableObject {
         // Speaker override is now in CallService.handleAudioSessionActivated()
         // — calling it here (before the session is active) was silently ignored
         // by iOS, leaving audio on the earpiece (log: out=Receiver).
+    }
+
+    /// Cold-start answer race (device report 2026-06-25, call 626ad9af): a
+    /// PushKit-woken incoming call rings via the native CallKit UI ~20 s before
+    /// the app finishes its cold start (WS reconnect + buffered call_offer SDP
+    /// redelivery). If the user answers in that gap, `onAnswerCall` runs while
+    /// `engine` / `responderCallIntegration` / `callContactId` are still being
+    /// set up, so `startIncomingCallAudioOnAnswer` bails ("audio not started"),
+    /// the answer is silently lost, `callState` stays `.idle` (no SAS screen)
+    /// and the call times out (endCall state=idle) — exactly what the device
+    /// logs showed (A36 computed SAS from the handshake, iOS never connected).
+    ///
+    /// Fix: `onAnswerCall` latches the answer (`answeredCallKitId`) and this
+    /// idempotent method DEFERS the audio start + state advance until the call
+    /// machinery is ready. Called from `onAnswerCall` (immediate / normal
+    /// path), the WS `call_incoming` handler (integration just built), and the
+    /// relay-session-ready / SAS-ready observers (PQC key live). The
+    /// `incomingAudioStarted` flag guarantees it runs exactly once.
+    @MainActor
+    private func consumeDeferredAnswerIfReady(_ trigger: String) {
+        guard answeredCallKitId != nil else { return }      // user hasn't answered
+        guard !incomingAudioStarted else { return }          // already started once
+        guard engine != nil,
+              responderCallIntegration != nil,
+              let peer = callContactId else {
+            print("[AppState] deferred answer not ready yet, will retry: \(trigger)")
+            return
+        }
+        incomingAudioStarted = true
+        // Advance the state machine for the native-UI / cold-start case where
+        // callState was .idle (background) or .ringing (foreground) at answer.
+        // onAnswerCall only advanced from .ringing and the sasReady observer
+        // only from .active/.connecting, so a background-answered call would
+        // otherwise never reach .encrypted (no SAS screen).
+        if callState != .encrypted { callState = .active }
+        if callSasKeySource == .mlKem { callState = .encrypted }
+        // Start mic capture + speaker playback on the existing responder
+        // integration (reuses the negotiated PQC session key).
+        startIncomingCallAudioOnAnswer()
+        // Tell the caller we answered. The WS-relay path (no WebRTC controller)
+        // has no other call_answer emitter, so the caller would stay stuck in
+        // .ringing without this. WebRTC calls send their own SDP-bearing
+        // call_answer from the controller — skip to avoid a duplicate.
+        if webRtcController == nil, let calling = liveProvider?.callingApi {
+            Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
+        }
+        print("[AppState] deferred answer consumed: \(trigger)")
     }
 
     /// W77: public hook to trigger the first-contact PSK handshake with a
@@ -5029,6 +5076,7 @@ final class AppState: ObservableObject {
         incomingCallerName = ""
         activeCallKitId = nil
         answeredCallKitId = nil  // Bug A — re-arm the idempotent-answer guard for the next call
+        incomingAudioStarted = false  // re-arm the deferred-answer consume for the next call
         // earbud-relay-v1 — drop the one-shot counterparty state so the
         // next earbud call starts a fresh responder (fresh FW-H7 counter).
         earbudCounterparty.reset()
@@ -5770,6 +5818,10 @@ extension AppState {
                         ]
                     )
                 }
+                // Cold-start answer race — PQC key is now live. If the callee
+                // answered the PushKit-woken call before the handshake finished,
+                // this is the point its audio + .encrypted advance happen.
+                self.consumeDeferredAnswerIfReady("sasReady")
             }
         }
     }
