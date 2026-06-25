@@ -851,8 +851,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
                 switch verdict {
                 case .abort(let code):
-                    print("[QAudionCallIntegration] OFFER verify ABORT code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — dropping, no ACCEPT emitted")
-                    throw IntegrationError.handshakeAborted(code: code)
+                    // W-NOBRICK (user directive 2026-06-25): a handshake-sig verdict
+                    // must NEVER hard-drop the call — "segnala un cambiamento, non
+                    // droppare", especially in debug. The SAS (6 words from the
+                    // session key) is the REAL anti-MITM gate; the Ed25519 identity
+                    // pin is advisory. So on identity_key_mismatch / sig_invalid we
+                    // WARN loudly, re-pin the peer's CURRENT bundle key
+                    // (trust-on-change, so the next call doesn't perpetually re-warn
+                    // after a legit re-pair / account churn), and PROCEED to emit the
+                    // ACCEPT. The user verifies the SAS to catch a real MITM. (Was:
+                    // throw → no ACCEPT → call bricked on every stale pin.)
+                    print("[QAudionCallIntegration] ⚠️ OFFER verify code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — NOT dropping; proceeding, VERIFY THE SAS")
+                    if let sikB64 = bundle.signerIdentityKey,
+                       let bundleKey = Data(base64Encoded: sikB64), bundleKey.count == 32 {
+                        applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: bundleKey, v4Capable: false)
+                        if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: bundleKey) {
+                            verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
+                        }
+                    }
                 case .authenticated(let tofuPinKey, let v4Capable):
                     applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
                     // The signed OFFER's binding the ACCEPT will carry. Rebuilt
@@ -1144,8 +1160,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
                 switch verdict {
                 case .abort(let code):
-                    print("[QAudionCallIntegration] ACCEPT verify ABORT code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — NOT initialising session")
-                    return
+                    // W-NOBRICK (user directive 2026-06-25): never hard-drop on a
+                    // handshake-sig verdict. Warn, re-pin the peer's current key
+                    // (trust-on-change), and PROCEED to initialise the session — the
+                    // SAS is the real anti-MITM gate. (Was: return → no session → call
+                    // bricked after account churn / re-pair left a stale pin.)
+                    print("[QAudionCallIntegration] ⚠️ ACCEPT verify code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — NOT aborting; proceeding, VERIFY THE SAS")
+                    if let sikB64 = bundle.signerIdentityKey,
+                       let bundleKey = Data(base64Encoded: sikB64), bundleKey.count == 32 {
+                        applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: bundleKey, v4Capable: false)
+                    }
                 case .authenticated(let tofuPinKey, let v4Capable):
                     applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
                 case .proceedUnsignedWarn(let reason):
