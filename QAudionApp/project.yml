@@ -35,6 +35,11 @@ targets:
           - "*.html"
           - "*.yml"
           - project.yml
+          # Bundled CallKit ringtone — added as an explicit resource below so
+          # XcodeGen places it in Copy-Bundle-Resources unambiguously (same
+          # rationale as PrivacyInfo.xcprivacy). Excluded from the recursive
+          # `sources:` enumeration to avoid a double "Multiple commands produce".
+          - "*.caf"
           # PrivacyInfo.xcprivacy is added as an explicit resource below
           # so XcodeGen places it in the Copy-Bundle-Resources phase. We
           # exclude it from the recursive `sources:` enumeration to keep
@@ -104,6 +109,8 @@ targets:
         embed: true
     resources:
       - path: Assets.xcassets
+      # Custom incoming-call ringtone (CallKit cfg.ringtoneSound). Bundle root.
+      - path: Resources/qaudion_ringtone.caf
       # Apple privacy manifest. Placed at the root of the app bundle by
       # XcodeGen's Copy-Bundle-Resources phase. Required to silence
       # ITMS-91061 ("Missing privacy manifest") on uploads after May 1

@@ -2,6 +2,7 @@ import Foundation
 #if canImport(CallKit) && os(iOS)
 @preconcurrency import CallKit
 import AVFoundation
+import UIKit
 
 public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegate, @unchecked Sendable {
 
@@ -46,7 +47,16 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // provider(_:perform:CXSetHeldCallAction). Since we implement
         // setOnHold() via CXCallController, hold is available but
         // signaling-layer hold/resume is a no-op — acceptable.
-        cfg.ringtoneSound = nil
+        //
+        // Custom ringtone: the bundled "qaudion_ringtone.caf" (Copy-Bundle-
+        // Resources, see project.yml) plays instead of the default iOS ringtone
+        // so an incoming Q-Audion call is audibly ours. iOS falls back to the
+        // system ringtone automatically if the file is ever missing.
+        cfg.ringtoneSound = "qaudion_ringtone.caf"
+        // Brand the native call UI with the Q-Audion lock glyph (template image
+        // from Assets.xcassets/CallKitGlyph — alpha defines the shape, tinted by
+        // the system). Best-effort: a nil/absent asset just leaves the default.
+        cfg.iconTemplateImageData = UIImage(named: "CallKitGlyph")?.pngData()
         self.provider = CXProvider(configuration: cfg)
         self.controller = CXCallController()
         super.init()
@@ -59,7 +69,10 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: callerName)
         update.hasVideo = hasVideo
-        update.localizedCallerName = callerName
+        // Tag the native (cleartext) call UI as an encrypted Q-Audion call. The
+        // caller name itself is resolved from the LOCAL address book by the call
+        // sites (PushKit + WS), so this only appends the security marker.
+        update.localizedCallerName = callerName + " · 🔒 Cifrata"
         do {
             try await provider.reportNewIncomingCall(with: uuid, update: update)
         } catch {

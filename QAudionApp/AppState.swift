@@ -1213,14 +1213,23 @@ final class AppState: ObservableObject {
                 // `call_incoming` for the SAME call sees it already registered and
                 // dedups (skips its own report) — closes the window that produced
                 // the intermittent "seconda chiamata" double dialer in chiaro.
-                await MainActor.run {
-                    self.activeCallKitId = payload.callId
-                    self.callContactId = payload.callerId
-                    self.isVideoCall = payload.hasVideo
+                // Resolve the caller name from the LOCAL address book (rubrica)
+                // here — the push payload's caller_name is server-supplied — so
+                // the native UI shows the same rubrica name the WS path resolves.
+                // Body extracted to a method (CLAUDE.md §13/§14: keep the nested
+                // MainActor.run closure to a single call to avoid type-checker
+                // timeouts).
+                let display: String = await MainActor.run {
+                    self.prepareIncomingPushCall(
+                        callId: payload.callId,
+                        callerId: payload.callerId,
+                        hasVideo: payload.hasVideo,
+                        fallbackName: payload.callerName
+                    )
                 }
                 await self.callKit?.reportIncomingCall(
                     uuid: payload.callId,
-                    callerName: payload.callerName,
+                    callerName: display,
                     hasVideo: payload.hasVideo
                 )
                 // CRITICAL: bring the signalling WS up NOW so the buffered
@@ -4178,6 +4187,45 @@ final class AppState: ObservableObject {
         } else {
             connectPersistentSocket()
         }
+    }
+
+    /// Resolve the incoming-call display name for the native CallKit UI,
+    /// preferring the LOCAL address book (rubrica) over the server-supplied push
+    /// name — mirrors the WS `call_incoming` resolution so a PushKit-woken call
+    /// shows "Mario Rossi" instead of the raw caller id. The encrypted-call
+    /// "Cifrata" tag is appended by CallKitProvider.reportIncomingCall (native UI
+    /// only), so this returns just the clean name.
+    /// PushKit incoming-call setup, extracted from the `onIncomingCall` closure
+    /// so the nested `MainActor.run` body is a single call (CLAUDE.md §13/§14
+    /// type-checker hygiene). Stamps the active-call ids and returns the native
+    /// CallKit display name (rubrica-resolved).
+    @MainActor
+    private func prepareIncomingPushCall(callId: UUID, callerId: String, hasVideo: Bool, fallbackName: String) -> String {
+        activeCallKitId = callId
+        callContactId = callerId
+        isVideoCall = hasVideo
+        return callKitDisplayName(callerId: callerId, fallback: fallbackName)
+    }
+
+    @MainActor
+    private func callKitDisplayName(callerId: String, fallback: String?) -> String {
+        // Tier 1: local rubrica (cached snapshot) by userId.
+        if let match = cachedContacts.first(where: { $0.userId == callerId }),
+           !match.displayName.isEmpty {
+            return match.displayName
+        }
+        // Tier 2: server-supplied name (push caller_name), sanitised. A bare
+        // numeric value is the PBX extension → format as "Int. NNN".
+        let san = StringSanitiser.displayName(fallback, fallback: "")
+        if !san.isEmpty {
+            if san.allSatisfy({ $0.isNumber }) { return "Int. " + san }
+            return san
+        }
+        // Tier 3: never show the raw 36-char UUID — truncate head…tail.
+        if callerId.count > 12 {
+            return String(callerId.prefix(8)) + "…" + String(callerId.suffix(4))
+        }
+        return callerId
     }
 
     /// W77: public hook to trigger the first-contact PSK handshake with a
