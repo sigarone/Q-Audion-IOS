@@ -1235,7 +1235,7 @@ final class AppState: ObservableObject {
                 // silently makes the device unreachable for incoming calls.
                 let placeholder = UUID()
                 await self.callKit?.reportIncomingCall(uuid: placeholder, callerName: "Q-Audion", hasVideo: false)
-                await self.callKit?.reportCallEnded(uuid: placeholder, reason: .failed)
+                await self.callKit?.reportCallEnded(uuid: placeholder, reason: .failed("malformed-voip-push"))
             }
         )
         #endif
