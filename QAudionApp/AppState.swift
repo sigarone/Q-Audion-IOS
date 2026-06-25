@@ -1215,6 +1215,14 @@ final class AppState: ObservableObject {
                     callerName: payload.callerName,
                     hasVideo: payload.hasVideo
                 )
+                // CRITICAL: bring the signalling WS up NOW so the buffered
+                // call_offer redelivery + PQC handshake can flow (see
+                // reviveSignalingSocket). Kicked in a detached Task so PushKit's
+                // completion() — already satisfied by the reportIncomingCall above —
+                // fires promptly; the revive runs while the native UI rings.
+                Task { @MainActor [weak self] in
+                    await self?.reviveSignalingSocket()
+                }
             },
             onMalformedPush: { [weak self] in
                 guard let self = self else { return }
@@ -4132,6 +4140,36 @@ final class AppState: ObservableObject {
             Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
         }
         print("[AppState] deferred answer consumed: \(trigger)")
+    }
+
+    /// Revive the signalling WebSocket on demand. Mirrors the
+    /// `UIApplication.willEnterForeground` reconnect logic so a PushKit
+    /// incoming-call wake gets the SAME socket recovery a manual foreground does.
+    ///
+    /// CRITICAL (device logs 2026-06-25, call c6cdbed4): a PushKit VoIP push
+    /// wakes the app specifically to take a call, but the signalling socket is
+    /// almost always DOWN at that moment — the server fell back to a push BECAUSE
+    /// the callee's WS was offline. The PushKit handler used to report the call to
+    /// CallKit and touch nothing else, so the buffered call_offer redelivery + the
+    /// PQC handshake never arrived: the native UI rang, the answer bound nothing,
+    /// and the call hung (no SAS, no audio) until the user MANUALLY foregrounded
+    /// the app minutes later (finally firing willEnterForeground → reconnect, long
+    /// after the server's buffered-offer TTL had expired → "offer expired; not
+    /// redelivering"). Kicking this from the push handler brings the socket up
+    /// immediately so the OFFER + handshake flow while the caller is still ringing.
+    @MainActor
+    private func reviveSignalingSocket() async {
+        guard isAuthenticated else { return }
+        if let live = liveProvider {
+            if live.persistentConnection.state == .disconnected {
+                liveProvider = nil
+                connectPersistentSocket()
+            } else {
+                _ = await live.persistentConnection.ensureAuthenticated(timeoutSec: 10)
+            }
+        } else {
+            connectPersistentSocket()
+        }
     }
 
     /// W77: public hook to trigger the first-contact PSK handshake with a
