@@ -172,7 +172,12 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// hammer: a flapping interface (WiFi roaming, elevator) can emit many path
     /// updates per second; we kick at most one path-driven reconnect per window.
     private var lastPathReconnectAt: TimeInterval = 0
-    private let pathReconnectDebounceSec: TimeInterval = 2.0
+    // 15 s (was 2 s): a VPN / flaky path can storm NWPathMonitor with
+    // satisfied↔unsatisfied edges every ~3 s. With the live-task bail in the
+    // handler this is belt-and-suspenders, but it also caps a non-live reconnect
+    // to at most one per 15 s so the socket has time to fully (re)authenticate +
+    // go fresh between attempts instead of being re-torn-down mid-handshake.
+    private let pathReconnectDebounceSec: TimeInterval = 15.0
 
     public init(config: BackendConfig) {
         self.config = config
@@ -948,14 +953,22 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         if sinceLastKick < pathReconnectDebounceSec { return }
 
         // CRITICAL anti-flap: a "recovered"/"switched" path event must NOT tear
-        // down a socket that is ALREADY authenticated and fresh. On VPN/Tor/
+        // down a socket that still has a LIVE authenticated task. On VPN/Tor/
         // flaky-WiFi setups iOS NWPathMonitor reports satisfied↔unsatisfied every
-        // few seconds; forceReconnect()ing a healthy socket on each "recovery"
-        // produced a ~3 s reconnect storm (logged as repeated
-        // "path change (network-recovered) → fast forceReconnect()") that churned
-        // the device "offline" and dropped in-flight call-setup/PQC-handshake
-        // frames. Only reconnect when the socket genuinely needs it (down/stale).
-        if isFreshlyAuthenticated() { return }
+        // few seconds; forceReconnect()ing on each "recovery" produced a ~3 s
+        // reconnect storm — device report 2026-06-25: "path change
+        // (network-recovered) → fast forceReconnect()" EVERY ~3 s for an entire
+        // iOS↔Android call → 97% packet loss, repeated "M-15 unseal failed/replay
+        // — dropped", the ACCEPT bundle lost so one direction never reached SAS,
+        // and no audio either way. The earlier `isFreshlyAuthenticated()` bail was
+        // NOT enough: the storm itself keeps the socket non-fresh (no inbound
+        // arrives between teardowns) → the bail never fires → vicious cycle. Bail
+        // on the WEAKER `hasLiveAuthenticatedTask()` instead: if the task is still
+        // authenticated + non-nil, LEAVE IT ALONE — a genuinely dead / zombie
+        // socket is recovered by the ping/pong staleness detector (pongTimeout)
+        // and by AppState.willEnterForeground, NOT by churning it on every phantom
+        // path edge. Mirrors Android KeepAlive (never force-reconnect a live socket).
+        if hasLiveAuthenticatedTask() { return }
 
         lock.lock()
         lastPathReconnectAt = now
