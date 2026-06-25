@@ -83,7 +83,25 @@ SERVICE_LOG_LINES = 50  # also fetch last N journalctl lines for context
 def ssh_connect():
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)
+    # Prefer SSH KEY auth (bcrypto_vps_ed25519). A successful key auth sends NO
+    # password, so it can NEVER trip fail2ban's sshd jail — which is exactly what
+    # locked the operator IP out (a failed password attempt got us banned, and
+    # "we are the operators, we must never be banned"). Password stays only as a
+    # last-resort fallback. Use the env override QAUDION_VPS_KEY if set.
+    key_path = os.environ.get("QAUDION_VPS_KEY") or os.path.expanduser(
+        "~/.claude/bin/bcrypto_vps_ed25519")
+    if os.path.exists(key_path):
+        try:
+            client.connect(VPS_HOST, username=VPS_USER, key_filename=key_path,
+                           timeout=15, look_for_keys=False, allow_agent=False)
+            return client
+        except Exception as e:  # noqa: BLE001 — fall back to password on any key error
+            print(f"[ssh] key auth failed ({e}); falling back to password",
+                  file=sys.stderr)
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15,
+                   look_for_keys=False, allow_agent=False)
     return client
 
 
