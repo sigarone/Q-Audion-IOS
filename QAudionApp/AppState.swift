@@ -4191,7 +4191,10 @@ final class AppState: ObservableObject {
     /// UI was actually shown — releaseFromSystemUI no-ops otherwise.
     @MainActor
     private func dismissNativeCallUIAfterAnswer(_ uuid: UUID) {
-        guard FeatureFlags.bool("ios_callkit_wake_only", false) else { return }
+        // Default ON (the user chose CallKit-wake-only). The remote flag in the
+        // control-room flags.json can still force it OFF (set false) as an
+        // instant kill-switch if it regresses audio — no rebuild needed.
+        guard FeatureFlags.bool("ios_callkit_wake_only", true) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self = self,
                   let provider = self.callKit as? CallKitProvider else { return }
