@@ -286,6 +286,19 @@ public final class AudioProcessingPipeline {
     /// read `inputNode.isVoiceProcessingEnabled`.
     private var voiceProcessingActive = false
 
+    /// True once `enableVoiceProcessing` has turned VP-IO ON for the current
+    /// engine. AudioCapture reads this to decide whether to run the VP-IO
+    /// input-pull graph + starve watchdog (W-AEC-FIX).
+    public var voiceProcessingIsActive: Bool { voiceProcessingActive }
+
+    /// W-AEC-FIX watchdog escape hatch. When AudioCapture detects the iPad
+    /// VP-IO input-tap starve (W574f) — VP-IO on, but the tap callback never
+    /// delivers a frame — it sets this `true` and restarts the engine; the next
+    /// `enableVoiceProcessing` then force-skips VP-IO so the mic TX is alive
+    /// (echo remains, but a working call beats a dead mic). Overrides EVERYTHING
+    /// including the speaker-route force. Reset per call by `AudioCapture.stop()`.
+    public var forceDisableVoiceProcessing: Bool = false
+
     public func enableVoiceProcessing(on engine: AVAudioEngine) throws {
         let inputNode = engine.inputNode
 
@@ -294,12 +307,21 @@ public final class AudioProcessingPipeline {
         // toggling the in-call speaker button re-runs this decision.
         // W574f — EXCLUDE iPad: VP-IO kills the iPad tap (tx_enc=0). iPad
         // keeps no-VP-IO on speaker (echo, but working TX). iPhone only.
+        // W574c — speaker route forces AEC. W-AEC-FIX (2026-06-25): iPad is NO
+        // LONGER excluded. The VP-IO input-pull graph + starve watchdog in
+        // AudioCapture make the input tap survive VP-IO on the iPad speaker
+        // route (and fall back safely to no-VP-IO if it still starves), so we
+        // can finally cancel the iPad speakerphone echo instead of disabling AEC.
         let speakerRoute = enableAecOnSpeakerRoute
-            && !Self.isPad
             && Self.currentRouteHasBuiltInSpeaker()
 
         let shouldEnable: Bool
-        if speakerRoute {
+        if forceDisableVoiceProcessing {
+            // Watchdog fallback: a prior start in this call starved the input tap
+            // with VP-IO on — keep VP-IO OFF this session so the mic transmits
+            // (echo returns, but a working call beats a dead mic).
+            shouldEnable = false
+        } else if speakerRoute {
             shouldEnable = true
         } else if let override = voiceProcessingOverride {
             shouldEnable = override

@@ -19,6 +19,13 @@ public final class AudioCapture {
     private var playerNode: AVAudioPlayerNode?
     private var playFormat: AVAudioFormat?
     private var isRunning = false
+    // W-AEC-FIX — VP-IO input-pull sink: when Voice-Processing I/O is active the
+    // inputNode tap starves on iPad + builtInSpeaker unless the mic is actively
+    // pulled through the graph; this muted mixer is that pull (see start()).
+    private var inputSink: AVAudioMixerNode?
+    // W-AEC-FIX — set true by the tap callback on its first delivered buffer.
+    // The starve watchdog checks it to detect the VP-IO "tap never fires" case.
+    private var firstFrameReceived = false
     private let audioPipeline: AudioProcessingPipeline
     // W475 — re-chunking accumulator. `installTap` delivers buffers of
     // an arbitrary size; the Opus encoder needs EXACTLY bytesPerFrame.
@@ -66,6 +73,7 @@ public final class AudioCapture {
         // accumulator so a stale partial frame from a prior call or a
         // pre-interruption session can't desync the frame boundaries.
         pcmAccumulator = Data()
+        firstFrameReceived = false  // W-AEC-FIX — re-arm the VP-IO starve watchdog
 
         // 1. Configure AVAudioSession for VoIP (hardware AEC, AGC, NS)
         if !audioPipeline.isActive {
@@ -113,9 +121,29 @@ public final class AudioCapture {
         let tapFormat: AVAudioFormat = (nodeFormat.channelCount > 0 && nodeFormat.sampleRate > 0)
             ? nodeFormat
             : format
+
+        // W-AEC-FIX — VP-IO input-pull. When Voice-Processing I/O is active the
+        // inputNode tap STARVES on iPad + builtInSpeaker (the duplex VP-IO unit
+        // doesn't pull the mic when the inputNode has no downstream consumer —
+        // only a tap; "callback never fires", W574f). Route inputNode → a MUTED
+        // sink mixer → mainMixer so the engine actively pulls the mic (keeping
+        // the tap alive) with NO local loopback (sink outputVolume = 0; the only
+        // thing reaching the speaker is the remote audio via the player node,
+        // which is exactly the VP-IO AEC reference). Gated on VP-IO active — the
+        // no-VP-IO path already taps fine and is left byte-for-byte unchanged.
+        if audioPipeline.voiceProcessingIsActive {
+            let sink = AVAudioMixerNode()
+            engine.attach(sink)
+            engine.connect(inputNode, to: sink, format: tapFormat)
+            sink.outputVolume = 0
+            engine.connect(sink, to: engine.mainMixerNode, format: tapFormat)
+            self.inputSink = sink
+        }
+
         let pipeline = self.audioPipeline
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
+            self.firstFrameReceived = true  // W-AEC-FIX — VP-IO tap is delivering
             // W574: VP-IO may deliver Float32 frames even though we requested Int16.
             // The tap bufferSize hint is also overridden by VP-IO (tied to hardware I/O
             // duration per W475). Guard on int16ChannelData first; if VP-IO delivered
@@ -178,6 +206,31 @@ public final class AudioCapture {
         // 6. M-12 — observe AVAudioSession interruptions so we can
         //    pause on .began and resume on .ended (.shouldResume).
         registerInterruptionObserver()
+
+        // 7. W-AEC-FIX — if VP-IO is active, arm the starve watchdog. If the
+        //    input tap never delivers a buffer within the window (the iPad
+        //    VP-IO + builtInSpeaker starve, W574f), restart WITHOUT VP-IO so the
+        //    mic transmits. Worst case = the pre-fix behaviour (echo, working
+        //    TX); never a dead mic. iPhone / no-VP-IO never arms it.
+        if audioPipeline.voiceProcessingIsActive {
+            scheduleVpioStarveWatchdog()
+        }
+    }
+
+    /// W-AEC-FIX — VP-IO input-tap starve detector. The iPad's VP-IO + built-in
+    /// speaker route can leave the inputNode tap callback completely silent
+    /// (W574f). If no buffer has arrived 1.2 s after start, fall back to a
+    /// no-VP-IO restart so the call still has a live mic (echo returns, but a
+    /// working call beats a dead one). One-shot per start(); a delivering tap
+    /// (firstFrameReceived) cancels it.
+    private func scheduleVpioStarveWatchdog() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self, self.isRunning else { return }
+            if self.firstFrameReceived { return }  // VP-IO tap is delivering — keep AEC
+            print("[AudioCapture] W-AEC-FIX: VP-IO input tap starved (no frame in 1.2s) — restarting without VP-IO so the mic transmits")
+            self.audioPipeline.forceDisableVoiceProcessing = true
+            self.restartEngineForRoute()
+        }
     }
 
     /// SINGLE-ENGINE FIX — schedule a decoded PCM frame for playback on the
@@ -311,7 +364,7 @@ public final class AudioCapture {
         playerNode?.stop()
         if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
         engine?.stop()
-        engine = nil; playerNode = nil; playFormat = nil; isRunning = false
+        engine = nil; playerNode = nil; playFormat = nil; inputSink = nil; isRunning = false
         do { try start() }
         catch { print("[AudioCapture] restart after route change failed: \(error.localizedDescription)") }
     }
@@ -337,6 +390,7 @@ public final class AudioCapture {
             engine = nil
             playerNode = nil
             playFormat = nil
+            inputSink = nil
             isRunning = false
         case .ended:
             guard wasInterrupted else { return }
@@ -380,6 +434,10 @@ public final class AudioCapture {
         engine = nil
         playerNode = nil
         playFormat = nil
+        inputSink = nil
+        // W-AEC-FIX — clear the watchdog fallback so the NEXT call retries VP-IO
+        // AEC fresh (a starve will just re-trigger the fallback if it recurs).
+        audioPipeline.forceDisableVoiceProcessing = false
         audioPipeline.deactivateSession()
         isRunning = false
     }
