@@ -295,7 +295,15 @@ final class CallService {
             relaySealerKeyFp = kfp
             let verb: String = hadSealer ? "re-keyed" : "installed"
             let p: String = String(cid.prefix(8))
-            let line: String = "[CallService] W574e: WS-relay PQC sealers " + verb + " (callId=" + p + "… keyfp=" + kfp + ")"
+            // W574x diag — mirror Android's "PQC_DIAG W574x ... dirKeys=.. roleA=.."
+            // so an iOS↔Android call can be compared side-by-side: if iOS dirKeys
+            // disagrees with the peer (one directional, one single) OR the role is
+            // not opposite, the recv key can't open the peer's frames (M-15 unseal
+            // failed/replay). keyfp is the MASTER sessionKey fp (pre-directional) —
+            // if it differs across peers the handshake/callId diverged, not the role.
+            let dirStr: String = srtpDirKeyV1 ? "true" : "false"
+            let roleStr: String = selfIsRoleA ? "A" : "B"
+            let line: String = "[CallService] PQC_DIAG W574x-iOS sealers " + verb + " callId=" + p + "… keyfp=" + kfp + " dirKeys=" + dirStr + " role=" + roleStr
             print(line)
         } catch {
             print("[CallService] W574e: relay sealer install failed: \(error) — relay runs unsealed (Android interop will fail)")
