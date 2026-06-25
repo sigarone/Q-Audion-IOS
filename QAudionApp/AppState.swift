@@ -499,6 +499,12 @@ final class AppState: ObservableObject {
     /// instead of the lock screen. A mere ring never sets it, so the lock still
     /// holds for an unanswered incoming call (SECURITY M-25/L-7 preserved).
     var callWasAnswered: Bool { answeredCallKitId != nil }
+    /// W-WAKEONLY — true once we've dismissed the native CallKit UI after answer
+    /// (CallKit-for-wake-only) and the app self-manages the audio session. When
+    /// set, `onAudioSessionDeactivated` re-asserts the session instead of pausing
+    /// (the call is still live in-app). Reset per call. Gated by the remote flag
+    /// `ios_callkit_wake_only`.
+    private var selfManagedAudioSession = false
     /// In-app ringtone timer (fires every 3 s while callState == .ringing
     /// and the native CallKit UI is suppressed).
     private var ringtoneTimer: DispatchSourceTimer?
@@ -1132,6 +1138,10 @@ final class AppState: ObservableObject {
                     // instead of being silently lost. When the machinery is already
                     // up (normal path) it runs immediately, identical to before.
                     self.consumeDeferredAnswerIfReady("onAnswerCall")
+                    // W-WAKEONLY — dismiss the native CallKit UI so the Q-Audion
+                    // SAS screen becomes the call surface (extracted to a method
+                    // to keep this closure shallow — §13/§14).
+                    self.dismissNativeCallUIAfterAnswer(uuid)
                 }
             }
             provider.onEndCall = { [weak self] uuid in
@@ -1162,7 +1172,17 @@ final class AppState: ObservableObject {
             }
             provider.onAudioSessionDeactivated = { [weak self] in
                 Task { @MainActor in
-                    self?.callService.handleAudioSessionDeactivated()
+                    guard let self = self else { return }
+                    if self.selfManagedAudioSession {
+                        // W-WAKEONLY — CallKit released its audio-session hold
+                        // after we dismissed the system UI, but the call is still
+                        // live in-app. Re-assert the session so mic + speaker keep
+                        // working (do NOT pause as the normal teardown would).
+                        await (self.callKit as? CallKitProvider)?
+                            .reactivateAudioSessionForSelfManagedCall()
+                        return
+                    }
+                    self.callService.handleAudioSessionDeactivated()
                 }
             }
             // W571 — wire up system-reset cleanup. CallKit may reset all calls
@@ -4159,6 +4179,29 @@ final class AppState: ObservableObject {
         print("[AppState] deferred answer consumed: \(trigger)")
     }
 
+    /// W-WAKEONLY — "CallKit for wake only". After the user answers a
+    /// push-woken call, dismiss the native CallKit in-call UI (which iOS keeps
+    /// on top of our window) so the Q-Audion SAS screen becomes the call
+    /// surface. The call stays alive in-app (sealed audio); the app then
+    /// self-manages the audio session. Gated by the remote flag
+    /// `ios_callkit_wake_only` (compiled default OFF) so it can be killed
+    /// server-side without a rebuild if it regresses audio. Delayed ~0.6 s so
+    /// the audio engine is up before CallKit drops its session hold (re-asserted
+    /// here + in onAudioSessionDeactivated). Only dismisses calls whose native
+    /// UI was actually shown — releaseFromSystemUI no-ops otherwise.
+    @MainActor
+    private func dismissNativeCallUIAfterAnswer(_ uuid: UUID) {
+        guard FeatureFlags.bool("ios_callkit_wake_only", false) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self = self,
+                  let provider = self.callKit as? CallKitProvider else { return }
+            guard provider.releaseFromSystemUI(uuid) else { return }
+            self.selfManagedAudioSession = true
+            RTLog.info("call", "CallKit-wake-only: native UI dismissed, app owns the call")
+            Task { await provider.reactivateAudioSessionForSelfManagedCall() }
+        }
+    }
+
     /// Revive the signalling WebSocket on demand. Mirrors the
     /// `UIApplication.willEnterForeground` reconnect logic so a PushKit
     /// incoming-call wake gets the SAME socket recovery a manual foreground does.
@@ -5171,6 +5214,7 @@ final class AppState: ObservableObject {
         activeCallKitId = nil
         answeredCallKitId = nil  // Bug A — re-arm the idempotent-answer guard for the next call
         incomingAudioStarted = false  // re-arm the deferred-answer consume for the next call
+        selfManagedAudioSession = false  // W-WAKEONLY — re-arm for the next call
         // earbud-relay-v1 — drop the one-shot counterparty state so the
         // next earbud call starts a fresh responder (fresh FW-H7 counter).
         earbudCounterparty.reset()

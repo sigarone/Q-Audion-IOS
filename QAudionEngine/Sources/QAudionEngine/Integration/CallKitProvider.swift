@@ -14,6 +14,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// banner for these calls we bypass CXCallController (which would
     /// also fail) and answer directly, manually activating the audio session.
     private var callKitRejectedUUIDs: Set<UUID> = []
+    /// W-WAKEONLY — UUIDs for which the NATIVE CallKit incoming UI was actually
+    /// shown (reportNewIncomingCall succeeded). Only these can be "released"
+    /// from the system UI after answer (the foreground-suppressed path never
+    /// showed a native UI, so there is nothing to dismiss).
+    private var nativelyReportedUUIDs: Set<UUID> = []
     public var onAnswerCall: ((UUID) async -> Void)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
@@ -75,6 +80,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         update.localizedCallerName = callerName + " · 🔒 Cifrata"
         do {
             try await provider.reportNewIncomingCall(with: uuid, update: update)
+            nativelyReportedUUIDs.insert(uuid)  // W-WAKEONLY — native UI is up
         } catch {
             // W478 — log instead of silently dropping. CallKit rejects with:
             //   Code=2 callUUIDAlreadyExists (PushKit+WS duplicate),
@@ -94,6 +100,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     public func reportCallEnded(uuid: UUID, reason: CallEndReason) async {
         // W495 — clean up rejected-UUID tracking on call end.
         callKitRejectedUUIDs.remove(uuid)
+        nativelyReportedUUIDs.remove(uuid)  // W-WAKEONLY
         let cxReason: CXCallEndedReason
         switch reason {
         case .userEnded: cxReason = .remoteEnded
@@ -136,6 +143,34 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// confuse users who need to distinguish encrypted calls from cleartext).
     public func registerSuppressedCall(_ uuid: UUID) {
         callKitRejectedUUIDs.insert(uuid)
+    }
+
+    /// W-WAKEONLY — "CallKit for wake only". After the user answers a
+    /// push-woken call we dismiss the SYSTEM in-call UI (which iOS keeps on top
+    /// of our window) by reporting the CallKit call ended, so the app's own SAS
+    /// in-call screen becomes the call surface. The call itself stays alive in
+    /// the app (sealed audio over WS/DC). `reportCall(endedAt:)` is a one-way
+    /// notification — it does NOT fire `provider(_:perform:CXEndCallAction)`, so
+    /// AppState.endCall() is NOT triggered and the call is not torn down. Only
+    /// releases a call whose NATIVE UI was actually shown; returns whether it did
+    /// (so the caller knows to switch to self-managed audio). iOS will likely
+    /// fire `provider(_:didDeactivate:)` shortly after — AppState re-asserts the
+    /// session there (see reactivateAudioSessionForSelfManagedCall).
+    @discardableResult
+    public func releaseFromSystemUI(_ uuid: UUID) -> Bool {
+        guard nativelyReportedUUIDs.contains(uuid) else { return false }
+        nativelyReportedUUIDs.remove(uuid)
+        provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
+        print("[CallKitProvider] W-WAKEONLY — released system call UI for \(uuid)")
+        return true
+    }
+
+    /// W-WAKEONLY — re-assert the shared AVAudioSession after CallKit released
+    /// its hold (we dismissed the system UI but the call is still live in-app).
+    /// Reuses the proven answer-time activation (retry + fire
+    /// onAudioSessionActivated → CallService restarts the engines if needed).
+    public func reactivateAudioSessionForSelfManagedCall() async {
+        await activateAudioSessionForAnswer()
     }
 
     /// W478 — answer an incoming call via the CallKit CXCallController.
