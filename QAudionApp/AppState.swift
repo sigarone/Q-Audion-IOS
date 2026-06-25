@@ -4191,10 +4191,17 @@ final class AppState: ObservableObject {
     /// UI was actually shown — releaseFromSystemUI no-ops otherwise.
     @MainActor
     private func dismissNativeCallUIAfterAnswer(_ uuid: UUID) {
-        // Default ON (the user chose CallKit-wake-only). The remote flag in the
-        // control-room flags.json can still force it OFF (set false) as an
-        // instant kill-switch if it regresses audio — no rebuild needed.
-        guard FeatureFlags.bool("ios_callkit_wake_only", true) else { return }
+        // REVERTED to default OFF (v1.0.691). Device evidence (call 19080DFB,
+        // 1.0.690): wake-only fired ("native UI dismissed, app owns the call")
+        // but the app STILL did not come to the foreground — iOS does NOT let an
+        // app foreground its own UI for a screen-off / locked push call (no API;
+        // dismissing the native UI just returns to the lock/home screen, not the
+        // app). So wake-only removed the system call UI without showing ours —
+        // strictly worse. The SAS screen is reachable only by tapping the
+        // Q-Audion icon on the native call screen (standard iOS, same as Signal).
+        // Kept behind the flag so it can be force-ON for experiments, but OFF by
+        // default restores the standard native call UI.
+        guard FeatureFlags.bool("ios_callkit_wake_only", false) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self = self,
                   let provider = self.callKit as? CallKitProvider else { return }
