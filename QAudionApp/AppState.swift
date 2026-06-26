@@ -140,6 +140,13 @@ final class AppState: ObservableObject {
     /// the registration succeeds, subsequent re-emits (rotation /
     /// reinstall) hit `registerVoipPushToken` directly.
     private var pendingVoipPushTokenHex: String?
+    /// W-PUSHHEAL: persisted last-known VoIP token. Survives the success-clear of
+    /// `pendingVoipPushTokenHex` AND process restarts. The server clears a device's
+    /// token on a dead push (410/BadDeviceToken — ClearAPNsVoipToken) and Apple does
+    /// NOT re-emit `didUpdate pushCredentials` on a stable install, so without a
+    /// persistent token + an unconditional re-assert the device would never
+    /// re-register and stay silently unreachable. Re-posted on login + foreground.
+    private static let lastKnownVoipTokenKey = "qaudion.push.lastVoipTokenHex"
     /// SECURITY C-6: cert-pinned URLSession for VoIP push token registration.
     /// Lazy — created once on first use against the server URL configured at
     /// login time. Avoids per-call URLSession + thread-pool allocation.
@@ -989,6 +996,11 @@ final class AppState: ObservableObject {
                 } else {
                     self.scheduleProactiveTokenRefresh()
                 }
+                // W-PUSHHEAL: re-assert the VoIP token on every foreground so a token
+                // the server cleared on a dead push (410) is re-registered the moment
+                // the user opens the app — the natural recovery action, no re-login
+                // needed. Best-effort; the register path already retries on failure.
+                self.reassertVoipPushTokenRegistration()
                 if let live = self.liveProvider {
                     // Drop the provider only when its WS is already known
                     // dead — otherwise let `ensureAuthenticated` decide
@@ -1362,9 +1374,10 @@ final class AppState: ObservableObject {
                     // on the same provider once the socket is up.
                     self.connectPersistentSocket()
                     self.bindPresenceAfterAuth()
-                    // W75: ship any cached PushKit token now that we
-                    // have a JWT — calls survive app-killed state.
-                    self.retryPendingVoipPushTokenRegistration()
+                    // W-PUSHHEAL: re-assert UNCONDITIONALLY so a token the server
+                    // cleared on a dead push (410) is re-posted on every authenticated
+                    // launch — not just the first. Calls survive app-killed state.
+                    self.reassertVoipPushTokenRegistration()
                 } catch {
                     // FORCED-QR FIX (2026-06-24): clear the session ONLY on a
                     // GENUINE hard auth rejection — i.e. `BCryptoError.unauthorized`,
@@ -1441,8 +1454,8 @@ final class AppState: ObservableObject {
             // W74: open the long-lived WS so the server marks us online.
             connectPersistentSocket()
             bindPresenceAfterAuth()
-            // W75: ship any cached PushKit token.
-            retryPendingVoipPushTokenRegistration()
+            // W-PUSHHEAL: re-assert UNCONDITIONALLY (see launch path).
+            reassertVoipPushTokenRegistration()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -1469,8 +1482,8 @@ final class AppState: ObservableObject {
             // W74: open the long-lived WS so the server marks us online.
             connectPersistentSocket()
             bindPresenceAfterAuth()
-            // W75: ship any cached PushKit token.
-            retryPendingVoipPushTokenRegistration()
+            // W-PUSHHEAL: re-assert UNCONDITIONALLY (see launch path).
+            reassertVoipPushTokenRegistration()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -1708,6 +1721,17 @@ final class AppState: ObservableObject {
         registerVoipPushToken(hex: hex)
     }
 
+    /// W-PUSHHEAL: UNCONDITIONALLY re-post the last-known VoIP token. Unlike
+    /// `retryPendingVoipPushTokenRegistration()` this is NOT gated on
+    /// `pendingVoipPushTokenHex` (wiped on first success, lost on restart): it reads
+    /// the persisted token so a server-side clear (dead-push 410) is healed at the
+    /// next login or foreground. No-op until PushKit has delivered a token once.
+    private func reassertVoipPushTokenRegistration() {
+        let stored = UserDefaults.standard.string(forKey: AppState.lastKnownVoipTokenKey)
+        guard let hex = pendingVoipPushTokenHex ?? stored else { return }
+        registerVoipPushToken(hex: hex)
+    }
+
     /// W75: ship the PushKit VoIP token to the bcrypto-server so the
     /// dispatcher can wake the device for incoming calls when the WS
     /// isn't live (app suspended or killed). The server endpoint is
@@ -1729,6 +1753,10 @@ final class AppState: ObservableObject {
             print("[AppState] PushKit token invalid (len=\(hex.count) hex=\(hex.allSatisfy { $0.isHexDigit }))")
             return
         }
+        // W-PUSHHEAL: persist the freshest valid token so it can be re-asserted on
+        // the next login/foreground even after success clears the cache or the
+        // process restarts. C-10: never log the token; UserDefaults is local.
+        UserDefaults.standard.set(hex, forKey: AppState.lastKnownVoipTokenKey)
         // Always cache so the next auth-success can retry. Cleared on
         // successful HTTP 2xx response IF the cached value still
         // matches THIS request — guards against a race where a second
