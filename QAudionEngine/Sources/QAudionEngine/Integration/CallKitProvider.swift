@@ -78,6 +78,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // caller name itself is resolved from the LOCAL address book by the call
         // sites (PushKit + WS), so this only appends the security marker.
         update.localizedCallerName = callerName + " · 🔒 Cifrata"
+        // W-CALLDIAG: every native report attempt logged (uuid + hasVideo). Two
+        // reports for the same uuid ⇒ Code=2 below (the "seconda chiamata in
+        // chiaro" duplicate the user sees on voice + video). The source (PushKit
+        // vs WS) is logged at the call sites in AppState.
+        let alreadyUp: Bool = nativelyReportedUUIDs.contains(uuid)
+        print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid) hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
         do {
             try await provider.reportNewIncomingCall(with: uuid, update: update)
             nativelyReportedUUIDs.insert(uuid)  // W-WAKEONLY — native UI is up

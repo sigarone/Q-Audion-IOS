@@ -1247,6 +1247,8 @@ final class AppState: ObservableObject {
                         fallbackName: payload.callerName
                     )
                 }
+                let pkDiag: String = "[AppState] W-CALLDIAG PushKit→report uuid=\(payload.callId) hasVideo=\(payload.hasVideo)"
+                print(pkDiag)
                 await self.callKit?.reportIncomingCall(
                     uuid: payload.callId,
                     callerName: display,
@@ -1982,6 +1984,9 @@ final class AppState: ObservableObject {
                     let appForeground = await MainActor.run {
                         UIApplication.shared.applicationState == .active
                     }
+                    let wsDiagVideo: Bool = (callType == "video")
+                    let wsDiag: String = "[AppState] W-CALLDIAG WS path uuid=\(callUUID) hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground)"
+                    print(wsDiag)
                     if !alreadyRegisteredByPushKit {
                         if appForeground {
                             await MainActor.run {
@@ -1991,7 +1996,7 @@ final class AppState: ObservableObject {
                             await ck.reportIncomingCall(
                                 uuid: callUUID,
                                 callerName: resolvedCallerName,
-                                hasVideo: (callType == "video")
+                                hasVideo: wsDiagVideo
                             )
                         }
                     }
