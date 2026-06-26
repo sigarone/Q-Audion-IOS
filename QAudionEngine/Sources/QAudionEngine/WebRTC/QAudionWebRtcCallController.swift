@@ -487,6 +487,84 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         state = .connecting
     }
 
+    /// W-VIDUP — responder side with NO pre-existing PeerConnection.
+    ///
+    /// On an iOS↔Android call whose AUDIO runs over the sealed WS relay (not
+    /// WebRTC), this controller has no live PC, so [acceptUpgradeOffer] (which
+    /// requires `peerConnection`) cannot answer a peer's video-upgrade offer —
+    /// the old code returned an empty SDP and the peer rolled the camera back.
+    ///
+    /// Here we build a FRESH PeerConnection from the peer's upgrade OFFER,
+    /// generate the answer, and RETURN it (AppState ships it via
+    /// `sendCallUpgradeResponse`, NOT `call_answer`). Because the peer's own PC
+    /// never completed ICE/DTLS for the WS-relay call, this is a clean first
+    /// offer/answer (externally reviewed): ICE + DTLS establish for the first
+    /// time and video flows both ways. Mirrors [acceptIncomingCall] (audio +
+    /// video tracks, PQC sealer) but does NOT send a call_answer and does not
+    /// guard on `state == .idle` (the controller is freshly built).
+    ///
+    /// Falls through to [acceptUpgradeOffer] when a PC already exists (a call
+    /// that started as video / already negotiated) — that path is a true
+    /// renegotiation and must be preserved.
+    public func acceptUpgradeOfferBuildingPeerConnection(
+        callerId: String,
+        remoteSdp: String,
+        peerCapabilities: [String]?
+    ) async throws -> String {
+        if peerConnection != nil {
+            if peerCapabilities != nil { acceptPeerCapabilities(peerCapabilities) }
+            return try await acceptUpgradeOffer(remoteSdp: remoteSdp)
+        }
+        hasAppliedRemoteAnswer = false
+        self.recipientId = callerId
+        let iceServers = await fetchIceServers()
+        let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
+            switch self?.videoSealer {
+            case .sframe(let s):  return .sframe(s)
+            case .livekit(let c): return .livekit(c)
+            default:              return nil
+            }
+        })
+        let pc = QAudionPeerConnection(
+            factory: factory,
+            iceServers: iceServers,
+            iceTransportPolicy: iceTransportPolicyOverride ?? .all,
+            delegate: self)
+        peerConnection = pc
+        pc.addLocalAudioTrack()
+        pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
+        // Video track BEFORE createAnswer so the answer's m=video is sendrecv
+        // with a real encoder-bound codec (avoids codec=null / purple video).
+        if let videoSource = pc.addLocalVideoTrack() {
+            startCameraCapture(for: videoSource)
+        }
+        applyPqcSealerIfPossible()
+        // 1. Apply the peer's upgrade offer.
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            pc.setRemoteOffer(sdp: remoteSdp) { err in
+                if let err = err { cont.resume(throwing: err) } else { cont.resume() }
+            }
+        }
+        // 2. Build the local answer (mirror the peer's video intent).
+        let answerSdp: String = try await withCheckedThrowingContinuation { cont in
+            pc.createAnswer(hasVideo: true) { result in
+                switch result {
+                case .success(let s): cont.resume(returning: s)
+                case .failure(let e): cont.resume(throwing: e)
+                }
+            }
+        }
+        // 3. Apply the peer caps NOW — AFTER the PC exists (caps live on the
+        //    QAudionPeerConnection). This makes peerNegotiated() non-nil so
+        //    ensureVideoSealer (called inside acceptPeerCapabilities) creates and
+        //    KEYS the native video FrameCryptor with K_video. Applying caps before
+        //    the PC was built silently dropped them → cryptor never keyed →
+        //    discardFrameWhenCryptorNotReady drops every frame → black video.
+        acceptPeerCapabilities(peerCapabilities)
+        state = .connecting
+        return answerSdp
+    }
+
     // MARK: - W536 — mid-call audio↔video upgrade
 
     /// Idempotency flag for upgradeToVideo. Set BEFORE the awaits on
@@ -764,9 +842,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                   negotiated.useVideoKey else {
                 return sessionKey
             }
+            // CROSS-PLATFORM K_video: feed ONLY the canonical transcript tags
+            // {sframe-v1, ratchet-v3, vkey-v1} — exactly what Android
+            // `videoTranscriptTags` (PqcHandshake.kt:502) and Desktop
+            // `agreedTagsFromFlags` build, and what the frozen
+            // PhoneVideoKeyKatTests vector pins. `negotiated.agreedTags` also
+            // contains `sframe-aes256-v1` / `dc-mux-v1`, which Android/Desktop
+            // EXCLUDE — feeding the full set made iOS's HKDF transcriptHash
+            // differ → a different K_video → Android/Desktop could not decrypt
+            // iOS video and vice-versa (black/garbage). The KAT passed only
+            // because it used the canonical 3-tag set, masking the runtime drift.
+            let canonicalTags = negotiated.agreedTags.filter {
+                $0 == CallCapabilities.sframeV1
+                    || $0 == CallCapabilities.ratchetV3
+                    || $0 == CallCapabilities.vkeyV1
+            }
             return QAudionCallIntegration.deriveVideoKey(
                 sessionKey: sessionKey,
-                agreedTags: negotiated.agreedTags,
+                agreedTags: canonicalTags,
                 psk: self.videoContactPsk
             )
         }

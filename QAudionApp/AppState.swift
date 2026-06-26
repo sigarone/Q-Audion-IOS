@@ -312,6 +312,20 @@ final class AppState: ObservableObject {
     /// re-prompting. Reset on call teardown.
     private var videoConsentGranted: Bool = false
 
+    /// W-VIDUP: true while an incoming video upgrade is being built (the
+    /// on-demand PeerConnection + SDP answer take hundreds of ms). Blocks an
+    /// Android offer-RETRANSMIT during that window from re-showing the consent
+    /// dialog or racing a second build → which could later fire a contradictory
+    /// accepted:false after we already shipped accepted:true.
+    private var upgradeBuildInProgress: Bool = false
+
+    /// W-VIDUP: pin outbound voice to the WS relay when the active controller
+    /// was built ON-DEMAND solely for a video upgrade (the call's audio was
+    /// never on WebRTC). Prevents silently moving the proven WS-relay audio leg
+    /// onto the fresh DataChannel mid-call (which could flap on the restrictive
+    /// NATs that put audio on the relay in the first place). Reset on teardown.
+    private var audioPinnedToWsRelay: Bool = false
+
     /// Auto-decline timer for [pendingIncomingUpgrade] (25s — below the
     /// initiator's 30s response window so it sees an explicit decline).
     private var pendingUpgradeAutoDeclineTask: Task<Void, Never>?
@@ -1610,7 +1624,8 @@ final class AppState: ObservableObject {
         // lazy per-call controller creation (the property is the gated `Any?`).
         #if canImport(WebRTC)
         callService.sendAudioOverDataChannel = { [weak self] data in
-            guard let controller = self?.webRtcController as? QAudionWebRtcCallController else { return false }
+            guard let self = self, !self.audioPinnedToWsRelay,
+                  let controller = self.webRtcController as? QAudionWebRtcCallController else { return false }
             return controller.sendAudioFrameData(data)
         }
         #endif
@@ -2228,6 +2243,14 @@ final class AppState: ObservableObject {
                 callId: callId, senderId: senderId, sdp: sdp)
             return
         }
+        // W-VIDUP: a video upgrade for this call is already being built (the
+        // on-demand PC + SDP answer take hundreds of ms). Ignore offer
+        // retransmits in that window so we neither re-prompt the user nor race a
+        // second build (which could later send a contradictory accepted:false).
+        if upgradeBuildInProgress {
+            RTLog.info("call", "onCallUpgradeRequest: upgrade build already in progress — ignoring retransmit")
+            return
+        }
         // A call that is ALREADY in video (born as a video call, or upgraded
         // earlier) counts as granted consent — re-offers don't re-prompt.
         if videoConsentGranted || isVideoCall {
@@ -2297,21 +2320,134 @@ final class AppState: ObservableObject {
 
     /// Shared accept body: WebRTC answer (when a controller is live) or the
     /// WS-relay empty-SDP accept, then local camera pipeline up.
+#if canImport(WebRTC)
+    /// W-VIDUP — roll back ONLY the video leg when the on-demand upgrade
+    /// PeerConnection fails to establish (ICE/DTLS). The WS-relay AUDIO call is
+    /// independent and MUST keep flowing — so this never calls
+    /// handleIceTermination()/endCall(). Idempotent.
+    @MainActor
+    private func rollbackUpgradeVideo() {
+        if let c = self.webRtcController as? QAudionWebRtcCallController {
+            c.closeSynchronously()
+        }
+        self.webRtcController = nil
+        self.remoteWebRtcVideoTrack = nil
+        self.videoPipeline?.stop()
+        self.videoPipeline = nil
+        self.setCamera(false)
+        self.isVideoCall = self.peerScreenShareActive
+        RTLog.warn("call", "video upgrade WebRTC failed — rolled back video only, WS-relay audio preserved")
+    }
+
+    /// W-VIDUP — build + wire a responder WebRTC controller on-demand when a
+    /// video upgrade arrives on a WS-relay call that never built one (the audio
+    /// runs over the sealed WS relay, not WebRTC). Mirrors the wiring in
+    /// `handleIncomingWebRtcOffer` (kept separate so that proven path is
+    /// untouched) and seeds the PQC session key + sovereign/KMS PSK so the
+    /// native video FrameCryptor derives the same K_video as Android (v1.0.700).
+    @MainActor
+    private func makeUpgradeResponderController() -> QAudionWebRtcCallController? {
+        guard let provider = liveProvider else { return nil }
+        let controller = QAudionWebRtcCallController(
+            callingApi: provider.callingApi,
+            relayProvider: ensureRelayProvider())
+        controller.accessToken = currentAccessToken
+        if let customUrl = TransportGate.preferredTurnUrl {
+            controller.iceServerOverride = [RTCIceServer(urlStrings: [customUrl.absoluteString])]
+        }
+        if TransportGate.forcesRelay { controller.iceTransportPolicyOverride = .relay }
+        controller.sframeVideoSealerFactory = { keyProvider in
+            SFrameVideoSealer.forRotatingKey(keyProvider)
+        }
+        controller.useExternalVideoSource = true
+        controller.onRemoteVideoTrack = { [weak self] track in
+            Task { @MainActor [weak self] in self?.remoteWebRtcVideoTrack = track }
+        }
+        controller.videoTelemetry = { kind, attrs in
+            TelemetryService.shared.emit(kind: kind, attrs: attrs)
+        }
+        controller.onAudioDataChannelFrame = { [weak self] data in
+            self?.callService.handleIncomingDataChannelAudio(data)
+        }
+        controller.shouldRejectIncomingVideo = { CallsGate.shouldRejectIncomingVideo }
+        controller.advertisedCapabilitiesFilter = { CallsGate.filterAdvertisedCapabilities($0) }
+        // NEVER-BRICK: this controller is built ONLY for the video upgrade; the
+        // AUDIO call rides the sealed WS relay independently. A fresh-PC ICE/DTLS
+        // failure (common on the restrictive NATs that forced audio onto the WS
+        // relay) must roll back ONLY the video — it must NOT call
+        // handleIceTermination()/endCall(), which would kill the working audio.
+        controller.onStateChange = { [weak self] newState in
+            switch newState {
+            case .failed, .disconnected:
+                Task { @MainActor [weak self] in self?.rollbackUpgradeVideo() }
+            default:
+                break
+            }
+        }
+        controller.onIceConnectionState = { [weak self] iceState in
+            switch iceState {
+            case .failed, .disconnected, .closed:
+                Task { @MainActor [weak self] in self?.rollbackUpgradeVideo() }
+            case .connected, .completed:
+                let isRelayForced = TransportGate.forcesRelay
+                Task { @MainActor [weak self] in self?.backendType = isRelayForced ? "turn" : "p2p" }
+            default:
+                break
+            }
+        }
+        // K_video parity (v1.0.700): the native video FrameCryptor needs the
+        // call's session key + the sovereign/KMS PSK salt BEFORE the answer.
+        controller.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
+        controller.videoContactPsk = self.callVideoPsk
+        if let key = self.callPqcSessionKey { controller.pqcSessionKey = key }
+        self.webRtcController = controller
+        // Keep the proven WS-relay audio leg untouched — this controller exists
+        // ONLY for video. Outbound voice stays on the relay (see
+        // sendAudioOverDataChannel pin); video rides this WebRTC PC.
+        self.audioPinnedToWsRelay = true
+        return controller
+    }
+#endif
+
     @MainActor
     private func acceptPendingIncomingUpgrade(_ pending: PendingIncomingUpgrade) {
         guard let provider = liveProvider,
               let impl = provider.callingApi as? BCryptoCallingApiImpl else { return }
+        // Latch SYNCHRONOUSLY before the async build so an Android upgrade-offer
+        // retransmit during the build window is treated as a duplicate (ignored
+        // by handleIncomingUpgradeRequest) instead of re-prompting / racing a
+        // second build. Cancel the consent auto-decline now — we're accepting.
+        upgradeBuildInProgress = true
+        pendingUpgradeAutoDeclineTask?.cancel()
+        pendingUpgradeAutoDeclineTask = nil
         Task { @MainActor [weak self] in
             guard let self = self else { return }
+            defer { self.upgradeBuildInProgress = false }
+            var builtOnDemand = false
             do {
                 var answerSdp = ""
                 #if canImport(WebRTC)
                 if let controller = self.webRtcController as? QAudionWebRtcCallController,
                    !pending.sdp.isEmpty {
-                    // Our camera frames are the WebRTC video source (the WS-relay
-                    // VideoCallPipeline owns the AVCaptureSession — avoid a 2nd capture).
+                    // Existing controller (call started as video / already has a PC):
+                    // a true renegotiation on the live PeerConnection.
                     controller.useExternalVideoSource = true
                     answerSdp = try await controller.acceptUpgradeOffer(remoteSdp: pending.sdp)
+                } else if !pending.sdp.isEmpty,
+                          let controller = self.makeUpgradeResponderController() {
+                    builtOnDemand = true
+                    // WS-relay call had NO WebRTC controller (audio is sealed-WS,
+                    // not WebRTC). Build one on-demand and answer the peer's video
+                    // upgrade offer with a fresh PeerConnection — a clean first
+                    // offer/answer (the peer's PC never completed ICE/DTLS for this
+                    // call). Without this iOS sent an EMPTY SDP and the peer rolled
+                    // the camera back (iOS↔Android video upgrade stayed black).
+                    // Caps are applied INSIDE the build method AFTER the PC exists
+                    // (they live on the PC) so peerNegotiated() is non-nil and the
+                    // native video FrameCryptor gets keyed with K_video.
+                    answerSdp = try await controller.acceptUpgradeOfferBuildingPeerConnection(
+                        callerId: pending.senderId, remoteSdp: pending.sdp,
+                        peerCapabilities: self.pendingPeerCapabilities)
                 }
                 #endif
                 try await impl.sendCallUpgradeResponse(
@@ -2348,6 +2484,14 @@ final class AppState: ObservableObject {
             } catch {
                 let desc: String = error.localizedDescription
                 RTLog.warn("call", "incoming upgrade accept failed: " + desc)
+                #if canImport(WebRTC)
+                // The on-demand upgrade controller was published to
+                // webRtcController before this (failed) async build — tear it down
+                // so a stale/half-built PC can't block a later upgrade retry or be
+                // probed per audio frame. ONLY for the on-demand path; a
+                // pre-existing renegotiation controller belongs to the live call.
+                if builtOnDemand { self.rollbackUpgradeVideo() }
+                #endif
                 try? await impl.sendCallUpgradeResponse(
                     callId: pending.callId,
                     recipientId: pending.senderId,
@@ -2679,6 +2823,14 @@ final class AppState: ObservableObject {
             // applying the SDP so the pipeline pick has the right
             // negotiated set when ensureVideoSealer() runs at video setup.
             let peerCaps = data["capabilities"] as? [String]
+            // W-VIDUP: persist the peer's caps on the CALLER side too. They were
+            // only stored on the inbound call_incoming path (callee), so an
+            // iOS-as-caller WS-relay audio call had pendingPeerCapabilities == nil
+            // at video-upgrade time → agreedTags empty → videoSealer latched
+            // .legacy → no K_video cryptor → one-way black video. Storing them
+            // here makes the on-demand upgrade responder negotiate sframe/vkey/
+            // aes256 correctly in BOTH call directions.
+            if let pc = peerCaps, !pc.isEmpty { self.pendingPeerCapabilities = pc }
             // earbud-relay-v1 (caller side) — the callee answered from a
             // phone whose bonded earbud owns the audio key. The SW PQC
             // OFFER we already shipped will never be ACCEPTed; run the
@@ -5435,6 +5587,8 @@ final class AppState: ObservableObject {
         // media-consent v1 — per-call consent + pending dialogs/watchdogs
         // die with the call.
         videoConsentGranted = false
+        upgradeBuildInProgress = false
+        audioPinnedToWsRelay = false
         pendingIncomingUpgrade = nil
         pendingUpgradeAutoDeclineTask?.cancel()
         pendingUpgradeAutoDeclineTask = nil
