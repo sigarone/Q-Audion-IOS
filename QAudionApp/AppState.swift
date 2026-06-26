@@ -2060,6 +2060,16 @@ final class AppState: ObservableObject {
                         // was the missing piece that forced iOS↔iOS audio
                         // to fall back on the WS relay even when a direct
                         // P2P path was available.
+                        // W-VIDDIAG: log the inbound SDP presence — the decisive
+                        // signal for whether iOS builds a WebRTC controller for
+                        // this peer (empty ⇒ iOS↔iOS PQC/relay; non-empty ⇒
+                        // WebRTC peer = Android/Desktop). Used to diagnose the
+                        // iOS↔Android one-way video (controller-nil → WS relay).
+                        let inSdpLen: Int = (data["sdp"] as? String)?.count ?? -1
+                        let inCaps: [String] = (data["capabilities"] as? [String]) ?? []
+                        let from8: String = String(senderId.prefix(8))
+                        let viddiagLine: String = "[AppState] W-VIDDIAG call_incoming: sdpLen=\(inSdpLen) caps=\(inCaps) from=" + from8
+                        print(viddiagLine)
                         if let sdp = data["sdp"] as? String, !sdp.isEmpty {
                             let caps = data["capabilities"] as? [String]
                             let vid = (callType == "video")
@@ -5424,6 +5434,12 @@ final class AppState: ObservableObject {
         // sdp): the pipeline starts PAUSED (camera + mirror preview only,
         // nothing leaves the device) and unpauses only when the peer accepts.
         if webRtcController == nil {
+            // W-VIDDIAG: if the peer is actually Android/Desktop (WebRTC), this
+            // branch is WRONG — they render only WebRTC RTP, so WS-relay video
+            // yields one-way/black video. webRtcController is nil here because no
+            // WebRTC controller was built during the audio phase. The next build
+            // fixes the decision; this log captures the peer caps to confirm.
+            print("[AppState] W-VIDDIAG upgradeToVideo: webRtcController=nil → taking WS-relay branch (peer=\(peerId.prefix(8)) caps=\(pendingPeerCapabilities ?? []))")
             RTLog.info("call", "upgradeToVideo: iOS↔iOS WS relay — starting VideoCallPipeline (paused until consent)")
             // W571 — check camera permission BEFORE flipping isVideoCall.
             let camStatus = AVCaptureDevice.authorizationStatus(for: .video)
@@ -6689,7 +6705,11 @@ extension AppState {
         peerCapabilities: [String]? = nil,
         hasVideo: Bool = false
     ) {
-        guard let provider = liveProvider else { return }
+        print("[AppState] W-VIDDIAG handleIncomingWebRtcOffer: caller=\(callerId.prefix(8)) sdpLen=\(sdp.count) hasVideo=\(hasVideo) — building WebRTC controller")
+        guard let provider = liveProvider else {
+            print("[AppState] W-VIDDIAG handleIncomingWebRtcOffer: liveProvider nil — NO controller built")
+            return
+        }
         // Spawn a controller bound to the live CallingApi + relay provider.
         let controller = QAudionWebRtcCallController(
             callingApi: provider.callingApi,
