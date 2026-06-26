@@ -2261,6 +2261,9 @@ final class AppState: ObservableObject {
                 #if canImport(WebRTC)
                 if let controller = self.webRtcController as? QAudionWebRtcCallController,
                    !pending.sdp.isEmpty {
+                    // Our camera frames are the WebRTC video source (the WS-relay
+                    // VideoCallPipeline owns the AVCaptureSession — avoid a 2nd capture).
+                    controller.useExternalVideoSource = true
                     answerSdp = try await controller.acceptUpgradeOffer(remoteSdp: pending.sdp)
                 }
                 #endif
@@ -2273,6 +2276,20 @@ final class AppState: ObservableObject {
                 self.isVideoCall = true
                 self.setCamera(true)
                 await self.startVideoPipeline(for: pending.senderId)
+                // W-VIDTX: feed the camera into the WebRTC RTCVideoSource on the
+                // RESPONDER upgrade too. The caller side already wires this in
+                // startCall; without it here, iOS camera frames go ONLY to the
+                // WS-relay VideoCallPipeline, never WebRTC RTP, so an Android /
+                // Desktop peer (which renders ONLY WebRTC RTP) sees a BLACK screen.
+                // Mirrors the proven caller-side wiring.
+                #if canImport(WebRTC)
+                if let controller = self.webRtcController as? QAudionWebRtcCallController,
+                   let capturer = controller.webrtcPixelBufferCapturer {
+                    self.videoPipeline?.onCapturedPixelBuffer = { [weak capturer] pixelBuffer, timestampNs in
+                        capturer?.push(pixelBuffer, rotation: ._0, timestampNs: timestampNs)
+                    }
+                }
+                #endif
                 if self.videoPipeline == nil {
                     // Camera permission denied at request time or hardware
                     // unavailable — the peer's video still shows (consent
