@@ -580,16 +580,20 @@ jobs:
           printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
 
-          # Hardened upload: altool/iTMSTransporter can hang indefinitely on a
-          # flaky App Store Connect connection (observed 60+ min stall on the
-          # v1.0.695 tag-push build with no timeout). Wrap each attempt in a
-          # 25-min timeout and retry up to 3x; treat an "already uploaded"
-          # response as success so a retry after a partial upload is safe.
+          # Hardened upload: altool/iTMSTransporter can hang on a flaky App
+          # Store Connect connection (60+ min stall on the v1.0.695 build).
+          # macOS has NO `timeout` binary by default (it's GNU coreutils), so
+          # use gtimeout if present, else run altool directly. Retry up to 3x
+          # and treat an "already uploaded" response as success so a retry
+          # after a partial upload is safe.
+          TO=""
+          if command -v gtimeout >/dev/null 2>&1; then TO="gtimeout 1500"
+          elif command -v timeout >/dev/null 2>&1; then TO="timeout 1500"; fi
           upload_ok=0
           for attempt in 1 2 3; do
-            echo "=== altool upload attempt $attempt/3 ==="
+            echo "=== altool upload attempt $attempt/3 (timeout='${TO:-none}') ==="
             set +e
-            OUT=$(timeout 1500 xcrun altool --upload-app \
+            OUT=$($TO xcrun altool --upload-app \
               --type ios \
               --file "$IPA_PATH" \
               --apiKey "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
@@ -602,7 +606,7 @@ jobs:
               echo "altool: build already on App Store Connect — treating as success"
               upload_ok=1; break
             fi
-            echo "=== altool attempt $attempt failed/timed out (rc=$rc); backoff 30s ==="
+            echo "=== altool attempt $attempt failed (rc=$rc); backoff 30s ==="
             sleep 30
           done
           if [ "$upload_ok" != "1" ]; then
