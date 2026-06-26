@@ -250,6 +250,16 @@ final class AppState: ObservableObject {
     /// `SasConstants.infoWords = "sas-words-v1"`. Drift here would
     /// silently diverge the two-peer ceremony.
     @Published var callPqcSessionKey: Data?
+    /// vkey-v1 — raw sovereign/KMS PSK bytes mixed into THIS call's session
+    /// key, resolved by the negotiated PSK fingerprint. Pushed to the WebRTC
+    /// controller as `videoContactPsk` so K_video's HKDF *salt* = psk —
+    /// byte-identical to Android `deriveVideoKey(psk = psk)`
+    /// (PqcHandshake.kt:674). nil when no PSK was selected (both platforms then
+    /// fall back to the default "Q-AUDION-PHONE-VIDEO-SALT-V1" salt). Without
+    /// this, iOS derived K_video with the default salt while Android used the
+    /// psk → divergent K_video → AES-GCM video frames undecryptable cross-
+    /// platform (black/garbage) while audio kept working.
+    var callVideoPsk: Data?
     /// M-10 — provenance of the key currently feeding the SAS panel.
     /// `.psk` while the SAS is seeded from the TRANSITIONAL per-pair
     /// PSK (pre-handshake); `.mlKem` once the real ML-KEM-1024 session
@@ -2424,6 +2434,7 @@ final class AppState: ObservableObject {
                 // to the WebRTC controller in case the upgrade
                 // crossed a rekey boundary. Idempotent.
                 if let key = self.callPqcSessionKey {
+                    controller.videoContactPsk = self.callVideoPsk
                     controller.pqcSessionKey = key
                 }
             } catch {
@@ -3717,6 +3728,24 @@ final class AppState: ObservableObject {
         return (displayName, method)
     }
 
+    /// vkey-v1 — resolve the raw PSK key bytes for a negotiated fingerprint
+    /// from the sovereign/KMS vault, so iOS can feed the same `psk` salt into
+    /// `deriveVideoKey` that Android used (PqcHandshake.kt:674). Returns nil
+    /// when no stored key matches the fingerprint — the caller then leaves
+    /// `videoContactPsk` nil and both peers fall back to the default video
+    /// salt (matches Android's `psk == null` branch). Mirrors the lookup in
+    /// ``resolvePskDisplayMeta(fingerprint:)`` but returns the key material.
+    static func resolvePskBytes(fingerprint: String?) -> Data? {
+        guard let fp = fingerprint, !fp.isEmpty else { return nil }
+        let vault = SovereignKeyVault()
+        let matchedName: String? = vault.listPskNames().first { n in
+            if n.hasPrefix("__") { return false }
+            return vault.getFingerprint(name: n) == fp
+        }
+        guard let name = matchedName else { return nil }
+        return (try? vault.loadPsk(name: name)) ?? nil
+    }
+
     /// Responder-side dispatch for Android JSON OFFER. Symmetric to
     /// `routeInboundPqcOffer` but consumes the Android wire format
     /// directly via `QAudionCallIntegration.onAndroidBundleReceived`.
@@ -4095,6 +4124,14 @@ final class AppState: ObservableObject {
                     pskFingerprint: pskFp,
                     pskName: meta.name,
                     pskMethod: meta.method)
+                // vkey-v1: resolve + publish the raw PSK so K_video's salt
+                // matches Android (psk == HKDF salt). nil → default salt.
+                self.callVideoPsk = AppState.resolvePskBytes(fingerprint: pskFp)
+                #if canImport(WebRTC)
+                if let ctrl = self.webRtcController as? QAudionWebRtcCallController {
+                    ctrl.videoContactPsk = self.callVideoPsk
+                }
+                #endif
             }
         }
         // Phase 18 — v4 ratchet bootstrap (fail-closed; no-op while v4NativeRatchetEnabled=false).
@@ -4962,6 +4999,13 @@ final class AppState: ObservableObject {
                             pskFingerprint: pskFp,
                             pskName: meta.name,
                             pskMethod: meta.method)
+                        // vkey-v1: publish raw PSK so K_video salt == Android.
+                        strongSelf.callVideoPsk = AppState.resolvePskBytes(fingerprint: pskFp)
+                        #if canImport(WebRTC)
+                        if let ctrl = strongSelf.webRtcController as? QAudionWebRtcCallController {
+                            ctrl.videoContactPsk = strongSelf.callVideoPsk
+                        }
+                        #endif
                     }
                 }
 
@@ -5403,6 +5447,9 @@ final class AppState: ObservableObject {
         // would otherwise let one call's verified SAS appear on the
         // next, unverified call.
         callPqcSessionKey = nil
+        // vkey-v1: drop the per-call video PSK salt so a stale key from this
+        // call can't seed the next call's K_video.
+        callVideoPsk = nil
         // M-10: reset SAS provenance so the next call starts from
         // .none and doesn't inherit this call's .mlKem trust state.
         callSasKeySource = .none
@@ -6060,6 +6107,10 @@ extension AppState {
                     // the same string the other party received from the wire
                     // (all platforms send the callId lowercase in call_offer).
                     ctrl.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
+                    // vkey-v1: set the K_video salt PSK before the session key so
+                    // the first ensureVideoSealer derives the Android-matching
+                    // K_video (salt = psk, not the default string).
+                    ctrl.videoContactPsk = self.callVideoPsk
                     ctrl.pqcSessionKey = key
                     print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId))")
                 }
