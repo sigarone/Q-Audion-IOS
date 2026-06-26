@@ -9,6 +9,16 @@ final class TransportSettingsContainer: ObservableObject {
     @Published var draftTorEnabled: Bool
     @Published var draftPreferredUrlString: String
 
+    // VPN exit-node picker. Reuses the same VpnService + access token the
+    // HomeView VpnToggleChip uses, and the SAME `vpn.preferredNodeId`
+    // UserDefaults key, so a choice made here and one made via the chip's
+    // long-press picker stay in sync. Primitives/refs only (no AppState type
+    // stored), so the build-landmine guard is not tripped.
+    @Published var vpnNodes: [VpnNode] = []
+    @Published var vpnNodesLoading = false
+    private let vpnService: VpnService
+    private let vpnTokenProvider: () -> String
+
     init(state: AppState) {
         let stored = SettingsStore().loadTransport()
         self.viewModel = stored
@@ -16,6 +26,19 @@ final class TransportSettingsContainer: ObservableObject {
         self.draftMode = stored.mode
         self.draftTorEnabled = stored.torEnabled
         self.draftPreferredUrlString = stored.preferredTurnServerUrl?.absoluteString ?? ""
+        self.vpnService = state.vpnService
+        self.vpnTokenProvider = { state.currentAccessToken ?? "" }
+    }
+
+    /// Fetch the live exit-node list (Helsinki, Milano, …) for the picker.
+    /// Best-effort: a failure leaves the list empty (the row still shows
+    /// "Auto"); never throws to the UI.
+    func loadVpnNodes() async {
+        let token = vpnTokenProvider()
+        guard !token.isEmpty else { return }
+        vpnNodesLoading = true
+        defer { vpnNodesLoading = false }
+        vpnNodes = (try? await vpnService.fetchNodes(accessToken: token)) ?? []
     }
 
     func runDiagnostics() async {
@@ -87,6 +110,10 @@ struct TransportSettingsScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
+    /// Manual VPN exit choice. '' = Auto (NodePicker best). SAME UserDefaults
+    /// key as the HomeView VpnToggleChip long-press picker, so both stay in sync.
+    @AppStorage("vpn.preferredNodeId") private var preferredVpnNodeId: String = ""
+
     init(state: AppState) {
         _container = StateObject(wrappedValue: TransportSettingsContainer(state: state))
     }
@@ -126,6 +153,9 @@ struct TransportSettingsScreen: View {
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.horizontal, 14).padding(.top, 6)
 
+                    SettingsSectionHeader("NODO VPN (USCITA)")
+                    vpnNodeSection
+
                     SettingsSectionHeader("SERVER TURN")
                     turnInputRow
                     Text("Lascia vuoto per usare il pool di relay predefinito.")
@@ -163,6 +193,7 @@ struct TransportSettingsScreen: View {
             }
         }
         .navigationTitle("Trasporto")
+        .task { await container.loadVpnNodes() }
     }
 
     // MARK: - Mode picker
@@ -179,6 +210,61 @@ struct TransportSettingsScreen: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(scheme.surfaceVariant.opacity(0.4))
         )
+    }
+
+    // MARK: - VPN exit node
+
+    @ViewBuilder
+    private var vpnNodeSection: some View {
+        VStack(spacing: 8) {
+            vpnNodeRow(id: "", title: "Auto", subtitle: "Nodo migliore · latenza + carico")
+            ForEach(container.vpnNodes) { n in
+                let loadPct: Int = Int((n.loadPct * 100).rounded())
+                let sub: String = n.country + " · " + String(loadPct) + "% carico"
+                let ttl: String = n.city.isEmpty ? n.id : n.city
+                vpnNodeRow(id: n.id, title: ttl, subtitle: sub)
+            }
+            if container.vpnNodesLoading && container.vpnNodes.isEmpty {
+                Text("Caricamento nodi…")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+            }
+        }
+        Text("Scegli da quale paese esce il traffico VPN. \"Auto\" sceglie il nodo migliore. La scelta vale dalla prossima connessione VPN.")
+            .qaudionStyle(type.labelSmall)
+            .foregroundStyle(scheme.onSurfaceVariant)
+            .padding(.horizontal, 14).padding(.top, 6)
+    }
+
+    private func vpnNodeRow(id: String, title: String, subtitle: String) -> some View {
+        Button {
+            preferredVpnNodeId = id
+        } label: {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .qaudionStyle(type.bodyMedium)
+                        .foregroundStyle(scheme.onSurface)
+                    Text(subtitle)
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                }
+                Spacer()
+                if preferredVpnNodeId == id {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(extras.success)
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 52)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(scheme.surfaceVariant.opacity(0.4))
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - TURN URL input
