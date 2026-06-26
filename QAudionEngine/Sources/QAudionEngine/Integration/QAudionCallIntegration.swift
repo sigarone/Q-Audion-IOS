@@ -131,6 +131,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// the secret; the caller is responsible for lifecycle.
     public var onPqcSessionKeyEstablished: ((Data) -> Void)?
 
+    /// DISPLAY-ONLY companion to ``onPqcSessionKeyEstablished``. Fires the
+    /// SAME 32-byte session key PLUS the negotiated sovereign-PSK
+    /// fingerprint (the value mixed into the HKDF, see `selectedFp` on the
+    /// responder OFFER path and `bundle.selectedPskFingerprint` on the
+    /// caller ACCEPT path). `pskFingerprint == nil` ⇒ no PSK was mixed.
+    /// The app layer resolves the human name + method label from this
+    /// fingerprint via its own `SovereignKeyVault` (the engine has no
+    /// vault-name in scope here — it only receives `eligiblePsks` keyed by
+    /// fingerprint). Primitives only (Data + String?) so the AppState type
+    /// never enters a parameter position (build landmine #16). Pure UI
+    /// surface — does NOT affect any derivation. No-op when nil.
+    public var onPqcSessionKeyEstablishedWithPsk: ((Data, String?) -> Void)?
+
     /// Phase 18 — v4 bootstrap signal. Fires at every JSON handshake-completion
     /// site (OFFER accepted = responder, ACCEPT decapsulated = originator) AFTER
     /// ``onPqcSessionKeyEstablished``. Carries `(peerId, effectiveSecret)` so the
@@ -1093,6 +1106,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             offerRetryTask = nil
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
+            // DISPLAY-ONLY: surface the PSK fingerprint negotiated on this
+            // responder OFFER path (`selectedFp`, in scope from step 4).
+            onPqcSessionKeyEstablishedWithPsk?(combined, selectedFp)
             onV4BootstrapReady?(callerId, combined)
             // vkey-v1: JSON responder — `combined` is the post-PSK-mix
             // session key and the IKM for K_video.
@@ -1338,6 +1354,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
+            // DISPLAY-ONLY: surface the PSK fingerprint the responder
+            // selected (`selectedFpStr`, from `bundle.selectedPskFingerprint`
+            // at the top of this ACCEPT branch). Empty ⇒ no PSK mixed ⇒ nil.
+            onPqcSessionKeyEstablishedWithPsk?(combined, selectedFpStr.isEmpty ? nil : selectedFpStr)
             onV4BootstrapReady?(callerId, combined)
             // vkey-v1: JSON caller — `combined` is the IKM for K_video.
             onVideoKeyEstablished?(combined)

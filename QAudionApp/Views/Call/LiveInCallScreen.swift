@@ -405,7 +405,18 @@ struct LiveInCallScreen: View {
     private var liveKeyInfo: InCallScreen.KeyInfo? {
         guard let key = appState.callPqcSessionKey, !key.isEmpty else { return nil }
         let fp = Self.sessionFingerprintFromKey(key)
-        let pskMethod: String? = appState.pskActive ? "PSK" : nil
+        // Use the REAL negotiated method label ("KMS"/"HW"/"SW"/"PSK") set by
+        // the broker from the handshake-completion site. Fall back to the
+        // legacy "PSK" label only when pskActive but no method was resolved,
+        // so the row never regresses to blank for an active PSK.
+        let pskMethod: String?
+        if !appState.pskMethod.isEmpty {
+            pskMethod = appState.pskMethod
+        } else if appState.pskActive {
+            pskMethod = "PSK"
+        } else {
+            pskMethod = nil
+        }
         let pskName: String?
         if appState.pskActive && !appState.pskName.isEmpty {
             pskName = appState.pskName

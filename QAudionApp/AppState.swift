@@ -232,6 +232,12 @@ final class AppState: ObservableObject {
     @Published var pskActive: Bool = false
     @Published var pskName: String = ""
     @Published var pskFingerprint: String = ""
+    /// DISPLAY-ONLY method label of the sovereign/KMS PSK mixed into the
+    /// active call's session key ("KMS" for KMS-delivered keys, "NFC" /
+    /// "QR" etc. for imported ones). Empty when no PSK was mixed. Mirrors
+    /// Android `keyInfo.pskMethodLabel`. Written by the broker's display
+    /// closures; never participates in any derivation.
+    @Published var pskMethod: String = ""
     /// PQC session key for the active call, used to derive the in-call
     /// 6-PGP-word SAS via [ComputeSasUseCase]. Set by the call setup
     /// path once the ML-KEM-1024 handshake completes; cleared on
@@ -1535,7 +1541,10 @@ final class AppState: ObservableObject {
             CallSessionKeyBroker.shared.bind(
                 getCallContactId: { [weak self] in self?.callContactId },
                 setSessionKey: { [weak self] in self?.callPqcSessionKey = $0 },
-                setPskActive: { [weak self] in self?.pskActive = $0 }
+                setPskActive: { [weak self] in self?.pskActive = $0 },
+                setPskName: { [weak self] in self?.pskName = $0 },
+                setPskMethod: { [weak self] in self?.pskMethod = $0 },
+                setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 }
             )
             // W383: forward broker notifications to the WebRTC
             // controller so the PQC SRTP sealer (W376/W382) gets
@@ -3666,6 +3675,48 @@ final class AppState: ObservableObject {
         print("[AppState] opaque_message from \(senderId.prefix(8))… not a valid QUAD frame and not a recognised Android envelope (\(blobStr.count) bytes)")
     }
 
+    /// DISPLAY-ONLY: resolve the human name + method label for a negotiated
+    /// PSK fingerprint by looking it up in the device's own
+    /// `SovereignKeyVault`. Pure UI helper — never throws, never affects
+    /// derivation.
+    ///
+    /// KMS-delivered keys: `KmsPollerService` stores the PSK under a UUID
+    /// account name (the server keyId) AND a sidecar `__kmsname.<fp>` entry
+    /// carrying the human key name. So we FIRST try that sidecar (method
+    /// "KMS" + the real server name). Otherwise we match the fingerprint to
+    /// a stored PSK account: a UUID account name => "KMS" (no sidecar name
+    /// => short fingerprint), else a human-imported key (name + KeyClass).
+    static func resolvePskDisplayMeta(fingerprint: String?) -> (name: String?, method: String?) {
+        guard let fp = fingerprint, !fp.isEmpty else { return (nil, nil) }
+        let vault = SovereignKeyVault()
+        // 1. KMS sidecar: human key name persisted at delivery, keyed by fp.
+        if let d = (try? vault.loadPsk(name: "__kmsname.\(fp)")) ?? nil,
+           let nm = String(data: d, encoding: .utf8), !nm.isEmpty {
+            return (nm, "KMS")
+        }
+        // 2. Match the fingerprint to a stored PSK account (skip sidecars).
+        let matchedName: String? = vault.listPskNames().first { n in
+            if n.hasPrefix("__") { return false }
+            return vault.getFingerprint(name: n) == fp
+        }
+        guard let name = matchedName else {
+            return (String(fp.prefix(9)), nil)
+        }
+        let isUuidName: Bool = (UUID(uuidString: name) != nil)
+        let method: String
+        if isUuidName {
+            method = "KMS"
+        } else {
+            switch vault.getKeyClass(name: name) {
+            case .hwOnly: method = "HW"
+            case .swOnly: method = "SW"
+            case .shared: method = "PSK"
+            }
+        }
+        let displayName: String = isUuidName ? String(fp.prefix(9)) : name
+        return (displayName, method)
+    }
+
     /// Responder-side dispatch for Android JSON OFFER. Symmetric to
     /// `routeInboundPqcOffer` but consumes the Android wire format
     /// directly via `QAudionCallIntegration.onAndroidBundleReceived`.
@@ -4018,10 +4069,32 @@ final class AppState: ObservableObject {
                 CallSessionKeyBroker.shared.bind(
                 getCallContactId: { [weak self] in self?.callContactId },
                 setSessionKey: { [weak self] in self?.callPqcSessionKey = $0 },
-                setPskActive: { [weak self] in self?.pskActive = $0 }
+                setPskActive: { [weak self] in self?.pskActive = $0 },
+                setPskName: { [weak self] in self?.pskName = $0 },
+                setPskMethod: { [weak self] in self?.pskMethod = $0 },
+                setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 }
             )
                 CallSessionKeyBroker.shared.registerPqcSessionKey(
                     sharedSecret, for: peerId)
+            }
+        }
+        // DISPLAY-ONLY: responder JSON path also reports the negotiated PSK
+        // fingerprint. Resolve the human name + method on the app side from
+        // our own vault, then record it for the in-call key panel. Never
+        // gates the call — any failure leaves the PSK row hidden.
+        integration.onPqcSessionKeyEstablishedWithPsk = { [weak self] sharedSecret, pskFp in
+            let peerId = callerId
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                guard sharedSecret.contains(where: { $0 != 0 }) else { return }
+                guard self.callContactId == peerId else { return }
+                let meta = AppState.resolvePskDisplayMeta(fingerprint: pskFp)
+                CallSessionKeyBroker.shared.registerPqcSessionKeyWithPsk(
+                    sharedSecret,
+                    for: peerId,
+                    pskFingerprint: pskFp,
+                    pskName: meta.name,
+                    pskMethod: meta.method)
             }
         }
         // Phase 18 — v4 ratchet bootstrap (fail-closed; no-op while v4NativeRatchetEnabled=false).
@@ -4864,10 +4937,31 @@ final class AppState: ObservableObject {
                         CallSessionKeyBroker.shared.bind(
                             getCallContactId: { [weak self] in self?.callContactId },
                             setSessionKey: { [weak self] in self?.callPqcSessionKey = $0 },
-                            setPskActive: { [weak self] in self?.pskActive = $0 }
+                            setPskActive: { [weak self] in self?.pskActive = $0 },
+                            setPskName: { [weak self] in self?.pskName = $0 },
+                            setPskMethod: { [weak self] in self?.pskMethod = $0 },
+                            setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 }
                         )
                         CallSessionKeyBroker.shared.registerPqcSessionKey(
                             sharedSecret, for: peerId)
+                    }
+                }
+                // DISPLAY-ONLY: caller JSON path PSK metadata (mirror of the
+                // responder wiring above). Resolves name+method app-side.
+                integration.onPqcSessionKeyEstablishedWithPsk = { [weak self] sharedSecret, pskFp in
+                    let peerId = contactId
+                    let weakSelf = self
+                    Task { @MainActor in
+                        guard let strongSelf = weakSelf else { return }
+                        guard sharedSecret.contains(where: { $0 != 0 }) else { return }
+                        guard strongSelf.callContactId == peerId else { return }
+                        let meta = AppState.resolvePskDisplayMeta(fingerprint: pskFp)
+                        CallSessionKeyBroker.shared.registerPqcSessionKeyWithPsk(
+                            sharedSecret,
+                            for: peerId,
+                            pskFingerprint: pskFp,
+                            pskName: meta.name,
+                            pskMethod: meta.method)
                     }
                 }
 

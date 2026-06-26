@@ -35,6 +35,13 @@ public final class CallSessionKeyBroker {
     private var getCallContactId: (() -> String?)?
     private var setSessionKey: ((Data) -> Void)?
     private var setPskActive: ((Bool) -> Void)?
+    // DISPLAY-ONLY: human name, method label, and fingerprint of the
+    // sovereign/KMS PSK that was mixed into the session key. Optional —
+    // bound via the extended `bind(...)` overload; nil-safe so existing
+    // behaviour is unchanged when they are not supplied.
+    private var setPskName: ((String) -> Void)?
+    private var setPskMethod: ((String) -> Void)?
+    private var setPskFingerprint: ((String) -> Void)?
 
     public init() {}
 
@@ -44,11 +51,50 @@ public final class CallSessionKeyBroker {
     func bind(
         getCallContactId: @escaping () -> String?,
         setSessionKey: @escaping (Data) -> Void,
-        setPskActive: @escaping (Bool) -> Void
+        setPskActive: @escaping (Bool) -> Void,
+        setPskName: ((String) -> Void)? = nil,
+        setPskMethod: ((String) -> Void)? = nil,
+        setPskFingerprint: ((String) -> Void)? = nil
     ) {
         self.getCallContactId = getCallContactId
         self.setSessionKey = setSessionKey
         self.setPskActive = setPskActive
+        self.setPskName = setPskName
+        self.setPskMethod = setPskMethod
+        self.setPskFingerprint = setPskFingerprint
+    }
+
+    /// DISPLAY-ONLY variant of ``registerPqcSessionKey(_:for:)`` that also
+    /// records the negotiated sovereign/KMS PSK metadata for the in-call
+    /// "CHIAVE IN USO" panel. Same security posture: pipes values, never
+    /// derives. `pskFingerprint == nil` ⇒ no PSK was mixed ⇒ the PSK row
+    /// stays hidden (we clear name/method/fp and leave `pskActive` driven
+    /// by the session key just like the base method). Never throws, never
+    /// gates the call.
+    public func registerPqcSessionKeyWithPsk(
+        _ sharedSecret: Data,
+        for peerId: String,
+        pskFingerprint: String?,
+        pskName: String?,
+        pskMethod: String?
+    ) {
+        // Reuse the validated base path for the session-key swap + SAS notify.
+        registerPqcSessionKey(sharedSecret, for: peerId)
+        // The base method already returned early on a peer mismatch / wrong
+        // length without touching anything; re-check the guard so we don't
+        // write stale PSK metadata for a call that was rejected above.
+        guard let currentPeer = getCallContactId?(), currentPeer == peerId else { return }
+        guard sharedSecret.count == 32 else { return }
+        if let fp = pskFingerprint, !fp.isEmpty {
+            setPskFingerprint?(fp)
+            if let name = pskName, !name.isEmpty { setPskName?(name) } else { setPskName?("") }
+            if let method = pskMethod, !method.isEmpty { setPskMethod?(method) } else { setPskMethod?("") }
+        } else {
+            // No PSK mixed — clear any leftover metadata from a prior call.
+            setPskFingerprint?("")
+            setPskName?("")
+            setPskMethod?("")
+        }
     }
 
     /// Call this from the PQC handshake completion path with the

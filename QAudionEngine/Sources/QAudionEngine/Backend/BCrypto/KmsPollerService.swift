@@ -196,6 +196,12 @@ public final class KmsPollerService {
         }
         try vault.storePsk(name: entry.keyId, key: psk, fingerprint: fp, keyClass: vaultClass)
         stats.stored += 1
+        // DISPLAY-ONLY: persist the server's human key name in a sidecar keyed
+        // by fingerprint so the in-call panel can show "KMS · <name>" instead
+        // of a bare UUID. Best-effort; a failure never blocks the KMS flow.
+        if !entry.keyName.isEmpty {
+            try? vault.storePsk(name: "__kmsname.\(fp)", key: Data(entry.keyName.utf8), fingerprint: "kms-name")
+        }
         // PoP over the per-delivery wrap secret (NOT over K).
         let pop = KmsPoPV1.compute(
             wrapSecret: wrap, deviceId: deviceId, serverId: context.serverId,
@@ -294,6 +300,12 @@ public final class KmsPollerService {
         //    reboots; idempotent re-store updates the bytes).
         try vault.storePsk(name: entry.keyId, key: psk, fingerprint: fingerprintHex)
         stats.stored += 1
+        // DISPLAY-ONLY: persist the server's human key name in a sidecar keyed
+        // by fingerprint so the in-call panel can show "KMS · <name>" instead
+        // of a bare UUID. Best-effort; a failure never blocks the KMS flow.
+        if !entry.keyName.isEmpty {
+            try? vault.storePsk(name: "__kmsname.\(fingerprintHex)", key: Data(entry.keyName.utf8), fingerprint: "kms-name")
+        }
 
         // 5. Acknowledge — only after the bytes are durably stored.
         //    Per WIRE_SPEC §2.5: NOT ack'ing on a transient failure

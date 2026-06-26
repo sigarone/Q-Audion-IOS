@@ -580,11 +580,35 @@ jobs:
           printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
 
-          xcrun altool --upload-app \
-            --type ios \
-            --file "$IPA_PATH" \
-            --apiKey "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
+          # Hardened upload: altool/iTMSTransporter can hang indefinitely on a
+          # flaky App Store Connect connection (observed 60+ min stall on the
+          # v1.0.695 tag-push build with no timeout). Wrap each attempt in a
+          # 25-min timeout and retry up to 3x; treat an "already uploaded"
+          # response as success so a retry after a partial upload is safe.
+          upload_ok=0
+          for attempt in 1 2 3; do
+            echo "=== altool upload attempt $attempt/3 ==="
+            set +e
+            OUT=$(timeout 1500 xcrun altool --upload-app \
+              --type ios \
+              --file "$IPA_PATH" \
+              --apiKey "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+              --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID" 2>&1)
+            rc=$?
+            set -e
+            echo "$OUT"
+            if [ "$rc" -eq 0 ]; then upload_ok=1; break; fi
+            if echo "$OUT" | grep -qiE "already been uploaded|redundant binary|same version"; then
+              echo "altool: build already on App Store Connect — treating as success"
+              upload_ok=1; break
+            fi
+            echo "=== altool attempt $attempt failed/timed out (rc=$rc); backoff 30s ==="
+            sleep 30
+          done
+          if [ "$upload_ok" != "1" ]; then
+            echo "altool upload failed after 3 attempts"
+            exit 1
+          fi
 
           echo ""
           echo "? Upload complete. Build will appear in TestFlight Internal"
