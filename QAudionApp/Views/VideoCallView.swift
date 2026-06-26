@@ -111,30 +111,39 @@ struct VideoCallView: View {
 
     @ViewBuilder
     private var remoteVideoLayer: some View {
-        if let pipeline = appState.videoPipeline {
-            // W562 — fill the whole screen; the AVSampleBufferDisplayLayer's
-            // own .resizeAspect already letterboxes the video keeping its
-            // aspect ratio. The previous SwiftUI .aspectRatio(.fit) on a UIView
-            // with NO intrinsic content size shrank the view, so the layer then
-            // letterboxed inside an already-undersized box → a huge black
-            // border ("enorme cornice nera"). A single aspect stage (the layer)
-            // is correct now that the encoder emits the right portrait dims.
+        #if canImport(WebRTC)
+        // SOURCE PRIORITY (device-verified 2026-06-26, iOS↔Android black screen):
+        // an Android peer sends remote video over WebRTC RTP, NOT the WS
+        // sealed-relay HEVC `videoPipeline`. `videoPipeline` is non-nil on every
+        // video call (it owns the local camera capture), so the old
+        // `if let pipeline` branch ALWAYS won and rendered the empty WS-HEVC
+        // remote display → the peer's camera showed as a black screen even though
+        // the remote WebRTC track was received and its FrameCryptor was keyed
+        // (proof: the Android side decoded our frames fine). When a remote WebRTC
+        // video track is present the peer is RTP-sending, so it MUST take
+        // precedence. iOS↔iOS / iOS↔Desktop carry no remote WebRTC track and
+        // fall through to the WS HEVC pipeline exactly as before.
+        if let track = appState.remoteWebRtcVideoTrack as? RTCVideoTrack {
+            // RTCMTLVideoView already applies .scaleAspectFit internally.
+            WebRTCRemoteVideoView(track: track)
+                .ignoresSafeArea()
+        } else if let pipeline = appState.videoPipeline {
+            // W562 — fill the whole screen; the AVSampleBufferDisplayLayer's own
+            // .resizeAspect letterboxes keeping aspect ratio. A single aspect
+            // stage (the layer) is correct now the encoder emits portrait dims.
             RemoteVideoDisplay(pipeline: pipeline)
                 .ignoresSafeArea()
         } else {
-            #if canImport(WebRTC)
-            if let track = appState.remoteWebRtcVideoTrack as? RTCVideoTrack {
-                // RTCMTLVideoView already applies .scaleAspectFit internally —
-                // same single-aspect-stage rule as above.
-                WebRTCRemoteVideoView(track: track)
-                    .ignoresSafeArea()
-            } else {
-                remoteVideoFallback
-            }
-            #else
             remoteVideoFallback
-            #endif
         }
+        #else
+        if let pipeline = appState.videoPipeline {
+            RemoteVideoDisplay(pipeline: pipeline)
+                .ignoresSafeArea()
+        } else {
+            remoteVideoFallback
+        }
+        #endif
     }
 
     private var remoteVideoFallback: some View {
