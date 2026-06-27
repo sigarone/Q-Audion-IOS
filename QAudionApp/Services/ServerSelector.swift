@@ -26,6 +26,22 @@ final class ServerSelector {
     private let switchThresholdMs: Double = 300
     private let improvementFactor: Double = 1.5
 
+    /// Hosts the client trusts as VoIP nodes. Every selection + failover path only
+    /// ever targets these — never an attacker-injected host. fi1.bcrypto.com (the
+    /// Helsinki failover node) is already pinned by `CertPinningDelegate` (it pins
+    /// the LE chain for any host whose standard trust eval passes), so this is the
+    /// app-layer allowlist that mirrors Android FAILOVER_HOSTS / Desktop
+    /// PINNED_HOSTNAMES.
+    private let trustedHosts: Set<String> = ["voip.bcrypto.com", "fi1.bcrypto.com"]
+
+    /// Hardcoded TRUSTED-HOSTNAME fallback node list. Used ONLY when the live
+    /// /api/v1/servers list can't be fetched (the node serving it died). WS path
+    /// is /ws (the real route; /api/v1/ws 404s). Mirrors Android/Desktop fallbackNodes.
+    private let fallbackNodes: [[String: Any]] = [
+        ["id": "eu-de-1", "https_url": "https://voip.bcrypto.com", "wss_url": "wss://voip.bcrypto.com/ws"],
+        ["id": "eu-fi-1", "https_url": "https://fi1.bcrypto.com", "wss_url": "wss://fi1.bcrypto.com/ws"],
+    ]
+
     // MARK: - State
     private var monitorTask: Task<Void, Never>?
     private weak var currentProvider: BCryptoBackendProvider?
@@ -43,6 +59,37 @@ final class ServerSelector {
         guard let best = ranked.first else { return }
         applyIfBetter(provider: provider, candidate: best.url, candidateRtt: best.rtt,
                       currentUrl: baseUrl)
+    }
+
+    /// Fail OFF a dead node: re-select the best REACHABLE trusted node whose
+    /// wss_url is not `deadWssUrl`, and switch the provider to it. Tries the live
+    /// server list first; if that can't be fetched (the dead node was serving it)
+    /// falls back to `fallbackNodes`. Returns the new wss_url, or nil if nothing
+    /// reachable — caller must NOT switch (implicit network-gate: if nothing
+    /// probes, the local network is likely the problem, not the node).
+    /// SECURITY: candidates are restricted to trusted `wss://` hosts only.
+    func reselectExcluding(deadWssUrl: String, provider: BCryptoBackendProvider) async -> String? {
+        currentProvider = provider
+        let live = await fetchServers(provider: provider)
+        let source: [[String: Any]]
+        if let live = live, !live.isEmpty {
+            source = live
+        } else {
+            source = fallbackNodes
+        }
+        let candidates = trustedFailoverCandidates(source, deadWssUrl: deadWssUrl)
+        guard !candidates.isEmpty else {
+            os_log("ServerSelector: no trusted alternative node to fail over to")
+            return nil
+        }
+        let ranked = await probeAll(nodes: candidates)
+        guard let best = ranked.first else {
+            os_log("ServerSelector: failover candidates unreachable — local net likely down, not switching")
+            return nil
+        }
+        os_log("ServerSelector: failover to %{public}@ (rtt=%.0fms)", best.url, best.rtt)
+        provider.updateServerUrl(to: best.url)
+        return best.wssUrl
     }
 
     /// Start periodic re-probing in background. Idempotent.
@@ -100,11 +147,35 @@ final class ServerSelector {
         }
     }
 
+    /// True if `wssUrl` is a `wss://` URL on a trusted (pinned) node. Both checks
+    /// are security-critical: a poisoned /api/v1/servers list could otherwise
+    /// advertise an untrusted host (steering) or a `ws://` cleartext URL (TLS
+    /// downgrade) that a hostname-only check would accept. (review-driven parity
+    /// with Android/Desktop)
+    private func isTrustedFailoverHost(_ wssUrl: String) -> Bool {
+        guard let u = URL(string: wssUrl), u.scheme == "wss", let host = u.host else { return false }
+        return trustedHosts.contains(host.lowercased())
+    }
+
+    /// SECURITY-CRITICAL failover filter: keep ONLY nodes that are not the dead one
+    /// and on a trusted `wss://` host. Dropping untrusted/cleartext hosts means a
+    /// failover can never be steered to a weaker endpoint.
+    private func trustedFailoverCandidates(_ nodes: [[String: Any]], deadWssUrl: String) -> [[String: Any]] {
+        return nodes.filter { node in
+            guard let wss = node["wss_url"] as? String else { return false }
+            return wss != deadWssUrl && isTrustedFailoverHost(wss)
+        }
+    }
+
     private func probeAll(nodes: [[String: Any]]) async -> [NodeProbe] {
         var results: [NodeProbe] = []
         for node in nodes {
+            // SECURITY (review-driven): probe/select ONLY trusted `wss://` hosts, so
+            // a poisoned /api/v1/servers list can never steer normal selection
+            // (selectBestServer / monitor) onto an untrusted or cleartext endpoint.
             guard let httpsUrl = node["https_url"] as? String, !httpsUrl.isEmpty,
-                  let wssUrl = node["wss_url"] as? String, !wssUrl.isEmpty else { continue }
+                  let wssUrl = node["wss_url"] as? String, !wssUrl.isEmpty,
+                  isTrustedFailoverHost(wssUrl) else { continue }
             let healthUrl = httpsUrl.trimmingCharacters(in: .init(charactersIn: "/")) + "/api/v1/health"
             if let rtt = await measureRtt(url: healthUrl) {
                 results.append(NodeProbe(url: httpsUrl, wssUrl: wssUrl, rtt: rtt))
