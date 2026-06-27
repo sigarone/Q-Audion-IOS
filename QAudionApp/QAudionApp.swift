@@ -1,9 +1,31 @@
 import SwiftUI
+import UIKit
 import BackgroundTasks
 import QAudionEngine
 
+/// W-NOCALLKIT — minimal UIApplicationDelegate, attached via
+/// `@UIApplicationDelegateAdaptor`, to capture the STANDARD APNs device token.
+/// Needed only in `CallsGate.callKitFreeMode` (the server sends an INCOMING_CALL
+/// *alert* push to this token when the app is killed). The token is forwarded
+/// via NotificationCenter so AppState can register it server-side without a
+/// static AppState reference (same pattern as the BGTask bridge). When the flag
+/// is OFF, AppState.handleApnsDeviceToken ignores the token → no behavior change.
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        let hex = deviceToken.map { String(format: "%02hhx", $0) }.joined()
+        NotificationCenter.default.post(name: AppState.apnsTokenReceived, object: hex)
+    }
+
+    func application(_ application: UIApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        print("[AppDelegate] APNs registration failed: \(error.localizedDescription)")
+    }
+}
+
 @main
 struct QAudionApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
     /// W441: App lock service. isLocked drives the gate overlay in body.
     @StateObject private var lockService = AppLockService()

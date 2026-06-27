@@ -73,6 +73,10 @@ struct CallsSettingsScreen: View {
     @State private var adaptiveRekeyingEnabled: Bool = false
     @State private var adaptivePaddingEnabled: Bool = false
 
+    // W-NOCALLKIT — revert switch for the CallKit-free incoming-call mode.
+    // UserDefaults-backed via CallsGate (not Keychain); read once on appear.
+    @State private var callKitFreeMode: Bool = false
+
     @AppStorage("qaudion.calls.metered_cap_enabled")
     private var meteredCapEnabled: Bool = false
 
@@ -195,6 +199,22 @@ struct CallsSettingsScreen: View {
                         )
                     }
 
+                    // W-NOCALLKIT — experimental: replace iOS CallKit + PushKit
+                    // with a fully custom in-app incoming-call ring. Revertible:
+                    // OFF restores the proven CallKit path. Requires app restart.
+                    SettingsSectionHeader("MODALITÀ CHIAMATA (SPERIMENTALE)")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Interfaccia chiamata personalizzata",
+                            subtitle: "Sostituisce CallKit/PushKit con la suoneria interna dell'app",
+                            isOn: Binding(
+                                get: { callKitFreeMode },
+                                set: { v in callKitFreeMode = v; CallsGate.setCallKitFreeMode(v) }
+                            )
+                        )
+                        warningHint("Modalità sperimentale. Riavvia l'app dopo la modifica. Con questa attiva non c'è la schermata di chiamata a tutto schermo su lock screen né integrazione CarPlay; con app chiusa la chiamata arriva come notifica con Rispondi/Rifiuta.")
+                    }
+
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
@@ -205,6 +225,7 @@ struct CallsSettingsScreen: View {
             deepfakeGuardEnabled = CallsGate.deepfakeGuardEnabled
             adaptiveRekeyingEnabled = CallsGate.adaptiveRekeyingEnabled
             adaptivePaddingEnabled = CallsGate.adaptivePaddingEnabled
+            callKitFreeMode = CallsGate.callKitFreeMode
         }
     }
 

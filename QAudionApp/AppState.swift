@@ -147,6 +147,12 @@ final class AppState: ObservableObject {
     /// persistent token + an unconditional re-assert the device would never
     /// re-register and stay silently unreachable. Re-posted on login + foreground.
     private static let lastKnownVoipTokenKey = "qaudion.push.lastVoipTokenHex"
+    /// W-NOCALLKIT — standard APNs (alert) device token, in flight to the server.
+    /// Only used in `CallsGate.callKitFreeMode`: the server sends an INCOMING_CALL
+    /// *alert* push (not VoIP) to this token when the app is killed. Mirrors
+    /// `pendingVoipPushTokenHex`/`lastKnownVoipTokenKey` semantics.
+    private var pendingApnsTokenHex: String?
+    private static let lastKnownApnsTokenKey = "qaudion.push.lastApnsTokenHex"
     /// SECURITY C-6: cert-pinned URLSession for VoIP push token registration.
     /// Lazy — created once on first use against the server URL configured at
     /// login time. Avoids per-call URLSession + thread-pool allocation.
@@ -528,6 +534,18 @@ final class AppState: ObservableObject {
     /// has actually started, so `consumeDeferredAnswerIfReady` runs exactly
     /// once. Reset in the call-reset block alongside `answeredCallKitId`.
     private var incomingAudioStarted = false
+    /// W-NOCALLKIT cold-start answer race — the user tapped "Rispondi" on the
+    /// local/APNs INCOMING_CALL notification BEFORE the WS `call_incoming`
+    /// (which generates the call UUID) has been processed. We can't accept yet
+    /// (no `activeCallKitId`); latch the intent here and `performAcceptIncoming`
+    /// fires the moment `call_incoming` lands. Cleared on consume + call reset.
+    private var pendingNotificationAnswer = false
+    /// W-NOCALLKIT cold-start DECLINE latch — symmetric to
+    /// `pendingNotificationAnswer`. User tapped "Rifiuta" on the APNs/local
+    /// notification before the WS `call_incoming` arrived; the call is rejected
+    /// (hangup sent, no provisioning, no ring) the moment it lands. Decline wins
+    /// over a concurrently-latched answer. Cleared on consume + call reset.
+    private var pendingNotificationDecline = false
     /// True once the user has explicitly answered the current incoming call via
     /// CallKit (`onAnswerCall` sets `answeredCallKitId`). The app-lock scene gate
     /// uses this to drop the biometric lock the MOMENT the call is answered —
@@ -986,6 +1004,84 @@ final class AppState: ObservableObject {
             }
         }
 
+        // W-NOCALLKIT — Answer/Decline from the INCOMING_CALL notification
+        // (local, posted by call_incoming when backgrounded; or APNs alert when
+        // the app was killed). Both the "Rispondi" action AND a plain tap mean
+        // answer. If the WS call_incoming already arrived (activeCallKitId set),
+        // accept now; otherwise latch the intent — the call_incoming handler
+        // consumes pendingNotificationAnswer the moment the call lands.
+        NotificationCenterService.shared.onIncomingCallAction = { [weak self] action, info in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                let callId = info["call_id"]
+                switch action {
+                case .decline:
+                    self.pendingNotificationAnswer = false
+                    if let cid = callId { NotificationCenterService.shared.clearIncomingCall(callId: cid) }
+                    if self.activeCallKitId != nil {
+                        self.declineIncomingCall()
+                    } else {
+                        // Cold start: call_incoming not processed yet — latch the
+                        // decline so the call is rejected the moment it lands.
+                        self.pendingNotificationDecline = true
+                        print("[AppState] W-NOCALLKIT decline latched (call_incoming not yet arrived)")
+                    }
+                case .answer:
+                    if let cid = callId { NotificationCenterService.shared.clearIncomingCall(callId: cid) }
+                    if self.activeCallKitId != nil {
+                        self.answerIncomingCall()
+                    } else {
+                        // Cold start: call_incoming not processed yet — latch.
+                        self.pendingNotificationAnswer = true
+                        print("[AppState] W-NOCALLKIT answer latched (call_incoming not yet arrived)")
+                    }
+                case .open:
+                    // Plain tap — bring up the in-app ring UI but do NOT answer.
+                    // Warm-background case: call_incoming already arrived
+                    // (activeCallKitId set) but callState stayed .idle (we were
+                    // backgrounded at arrival). Surface the ring now. Cold start:
+                    // activeCallKitId is nil → the incoming call_incoming will set
+                    // .ringing itself (foreground at that point), nothing to do.
+                    if self.activeCallKitId != nil,
+                       !self.isInCall,
+                       self.callState == .idle {
+                        self.callState = .ringing
+                        self.startInAppRingtone()
+                    }
+                }
+            }
+        }
+        // W-NOCALLKIT cold-start: drain any notification action that fired before
+        // this handler was wired (app-killed launch via Answer/Decline tap).
+        NotificationCenterService.shared.flushPendingIncomingAction()
+
+        // W-NOCALLKIT — receive the standard APNs device token from AppDelegate
+        // and register it server-side (only when callKitFreeMode; handleApnsDeviceToken
+        // gates internally). Posted by
+        // application(_:didRegisterForRemoteNotificationsWithDeviceToken:).
+        NotificationCenter.default.addObserver(
+            forName: AppState.apnsTokenReceived,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let hex = note.object as? String else { return }
+            Task { @MainActor [weak self] in
+                self?.handleApnsDeviceToken(hex: hex)
+            }
+        }
+
+        // W-NOCALLKIT — in CallKit-free mode the incoming-call ring depends on
+        // USER notification authorization (the local INCOMING_CALL banner when
+        // backgrounded + the APNs alert when killed) AND a standard APNs token.
+        // VoIP push needs neither, which is why the app never requested notif
+        // permission before. Request both now. Flag OFF → VoIP path unchanged
+        // (we skip this so flag-OFF behavior is byte-identical to today).
+        if CallsGate.callKitFreeMode {
+            Task { @MainActor in
+                _ = await NotificationCenterService.shared.requestAuthorization()
+            }
+        }
+
         // W74: re-attempt the persistent WS the moment the app returns
         // to the foreground. iOS suspends URLSessionWebSocketTask while
         // backgrounded — by the time the user opens the app again the
@@ -1031,6 +1127,7 @@ final class AppState: ObservableObject {
                 // the user opens the app — the natural recovery action, no re-login
                 // needed. Best-effort; the register path already retries on failure.
                 self.reassertVoipPushTokenRegistration()
+                self.reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
                 if let live = self.liveProvider {
                     // Drop the provider only when its WS is already known
                     // dead — otherwise let `ensureAuthenticated` decide
@@ -1124,66 +1221,10 @@ final class AppState: ObservableObject {
             provider.onAnswerCall = { [weak self] uuid in
                 guard let self = self else { return }
                 await MainActor.run {
-                    // Bug A — idempotent answer. CallKit may deliver
-                    // CXAnswerCallAction twice for the same call when the
-                    // in-app green button and the native UI both target it
-                    // (double-dialer second call). The second pass would
-                    // re-enter startIncomingCallAudioOnAnswer →
-                    // activateIncomingCallAudio → teardownAudioStack() while
-                    // the first AVAudioEngine start is still in flight → an
-                    // uncatchable NSException. Ignore repeats for the same call.
-                    if self.answeredCallKitId == uuid {
-                        print("[AppState] onAnswerCall: duplicate answer for \(uuid) ignored (Bug A guard)")
-                        return
-                    }
-                    self.answeredCallKitId = uuid
-                    // User accepted incoming call from lock screen.
-                    // Notify "user accepted" so the call transitions from ringing to active.
-                    // Actual signalling (offer/answer) stays inside QAudionCallIntegration.
-                    self.isInCall = true
-                    self.activeCallKitId = uuid
-                    // Callee-side state machine: ringing → active on answer.
-                    // Guarded so a stale CallKit callback can't regress an
-                    // already-encrypted or ended call.
-                    if self.callState == .ringing {
-                        self.callState = .active
-                    }
-                    // W521: sasReadyNotification may have fired during the
-                    // ringing phase — before the user answered. Its observer
-                    // (wireSasReadyToController) guards on callState == .active,
-                    // which was false at that point, so the .encrypted
-                    // transition was skipped. callSasKeySource is still set to
-                    // .mlKem unconditionally when the notification fires.
-                    // Catch up: if the ML-KEM handshake already completed,
-                    // advance the state machine to .encrypted right now so
-                    // the peer (Android/Desktop) doesn't time out waiting for
-                    // PQC confirmation and send call_hangup.
-                    if self.callState == .active && self.callSasKeySource == .mlKem {
-                        self.callState = .encrypted
-                        RTLog.info("call", "onAnswerCall: PQC handshake completed during ringing — state .active → .encrypted")
-                        // W541-3: emit encrypted-state-reached event.
-                        // Maintainer measures (call.encrypted.ts -
-                        // call.start_dial.ts) as the dial-to-secure
-                        // latency p95 — a key user-perceived metric.
-                        TelemetryService.shared.emit(
-                            kind: "call.encrypted",
-                            callId: uuid.uuidString.lowercased(),
-                            attrs: ["path": "answer-fastpath-w521"]
-                        )
-                    }
-                    // W450 + cold-start answer race: boot the audio pipeline and
-                    // notify the caller. Routed through consumeDeferredAnswerIfReady
-                    // so that when the user answers a PushKit-woken call BEFORE the
-                    // cold-start WS reconnect + SDP redelivery has built the
-                    // responder integration, the answer is latched and replayed the
-                    // moment the machinery is ready (WS call_incoming / SAS-ready)
-                    // instead of being silently lost. When the machinery is already
-                    // up (normal path) it runs immediately, identical to before.
-                    self.consumeDeferredAnswerIfReady("onAnswerCall")
-                    // W-WAKEONLY — dismiss the native CallKit UI so the Q-Audion
-                    // SAS screen becomes the call surface (extracted to a method
-                    // to keep this closure shallow — §13/§14).
-                    self.dismissNativeCallUIAfterAnswer(uuid)
+                    // CallKit answered → run the shared accept path + dismiss the
+                    // native CallKit UI. The same accept body is reused by the
+                    // CallKit-FREE path (answerIncomingCall when callKitFreeMode).
+                    self.performAcceptIncoming(uuid: uuid, dismissNativeUI: true)
                 }
             }
             provider.onEndCall = { [weak self] uuid in
@@ -1250,6 +1291,13 @@ final class AppState: ObservableObject {
 
         // MARK: PushKit VoIP push registration
         // Registers for tokens so the day server picks option α/β/γ/δ, iOS is ready.
+        // W-NOCALLKIT — when callKitFreeMode is ON, do NOT register PushKit/VoIP
+        // (PushKit MANDATES a CallKit reportNewIncomingCall, which we no longer
+        // want). The standard APNs *alert* path replaces it: the token is captured
+        // by AppDelegate → handleApnsDeviceToken → server. Flag OFF → unchanged.
+        if CallsGate.callKitFreeMode {
+            print("[AppState] W-NOCALLKIT callKitFreeMode ON — PushKit/VoIP NOT registered; using APNs alert path")
+        } else {
         self.pushKit = PushKitProvider(
             // W60: rimosso `[weak self]` non usato — il body del closure
             // logga solo il token, no riferimenti a self. Eliminava il
@@ -1317,6 +1365,7 @@ final class AppState: ObservableObject {
                 await self.callKit?.reportCallEnded(uuid: placeholder, reason: .failed("malformed-voip-push"))
             }
         )
+        }  // W-NOCALLKIT — end `if !callKitFreeMode` PushKit registration guard
         #endif
 
         if let token = authService.loadToken() {
@@ -1408,6 +1457,7 @@ final class AppState: ObservableObject {
                     // cleared on a dead push (410) is re-posted on every authenticated
                     // launch — not just the first. Calls survive app-killed state.
                     self.reassertVoipPushTokenRegistration()
+                    self.reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
                 } catch {
                     // FORCED-QR FIX (2026-06-24): clear the session ONLY on a
                     // GENUINE hard auth rejection — i.e. `BCryptoError.unauthorized`,
@@ -1486,6 +1536,7 @@ final class AppState: ObservableObject {
             bindPresenceAfterAuth()
             // W-PUSHHEAL: re-assert UNCONDITIONALLY (see launch path).
             reassertVoipPushTokenRegistration()
+            reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -1514,6 +1565,7 @@ final class AppState: ObservableObject {
             bindPresenceAfterAuth()
             // W-PUSHHEAL: re-assert UNCONDITIONALLY (see launch path).
             reassertVoipPushTokenRegistration()
+            reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -1866,6 +1918,83 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - W-NOCALLKIT: standard APNs (alert) token for CallKit-free calls
+
+    /// Public entry — invoked when AppDelegate receives the standard APNs device
+    /// token. ADDITIVE: only ships the token to the server when
+    /// `CallsGate.callKitFreeMode` is ON, so flag-OFF behavior is byte-identical
+    /// to today (VoIP/CallKit path untouched; the token is simply ignored).
+    func handleApnsDeviceToken(hex: String) {
+        guard CallsGate.callKitFreeMode else {
+            // Flag OFF — VoIP/PushKit owns incoming-call wakeups. Ignore.
+            return
+        }
+        registerStandardApnsToken(hex: hex)
+    }
+
+    /// W-NOCALLKIT: re-assert the last-known standard APNs token (login /
+    /// foreground), so a server-side clear (dead push 410) heals. No-op when the
+    /// flag is OFF or no token has ever been delivered.
+    private func reassertStandardApnsTokenRegistration() {
+        guard CallsGate.callKitFreeMode else { return }
+        let stored = UserDefaults.standard.string(forKey: AppState.lastKnownApnsTokenKey)
+        guard let hex = pendingApnsTokenHex ?? stored else { return }
+        registerStandardApnsToken(hex: hex)
+    }
+
+    /// W-NOCALLKIT: ship the standard APNs (alert) device token to the server so
+    /// the dispatcher can send an INCOMING_CALL *alert* push (push-type=alert,
+    /// interruption-level=time-sensitive, category INCOMING_CALL) when the app is
+    /// killed and `callKitFreeMode` is ON. Mirrors `registerVoipPushToken`.
+    /// Server endpoint (Phase 3): `POST /api/v1/account/apns-token` with body
+    /// `{apns_token: "<64 hex>", bundle_id: "com.qaudion.app"}`.
+    private func registerStandardApnsToken(hex: String) {
+        guard hex.count == 64,
+              hex.allSatisfy({ $0.isHexDigit }) else {
+            print("[AppState] APNs token invalid (len=\(hex.count))")
+            return
+        }
+        UserDefaults.standard.set(hex, forKey: AppState.lastKnownApnsTokenKey)
+        pendingApnsTokenHex = hex
+        guard let token = authService.loadToken(), !token.isEmpty else {
+            print("[AppState] APNs register deferred — not authenticated yet (cached for retry)")
+            return
+        }
+        guard var components = URLComponents(string: serverUrl) else { return }
+        var path = components.path
+        while path.hasSuffix("/") { path.removeLast() }
+        components.path = path + "/api/v1/account/apns-token"
+        guard let url = components.url else { return }
+
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.qaudion.app"
+        let body: [String: Any] = [
+            "apns_token": hex,
+            "bundle_id": bundleId,
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = bodyData
+        let session = voipPushSession
+        Task { [weak self, hex, session] in
+            do {
+                let (_, resp) = try await session.data(for: req)
+                if let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                    await MainActor.run {
+                        if self?.pendingApnsTokenHex == hex { self?.pendingApnsTokenHex = nil }
+                    }
+                } else {
+                    let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                    print("[AppState] APNs register HTTP \(code)")
+                }
+            } catch {
+                print("[AppState] APNs register error: \(error.localizedDescription)")
+            }
+        }
+    }
+
     // MARK: - W-BGK: Background WS keepalive
 
     /// Schedule the next BGAppRefreshTask. Called on launch and at the end of
@@ -2026,6 +2155,22 @@ final class AppState: ObservableObject {
                     print("[AppState] call_incoming: dup dropped callId=\(callIdStr.prefix(8))… state=\(self.callState) sameProvisioned=\(sameCallProvisioned) otherActive=\(differentCallActive)")
                     return
                 }
+                // W-NOCALLKIT cold-start DECLINE: the user already tapped "Rifiuta"
+                // on the notification before this call_incoming landed. Reject the
+                // call NOW — send hangup, skip ALL provisioning (no integration, no
+                // ring, no state change). The incoming call_id is already bound
+                // (bindIncomingCallId above) so the hangup targets the right call.
+                if CallsGate.callKitFreeMode && self.pendingNotificationDecline {
+                    self.pendingNotificationDecline = false
+                    self.pendingNotificationAnswer = false
+                    if let provider = self.liveProvider {
+                        let peer = senderId
+                        Task { try? await provider.callingApi.sendHangup(recipientId: peer) }
+                    }
+                    NotificationCenterService.shared.clearIncomingCall(callId: callIdStr)
+                    print("[AppState] W-NOCALLKIT cold-start decline consumed — call rejected before provisioning")
+                    return
+                }
                 Task {
                     // If PushKit already reported this call (activeCallKitId set),
                     // skip the second reportIncomingCall to avoid Code=2
@@ -2049,8 +2194,23 @@ final class AppState: ObservableObject {
                     let wsDiagVideo: Bool = (callType == "video")
                     let wsDiag: String = "[AppState] W-CALLDIAG WS path uuid=\(callUUID) hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground)"
                     print(wsDiag)
+                    let useCustomUI = CallsGate.callKitFreeMode
                     if !alreadyRegisteredByPushKit {
-                        if appForeground {
+                        if useCustomUI {
+                            // W-NOCALLKIT — never touch CallKit. Foreground → the
+                            // in-app banner (callState=.ringing set below) is the
+                            // ring UI. Not foreground (app alive in background) →
+                            // post a local INCOMING_CALL notification with
+                            // Answer/Decline; tapping Answer opens the app → banner.
+                            if !appForeground {
+                                await NotificationCenterService.shared.postIncomingCall(
+                                    callId: callIdStr,
+                                    peerId: senderId,
+                                    callerName: resolvedCallerName,
+                                    hasVideo: wsDiagVideo
+                                )
+                            }
+                        } else if appForeground {
                             await MainActor.run {
                                 (self.callKit as? CallKitProvider)?.registerSuppressedCall(callUUID)
                             }
@@ -2089,6 +2249,16 @@ final class AppState: ObservableObject {
                             // notification channel, which works even when the audio session is
                             // inactive (i.e. before the user answers).
                             self.startInAppRingtone()
+                        }
+                        // W-NOCALLKIT cold-start: the user already tapped
+                        // "Rispondi" on the notification before this call_incoming
+                        // landed. activeCallKitId is now set → consume the latched
+                        // intent and accept. Guarded by callKitFreeMode so the
+                        // CallKit path is untouched.
+                        if useCustomUI && self.pendingNotificationAnswer {
+                            self.pendingNotificationAnswer = false
+                            self.stopInAppRingtone()
+                            self.performAcceptIncoming(uuid: callUUID, dismissNativeUI: false)
                         }
                         // C-3: do NOT set isInCall here. Setting it on
                         // call ARRIVAL (before the user answers) blocks
@@ -2135,7 +2305,11 @@ final class AppState: ObservableObject {
                         let inSdpLen: Int = (data["sdp"] as? String)?.count ?? -1
                         let inCaps: [String] = (data["capabilities"] as? [String]) ?? []
                         let from8: String = String(senderId.prefix(8))
-                        let viddiagLine: String = "[AppState] W-VIDDIAG call_incoming: sdpLen=\(inSdpLen) caps=\(inCaps) from=" + from8
+                        // W-NOCALLKIT review B1: drop the `+` operator (overload
+                        // resolution risk inside this deep closure, CLAUDE.md §16)
+                        // — single-segment interpolation only. The W-NOCALLKIT
+                        // additions enlarged this closure, so de-risk it.
+                        let viddiagLine: String = "[AppState] W-VIDDIAG call_incoming: sdpLen=\(inSdpLen) caps=\(inCaps) from=\(from8)"
                         print(viddiagLine)
                         if let sdp = data["sdp"] as? String, !sdp.isEmpty {
                             let caps = data["capabilities"] as? [String]
@@ -2612,7 +2786,11 @@ final class AppState: ObservableObject {
         }
         let uuid = self.activeCallKitId
         Task {
-            if let uuid = uuid {
+            // W-NOCALLKIT review H1: in callKitFreeMode the call was NEVER
+            // reported to CallKit (no reportIncomingCall), so reporting its end
+            // would hit CXProvider with a UUID it never saw. Skip it; the
+            // markMissed + endCall below run unconditionally. Flag OFF unchanged.
+            if let uuid = uuid, !CallsGate.callKitFreeMode {
                 await self.callKit?.reportCallEnded(uuid: uuid, reason: reason)
             }
             await MainActor.run {
@@ -3658,6 +3836,12 @@ final class AppState: ObservableObject {
     /// iOS fires the ws-keepalive background task; AppState.handleWsKeepaliveTask
     /// is the observer.
     static let bgWsKeepalive = Notification.Name("com.bcrypto.qaudion.bgWsKeepalive")
+
+    /// W-NOCALLKIT: standard APNs device token delivered. AppDelegate
+    /// (`application(_:didRegisterForRemoteNotificationsWithDeviceToken:)`) posts
+    /// this with the hex token as `object`; AppState registers it server-side
+    /// only when `CallsGate.callKitFreeMode` (alert-push for incoming calls).
+    static let apnsTokenReceived = Notification.Name("com.bcrypto.qaudion.apnsTokenReceived")
 
     /// W77: dispatch inbound `opaque_message` envelopes. The QUAD frame
     /// inside the payload carries either:
@@ -5009,6 +5193,19 @@ final class AppState: ObservableObject {
             let peerDisplayName = _outgoingPeerDisplay
             let hasVideo = video
             Task {
+                // W-NOCALLKIT — when callKitFreeMode is ON the app uses NO CallKit
+                // for outgoing calls either: mint a local call id and self-activate
+                // the audio session via the SAME fallback the CallKit-nil/failure
+                // branches already use (CallService Bug-B path). Flag OFF keeps the
+                // proven CXStartCallAction outgoing integration unchanged.
+                if CallsGate.callKitFreeMode {
+                    let localId = UUID()
+                    await MainActor.run {
+                        self.activeCallKitId = localId
+                        self.callService.handleAudioSessionActivated()
+                    }
+                    return
+                }
                 do {
                     if let uuid = try await callKit?.startOutgoingCall(handle: peerDisplayName, hasVideo: hasVideo) {
                         await MainActor.run {
@@ -5462,10 +5659,59 @@ final class AppState: ObservableObject {
     /// W478 — answer an incoming call from the in-app ringing banner.
     /// Uses CXCallController so the same `provider(_:perform:CXAnswerCallAction)`
     /// delegate path fires as when the user taps Answer on the system sheet.
+    /// Shared incoming-call accept path. Run by BOTH the CallKit answer
+    /// (`onAnswerCall`, `dismissNativeUI=true`) and the CallKit-FREE path
+    /// (`answerIncomingCall` when `CallsGate.callKitFreeMode`,
+    /// `dismissNativeUI=false`). Idempotent via the Bug A guard. The crypto +
+    /// signalling are unchanged — only WHO triggers the accept differs.
+    @MainActor
+    private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) {
+        // Bug A — idempotent answer (CallKit/in-app/notification may all target
+        // the same call). A repeat would re-enter activateIncomingCallAudio
+        // mid-start → uncatchable NSException.
+        if self.answeredCallKitId == uuid {
+            print("[AppState] performAcceptIncoming: duplicate answer for \(uuid) ignored (Bug A guard)")
+            return
+        }
+        self.answeredCallKitId = uuid
+        self.isInCall = true
+        self.activeCallKitId = uuid
+        if self.callState == .ringing {
+            self.callState = .active
+        }
+        // W521: catch up to .encrypted if PQC completed during ringing.
+        if self.callState == .active && self.callSasKeySource == .mlKem {
+            self.callState = .encrypted
+            RTLog.info("call", "performAcceptIncoming: PQC handshake completed during ringing — state .active → .encrypted")
+            TelemetryService.shared.emit(
+                kind: "call.encrypted",
+                callId: uuid.uuidString.lowercased(),
+                attrs: ["path": "answer-fastpath-w521"]
+            )
+        }
+        // W450 + cold-start race: boot audio + notify caller (latched/replayed
+        // when the responder integration isn't ready yet).
+        self.consumeDeferredAnswerIfReady("performAcceptIncoming")
+        if dismissNativeUI {
+            // W-WAKEONLY — dismiss the native CallKit UI so the SAS screen shows.
+            self.dismissNativeCallUIAfterAnswer(uuid)
+        }
+        // CallKit-free: no native UI. Audio self-activates without CallKit's
+        // onAudioSessionActivated via CallService.activateIncomingCallAudio's
+        // Bug B fallback (configureForVoIP best-effort setActive + 0.7s
+        // self-activate), reached via consumeDeferredAnswerIfReady →
+        // startIncomingCallAudioOnAnswer.
+    }
+
     func answerIncomingCall() {
         stopInAppRingtone()
         guard let uuid = activeCallKitId else { return }
-        Task { try? await callKit?.answerCall(uuid: uuid) }
+        if CallsGate.callKitFreeMode {
+            // W-NOCALLKIT — no CallKit; run the accept path directly.
+            performAcceptIncoming(uuid: uuid, dismissNativeUI: false)
+        } else {
+            Task { try? await callKit?.answerCall(uuid: uuid) }
+        }
     }
 
     /// W478 — decline an incoming call from the in-app ringing banner.
@@ -5496,7 +5742,10 @@ final class AppState: ObservableObject {
             Task { try? await provider.callingApi.sendHangup(recipientId: peer) }
         }
 
-        if let uuid = activeCallKitId {
+        // W-NOCALLKIT review H1: skip CallKit teardown in callKitFreeMode — the
+        // call was never reported to CallKit, so reportCallEnded would target a
+        // UUID CXProvider never saw. Flag OFF path is byte-identical to before.
+        if let uuid = activeCallKitId, !CallsGate.callKitFreeMode {
             Task { [weak self] in
                 await self?.callKit?.reportCallEnded(uuid: uuid, reason: .userEnded)
             }
@@ -5574,6 +5823,8 @@ final class AppState: ObservableObject {
         activeCallKitId = nil
         answeredCallKitId = nil  // Bug A — re-arm the idempotent-answer guard for the next call
         incomingAudioStarted = false  // re-arm the deferred-answer consume for the next call
+        pendingNotificationAnswer = false  // W-NOCALLKIT — drop any stale latched answer
+        pendingNotificationDecline = false // W-NOCALLKIT — drop any stale latched decline
         selfManagedAudioSession = false  // W-WAKEONLY — re-arm for the next call
         // earbud-relay-v1 — drop the one-shot counterparty state so the
         // next earbud call starts a fresh responder (fresh FW-H7 counter).

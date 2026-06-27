@@ -79,6 +79,27 @@ public enum CallsGate {
     public static func setNs(_ value: Bool)  { UserDefaults.standard.set(value, forKey: keyNs) }
     public static func setAgc(_ value: Bool) { UserDefaults.standard.set(value, forKey: keyAgc) }
 
+    // MARK: - W-NOCALLKIT — CallKit-free incoming-call mode (revertible)
+
+    /// When true, iOS abandons CallKit + PushKit and handles the incoming-call
+    /// ring + answer with a fully custom in-app UI:
+    ///   • app alive  → the WebSocket-delivered `call_incoming` shows the custom
+    ///                  ring UI immediately (no push, no CallKit);
+    ///   • app killed → a standard APNs ALERT notification (category
+    ///                  `INCOMING_CALL`, time-sensitive, Answer/Decline actions)
+    ///                  rings; tap Answer opens the app → custom UI.
+    ///
+    /// Default FALSE = the proven CallKit + PushKit path, so this is a clean
+    /// REVERT switch (flip to false and the old behaviour returns). Apple
+    /// constraint (verified): PushKit REQUIRES CallKit (iOS 13+), so the two are
+    /// disabled together; the cost of `true` is no full-screen auto-ring on the
+    /// lock screen and no CarPlay/system-call integration on iOS.
+    public static let keyCallKitFree = "qaudion.calls.callkit_free_mode"
+    public static var callKitFreeMode: Bool { readBool(keyCallKitFree, default: false) }
+    public static func setCallKitFreeMode(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: keyCallKitFree)
+    }
+
     // MARK: - W443 call session security (parity with Android SettingsViewModel)
 
     /// Controls AASIST live deepfake detection during calls.
