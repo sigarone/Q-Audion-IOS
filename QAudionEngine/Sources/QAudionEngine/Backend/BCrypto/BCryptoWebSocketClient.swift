@@ -122,6 +122,17 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// milliseconds after each `ping`/`pong` cycle. Consumers should dispatch
     /// to @MainActor before updating UI state.
     public var onLatencyMeasured: ((Int) -> Void)?
+    /// FAILOVER signal: invoked with the current (apparently-DEAD) wss URL after
+    /// `failoverAfterAttempts` consecutive reconnect attempts to the same node
+    /// (reconnectAttempt resets to 0 on a successful auth, so a transient flap
+    /// never trips it). The app layer (AppState) wires this to
+    /// `ServerSelector.reselectExcluding` so a dead node no longer pins the client
+    /// until its ~60s server-side heartbeat TTL clears. The socket's own backoff
+    /// reconnect is unchanged — this only adds a fast cross-node recovery path.
+    public var onNodeStalled: ((String) -> Void)?
+    /// Consecutive failed reconnects to the same node after which `onNodeStalled`
+    /// fires. High enough that a flap (counter resets on auth) never trips it.
+    private let failoverAfterAttempts = 3
     /// Interval between outbound ping keepalives. ADAPTIVE by transport (set by
     /// `applyAdaptiveTiming(for:)` from the NWPathMonitor): WiFi 20 s (beats
     /// carrier/NAT idle timeouts and keeps the server from marking us stale),
@@ -1044,6 +1055,16 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         _state = .disconnected
         reconnectAttempt += 1
         let attempt = reconnectAttempt
+        // FAILOVER trigger: after enough consecutive reconnects the node is likely
+        // DEAD. Signal the app to fail over to a different node (it re-selects +
+        // reconnects). The backoff reconnect below still proceeds and is superseded
+        // when the app switches the server URL.
+        if attempt >= failoverAfterAttempts, let onStalled = onNodeStalled {
+            let deadWss = config.serverUrl
+                .replacingOccurrences(of: "https://", with: "wss://")
+                .replacingOccurrences(of: "http://", with: "ws://") + "/ws"
+            onStalled(deadWss)
+        }
         // Drop the in-flight flag — the previous reconnect attempt either
         // finished or failed. The next forceReconnect() / send() can kick a
         // fresh attempt without being silently debounced.

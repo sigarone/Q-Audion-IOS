@@ -96,6 +96,8 @@ final class AppState: ObservableObject {
     /// emission (W84). Set by `attachPersistentBackend`; cleared on
     /// logout / token refresh.
     internal var liveProvider: BCryptoBackendProvider?
+    /// Epoch-ms of the last node failover — damps ping-pong if both nodes flap.
+    private var lastFailoverMs: Double = 0
     /// W90: peer userId of the currently-open chat. ChatContainer.markRead
     /// sets this on .onAppear; ChatContainer deinits clear it. Used by
     /// `handleIncomingMessage` to suppress local-notification banners
@@ -1720,6 +1722,11 @@ final class AppState: ObservableObject {
         // so we dispatch to main before writing @Published latencyMs.
         ws.onLatencyMeasured = { [weak self] rttMs in
             DispatchQueue.main.async { self?.latencyMs = rttMs }
+        }
+        // FAILOVER: the WS client signals a stalled (dead) node after enough
+        // consecutive reconnects. Re-select a different trusted node and switch.
+        ws.onNodeStalled = { [weak self] deadWss in
+            Task { @MainActor in await self?.handleNodeStalled(deadWss) }
         }
         let cke = ContactKeyExchange(
             identity: sovereignIdentity,
@@ -4979,6 +4986,21 @@ final class AppState: ObservableObject {
     /// and automatically whenever ContactsStore posts .contactsDidChange.
     private func refreshContactsCache() {
         cachedContacts = ContactsStore().load()
+    }
+
+    /// Fail over off a dead node (driven by the WS client's onNodeStalled signal):
+    /// cooldown-gated (anti ping-pong) + jittered (anti thundering-herd), then ask
+    /// ServerSelector to re-select a different trusted node, which switches the
+    /// provider URL. The WS reconnect then lands on the new node.
+    @MainActor
+    private func handleNodeStalled(_ deadWss: String) async {
+        guard let prov = self.liveProvider else { return }
+        let now = Date().timeIntervalSince1970 * 1000
+        if now - lastFailoverMs < 20_000 { return }
+        lastFailoverMs = now
+        let jitter = Double.random(in: 0...5_000)
+        try? await Task.sleep(nanoseconds: UInt64(jitter * 1_000_000))
+        _ = await ServerSelector.shared.reselectExcluding(deadWssUrl: deadWss, provider: prov)
     }
 
     func logout() {
