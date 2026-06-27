@@ -26,6 +26,19 @@ final class ServerSelector {
     private let switchThresholdMs: Double = 300
     private let improvementFactor: Double = 1.5
 
+    /// How strongly a node's reported load penalises its RTT in selection.
+    /// effectiveRtt = rtt * (1 + loadWeight * loadPct/100): at 100 % load a node's
+    /// effective RTT doubles, at 50 % it is ×1.5. Spreads NEW connections off an
+    /// overloaded-but-close node instead of piling on by latency alone. 0 = pure
+    /// RTT; 1.0 is the validated default. Mirrors Android/Desktop ServerSelector.
+    static let loadWeight: Double = 1.0
+
+    /// Load-aware ranking score (pure; testable). Static so unit tests need no instance.
+    static func effectiveRtt(_ rttMs: Double, loadPct: Double) -> Double {
+        let load = min(100, max(0, loadPct))
+        return rttMs * (1 + loadWeight * load / 100)
+    }
+
     /// Hosts the client trusts as VoIP nodes. Every selection + failover path only
     /// ever targets these — never an attacker-injected host. fi1.bcrypto.com (the
     /// Helsinki failover node) is already pinned by `CertPinningDelegate` (it pins
@@ -126,6 +139,7 @@ final class ServerSelector {
         let url: String
         let wssUrl: String
         let rtt: Double
+        let load: Double
     }
 
     /// SECURITY C-6 — uses the provider's cert-pinned BCryptoRestClient session.
@@ -178,10 +192,22 @@ final class ServerSelector {
                   isTrustedFailoverHost(wssUrl) else { continue }
             let healthUrl = httpsUrl.trimmingCharacters(in: .init(charactersIn: "/")) + "/api/v1/health"
             if let rtt = await measureRtt(url: healthUrl) {
-                results.append(NodeProbe(url: httpsUrl, wssUrl: wssUrl, rtt: rtt))
+                let load = (node["load_pct"] as? NSNumber)?.doubleValue ?? 0
+                results.append(NodeProbe(url: httpsUrl, wssUrl: wssUrl, rtt: rtt, load: load))
             }
         }
-        return results.sorted { $0.rtt < $1.rtt }
+        // Rank by load-aware effectiveRtt (not raw RTT) so new selections shed off
+        // an overloaded-but-close node. The ±1% jitter is computed ONCE per element
+        // (never inside the comparator) and spreads the decision boundary so clients
+        // don't all flip at the same load threshold (30s-stale load + un-synced
+        // client cycles already damp most of the herd).
+        return results
+            .map { probe -> (NodeProbe, Double) in
+                let jitter = 1 + Double.random(in: -0.01...0.01)
+                return (probe, ServerSelector.effectiveRtt(probe.rtt, loadPct: probe.load) * jitter)
+            }
+            .sorted { $0.1 < $1.1 }
+            .map { $0.0 }
     }
 
     private func measureRtt(url urlStr: String) async -> Double? {
