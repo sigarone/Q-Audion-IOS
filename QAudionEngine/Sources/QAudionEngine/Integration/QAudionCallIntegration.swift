@@ -344,18 +344,55 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     /// Resolve the TOFU-PINNED 32-byte Ed25519 key for a peer contactId, or nil
     /// if not pinned yet (spec §5c trust source, highest priority). Wired from a
-    /// shared `PeerIdentityPinStore.pinnedKey`.
+    /// shared `PeerIdentityPinStore.pinnedKey`. LEGACY (no device id) — kept so
+    /// existing wiring / tests compile; `resolvePinnedPeerKeyForDevice` is
+    /// preferred when set.
     public var resolvePinnedPeerKey: ((String) -> Data?)?
+
+    /// D11 per-(peer,device) pin lookup: `(peerContactId, senderDeviceId?) ->
+    /// pinnedKey?`. A nil device id resolves to the legacy bare-contactId pin in
+    /// the store (migration anchor / graceful fallback). Wired in `AppState` from
+    /// `PeerIdentityPinStore.pinnedKey(contactId:deviceId:)`. When set, takes
+    /// precedence over `resolvePinnedPeerKey`.
+    public var resolvePinnedPeerKeyForDevice: ((String, String?) -> Data?)?
 
     /// Resolve the SERVER/QR-fetched 32-byte Ed25519 key for a peer contactId,
     /// used as the trust source on first contact when no pin exists yet (spec
     /// §5c). Wired from `ContactsStore.findPubkey`.
     public var resolveServerPeerKey: ((String) -> Data?)?
 
+    /// D11 trust-on-publish floor: resolve the server-published per-device SET of
+    /// Ed25519 keys (`GET …/identity-key?all=1`) for `(peerContactId,
+    /// senderDeviceId?)`. A bundle key that differs from the pin but is ∈ this set
+    /// is an AUTHENTICATED new device / rotation (silent re-pin), not a mismatch
+    /// alarm. Returns an EMPTY set ⇒ "no floor" ⇒ degrade to legacy pin-only TOFU
+    /// (NEVER a fatal mismatch). Wired in `AppState` from the thread-safe
+    /// UserDefaults set cache warmed by `prefetchServerPeerKeySet(_:)`.
+    public var resolvePublishedKeySet: ((String, String?) -> Set<Data>)?
+
     /// Commit a first-contact TOFU pin (contactId, 32-byte Ed25519 key) AFTER a
     /// signature verified under it (spec §2). Wired from
     /// `PeerIdentityPinStore.pinOrMatch`.
+    ///
+    /// D11: the optional third arg is the sender's `device_id` (server-stamped),
+    /// so the pin is keyed per-(peer, device). nil → legacy bare-contactId pin
+    /// (graceful fallback when `sender_device_id` is absent). The default-arg
+    /// overload below keeps the legacy 2-arg call sites compiling.
+    public var commitTofuPinForDevice: ((String, Data, String?) -> Void)?
+
+    /// Legacy 2-arg TOFU-pin shim (no device id). Kept so existing wiring /
+    /// tests that set `commitTofuPin` still work; the integration prefers
+    /// `commitTofuPinForDevice` when both are set.
     public var commitTofuPin: ((String, Data) -> Void)?
+
+    /// D11 UI advisory (W-NOBRICK): fired (peerContactId) when an inbound bundle
+    /// presented an UNAUTHENTICATED identity-key change — the key differs from
+    /// the per-(peer,device) pin AND is ∉ the server-published set. The call is
+    /// NOT dropped and the observed key is NOT pinned; this only raises a
+    /// non-blocking in-call banner ("verify SAS"). AppState marshals it to
+    /// MainActor and sets a `@Published` flag the InCallScreen binds to. nil ⇒
+    /// no UI wired (silent — behaviourally unchanged for tests / legacy paths).
+    public var onUnauthenticatedIdentityChange: ((String) -> Void)?
 
     /// Has this peer ever had a SIGNED v4 bundle verify (spec §4
     /// `v4_capable_pinned`)? Wired from a UserDefaults-backed set in AppState.
@@ -810,6 +847,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         bundle: AndroidHandshakeBundle,
         callId: String,
         callerId: String = "",
+        callerDeviceId: String? = nil,
         eligiblePsks: [String: Data] = [:],
         sendOpaqueRaw: @escaping (String) async throws -> Void
     ) async throws {
@@ -849,46 +887,66 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 throw IntegrationError.invalidState(state)
             }
 
-            // Phase-10b (b) — VERIFY the incoming OFFER fail-closed BEFORE any
-            // crypto work (`pqc.encapsulate`) or ACCEPT emission (spec §4). When
-            // verification is not wired we skip entirely (legacy behaviour). The
-            // peer is `callerId`. `.abort` THROWS here → no ACCEPT is ever sent,
-            // no session is derived. `.authenticated` commits the TOFU pin / v4
-            // flag BEFORE completion and yields the offer_binding the ACCEPT must
-            // carry (spec §3). `.proceedUnsignedWarn` logs and continues with an
-            // EMPTY binding (legacy/unsigned-peer migration path).
+            // Phase-10b (b) — VERIFY the incoming OFFER BEFORE crypto work
+            // (`pqc.encapsulate`) or ACCEPT emission (spec §4). When verification
+            // is not wired we skip entirely (legacy behaviour). The peer is
+            // `callerId`. D11 + W-NOBRICK: the identity verdict NEVER hard-drops the
+            // call (it used to THROW here; that bricked calls on a stale pin). `.abort`
+            // (e.g. identity_key_mismatch — bundle key ∉ the server-published set)
+            // raises a non-blocking in-call alert and PROCEEDS WITHOUT pinning the
+            // observed key — SAS is the terminal anti-MITM gate. `.authenticated`
+            // (key == pinned/server) and `.authenticatedRepinFromPublished` (a
+            // set-PROVEN rotation) commit the per-(peer,device) pin + v4 flag and
+            // yield the offer_binding the ACCEPT must carry (spec §3).
+            // `.proceedUnsignedWarn` logs and continues with an EMPTY binding
+            // (legacy/unsigned-peer migration path).
             var verifiedOfferBinding = Data()  // empty == "no signed offer to bind"
             if verificationEnabled {
-                let verdict = evaluateVerdict(bundle: bundle, peerId: callerId) { key in
+                let verdict = evaluateVerdict(bundle: bundle, peerId: callerId, peerDeviceId: callerDeviceId) { key in
                     Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: key)
                 }
                 switch verdict {
                 case .abort(let code):
-                    // W-NOBRICK (user directive 2026-06-25): a handshake-sig verdict
-                    // must NEVER hard-drop the call — "segnala un cambiamento, non
-                    // droppare", especially in debug. The SAS (6 words from the
-                    // session key) is the REAL anti-MITM gate; the Ed25519 identity
-                    // pin is advisory. So on identity_key_mismatch / sig_invalid we
-                    // WARN loudly, re-pin the peer's CURRENT bundle key
-                    // (trust-on-change, so the next call doesn't perpetually re-warn
-                    // after a legit re-pair / account churn), and PROCEED to emit the
-                    // ACCEPT. The user verifies the SAS to catch a real MITM. (Was:
-                    // throw → no ACCEPT → call bricked on every stale pin.)
+                    // W-NOBRICK (user directive): a handshake-sig verdict must NEVER
+                    // hard-drop the call — "segnala un cambiamento, non droppare".
+                    // The SAS (6 words from the session key) is the REAL anti-MITM
+                    // gate; the Ed25519 identity verdict is advisory. (D11) We DO NOT
+                    // blind-re-pin the bundle's own (untrusted) key any more — an
+                    // `identity_key_mismatch` here means the bundle key is ∉ the
+                    // server-published set (an UNAUTHENTICATED change). We raise a
+                    // non-blocking in-call alert and PROCEED with media WITHOUT
+                    // pinning the observed key. (A set-PROVEN rotation never reaches
+                    // this case — it returns `.authenticatedRepinFromPublished`.)
                     print("[QAudionCallIntegration] ⚠️ OFFER verify code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — NOT dropping; proceeding, VERIFY THE SAS")
+                    if code == "identity_key_mismatch" {
+                        onUnauthenticatedIdentityChange?(callerId)
+                    }
+                    // Protocol continuity only: build the offer_binding under the
+                    // bundle's carried key so the ACCEPT we emit stays internally
+                    // consistent. This pins NOTHING and trusts NOTHING — the verdict
+                    // is already advisory and the SAS is terminal.
                     if let sikB64 = bundle.signerIdentityKey,
-                       let bundleKey = Data(base64Encoded: sikB64), bundleKey.count == 32 {
-                        applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: bundleKey, v4Capable: false)
-                        if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: bundleKey) {
-                            verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
-                        }
+                       let bundleKey = Data(base64Encoded: sikB64), bundleKey.count == 32,
+                       let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: bundleKey) {
+                        verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
                     }
                 case .authenticated(let tofuPinKey, let v4Capable):
-                    applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
                     // The signed OFFER's binding the ACCEPT will carry. Rebuilt
                     // under the trusted key (= the bundle's signerIdentityKey,
                     // which the verdict already confirmed == pinned/server key).
                     if let sikB64 = bundle.signerIdentityKey, let trustedKey = Data(base64Encoded: sikB64),
                        let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: trustedKey) {
+                        verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
+                    }
+                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable):
+                    // D11 trust-on-publish: bundle key ≠ pin but ∈ the server's
+                    // published set AND its own signature verified. Silent additive
+                    // re-pin per-(peer, device); NO banner. The binding is rebuilt
+                    // under the SET-PROVEN device key (the key the policy verified).
+                    print("[QAudionCallIntegration] OFFER set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable)
+                    if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: deviceKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
                     }
                 case .proceedUnsignedWarn(let reason):
@@ -1171,23 +1229,32 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 if let t = sentOfferT {
                     expectedBinding = HandshakeTranscript.offerBinding(t)
                 }
-                let verdict = evaluateVerdict(bundle: bundle, peerId: callerId) { key in
+                let verdict = evaluateVerdict(bundle: bundle, peerId: callerId, peerDeviceId: callerDeviceId) { key in
                     Self.acceptTranscript(from: bundle, callId: callId, signerKeyRaw: key, offerBinding: expectedBinding)
                 }
                 switch verdict {
                 case .abort(let code):
-                    // W-NOBRICK (user directive 2026-06-25): never hard-drop on a
-                    // handshake-sig verdict. Warn, re-pin the peer's current key
-                    // (trust-on-change), and PROCEED to initialise the session — the
-                    // SAS is the real anti-MITM gate. (Was: return → no session → call
-                    // bricked after account churn / re-pair left a stale pin.)
+                    // W-NOBRICK (user directive): never hard-drop on a handshake-sig
+                    // verdict. (D11) No more blind re-pin of the bundle's own
+                    // (untrusted) key — an `identity_key_mismatch` means the bundle
+                    // key is ∉ the server-published set (an UNAUTHENTICATED change).
+                    // Raise a non-blocking in-call alert, PROCEED to initialise the
+                    // session WITHOUT pinning the observed key; the SAS is the real
+                    // anti-MITM gate. (A set-PROVEN rotation returns
+                    // `.authenticatedRepinFromPublished`, not this case.)
                     print("[QAudionCallIntegration] ⚠️ ACCEPT verify code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — NOT aborting; proceeding, VERIFY THE SAS")
-                    if let sikB64 = bundle.signerIdentityKey,
-                       let bundleKey = Data(base64Encoded: sikB64), bundleKey.count == 32 {
-                        applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: bundleKey, v4Capable: false)
+                    if code == "identity_key_mismatch" {
+                        onUnauthenticatedIdentityChange?(callerId)
                     }
                 case .authenticated(let tofuPinKey, let v4Capable):
-                    applyAuthenticatedSideEffects(peerId: callerId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
+                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable):
+                    // D11 trust-on-publish: set-proven rotation → silent additive
+                    // re-pin per-(peer, device); NO banner. Proceed to init the
+                    // session (the policy already verified the ACCEPT signature
+                    // under this set-proven device key).
+                    print("[QAudionCallIntegration] ACCEPT set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable)
                 case .proceedUnsignedWarn(let reason):
                     print("[QAudionCallIntegration] ACCEPT unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
                 }
@@ -1496,7 +1563,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// false an inbound bundle is treated as a legacy unsigned peer (proceed —
     /// no abort), so an unwired integration is behaviourally unchanged.
     private var verificationEnabled: Bool {
-        return resolvePinnedPeerKey != nil || resolveServerPeerKey != nil
+        return resolvePinnedPeerKey != nil
+            || resolvePinnedPeerKeyForDevice != nil
+            || resolveServerPeerKey != nil
     }
 
     /// Attach `signerIdentityKey` + `signature` to a bundle by signing `transcript`.
@@ -1533,28 +1602,33 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private func evaluateVerdict(
         bundle: AndroidHandshakeBundle,
         peerId: String,
+        peerDeviceId: String?,
         transcriptFor: (Data) -> Data?
     ) -> HandshakeSigningPolicy.Verdict {
-        let pinned = resolvePinnedPeerKey?(peerId)
+        // D11: pin is keyed per-(peer, device). A nil/absent device id resolves
+        // to the legacy bare-contactId pin (migration anchor / graceful fallback)
+        // inside the store, so this is safe when `sender_device_id` is absent.
+        // `peerPinStoreLookup` itself returns nil when neither pin closure is set.
+        let pinned = peerPinStoreLookup(peerId: peerId, deviceId: peerDeviceId)
         let server = resolveServerPeerKey?(peerId)
-        // Pick the trusted key the same way the policy will, so the transcript
-        // we hand the policy is built under that exact key (the policy verifies
-        // against the trusted key, never the bundle key). On genuine first
-        // contact (no pin, no server) the bundle's own key is the TOFU candidate.
-        let trustedKey: Data
-        if let p = pinned {
-            trustedKey = p
-        } else if let s = server {
-            trustedKey = s
-        } else if let sikB64 = bundle.signerIdentityKey, let bk = Data(base64Encoded: sikB64) {
-            trustedKey = bk
-        } else {
-            // No signature/identity at all → policy will hit the ABSENT branch;
-            // the transcript bytes are irrelevant there. Use empty so a
-            // present-but-unparseable case still flows to `sig_malformed`.
-            trustedKey = Data()
-        }
-        let transcript = transcriptFor(trustedKey) ?? Data()
+        // D11 trust-on-publish floor: the server's published per-device SET. An
+        // empty set (no floor / fetch failed) makes the policy degrade to legacy
+        // pin-only TOFU — never a fatal mismatch.
+        let publishedSet = resolvePublishedKeySet?(peerId, peerDeviceId) ?? []
+
+        // Parse the bundle's carried key so we can pick the SAME authoritative
+        // key the policy will verify under, and build the transcript under it
+        // (the transcript binds `signerIdentityKey`, so a set-proven rotation
+        // MUST be rebuilt under the bundle key — never the stale pin).
+        let bundleKey: Data? = bundle.signerIdentityKey.flatMap { Data(base64Encoded: $0) }
+        let verifyKey = HandshakeSigningPolicy.verifyKeyHint(
+            bundleKey: bundleKey,
+            pinnedKey: pinned,
+            serverFetchedKey: server,
+            publishedKeySet: publishedSet
+        ) ?? Data()  // empty → policy ABSENT/malformed branch (transcript irrelevant)
+
+        let transcript = transcriptFor(verifyKey) ?? Data()
         let advertisedV4 = (HandshakeSigningPolicy.ratchetV >= 0x04)
             && (HandshakeSigningPolicy.suiteId == 0x01)
         return HandshakeSigningPolicy.evaluate(
@@ -1564,20 +1638,41 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             pinnedKey: pinned,
             serverFetchedKey: server,
             requireSigned: requireSigned(forPeer: peerId),
-            advertisedV4: advertisedV4
+            advertisedV4: advertisedV4,
+            publishedKeySet: publishedSet.isEmpty ? nil : publishedSet
         )
     }
 
-    /// Commit the side effects of a `.authenticated` verdict (spec §2 / §4):
-    /// first-contact TOFU pin, then v4-capable-pin — BOTH before the handshake
-    /// completes. Pure side-effect; safe to call when closures are nil.
+    /// D11 per-(peer,device) pin lookup. `resolvePinnedPeerKey` is the legacy
+    /// bare-contactId closure (kept for back-compat); `resolvePinnedPeerKeyForDevice`
+    /// is the device-aware one wired in AppState. Prefer the device-aware closure
+    /// when set so a 2nd device resolves to its own pin (or the migrated legacy
+    /// pin) rather than always the first device's.
+    private func peerPinStoreLookup(peerId: String, deviceId: String?) -> Data? {
+        if let perDevice = resolvePinnedPeerKeyForDevice {
+            return perDevice(peerId, deviceId)
+        }
+        return resolvePinnedPeerKey?(peerId)
+    }
+
+    /// Commit the side effects of a `.authenticated` /
+    /// `.authenticatedRepinFromPublished` verdict (spec §2 / §4 / D11):
+    /// first-contact-or-set-proven TOFU pin (per-(peer, device)), then
+    /// v4-capable-pin — BOTH before the handshake completes. Pure side-effect;
+    /// safe to call when closures are nil. `deviceId` keys the pin per-device
+    /// (nil → legacy bare-contactId pin via the store's migration anchor).
     private func applyAuthenticatedSideEffects(
         peerId: String,
+        deviceId: String?,
         tofuPinKey: Data?,
         v4Capable: Bool
     ) {
         if let pinKey = tofuPinKey {
-            commitTofuPin?(peerId, pinKey)
+            if let perDevice = commitTofuPinForDevice {
+                perDevice(peerId, pinKey, deviceId)
+            } else {
+                commitTofuPin?(peerId, pinKey)
+            }
         }
         if v4Capable {
             setPeerV4Pinned?(peerId)

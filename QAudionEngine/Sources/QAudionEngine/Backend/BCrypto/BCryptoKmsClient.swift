@@ -143,6 +143,102 @@ public final class BCryptoKmsClient {
         _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
     }
 
+    /// Fetch a peer's published long-term Ed25519 identity key (RAW 32 bytes),
+    /// or `nil` when the peer has not published one (404) or on any transport /
+    /// decode error. This is the iOS mirror of Android
+    /// `BCryptoApi.fetchIdentityKey` + Desktop `BCryptoApi.fetchIdentityKey`,
+    /// used as the spec-§5c "server" trust source for the call handshake
+    /// (`integration.resolveServerPeerKey`).
+    ///
+    /// GET /api/v1/users/{id}/identity-key returns either the v2 bundle
+    /// (`ed25519_pub_b64` + ik_* + self_sig) or the v1 fallback shape
+    /// (`ed25519_pub_b64` only). Both carry the Ed25519 SIGNING key under
+    /// `ed25519_pub_b64`; after the 2026-06-23 publish fix every platform's
+    /// published key equals its handshake signing key, so this is a safe
+    /// cross-check. Returns nil (never a partial/garbage key) so the caller
+    /// falls through to bundle-TOFU on first contact rather than aborting.
+    public func fetchUserIdentityKey(userId: String) async -> Data? {
+        return await fetchUserIdentityKey(userId: userId, deviceId: nil)
+    }
+
+    /// D11 per-device fetch: `GET /api/v1/users/{id}/identity-key?device_id=<id>`.
+    /// Returns the SPECIFIC sender device's published Ed25519 key (RAW 32 bytes),
+    /// or `nil` on 404 / transport / decode error. The server falls through to
+    /// the latest/v1 bundle when that device hasn't published, so a non-nil
+    /// result is "the best key the server has for this (user, device)". A nil
+    /// `deviceId` is the legacy single-key fetch (no query parameter) — identical
+    /// to the bare `fetchUserIdentityKey(userId:)`. Never a partial/garbage key
+    /// (caller falls through to bundle-TOFU on first contact rather than aborting).
+    public func fetchUserIdentityKey(userId: String, deviceId: String?) async -> Data? {
+        guard !userId.isEmpty else { return nil }
+        var path = "/api/v1/users/\(userId)/identity-key"
+        if let d = deviceId, !d.isEmpty {
+            // device_id is a server-stamped UUID (`sender_device_id`), URL-safe,
+            // but encode defensively to mirror the Android/Desktop @Query escaping.
+            let enc = d.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? d
+            path += "?device_id=\(enc)"
+        }
+        do {
+            let data = try await rest.get(path)
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            let b64: String? = (json["ed25519_pub_b64"] as? String) ?? (json["public_key_b64"] as? String)
+            guard let keyB64 = b64,
+                  let raw = Data(base64Encoded: keyB64),
+                  raw.count == 32 else {
+                return nil
+            }
+            return raw
+        } catch {
+            return nil
+        }
+    }
+
+    /// D11 trust-on-publish floor: fetch the SET of a peer's published per-device
+    /// Ed25519 identity keys via `GET /api/v1/users/{id}/identity-key?all=1`.
+    ///
+    /// The server returns `{ "uuid": <id>, "devices": [ { "ed25519_pub_b64": …,
+    /// "device_id": …, … }, … ] }` (users_identity_key.go `?all=1` branch). Pre-
+    /// rollout publishers with no per-device record fall back server-side to the
+    /// single latest bundle, so the array is never empty for a user who has
+    /// published anything.
+    ///
+    /// Returns the set of RAW 32-byte keys (only valid 32-byte entries are kept;
+    /// malformed entries are skipped, never a partial key). Returns an EMPTY set
+    /// on 404 / transport / decode error — the caller treats an empty set as "no
+    /// floor" and degrades to legacy pin-only TOFU (NEVER a fatal mismatch). This
+    /// is the iOS mirror of Android `fetchIdentityKey(all=1)` / Desktop
+    /// `fetchIdentityKey({all:true})`.
+    public func fetchUserIdentityKeySet(userId: String) async -> Set<Data> {
+        guard !userId.isEmpty else { return [] }
+        do {
+            let data = try await rest.get("/api/v1/users/\(userId)/identity-key?all=1")
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return []
+            }
+            var out = Set<Data>()
+            if let devices = json["devices"] as? [[String: Any]] {
+                for dev in devices {
+                    if let b64 = (dev["ed25519_pub_b64"] as? String) ?? (dev["public_key_b64"] as? String),
+                       let raw = Data(base64Encoded: b64), raw.count == 32 {
+                        out.insert(raw)
+                    }
+                }
+            }
+            // Defensive: a server that doesn't honour ?all=1 returns the single-
+            // key shape. Fold it into a 1-element set so the floor still works.
+            if out.isEmpty,
+               let b64 = (json["ed25519_pub_b64"] as? String) ?? (json["public_key_b64"] as? String),
+               let raw = Data(base64Encoded: b64), raw.count == 32 {
+                out.insert(raw)
+            }
+            return out
+        } catch {
+            return []
+        }
+    }
+
     /// Acknowledge earbud-exclusive hw_only key delivery with SE PoP.
     /// POST /api/v1/kms/earbud-ack-pop
     ///
