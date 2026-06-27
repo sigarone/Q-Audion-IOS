@@ -120,6 +120,11 @@ struct InCallScreen: View {
     /// sharing screen" badge over the remote video panel so the user
     /// understands they're seeing screen content, not camera.
     let peerScreenSharing: Bool
+    /// D11 / W-NOBRICK — true when the active call's peer presented an
+    /// UNAUTHENTICATED identity-key change (handshake signer key ∉ the
+    /// server-published per-device set). Drives a NON-BLOCKING advisory banner
+    /// only; it MUST NOT gate audio/video. SAS remains the terminal gate.
+    let identityUnauthenticatedChange: Bool
     let onAddParticipant: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
@@ -153,6 +158,7 @@ struct InCallScreen: View {
          screenSharing: Bool = false,
          onToggleScreenShare: @escaping () -> Void = {},
          peerScreenSharing: Bool = false,
+         identityUnauthenticatedChange: Bool = false,
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
@@ -185,6 +191,7 @@ struct InCallScreen: View {
         self.screenSharing = screenSharing
         self.onToggleScreenShare = onToggleScreenShare
         self.peerScreenSharing = peerScreenSharing
+        self.identityUnauthenticatedChange = identityUnauthenticatedChange
         self.onAddParticipant = onAddParticipant
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
@@ -241,6 +248,43 @@ struct InCallScreen: View {
         )
     }
 
+    // MARK: - D11 identity-change advisory banner (non-blocking)
+
+    /// W-NOBRICK advisory: the peer's identity key changed and is NOT
+    /// server-published — possible re-pair / account churn, or a MITM. Advisory
+    /// ONLY (never gates media); the user confirms the SAS to be sure. Static
+    /// foreground + no closures (SWIFT6_PATTERNS §1) so the type-checker stays
+    /// fast and there is no isolation concern.
+    private var identityChangeBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(extras.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("CHIAVE IDENTITÀ CAMBIATA")
+                    .qaudionStyle(type.labelSmall)
+                    .tracking(0.6)
+                    .foregroundStyle(extras.warning)
+                Text("La chiave del contatto è cambiata e non risulta pubblicata dal server. Confronta le parole SAS per verificare.")
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scheme.surfaceVariant)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(extras.warning.opacity(0.55), lineWidth: 1)
+                )
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Avviso di sicurezza: la chiave identità del contatto è cambiata e non è pubblicata dal server. Verifica le parole SAS.")
+    }
+
     // MARK: - Scroll content (everything above the pinned action row)
 
     private var scrollContent: some View {
@@ -278,6 +322,15 @@ struct InCallScreen: View {
                 Spacer().frame(height: 12)
 
                 statsCard.padding(.horizontal, 20)
+
+                // D11 / W-NOBRICK — non-blocking security advisory. Shown when the
+                // peer's identity key changed and is NOT in the server-published
+                // per-device set. Advisory ONLY: it never gates audio/video; the
+                // SAS panel below is the terminal verification.
+                if identityUnauthenticatedChange {
+                    Spacer().frame(height: 10)
+                    identityChangeBanner.padding(.horizontal, 20)
+                }
 
                 if sasWords.count == 6 {
                     Spacer().frame(height: 8)

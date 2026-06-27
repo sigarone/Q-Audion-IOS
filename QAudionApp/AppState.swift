@@ -181,6 +181,20 @@ final class AppState: ObservableObject {
     @Published var isVideoCall: Bool = false
     @Published var callState: CallState = .idle
     @Published var callContactId: String?
+    /// D11 / W-NOBRICK — true when the active call's peer presented an
+    /// UNAUTHENTICATED identity-key change (the handshake signer key is ∉ the
+    /// server-published per-device set). Drives a NON-BLOCKING advisory banner in
+    /// `InCallScreen` ("verify SAS"); it NEVER gates audio/video. Set off-main by
+    /// the integration's `onUnauthenticatedIdentityChange` (marshalled to
+    /// MainActor); reset at the start of every new call.
+    @Published var callIdentityUnauthenticatedChange: Bool = false
+    /// D11 — `sender_device_id` (server-stamped) captured from the most recent
+    /// `call_incoming` envelope, keyed by `sender_id`. The OFFER/ACCEPT bundles
+    /// arrive over `opaque_message`, which the server relays WITHOUT a device id
+    /// (only `sender_id`), so we stash the device id here from `call_incoming`
+    /// and thread it into the per-device verdict when the bundle lands. Absent ⇒
+    /// nil ⇒ legacy single-key + set-membership (never a fatal mismatch).
+    private var senderDeviceIdByPeer: [String: String] = [:]
     /// W478 — display name of the incoming caller, set when `call_incoming`
     /// is processed. Shown in the in-app ringing banner as a fallback when
     /// CallKit's system UI is suppressed (Focus / Silence Unknown Callers).
@@ -2050,6 +2064,24 @@ final class AppState: ObservableObject {
             // A blocked caller must not be able to ring the device or
             // trigger key-exchange side effects.
             if BlockedContactsStore.isBlocked(senderId) { return }
+            // D11: stash the server-stamped `sender_device_id` keyed by sender so
+            // the later OFFER/ACCEPT (which arrive over `opaque_message` WITHOUT a
+            // device id — the server relays only `sender_id` there) can verify
+            // per-(peer, device). Absent ⇒ nil ⇒ legacy single-key + set
+            // membership (never a fatal mismatch). Server-authoritative, sourced
+            // from the caller's JWT `did` (server client.go), NOT client payload.
+            if let sdid = (data["sender_device_id"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !sdid.isEmpty {
+                self.senderDeviceIdByPeer[senderId] = sdid
+            }
+            // D11: a fresh incoming call clears any stale unauthenticated-change
+            // banner from a previous call.
+            self.callIdentityUnauthenticatedChange = false
+            // #2 (server-fetch trust source): warm the caller's server identity
+            // key now, BEFORE handleIncomingWebRtcOffer runs the §5c verify, so
+            // resolveServerPeerKey can cross-check the OFFER's signer key. Race
+            // loser (verify before fetch lands) → cache miss → bundle-TOFU.
+            self.prefetchServerPeerKey(senderId)
             let callType = data["call_type"] as? String ?? "audio"
             let callUUID = UUID(uuidString: callIdStr) ?? UUID()
             // Caller-id resolution priority for the CallKit display name:
@@ -4088,6 +4120,9 @@ final class AppState: ObservableObject {
     @MainActor
     private func routeInboundAndroidOffer(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
         let integration = ensureResponderIntegration(forCaller: senderId)
+        // D11: the OFFER opaque carries no device id; use the one stamped on the
+        // matching `call_incoming` envelope (stashed by sender_id). nil ⇒ legacy.
+        let senderDeviceId = senderDeviceIdByPeer[senderId]
         let sendOpaqueRaw: (String) async throws -> Void = { [weak self] wireString in
             guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
             // CRITICAL: ship the wire string verbatim — NOT base64-wrapped.
@@ -4128,6 +4163,9 @@ final class AppState: ObservableObject {
                     bundle: parsed.bundle,
                     callId: parsed.callId,
                     callerId: senderId,
+                    // D11: per-device verdict. nil ⇒ legacy single-key + set
+                    // membership (never a fatal mismatch).
+                    callerDeviceId: senderDeviceId,
                     eligiblePsks: eligiblePsks,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
@@ -4150,6 +4188,12 @@ final class AppState: ObservableObject {
         // case mismatches (iOS uppercase UUID vs Android lowercase echo).
         let intState: String = String(describing: integration.getState())
         print("[AppState] Android ACCEPT callId=\(parsed.callId.prefix(8))… from \(senderId.prefix(8))… integration.state=\(intState)")
+        // D11: the ACCEPT (answer leg) carries no server-stamped device id — the
+        // caller never receives a `call_incoming` for the callee's device — so
+        // this is typically nil ⇒ legacy single-key + set-membership floor (the
+        // callee's key ∈ its published set), NEVER a fatal mismatch. We still pass
+        // any stash we happen to hold for symmetry.
+        let senderDeviceId = senderDeviceIdByPeer[senderId]
         let sendOpaqueRaw: (String) async throws -> Void = { [weak self] wireString in
             guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
             let payload = wireString.data(using: .utf8) ?? Data()
@@ -4188,6 +4232,7 @@ final class AppState: ObservableObject {
                     // previously omitted (defaulted to ""), which left the .accept
                     // branch with no peer to verify against.
                     callerId: senderId,
+                    callerDeviceId: senderDeviceId,
                     eligiblePsks: eligiblePsks,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
@@ -4557,17 +4602,69 @@ final class AppState: ObservableObject {
         integration.localSignerIdentityKey = identityManager.loadIdentity()?.signingPublic
 
         // Trust sources (spec §5c): pinned key first, then server/QR-fetched key.
-        integration.resolvePinnedPeerKey = { peerId in
-            pinStore.pinnedKey(contactId: peerId)
+        // D11: per-(peer, device) pin. A nil device id resolves to the legacy
+        // bare-contactId pin inside the store (migration anchor / graceful
+        // fallback), so a missing `sender_device_id` never manufactures a
+        // spurious mismatch.
+        integration.resolvePinnedPeerKeyForDevice = { peerId, deviceId in
+            pinStore.pinnedKey(contactId: peerId, deviceId: deviceId)
         }
         integration.resolveServerPeerKey = { peerId in
-            // ContactsStore is cheap to construct (UserDefaults-backed); mirror
-            // the existing `ContactsStore().load()` usage elsewhere in AppState.
-            ContactsStore().findPubkey(userId: peerId)
+            // Spec §5c "server" trust source (iOS parity with Android
+            // EnsurePeerTrustPinnedUseCase / Desktop server-fetch). Read the
+            // server-fetched RAW 32-byte Ed25519 identity key from the
+            // thread-safe UserDefaults cache populated by
+            // `prefetchServerPeerKey(_:)` (kicked at call_incoming / startCall).
+            // Falls back to any QR-paired ContactsStore key. A cache MISS
+            // returns nil so the verifier falls through to bundle-TOFU on
+            // genuine first contact (never a hard abort). NOTE: this is gated
+            // on the 2026-06-23 publish fix being fleet-wide — the server must
+            // hold each peer's SIGNING key (== its handshake bundle key), else
+            // a cached pre-fix device key would trip identity_key_mismatch.
+            guard !peerId.isEmpty else { return nil }
+            if let raw = UserDefaults.standard.data(forKey: Self.serverPeerKeyDefaultsKey(peerId)),
+               raw.count == 32 {
+                return raw
+            }
+            return ContactsStore().findPubkey(userId: peerId)
         }
-        // First-contact TOFU pin commit (AFTER a signature verified under it).
-        integration.commitTofuPin = { peerId, key in
-            _ = pinStore.pinOrMatch(contactId: peerId, ed25519Pub: key)
+        // First-contact / set-proven TOFU pin commit (AFTER a signature verified
+        // under it). D11: keyed per-(peer, device); a nil device id pins under
+        // the legacy bare-contactId account inside the store.
+        integration.commitTofuPinForDevice = { peerId, key, deviceId in
+            _ = pinStore.pinOrMatch(contactId: peerId, ed25519Pub: key, deviceId: deviceId)
+        }
+
+        // D11 trust-on-publish floor: resolve the server's published per-device
+        // SET of Ed25519 identity keys for this peer. Read from the thread-safe
+        // UserDefaults set cache warmed by `prefetchServerPeerKeySet(_:)` at
+        // call_incoming / startCall. Empty set ⇒ "no floor" ⇒ the policy degrades
+        // to legacy pin-only TOFU (NEVER a fatal mismatch). The `deviceId` arg is
+        // accepted for symmetry but the cache is keyed per-peer (the set already
+        // covers all of a peer's devices).
+        let setKeyFn = Self.serverPeerKeySetDefaultsKey
+        integration.resolvePublishedKeySet = { peerId, _ in
+            guard !peerId.isEmpty else { return [] }
+            guard let arr = UserDefaults.standard.array(forKey: setKeyFn(peerId)) as? [Data] else {
+                return []
+            }
+            return Set(arr.filter { $0.count == 32 })
+        }
+
+        // D11 W-NOBRICK UI advisory: an UNAUTHENTICATED identity-key change
+        // (bundle key ∉ the published set) was observed for `peerId`. The verdict
+        // handler runs OFF-MAIN, and the banner flag is MainActor-isolated, so we
+        // marshal the set onto the main actor. Advisory ONLY — media is never
+        // hard-blocked here; this just lights the non-blocking InCallScreen banner.
+        integration.onUnauthenticatedIdentityChange = { [weak self] peerId in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                // Only surface the alert for the peer of the active call to avoid
+                // a stale banner from a late/duplicate envelope of another call.
+                if self.callContactId == nil || self.callContactId == peerId {
+                    self.callIdentityUnauthenticatedChange = true
+                }
+            }
         }
 
         // v4_capable_pinned set (spec §4), persisted in UserDefaults (thread-safe).
@@ -4593,11 +4690,24 @@ final class AppState: ObservableObject {
         }
         // Global enforcement flag: the integration default is `true` (Gate #16,
         // enabled 2026-06-18 — see QAudionCallIntegration.requireSignedHandshakeFlag).
-        // We intentionally do NOT touch it here. Signed-handshake enforcement is
-        // ON: unsigned/legacy peers are rejected (sig_required_missing) and a
-        // key swap is caught fail-closed (identity_key_mismatch). NEVER set this
-        // to `false` — that re-opens the fleet to unsigned/MITM peers (security
-        // downgrade). (The previous comment here wrongly said "DEFAULTS OFF".)
+        // We intentionally do NOT touch it here. `require_signed_handshake` ON
+        // means a MISSING signature is surfaced (sig_required_missing) rather than
+        // silently accepted; do NOT set it to `false` (that re-opens the fleet to
+        // unsigned/MITM peers — a security downgrade).
+        //
+        // D11 / W-NOBRICK — what actually happens to a KEY SWAP (corrects the
+        // earlier "caught fail-closed" wording, which never matched runtime):
+        // a key swap is NOT a hard media block. The identity verdict is advisory.
+        //   • A changed key that IS a member of the server-published per-device
+        //     set (GET …/identity-key?all=1) is a legitimate new device /
+        //     authenticated rotation → it auto-pins SILENTLY (trust-on-publish),
+        //     no banner.
+        //   • A changed key that is NOT in the published set is an UNAUTHENTICATED
+        //     change → surfaced as a NON-BLOCKING in-call alert ONLY (the observed
+        //     key is NOT pinned). The call proceeds.
+        //   • Media is NEVER hard-blocked on the identity verdict; the SAS (6
+        //     out-of-band words) is the terminal anti-MITM gate. Trust-on-publish
+        //     is a server-trusted floor, NOT end-to-end identity authentication.
     }
 
     /// W450: boot the audio capture/playback stack for an incoming call
@@ -5001,8 +5111,67 @@ final class AppState: ObservableObject {
         await startCall(contactId: trimmed, video: video)
     }
 
+    /// UserDefaults key namespace for the server-fetched peer Ed25519 identity
+    /// key cache (spec §5c server trust source). Per-peer key so reads are O(1)
+    /// and thread-safe (UserDefaults synchronises its own access).
+    private static func serverPeerKeyDefaultsKey(_ userId: String) -> String {
+        "qaudion.serverpeerkey." + userId
+    }
+
+    /// Best-effort warm of the server-fetched identity-key cache for `userId`
+    /// BEFORE the handshake verify needs it (kicked at call_incoming for the
+    /// caller and at startCall for the callee). Safe to call repeatedly; ONLY a
+    /// valid RAW 32-byte key is ever written (404 / transport error / garbage →
+    /// no write, so the verifier falls through to bundle-TOFU rather than
+    /// aborting). Fire-and-forget; captures only locals so it never retains
+    /// self.
+    private func prefetchServerPeerKey(_ userId: String) {
+        guard !userId.isEmpty, let provider = liveProvider else { return }
+        let defaultsKey = Self.serverPeerKeyDefaultsKey(userId)
+        Task {
+            if let raw = await provider.kmsClient.fetchUserIdentityKey(userId: userId),
+               raw.count == 32 {
+                UserDefaults.standard.set(raw, forKey: defaultsKey)
+            }
+        }
+        // D11: also warm the published per-device SET (trust-on-publish floor).
+        prefetchServerPeerKeySet(userId)
+    }
+
+    /// D11 UserDefaults key namespace for the server-published per-device SET
+    /// cache (`GET …/identity-key?all=1`). Per-peer; stored as `[Data]` (each a
+    /// RAW 32-byte Ed25519 key). UserDefaults synchronises its own access.
+    private static func serverPeerKeySetDefaultsKey(_ userId: String) -> String {
+        "qaudion.serverpeerkeyset." + userId
+    }
+
+    /// Best-effort warm of the D11 published-key-SET cache for `userId` BEFORE
+    /// the handshake verify needs it (kicked alongside `prefetchServerPeerKey`).
+    /// Fire-and-forget; writes ONLY a non-empty set of valid 32-byte keys. An
+    /// empty result (404 / transport error) leaves the cache as-is, so the
+    /// verifier degrades to legacy pin-only TOFU (NEVER a fatal mismatch).
+    /// Captures only locals so it never retains self.
+    private func prefetchServerPeerKeySet(_ userId: String) {
+        guard !userId.isEmpty, let provider = liveProvider else { return }
+        let setKey = Self.serverPeerKeySetDefaultsKey(userId)
+        Task {
+            let set = await provider.kmsClient.fetchUserIdentityKeySet(userId: userId)
+            let valid = set.filter { $0.count == 32 }
+            if !valid.isEmpty {
+                // Store as a plain [Data] array; the resolver re-wraps into a Set.
+                UserDefaults.standard.set(Array(valid), forKey: setKey)
+            }
+        }
+    }
+
     func startCall(contactId: String, video: Bool = false) async {
         RTLog.info("call", "startCall contactId=\(contactId.prefix(8))… video=\(video)")
+        // D11: a fresh outgoing call clears any stale unauthenticated-change
+        // banner from a previous call.
+        callIdentityUnauthenticatedChange = false
+        // #2 (server-fetch trust source): warm the peer's server identity key
+        // so the handshake verify of the callee's ACCEPT has the §5c server key.
+        prefetchServerPeerKey(contactId)
         // W541-3: telemetry event marking outgoing-call dial. callId
         // isn't minted yet at this point — bound later via the same
         // session_id. Useful for measuring dial-to-active duration.

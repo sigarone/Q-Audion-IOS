@@ -55,17 +55,56 @@ public final class PeerIdentityPinStore {
 
     public init() {}
 
+    // MARK: - Account keying (D11 per-(peer,device))
+
+    /// The `kSecAttrAccount` for a pin. D11: a pin is keyed per-(peer, deviceId)
+    /// so a peer's SECOND device pins as a NEW Keychain entry (`.pinnedNew`)
+    /// rather than tripping `.mismatch` against the first device's pin.
+    ///
+    /// - `deviceId == nil` / empty → the LEGACY bare-`contactId` account (the
+    ///   pre-D11 shape). This is BOTH the migration anchor (an existing bare pin
+    ///   is read/kept under this account) AND the graceful fallback when the
+    ///   server did not stamp `sender_device_id` (legacy caller / pre-Step-1
+    ///   envelope) — so a null device id keeps using the legacy single-key pin
+    ///   and NEVER manufactures a spurious mismatch.
+    /// - `deviceId` non-empty → the composite `"<contactId>|<deviceId>"` account.
+    private static func account(_ contactId: String, _ deviceId: String?) -> String {
+        if let d = deviceId, !d.isEmpty {
+            return contactId + "|" + d
+        }
+        return contactId
+    }
+
     // MARK: - Read
 
-    /// Return the pinned 32-byte Ed25519 public key for `contactId`, or `nil`
-    /// when no pin exists yet (genuine first contact).
-    public func pinnedKey(contactId: String) -> Data? {
-        #if canImport(Security)
+    /// Return the pinned 32-byte Ed25519 public key for `(contactId, deviceId)`,
+    /// or `nil` when no pin exists yet (genuine first contact for THIS device).
+    ///
+    /// D11 migration: when a per-device pin is absent but `deviceId` is non-nil,
+    /// fall back to the LEGACY bare-`contactId` pin (the pre-D11 single-key pin
+    /// for the peer's first/legacy device). This stops every existing pin from
+    /// reading as "no pin → first contact" the first time a concrete device id is
+    /// threaded — which would silently re-TOFU and briefly weaken the pin.
+    public func pinnedKey(contactId: String, deviceId: String? = nil) -> Data? {
         guard !contactId.isEmpty else { return nil }
+        if let exact = rawPinnedKey(account: Self.account(contactId, deviceId)) {
+            return exact
+        }
+        // Per-device miss → legacy bare-contactId pin (the first/legacy device).
+        if let d = deviceId, !d.isEmpty {
+            return rawPinnedKey(account: contactId)
+        }
+        return nil
+    }
+
+    /// Raw single-account Keychain read (no migration fallback).
+    private func rawPinnedKey(account: String) -> Data? {
+        #if canImport(Security)
+        guard !account.isEmpty else { return nil }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: contactId,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -82,22 +121,42 @@ public final class PeerIdentityPinStore {
 
     // MARK: - Pin-or-match (TOFU)
 
-    /// Trust-On-First-Use pin/compare for `contactId`'s long-term Ed25519 key.
+    /// Trust-On-First-Use pin/compare for `(contactId, deviceId)`'s long-term
+    /// Ed25519 key.
     ///
     /// - No existing pin → store `ed25519Pub` and return `.pinnedNew`.
     /// - Existing pin equals `ed25519Pub` → return `.match` (no write).
     /// - Existing pin DIFFERS → return `.mismatch` and DO NOT overwrite — the
     ///   immutable-on-mismatch property is what makes a key-swap detectable.
     ///
+    /// D11: the pin is write-once-immutable per-(peer, device). A SECOND device
+    /// for the same peer resolves to a different account → no existing pin →
+    /// `.pinnedNew` (not `.mismatch`). When `deviceId` is nil/empty the legacy
+    /// bare-`contactId` account is used (migration anchor / graceful fallback).
+    ///
     /// Returns `.mismatch` for a malformed argument (empty / not 32 bytes) so
     /// the caller fails closed rather than pinning garbage. The `@discardableResult`
     /// lets call sites that only care about the side-effect (first-contact pin
     /// after a successful verify) ignore the return.
     @discardableResult
-    public func pinOrMatch(contactId: String, ed25519Pub: Data) -> PinResult {
+    public func pinOrMatch(contactId: String, ed25519Pub: Data, deviceId: String? = nil) -> PinResult {
         guard !contactId.isEmpty, ed25519Pub.count == 32 else { return .mismatch }
 
-        if let existing = pinnedKey(contactId: contactId) {
+        let account = Self.account(contactId, deviceId)
+
+        // Migration anchor: if there is NO per-device pin yet but a LEGACY bare
+        // pin exists for this peer, treat the legacy pin as THIS (first/legacy)
+        // device's pin so a concrete device id does not orphan it into a silent
+        // re-TOFU. Compare against the legacy pin; on a match it stays put (it is
+        // already the immutable first-device pin), on a difference it is the
+        // mismatch alarm — exactly the pre-D11 semantics for the first device.
+        if let d = deviceId, !d.isEmpty,
+           rawPinnedKey(account: account) == nil,
+           let legacy = rawPinnedKey(account: contactId) {
+            return legacy == ed25519Pub ? .match : .mismatch
+        }
+
+        if let existing = rawPinnedKey(account: account) {
             // Constant-time-ish compare is unnecessary here (the pinned key is
             // not secret — it is a public identity key), but `Data ==` is a
             // single length-checked memcmp which is fine.
@@ -108,7 +167,7 @@ public final class PeerIdentityPinStore {
         let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: contactId,
+            kSecAttrAccount as String: account,
             kSecValueData as String: ed25519Pub,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
@@ -118,7 +177,7 @@ public final class PeerIdentityPinStore {
             // Re-read and compare so two concurrent first-contacts converge on
             // ONE pin (and a racing different key is reported as a mismatch
             // rather than silently overwriting).
-            if let now = pinnedKey(contactId: contactId) {
+            if let now = rawPinnedKey(account: account) {
                 return now == ed25519Pub ? .match : .mismatch
             }
             return .mismatch
@@ -137,17 +196,61 @@ public final class PeerIdentityPinStore {
 
     // MARK: - Wipe
 
-    /// Forget the pin for a single peer — used when the user explicitly resets
+    /// Forget the pin(s) for a single peer — used when the user explicitly resets
     /// a contact (the next handshake re-TOFU-pins).
-    public func wipe(contactId: String) {
+    ///
+    /// - `deviceId == nil` → wipe BOTH the legacy bare-`contactId` pin AND every
+    ///   per-device pin for the peer (full per-peer reset).
+    /// - `deviceId` non-empty → wipe only that one device's pin.
+    public func wipe(contactId: String, deviceId: String? = nil) {
         #if canImport(Security)
         guard !contactId.isEmpty else { return }
+        if let d = deviceId, !d.isEmpty {
+            deleteAccount(Self.account(contactId, d))
+            return
+        }
+        // Full per-peer reset: the legacy bare account + all "<contactId>|<dev>"
+        // composite accounts. Keychain has no prefix-delete, so enumerate this
+        // service's accounts and delete the ones that belong to this peer.
+        deleteAccount(contactId)
+        let prefix = contactId + "|"
+        for acct in allAccounts() where acct.hasPrefix(prefix) {
+            deleteAccount(acct)
+        }
+        #endif
+    }
+
+    /// Delete one Keychain account in this service. No-op if absent.
+    private func deleteAccount(_ account: String) {
+        #if canImport(Security)
+        guard !account.isEmpty else { return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: contactId
+            kSecAttrAccount as String: account
         ]
         SecItemDelete(query as CFDictionary)
+        #endif
+    }
+
+    /// Enumerate every `kSecAttrAccount` stored under this service. Used only by
+    /// the full per-peer `wipe` to find composite accounts to delete.
+    private func allAccounts() -> [String] {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+        var items: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &items)
+        guard status == errSecSuccess, let arr = items as? [[String: Any]] else {
+            return []
+        }
+        return arr.compactMap { $0[kSecAttrAccount as String] as? String }
+        #else
+        return []
         #endif
     }
 

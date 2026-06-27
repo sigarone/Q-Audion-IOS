@@ -55,13 +55,38 @@ public enum HandshakeSigningPolicy {
         /// also first-seen-pin the key (caller pins AFTER this success).
         /// `v4Capable` true when the verified bundle advertised v4+suite-1.
         case authenticated(tofuPinKey: Data?, v4Capable: Bool)
+        /// D11 trust-on-publish: the bundle key DIFFERS from the per-(peer,device)
+        /// pin (or there is no pin yet for this device) but IS a member of the
+        /// server-published per-device set, and its OWN signature verified under
+        /// it. An AUTHENTICATED new device / rotation — the actuator silently
+        /// re-pins `deviceKey` per-(peer,deviceId); NO banner. This is the iOS
+        /// mirror of Desktop `new_device_pin`. NEVER blind-pins an observed key:
+        /// `deviceKey` was proven ∈ the published set BEFORE this is returned.
+        case authenticatedRepinFromPublished(deviceKey: Data, v4Capable: Bool)
         /// No signature, and policy does NOT require one — proceed but WARN
         /// (legacy peer migration path, §4). `reason` is the user-facing hint.
         case proceedUnsignedWarn(reason: String)
-        /// Fatal: abort the handshake. `code` is one of the §4 abort codes
-        /// (`sig_invalid`, `identity_key_mismatch`, `sig_required_missing`,
-        /// `sig_malformed`).
+        /// Fatal-shaped verdict: `code` is one of the §4 codes (`sig_invalid`,
+        /// `identity_key_mismatch`, `sig_required_missing`, `sig_malformed`).
+        ///
+        /// W-NOBRICK (user directive): the call ACTUATOR
+        /// (`QAudionCallIntegration`) NEVER hard-drops media on this verdict — an
+        /// `identity_key_mismatch` (key ∉ published set) is surfaced as a
+        /// NON-BLOCKING in-call alert and the observed key is NOT pinned; SAS is
+        /// the terminal out-of-band gate. The word "abort" is historical
+        /// producer-language only.
         case abort(code: String)
+    }
+
+    /// Constant-time-ish membership test of a 32-byte Ed25519 pubkey in the
+    /// server-published per-device set (`GET …/identity-key?all=1`). The keys are
+    /// PUBLIC identity keys (not secret), so `Data ==` (a length-checked memcmp)
+    /// is acceptable; we iterate the whole set so timing does not leak which
+    /// element matched. Empty / nil set ⇒ never a member (degrade to legacy
+    /// pin-only TOFU; D11 graceful fallback, never a fatal mismatch).
+    static func isMember(_ key: Data, of set: Set<Data>?) -> Bool {
+        guard let set = set, !set.isEmpty, key.count == 32 else { return false }
+        return set.contains(key)
     }
 
     /// Evaluate a received bundle's signing material against the §4 / §5c rules.
@@ -74,12 +99,24 @@ public enum HandshakeSigningPolicy {
     ///   (used as the trust source on first contact when no pin exists yet).
     /// - `requireSigned`: result of `requireSigned(...)` for this peer.
     /// - `advertisedV4`: bundle advertised `ratchet_v>=4 && suite_id==0x01`.
+    /// - `publishedKeySet`: D11 trust-on-publish floor — the server's published
+    ///   per-device set of Ed25519 identity keys (`GET …/identity-key?all=1`). A
+    ///   bundle key that differs from the pin but is a MEMBER of this set is an
+    ///   AUTHENTICATED new device / rotation, not a mismatch alarm. nil/empty ⇒
+    ///   no floor (degrade to legacy pin-only TOFU; never a fatal mismatch).
     ///
     /// Trust source (§5c): verification ALWAYS uses the pinned/server-fetched key
     /// when one exists; the bundle-carried key is accepted only if it equals that
-    /// trusted key. On genuine first contact (neither pin nor server key) the
-    /// bundle key is the TOFU candidate and is returned in `tofuPinKey` so the
-    /// caller pins it ONLY after this returns `.authenticated`.
+    /// trusted key OR it is proven ∈ the published set (D11). On genuine first
+    /// contact (neither pin nor server key nor set membership) the bundle key is
+    /// the TOFU candidate and is returned in `tofuPinKey` so the caller pins it
+    /// ONLY after this returns `.authenticated`.
+    ///
+    /// CALLER CONTRACT (D11): when the bundle key differs from the pin but is ∈
+    /// the published set, the signature is verified UNDER THE BUNDLE KEY (its own
+    /// authenticated rotation key), so the caller MUST have built `transcript`
+    /// with `signerIdentityKey = bundleKey` for that case (the integration
+    /// resolves the transcript signer key the same way — see `verifyKeyHint`).
     public static func evaluate(
         signerIdentityKeyB64: String?,
         signatureB64: String?,
@@ -87,7 +124,8 @@ public enum HandshakeSigningPolicy {
         pinnedKey: Data?,
         serverFetchedKey: Data?,
         requireSigned: Bool,
-        advertisedV4: Bool
+        advertisedV4: Bool,
+        publishedKeySet: Set<Data>? = nil
     ) -> Verdict {
 
         // --- Signature ABSENT -------------------------------------------------
@@ -124,27 +162,88 @@ public enum HandshakeSigningPolicy {
             isTofuFirstContact = true
         }
 
-        // Identity-mismatch is ALWAYS fatal (§4): a bundle key that disagrees
-        // with the trusted key is the MITM/key-swap alarm.
-        if bundleKey != trustedKey {
+        let bundleInSet = isMember(bundleKey, of: publishedKeySet)
+        let matchesTrusted = (bundleKey == trustedKey)
+
+        // --- Identity resolution / mismatch (D11 set-membership-aware) --------
+        // A bundle key that disagrees with the trusted (pinned/server) key is a
+        // key change. TRUST-ON-PUBLISH FLOOR: if the new key is ∈ the published
+        // set it is an AUTHENTICATED rotation (handled on the verify path below
+        // as `.authenticatedRepinFromPublished`); otherwise it is an
+        // UNAUTHENTICATED change → `identity_key_mismatch`. The ACTUATOR surfaces
+        // that as a non-blocking in-call alert and does NOT pin the observed key
+        // (W-NOBRICK — never a hard media block; SAS is terminal).
+        if !matchesTrusted && !bundleInSet {
             return .abort(code: "identity_key_mismatch")
         }
 
         // --- Verify the detached Ed25519 signature over the recomputed §3
-        //     transcript, using the TRUSTED key (never blindly the bundle key).
+        //     transcript. AUTHORITATIVE key choice (D11):
+        //   • bundle key == trusted key → verify under the trusted key (pin /
+        //     server), the established identity (legacy path).
+        //   • bundle key ∈ published set (new device / authenticated rotation) →
+        //     the bundle key itself is authoritative (its OWN signature proves
+        //     possession AND set membership proves server-publication) — verify
+        //     under the bundle key. NEVER blind-trust the bundle key on a bare
+        //     mismatch: we only get here when bundleInSet is true.
+        let verifyKey = matchesTrusted ? trustedKey : bundleKey
         let ok = HandshakeTranscript.verify(
             transcript: transcript,
             signature: signature,
-            signerIdentityKey: trustedKey
+            signerIdentityKey: verifyKey
         )
         guard ok else {
             // Present-but-invalid signature is ALWAYS fatal, regardless of policy.
             return .abort(code: "sig_invalid")
         }
 
-        return .authenticated(
-            tofuPinKey: isTofuFirstContact ? trustedKey : nil,
-            v4Capable: advertisedV4
-        )
+        if matchesTrusted {
+            return .authenticated(
+                tofuPinKey: isTofuFirstContact ? trustedKey : nil,
+                v4Capable: advertisedV4
+            )
+        }
+        // Not matching the trusted key but ∈ published set and self-signature
+        // valid → authenticated new device / rotation. Silent additive re-pin.
+        return .authenticatedRepinFromPublished(deviceKey: bundleKey, v4Capable: advertisedV4)
+    }
+
+    /// D11 helper for the call integration: given the resolved trust facts, which
+    /// key will `evaluate` verify the signature UNDER — so the caller can build
+    /// the §3 transcript with `signerIdentityKey` set to that exact key. Mirrors
+    /// the authoritative-key choice in `evaluate`:
+    ///   • a present bundle key that differs from the pinned/server key but is ∈
+    ///     the published set → the BUNDLE key (set-proven rotation).
+    ///   • otherwise → the pinned key, else the server key, else the bundle key
+    ///     (genuine first-contact TOFU candidate).
+    /// Returns nil only when there is no parseable bundle key at all (the policy
+    /// will then hit the ABSENT / malformed branch where the transcript bytes are
+    /// irrelevant).
+    ///
+    /// CORRECTNESS (must hold): in every case where `evaluate` actually REACHES
+    /// signature verification (i.e. `matchesTrusted || bundleInSet`), this hint
+    /// equals `evaluate`'s `verifyKey`:
+    ///   • matchesTrusted → both = trustedKey.
+    ///   • !matchesTrusted && bundleInSet → both = bundleKey.
+    /// The remaining case (`!matchesTrusted && !bundleInSet`) is the
+    /// UNAUTHENTICATED change: `evaluate` returns `.abort(identity_key_mismatch)`
+    /// BEFORE verifying, so the transcript this hint built (= trustedKey) is never
+    /// consumed. Do NOT "simplify" this to always return bundleKey on a mismatch
+    /// — that would build the transcript under an UNTRUSTED key for the
+    /// abort-before-verify case (semantically wrong; the key is never set-proven).
+    public static func verifyKeyHint(
+        bundleKey: Data?,
+        pinnedKey: Data?,
+        serverFetchedKey: Data?,
+        publishedKeySet: Set<Data>?
+    ) -> Data? {
+        let trustedKey: Data?
+        if let pin = pinnedKey { trustedKey = pin }
+        else if let server = serverFetchedKey { trustedKey = server }
+        else { trustedKey = bundleKey }
+        if let bk = bundleKey, bk != trustedKey, isMember(bk, of: publishedKeySet) {
+            return bk
+        }
+        return trustedKey
     }
 }

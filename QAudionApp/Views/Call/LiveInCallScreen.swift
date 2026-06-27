@@ -194,6 +194,8 @@ struct LiveInCallScreen: View {
                 screenSharing: appState.isScreenSharing,
                 onToggleScreenShare: handleToggleScreenShare,
                 peerScreenSharing: appState.peerScreenShareActive,
+                // D11 / W-NOBRICK — non-blocking identity-change advisory banner.
+                identityUnauthenticatedChange: appState.callIdentityUnauthenticatedChange,
                 onAddParticipant: {},
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
