@@ -887,14 +887,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 throw IntegrationError.invalidState(state)
             }
 
-            // Phase-10b (b) — VERIFY the incoming OFFER fail-closed BEFORE any
-            // crypto work (`pqc.encapsulate`) or ACCEPT emission (spec §4). When
-            // verification is not wired we skip entirely (legacy behaviour). The
-            // peer is `callerId`. `.abort` THROWS here → no ACCEPT is ever sent,
-            // no session is derived. `.authenticated` commits the TOFU pin / v4
-            // flag BEFORE completion and yields the offer_binding the ACCEPT must
-            // carry (spec §3). `.proceedUnsignedWarn` logs and continues with an
-            // EMPTY binding (legacy/unsigned-peer migration path).
+            // Phase-10b (b) — VERIFY the incoming OFFER BEFORE crypto work
+            // (`pqc.encapsulate`) or ACCEPT emission (spec §4). When verification
+            // is not wired we skip entirely (legacy behaviour). The peer is
+            // `callerId`. D11 + W-NOBRICK: the identity verdict NEVER hard-drops the
+            // call (it used to THROW here; that bricked calls on a stale pin). `.abort`
+            // (e.g. identity_key_mismatch — bundle key ∉ the server-published set)
+            // raises a non-blocking in-call alert and PROCEEDS WITHOUT pinning the
+            // observed key — SAS is the terminal anti-MITM gate. `.authenticated`
+            // (key == pinned/server) and `.authenticatedRepinFromPublished` (a
+            // set-PROVEN rotation) commit the per-(peer,device) pin + v4 flag and
+            // yield the offer_binding the ACCEPT must carry (spec §3).
+            // `.proceedUnsignedWarn` logs and continues with an EMPTY binding
+            // (legacy/unsigned-peer migration path).
             var verifiedOfferBinding = Data()  // empty == "no signed offer to bind"
             if verificationEnabled {
                 let verdict = evaluateVerdict(bundle: bundle, peerId: callerId, peerDeviceId: callerDeviceId) { key in
