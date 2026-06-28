@@ -955,14 +955,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // `.proceedUnsignedWarn` logs and continues with an EMPTY binding
             // (legacy/unsigned-peer migration path).
             var verifiedOfferBinding = Data()  // empty == "no signed offer to bind"
-            // Phase 18 — v4 bootstrap is gated on AUTHENTIC verification, mirroring
-            // Android (`HandshakeSigner.verifyOffer` returns a non-null binding ONLY
-            // on `Decision.Ok && signature != null`; the Abort/WarnLegacy paths
-            // return null → `handshakeTranscriptHash == null` → v4 stays inert).
-            // `verifiedOfferBinding` (for ACCEPT signing) is still rebuilt on the
-            // abort path for protocol continuity, but THAT path must NOT bootstrap
-            // v4 — only the two authenticated cases set this true.
-            var v4OfferAuthenticated = false
+            // Phase 18 — v4 bootstrap (BUG 2 fix): we mirror Android's `v4Ready`
+            // (PqcHandshake.kt:819-826), which does NOT require an "authenticated
+            // verdict". The single real input the bootstrap gate needs is a NON-EMPTY
+            // `verifiedOfferBinding` (== Android's `handshakeTranscriptHash != null`).
+            // That binding is rebuilt on EVERY proceeding verdict below — including the
+            // W-NOBRICK abort/warn paths — so a freshly-reinstalled peer (new identity →
+            // warn/repin verdict) STILL bootstraps v4, matching the peer that does the
+            // same. The SAS is the terminal anti-MITM gate. (We previously gated on a
+            // now-removed `v4OfferAuthenticated` flag, which made iOS stricter than
+            // Android → asymmetry → no iOS v4 session → "messaggio non leggibile".)
             if verificationEnabled {
                 let verdict = evaluateVerdict(bundle: bundle, peerId: callerId, peerDeviceId: callerDeviceId) { key in
                     Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: key)
@@ -1000,7 +1002,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     if let sikB64 = bundle.signerIdentityKey, let trustedKey = Data(base64Encoded: sikB64),
                        let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: trustedKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
-                        v4OfferAuthenticated = true  // authentic OFFER → v4 may bootstrap
                     }
                 case .authenticatedRepinFromPublished(let deviceKey, let v4Capable):
                     // D11 trust-on-publish: bundle key ≠ pin but ∈ the server's
@@ -1011,7 +1012,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable)
                     if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: deviceKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
-                        v4OfferAuthenticated = true  // set-proven authentic OFFER → v4 may bootstrap
                     }
                 case .proceedUnsignedWarn(let reason):
                     print("[QAudionCallIntegration] OFFER unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
@@ -1236,25 +1236,34 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // responder OFFER path (`selectedFp`, in scope from step 4).
             onPqcSessionKeyEstablishedWithPsk?(combined, selectedFp)
             // Phase 18 — v4 bootstrap (responder leg). Mirrors Android
-            // PqcHandshake.kt:457-459: self = our identity, peer = the OFFER's
-            // signerIdentityKey (base64-decoded), transcriptHash = the verified
-            // OFFER binding. `verifiedOfferBinding` is the SAME value our ACCEPT
-            // signature bound (step (c) above) — byte-identical to Android's
-            // `offerBindingForAccept`. Gated on `v4OfferAuthenticated`: Android only
-            // yields a binding (→ bootstraps v4) when the OFFER signature AUTHENTI-
-            // CALLY verified (`Decision.Ok`), NEVER on the W-NOBRICK abort path or
-            // an unsigned/legacy peer — so iOS must not either, or the two ends would
-            // diverge on who has a v4 session. SKIP (leave v3 fallback) unless ALL
-            // real inputs exist; a placeholder would diverge and break interop.
+            // PqcHandshake.kt:819-826 (`v4Ready`): self = our identity, peer = the
+            // OFFER's signerIdentityKey (base64-decoded), transcriptHash = the
+            // verified OFFER binding. `verifiedOfferBinding` is the SAME value our
+            // ACCEPT signature bound (step (c) above) — byte-identical to Android's
+            // `offerBindingForAccept`. NOTE: we deliberately do NOT gate on an
+            // "authenticated verdict" (`v4OfferAuthenticated`). Android's `v4Ready`
+            // requires ONLY that the identity pubkeys + the transcript binding are
+            // present — NOT a `Decision.Ok` verdict — so it ALSO bootstraps v4 on
+            // the W-NOBRICK warn/repin proceed paths (e.g. a freshly reinstalled
+            // peer with a new identity → warn/repin verdict). If iOS additionally
+            // required `v4OfferAuthenticated` it would SKIP the bootstrap while the
+            // peer bootstraps and sends 0xE5 → iOS has no session → "non leggibile"
+            // (BUG 2 asymmetry). A non-empty signed binding already proves a signed
+            // OFFER; the SAS remains the terminal security gate (W-NOBRICK), exactly
+            // as on Android. SKIP (leave v3 fallback) unless ALL real inputs exist;
+            // a placeholder would diverge and break interop.
             // `negotiatedRatchetV4` is the cross-platform AND (this build advertises
             // v4 AND the peer advertised it) — without it a one-sided v4 would send
             // 0xE5 frames the peer can't decrypt.
-            if negotiatedRatchetV4,
-               v4OfferAuthenticated,
+            let v4SelfIdPresent = (localSignerIdentityKey != nil)
+            let v4PeerSik = bundle.signerIdentityKey.flatMap { Data(base64Encoded: $0) }
+            let v4PeerIdValid = (v4PeerSik?.count == 32)
+            let v4BindingPresent = !verifiedOfferBinding.isEmpty
+            let v4Fire = negotiatedRatchetV4 && v4SelfIdPresent && v4PeerIdValid && v4BindingPresent
+            print("[PQC_DIAG_V4] responder callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4SelfIdPresent) peer=\(v4PeerIdValid) bindingEmpty=\(verifiedOfferBinding.isEmpty) → fire=\(v4Fire)")
+            if v4Fire,
                let selfId = localSignerIdentityKey,
-               let peerSikB64 = bundle.signerIdentityKey,
-               let peerId = Data(base64Encoded: peerSikB64), peerId.count == 32,
-               !verifiedOfferBinding.isEmpty {
+               let peerId = v4PeerSik {
                 onV4BootstrapReady?(callerId, combined, verifiedOfferBinding, selfId, peerId)
             }
             // vkey-v1: JSON responder — `combined` is the post-PSK-mix
@@ -1530,11 +1539,22 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // `negotiatedRatchetV4` is the cross-platform AND (this build advertises
             // v4 AND the responder's ACCEPT advertised it, captured at the top of
             // onAndroidBundleReceived) — without it a one-sided v4 would diverge.
+            // NOTE: this initiator gate already mirrors Android's `v4Ready`
+            // (PqcHandshake.kt:819-826) — it does NOT require an "authenticated
+            // verdict"; the presence of our sent-OFFER transcript binding already
+            // proves WE signed the OFFER, so a non-empty `sentBinding` is the
+            // initiator's equivalent of `handshakeTranscriptHash != null`. The SAS
+            // remains the terminal security gate (W-NOBRICK), as on Android.
             let sentOfferTForV4: Data? = lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] }
-            if negotiatedRatchetV4,
+            let v4InitSelfIdPresent = (localSignerIdentityKey != nil)
+            let v4InitPeerSik = bundle.signerIdentityKey.flatMap { Data(base64Encoded: $0) }
+            let v4InitPeerIdValid = (v4InitPeerSik?.count == 32)
+            let v4InitBindingPresent = (sentOfferTForV4 != nil)
+            let v4InitFire = negotiatedRatchetV4 && v4InitSelfIdPresent && v4InitPeerIdValid && v4InitBindingPresent
+            print("[PQC_DIAG_V4] initiator callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4InitSelfIdPresent) peer=\(v4InitPeerIdValid) bindingEmpty=\(!v4InitBindingPresent) → fire=\(v4InitFire)")
+            if v4InitFire,
                let selfId = localSignerIdentityKey,
-               let peerSikB64 = bundle.signerIdentityKey,
-               let peerId = Data(base64Encoded: peerSikB64), peerId.count == 32,
+               let peerId = v4InitPeerSik,
                let sentOfferT = sentOfferTForV4 {
                 let sentBinding = HandshakeTranscript.offerBinding(sentOfferT)
                 onV4BootstrapReady?(callerId, combined, sentBinding, selfId, peerId)

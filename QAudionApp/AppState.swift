@@ -3234,7 +3234,10 @@ final class AppState: ObservableObject {
                 // a 0xE5 frame with no local v4 session (or the v4 path disabled)
                 // yields nil → throw → surfaced as a decrypt failure, NEVER a
                 // silent downgrade to v2/v1.
-                guard let plain = ratchetDecryptV4(wire: cipher, senderId: senderId) else {
+                let v4HasSession = AppState.sharedV4Ratchet.hasV4Session(senderId)
+                let v4Plain = ratchetDecryptV4(wire: cipher, senderId: senderId)
+                print("[PQC_DIAG_V4] decryptV4 sender=\(senderId.prefix(8)) hasSession=\(v4HasSession) result=\(v4Plain != nil ? "ok" : "nil")")
+                guard let plain = v4Plain else {
                     throw RatchetV4DispatchError.unroutableOrFailedClosed
                 }
                 pt = plain
@@ -4531,7 +4534,7 @@ final class AppState: ObservableObject {
         // placeholder ever reaches here.
         integration.onV4BootstrapReady = { peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
             Task {
-                _ = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
+                let ok = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
                     peerId: peerId,
                     effectiveSecret: effectiveSecret,
                     selfEpochId: Data(count: 16),
@@ -4540,6 +4543,7 @@ final class AppState: ObservableObject {
                     peerIdentityPub: peerIdentityPub,
                     transcriptHash: transcriptHash
                 )
+                print("[PQC_DIAG_V4] bootstrapV4AndPersist peer=\(peerId.prefix(8)) ok=\(ok)")
             }
         }
         // Pre-negotiation hooks — same shape the caller-side block in
@@ -5564,7 +5568,7 @@ final class AppState: ObservableObject {
                 // fires when every input is real, so no placeholder reaches here.
                 integration.onV4BootstrapReady = { peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
                     Task {
-                        _ = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
+                        let ok = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
                             peerId: peerId,
                             effectiveSecret: effectiveSecret,
                             selfEpochId: Data(count: 16),
@@ -5573,6 +5577,7 @@ final class AppState: ObservableObject {
                             peerIdentityPub: peerIdentityPub,
                             transcriptHash: transcriptHash
                         )
+                        print("[PQC_DIAG_V4] bootstrapV4AndPersist peer=\(peerId.prefix(8)) ok=\(ok)")
                     }
                 }
 

@@ -69,92 +69,100 @@ final class ChatMessageSendService {
         }
         let plaintextData = Data(plaintext.utf8)
 
-        // Resolve PSK. Only a real pairwise PSK from the vault (populated by
-        // `ContactKeyExchange` after the QR/NFC/auto handshake) is acceptable.
-        // If none exists, we REFUSE to send and trigger a key exchange — we
-        // never derive a server-guessable fallback key (FIX H1).
-        let psk: Data
-        do {
-            // W77: ContactKeyExchange persists pairwise PSKs under the
-            // `auto:<peerIdPrefix>:<peerId>` name (see
-            // `ContactKeyExchange.keyName(for:)`). Check that first,
-            // then the bare peerId (legacy / manually-bound); if neither
-            // exists, refuse the send and kick off a key exchange.
-            let prefix = peerUserId.count > 8 ? String(peerUserId.prefix(8)) : peerUserId
-            let autoName = "auto:\(prefix):\(peerUserId)"
-            if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
-                psk = stored
-            } else if let stored = try vault.loadPsk(name: peerUserId), !stored.isEmpty {
-                psk = stored
-            } else {
-                // FIX H1: refuse to send when no pairwise PSK exists. The old
-                // deterministic SHA-256(sorted(peer,self)) fallback was
-                // derivable by the server (and anyone who knows the two public
-                // userIds), so it gave NO confidentiality. Instead, kick off a
-                // ContactKeyExchange OFFER (W566 auto-identity) so a real
-                // X25519-derived PSK gets bound under `auto:<prefix>:<peerId>`,
-                // and fail this send. Once the peer's ACCEPT lands, the user's
-                // Retry succeeds against the real PSK (resolved above).
-                print("[ChatSend] PSK not found for \(peerUserId) — refusing to send, triggering key exchange")
-                appState.triggerKeyExchange(with: peerUserId)
-                return .failed(reason: .pskMissing)
-            }
-        } catch {
-            // Vault failure is hard — keychain refusing access.
-            print("[ChatSend] PSK vault load failed: \(error.localizedDescription)")
-            return .failed(reason: .cryptoFailure)
-        }
-
-        // W365: per-peer v3 capability gate. The global UserDefaults
-        // flag still works as a kill-switch — but normally we now flip
-        // to v3 automatically the first time we observe a v3 inbound
-        // from this peer (PeerCapabilityRegistry.probeInbound writes
-        // the flag). This means v3 lights up incrementally as peers
-        // upgrade, without any manual coordination per device.
-        //
-        // ── Phase 18 — v4 native PQ ratchet gate (checked BEFORE v3/v2) ──
+        // ── Phase 18 — v4 native PQ ratchet gate (checked BEFORE the PSK) ──
         // SYNCHRONOUS, fail-closed: route v4 ONLY when a persisted v4 session
         // already exists for this peer (which implies the v4 path is enabled AND
         // a negotiated+verified handshake bootstrapped it — `hasV4Session` is the
-        // per-peer v4 capability proof). We resolve this BEFORE any version
-        // selection so a peer that has a v4 session can NEVER be downgraded to v3
-        // (the "never downgrade a v4 PSK" rule). The 0xE5 frame is OPAQUE — emitted
-        // by the engine-routed method; we never build it here.
+        // per-peer v4 capability proof). This MUST be resolved BEFORE the
+        // ContactKeyExchange PSK resolution because the v4 path uses the v4
+        // SESSION, NOT that PSK — a v4-capable peer with no ContactKeyExchange
+        // PSK must NOT be wrongly refused with `.pskMissing` (BUG 1 / parity with
+        // Android `MessageCrypto.kt` which dispatches on `ratchetVersion == 4`
+        // before any v3/v2 PSK lookup). The 0xE5 frame is OPAQUE — emitted by the
+        // engine-routed method; we never build it here.
         let useV4 = AppState.sharedV4Ratchet.hasV4Session(peerUserId)
-        let useV3 = PeerCapabilityRegistry.shared.shouldUseV3Outbound(for: peerUserId)
+        print("[PQC_DIAG_V4] send peer=\(peerUserId) useV4=\(useV4) hasV4Session=\(useV4)")
+
         let wireBlob: Data
-        do {
-            if useV4 {
-                // FAIL CLOSED: if the engine returns nil (disabled mid-flight,
-                // deserialize/encrypt/persist error) we refuse the send rather
-                // than silently re-encrypting under a weaker v3/v2 epoch.
-                guard let frame = AppState.sharedV4Ratchet.encryptV4Routed(
-                    peerId: peerUserId, plaintext: plaintextData
-                ), let first = frame.first, first == MessageRatchet.magicV4 else {
-                    print("[ChatSend] v4 selected but encrypt failed/unroutable — failing closed (no downgrade)")
-                    return .failed(reason: .cryptoFailure)
-                }
-                wireBlob = frame
-            } else if useV3 {
-                wireBlob = try Self.ratchetEncryptV3(
-                    plaintext: plaintextData,
-                    psk: psk,
-                    senderId: senderId,
-                    peerId: peerUserId,
-                    msgId: messageId.uuidString
-                )
-            } else {
-                wireBlob = try crypto.encrypt(
-                    plaintext: plaintextData,
-                    psk: psk,
-                    senderId: senderId,
-                    recipientId: peerUserId,
-                    msgId: messageId.uuidString
-                )
+        if useV4 {
+            // v4 path: independent of the ContactKeyExchange PSK. FAIL CLOSED —
+            // if the engine returns nil (disabled mid-flight, deserialize/
+            // encrypt/persist error) we refuse the send rather than silently
+            // re-encrypting under a weaker v3/v2 epoch.
+            guard let frame = AppState.sharedV4Ratchet.encryptV4Routed(
+                peerId: peerUserId, plaintext: plaintextData
+            ), let first = frame.first, first == MessageRatchet.magicV4 else {
+                print("[ChatSend] v4 selected but encrypt failed/unroutable — failing closed (no downgrade)")
+                return .failed(reason: .cryptoFailure)
             }
-        } catch {
-            print("[ChatSend] encrypt failed: \(error.localizedDescription)")
-            return .failed(reason: .cryptoFailure)
+            wireBlob = frame
+        } else {
+            // ── No v4 session: v3/v2 path, which DOES need a pairwise PSK. ──
+            // Resolve PSK. Only a real pairwise PSK from the vault (populated by
+            // `ContactKeyExchange` after the QR/NFC/auto handshake) is acceptable.
+            // If none exists, we REFUSE to send and trigger a key exchange — we
+            // never derive a server-guessable fallback key (FIX H1).
+            let psk: Data
+            do {
+                // W77: ContactKeyExchange persists pairwise PSKs under the
+                // `auto:<peerIdPrefix>:<peerId>` name (see
+                // `ContactKeyExchange.keyName(for:)`). Check that first,
+                // then the bare peerId (legacy / manually-bound); if neither
+                // exists, refuse the send and kick off a key exchange.
+                let prefix = peerUserId.count > 8 ? String(peerUserId.prefix(8)) : peerUserId
+                let autoName = "auto:\(prefix):\(peerUserId)"
+                if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
+                    psk = stored
+                } else if let stored = try vault.loadPsk(name: peerUserId), !stored.isEmpty {
+                    psk = stored
+                } else {
+                    // FIX H1: refuse to send when no pairwise PSK exists. The old
+                    // deterministic SHA-256(sorted(peer,self)) fallback was
+                    // derivable by the server (and anyone who knows the two public
+                    // userIds), so it gave NO confidentiality. Instead, kick off a
+                    // ContactKeyExchange OFFER (W566 auto-identity) so a real
+                    // X25519-derived PSK gets bound under `auto:<prefix>:<peerId>`,
+                    // and fail this send. Once the peer's ACCEPT lands, the user's
+                    // Retry succeeds against the real PSK (resolved above).
+                    print("[ChatSend] PSK not found for \(peerUserId) — refusing to send, triggering key exchange")
+                    appState.triggerKeyExchange(with: peerUserId)
+                    return .failed(reason: .pskMissing)
+                }
+            } catch {
+                // Vault failure is hard — keychain refusing access.
+                print("[ChatSend] PSK vault load failed: \(error.localizedDescription)")
+                return .failed(reason: .cryptoFailure)
+            }
+
+            // W365: per-peer v3 capability gate. The global UserDefaults
+            // flag still works as a kill-switch — but normally we now flip
+            // to v3 automatically the first time we observe a v3 inbound
+            // from this peer (PeerCapabilityRegistry.probeInbound writes
+            // the flag). This means v3 lights up incrementally as peers
+            // upgrade, without any manual coordination per device.
+            let useV3 = PeerCapabilityRegistry.shared.shouldUseV3Outbound(for: peerUserId)
+            do {
+                if useV3 {
+                    wireBlob = try Self.ratchetEncryptV3(
+                        plaintext: plaintextData,
+                        psk: psk,
+                        senderId: senderId,
+                        peerId: peerUserId,
+                        msgId: messageId.uuidString
+                    )
+                } else {
+                    wireBlob = try crypto.encrypt(
+                        plaintext: plaintextData,
+                        psk: psk,
+                        senderId: senderId,
+                        recipientId: peerUserId,
+                        msgId: messageId.uuidString
+                    )
+                }
+            } catch {
+                print("[ChatSend] encrypt failed: \(error.localizedDescription)")
+                return .failed(reason: .cryptoFailure)
+            }
         }
 
         // Ship via the shared, already-authenticated persistent WS
