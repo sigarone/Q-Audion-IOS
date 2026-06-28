@@ -177,23 +177,22 @@ final class ChatMessageSendService {
             // echoes the exact same UUID the recipient uses to reconstruct
             // the AAD for AEAD verification. Previously BCryptoMessageApiImpl
             // generated a NEW UUID here → AAD mismatch → every decrypt failed.
-            let serverMsgId: String
-            if let live = appState.liveProvider {
-                serverMsgId = try await live.messageApi.sendMessage(
-                    recipientId: peerUserId,
-                    content: wireBlob,
-                    clientMsgId: messageId.uuidString
-                )
-            } else {
-                let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
-                let provider = BCryptoBackendProvider(config: backendConfig)
-                try await provider.initialize()
-                serverMsgId = try await provider.messageApi.sendMessage(
-                    recipientId: peerUserId,
-                    content: wireBlob,
-                    clientMsgId: messageId.uuidString
-                )
+            // W-ONESOCKET: always send over the persistent WS. The old
+            // fallback opened a throwaway `BCryptoBackendProvider` +
+            // `initialize()` for this one message — a second `/ws` with the
+            // same JWT/deviceID, which made the server replace the live socket
+            // ("replacing stale ws device") → reconnect storm + a re-POSTed
+            // apns-voip-token. `ensurePersistentProviderConnected()` brings up
+            // (or reuses) the single long-lived provider instead.
+            guard let live = await appState.ensurePersistentProviderConnected() else {
+                print("[ChatSend] no persistent WS available — deferring send")
+                return .failed(reason: .networkError)
             }
+            let serverMsgId = try await live.messageApi.sendMessage(
+                recipientId: peerUserId,
+                content: wireBlob,
+                clientMsgId: messageId.uuidString
+            )
             return .delivered(serverMessageId: serverMsgId)
         } catch {
             // Most likely: WS not connected, 401 token expired, or

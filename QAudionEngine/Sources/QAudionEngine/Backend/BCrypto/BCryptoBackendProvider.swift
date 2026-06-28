@@ -7,8 +7,46 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// by `applyTokenPair` and `updateServerUrl`. External components (e.g.
     /// ServerSelector) read `config.serverUrl` and `config.accessToken` here.
     public private(set) var config: BackendConfig
-    private let wsClient: BCryptoWebSocketClient
+    /// Lazily-created WebSocket client. A transient, REST-only provider — the
+    /// ~20 per-use providers spun up for one-off account/contacts/storage/
+    /// security calls — never touches a WS-backed API, so this stays nil and
+    /// NO socket is ever opened. Only a provider that uses `callingApi` /
+    /// `messageApi` / `presenceManager` / `persistentConnection`, or that
+    /// calls `initialize()` (the single persistent `liveProvider`), brings a
+    /// socket into being. This kills the "zombie WS + duplicate
+    /// apns-voip-token" churn from transient providers each opening their own
+    /// short-lived `/ws`. Built + wired on first access by the `wsClient`
+    /// computed accessor below.
+    private var _wsClient: BCryptoWebSocketClient?
     private let restClient: BCryptoRestClient
+
+    /// On-demand accessor for the WebSocket client. The FIRST access builds
+    /// it from the CURRENT `config` (so a socket created AFTER an
+    /// `applyTokenPair` / `updateServerUrl` still authenticates with the
+    /// latest token / URL) and wires the silent auth-recovery bridge — the
+    /// same wiring that used to live in `init`, moved here so merely
+    /// constructing a provider no longer forces a socket into existence.
+    private var wsClient: BCryptoWebSocketClient {
+        if let c = _wsClient { return c }
+        let c = BCryptoWebSocketClient(config: config)
+        // Always-reachable Phase 2 — bridge the WebSocket's `auth_failed`
+        // handler to the SAME silent recovery cascade the REST 401 path uses
+        // (refresh → Ed25519 device-renew). The cascade writes the fresh
+        // tokens into the REST client's own config; we then broadcast them to
+        // EVERY transport (including this WS) via `applyTokenPair` so the WS's
+        // next connect() authenticates with the new access token. Returns
+        // `true` on success → WS resumes reconnect; `false` on genuine
+        // revocation → WS parks its loop (never forces QR).
+        c.onAuthFailedRecover = { [weak self] in
+            guard let self = self else { return false }
+            let ok = await self.restClient.recoverAuth()
+            guard ok, let fresh = self.restClient.accessToken else { return false }
+            self.applyTokenPair(access: fresh, refresh: self.restClient.refreshToken)
+            return true
+        }
+        _wsClient = c
+        return c
+    }
 
     public lazy var callingApi: CallingApi = BCryptoCallingApiImpl(ws: wsClient, rest: restClient)
     public lazy var messageApi: MessageApi = BCryptoMessageApiImpl(ws: wsClient)
@@ -38,18 +76,20 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// `presenceManager.subscribe(userIds:)` once the contacts view is shown.
     public lazy var presenceManager = BCryptoPresenceManager(ws: wsClient)
 
-    public var isConnected: Bool { wsClient.state == .authenticated }
+    /// True only once a socket exists AND is authenticated. A REST-only
+    /// provider (no socket) is correctly `false` — reading this never forces a
+    /// socket into existence.
+    public var isConnected: Bool { _wsClient?.state == .authenticated }
 
     public init(config: BackendConfig) {
         self.config = config
-        self.wsClient = BCryptoWebSocketClient(config: config)
         self.restClient = BCryptoRestClient(config: config)
 
         // Wire the REST client so it can auto-refresh the JWT access token on
         // HTTP 401 and transparently retry the original request once. Any REST
         // or WebSocket component reading tokens from `self.config` will see the
         // new pair immediately because `updateConfig` is broadcast to both
-        // clients here.
+        // clients on `applyTokenPair`.
         self.restClient.setTokenRefresher { [weak self] in
             guard let self else { throw BCryptoError.unauthorized }
             guard let refresh = self.config.refreshToken else { throw BCryptoError.unauthorized }
@@ -58,21 +98,10 @@ public final class BCryptoBackendProvider: BackendProvider {
             return (accessToken: pair.accessToken, refreshToken: pair.refreshToken)
         }
 
-        // Always-reachable Phase 2 — bridge the WebSocket's `auth_failed`
-        // handler to the SAME silent recovery cascade the REST 401 path uses
-        // (refresh → Ed25519 device-renew). The cascade writes the fresh tokens
-        // into the REST client's own config; we then broadcast them to EVERY
-        // transport (including the WS client) via `applyTokenPair` so the WS's
-        // next connect() authenticates with the new access token. Returns
-        // `true` on success → WS resumes reconnect; `false` on genuine
-        // revocation → WS parks its loop (never forces QR).
-        self.wsClient.onAuthFailedRecover = { [weak self] in
-            guard let self = self else { return false }
-            let ok = await self.restClient.recoverAuth()
-            guard ok, let fresh = self.restClient.accessToken else { return false }
-            self.applyTokenPair(access: fresh, refresh: self.restClient.refreshToken)
-            return true
-        }
+        // NOTE: the WebSocket client and its `onAuthFailedRecover` bridge are
+        // created lazily on first use (see the `wsClient` accessor). A
+        // REST-only provider never reaches that path, so it never opens a
+        // socket nor registers anything WS-side.
     }
 
     /// Propagate a refreshed (access, refresh) pair to the internal clients so
@@ -82,7 +111,9 @@ public final class BCryptoBackendProvider: BackendProvider {
     public func applyTokenPair(access: String, refresh: String?) {
         config.accessToken = access
         if let r = refresh { config.refreshToken = r }
-        wsClient.updateConfig(config)
+        // `_wsClient?` — never force-create a socket just to push a token. A
+        // socket built later reads the now-updated `config` at creation time.
+        _wsClient?.updateConfig(config)
         restClient.updateConfig(config)
     }
 
@@ -92,12 +123,14 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// reconnect automatically (with backoff) to the new URL.
     public func updateServerUrl(to newUrl: String) {
         config.serverUrl = newUrl
-        wsClient.updateConfig(config)
+        // `_wsClient?` — a not-yet-created socket reads the new URL on first
+        // connect; no need to force one into existence here.
+        _wsClient?.updateConfig(config)
         restClient.updateConfig(config)
     }
 
     public func initialize() async throws { wsClient.connect() }
-    public func shutdown() { wsClient.disconnect() }
+    public func shutdown() { _wsClient?.disconnect() }
     public func getWebSocketClient() -> BCryptoWebSocketClient { wsClient }
     public func getRestClient() -> BCryptoRestClient { restClient }
 }

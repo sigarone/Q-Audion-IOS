@@ -155,6 +155,20 @@ final class AppState: ObservableObject {
     /// `pendingVoipPushTokenHex`/`lastKnownVoipTokenKey` semantics.
     private var pendingApnsTokenHex: String?
     private static let lastKnownApnsTokenKey = "qaudion.push.lastApnsTokenHex"
+    /// W-PUSHDEDUP: coalesce duplicate VoIP-token registrations. Several
+    /// triggers fire on the SAME auth/foreground transition — launch
+    /// auth-success (`reassertVoipPushTokenRegistration`), the foreground
+    /// notification, the PushKit `didUpdate` re-emit — so the device used to
+    /// POST `/account/apns-voip-token` 2-3× within a couple of seconds (the
+    /// "pairs" in the server journal). These fields let `registerVoipPushToken`
+    /// skip a POST when the SAME token is already in flight OR was confirmed
+    /// registered within `voipRegisterCoalesceWindowSec`. The window is short
+    /// so the long-timescale W-PUSHHEAL re-assert (login / foreground, minutes
+    /// to hours apart) STILL re-posts to heal a server-side 410 clear.
+    private var voipRegisterInFlightHex: String?
+    private var lastVoipRegisteredHex: String?
+    private var lastVoipRegisteredAt: Date?
+    private static let voipRegisterCoalesceWindowSec: TimeInterval = 90
     /// SECURITY C-6: cert-pinned URLSession for VoIP push token registration.
     /// Lazy — created once on first use against the server URL configured at
     /// login time. Avoids per-call URLSession + thread-pool allocation.
@@ -1820,6 +1834,25 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// W-ONESOCKET: return the persistent `liveProvider`, establishing it if
+    /// absent, so EVERY WebSocket operation rides the SINGLE long-lived socket
+    /// instead of a throwaway one. Replaces the old "spin up a fresh provider
+    /// + `initialize()`" fallbacks that opened a second `/ws` per message /
+    /// presence op — the server logged "replacing stale ws device", churned
+    /// the per-(user,deviceID) slot, and the dropped zombie re-POSTed the
+    /// apns-voip-token. Returns nil only when unauthenticated; otherwise
+    /// best-effort awaits authentication up to `timeoutSec` (the caller still
+    /// proceeds best-effort — `send()` self-heals a stale socket).
+    func ensurePersistentProviderConnected(timeoutSec: Double = 5) async -> BCryptoBackendProvider? {
+        if liveProvider == nil {
+            guard authService.loadToken()?.isEmpty == false else { return nil }
+            connectPersistentSocket()   // idempotent; sets self.liveProvider synchronously
+        }
+        guard let live = liveProvider else { return nil }
+        _ = await live.persistentConnection.ensureAuthenticated(timeoutSec: timeoutSec)
+        return live
+    }
+
     /// W75: re-attempt the PushKit registration after auth-success.
     /// Called from the 3 auth-success entry points so the cached token
     /// (deferred while unauthenticated) lands the moment we have a JWT.
@@ -1874,6 +1907,17 @@ final class AppState: ObservableObject {
             print("[AppState] PushKit register deferred — not authenticated yet (cached for retry)")
             return
         }
+        // W-PUSHDEDUP: collapse the burst of identical registrations that the
+        // launch/foreground/PushKit triggers fire within a second or two.
+        if voipRegisterInFlightHex == hex {
+            print("[AppState] PushKit register skipped — same token already in flight")
+            return
+        }
+        if lastVoipRegisteredHex == hex, let at = lastVoipRegisteredAt,
+           Date().timeIntervalSince(at) < AppState.voipRegisterCoalesceWindowSec {
+            print("[AppState] PushKit register skipped — same token registered \(Int(Date().timeIntervalSince(at)))s ago (<\(Int(AppState.voipRegisterCoalesceWindowSec))s)")
+            return
+        }
         // Build URL via URLComponents so the path isn't percent-encoded
         // by `appendingPathComponent` (which can produce /api%2Fv1%2F…
         // on some iOS versions, leading to 404).
@@ -1896,6 +1940,10 @@ final class AppState: ObservableObject {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = bodyData
+        // W-PUSHDEDUP: mark in flight only now that the POST is actually
+        // about to fire (all synchronous guards passed). Cleared on every
+        // terminal outcome below so a later genuine re-assert isn't blocked.
+        voipRegisterInFlightHex = hex
         // SECURITY C-6 — cert-pinned session for push token registration.
         // Capture the lazy session once; avoids per-call URLSession allocation.
         let session = voipPushSession
@@ -1907,6 +1955,14 @@ final class AppState: ObservableObject {
                         // C-10: token registered OK — do NOT log any
                         // portion of the token material.
                         await MainActor.run {
+                            // W-PUSHDEDUP: stamp the confirmed registration so
+                            // the coalesce window suppresses the sibling burst,
+                            // and release the in-flight latch.
+                            self?.lastVoipRegisteredHex = hex
+                            self?.lastVoipRegisteredAt = Date()
+                            if self?.voipRegisterInFlightHex == hex {
+                                self?.voipRegisterInFlightHex = nil
+                            }
                             // Only clear if cache still holds THIS token.
                             // If a second PushKit emit raced ahead the
                             // cache holds the new hex — must NOT wipe it.
@@ -1916,13 +1972,26 @@ final class AppState: ObservableObject {
                         }
                     } else {
                         print("[AppState] PushKit register HTTP \(http.statusCode)")
-                        // Cache stays — `retryPendingVoipPushTokenRegistration()`
-                        // will fire next foreground/auth event.
+                        // Failure: release the in-flight latch so the retry
+                        // can re-POST. Cache stays —
+                        // `retryPendingVoipPushTokenRegistration()` fires next
+                        // foreground/auth event.
+                        await MainActor.run {
+                            if self?.voipRegisterInFlightHex == hex { self?.voipRegisterInFlightHex = nil }
+                        }
                         await Self.scheduleRetry(self: self)
+                    }
+                } else {
+                    // Non-HTTP response (shouldn't happen) — release the latch.
+                    await MainActor.run {
+                        if self?.voipRegisterInFlightHex == hex { self?.voipRegisterInFlightHex = nil }
                     }
                 }
             } catch {
                 print("[AppState] PushKit register error: \(error.localizedDescription)")
+                await MainActor.run {
+                    if self?.voipRegisterInFlightHex == hex { self?.voipRegisterInFlightHex = nil }
+                }
                 await Self.scheduleRetry(self: self)
             }
         }
@@ -4961,17 +5030,17 @@ final class AppState: ObservableObject {
     }
 
     private func bindPresenceAfterAuth() {
-        // W74: prefer the long-lived provider when present so the
-        // presence subscriptions ride the SAME WS that keeps the user
-        // marked online. Falls back to a fresh provider only when the
-        // persistent socket failed to open.
-        let provider: BCryptoBackendProvider
-        if let live = liveProvider {
-            provider = live
-        } else {
-            guard let token = authService.loadToken(), !token.isEmpty else { return }
-            let config = pinnedConfig(token: token)
-            provider = BCryptoBackendProvider(config: config)
+        // W74: presence subscriptions ride the SAME long-lived WS that keeps
+        // the user marked online.
+        // W-ONESOCKET: presence rides the SINGLE persistent socket. Never
+        // open a throwaway WS just to subscribe — that spawned a zombie
+        // socket (and a duplicate apns-voip-token POST). If the persistent
+        // provider isn't up yet, bind nothing now; the auth-success path
+        // re-runs `bindPresenceAfterAuth` once `connectPersistentSocket`
+        // settles, so presence lands on the live transport then.
+        guard let provider = liveProvider else {
+            if authService.loadToken()?.isEmpty == false { connectPersistentSocket() }
+            return
         }
         presenceService.attach(provider: provider)
         // Initial subscription set: known contact userIds + recent calls.
@@ -6610,16 +6679,17 @@ final class AppState: ObservableObject {
             // ("replacing stale ws device") and triggers a reconnect storm.
             // Pass the same msgId used for AAD so the server echoes it
             // verbatim and the receiver reconstructs the identical AAD.
-            if let live = liveProvider {
-                _ = try await live.messageApi.sendMessage(
-                    recipientId: contactId, content: payload, clientMsgId: messageId)
-            } else {
-                let backendConfig = pinnedConfig(token: authService.loadToken())
-                let provider = BCryptoBackendProvider(config: backendConfig)
-                try await provider.initialize()
-                _ = try await provider.messageApi.sendMessage(
-                    recipientId: contactId, content: payload, clientMsgId: messageId)
+            // W-ONESOCKET: ride the persistent WS only — never open a
+            // throwaway socket for a single send (that made the server
+            // replace the live device → reconnect storm + duplicate
+            // apns-voip-token). If the persistent socket can't be brought up,
+            // surface the failure instead of churning a zombie.
+            guard let live = await ensurePersistentProviderConnected() else {
+                errorMessage = "Send failed: no connection"
+                return
             }
+            _ = try await live.messageApi.sendMessage(
+                recipientId: contactId, content: payload, clientMsgId: messageId)
         } catch {
             errorMessage = "Send failed: \(error.localizedDescription)"
         }
