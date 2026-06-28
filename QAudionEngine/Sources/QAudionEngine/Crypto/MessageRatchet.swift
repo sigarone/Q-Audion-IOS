@@ -58,20 +58,28 @@ public final class MessageRatchet {
     // ───────────────────────────────────────────────────────────────────
 
     /// Phase 3 (iOS) — master kill-switch for the **v4 native PQ ratchet** (the shared Rust core
-    /// via ``RatchetNative``). DEFAULT **OFF**.
+    /// via ``RatchetNative``). GO-LIVE **ON** (Pavel, 2026-06-28).
     ///
-    /// While `false` (the shipped state) NOTHING routes through the v4 path:
-    /// ``ensureSessionV4(root:firstSsXwing:transcriptHash:isA:)`` / ``encryptV4(_:plaintext:)`` /
-    /// ``decryptV4(_:frame:)`` all fail-closed (`nil` / `0`) and the entire live messaging path is
-    /// the v3.1 engine below, bit-for-bit unchanged. This mirrors the existing magic-byte
-    /// versioning the dispatcher already uses (v2 = 0xE2, v3 = 0xE3) — v4 is simply the next,
-    /// currently-disabled tier (0xE5), and the Android engine's `V4_NATIVE_RATCHET_ENABLED = false`.
+    /// iOS now bootstraps its v4 message session FROM THE CALL HANDSHAKE, exactly like Android
+    /// (`V4_NATIVE_RATCHET_ENABLED = true`) and Desktop. The integration fires
+    /// ``QAudionCallIntegration/onV4BootstrapReady`` at each JSON handshake-completion site with the
+    /// REAL §2.5 inputs (offer_binding `transcriptHash` + self/peer Ed25519 identities), and AppState
+    /// calls ``bootstrapV4AndPersist(peerId:effectiveSecret:…)``. This is what unblocks
+    /// cross-platform iOS↔Android messaging: the iOS v3 path needed a separate ContactKeyExchange PSK
+    /// that was never auto-established (→ `.pskMissing` / "Contatto non verificato"), whereas the v4
+    /// session is derived from the call — so once both ends are v4, messaging interops.
     ///
-    /// Flip to `true` ONLY for the on-device v4 round-trip test; it must NOT ship enabled until the
-    /// v4 wire is negotiated cross-platform (Android / Desktop / firmware), the real
-    /// ``RatchetNative`` core is linked (a published XCFramework, not the placeholder stub), and the
-    /// human crypto audit (Pavel) signs off.
-    public static let v4NativeRatchetEnabled: Bool = false
+    /// INTEROP INVARIANT: the v4 sessions match ONLY because the offer_binding + identity pubkeys
+    /// passed here are BYTE-IDENTICAL to Android's. They are guaranteed identical because both come
+    /// from the SAME shared signed handshake (`HandshakeTranscript.offerBinding` of the byte-exact
+    /// cross-platform OFFER transcript, and the raw 32-byte Ed25519 identities). If any of those
+    /// inputs is missing (unsigned/legacy peer), the integration SKIPS the v4 bootstrap and the v3.1
+    /// engine below handles the path unchanged — never a divergent placeholder session.
+    ///
+    /// Still gated at runtime by ``isV4Enabled()`` = this flag AND ``RatchetNative/available``: under
+    /// the fail-closed stub (e.g. `swift test` CI, no XCFramework linked) the whole v4 path stays
+    /// inert regardless of this flag, so the live engine is the v3.1 path there.
+    public static let v4NativeRatchetEnabled: Bool = true
 
     /// v4 wire magic byte — distinct from v3 (0xE3), v2 (0xE2), v1. Matches the Rust core's frame
     /// magic (`0xE5`, see qaudion-crypto-core `src/wire.rs` `MAGIC_V4`). Lets a dispatcher tell a v4

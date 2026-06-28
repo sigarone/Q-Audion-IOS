@@ -1,43 +1,57 @@
 import XCTest
 @testable import QAudionEngine
 
-/// Phase 3 (iOS) — wiring tests for the v4 PQ "continuum" ratchet native binding (``RatchetNative``)
-/// and the default-OFF feature gate on ``MessageRatchet``.
+/// Phase 3/18 (iOS) — wiring tests for the v4 PQ "continuum" ratchet native binding (``RatchetNative``)
+/// and the feature gate on ``MessageRatchet``.
 ///
 /// These do NOT exercise the v4 ratchet crypto (that requires the real `QaudionCryptoCore.xcframework`
-/// linked + the flag ON + a device test). They verify the **wiring contract**: the flag ships OFF,
-/// the v4 surface compiles + links against the real C ABI, and every v4 method fail-closes while the
-/// flag is off — so the live messaging path stays the v3.1 engine, bit-for-bit. This is what makes
-/// `engine-tests.yml` a real verifier of Stage B.
+/// linked + a device test). They verify the **wiring contract**: the flag is at its go-live state,
+/// the v4 surface compiles + links against the real C ABI, and — because the engine-tests CI links
+/// only the FAIL-CLOSED stub (``RatchetNative/available`` == false) — every v4 method still fail-
+/// closes there, so the CI live messaging path stays the v3.1 engine, bit-for-bit. This is what
+/// makes `engine-tests.yml` a real verifier of Stage B.
 final class RatchetNativeV4Tests: XCTestCase {
 
     private let root = Data(repeating: 0x10, count: 32)
     private let ssXwing = Data(repeating: 0x20, count: 32)
     private let th = Data(repeating: 0x30, count: 32)
 
-    // MARK: - The default-OFF tripwire
+    // MARK: - The go-live tripwire
 
-    /// The shipped build MUST have the v4 native ratchet OFF. If this fails, someone flipped the
-    /// flag — the v4 wire is not yet negotiated cross-platform and has not had the crypto audit
-    /// sign-off, so it must not ship enabled. (Mirrors Android's `V4_NATIVE_RATCHET_ENABLED = false`.)
-    func testV4FlagShipsOff() {
-        XCTAssertFalse(MessageRatchet.v4NativeRatchetEnabled,
-                       "v4 native ratchet must ship DEFAULT-OFF until cross-platform + audit sign-off")
+    /// GO-LIVE (Pavel, 2026-06-28): the shipped iOS build now has the v4 native ratchet ON, matching
+    /// Android (`V4_NATIVE_RATCHET_ENABLED = true`) + Desktop. iOS bootstraps its v4 message session
+    /// from the call handshake; cross-platform iOS↔Android messaging needs both ends on v4. If this
+    /// fails, someone reverted the go-live — restore it (the live path is still runtime-gated by
+    /// ``RatchetNative/available``, so a build without the linked core stays inert regardless).
+    func testV4FlagIsLive() {
+        XCTAssertTrue(MessageRatchet.v4NativeRatchetEnabled,
+                      "v4 native ratchet is GO-LIVE ON (Pavel 2026-06-28) — runtime-gated by RatchetNative.available")
     }
 
-    /// With the flag off, `isV4Enabled()` is false regardless of whether a native core is linked.
-    func testIsV4EnabledFalseWhenFlagOff() {
+    /// Under the fail-closed stub (engine-tests CI: no XCFramework linked, ``RatchetNative/available``
+    /// == false), `isV4Enabled()` is false even with the flag ON — so the CI messaging path is the
+    /// v3.1 engine. With the real core linked this returns true (covered by the device round-trip).
+    func testIsV4EnabledFalseUnderStub() {
         let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
-        XCTAssertFalse(ratchet.isV4Enabled())
+        // The assertion is only meaningful when the stub is linked (CI reality); when the real core
+        // IS linked the live path is covered elsewhere, so don't assert false in that case.
+        if !RatchetNative.available {
+            XCTAssertFalse(ratchet.isV4Enabled())
+        }
     }
 
-    // MARK: - v4 methods fail-closed while disabled (no crypto, no handle, no plaintext)
+    // MARK: - v4 methods fail-closed while the path is INERT (stub core: not available)
 
-    func testV4SessionOpsFailClosedWhenDisabled() {
+    func testV4SessionOpsFailClosedWhenDisabled() throws {
+        // Go-live note: the flag is now ON, so "disabled" here means the runtime path is INERT
+        // because the native core is the fail-closed stub (engine-tests CI). When the real core is
+        // linked these ops succeed (covered by the device round-trip), so skip the inert assertions
+        // in that case.
+        try XCTSkipIf(RatchetNative.available, "real core linked — inert assertions N/A (round-trip covers live)")
         let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
 
         let handle = ratchet.ensureSessionV4(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
-        XCTAssertEqual(handle, 0, "ensureSessionV4 must return 0 (no session) while v4 is disabled")
+        XCTAssertEqual(handle, 0, "ensureSessionV4 must return 0 (no session) while the v4 path is inert")
 
         XCTAssertNil(ratchet.encryptV4(handle, plaintext: Data("hi".utf8)))
         XCTAssertNil(ratchet.decryptV4(handle, frame: Data([0xE5, 0x04, 0x00])))
