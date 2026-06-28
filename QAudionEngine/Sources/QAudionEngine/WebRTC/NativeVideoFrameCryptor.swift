@@ -31,6 +31,15 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
     private let participantId: String
     private var senderCryptor: RTCFrameCryptor?
     private var receiverCryptor: RTCFrameCryptor?
+    // VIDEO-TOGGLE FREEZE FIX (2026-06-28): the RTP sender/receiver a cryptor is
+    // bound to. A video toggle off→on renegotiation hands us a NEW transceiver
+    // (new RTCRtpReceiver/RTCRtpSender); the existing cryptor stays bound to the
+    // dead one. We track identity here so attachReceiver/attachSender REBIND to
+    // the live object instead of no-op'ing (which left the inbound/outbound video
+    // undecrypted → frozen). weak: the RTCFrameCryptor holds its own native ref,
+    // so a deallocated prior object simply becomes nil ⇒ treated as "changed".
+    private weak var boundSender: RTCRtpSender?
+    private weak var boundReceiver: RTCRtpReceiver?
     private var hasKey = false
     private let lock = NSLock()
 
@@ -85,7 +94,15 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
     @discardableResult
     public func attachSender(_ sender: RTCRtpSender) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard senderCryptor == nil else { return true }
+        // Already bound to THIS sender → nothing to do. Bound to a DIFFERENT
+        // (reneg) sender → dispose the stale cryptor and rebind to the live one
+        // (mirrors Android onTrack stale-cryptor disposal in PeerConnectionHolder.kt).
+        if senderCryptor != nil {
+            if boundSender === sender { return true }
+            print("[NativeVideoFrameCryptor] sender changed (reneg) — disposing stale cryptor, rebinding")
+            senderCryptor?.enabled = false
+            senderCryptor = nil
+        }
         guard let c = RTCFrameCryptor(factory: factory,
                                       rtpSender: sender,
                                       participantId: participantId,
@@ -97,6 +114,7 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
         c.keyIndex = 0
         c.enabled = true
         senderCryptor = c
+        boundSender = sender
         print("[NativeVideoFrameCryptor] sender cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")
         return true
     }
@@ -106,7 +124,16 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
     @discardableResult
     public func attachReceiver(_ receiver: RTCRtpReceiver) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard receiverCryptor == nil else { return true }
+        // Already bound to THIS receiver → done. Bound to a DIFFERENT (reneg)
+        // receiver → the inbound video toggle off→on created a new receiver;
+        // dispose the stale cryptor and rebind so the peer's AES-GCM video keeps
+        // decrypting (otherwise frames are discarded → frozen remote view).
+        if receiverCryptor != nil {
+            if boundReceiver === receiver { return true }
+            print("[NativeVideoFrameCryptor] receiver changed (reneg) — disposing stale cryptor, rebinding")
+            receiverCryptor?.enabled = false
+            receiverCryptor = nil
+        }
         guard let c = RTCFrameCryptor(factory: factory,
                                       rtpReceiver: receiver,
                                       participantId: participantId,
@@ -118,6 +145,7 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
         c.keyIndex = 0
         c.enabled = true
         receiverCryptor = c
+        boundReceiver = receiver
         print("[NativeVideoFrameCryptor] receiver cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")
         return true
     }
@@ -136,6 +164,8 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
         receiverCryptor?.enabled = false
         senderCryptor = nil
         receiverCryptor = nil
+        boundSender = nil
+        boundReceiver = nil
     }
 }
 #endif
