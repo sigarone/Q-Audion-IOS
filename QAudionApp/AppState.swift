@@ -4522,17 +4522,23 @@ final class AppState: ObservableObject {
                 #endif
             }
         }
-        // Phase 18 — v4 ratchet bootstrap (fail-closed; no-op while v4NativeRatchetEnabled=false).
-        integration.onV4BootstrapReady = { peerId, effectiveSecret in
+        // Phase 18 — v4 ratchet bootstrap from the call handshake (matches
+        // Android). The integration supplies the REAL §2.5 / chain-derivation
+        // inputs — transcriptHash (offer_binding), self + peer Ed25519 identities —
+        // all byte-identical to Android's via the shared signed handshake.
+        // selfEpochId/peerEpochId are the 16-zero cross-platform constant (Android
+        // zeroEpoch). The integration only fires when every input is real, so no
+        // placeholder ever reaches here.
+        integration.onV4BootstrapReady = { peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
             Task {
                 _ = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
                     peerId: peerId,
                     effectiveSecret: effectiveSecret,
                     selfEpochId: Data(count: 16),
                     peerEpochId: Data(count: 16),
-                    selfIdentityPub: Data(),
-                    peerIdentityPub: Data(),
-                    transcriptHash: Data()
+                    selfIdentityPub: selfIdentityPub,
+                    peerIdentityPub: peerIdentityPub,
+                    transcriptHash: transcriptHash
                 )
             }
         }
@@ -5549,17 +5555,23 @@ final class AppState: ObservableObject {
                     }
                 }
 
-                // Phase 18 — v4 ratchet bootstrap (fail-closed; no-op while v4NativeRatchetEnabled=false).
-                integration.onV4BootstrapReady = { peerId, effectiveSecret in
+                // Phase 18 — v4 ratchet bootstrap from the call handshake (matches
+                // Android). The integration supplies the REAL §2.5 / chain-
+                // derivation inputs — transcriptHash (offer_binding), self + peer
+                // Ed25519 identities — all byte-identical to Android's via the
+                // shared signed handshake. selfEpochId/peerEpochId are the 16-zero
+                // cross-platform constant (Android zeroEpoch). The integration only
+                // fires when every input is real, so no placeholder reaches here.
+                integration.onV4BootstrapReady = { peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
                     Task {
                         _ = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
                             peerId: peerId,
                             effectiveSecret: effectiveSecret,
                             selfEpochId: Data(count: 16),
                             peerEpochId: Data(count: 16),
-                            selfIdentityPub: Data(),
-                            peerIdentityPub: Data(),
-                            transcriptHash: Data()
+                            selfIdentityPub: selfIdentityPub,
+                            peerIdentityPub: peerIdentityPub,
+                            transcriptHash: transcriptHash
                         )
                     }
                 }

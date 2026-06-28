@@ -54,14 +54,16 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
         XCTAssertFalse(MessageWireFormat.isV4(Data()))
     }
 
-    /// With the production default (flag off), EVERY routed v4 method fail-closes
-    /// regardless of stored state — the live path can never accidentally engage v4.
+    /// While the v4 path is INERT, EVERY routed v4 method fail-closes regardless of
+    /// stored state — the live path can never accidentally engage v4. Post go-live
+    /// (flag ON) the path is inert under the engine-tests stub (``RatchetNative/
+    /// available`` == false), which is exactly the `isV4Enabled()` guard below.
     /// (Mirrors Android `routedMethods_areInert_whenFlagOff`.)
     func testRoutedMethodsAreInertWhenFlagOff() {
-        // The shipped build has the flag off; if the real core were also linked
-        // the routed ops could engage, so additionally require the core to be the
-        // stub for this assertion to be meaningful. When the real core IS linked
-        // the dedicated round-trip test below covers the live behaviour.
+        // The flag is now ON, but the routed ops can only engage when the real core
+        // is linked; under the stub `isV4Enabled()` is false and these assertions are
+        // meaningful. When the real core IS linked the dedicated round-trip test
+        // below covers the live behaviour, so self-skip here.
         guard !MessageRatchet(vault: InMemoryRatchetVault()).isV4Enabled() else {
             // v4 actually enabled (real core + flag on) — inert assertions N/A.
             return

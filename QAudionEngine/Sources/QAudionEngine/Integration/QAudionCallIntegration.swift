@@ -80,6 +80,32 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         Self.srtpDirKeysEnabled && peerAdvertisedSrtpDirKey
     }
 
+    /// Phase 18 — whether THIS build advertises the v4 PQ ratchet (`ratchetV4`)
+    /// capability. Mirrors Android `selfCapabilities().ratchetV4 =
+    /// MessageRatchet.V4_NATIVE_RATCHET_ENABLED && RatchetNative.available`
+    /// (`PqcHandshake.kt:477`): we only signal v4 when the flag is ON and the real
+    /// native core is linked, so we never claim v4 against a stub build that would
+    /// fail-close `bootstrapV4AndPersist`. Folded into OFFER + ACCEPT capabilities.
+    /// NOT part of the signed CAPS triplet (`ratchetV3,sframeV1,vkeyV1`), so adding
+    /// it never perturbs the Ed25519 handshake signature.
+    public static var advertisesRatchetV4: Bool {
+        MessageRatchet.v4NativeRatchetEnabled && RatchetNative.available
+    }
+
+    /// Phase 18 — whether the PEER advertised `ratchetV4` in its last received
+    /// OFFER/ACCEPT bundle (set in `onAndroidBundleReceived`, before the v4
+    /// bootstrap fires). The v4 session is bootstrapped/used ONLY when BOTH ends
+    /// advertise v4 — the same `self && peer` negotiation Android applies
+    /// (`PqcHandshake.negotiate`: `ratchetV4 = self.ratchetV4 && safePeer.ratchetV4`).
+    /// Without this AND, a one-sided v4 (iOS bootstraps, Android stays v3) would
+    /// emit 0xE5 frames the peer routes to v3/v2 and cannot decrypt.
+    private var peerAdvertisedRatchetV4: Bool = false
+
+    /// Phase 18 — v4 is engaged only when BOTH peers advertise it (negotiated AND).
+    public var negotiatedRatchetV4: Bool {
+        Self.advertisesRatchetV4 && peerAdvertisedRatchetV4
+    }
+
     // MARK: - W529 / W531: handshake retry & WS-reconnect replay state
 
     /// Last serialized OFFER wire bundle (`"<callId>|<JSON>"`) actually
@@ -146,13 +172,30 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     /// Phase 18 — v4 bootstrap signal. Fires at every JSON handshake-completion
     /// site (OFFER accepted = responder, ACCEPT decapsulated = originator) AFTER
-    /// ``onPqcSessionKeyEstablished``. Carries `(peerId, effectiveSecret)` so the
-    /// app layer can call
-    /// ``MessageRatchet/bootstrapV4AndPersist(peerId:effectiveSecret:…)`` without
-    /// needing access to the raw handshake internals. Only fires on the JSON
-    /// (AndroidHandshakeBundle) paths — not the QUAD or earbud paths, where v4
-    /// capability is not negotiated. No-op when nil.
-    public var onV4BootstrapReady: ((String, Data) -> Void)?
+    /// ``onPqcSessionKeyEstablished``. Carries
+    /// `(peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub)`
+    /// so the app layer can call
+    /// ``MessageRatchet/bootstrapV4AndPersist(peerId:effectiveSecret:…)`` with the
+    /// SAME §2.5 / chain-derivation inputs Android passes
+    /// (`PqcHandshake.kt:894-901`), without needing access to the raw handshake
+    /// internals:
+    ///   - `transcriptHash` = the offer_binding (`SHA-256(offerTranscript)`) — the
+    ///     responder's verified-OFFER binding, the initiator's sent-OFFER binding.
+    ///   - `selfIdentityPub` = THIS device's raw 32-byte Ed25519 identity
+    ///     (`localSignerIdentityKey`, == Android `handshakeSigner.localIdentityKey()`).
+    ///   - `peerIdentityPub` = the OTHER device's raw 32-byte Ed25519 identity (the
+    ///     bundle's `signerIdentityKey`, base64-decoded — the OFFER's on the
+    ///     responder leg, the ACCEPT's on the initiator leg).
+    /// The native bootstrap mixes `transcriptHash` into chain-key derivation and
+    /// uses the two identity pubkeys for the §2.5 lex-order (is_lex_min → chain
+    /// direction), so these MUST byte-match Android's — which they do, because they
+    /// are the SAME values the shared signed-handshake binding already produces.
+    /// Only fires on the JSON (AndroidHandshakeBundle) paths — not the QUAD or
+    /// earbud paths, where v4 capability is not negotiated. The integration SKIPS
+    /// the fire (passes nothing) when any real input is missing (no signed
+    /// handshake), leaving the v3 fallback rather than a divergent placeholder
+    /// session. No-op when nil.
+    public var onV4BootstrapReady: ((String, Data, Data, Data, Data) -> Void)?
 
     /// `vkey-v1` — fired alongside ``onPqcSessionKeyEstablished`` at every
     /// handshake-completion site. Carries the SAME 32-byte post-PSK-mix
@@ -634,6 +677,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // Sending them true makes the signed CAPS == the reconstructed CAPS.
                 sframeV1: true,
                 vkeyV1: true,
+                // Phase 18 — advertise v4 ONLY when this build can actually do v4
+                // (flag ON + native core linked). nil when not → JSONEncoder omits
+                // the key → byte-identical pre-v4 wire, and Android negotiates v4
+                // off for us (its `safePeer.ratchetV4` default). NOT in the signed
+                // CAPS triplet, so the OFFER signature is unaffected.
+                ratchetV4: Self.advertisesRatchetV4 ? true : nil,
                 srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
             ),
             pskFingerprints: SovereignKeyVault().listPskNames().compactMap {
@@ -855,6 +904,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // the relay sealer can be built directional when both sides support it.
         // This runs before onRelaySessionReady fires for this bundle.
         self.peerAdvertisedSrtpDirKey = (bundle.capabilities?.srtpDirKeyV1 ?? false)
+        // Phase 18 — capture the peer's v4 advertisement so the v4 bootstrap is
+        // gated on the negotiated AND (`negotiatedRatchetV4`). A bundle that omits
+        // the field (older peer / un-opted-in) decodes nil → false → v4 stays off
+        // for the pair, exactly like Android's `safePeer.ratchetV4` default.
+        self.peerAdvertisedRatchetV4 = (bundle.capabilities?.ratchetV4 ?? false)
 
         switch bundle.kind {
         case .offer:
@@ -901,6 +955,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // `.proceedUnsignedWarn` logs and continues with an EMPTY binding
             // (legacy/unsigned-peer migration path).
             var verifiedOfferBinding = Data()  // empty == "no signed offer to bind"
+            // Phase 18 — v4 bootstrap is gated on AUTHENTIC verification, mirroring
+            // Android (`HandshakeSigner.verifyOffer` returns a non-null binding ONLY
+            // on `Decision.Ok && signature != null`; the Abort/WarnLegacy paths
+            // return null → `handshakeTranscriptHash == null` → v4 stays inert).
+            // `verifiedOfferBinding` (for ACCEPT signing) is still rebuilt on the
+            // abort path for protocol continuity, but THAT path must NOT bootstrap
+            // v4 — only the two authenticated cases set this true.
+            var v4OfferAuthenticated = false
             if verificationEnabled {
                 let verdict = evaluateVerdict(bundle: bundle, peerId: callerId, peerDeviceId: callerDeviceId) { key in
                     Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: key)
@@ -938,6 +1000,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     if let sikB64 = bundle.signerIdentityKey, let trustedKey = Data(base64Encoded: sikB64),
                        let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: trustedKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
+                        v4OfferAuthenticated = true  // authentic OFFER → v4 may bootstrap
                     }
                 case .authenticatedRepinFromPublished(let deviceKey, let v4Capable):
                     // D11 trust-on-publish: bundle key ≠ pin but ∈ the server's
@@ -948,6 +1011,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable)
                     if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: deviceKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
+                        v4OfferAuthenticated = true  // set-proven authentic OFFER → v4 may bootstrap
                     }
                 case .proceedUnsignedWarn(let reason):
                     print("[QAudionCallIntegration] OFFER unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
@@ -1089,6 +1153,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // hs-sig ACCEPT abort: sig_invalid → handshake fails.
                     sframeV1: true,
                     vkeyV1: true,
+                    // Phase 18 — advertise v4 on the ACCEPT too (same self && peer
+                    // negotiation): nil when this build can't do v4 → wire unchanged.
+                    // Not part of the signed CAPS triplet → ACCEPT signature intact.
+                    ratchetV4: Self.advertisesRatchetV4 ? true : nil,
                     srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
                 ),
                 selectedPskFingerprint: selectedFp
@@ -1167,7 +1235,28 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // DISPLAY-ONLY: surface the PSK fingerprint negotiated on this
             // responder OFFER path (`selectedFp`, in scope from step 4).
             onPqcSessionKeyEstablishedWithPsk?(combined, selectedFp)
-            onV4BootstrapReady?(callerId, combined)
+            // Phase 18 — v4 bootstrap (responder leg). Mirrors Android
+            // PqcHandshake.kt:457-459: self = our identity, peer = the OFFER's
+            // signerIdentityKey (base64-decoded), transcriptHash = the verified
+            // OFFER binding. `verifiedOfferBinding` is the SAME value our ACCEPT
+            // signature bound (step (c) above) — byte-identical to Android's
+            // `offerBindingForAccept`. Gated on `v4OfferAuthenticated`: Android only
+            // yields a binding (→ bootstraps v4) when the OFFER signature AUTHENTI-
+            // CALLY verified (`Decision.Ok`), NEVER on the W-NOBRICK abort path or
+            // an unsigned/legacy peer — so iOS must not either, or the two ends would
+            // diverge on who has a v4 session. SKIP (leave v3 fallback) unless ALL
+            // real inputs exist; a placeholder would diverge and break interop.
+            // `negotiatedRatchetV4` is the cross-platform AND (this build advertises
+            // v4 AND the peer advertised it) — without it a one-sided v4 would send
+            // 0xE5 frames the peer can't decrypt.
+            if negotiatedRatchetV4,
+               v4OfferAuthenticated,
+               let selfId = localSignerIdentityKey,
+               let peerSikB64 = bundle.signerIdentityKey,
+               let peerId = Data(base64Encoded: peerSikB64), peerId.count == 32,
+               !verifiedOfferBinding.isEmpty {
+                onV4BootstrapReady?(callerId, combined, verifiedOfferBinding, selfId, peerId)
+            }
             // vkey-v1: JSON responder — `combined` is the post-PSK-mix
             // session key and the IKM for K_video.
             onVideoKeyEstablished?(combined)
@@ -1425,7 +1514,31 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // selected (`selectedFpStr`, from `bundle.selectedPskFingerprint`
             // at the top of this ACCEPT branch). Empty ⇒ no PSK mixed ⇒ nil.
             onPqcSessionKeyEstablishedWithPsk?(combined, selectedFpStr.isEmpty ? nil : selectedFpStr)
-            onV4BootstrapReady?(callerId, combined)
+            // Phase 18 — v4 bootstrap (initiator leg). Mirrors Android
+            // PqcHandshake.kt:333-335: self = our identity, peer = the ACCEPT's
+            // signerIdentityKey (base64-decoded), transcriptHash = the binding of
+            // the OFFER WE SENT. We recompute that binding from the stashed sent-
+            // OFFER transcript (`sentOfferTranscriptByCall`, populated only when we
+            // actually signed the OFFER) via the SAME `HandshakeTranscript.
+            // offerBinding` helper the responder/verify path uses — so it byte-
+            // matches Android's `sentOfferBinding` (== the responder's
+            // `offerBindingForAccept`). Split into explicit steps so the type-
+            // checker never explores the `withLock`→`map`→`??` chain as one
+            // expression (CLAUDE.md §13). SKIP the v4 bootstrap (leave v3 fallback)
+            // unless ALL three real inputs exist; a placeholder would diverge from
+            // the peer's v4 session and break interop.
+            // `negotiatedRatchetV4` is the cross-platform AND (this build advertises
+            // v4 AND the responder's ACCEPT advertised it, captured at the top of
+            // onAndroidBundleReceived) — without it a one-sided v4 would diverge.
+            let sentOfferTForV4: Data? = lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] }
+            if negotiatedRatchetV4,
+               let selfId = localSignerIdentityKey,
+               let peerSikB64 = bundle.signerIdentityKey,
+               let peerId = Data(base64Encoded: peerSikB64), peerId.count == 32,
+               let sentOfferT = sentOfferTForV4 {
+                let sentBinding = HandshakeTranscript.offerBinding(sentOfferT)
+                onV4BootstrapReady?(callerId, combined, sentBinding, selfId, peerId)
+            }
             // vkey-v1: JSON caller — `combined` is the IKM for K_video.
             onVideoKeyEstablished?(combined)
             // W529: caller's ACCEPT decapsulation succeeded → cancel

@@ -65,8 +65,11 @@ let package = Package(
         // ─────────────────────────────────────────────────────────────────────────────────────
         .binaryTarget(
             name: "CQaudionCryptoCore",
-            url: "https://github.com/sigarone/qaudion-crypto-core-spm/releases/download/v0.1.3/QaudionCryptoCore.xcframework.zip",
-            checksum: "d918ed92cf0d54a451357392e96b05bf2849bc88626bed55dc527fd286b4d1ab"
+            // v0.1.4 — core @ b868067 (same core as the live Android .so / Desktop .node):
+            // adds the empty-plaintext v4-decrypt fix + C-ABI catch_unwind hardening; v4 wire/
+            // derivation byte-identical to v0.1.3 (WIRE-FORMAT §4 + Model A) so iOS v4 interops.
+            url: "https://github.com/sigarone/qaudion-crypto-core-spm/releases/download/v0.1.4/QaudionCryptoCore.xcframework.zip",
+            checksum: "892c956caacd5dd911a617136f9f60de3340d9552d940ba87fa892d6877efc05"
         ),
         .target(
             name: "CLiboqs",
