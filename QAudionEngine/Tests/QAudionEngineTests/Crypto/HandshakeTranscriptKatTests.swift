@@ -8,8 +8,8 @@ import CryptoKit
 /// ⚠️ **MUST be run by Xcode / SwiftPM (`swift test`) to confirm.** This file was authored
 /// in an environment that cannot execute Swift / CryptoKit, so the assertions here are
 /// UNVERIFIED on-device. The byte LAYOUT (transcript length + SHA-256) was hand-traced
-/// against the golden JSON offline and matches (OFFER 1850 / `4f0ee937…`,
-/// ACCEPT 1819 / `b2d3939d…`). The Ed25519 **signature** equality assertions can only be
+/// against the golden JSON offline and matches (XC-3, CAPS=4 bytes: OFFER 1851 / `70b16c16…`,
+/// ACCEPT 1820 / `e5205247…`). The Ed25519 **signature** equality assertions can only be
 /// confirmed by a real CryptoKit run — `kat-cross-platform.yml` / `engine-tests.yml` is
 /// the gate. If the signature assertion fails while the SHA-256 assertion passes, the
 /// transcript bytes are correct and the divergence is purely in the Ed25519 primitive
@@ -99,6 +99,7 @@ final class HandshakeTranscriptKatTests: XCTestCase {
             ratchetV3: caps.ratchetV3,
             sframeV1: caps.sframeV1,
             vkeyV1: caps.vkeyV1,
+            sessionKdfV3: caps.sessionKdfV3,
             ratchetV: ratchetV,
             suiteId: suiteId,
             pskFingerprints: psks
@@ -149,6 +150,7 @@ final class HandshakeTranscriptKatTests: XCTestCase {
             ratchetV3: caps.ratchetV3,
             sframeV1: caps.sframeV1,
             vkeyV1: caps.vkeyV1,
+            sessionKdfV3: caps.sessionKdfV3,
             ratchetV: ratchetV,
             suiteId: suiteId,
             selectedPskFingerprint: selPsk,
@@ -216,7 +218,7 @@ final class HandshakeTranscriptKatTests: XCTestCase {
 
     // MARK: - JSON extraction helpers
 
-    private struct Caps { let ratchetV3: Bool; let sframeV1: Bool; let vkeyV1: Bool }
+    private struct Caps { let ratchetV3: Bool; let sframeV1: Bool; let vkeyV1: Bool; let sessionKdfV3: Bool }
 
     private func capabilities(_ inp: [String: Any], _ id: String) throws -> Caps {
         guard let c = inp["capabilities"] as? [String: Any] else {
@@ -225,7 +227,8 @@ final class HandshakeTranscriptKatTests: XCTestCase {
         return Caps(
             ratchetV3: (c["ratchetV3"] as? Bool) ?? false,
             sframeV1: (c["sframeV1"] as? Bool) ?? false,
-            vkeyV1: (c["vkeyV1"] as? Bool) ?? false
+            vkeyV1: (c["vkeyV1"] as? Bool) ?? false,
+            sessionKdfV3: (c["sessionKdfV3"] as? Bool) ?? false
         )
     }
 

@@ -14,10 +14,10 @@ import CryptoKit
 /// `apps/qaudion-android-new/qaudion-engine/src/main/java/com/bcrypto/qaudion/crypto/HandshakeTranscript.kt`.
 /// Both ports MUST reproduce `tools/kat/handshake-sig/handshake-sig-kat.json`
 /// (`transcript_sha256_hex` + `signature_hex` + `offer_binding_hex`) byte-for-byte.
-/// Reference golden (`hs-sig-offer-0001`): transcript len **1850**,
-/// sha256 `4f0ee937b78941ec7eb994e37d5fe478ecca46bd332dae3ed4d804cf31a963a2`.
-/// (`hs-sig-accept-0001`): transcript len **1819**,
-/// sha256 `b2d3939d70dd1837d193e9af38fdbd370e8745a4ac06301a262ab63f18ed303c`.
+/// Reference golden (XC-3, CAPS=4 bytes, `hs-sig-offer-0001`): transcript len **1851**,
+/// sha256 `70b16c169ca35555165dfafb8813638d39a1ba398412e429e70713d27f785103`.
+/// (`hs-sig-accept-0001`): transcript len **1820**,
+/// sha256 `e5205247ad5e66778cf83d933dcd302d6a1521e28f2a6cb4f09de3d492894e4e`.
 ///
 /// **What it binds** (anti-downgrade / anti-MITM / anti-reflection / anti-mix-and-match):
 /// the role (OFFER vs ACCEPT), callId, the signer's long-term Ed25519 identity, the signer's
@@ -87,6 +87,7 @@ public enum HandshakeTranscript {
         ratchetV3: Bool,
         sframeV1: Bool,
         vkeyV1: Bool,
+        sessionKdfV3: Bool,
         ratchetV: UInt8,
         suiteId: UInt8,
         pskFingerprints: [String]?
@@ -104,6 +105,7 @@ public enum HandshakeTranscript {
         out.append(capByte(ratchetV3))
         out.append(capByte(sframeV1))
         out.append(capByte(vkeyV1))
+        out.append(capByte(sessionKdfV3)) // XC-3: 4th CAPS byte — sessionKdfV3 now signed
         out.append(ratchetV)
         out.append(suiteId)
         appendLP(&out, pskJoin(pskFingerprints))
@@ -136,6 +138,7 @@ public enum HandshakeTranscript {
         ratchetV3: Bool,
         sframeV1: Bool,
         vkeyV1: Bool,
+        sessionKdfV3: Bool,
         ratchetV: UInt8,
         suiteId: UInt8,
         selectedPskFingerprint: String?,
@@ -154,6 +157,7 @@ public enum HandshakeTranscript {
         out.append(capByte(ratchetV3))
         out.append(capByte(sframeV1))
         out.append(capByte(vkeyV1))
+        out.append(capByte(sessionKdfV3)) // XC-3: 4th CAPS byte — sessionKdfV3 now signed
         out.append(ratchetV)
         out.append(suiteId)
         appendLP(&out, Data((selectedPskFingerprint ?? "").utf8))

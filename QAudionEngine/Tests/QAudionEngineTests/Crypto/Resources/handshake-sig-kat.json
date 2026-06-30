@@ -17,7 +17,8 @@
         "capabilities": {
           "ratchetV3": true,
           "sframeV1": true,
-          "vkeyV1": true
+          "vkeyV1": true,
+          "sessionKdfV3": true
         },
         "ratchetV": 4,
         "suiteId": 1,
@@ -27,10 +28,10 @@
         ]
       },
       "expected": {
-        "transcript_len": 1850,
-        "transcript_sha256_hex": "4f0ee937b78941ec7eb994e37d5fe478ecca46bd332dae3ed4d804cf31a963a2",
-        "offer_binding_hex": "4f0ee937b78941ec7eb994e37d5fe478ecca46bd332dae3ed4d804cf31a963a2",
-        "signature_hex": "7e4668b40fb3184d13ce75206c0d34aaa3658266e6db3c4e2caa2239b73b582d032be37247ceecf2f9b05c8f60623ebc3ea6442a248c588d6d45846620280009"
+        "transcript_len": 1851,
+        "transcript_sha256_hex": "70b16c169ca35555165dfafb8813638d39a1ba398412e429e70713d27f785103",
+        "offer_binding_hex": "70b16c169ca35555165dfafb8813638d39a1ba398412e429e70713d27f785103",
+        "signature_hex": "7b5bc8a7e706ab0f951cf777c4c4d20e23eb2b50b4b392ba904434ed6a1a44b31f05a96aa6b97e9b78c1cee80da1f00d2a0efc9e29c01d717331968c6f18a101"
       }
     },
     {
@@ -49,16 +50,17 @@
         "capabilities": {
           "ratchetV3": true,
           "sframeV1": true,
-          "vkeyV1": true
+          "vkeyV1": true,
+          "sessionKdfV3": true
         },
         "ratchetV": 4,
         "suiteId": 1,
-        "binds_offer_binding_hex": "4f0ee937b78941ec7eb994e37d5fe478ecca46bd332dae3ed4d804cf31a963a2"
+        "binds_offer_binding_hex": "70b16c169ca35555165dfafb8813638d39a1ba398412e429e70713d27f785103"
       },
       "expected": {
-        "transcript_len": 1819,
-        "transcript_sha256_hex": "b2d3939d70dd1837d193e9af38fdbd370e8745a4ac06301a262ab63f18ed303c",
-        "signature_hex": "0cd9c4aecb50847644d8b883b0d63a97e76825380a463f5ec75b3c8f3464a220c1c710ee72259cb25fa180703522fce18137affdcb8c7429d18b4e6f6a47b808"
+        "transcript_len": 1820,
+        "transcript_sha256_hex": "e5205247ad5e66778cf83d933dcd302d6a1521e28f2a6cb4f09de3d492894e4e",
+        "signature_hex": "43fbd06649f3ceefc68601645eb62cbf21e99f5bb312b97f52cc215c545c1f7aeff233f4faa5b3ca8e069ecc2b08c6debc0816e750ee24cf0fafe96232e1aa0f"
       }
     }
   ]
