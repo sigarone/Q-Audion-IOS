@@ -1051,9 +1051,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             var selectedFp: String? = nil
             var selectedPsk: Data? = nil
             if let advertised = bundle.pskFingerprints {
-                if let first = advertised.first(where: { eligiblePsks[$0] != nil }) {
+                if let first = advertised.first(where: { eligiblePsks[$0] != nil }),
+                   let gated = Self.pskIfFingerprintMatches(eligiblePsks[first], first) {
+                    // Symmetric-null convergence: select + echo the fingerprint ONLY
+                    // when SHA-256(rawPsk)==fp, so the initiator never mixes a PSK we
+                    // dropped — both ends mix the byte-equal PSK or both fall back to
+                    // the no-PSK key (fixes the iOS↔desktop sealed-audio AEAD mismatch).
                     selectedFp = first
-                    selectedPsk = eligiblePsks[first]
+                    selectedPsk = gated
                 }
             }
 
@@ -1463,7 +1468,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     guard let name = vault.listPskNames().first(where: {
                         vault.getFingerprint(name: $0) == selectedFpStr
                     }) else { return nil }
-                    return (try? vault.loadPsk(name: name)) ?? nil
+                    let raw = (try? vault.loadPsk(name: name)) ?? nil
+                    return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
                 }()
                 let selFpRaw: Data
                 if let psk = vaultPsk, !psk.isEmpty {
@@ -1499,7 +1505,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     guard let name = vault.listPskNames().first(where: {
                         vault.getFingerprint(name: $0) == selectedFpStr
                     }) else { return nil }
-                    return (try? vault.loadPsk(name: name)) ?? nil
+                    let raw = (try? vault.loadPsk(name: name)) ?? nil
+                    return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
                 }()
                 combined = Self.deriveHybridSessionKey(
                     pqcSs: pqcSs,
@@ -1910,6 +1917,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             outputByteCount: 32
         )
         return key.withUnsafeBytes { Data($0) }
+    }
+
+    /// Symmetric-null convergence gate (iOS↔desktop sealed-audio AEAD fix). Returns
+    /// `psk` IFF its canonical fingerprint `lc_hex(SHA-256(psk))` byte-equals `fp`
+    /// (computed exactly as the PSK fingerprint is stored/advertised), else nil. A
+    /// matching `fp` proves — by collision resistance — that both ends hold the SAME
+    /// raw bytes, so each side mixes the PSK as the schema:2 HKDF Extract salt only
+    /// when this gate passes against the negotiated fingerprint. On any miss (no PSK /
+    /// lookup miss / a drifted Keychain entry whose label no longer hashes to its
+    /// bytes) both ends fall back to the no-PSK key and CONVERGE — instead of silently
+    /// mixing divergent salts (which makes every relay-audio frame fail AES-GCM auth).
+    /// Android is unaffected: it always holds the byte-equal established PSK, so the
+    /// gate passes on both ends and the session key stays byte-identical to interop.
+    static func pskIfFingerprintMatches(_ psk: Data?, _ fp: String?) -> Data? {
+        guard let psk = psk, !psk.isEmpty, let fp = fp, !fp.isEmpty else { return nil }
+        let h = SHA256.hash(data: psk).map { String(format: "%02x", $0) }.joined()
+        return h == fp ? psk : nil
     }
 
     // MARK: - Schema:3 session KDF primitives
