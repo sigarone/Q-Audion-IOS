@@ -634,14 +634,15 @@ public final class MessageRatchet {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  v4 PQ "continuum" ratchet — ADDITIVE, DEFAULT-OFF native path
+    //  v4 PQ "continuum" ratchet — ADDITIVE native path
     //
-    //  Everything below is gated behind [v4NativeRatchetEnabled] (false in the shipped build) and
-    //  delegates to the shared Rust core via [RatchetNative]. It does NOT touch any v3.1 state
-    //  above — the v3.1 engine is byte-for-byte unchanged. When the flag is off (or the real native
-    //  core is not linked, only the placeholder stub), every method here fail-closes (nil / 0), so
-    //  the live messaging path is exactly the v3.1 logic above. The v4 ratchet is not exercised
-    //  until a device-test flips the flag ON.
+    //  Everything below is gated behind [v4NativeRatchetEnabled] (now TRUE on iOS — go-live a3f00d6,
+    //  Pavel sign-off) AND [RatchetNative.available], and delegates to the shared Rust core via
+    //  [RatchetNative]. It does NOT touch any v3.1 state above — the v3.1 engine is byte-for-byte
+    //  unchanged. When the flag is off (or the real native core is not linked, only the placeholder
+    //  stub), every method here fail-closes (nil / 0), so the live messaging path falls back to the
+    //  v3.1 logic above. v4 is negotiated PER PEER (capability-AND): a peer that does not advertise
+    //  ratchetV4 keeps the pair on v3.1, so enabling the flag never breaks interop with v3.1 peers.
     //
     //  The v4 session is an opaque native handle (UInt); the v4 wire frame is opaque bytes owned
     //  end-to-end by the native core (magic 0xE5). This Swift layer only marshals Data in/out and
