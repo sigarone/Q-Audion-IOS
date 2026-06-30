@@ -4752,6 +4752,19 @@ final class AppState: ObservableObject {
                 }
             }
         }
+        // XC-1 — a present-but-INVALID handshake signature (forgery against the
+        // established identity). Revoke this peer's stored SAS verification so the
+        // in-call SAS card becomes a REQUIRED re-confirmation, and surface the same
+        // non-blocking banner. The call still proceeds (W-NOBRICK / signal-not-kill).
+        integration.onInvalidHandshakeSignature = { [weak self] peerId in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                SasVerificationStore.shared.clear(peerUserId: peerId)
+                if self.callContactId == nil || self.callContactId == peerId {
+                    self.callIdentityUnauthenticatedChange = true
+                }
+            }
+        }
 
         // v4_capable_pinned set (spec §4), persisted in UserDefaults (thread-safe).
         integration.isPeerV4Pinned = { peerId in

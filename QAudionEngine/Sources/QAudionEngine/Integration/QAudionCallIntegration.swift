@@ -437,6 +437,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// no UI wired (silent — behaviourally unchanged for tests / legacy paths).
     public var onUnauthenticatedIdentityChange: ((String) -> Void)?
 
+    /// XC-1 — fired when a handshake bundle carried a signature that FAILED
+    /// verification against the key we verify under (`sig_invalid`): a forgery
+    /// against the established/published identity, distinct from an
+    /// `identity_key_mismatch` key change. The call is NOT dropped (W-NOBRICK /
+    /// signal-not-kill); AppState revokes the peer's stored SAS verification so
+    /// the in-call SAS card becomes a REQUIRED re-confirmation (the real terminal
+    /// anti-MITM gate). nil ⇒ no UI wired (silent — behaviourally unchanged).
+    public var onInvalidHandshakeSignature: ((String) -> Void)?
+
     /// Has this peer ever had a SIGNED v4 bundle verify (spec §4
     /// `v4_capable_pinned`)? Wired from a UserDefaults-backed set in AppState.
     public var isPeerV4Pinned: ((String) -> Bool)?
@@ -985,6 +994,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     if code == "identity_key_mismatch" {
                         onUnauthenticatedIdentityChange?(callerId)
                     }
+                    // XC-1 — a present-but-INVALID signature is a forgery against
+                    // the key we verify under (not a key change). Revoke the peer's
+                    // SAS verification so the in-call SAS becomes a required
+                    // re-confirmation. Still PROCEED (W-NOBRICK / signal-not-kill).
+                    if code == "sig_invalid" {
+                        onInvalidHandshakeSignature?(callerId)
+                    }
                     // Protocol continuity only: build the offer_binding under the
                     // bundle's carried key so the ACCEPT we emit stays internally
                     // consistent. This pins NOTHING and trusts NOTHING — the verdict
@@ -1343,6 +1359,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     print("[QAudionCallIntegration] ⚠️ ACCEPT verify code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — NOT aborting; proceeding, VERIFY THE SAS")
                     if code == "identity_key_mismatch" {
                         onUnauthenticatedIdentityChange?(callerId)
+                    }
+                    // XC-1 — present-but-INVALID signature (forgery). Revoke the
+                    // peer's SAS verification → in-call SAS re-confirmation required.
+                    // Still PROCEED (W-NOBRICK / signal-not-kill).
+                    if code == "sig_invalid" {
+                        onInvalidHandshakeSignature?(callerId)
                     }
                 case .authenticated(let tofuPinKey, let v4Capable):
                     applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
