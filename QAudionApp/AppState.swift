@@ -7498,13 +7498,42 @@ extension AppState {
     /// .decodeFromAndroid` / `WireRelayFrameCodec` unwrap branch assumed
     /// one that Android never sends — see the matching note on the send
     /// side in `startVideoPipeline`).
+    ///
+    /// Task 11 holistic-review fix (2026-07-01) — a `call_id` check on
+    /// the inbound envelope was missing entirely: every video_frame was
+    /// fed to `acceptInboundFragment` regardless of which call (or
+    /// which stale/overlapping session) it was relayed for, relying
+    /// solely on AEAD auth succeeding as the only safety net. Android's
+    /// `BcryptoWsVideoRelayTransport.parseAndUnseal` (`if (cid != callId)
+    /// return null`) and Desktop's `BcryptoWsVideoRelayTransport
+    /// .acceptRawEnvelope` (`if (raw.call_id !== this.opts.callId)
+    /// return`) both reject on ANY mismatch — including an unknown/empty
+    /// active call_id — with no nil-passthrough. This mirrors that exact
+    /// strict semantics (deliberately stricter than the audio path's
+    /// `handleIncomingEncryptedFrame`, which allows the frame through
+    /// when either side is nil/unbound — video's fragment reassembler
+    /// has no such tolerant fallback and Android/Desktop don't either).
+    /// `getActiveCallId()` is re-resolved on every frame (not captured
+    /// once at registration time) via the live `liveProvider`, so a
+    /// reconnect or a fresh call after this closure was created is
+    /// always compared against the CURRENT active call — mirrors the
+    /// `callService.getCallId` live-getter pattern used for the audio
+    /// WS handler (see `AppState.wireCallService` / CallService.swift's
+    /// `attachIncomingAudioHandler`).
     @MainActor
     func registerInboundVideoHandler(on ws: BCryptoWebSocketClient,
                                      pipeline: VideoCallPipeline) {
-        ws.registerHandler(type: "video_frame") { [weak pipeline] _, data in
+        ws.registerHandler(type: "video_frame") { [weak self, weak pipeline] _, data in
             guard let pipeline = pipeline,
                   let b64 = data["frame"] as? String,
                   let raw = Data(base64Encoded: b64) else { return }
+            let incomingCallId = data["call_id"] as? String
+            guard let live = self?.liveProvider,
+                  let impl = live.callingApi as? BCryptoCallingApiImpl,
+                  let activeCallId = impl.getActiveCallId(),
+                  let cid = incomingCallId,
+                  cid.caseInsensitiveCompare(activeCallId) == .orderedSame
+            else { return }
             pipeline.acceptInboundFragment(raw)
         }
     }

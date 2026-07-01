@@ -45,6 +45,19 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
 
     // MARK: - Internal pending state
 
+    /// Task 11 holistic-review fix (2026-07-01) — single-frame-in-flight
+    /// state. Previously this class kept a `[Int: PendingFrame]`
+    /// dictionary (multiple frameIds tracked concurrently, reclaimed
+    /// only by the 150ms `purgeStaleFrames()` timeout), which diverged
+    /// from Android's `VideoFrameReassembler.kt` and Desktop's
+    /// `VideoFrameReassembler.ts` — both of which hold exactly ONE
+    /// pending frame: a new frameId unconditionally discards whatever
+    /// partial frame was previously in flight (no dictionary, no
+    /// timeout needed to reclaim a stale ENTRY since there is only one
+    /// slot to begin with). This file's own top-of-file doc comment
+    /// claims a "direct port of Android's VideoFrameFragmenter.kt" —
+    /// this was the one place that claim didn't hold. `pendingFrame` now
+    /// mirrors that single-slot semantics exactly.
     private final class PendingFrame {
         var fragments: [Data?]
         let totalFragments: Int
@@ -52,8 +65,10 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         let bitrateHintKbps: Int
         let startTimeMs: Int64
         var receivedCount: Int
+        let frameId: Int
 
-        init(totalFragments: Int, isKeyFrame: Bool, bitrateHintKbps: Int, startTimeMs: Int64) {
+        init(frameId: Int, totalFragments: Int, isKeyFrame: Bool, bitrateHintKbps: Int, startTimeMs: Int64) {
+            self.frameId = frameId
             self.fragments = Array(repeating: nil, count: totalFragments)
             self.totalFragments = totalFragments
             self.isKeyFrame = isKeyFrame
@@ -64,7 +79,7 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var pendingFrames: [Int: PendingFrame] = [:]
+    private var pendingFrame: PendingFrame?
     private var nextFrameId: Int = 0
 
     public init() {}
@@ -149,19 +164,28 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        // Task 11 holistic-review fix — single-frame-in-flight, matching
+        // Android's VideoFrameReassembler.kt / Desktop's
+        // VideoFrameReassembler.ts byte-for-byte: a new frameId
+        // unconditionally discards whatever partial frame was
+        // previously buffered (no dictionary keyed by frameId, no
+        // timeout needed to reclaim a stale slot — there is only ever
+        // one). A REPEATED frameId whose totalFrags disagrees with the
+        // in-flight state is an inconsistent/malformed frame and is
+        // dropped, same as before.
         let pending: PendingFrame
-        if let existing = pendingFrames[frameId] {
-            // Validate consistency (reject if total/keyframe disagrees).
+        if let existing = pendingFrame, existing.frameId == frameId {
             if existing.totalFragments != totalFrags { return nil }
             pending = existing
         } else {
             pending = PendingFrame(
+                frameId: frameId,
                 totalFragments: totalFrags,
                 isKeyFrame: isKeyFrame,
                 bitrateHintKbps: bitrateHintKbps,
                 startTimeMs: Int64(Date().timeIntervalSince1970 * 1000)
             )
-            pendingFrames[frameId] = pending
+            pendingFrame = pending
         }
 
         // Store fragment (ignore duplicates).
@@ -174,7 +198,7 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         guard pending.receivedCount >= pending.totalFragments else {
             return nil
         }
-        pendingFrames.removeValue(forKey: frameId)
+        pendingFrame = nil
         // W398: count completed frames for loss-rate denominator.
         framesReceivedInWindow &+= 1
         // W524: track per-frame reassembly latency + inter-arrival
@@ -217,26 +241,36 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
 
     // MARK: - Maintenance
 
-    /// Purge stale incomplete frames that exceeded the reassembly timeout.
+    /// Purge the pending frame if it exceeded the reassembly timeout.
     /// Should be called periodically (e.g., every 200ms). Returns the
-    /// number of purged frames.
+    /// number of purged frames (0 or 1).
     /// W398: each purge is also accumulated into a sliding-window
     /// loss counter so the ABR controller can read recent loss rate.
+    ///
+    /// Task 11 holistic-review fix — with single-frame-in-flight
+    /// semantics (see `defragment`) there is at most one pending frame
+    /// to reclaim, not an unbounded dictionary. Kept as its own method
+    /// (rather than folded into `defragment` or removed) because it is
+    /// still load-bearing: `VideoCallPipeline.startPurgeTimer()` calls
+    /// it on a 200ms `DispatchSourceTimer` to evict a partial frame
+    /// whose remaining fragments never arrive (no new frameId will ever
+    /// come in to naturally evict it), and its return value feeds
+    /// `framesLostInWindow`, which `consumeAbrSample`/
+    /// `consumeAbrSampleExtended` report to `AbrController` for the
+    /// loss-rate feedback loop.
     @discardableResult
     public func purgeStaleFrames() -> Int {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let timeout = VideoConstants.fragmentReassemblyTimeoutMs
         lock.lock()
         defer { lock.unlock() }
-        let staleIds = pendingFrames.compactMap { (id, p) in
-            (nowMs - p.startTimeMs > timeout) ? id : nil
+        guard let pending = pendingFrame, nowMs - pending.startTimeMs > timeout else {
+            return 0
         }
-        for id in staleIds {
-            pendingFrames.removeValue(forKey: id)
-        }
+        pendingFrame = nil
         // W398: counter bookkeeping.
-        framesLostInWindow &+= staleIds.count
-        return staleIds.count
+        framesLostInWindow &+= 1
+        return 1
     }
 
     // MARK: - W398 ABR feedback
@@ -295,14 +329,17 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         return (r, l, avgLat, jitter)
     }
 
+    /// 0 or 1 — single-frame-in-flight (see `defragment`), kept as its
+    /// own count rather than a bare `Bool`/`pendingFrame != nil` so
+    /// existing call sites (tests) reading a count don't need to change.
     public var pendingFrameCount: Int {
         lock.lock(); defer { lock.unlock() }
-        return pendingFrames.count
+        return pendingFrame == nil ? 0 : 1
     }
 
     public func reset() {
         lock.lock()
-        pendingFrames.removeAll()
+        pendingFrame = nil
         nextFrameId = 0
         lock.unlock()
     }

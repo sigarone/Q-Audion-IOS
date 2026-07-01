@@ -102,6 +102,43 @@ final class VideoFrameFragmenterTests: XCTestCase {
         XCTAssertEqual(recv.pendingFrameCount, 0)
     }
 
+    /// Task 11 holistic-review fix — single-frame-in-flight: a new
+    /// frameId must UNCONDITIONALLY discard whatever partial frame was
+    /// previously buffered, matching Android's VideoFrameReassembler.kt /
+    /// Desktop's VideoFrameReassembler.ts (a dictionary keyed by frameId
+    /// was the previous — now-fixed — divergence from both). No timeout
+    /// wait needed: the abandoned frame's fragments must never complete
+    /// once a newer frame's fragment has arrived, even immediately.
+    func testNewFrameIdDiscardsPriorIncompleteFrame() throws {
+        let fragmenter = VideoFrameFragmenter()
+        let nal1 = Data((0..<3000).map { UInt8($0 & 0xFF) })
+        let frags1 = try fragmenter.fragment(nalUnit: nal1, isKeyFrame: false)
+        XCTAssertGreaterThan(frags1.count, 1)
+        let nal2 = Data((0..<256).map { UInt8($0 & 0xFF) })
+        let frags2 = try fragmenter.fragment(nalUnit: nal2, isKeyFrame: true)
+        XCTAssertEqual(frags2.count, 1)
+
+        let recv = VideoFrameFragmenter()
+        // Start frame 1 but never complete it.
+        XCTAssertNil(recv.defragment(frags1[0]))
+        XCTAssertEqual(recv.pendingFrameCount, 1)
+
+        // Frame 2 (a different frameId, fully self-contained in 1
+        // fragment) arrives next — it must complete on its own, proving
+        // the pending slot was replaced rather than merged/blocked.
+        let result = recv.defragment(frags2[0])
+        XCTAssertEqual(result?.nalUnit, nal2)
+        XCTAssertEqual(result?.isKeyFrame, true)
+        XCTAssertEqual(recv.pendingFrameCount, 0)
+
+        // Frame 1's remaining fragments must NOT complete it — its slot
+        // was discarded when frame 2 arrived, not merged alongside it.
+        for f in frags1.dropFirst() {
+            XCTAssertNil(recv.defragment(f))
+        }
+        XCTAssertEqual(recv.pendingFrameCount, 1) // the last dropFirst fragment re-opens a (new, doomed) slot for frameId1
+    }
+
     func testKeyFrameFlagPreservedAcrossFragments() throws {
         let fragmenter = VideoFrameFragmenter()
         let nal = Data((0..<2500).map { UInt8($0 & 0xFF) })
