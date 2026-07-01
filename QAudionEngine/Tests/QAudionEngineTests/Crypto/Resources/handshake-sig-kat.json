@@ -18,7 +18,9 @@
           "ratchetV3": true,
           "sframeV1": true,
           "vkeyV1": true,
-          "sessionKdfV3": true
+          "sessionKdfV3": true,
+          "ratchetV4": true,
+          "srtpDirKeyV1": true
         },
         "ratchetV": 4,
         "suiteId": 1,
@@ -28,10 +30,10 @@
         ]
       },
       "expected": {
-        "transcript_len": 1851,
-        "transcript_sha256_hex": "70b16c169ca35555165dfafb8813638d39a1ba398412e429e70713d27f785103",
-        "offer_binding_hex": "70b16c169ca35555165dfafb8813638d39a1ba398412e429e70713d27f785103",
-        "signature_hex": "7b5bc8a7e706ab0f951cf777c4c4d20e23eb2b50b4b392ba904434ed6a1a44b31f05a96aa6b97e9b78c1cee80da1f00d2a0efc9e29c01d717331968c6f18a101"
+        "transcript_len": 1853,
+        "transcript_sha256_hex": "01496bb5349a089fe9881406ad52f70c6ab891ee9f403b2b64f3006bd236a50d",
+        "offer_binding_hex": "01496bb5349a089fe9881406ad52f70c6ab891ee9f403b2b64f3006bd236a50d",
+        "signature_hex": "34b3dbfeee721f93593540a73004defce2e216051f6ea998ff0aae3b9252a5182c4abb1a8e4169284898df35ff05dd3395ddc34d74cb16c6d3f8c53a66af080c"
       }
     },
     {
@@ -51,16 +53,18 @@
           "ratchetV3": true,
           "sframeV1": true,
           "vkeyV1": true,
-          "sessionKdfV3": true
+          "sessionKdfV3": true,
+          "ratchetV4": true,
+          "srtpDirKeyV1": true
         },
         "ratchetV": 4,
         "suiteId": 1,
-        "binds_offer_binding_hex": "70b16c169ca35555165dfafb8813638d39a1ba398412e429e70713d27f785103"
+        "binds_offer_binding_hex": "01496bb5349a089fe9881406ad52f70c6ab891ee9f403b2b64f3006bd236a50d"
       },
       "expected": {
-        "transcript_len": 1820,
-        "transcript_sha256_hex": "e5205247ad5e66778cf83d933dcd302d6a1521e28f2a6cb4f09de3d492894e4e",
-        "signature_hex": "43fbd06649f3ceefc68601645eb62cbf21e99f5bb312b97f52cc215c545c1f7aeff233f4faa5b3ca8e069ecc2b08c6debc0816e750ee24cf0fafe96232e1aa0f"
+        "transcript_len": 1822,
+        "transcript_sha256_hex": "5e4ce2f078dc22429706493a1bc96e957304b58b728245bce5a8969a1e708712",
+        "signature_hex": "f2b009afd6318113d2f5a0b6698d2288da92b3963300b791d02bd500a8e2e73092f9b8b123b202826ff06025d96dd66008dad75a3349145c5ececb8242cb400f"
       }
     }
   ]

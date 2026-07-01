@@ -14,10 +14,10 @@ import CryptoKit
 /// `apps/qaudion-android-new/qaudion-engine/src/main/java/com/bcrypto/qaudion/crypto/HandshakeTranscript.kt`.
 /// Both ports MUST reproduce `tools/kat/handshake-sig/handshake-sig-kat.json`
 /// (`transcript_sha256_hex` + `signature_hex` + `offer_binding_hex`) byte-for-byte.
-/// Reference golden (XC-3, CAPS=4 bytes, `hs-sig-offer-0001`): transcript len **1851**,
-/// sha256 `70b16c169ca35555165dfafb8813638d39a1ba398412e429e70713d27f785103`.
-/// (`hs-sig-accept-0001`): transcript len **1820**,
-/// sha256 `e5205247ad5e66778cf83d933dcd302d6a1521e28f2a6cb4f09de3d492894e4e`.
+/// Reference golden (XC-4, CAPS=6 bytes, `hs-sig-offer-0001`): transcript len **1853**,
+/// sha256 `01496bb5349a089fe9881406ad52f70c6ab891ee9f403b2b64f3006bd236a50d`.
+/// (`hs-sig-accept-0001`): transcript len **1822**,
+/// sha256 `5e4ce2f078dc22429706493a1bc96e957304b58b728245bce5a8969a1e708712`.
 ///
 /// **What it binds** (anti-downgrade / anti-MITM / anti-reflection / anti-mix-and-match):
 /// the role (OFFER vs ACCEPT), callId, the signer's long-term Ed25519 identity, the signer's
@@ -88,6 +88,8 @@ public enum HandshakeTranscript {
         sframeV1: Bool,
         vkeyV1: Bool,
         sessionKdfV3: Bool,
+        ratchetV4: Bool,
+        srtpDirKeyV1: Bool,
         ratchetV: UInt8,
         suiteId: UInt8,
         pskFingerprints: [String]?
@@ -106,6 +108,8 @@ public enum HandshakeTranscript {
         out.append(capByte(sframeV1))
         out.append(capByte(vkeyV1))
         out.append(capByte(sessionKdfV3)) // XC-3: 4th CAPS byte — sessionKdfV3 now signed
+        out.append(capByte(ratchetV4)) // XC-4: 5th CAPS byte — ratchetV4 now signed
+        out.append(capByte(srtpDirKeyV1)) // XC-4: 6th CAPS byte — srtpDirKeyV1 now signed
         out.append(ratchetV)
         out.append(suiteId)
         appendLP(&out, pskJoin(pskFingerprints))
@@ -139,6 +143,8 @@ public enum HandshakeTranscript {
         sframeV1: Bool,
         vkeyV1: Bool,
         sessionKdfV3: Bool,
+        ratchetV4: Bool,
+        srtpDirKeyV1: Bool,
         ratchetV: UInt8,
         suiteId: UInt8,
         selectedPskFingerprint: String?,
@@ -158,6 +164,8 @@ public enum HandshakeTranscript {
         out.append(capByte(sframeV1))
         out.append(capByte(vkeyV1))
         out.append(capByte(sessionKdfV3)) // XC-3: 4th CAPS byte — sessionKdfV3 now signed
+        out.append(capByte(ratchetV4)) // XC-4: 5th CAPS byte — ratchetV4 now signed
+        out.append(capByte(srtpDirKeyV1)) // XC-4: 6th CAPS byte — srtpDirKeyV1 now signed
         out.append(ratchetV)
         out.append(suiteId)
         appendLP(&out, Data((selectedPskFingerprint ?? "").utf8))

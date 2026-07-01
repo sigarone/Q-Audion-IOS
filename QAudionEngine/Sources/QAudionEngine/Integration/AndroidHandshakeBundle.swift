@@ -95,10 +95,12 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         public let ratchetV4: Bool?
         /// W574x — whether this peer derives DIRECTIONAL per-direction PQC RTP
         /// sealer keys (fixes the bidirectional AES-GCM nonce reuse on the relay
-        /// path). Additive + omit-when-false (Codable nil → key absent), so the
-        /// signed transcript (which folds only ratchetV3/sframeV1/vkeyV1) is
-        /// unaffected and old peers stay byte-compatible. Both peers must
-        /// advertise `true` for the pair to use directional sealer keys.
+        /// path). Additive + omit-when-false (Codable nil → key absent), so old
+        /// peers stay byte-compatible. Both peers must advertise `true` for the
+        /// pair to use directional sealer keys. XC-4: this bit is now SIGNED as
+        /// the 6th CAPS byte of the handshake transcript (absent/nil → 0x00), so a
+        /// relay can no longer strip it to force the nonce-reusing single-key
+        /// sealer without breaking the signature.
         public let srtpDirKeyV1: Bool?
 
         public init(
