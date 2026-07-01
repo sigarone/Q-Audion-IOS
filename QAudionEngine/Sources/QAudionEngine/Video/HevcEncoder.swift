@@ -47,6 +47,28 @@ public final class HevcEncoder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var frameIndex: Int64 = 0
+    // W-crash-guard — bumped by every start()/invalidate() (including the
+    // invalidate()+start() pair inside setResolution()). VideoToolbox's
+    // output callback runs on its own internal thread, fully decoupled
+    // from the thread that calls invalidate()/setResolution(): a callback
+    // for a frame encoded by the PREVIOUS session can still be in flight
+    // (already dispatched by VideoToolbox) at the exact moment
+    // setResolution() tears down and rebuilds the session on the capture
+    // queue. Without a guard, handleOutput() would read `fps`/`onNal`
+    // (previously unlocked) and touch `self` state concurrently with that
+    // teardown/rebuild — a data race with undefined behaviour (up to a
+    // native EXC_BAD_ACCESS crash inside VideoToolbox/CoreMedia, invisible
+    // to Swift's compiler). handleOutput() now captures the generation
+    // under `lock` and bails out (log + return, never crash) if a
+    // resolution/session change has superseded it — signal-not-kill.
+    private var sessionGeneration: UInt64 = 0
+
+    /// W-crash-guard — true iff no start()/invalidate()/setResolution() has
+    /// run since `generation` was captured. Thread-safe (locks internally).
+    private func sessionGenerationUnchanged(since generation: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return sessionGeneration == generation
+    }
 
     public init(
         width: Int = VideoConstants.defaultVideoWidth,
@@ -122,6 +144,7 @@ public final class HevcEncoder: @unchecked Sendable {
             throw EncoderError.prepareFailed(prepStatus)
         }
         self.session = session
+        sessionGeneration &+= 1
     }
 
     public func invalidate() {
@@ -130,6 +153,9 @@ public final class HevcEncoder: @unchecked Sendable {
             VTCompressionSessionInvalidate(session)
         }
         session = nil
+        // W-crash-guard — supersede any callback already in flight from the
+        // session just invalidated (see sessionGeneration doc above).
+        sessionGeneration &+= 1
         lock.unlock()
     }
 
@@ -260,13 +286,29 @@ public final class HevcEncoder: @unchecked Sendable {
         // the ABR controller's last decision isn't reverted by the
         // tear-down. keyframeIntervalSec is `let` so it carries over
         // implicitly without an explicit save/restore.
+        //
+        // W-crash-guard — width/height/bitrateBps/fps used to be mutated
+        // here OUTSIDE `lock`, in the window between invalidate() (which
+        // releases the lock after nil-ing `session`) and start() (which
+        // re-acquires it to build the new session). handleOutput(), called
+        // asynchronously by VideoToolbox for a frame still in flight from
+        // the just-invalidated session, reads `fps` — a genuine data race
+        // with undefined behaviour. Wrapping this read-modify-write in the
+        // same `lock` (which invalidate()/start() also take) closes that
+        // window; handleOutput() additionally re-checks sessionGeneration
+        // before emitting, so a callback that lands mid-transition is
+        // dropped and logged rather than acting on inconsistent state.
+        lock.lock()
         let oldFps = self.fps
         let oldBps = self.bitrateBps
+        lock.unlock()
         invalidate()
+        lock.lock()
         self.width = newW
         self.height = newH
         self.bitrateBps = oldBps
         self.fps = oldFps
+        lock.unlock()
         try start()
     }
 
@@ -302,7 +344,27 @@ public final class HevcEncoder: @unchecked Sendable {
     }
 
     private func handleOutput(sampleBuffer: CMSampleBuffer) {
-        guard let cb = onNal else { return }
+        // W-crash-guard — capture `onNal`, `fps`, and the session generation
+        // together, under `lock`. VideoToolbox's output callback runs on its
+        // own internal thread, decoupled from invalidate()/setResolution();
+        // a callback for a frame from the PREVIOUS session can still be
+        // in flight when invalidate()+start()/setResolution() (session
+        // teardown/rebuild) runs concurrently on the capture queue.
+        // Previously `onNal` and `fps` were read here with no lock at all,
+        // racing unsynchronized against that teardown/rebuild — a data
+        // race whose worst case is a native crash inside VideoToolbox/
+        // CoreMedia. Right before this frame's NALs are actually emitted,
+        // we re-check the generation is unchanged; if a resolution/session
+        // change raced in the meantime we drop the frame and log instead of
+        // acting on encoder state that belongs to a superseded session —
+        // matches this project's signal-not-kill philosophy (degrade,
+        // don't crash).
+        lock.lock()
+        let cb = onNal
+        let fps = self.fps
+        let entryGeneration = sessionGeneration
+        lock.unlock()
+        guard let cb = cb else { return }
 
         // Determine if this is a key frame by inspecting the sync attachment.
         // Apple docs: "If kCMSampleAttachmentKey_NotSync is present and kCFBooleanTrue,
@@ -336,11 +398,22 @@ public final class HevcEncoder: @unchecked Sendable {
             isKeyFrame = true
         }
 
+        // W-crash-guard — re-check the generation right before emitting
+        // anything for this frame. If setResolution()/invalidate() raced in
+        // between the entry capture above and here, `cb` (and any encoder
+        // state a peer might index off `width`/`height`) could belong to a
+        // session that's already been superseded; drop this frame instead
+        // of emitting it against inconsistent state.
+        guard sessionGenerationUnchanged(since: entryGeneration) else {
+            print("[HevcEncoder] handleOutput: dropping frame, session was superseded mid-callback")
+            return
+        }
+
         // For a key frame, prepend the parameter sets (VPS/SPS/PPS) so the
         // peer's decoder can bootstrap. Subsequent frames carry the slice
         // NAL only.
         if isKeyFrame, let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
-            emitParameterSets(formatDesc: formatDesc)
+            emitParameterSets(formatDesc: formatDesc, cb: cb)
         }
 
         // Extract slice NAL(s) from the data buffer. iOS emits AVCC-style
@@ -380,8 +453,7 @@ public final class HevcEncoder: @unchecked Sendable {
         }
     }
 
-    private func emitParameterSets(formatDesc: CMFormatDescription) {
-        guard let cb = onNal else { return }
+    private func emitParameterSets(formatDesc: CMFormatDescription, cb: NalCallback) {
         var paramCount: Int = 0
         // First call: just get the count.
         _ = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
