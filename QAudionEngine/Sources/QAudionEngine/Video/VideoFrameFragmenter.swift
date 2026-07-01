@@ -12,6 +12,22 @@ import Foundation
 /// loss only affects individual fragments, not the whole video frame.
 public final class VideoFrameFragmenter: @unchecked Sendable {
 
+    /// Task 10 holistic-review fix (2026-07-01) — thrown by `fragment(...)`
+    /// when a NAL unit needs more than `VideoConstants.maxFragmentsPerFrame`
+    /// fragments. The PREVIOUS behaviour silently clamped
+    /// `min(neededFragments, maxFragmentsPerFrame)`, so any NAL above
+    /// `maxFragmentsPerFrame * maxDataPerFragment` (~304KB, a realistic
+    /// 720p HEVC IDR size) was truncated with no error and no log — the
+    /// peer's decoder received a corrupted, incomplete NAL with zero
+    /// signal anything went wrong. Android's fragmenter `require()`s the
+    /// same bound and the caller drops the WHOLE frame on the exception
+    /// (`BcryptoWsVideoRelayTransport.sendFrame`'s catch block) — this
+    /// mirrors that: reject the oversized frame outright so the caller can
+    /// drop-and-log it, rather than shipping a corrupted one.
+    public enum FragmenterError: Error, Equatable {
+        case frameTooLarge(nalSize: Int, neededFragments: Int, maxFragments: Int)
+    }
+
     /// Result of defragmentation: a complete reassembled NAL unit.
     public struct ReassembledFrame: Equatable {
         public let nalUnit: Data
@@ -61,10 +77,16 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         nalUnit: Data,
         isKeyFrame: Bool,
         bitrateKbps: Int = VideoConstants.defaultVideoBitrateBps / 1000
-    ) -> [Data] {
+    ) throws -> [Data] {
         let maxDataPerFragment = VideoConstants.maxFragmentPayload - VideoConstants.videoFragmentHeaderSize
         let neededFragments = (nalUnit.count + maxDataPerFragment - 1) / maxDataPerFragment
-        let totalFragments = max(1, min(neededFragments, VideoConstants.maxFragmentsPerFrame))
+        guard neededFragments <= VideoConstants.maxFragmentsPerFrame else {
+            throw FragmenterError.frameTooLarge(
+                nalSize: nalUnit.count,
+                neededFragments: neededFragments,
+                maxFragments: VideoConstants.maxFragmentsPerFrame)
+        }
+        let totalFragments = max(1, neededFragments)
 
         lock.lock()
         let frameId = nextFrameId

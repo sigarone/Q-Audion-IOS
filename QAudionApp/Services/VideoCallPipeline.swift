@@ -158,6 +158,13 @@ public final class VideoCallPipeline: NSObject {
     private nonisolated(unsafe) var pqcEncryptor: PqcFrameEncryptor?
     private nonisolated(unsafe) var pqcDecryptor: PqcFrameDecryptor?
     private let sealerLock = NSLock()
+    /// Task 10 holistic review — rate-limits the drop warnings below so a
+    /// sustained pre-handshake/failure window can't spam the log at
+    /// 24-30fps. Guarded by `dropWarnLock` (separate from `sealerLock`:
+    /// distinct concern, avoids re-entrancy coupling).
+    private nonisolated(unsafe) var lastOutboundDropWarnAtMs: Int64 = 0
+    private nonisolated(unsafe) var lastInboundDropWarnAtMs: Int64 = 0
+    private let dropWarnLock = NSLock()
     #endif
 
     private var isRunning: Bool = false
@@ -274,19 +281,34 @@ public final class VideoCallPipeline: NSObject {
 
     /// Inbound fragment arrival point for the transport layer to call.
     /// Reentrant-safe; fragmenter has its own lock.
-    /// W394: applies PQC unwrap if a decryptor is currently installed.
+    ///
+    /// W394 / Task 10 holistic-review fix (2026-07-01) — applies PQC unwrap
+    /// if a decryptor is currently installed; DROPS the fragment (does not
+    /// process it) if no decryptor is installed OR the AEAD open fails.
+    /// The previous behaviour (`opened.isEmpty ? payload : opened`) fed the
+    /// raw, still-encrypted ciphertext into `defragment`/`decode` as if it
+    /// were authenticated plaintext on ANY failure — discarding the
+    /// security-relevant signal instead of surfacing it, and processing
+    /// attacker/network-corrupted bytes as trusted input. Mirrors Android's
+    /// `BcryptoWsVideoRelayTransport.parseAndUnseal`, which has no
+    /// pass-through-unsealed mode for video and drops + rate-limited-WARNs
+    /// on the exact same two conditions.
     public nonisolated func acceptInboundFragment(_ payload: Data) {
         let unwrapped: Data
         #if canImport(WebRTC)
         sealerLock.lock()
         let dec = pqcDecryptor
         sealerLock.unlock()
-        if let dec = dec {
-            let opened = dec.decryptCiphertext(payload)
-            unwrapped = opened.isEmpty ? payload : opened
-        } else {
-            unwrapped = payload
+        guard let dec = dec else {
+            warnInboundDropRateLimited("acceptInboundFragment: no decryptor installed, dropping inbound video fragment")
+            return
         }
+        let opened = dec.decryptCiphertext(payload)
+        guard !opened.isEmpty else {
+            warnInboundDropRateLimited("acceptInboundFragment: decryptCiphertext failed, dropping inbound video fragment")
+            return
+        }
+        unwrapped = opened
         #else
         unwrapped = payload
         #endif
@@ -299,23 +321,58 @@ public final class VideoCallPipeline: NSObject {
         }
     }
 
-    /// W394: PQC seal helper for the outbound path. Caller passes a
-    /// raw fragment; gets back a sealed-or-clear payload depending on
-    /// whether the rekey has installed a sealer.
-    public nonisolated func sealOutboundFragment(_ fragment: Data) -> Data {
+    /// W394 / Task 10 holistic-review fix (2026-07-01) — PQC seal helper
+    /// for the outbound path. Returns the sealed payload, or `nil` if no
+    /// encryptor is installed OR the seal itself fails — the caller MUST
+    /// drop the fragment (not send it) on `nil`. The previous behaviour
+    /// (`sealed.isEmpty ? fragment : sealed`, non-optional `Data` return)
+    /// shipped the RAW, UNENCRYPTED video fragment over the WS relay on
+    /// either failure mode, with no logging — directly contradicting
+    /// `PqcFrameEncryptorAdapter.encryptPlaintext`'s own documented
+    /// contract ("frame must be dropped, NOT sent as plaintext") and this
+    /// project's signal-not-kill philosophy (security failures must warn
+    /// and degrade, never silently ship as if nothing happened). Mirrors
+    /// Android's `BcryptoWsVideoRelayTransport.sendFrame`, which has no
+    /// plaintext-fallback path at all.
+    public nonisolated func sealOutboundFragment(_ fragment: Data) -> Data? {
         #if canImport(WebRTC)
         sealerLock.lock()
         let enc = pqcEncryptor
         sealerLock.unlock()
-        if let enc = enc {
-            let sealed = enc.encryptPlaintext(fragment)
-            return sealed.isEmpty ? fragment : sealed
+        guard let enc = enc else {
+            warnOutboundDropRateLimited("sealOutboundFragment: no encryptor installed, dropping outbound video fragment")
+            return nil
         }
-        return fragment
+        let sealed = enc.encryptPlaintext(fragment)
+        guard !sealed.isEmpty else {
+            warnOutboundDropRateLimited("sealOutboundFragment: encryptPlaintext failed, dropping outbound video fragment")
+            return nil
+        }
+        return sealed
         #else
         return fragment
         #endif
     }
+
+    #if canImport(WebRTC)
+    private nonisolated func warnOutboundDropRateLimited(_ message: String) {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        dropWarnLock.lock()
+        let shouldLog = now - lastOutboundDropWarnAtMs > 2000
+        if shouldLog { lastOutboundDropWarnAtMs = now }
+        dropWarnLock.unlock()
+        if shouldLog { print("[VideoCallPipeline] \(message)") }
+    }
+
+    private nonisolated func warnInboundDropRateLimited(_ message: String) {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        dropWarnLock.lock()
+        let shouldLog = now - lastInboundDropWarnAtMs > 2000
+        if shouldLog { lastInboundDropWarnAtMs = now }
+        dropWarnLock.unlock()
+        if shouldLog { print("[VideoCallPipeline] \(message)") }
+    }
+    #endif
 
     /// W398 — read the inbound fragmenter's loss-window counters.
     /// Returns (received, lost) since the last call. Used by the
@@ -562,12 +619,22 @@ public final class VideoCallPipeline: NSObject {
             guard let self = self else { return }
             // Fragment the NAL and ship each chunk to the transport.
             // Both fragmenter and the transport callback are reentrant.
-            let fragments = self.outboundFragmenter.fragment(
-                nalUnit: nal,
-                isKeyFrame: isKeyFrame,
-                bitrateKbps: self.targetBitrateBps / 1000)
-            for f in fragments {
-                self.onOutboundFragment?(f)
+            // Task 10 holistic-review fix — `fragment` now throws instead
+            // of silently truncating an oversized NAL to 255 fragments
+            // (which corrupted large keyframes with zero signal). Drop the
+            // WHOLE frame and log on rejection, mirroring Android's
+            // BcryptoWsVideoRelayTransport.sendFrame catch block for the
+            // same condition.
+            do {
+                let fragments = try self.outboundFragmenter.fragment(
+                    nalUnit: nal,
+                    isKeyFrame: isKeyFrame,
+                    bitrateKbps: self.targetBitrateBps / 1000)
+                for f in fragments {
+                    self.onOutboundFragment?(f)
+                }
+            } catch {
+                print("[VideoCallPipeline] outbound fragment rejected, dropping frame: \(error)")
             }
         }
         decoder.onPixelBuffer = { [weak self] pb, _ in

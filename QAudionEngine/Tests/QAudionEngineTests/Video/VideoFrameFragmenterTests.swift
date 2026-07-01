@@ -6,7 +6,7 @@ final class VideoFrameFragmenterTests: XCTestCase {
     func testSingleFragmentRoundTrip() throws {
         let fragmenter = VideoFrameFragmenter()
         let nal = Data((0..<256).map { UInt8($0 & 0xFF) })
-        let frags = fragmenter.fragment(nalUnit: nal, isKeyFrame: true, bitrateKbps: 800)
+        let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: true, bitrateKbps: 800)
         XCTAssertEqual(frags.count, 1)
 
         let recv = VideoFrameFragmenter()
@@ -21,7 +21,7 @@ final class VideoFrameFragmenterTests: XCTestCase {
         let fragmenter = VideoFrameFragmenter()
         // 3500 bytes -> ceil(3500 / 1193) = 3 fragments (1200-7=1193 max data per fragment)
         let nal = Data((0..<3500).map { UInt8($0 & 0xFF) })
-        let frags = fragmenter.fragment(nalUnit: nal, isKeyFrame: false, bitrateKbps: 1500)
+        let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: false, bitrateKbps: 1500)
         XCTAssertEqual(frags.count, 3)
 
         let recv = VideoFrameFragmenter()
@@ -37,7 +37,7 @@ final class VideoFrameFragmenterTests: XCTestCase {
     func testOutOfOrderReassembly() throws {
         let fragmenter = VideoFrameFragmenter()
         let nal = Data((0..<3000).map { UInt8($0 & 0xFF) })
-        let frags = fragmenter.fragment(nalUnit: nal, isKeyFrame: true)
+        let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: true)
         XCTAssertGreaterThan(frags.count, 1)
 
         let recv = VideoFrameFragmenter()
@@ -53,7 +53,7 @@ final class VideoFrameFragmenterTests: XCTestCase {
     func testDuplicateFragmentIgnored() throws {
         let fragmenter = VideoFrameFragmenter()
         let nal = Data((0..<2000).map { UInt8($0 & 0xFF) })
-        let frags = fragmenter.fragment(nalUnit: nal, isKeyFrame: false)
+        let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: false)
         XCTAssertGreaterThan(frags.count, 1)
 
         let recv = VideoFrameFragmenter()
@@ -76,21 +76,21 @@ final class VideoFrameFragmenterTests: XCTestCase {
         XCTAssertNil(recv.defragment(Data([0x01, 0x02, 0x03])))
     }
 
-    func testFrameIdWraparound() {
+    func testFrameIdWraparound() throws {
         let fragmenter = VideoFrameFragmenter()
         let nal = Data([0x00])
         // Fragment 65537 times to wrap the u16 frameId.
         // (Use a smaller probe — 5 calls — and just verify it doesn't crash.)
         for _ in 0..<5 {
-            _ = fragmenter.fragment(nalUnit: nal, isKeyFrame: false)
+            _ = try fragmenter.fragment(nalUnit: nal, isKeyFrame: false)
         }
     }
 
-    func testPurgeStaleClearsPending() {
+    func testPurgeStaleClearsPending() throws {
         let recv = VideoFrameFragmenter()
         let fragmenter = VideoFrameFragmenter()
         let nal = Data((0..<3000).map { UInt8($0 & 0xFF) })
-        let frags = fragmenter.fragment(nalUnit: nal, isKeyFrame: false)
+        let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: false)
 
         XCTAssertNil(recv.defragment(frags[0]))
         XCTAssertEqual(recv.pendingFrameCount, 1)
@@ -102,10 +102,10 @@ final class VideoFrameFragmenterTests: XCTestCase {
         XCTAssertEqual(recv.pendingFrameCount, 0)
     }
 
-    func testKeyFrameFlagPreservedAcrossFragments() {
+    func testKeyFrameFlagPreservedAcrossFragments() throws {
         let fragmenter = VideoFrameFragmenter()
         let nal = Data((0..<2500).map { UInt8($0 & 0xFF) })
-        let frags = fragmenter.fragment(nalUnit: nal, isKeyFrame: true)
+        let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: true)
         // Every fragment must have the FRAG_FLAG_KEY_FRAME bit set.
         for f in frags {
             XCTAssertEqual(f[f.startIndex] & VideoConstants.fragFlagKeyFrame,
@@ -119,10 +119,10 @@ final class VideoFrameFragmenterTests: XCTestCase {
         }
     }
 
-    func testFragmentHeaderLayoutMatchesAndroid() {
+    func testFragmentHeaderLayoutMatchesAndroid() throws {
         let fragmenter = VideoFrameFragmenter()
         let nal = Data(repeating: 0xAB, count: 100)
-        let frags = fragmenter.fragment(nalUnit: nal, isKeyFrame: true, bitrateKbps: 0x1234)
+        let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: true, bitrateKbps: 0x1234)
         XCTAssertEqual(frags.count, 1)
         let f = frags[0]
         // Header bytes:
@@ -136,5 +136,36 @@ final class VideoFrameFragmenterTests: XCTestCase {
         XCTAssertEqual(f[4], 0x01)
         // [5-6] bitrateHint = 0x1234 BE
         XCTAssertEqual(f[5], 0x12); XCTAssertEqual(f[6], 0x34)
+    }
+
+    /// Task 10 holistic-review fix — a NAL needing more than
+    /// `VideoConstants.maxFragmentsPerFrame` fragments must be REJECTED
+    /// (thrown), not silently truncated. Mirrors Android's
+    /// `VideoFrameFragmenter.kt` `require(totalFrags <= MAX_FRAGMENTS_PER_FRAME)`.
+    func testOversizedFrameThrowsInsteadOfTruncating() {
+        let fragmenter = VideoFrameFragmenter()
+        let maxDataPerFragment = VideoConstants.maxFragmentPayload - VideoConstants.videoFragmentHeaderSize
+        // One byte more than fits in maxFragmentsPerFrame fragments.
+        let oversizedSize = maxDataPerFragment * VideoConstants.maxFragmentsPerFrame + 1
+        let nal = Data(repeating: 0xCD, count: oversizedSize)
+        XCTAssertThrowsError(try fragmenter.fragment(nalUnit: nal, isKeyFrame: true)) { error in
+            guard case VideoFrameFragmenter.FragmenterError.frameTooLarge(let nalSize, let needed, let maxFrags) = error else {
+                XCTFail("expected .frameTooLarge, got \(error)")
+                return
+            }
+            XCTAssertEqual(nalSize, oversizedSize)
+            XCTAssertEqual(needed, VideoConstants.maxFragmentsPerFrame + 1)
+            XCTAssertEqual(maxFrags, VideoConstants.maxFragmentsPerFrame)
+        }
+    }
+
+    /// A NAL that needs EXACTLY `maxFragmentsPerFrame` fragments must still
+    /// succeed (the bound is inclusive, matching Android's `<=` check).
+    func testFrameAtExactlyMaxFragmentsSucceeds() throws {
+        let fragmenter = VideoFrameFragmenter()
+        let maxDataPerFragment = VideoConstants.maxFragmentPayload - VideoConstants.videoFragmentHeaderSize
+        let nal = Data(repeating: 0xCD, count: maxDataPerFragment * VideoConstants.maxFragmentsPerFrame)
+        let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: true)
+        XCTAssertEqual(frags.count, VideoConstants.maxFragmentsPerFrame)
     }
 }

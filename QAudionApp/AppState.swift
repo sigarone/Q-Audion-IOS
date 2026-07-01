@@ -7424,8 +7424,14 @@ extension AppState {
         // fragIdx/totalFrags/isKeyFrame metadata for the WS envelope's
         // top-level fields; it does not wrap or alter the sealed bytes.
         pipeline.onOutboundFragment = { [weak self, weak ws, weak pipeline, callingImpl] fragment in
+            // Task 10 holistic-review fix — sealOutboundFragment now
+            // returns nil (drop) when no encryptor is installed or seal
+            // fails, instead of a non-optional Data that used to fall back
+            // to shipping the raw fragment unsealed. `pipeline == nil` (the
+            // pipeline itself deallocated) is treated the same way: no
+            // sealed bytes, no send — never fall back to `fragment`.
+            guard let sealed = pipeline?.sealOutboundFragment(fragment) else { return }
             let parsed = AndroidVideoWireAdapter.parseIosFragment(fragment)
-            let sealed = pipeline?.sealOutboundFragment(fragment) ?? fragment
             let cid = callingImpl?.getActiveCallId()
             let effectiveWs = self?.liveProvider?.getWebSocketClient() ?? ws
             effectiveWs?.sendVideoFrame(
