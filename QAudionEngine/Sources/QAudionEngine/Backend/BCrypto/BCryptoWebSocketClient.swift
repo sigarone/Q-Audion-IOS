@@ -665,10 +665,24 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         send(type: "audio_frame", data: data)
     }
 
-    public func sendVideoFrame(recipientId: String, frame: Data, callId: String? = nil) {
+    /// Task 10 (2026-07-01) — `fragIdx`/`totalFrags`/`isKeyFrame` are
+    /// carried as TOP-LEVEL JSON fields (`frag_idx`/`total_frags`/
+    /// `is_key_frame`), matching Android's real `WsCommand.VideoFrame` /
+    /// `WsCodec` encoding exactly (`frag_idx`, `total_frags`,
+    /// `is_key_frame` — see qaudion-android-new's `WsCodec.kt`). Defaults
+    /// (0/1/false) exist only so any pre-Task-10 call site still compiles;
+    /// production callers (AppState.startVideoPipeline) always pass the
+    /// real per-fragment values.
+    public func sendVideoFrame(
+        recipientId: String, frame: Data, callId: String? = nil,
+        fragIdx: UInt16 = 0, totalFrags: UInt16 = 1, isKeyFrame: Bool = false
+    ) {
         var data: [String: Any] = [
             "recipient_id": recipientId,
             "frame": frame.base64EncodedString(),
+            "frag_idx": Int(fragIdx),
+            "total_frags": Int(totalFrags),
+            "is_key_frame": isKeyFrame,
         ]
         if let cid = callId, !cid.isEmpty { data["call_id"] = cid }
         send(type: "video_frame", data: data)

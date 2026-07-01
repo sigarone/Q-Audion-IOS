@@ -286,6 +286,16 @@ final class AppState: ObservableObject {
     /// `SasConstants.infoWords = "sas-words-v1"`. Drift here would
     /// silently diverge the two-peer ceremony.
     @Published var callPqcSessionKey: Data?
+    /// Task 10 — the video PQC sealer's `(callId, selfIsRoleA)` identity,
+    /// pinned ONCE at `startVideoPipeline` and reused verbatim by the later
+    /// `wireSasReadyToController` rotate. Two independently-computed
+    /// `selfIsRoleA` values (one from the `peerId` function param, one from
+    /// `callContactId`) could in principle diverge if the two ever disagree
+    /// for the active call — pinning removes that divergence risk by
+    /// construction instead of relying on the two sources always agreeing.
+    /// Cleared alongside `callPqcSessionKey` at hangup so a stale pin can
+    /// never leak into the next call's pipeline.
+    private var activeVideoCallIdentity: (callId: String, selfIsRoleA: Bool)?
     /// vkey-v1 — raw sovereign/KMS PSK bytes mixed into THIS call's session
     /// key, resolved by the negotiated PSK fingerprint. Pushed to the WebRTC
     /// controller as `videoContactPsk` so K_video's HKDF *salt* = psk —
@@ -6142,6 +6152,10 @@ final class AppState: ObservableObject {
         // would otherwise let one call's verified SAS appear on the
         // next, unverified call.
         callPqcSessionKey = nil
+        // Task 10: drop the pinned video sealer identity alongside the
+        // session key so a stale (callId, selfIsRoleA) can't leak into the
+        // next call's video pipeline.
+        activeVideoCallIdentity = nil
         // vkey-v1: drop the per-call video PSK salt so a stale key from this
         // call can't seed the next call's K_video.
         callVideoPsk = nil
@@ -6811,12 +6825,28 @@ extension AppState {
                     print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId))")
                 }
                 #endif
-                // W394: rotate the video pipeline's sealer with the new
-                // ML-KEM secret. From this moment forward, every outbound
-                // fragment is sealed under the post-handshake key and
-                // every inbound fragment is opened with it.
+                // W394 + Task 10: rotate the video pipeline's sealer with
+                // the new ML-KEM secret. From this moment forward, every
+                // outbound fragment is sealed under the post-handshake
+                // key and every inbound fragment is opened with it.
+                // REUSES the (callId, selfIsRoleA) pinned by
+                // startVideoPipeline (`activeVideoCallIdentity`) rather
+                // than recomputing selfIsRoleA from `callContactId` here —
+                // two independently-computed values could in principle
+                // diverge (this closure has no direct access to
+                // startVideoPipeline's `peerId`) and silently swap the
+                // send/recv key assignment mid-call. The `callContactId`
+                // fallback only fires if this notification somehow arrives
+                // before startVideoPipeline ever pinned an identity, which
+                // shouldn't happen (the pipeline itself is created there
+                // first) — defensive, not the expected path.
                 if let pipeline = self.videoPipeline {
-                    pipeline.rotatePqcSealer(key)
+                    let pinned = self.activeVideoCallIdentity
+                    let videoCallId = pinned?.callId
+                        ?? self.activeCallKitId?.uuidString.lowercased() ?? ""
+                    let videoSelfIsRoleA = pinned?.selfIsRoleA
+                        ?? PqcRtpFrameSealer.selfIsRoleA(self.currentUserId ?? "", self.callContactId ?? "")
+                    pipeline.rotatePqcSealer(key, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
                     print("[AppState] video pipeline PQC sealer rotated (\(key.count) bytes)")
                 }
                 // Advance the call-state machine to .encrypted now that
@@ -7341,27 +7371,6 @@ extension AppState {
             return
         }
 
-        // W392 + W394: PQC seal/unwrap on the video transport, with
-        // mid-call rekey support. The pipeline owns its own
-        // PqcFrameEncryptor / Decryptor (under sealerLock) and
-        // re-rotates whenever AppState calls rotatePqcSealer with a
-        // fresh ML-KEM secret. Initial install with the current call
-        // key (transitional or post-handshake); the wireSasReady-
-        // ToController observer re-fires this with the real key once
-        // the W389 broker reports.
-        pipeline.rotatePqcSealer(self.callPqcSessionKey)
-
-        // W397 — Android wire-compat is OPT-IN via UserDefaults.
-        // Default ON for cross-platform interop (iOS↔Android needs
-        // WireRelayFrameCodec); flip OFF via the Beta panel for
-        // legacy iOS↔iOS-only mode (raw sealed fragments).
-        let androidWire = (UserDefaults.standard.object(
-            forKey: "qaudion.video.android_wire_compat") as? Bool) ?? true
-        let seqCounter = AndroidVideoWireAdapter.SequenceCounter()
-
-        // Outbound — each fragment ships as a video_frame WS envelope.
-        // sealOutboundFragment reads the current sealer from the
-        // pipeline so rekey is observed without rewiring closures.
         // W525: capture a weak reference to the calling impl so each
         // fragment can stamp the current call_id onto the WS envelope.
         // Without this Android/Desktop drop every video_frame the same
@@ -7371,39 +7380,64 @@ extension AppState {
         // a weak capture on an optional reference here would just add
         // optional chaining noise without lifetime benefit.
         let callingImpl: BCryptoCallingApiImpl? = liveProvider?.callingApi as? BCryptoCallingApiImpl
-        // W574c — resolve the WS client PER FRAGMENT, mirroring the audio
-        // TX fix in CallService: the `weak ws` capture pins the instance
-        // that was live at pipeline setup; if that instance is superseded
-        // mid-call every remaining video_frame is dropped silently
-        // (webSocketTask nil → "DROPPED"), which the user experiences as
-        // the video freezing/chopping. `liveProvider` read is the same
-        // best-effort cross-thread pattern as CallService.getWsClient.
+
+        // W392 + W394 + Task 10: PQC seal/unwrap on the video transport,
+        // with mid-call rekey support. The pipeline owns its own
+        // PqcFrameEncryptor / Decryptor (under sealerLock) and
+        // re-rotates whenever AppState calls rotatePqcSealer with a
+        // fresh ML-KEM secret. Initial install with the current call
+        // key (transitional or post-handshake); the wireSasReady-
+        // ToController observer re-fires this with the real key once
+        // the W389 broker reports. `callId` is the same wire call_id
+        // stamped on every outbound video_frame envelope below (via
+        // callingImpl.getActiveCallId()) so the HKDF-bound sealer key
+        // and the envelope's call_id can never drift apart.
+        //
+        // `activeVideoCallIdentity` PINS (callId, selfIsRoleA) here so
+        // wireSasReadyToController's LATER rotate (fired asynchronously
+        // once the real ML-KEM secret lands) reuses the exact same
+        // identity instead of independently recomputing selfIsRoleA from
+        // `callContactId` — two independently-computed values could in
+        // principle diverge (peerId here vs. callContactId there) and
+        // silently swap the send/recv key assignment mid-call. Pinning
+        // removes that risk by construction.
+        let videoCallId = callingImpl?.getActiveCallId() ?? ""
+        let videoSelfIsRoleA = PqcRtpFrameSealer.selfIsRoleA(self.currentUserId ?? "", peerId)
+        self.activeVideoCallIdentity = (callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
+        pipeline.rotatePqcSealer(self.callPqcSessionKey, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
+
+        // Task 10 (2026-07-01) — Android's real, shipped WS-relay video
+        // fallback (`BcryptoWsVideoRelayTransport`) never uses
+        // `WireRelayFrameCodec` for video: it ships `frame` as exactly
+        // `base64(PqcRtpFrameSealer.seal(rawFragment))` — nonce||ciphertext
+        // ||tag over the UNTOUCHED VideoFrameFragmenter output (7-byte
+        // sub-header + NAL chunk) — with `frag_idx`/`total_frags`/
+        // `is_key_frame` as TOP-LEVEL WS JSON fields, not embedded in a
+        // binary mux wrapper. The old `AndroidVideoWireAdapter.encodeForAndroid`
+        // path (this file's previous behaviour, opt-in via the now-removed
+        // `qaudion.video.android_wire_compat` UserDefaults toggle) wrapped
+        // sealed fragments in `WireRelayFrameCodec.encodeVideo` — an
+        // assumption about Android's wire format that was never verified
+        // against real Android code and is now confirmed wrong (see the
+        // "Task 10 correction" note at the top of AndroidVideoWireAdapter.swift).
+        // `parseIosFragment` is still used here — purely to read the
+        // fragIdx/totalFrags/isKeyFrame metadata for the WS envelope's
+        // top-level fields; it does not wrap or alter the sealed bytes.
         pipeline.onOutboundFragment = { [weak self, weak ws, weak pipeline, callingImpl] fragment in
-            // Parse the iOS sub-header BEFORE sealing so the sealed
-            // envelope carries it inside the ciphertext. The Android
-            // wrapper only needs the metadata to rebuild the outer
-            // mux header — the iOS receiver still uses the inner
-            // sub-header for defragmentation.
             let parsed = AndroidVideoWireAdapter.parseIosFragment(fragment)
             let sealed = pipeline?.sealOutboundFragment(fragment) ?? fragment
-            let toShip: Data
-            if androidWire, let p = parsed,
-               let android = AndroidVideoWireAdapter.encodeForAndroid(
-                    sealedFragment: sealed,
-                    innerFragment: p,
-                    sequence: seqCounter.next()) {
-                toShip = android
-            } else {
-                toShip = sealed
-            }
             let cid = callingImpl?.getActiveCallId()
             let effectiveWs = self?.liveProvider?.getWebSocketClient() ?? ws
-            effectiveWs?.sendVideoFrame(recipientId: peerId, frame: toShip, callId: cid)
+            effectiveWs?.sendVideoFrame(
+                recipientId: peerId, frame: sealed, callId: cid,
+                fragIdx: parsed?.fragIdx ?? 0,
+                totalFrags: parsed?.totalFrags ?? 1,
+                isKeyFrame: parsed?.isKeyFrame ?? false)
         }
 
-        // Inbound — register the WS handler. When Android-wire is on,
-        // unwrap the outer mux header first; either way feed the
-        // post-seal envelope to acceptInboundFragment which applies
+        // Inbound — register the WS handler. Feeds the base64-decoded
+        // `frame` bytes (the raw PqcRtpFrameSealer-sealed envelope, no
+        // outer wrapper) straight to acceptInboundFragment, which applies
         // PQC unwrap internally before defragmentation.
         // W574c: extracted to registerInboundVideoHandler so the same
         // registration can be replayed on the FRESH WS instance after a
@@ -7449,24 +7483,23 @@ extension AppState {
 
     /// W574c — inbound video_frame handler registration, shared between
     /// startVideoPipeline (initial WS) and rewireCallAudioOnReconnect
-    /// (fresh WS instance after a mid-call reconnect). Reads the
-    /// android-wire toggle live so a re-registration keeps the same
-    /// decode behaviour as the original.
+    /// (fresh WS instance after a mid-call reconnect).
+    ///
+    /// Task 10 (2026-07-01) — `frame` is always the raw PqcRtpFrameSealer
+    /// envelope (nonce||ciphertext||tag), matching Android's real shipped
+    /// `BcryptoWsVideoRelayTransport` wire format. No outer wrapper is
+    /// ever applied on the wire (the previous `AndroidVideoWireAdapter
+    /// .decodeFromAndroid` / `WireRelayFrameCodec` unwrap branch assumed
+    /// one that Android never sends — see the matching note on the send
+    /// side in `startVideoPipeline`).
     @MainActor
     func registerInboundVideoHandler(on ws: BCryptoWebSocketClient,
                                      pipeline: VideoCallPipeline) {
-        let androidWire = (UserDefaults.standard.object(
-            forKey: "qaudion.video.android_wire_compat") as? Bool) ?? true
         ws.registerHandler(type: "video_frame") { [weak pipeline] _, data in
             guard let pipeline = pipeline,
                   let b64 = data["frame"] as? String,
                   let raw = Data(base64Encoded: b64) else { return }
-            if androidWire,
-               let unwrapped = AndroidVideoWireAdapter.decodeFromAndroid(raw) {
-                pipeline.acceptInboundFragment(unwrapped.sealedFragment)
-            } else {
-                pipeline.acceptInboundFragment(raw)
-            }
+            pipeline.acceptInboundFragment(raw)
         }
     }
 

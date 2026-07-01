@@ -417,23 +417,48 @@ public final class VideoCallPipeline: NSObject {
         }
     }
 
-    /// W394: install / rotate the PQC sealer. Called when
+    /// W394 / Task 10 parity — install / rotate the PQC sealer. Called when
     /// CallSessionKeyBroker fires sasReadyNotification with a fresh
     /// 32-byte ML-KEM-derived secret. Idempotent — the call site
     /// can fire it on every notification without checking.
-    public func rotatePqcSealer(_ newKey: Data?) {
+    ///
+    /// **Directional keys, mandatory.** Android's WS-relay video fallback
+    /// (shipped 2026-06-30, `CallController.onConnected`) unconditionally
+    /// derives a DIRECTIONAL sealer pair for video via
+    /// `PqcRtpFrameSealer.createDirectional(sessionKey, "<callId>:video", selfIsRoleA)`
+    /// — the `:video` suffix domain-separates this key from audio's own
+    /// directional sealers (bare callId), and the a2b/b2a split avoids the
+    /// (key, nonce) reuse the legacy single-key scheme is vulnerable to
+    /// (see the `createDirectional` kdoc). iOS MUST derive the byte-identical
+    /// keys or `open()` fails 100% of the time against a real Android peer —
+    /// this is why `callId` and `selfIsRoleA` are now required parameters
+    /// instead of the old callId-unbound single-key `init(pqcSessionKey:)`.
+    ///
+    /// - Parameters:
+    ///   - newKey: 32-byte ML-KEM-derived session key, or `nil`/wrong-length
+    ///     to clear the sealer (e.g. call ended).
+    ///   - callId: the ACTIVE call's lowercase wire call_id (same string
+    ///     Android's `outcome.callId` resolves to) — MUST match the peer's
+    ///     value or the HKDF info diverges and interop fails silently
+    ///     (AEAD auth failure on every frame).
+    ///   - selfIsRoleA: `PqcRtpFrameSealer.selfIsRoleA(selfUserId, peerUserId)`
+    ///     — same rule Android/Desktop use, so both legs agree without
+    ///     extra signalling.
+    public func rotatePqcSealer(_ newKey: Data?, callId: String, selfIsRoleA: Bool) {
         #if canImport(WebRTC)
         sealerLock.lock()
         defer { sealerLock.unlock() }
-        guard let key = newKey, key.count == 32 else {
+        guard let key = newKey, key.count == 32, !callId.isEmpty else {
             pqcEncryptor = nil
             pqcDecryptor = nil
             return
         }
         do {
-            let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
-            pqcEncryptor = PqcFrameEncryptor(sealer: sealer)
-            pqcDecryptor = PqcFrameDecryptor(sealer: sealer)
+            let videoCallId = "\(callId.lowercased()):video"
+            let pair = try PqcRtpFrameSealer.createDirectional(
+                pqcSessionKey: key, callId: videoCallId, selfIsRoleA: selfIsRoleA)
+            pqcEncryptor = PqcFrameEncryptor(sealer: pair.send)
+            pqcDecryptor = PqcFrameDecryptor(sealer: pair.recv)
         } catch {
             print("[VideoCallPipeline] rotatePqcSealer failed: \(error)")
             pqcEncryptor = nil
