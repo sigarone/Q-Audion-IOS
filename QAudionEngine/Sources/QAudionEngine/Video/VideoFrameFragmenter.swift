@@ -164,6 +164,19 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        // CX/perf micro (audit 2026-07-02): capture the clock ONCE for this
+        // locked scope and reuse it for both the new-frame `startTimeMs` and
+        // the completion-path `nowMsForStats` below. Previously each read
+        // called `Date().timeIntervalSince1970 * 1000` independently on the
+        // per-frame hot path. Sharing one value is also strictly MORE correct:
+        // when a single-fragment frame is created AND completed in the same
+        // call, both reads now observe the same logical "now" (reassemblyMs = 0
+        // exactly), instead of a tiny non-zero delta from two separate clock
+        // reads. Purge semantics are unchanged: `purgeStaleFrames()` compares
+        // its own `nowMs` against this `startTimeMs`, and this value is taken at
+        // the same point the old `Date()` was, so the timeout window is identical.
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+
         // Task 11 holistic-review fix — single-frame-in-flight, matching
         // Android's VideoFrameReassembler.kt / Desktop's
         // VideoFrameReassembler.ts byte-for-byte: a new frameId
@@ -183,7 +196,7 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
                 totalFragments: totalFrags,
                 isKeyFrame: isKeyFrame,
                 bitrateHintKbps: bitrateHintKbps,
-                startTimeMs: Int64(Date().timeIntervalSince1970 * 1000)
+                startTimeMs: nowMs
             )
             pendingFrame = pending
         }
@@ -210,7 +223,7 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         // grows with both packet delay variance and reorder. Inter-
         // arrival jitter is the std deviation of completion times
         // computed via Welford's online algorithm.
-        let nowMsForStats = Int64(Date().timeIntervalSince1970 * 1000)
+        let nowMsForStats = nowMs
         let reassemblyMs = max(Int64(0), nowMsForStats - pending.startTimeMs)
         latencySumMs &+= reassemblyMs
         latencySamplesInWindow &+= 1
