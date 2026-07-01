@@ -71,6 +71,16 @@ public final class QAudionPeerConnection: NSObject {
     /// published later via `setKey`, and the sender/receiver cryptors are
     /// attached when their tracks exist. Replaces the codec-layer seal.
     public private(set) var nativeVideoCryptor: NativeVideoFrameCryptor?
+    /// CALLEE-UPGRADE-PURPLE FIX (2026-07-01) — the mid of the FIRST real inbound
+    /// video transceiver, recorded when its receiver surfaces in
+    /// `didAdd rtpReceiver`. Once set, a later `didAdd` for a video receiver on a
+    /// DIFFERENT mid whose transceiver is recv-only with NO sender track is the
+    /// phantom duplicate m-line libwebrtc M144 mints on a callee-side video
+    /// upgrade — it is IGNORED so the renderer sink stays on the established
+    /// track (mirrors Android `cryptorBoundMid` +
+    /// `shouldIgnorePhantomVideoTransceiver`, qaudion-android-new 39ea0e5f).
+    /// nil until the first video receiver arrives; cleared in `close()`.
+    private var establishedVideoReceiverMid: String?
     private let mediaConstraints = RTCMediaConstraints(
         mandatoryConstraints: nil,
         optionalConstraints: ["DtlsSrtpKeyAgreement": "true"]
@@ -439,6 +449,7 @@ public final class QAudionPeerConnection: NSObject {
         localAudioTrack = nil
         localVideoTrack = nil
         videoSender = nil
+        establishedVideoReceiverMid = nil
     }
 
     // MARK: - Errors
@@ -508,6 +519,43 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
             delegate?.peerConnection(self, didReceiveRemoteAudioTrack: audio)
         }
         if let video = rtpReceiver.track as? RTCVideoTrack {
+            // CALLEE-UPGRADE-PURPLE FIX (2026-07-01) — mirror of Android 39ea0e5f
+            // (`shouldIgnorePhantomVideoTransceiver`): on a callee-initiated video
+            // upgrade the peer's libwebrtc (M144) can mint a DUPLICATE phantom
+            // video m-line at a NEW mid (~2s after the upgrade reneg) — recv-only,
+            // receiver track present, NO sender track. Forwarding it would let the
+            // app's latest-wins remote-track plumbing move the renderer sink to
+            // the phantom's EMPTY track while real RTP keeps decoding on the
+            // established mid → remote video frozen. (The receiver cryptor is
+            // already phantom-safe: NativeVideoFrameCryptor.attachReceiver is
+            // bind-once — only the render sink was stealable.)
+            //
+            // Resolve the owning transceiver by receiverId — the ObjC wrapper
+            // objects are NOT identity-stable, so `===` matching would be wrong.
+            let tx = peerConnection.transceivers.first { $0.receiver.receiverId == rtpReceiver.receiverId }
+            // `mid` is annotated nonnull but is empty/nil pre-association; Swift
+            // bridges a nil NSString to "" — treat empty as "no mid" either way.
+            let rawMid = tx?.mid ?? ""
+            let liveMid: String? = rawMid.isEmpty ? nil : rawMid
+            let isRecvOnly = tx?.direction == .recvOnly
+            let hasSenderTrack = tx?.sender.track != nil
+            if VideoTransceiverPhantomGuard.shouldIgnorePhantomVideoTransceiver(
+                establishedMid: establishedVideoReceiverMid,
+                liveMid: liveMid,
+                isRecvOnly: isRecvOnly,
+                hasSenderTrack: hasSenderTrack
+            ) {
+                let est = establishedVideoReceiverMid ?? "nil"
+                print("[WebRTC] PHANTOM video transceiver IGNORED mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack) (established mid=\(est) still live) — keeping renderer on established track")
+                return
+            }
+            // First real inbound video establishes the mid. Fail-open: if the
+            // transceiver can't be resolved (or its mid is empty) nothing is
+            // established and the guard above stays inert — old behavior.
+            if establishedVideoReceiverMid == nil, let mid = liveMid {
+                establishedVideoReceiverMid = mid
+                print("[WebRTC] inbound VIDEO mid established mid=\(mid)")
+            }
             delegate?.peerConnection(self, didReceiveRemoteVideoTrack: video)
             // Attach point for the native FrameCryptor (decrypts inbound video).
             // This runs on the WebRTC signalling thread — the correct place to
@@ -538,3 +586,44 @@ extension QAudionPeerConnection: RTCDataChannelDelegate {
     }
 }
 #endif
+
+/// CALLEE-UPGRADE-PURPLE FIX (2026-07-01) — pure decision for whether a
+/// just-added inbound video receiver belongs to a PHANTOM transceiver that must
+/// be IGNORED (do not forward didReceiveRemoteVideoTrack /
+/// didReceiveRemoteVideoReceiver; keep the renderer on the established mid).
+/// Mirrors Android `shouldIgnorePhantomVideoTransceiver`
+/// (qaudion-android-new commit 39ea0e5f, PeerConnectionHolder.kt).
+///
+/// Phantom shape (device-verified on Android A36↔S26, same libwebrtc M144 on
+/// iOS): once a real inbound video mid is ESTABLISHED, a transceiver at a
+/// DIFFERENT mid that is recv-only with NO sender track is the empty duplicate
+/// m-line libwebrtc mints on a callee-side video upgrade. Real RTP keeps
+/// flowing on the established mid; following the phantom steals the render
+/// sink → remote video frozen.
+///
+/// Safety semantics (the guard must be unable to break legitimate video):
+///  - first-ever video (`establishedMid == nil`) → NEVER ignored (it is the
+///    one that establishes the mid)
+///  - same-mid re-fire → forwarded normally
+///  - sender track present, or direction not recv-only → forwarded normally
+///    (a real bidirectional m-line, not the empty phantom)
+///  - unresolvable transceiver / empty mid (`liveMid == nil`) → forwarded
+///    normally (fail open to old behavior — never drop a track we can't
+///    classify)
+///
+/// Kept OUTSIDE `#if canImport(WebRTC)` and free of RTC types so it is
+/// unit-testable on the macOS CI runner (`swift test`) without the WebRTC
+/// binary — same extraction pattern as the Android pure function.
+enum VideoTransceiverPhantomGuard {
+    static func shouldIgnorePhantomVideoTransceiver(
+        establishedMid: String?,
+        liveMid: String?,
+        isRecvOnly: Bool,
+        hasSenderTrack: Bool
+    ) -> Bool {
+        guard let establishedMid = establishedMid, !establishedMid.isEmpty else { return false }
+        guard let liveMid = liveMid, !liveMid.isEmpty else { return false }
+        if liveMid == establishedMid { return false }
+        return isRecvOnly && !hasSenderTrack
+    }
+}
