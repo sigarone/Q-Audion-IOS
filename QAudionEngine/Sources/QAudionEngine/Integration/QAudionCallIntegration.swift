@@ -1628,12 +1628,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// absent OR null capabilities → false).
     private static func capsFromBundle(
         _ caps: AndroidHandshakeBundle.Capabilities?
-    ) -> (ratchetV3: Bool, sframeV1: Bool, vkeyV1: Bool, sessionKdfV3: Bool) {
+    ) -> (ratchetV3: Bool, sframeV1: Bool, vkeyV1: Bool, sessionKdfV3: Bool, ratchetV4: Bool, srtpDirKeyV1: Bool) {
         return (
             ratchetV3: caps?.ratchetV3 ?? false,
             sframeV1: caps?.sframeV1 ?? false,
             vkeyV1: caps?.vkeyV1 ?? false,
-            sessionKdfV3: caps?.sessionKdfV3 ?? false  // XC-3: bound into the signed transcript (4th CAPS byte)
+            sessionKdfV3: caps?.sessionKdfV3 ?? false,  // XC-3: bound into the signed transcript (4th CAPS byte)
+            ratchetV4: caps?.ratchetV4 ?? false,  // XC-4: bound into the signed transcript (5th CAPS byte)
+            srtpDirKeyV1: caps?.srtpDirKeyV1 ?? false  // XC-4: bound into the signed transcript (6th CAPS byte)
         )
     }
 
@@ -1665,6 +1667,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             sframeV1: caps.sframeV1,
             vkeyV1: caps.vkeyV1,
             sessionKdfV3: caps.sessionKdfV3,
+            ratchetV4: caps.ratchetV4,
+            srtpDirKeyV1: caps.srtpDirKeyV1,
             ratchetV: HandshakeSigningPolicy.ratchetV,
             suiteId: HandshakeSigningPolicy.suiteId,
             pskFingerprints: bundle.pskFingerprints
@@ -1700,6 +1704,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             sframeV1: caps.sframeV1,
             vkeyV1: caps.vkeyV1,
             sessionKdfV3: caps.sessionKdfV3,
+            ratchetV4: caps.ratchetV4,
+            srtpDirKeyV1: caps.srtpDirKeyV1,
             ratchetV: HandshakeSigningPolicy.ratchetV,
             suiteId: HandshakeSigningPolicy.suiteId,
             selectedPskFingerprint: bundle.selectedPskFingerprint,
