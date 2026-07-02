@@ -744,6 +744,19 @@ struct ChatDetailScreen: View {
                     saveRequest: mediaSaveRequestBinding(for: msg.id),
                     shareRequest: mediaShareRequestBinding(for: msg.id)
                 )
+            } else if let mime = msg.mediaMimeType, !mime.isEmpty {
+                // W446: generic file attachment (PDF, doc, archive, …) —
+                // anything with a mime that isn't audio/image lands here
+                // instead of falling through to plain text. Covers both
+                // the downloading state (mediaLocalPath still nil, mime
+                // already stamped from the qfile/attach_announce marker
+                // — see AppState.handleIncomingMessage) and the ready
+                // state once ChatVoiceNoteReceiver.fetch/fetchAttachAnnounce
+                // populates the decrypted cache path.
+                FileBubbleContent(
+                    messageId: msg.id,
+                    mediaLocalPath: msg.mediaLocalPath
+                )
             } else if let dur = msg.mediaDurationMs, dur > 0 {
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
