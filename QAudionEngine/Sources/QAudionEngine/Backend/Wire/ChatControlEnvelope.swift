@@ -33,10 +33,36 @@ import Foundation
 ///   - `t: "del"` → normalized to `"delete"`.
 ///   - `body` → fallback for `new_body` (Phase-31 rename).
 ///   - `ref` → fallback for `target` (early-Android compat).
+///
+/// **Screenshot-lock family** (Android `TYPE_SCREENSHOT_*`) — conversation-level
+/// controls for the mutual screenshot-unlock handshake. Unlike delete/edit/
+/// reaction these carry NO `target` (they act on the whole conversation, not a
+/// single message), matching Android's nullable `target`:
+///
+/// | Variant   | Wire JSON                                                          |
+/// | --------- | ------------------------------------------------------------------ |
+/// | ss_req    | `{"qa_ctl":1,"t":"ss_req","ts":<unix-s>}`                          |
+/// | ss_resp   | `{"qa_ctl":1,"t":"ss_resp","approved":<bool>,"ts":<unix-s>}`       |
+/// | ss_lock   | `{"qa_ctl":1,"t":"ss_lock","ts":<unix-s>}`                         |
+///
+/// RECEIVE-SIDE NOTE: iOS applies these envelopes through the conversation-level
+/// ad-hoc JSON handler in `AppState.handleIncomingMessage` (which also renders
+/// the system bubble and updates `ConversationStore.setScreenshotGranted`).
+/// These enum cases exist so the typed wire model is complete and parity-checked
+/// against Android/Desktop; `handleControlEnvelope`'s message-targeted dispatch
+/// intentionally treats them as no-ops (see comment there) so there is exactly
+/// one code path that applies them. Origination lives in `ChatContainer`.
 public enum ChatControlEnvelope: Equatable {
     case delete(target: String, ts: Int64?)
     case edit(target: String, newBody: String, ts: Int64?)
     case reaction(target: String, emoji: String, ts: Int64?)
+    /// Peer requests a mutual screenshot unlock for this conversation. No payload.
+    case screenshotRequest(ts: Int64?)
+    /// Peer's response to a screenshot-unlock request. `approved` = grant/deny.
+    case screenshotResponse(approved: Bool, ts: Int64?)
+    /// Peer re-locks screenshots for this conversation. No payload; no consent
+    /// needed since it only restores the more-secure (locked) state.
+    case screenshotLock(ts: Int64?)
 
     public static let qaCtlVersion: Int = 1
 
@@ -70,6 +96,21 @@ public enum ChatControlEnvelope: Equatable {
 
     // MARK: - Decode
 
+    /// Strictly interpret a `JSONSerialization` value as a JSON boolean.
+    /// Returns the bool only when the value is a genuine JSON `true`/`false`
+    /// (backed by `CFBoolean`); returns `nil` for JSON numbers, strings,
+    /// objects, `null`, or a missing key. This prevents a crafted numeric
+    /// `1`/`0` from being coerced into a boolean — parity with Android/Desktop,
+    /// where a non-bool `approved` deserializes to null (→ deny).
+    private static func jsonBool(_ value: Any?) -> Bool? {
+        guard let num = value as? NSNumber else { return nil }
+        // A JSON bool is bridged to an NSNumber whose CFTypeID is CFBoolean's;
+        // a JSON integer/double is a plain numeric NSNumber. Only accept the
+        // former.
+        guard CFGetTypeID(num) == CFBooleanGetTypeID() else { return nil }
+        return num.boolValue
+    }
+
     /// Parse a JSON-encoded plaintext envelope into a typed variant.
     /// Returns `nil` if the JSON is well-formed but doesn't have
     /// `qa_ctl == 1` (caller falls back to other parsers — e.g.
@@ -89,6 +130,32 @@ public enum ChatControlEnvelope: Equatable {
         }
         // Legacy alias normalization.
         if typeStr == "del" { typeStr = "delete" }
+
+        // Screenshot-lock family — conversation-level, NO `target` field.
+        // Handle these BEFORE the target-extraction guard below (which would
+        // otherwise throw `missingField("target")` for these payload-less
+        // variants). `ts` is optional here too, mirroring Android.
+        switch typeStr {
+        case "ss_req":
+            let ts: Int64? = (any["ts"] as? Int64) ?? (any["ts"] as? NSNumber)?.int64Value
+            return .screenshotRequest(ts: ts)
+        case "ss_resp":
+            // `approved` MUST be a genuine JSON boolean. Anything else
+            // (missing, string, number, object) is treated as `false` (deny) —
+            // the fail-closed reading for a security-sensitive unlock response,
+            // and strict parity with Android/Desktop (kotlinx / JSON.parse both
+            // require a real bool; a numeric `1` deserializes to null → deny).
+            // We deliberately do NOT accept a numeric NSNumber here so a crafted
+            // `"approved":1` cannot be coerced into a grant.
+            let approved = jsonBool(any["approved"]) ?? false
+            let ts: Int64? = (any["ts"] as? Int64) ?? (any["ts"] as? NSNumber)?.int64Value
+            return .screenshotResponse(approved: approved, ts: ts)
+        case "ss_lock":
+            let ts: Int64? = (any["ts"] as? Int64) ?? (any["ts"] as? NSNumber)?.int64Value
+            return .screenshotLock(ts: ts)
+        default:
+            break
+        }
 
         // Extract `target` (or legacy `ref`).
         guard let target = (any["target"] as? String) ?? (any["ref"] as? String),
@@ -173,6 +240,28 @@ public enum ChatControlEnvelope: Equatable {
                 "t":      "reaction",
                 "target": target,
                 "emoji":  emoji,
+            ]
+            if let ts = ts { d["ts"] = ts }
+            return d
+        case .screenshotRequest(let ts):
+            var d: [String: Any] = [
+                "qa_ctl": Self.qaCtlVersion,
+                "t":      "ss_req",
+            ]
+            if let ts = ts { d["ts"] = ts }
+            return d
+        case .screenshotResponse(let approved, let ts):
+            var d: [String: Any] = [
+                "qa_ctl":   Self.qaCtlVersion,
+                "t":        "ss_resp",
+                "approved": approved,
+            ]
+            if let ts = ts { d["ts"] = ts }
+            return d
+        case .screenshotLock(let ts):
+            var d: [String: Any] = [
+                "qa_ctl": Self.qaCtlVersion,
+                "t":      "ss_lock",
             ]
             if let ts = ts { d["ts"] = ts }
             return d

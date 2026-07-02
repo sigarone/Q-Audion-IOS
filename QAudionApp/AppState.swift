@@ -3363,14 +3363,28 @@ final class AppState: ObservableObject {
             // shape for `qfile` markers (legacy iOS-internal file
             // transfer) so a stray Desktop-FileTransfer marker doesn't
             // leak as text either.
-            // W86: route qa_ctl:1 control envelopes (delete / edit)
+            // W86: route qa_ctl:1 control envelopes (delete / edit / reaction)
             // BEFORE persisting as a new inbound row. These mutate
             // an EXISTING row keyed by clientMsgId rather than
             // appending. A successful route returns early — the chat
             // refresh notification fires from inside the route helper.
+            //
+            // Screenshot-lock family (ss_req / ss_resp / ss_lock) now ALSO
+            // parses into a typed case, but it is CONVERSATION-level (no target
+            // row to mutate) and is applied — together with its system bubble +
+            // `setScreenshotGranted` state — by the conversation-level ad-hoc
+            // JSON handler further down this function. So we deliberately let it
+            // FALL THROUGH here (do not route to `handleControlEnvelope`, which
+            // treats it as a no-op) to keep that ad-hoc handler as the single
+            // source of truth and avoid a parse-then-drop regression.
             if let env = try? ChatControlEnvelope.parse(decryptedRaw) {
-                handleControlEnvelope(env, senderId: senderId)
-                return
+                switch env {
+                case .screenshotRequest, .screenshotResponse, .screenshotLock:
+                    break  // fall through to the ad-hoc conversation-level handler
+                case .delete, .edit, .reaction:
+                    handleControlEnvelope(env, senderId: senderId)
+                    return
+                }
             }
             // W390: route `qa_grp:1` envelopes (sender_key_init,
             // sender_key_rotate) to the GroupChatService BEFORE
@@ -3518,6 +3532,20 @@ final class AppState: ObservableObject {
         var isViewOnce: Bool = false
         isViewOnce = (conv.ephemeralTimerSeconds ?? 0) == -1
 
+        // W441 (inbound parity): when the conversation has an ACTIVE positive
+        // disappearing-timer, stamp `expiresAt` on the received row so the
+        // EphemeralMessageJanitor sweeps it, exactly like the outbound send path
+        // (ChatContainer.sendMessage). Mirrors Android's computeEphemeralExpiry:
+        //   - nil / 0  → no expiry (message persists)
+        //   - -1       → view-once (expiresAt stays nil here; set at open time
+        //                by markViewOnceOpened, parity with the outbound path)
+        //   - positive → now + seconds
+        let receivedNow = Date()
+        let ephSecs = conv.ephemeralTimerSeconds
+        let ephExpiry: Date? = ephSecs.flatMap { s in
+            s > 0 ? receivedNow.addingTimeInterval(Double(s)) : nil
+        }
+
         let msgUUID = UUID()
         // W80: voice-note receive.
         var initialMediaDur: Int64? = nil
@@ -3554,6 +3582,7 @@ final class AppState: ObservableObject {
             mediaDurationMs: initialMediaDur,
             mediaMimeType: pendingMarker?.qfile.mime ?? pendingAttachAnnounce?.att.mime,
             clientMsgId: clientMsgId,
+            expiresAt: ephExpiry,
             isViewOnce: isViewOnce ? true : nil
         )
         store.appendMessage(msg)
@@ -3739,11 +3768,28 @@ final class AppState: ObservableObject {
     private func handleControlEnvelope(_ env: ChatControlEnvelope,
                                        senderId envelopeSenderId: String) {
         let store = ConversationStore()
+        // Screenshot-lock family (ss_req / ss_resp / ss_lock) is
+        // CONVERSATION-level, not message-targeted, and is applied by the
+        // ad-hoc JSON handler earlier in `handleIncomingMessage` (which also
+        // renders the system bubble + updates `setScreenshotGranted`). We must
+        // NOT re-apply it here — that path is the single source of truth. These
+        // cases are typed-model completeness only; treat them as a safe no-op so
+        // the message-targeted dispatch below never runs on them. (In practice
+        // the caller doesn't route these variants here — see the parse-guard in
+        // `handleIncomingMessage`.)
+        switch env {
+        case .screenshotRequest, .screenshotResponse, .screenshotLock:
+            return
+        case .delete, .edit, .reaction:
+            break
+        }
         let target: String
         switch env {
         case .delete(let t, _): target = t
         case .edit(let t, _, _): target = t
         case .reaction(let t, _, _): target = t
+        case .screenshotRequest, .screenshotResponse, .screenshotLock:
+            return  // unreachable: handled by the guard above
         }
         guard let (convId, original) = store.findByClientMsgId(target) else {
             print("[AppState] qa_ctl envelope: target \(target.prefix(8))… not found")
@@ -3784,6 +3830,8 @@ final class AppState: ObservableObject {
             applied = store.applyEditByClientMsgId(target, newPlaintext: newBody)
         case .reaction:
             applied = false  // handled above
+        case .screenshotRequest, .screenshotResponse, .screenshotLock:
+            applied = false  // unreachable: handled by the top-of-function guard
         }
         guard applied else { return }
         NotificationCenter.default.post(
