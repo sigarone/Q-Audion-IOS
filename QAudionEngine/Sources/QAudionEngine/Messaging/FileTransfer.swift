@@ -96,13 +96,28 @@ public final class FileTransfer: @unchecked Sendable {
     public struct StorageApi {
         public let uploadFile: (_ data: Data, _ filename: String) async throws -> String
         public let downloadFile: (_ fileId: String) async throws -> Data
+        /// W446 — optional progress-reporting variant. When supplied, the
+        /// caller-provided closure is preferred over `uploadFile` so
+        /// ``upload(recipientId:bytes:filename:mime:onProgress:)`` can
+        /// report bytes-uploaded/total to the UI as chunks complete.
+        /// `nil` by default — local-only UI plumbing, never touches the
+        /// wire schema.
+        public let uploadFileWithProgress: (
+            (_ data: Data, _ filename: String,
+             _ onProgress: ((Int64, Int64) -> Void)?) async throws -> String
+        )?
 
         public init(
             uploadFile: @escaping (_ data: Data, _ filename: String) async throws -> String,
-            downloadFile: @escaping (_ fileId: String) async throws -> Data
+            downloadFile: @escaping (_ fileId: String) async throws -> Data,
+            uploadFileWithProgress: (
+                (_ data: Data, _ filename: String,
+                 _ onProgress: ((Int64, Int64) -> Void)?) async throws -> String
+            )? = nil
         ) {
             self.uploadFile = uploadFile
             self.downloadFile = downloadFile
+            self.uploadFileWithProgress = uploadFileWithProgress
         }
     }
 
@@ -147,11 +162,19 @@ public final class FileTransfer: @unchecked Sendable {
     // MARK: - Upload
 
     /// Encrypt `bytes`, upload ciphertext, return a marker ready for the chat body.
+    ///
+    /// - Parameter onProgress: optional local-UI callback,
+    ///   `(bytesUploaded, totalBytes)`, forwarded to the storage layer's
+    ///   `uploadFileWithProgress` when the caller wired one (see
+    ///   ``StorageApi``). Ignored (never called) when the caller only
+    ///   supplied the plain `uploadFile` closure. `nil` by default so
+    ///   existing call sites keep compiling unchanged.
     public func upload(
         recipientId: String,
         bytes: Data,
         filename: String,
-        mime: String
+        mime: String,
+        onProgress: ((Int64, Int64) -> Void)? = nil
     ) async throws -> FileMarker {
         guard let psk = vault.forContact(recipientId) ?? vault.primary() else {
             throw FileTransferError.noPskAvailable
@@ -171,7 +194,12 @@ public final class FileTransfer: @unchecked Sendable {
         let tag = sealed.tag
 
         // Upload ONLY the ciphertext — salt/nonce/tag ride in the chat marker.
-        let fileId = try await storage.uploadFile(ciphertext, filename)
+        let fileId: String
+        if let withProgress = storage.uploadFileWithProgress {
+            fileId = try await withProgress(ciphertext, filename, onProgress)
+        } else {
+            fileId = try await storage.uploadFile(ciphertext, filename)
+        }
 
         return FileMarker(qfile: .init(
             fileId: fileId,

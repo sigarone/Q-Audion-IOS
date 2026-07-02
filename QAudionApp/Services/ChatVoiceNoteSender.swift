@@ -65,12 +65,18 @@ final class ChatVoiceNoteSender {
     ///   - recording: handed back by ``VoiceNoteRecorder/stop``.
     ///   - recipientUserId: peer UUID — bound into the issued token's HMAC
     ///     so a leaked claim cannot be redeemed by any other account.
+    ///   - onProgress: optional local-UI callback, `(bytesUploaded,
+    ///     totalBytes)`. Only wired on the legacy qfile path (the
+    ///     `attach_announce` cross-platform path, gated behind
+    ///     `VoiceNote.attachAnnounce.enabled` and default OFF, uploads via
+    ///     a separate single-shot pipeline and doesn't report progress).
     /// - Returns: the JSON-serialized ``FileTransfer/FileMarker`` as a
     ///   string; pass this through ``ChatContainer/composerText`` to ride
     ///   the regular send path (AAD-bound chat ciphertext).
     func prepareMarkerJson(
         for recording: VoiceNoteRecorder.Recording,
-        recipientUserId: String
+        recipientUserId: String,
+        onProgress: ((Int64, Int64) -> Void)? = nil
     ) async throws -> String {
         // W362: when UserDefaults["VoiceNote.attachAnnounce.enabled"]
         // is true, route through the cross-platform attach_announce
@@ -109,7 +115,8 @@ final class ChatVoiceNoteSender {
             mime: recording.mimeType,
             filename: "voicenote-\(recording.fileURL.deletingPathExtension().lastPathComponent).m4a",
             durationMs: Int64(recording.durationMs),
-            recipientUserId: recipientUserId
+            recipientUserId: recipientUserId,
+            onProgress: onProgress
         )
     }
 
@@ -119,12 +126,18 @@ final class ChatVoiceNoteSender {
     /// covers all of them. The `mime` is stamped into `marker.qfile.mime`
     /// so the receiver can route to the right bubble; `durationMs` is
     /// optional and only set for voice notes.
+    /// - Parameter onProgress: optional local-UI callback,
+    ///   `(bytesUploaded, totalBytes)`, invoked as TUS chunks complete
+    ///   during the upload step. Purely local UI state — never touches
+    ///   `attach_announce`/`ChatControlEnvelope` or any wire schema.
+    ///   `nil` by default so existing callers keep compiling unchanged.
     func prepareAttachmentMarkerJson(
         bytes: Data,
         mime: String,
         filename: String,
         durationMs: Int64?,
-        recipientUserId: String
+        recipientUserId: String,
+        onProgress: ((Int64, Int64) -> Void)? = nil
     ) async throws -> String {
         // 1. Build the FileTransfer dependencies. We rebuild per-call so
         //    the service stays stateless and a token rotation is picked
@@ -138,13 +151,29 @@ final class ChatVoiceNoteSender {
         // No `provider.initialize()` — `uploadFile` and `issueToken` are
         // REST-only; a fresh provider with the auth token is sufficient.
 
+        // BCryptoStorageApiImpl.uploadFile(data:filename:onProgress:) is
+        // not part of the StorageApi protocol (mirrors AvatarUploader's
+        // existing cast for the same reason), so we cast to the concrete
+        // impl to reach the progress-reporting overload. Falls back to
+        // the plain protocol call if the concrete type ever changes —
+        // `uploadFileWithProgress` stays nil and FileTransfer.upload
+        // silently skips progress reporting.
+        let storageImpl = provider.storageApi as? BCryptoStorageApiImpl
+        let uploadWithProgress: (
+            (_ data: Data, _ filename: String,
+             _ onProgress: ((Int64, Int64) -> Void)?) async throws -> String
+        )? = storageImpl == nil ? nil : { data, filename, progress in
+            try await storageImpl!.uploadFile(data: data, filename: filename, onProgress: progress)
+        }
+
         let storage = FileTransfer.StorageApi(
             uploadFile: { data, filename in
                 try await provider.storageApi.uploadFile(data: data, filename: filename)
             },
             downloadFile: { _ in
                 throw Error.uploadFailed("sender-side download invoked unexpectedly")
-            }
+            },
+            uploadFileWithProgress: uploadWithProgress
         )
 
         // 2. Resolve PSK adapter — same ladder as ChatMessageSendService.
@@ -167,7 +196,8 @@ final class ChatVoiceNoteSender {
                 recipientId: recipientUserId,
                 bytes: bytes,
                 filename: filename,
-                mime: mime
+                mime: mime,
+                onProgress: onProgress
             )
         } catch {
             throw Error.uploadFailed(error.localizedDescription)
