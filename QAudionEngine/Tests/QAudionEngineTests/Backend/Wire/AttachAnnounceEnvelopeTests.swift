@@ -132,4 +132,95 @@ final class AttachAnnounceEnvelopeTests: XCTestCase {
         )
         XCTAssertThrowsError(try meta.validate())
     }
+
+    // MARK: - W447: `ex` per-attachment ephemeral-timer override
+
+    func test_parse_withEx_positiveTtl_roundTrips() throws {
+        let json = """
+        {"qa_ctl":1,"t":"attach_announce","att":{
+          "id":"a","mime":"image/jpeg","byte_length":10,
+          "sha256_b64":"x","file_id":"y","ex":300}}
+        """
+        let env = try AttachAnnounceEnvelope.parse(json)
+        XCTAssertEqual(env?.att.ex, 300)
+    }
+
+    func test_parse_withEx_viewOnceSentinel() throws {
+        let json = """
+        {"qa_ctl":1,"t":"attach_announce","att":{
+          "id":"a","mime":"image/jpeg","byte_length":10,
+          "sha256_b64":"x","file_id":"y","ex":-1}}
+        """
+        let env = try AttachAnnounceEnvelope.parse(json)
+        XCTAssertEqual(env?.att.ex, -1)
+    }
+
+    /// Backward-compat: old-shape JSON with no `ex` key at all must still
+    /// decode, and `ex` must come back nil (today's default behavior).
+    func test_parse_withoutEx_decodesWithNilDefault() throws {
+        let json = """
+        {"qa_ctl":1,"t":"attach_announce","att":{
+          "id":"a","mime":"image/jpeg","byte_length":10,
+          "sha256_b64":"x","file_id":"y"}}
+        """
+        let env = try AttachAnnounceEnvelope.parse(json)
+        XCTAssertNotNil(env)
+        XCTAssertNil(env!.att.ex)
+    }
+
+    func test_encode_withEx_emitsExKey() throws {
+        let env = AttachAnnounceEnvelope(
+            att: AttachAnnounceMeta(
+                id: "a", mime: "image/jpeg", byteLength: 10,
+                sha256B64: "x", fileId: "y", ex: 3600
+            )
+        )
+        let wire = try env.toJsonString()
+        XCTAssertTrue(wire.contains("\"ex\":3600"))
+    }
+
+    /// Backward-compat: when `ex` is not set (nil), the encoder must omit
+    /// the key entirely — byte-identical wire shape to before this change.
+    func test_encode_withoutEx_omitsExKey() throws {
+        let env = AttachAnnounceEnvelope(
+            att: AttachAnnounceMeta(
+                id: "a", mime: "image/jpeg", byteLength: 10,
+                sha256B64: "x", fileId: "y"
+            )
+        )
+        let wire = try env.toJsonString()
+        XCTAssertFalse(wire.contains("\"ex\""))
+    }
+
+    func test_roundTrip_withEx_preservesValue() throws {
+        let original = AttachAnnounceEnvelope(
+            att: AttachAnnounceMeta(
+                id: "AAECAwQFBgcICQoLDA0ODw==", mime: "audio/opus", byteLength: 12345,
+                sha256B64: "aGVsbG8K", fileId: "01940000-0000-7000-8000-aaaabbbbcccc",
+                durationMs: 5234, ex: -1
+            ),
+            ts: 1700000000
+        )
+        let wire = try original.toJsonString()
+        let parsed = try AttachAnnounceEnvelope.parse(wire)
+        XCTAssertEqual(parsed?.att, original.att)
+        XCTAssertEqual(parsed?.att.ex, -1)
+    }
+
+    func test_validate_rejectsExBelowViewOnceSentinel() {
+        let meta = AttachAnnounceMeta(
+            id: "a", mime: "m", byteLength: 1,
+            sha256B64: "x", fileId: "y", ex: -2
+        )
+        XCTAssertThrowsError(try meta.validate())
+    }
+
+    func test_validate_acceptsExZeroAndViewOnceAndPositive() throws {
+        try AttachAnnounceMeta(id: "a", mime: "m", byteLength: 1,
+                               sha256B64: "x", fileId: "y", ex: 0).validate()
+        try AttachAnnounceMeta(id: "a", mime: "m", byteLength: 1,
+                               sha256B64: "x", fileId: "y", ex: -1).validate()
+        try AttachAnnounceMeta(id: "a", mime: "m", byteLength: 1,
+                               sha256B64: "x", fileId: "y", ex: 60).validate()
+    }
 }

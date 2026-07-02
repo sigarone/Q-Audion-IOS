@@ -142,6 +142,13 @@ public struct AttachAnnounceMeta: Equatable {
     public let fileId: String
     /// OPTIONAL — voice notes only. Recording duration in milliseconds.
     public let durationMs: Int64?
+    /// W447 — per-attachment ephemeral-timer override, mirrors Desktop's
+    /// `ex` field (commit `488215b`) and Android's convention for the
+    /// same concept. Additive/backward-compatible: absent or 0 = no
+    /// override (conversation default applies, today's behavior
+    /// unchanged); -1 = view-once; positive N = TTL in seconds. Old
+    /// decoders ignore the unknown key; old encoders simply omit it.
+    public let ex: Int?
 
     public init(
         id: String,
@@ -149,7 +156,8 @@ public struct AttachAnnounceMeta: Equatable {
         byteLength: Int64,
         sha256B64: String,
         fileId: String,
-        durationMs: Int64? = nil
+        durationMs: Int64? = nil,
+        ex: Int? = nil
     ) {
         self.id = id
         self.mime = mime
@@ -157,6 +165,7 @@ public struct AttachAnnounceMeta: Equatable {
         self.sha256B64 = sha256B64
         self.fileId = fileId
         self.durationMs = durationMs
+        self.ex = ex
     }
 
     /// Validate non-empty + non-negative invariants. Throws on malformed.
@@ -168,6 +177,11 @@ public struct AttachAnnounceMeta: Equatable {
         guard !fileId.isEmpty else { throw AttachAnnounceEnvelope.Error.invalidValue("att.file_id") }
         if let d = durationMs, d < 0 {
             throw AttachAnnounceEnvelope.Error.invalidValue("att.duration_ms")
+        }
+        // ex semantics: absent/0 = no override, -1 = view-once, N>0 = TTL
+        // seconds. Anything < -1 is not a valid value on the wire.
+        if let e = ex, e < -1 {
+            throw AttachAnnounceEnvelope.Error.invalidValue("att.ex")
         }
     }
 
@@ -204,9 +218,23 @@ public struct AttachAnnounceMeta: Equatable {
         if let d = durationMs, d < 0 {
             throw AttachAnnounceEnvelope.Error.invalidValue("att.duration_ms")
         }
+        // W447: `ex` is a brand-new optional key — absent in every
+        // envelope produced before this change. Missing key → nil,
+        // exactly like `durationMs`, so old-shape JSON keeps decoding
+        // unchanged.
+        var ex: Int?
+        if let n = dict["ex"] as? Int {
+            ex = n
+        } else if let n = dict["ex"] as? NSNumber {
+            ex = n.intValue
+        }
+        if let e = ex, e < -1 {
+            throw AttachAnnounceEnvelope.Error.invalidValue("att.ex")
+        }
         return AttachAnnounceMeta(
             id: id, mime: mime, byteLength: byteLength,
-            sha256B64: sha256B64, fileId: fileId, durationMs: durationMs
+            sha256B64: sha256B64, fileId: fileId, durationMs: durationMs,
+            ex: ex
         )
     }
 
@@ -220,6 +248,13 @@ public struct AttachAnnounceMeta: Equatable {
         ]
         if let d = durationMs {
             dict["duration_ms"] = NSNumber(value: d)
+        }
+        // W447: only emit when explicitly set (non-nil) so the wire
+        // shape is byte-identical to today when no override is chosen —
+        // 0 is a valid "no override" sentinel too but we still round-trip
+        // whatever the caller passed to keep the encode/decode symmetric.
+        if let e = ex {
+            dict["ex"] = NSNumber(value: e)
         }
         return dict
     }

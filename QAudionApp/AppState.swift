@@ -3528,24 +3528,6 @@ final class AppState: ObservableObject {
             }
         }
 
-        // Incoming message: isViewOnce derived from conversation timer == -1.
-        var isViewOnce: Bool = false
-        isViewOnce = (conv.ephemeralTimerSeconds ?? 0) == -1
-
-        // W441 (inbound parity): when the conversation has an ACTIVE positive
-        // disappearing-timer, stamp `expiresAt` on the received row so the
-        // EphemeralMessageJanitor sweeps it, exactly like the outbound send path
-        // (ChatContainer.sendMessage). Mirrors Android's computeEphemeralExpiry:
-        //   - nil / 0  → no expiry (message persists)
-        //   - -1       → view-once (expiresAt stays nil here; set at open time
-        //                by markViewOnceOpened, parity with the outbound path)
-        //   - positive → now + seconds
-        let receivedNow = Date()
-        let ephSecs = conv.ephemeralTimerSeconds
-        let ephExpiry: Date? = ephSecs.flatMap { s in
-            s > 0 ? receivedNow.addingTimeInterval(Double(s)) : nil
-        }
-
         let msgUUID = UUID()
         // W80: voice-note receive.
         var initialMediaDur: Int64? = nil
@@ -3567,6 +3549,37 @@ final class AppState: ObservableObject {
             initialMediaDur = env.att.durationMs
             pendingAttachAnnounce = env
         }
+
+        // W447: per-attachment ephemeral-timer override. When the
+        // inbound message carries a qfile/attach_announce envelope with
+        // a non-zero `ex`, it wins over the conversation default —
+        // mirrors Desktop's `resolveAttachmentTimerSec` and Android's
+        // `InboundFileAttachmentDispatcher`. Plain text messages (no
+        // envelope parsed) have no override, so this is a no-op for them
+        // and behavior is unchanged.
+        let attachmentExOverride: Int? = pendingMarker?.qfile.ex ?? pendingAttachAnnounce?.att.ex
+        let effectiveTimerSecs = AttachmentTimerResolver.resolve(
+            overrideSeconds: attachmentExOverride,
+            conversationDefault: conv.ephemeralTimerSeconds
+        )
+
+        // Incoming message: isViewOnce derived from the effective timer == -1.
+        let isViewOnce = (effectiveTimerSecs ?? 0) == -1
+
+        // W441 (inbound parity): when the effective timer is an ACTIVE
+        // positive disappearing-timer, stamp `expiresAt` on the received
+        // row so the EphemeralMessageJanitor sweeps it, exactly like the
+        // outbound send path (ChatContainer.sendMessage). Mirrors
+        // Android's computeEphemeralExpiry:
+        //   - nil / 0  → no expiry (message persists)
+        //   - -1       → view-once (expiresAt stays nil here; set at open time
+        //                by markViewOnceOpened, parity with the outbound path)
+        //   - positive → now + seconds
+        let receivedNow = Date()
+        let ephExpiry: Date? = effectiveTimerSecs.flatMap { s in
+            s > 0 ? receivedNow.addingTimeInterval(Double(s)) : nil
+        }
+
         let msg = Message(
             id: msgUUID,
             conversationId: conv.id,

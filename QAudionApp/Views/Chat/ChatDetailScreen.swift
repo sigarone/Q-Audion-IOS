@@ -2,6 +2,43 @@ import SwiftUI
 import PhotosUI
 import QAudionEngine
 
+/// W447: one row of the ephemeral-timer chooser. `seconds` uses the
+/// same encoding as `Conversation.ephemeralTimerSeconds` /
+/// `ChatContainer.setEphemeralTimer` (nil = off, -1 = view-once,
+/// positive = TTL seconds). Shared by the conversation-level timer
+/// dialog (topbar clock icon) AND the pre-send per-attachment picker
+/// (W447) so both surfaces always offer the exact same choices.
+struct EphemeralTimerOption: Identifiable {
+    let id: String
+    let label: String
+    let seconds: Int?
+
+    static let all: [EphemeralTimerOption] = [
+        EphemeralTimerOption(id: "off", label: "Spento", seconds: nil),
+        EphemeralTimerOption(id: "view_once", label: "Visualizza una volta", seconds: -1),
+        EphemeralTimerOption(id: "30s", label: "30 secondi", seconds: 30),
+        EphemeralTimerOption(id: "5m", label: "5 minuti", seconds: 5 * 60),
+        EphemeralTimerOption(id: "1h", label: "1 ora", seconds: 60 * 60),
+        EphemeralTimerOption(id: "1d", label: "1 giorno", seconds: 24 * 60 * 60),
+        EphemeralTimerOption(id: "1w", label: "1 settimana", seconds: 7 * 24 * 60 * 60),
+    ]
+}
+
+/// W447: a not-yet-sent attachment payload, captured at the moment the
+/// user picks an attachment (photo, camera capture, pasted image, file,
+/// or finished voice-note recording) so the pre-send timer dialog can
+/// gate the actual `container.send*` call. Nothing is sent, no local
+/// row created, no upload started until the user confirms a timer
+/// choice in the dialog — cancel discards this value entirely.
+enum PendingAttachmentSend {
+    case image(Data)
+    /// W91/W447: multi-select photo picker — one timer choice applies
+    /// to the whole batch (asking once per photo would be unusable).
+    case multiImage([Data])
+    case file(URL)
+    case voiceNote(VoiceNoteRecorder.Recording)
+}
+
 /// Chat detail (conversation) screen. 1:1 visual port of Android
 /// `qaudion-android-new/feature/feature-chat/.../detail/ChatDetailScreen.kt`.
 ///
@@ -92,6 +129,13 @@ struct ChatDetailScreen: View {
     @State private var forwardingMessage: Message? = nil
     /// W445: Document picker state.
     @State private var showingDocPicker: Bool = false
+    /// W447: gate for the pre-send per-attachment timer picker. Non-nil
+    /// → the confirmationDialog is up and holds the payload that will
+    /// be sent once the user picks a timer (or discarded on cancel).
+    /// Every attachment entry point (paste, camera, gallery multi-pick,
+    /// document picker, voice-note finish) routes through this instead
+    /// of calling `container.send*` directly.
+    @State private var pendingAttachmentSend: PendingAttachmentSend? = nil
 
     // Stub values for the SessionStatusStrip until the engine wires them.
     private let stubConfidence: Double = 0.92
@@ -197,7 +241,7 @@ struct ChatDetailScreen: View {
                 Button {
                     if let img = UIPasteboard.general.image,
                        let data = img.jpegData(compressionQuality: 1.0) {
-                        container.sendImage(data)
+                        pendingAttachmentSend = .image(data)
                     } else {
                         snackbar?.show(.init(
                             text: "Nessuna immagine valida negli appunti.",
@@ -212,7 +256,7 @@ struct ChatDetailScreen: View {
         .sheet(isPresented: $showCameraPicker) {
             CameraPicker(
                 onCapture: { data in
-                    container.sendImage(data)
+                    pendingAttachmentSend = .image(data)
                     showCameraPicker = false
                 },
                 onCancel: {
@@ -358,16 +402,49 @@ struct ChatDetailScreen: View {
             isPresented: $showingEphemeralPicker,
             titleVisibility: .visible
         ) {
-            Button("Spento") { container.setEphemeralTimer(nil) }
-            Button("Visualizza una volta") { container.setEphemeralTimer(-1) }
-            Button("30 secondi") { container.setEphemeralTimer(30) }
-            Button("5 minuti") { container.setEphemeralTimer(5 * 60) }
-            Button("1 ora") { container.setEphemeralTimer(60 * 60) }
-            Button("1 giorno") { container.setEphemeralTimer(24 * 60 * 60) }
-            Button("1 settimana") { container.setEphemeralTimer(7 * 24 * 60 * 60) }
+            ForEach(EphemeralTimerOption.all) { option in
+                Button(option.label) { container.setEphemeralTimer(option.seconds) }
+            }
             Button("Annulla", role: .cancel) { }
         } message: {
             Text("I messaggi verranno eliminati automaticamente. \"Visualizza una volta\" li elimina appena aperti.")
+        }
+        // W447: pre-send per-attachment timer picker. Intercepts the
+        // attach flow (paperclip → photo/camera/paste/file/voice-note)
+        // right before the send call fires: same options as the
+        // conversation-level dialog above, pre-selected to the
+        // conversation's current default (marked with a checkmark).
+        // Confirm proceeds to send with the chosen override; cancel/
+        // dismiss sends nothing (no row created, no upload started) —
+        // `pendingAttachmentSend` is only cleared, never executed, on
+        // the cancel path.
+        .confirmationDialog(
+            "Timer per questo allegato",
+            isPresented: Binding(
+                get: { pendingAttachmentSend != nil },
+                set: { if !$0 { pendingAttachmentSend = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            let currentDefault = container.viewModel.conversation.ephemeralTimerSeconds
+            ForEach(EphemeralTimerOption.all) { option in
+                Button {
+                    guard let pending = pendingAttachmentSend else { return }
+                    pendingAttachmentSend = nil
+                    performAttachmentSend(pending, overrideSeconds: option.seconds)
+                } label: {
+                    if option.seconds == currentDefault {
+                        Label(option.label, systemImage: "checkmark")
+                    } else {
+                        Text(option.label)
+                    }
+                }
+            }
+            Button("Annulla", role: .cancel) {
+                pendingAttachmentSend = nil
+            }
+        } message: {
+            Text("Scegli il timer per questo allegato. Il valore predefinito della chat è preselezionato.")
         }
         // W445: forward message picker sheet.
         .sheet(isPresented: $showingForwardPicker) {
@@ -382,7 +459,7 @@ struct ChatDetailScreen: View {
         // W445: document picker sheet.
         .sheet(isPresented: $showingDocPicker) {
             DocumentPicker { url in
-                container.sendFileAttachment(url: url)
+                pendingAttachmentSend = .file(url)
                 showingDocPicker = false
             }
         }
@@ -844,9 +921,11 @@ struct ChatDetailScreen: View {
         // FileTransfer (HKDF-SHA256 + AES-256-GCM), mint a recipient
         // capability token, build a qfile v3 marker, and ship it as
         // the plaintext of a regular msg_send.
+        // W447: route through the pre-send timer picker instead of
+        // sending immediately — same gate as photo/camera/file.
         if let rec = voiceNoteRecorder.stop() {
             HapticFeedback.recordingStop()  // W114: medium bump
-            container.sendVoiceNote(rec)
+            pendingAttachmentSend = .voiceNote(rec)
         }
     }
 
@@ -921,15 +1000,16 @@ struct ChatDetailScreen: View {
     }
 
     private func processMultiPhotoPicker(_ items: [PhotosPickerItem]) async {
-        // W91: fan out one sendImage per picked item. Each one goes
-        // through the same EXIF-strip + 2048px + 10MB cap pipeline +
-        // qfile marker. Sequential await rather than parallel TaskGroup
-        // keeps the WS msg_send order stable (chat shows them in
-        // selection order, not random).
+        // W91: load bytes for every picked item first — each one still
+        // goes through the same EXIF-strip + 2048px + 10MB cap pipeline +
+        // qfile marker once sent. W447: sending itself is deferred until
+        // the user confirms a timer in the pre-send dialog (one dialog
+        // for the whole batch, not one per photo).
+        var loaded: [Data] = []
         var failures = 0
         for item in items {
             if let data = try? await item.loadTransferable(type: Data.self) {
-                await MainActor.run { container.sendImage(data) }
+                loaded.append(data)
             } else {
                 failures += 1
             }
@@ -947,6 +1027,8 @@ struct ChatDetailScreen: View {
                     durationSeconds: 3))
             }
         }
+        guard !loaded.isEmpty else { return }
+        await MainActor.run { pendingAttachmentSend = .multiImage(loaded) }
     }
 
     private static func photoFailureSnackbarText(failed: Int, total: Int) -> String {
@@ -954,6 +1036,30 @@ struct ChatDetailScreen: View {
         // overload. Type-checker resolves instantly even when callers
         // are deep inside closure stacks.
         return "\(failed) foto su \(total) non leggibili."
+    }
+
+    // MARK: - W447: pre-send attachment timer dialog — dispatch
+
+    /// Fires the actual `container.send*` call for a `PendingAttachmentSend`
+    /// captured earlier, now that the user has confirmed a timer choice in
+    /// the dialog. `overrideSeconds` uses the same encoding as
+    /// `EphemeralTimerOption.seconds` (nil = off/no-override, -1 =
+    /// view-once, positive = TTL seconds) and is threaded straight through
+    /// to `ChatContainer` so it lands in the envelope's `ex` field AND
+    /// stamps the sender's own local echo `Message.expiresAt`.
+    private func performAttachmentSend(_ pending: PendingAttachmentSend, overrideSeconds: Int?) {
+        switch pending {
+        case .image(let data):
+            container.sendImage(data, overrideTimerSeconds: overrideSeconds)
+        case .multiImage(let items):
+            for data in items {
+                container.sendImage(data, overrideTimerSeconds: overrideSeconds)
+            }
+        case .file(let url):
+            container.sendFileAttachment(url: url, overrideTimerSeconds: overrideSeconds)
+        case .voiceNote(let recording):
+            container.sendVoiceNote(recording, overrideTimerSeconds: overrideSeconds)
+        }
     }
 
     // MARK: - Composer view (W261)

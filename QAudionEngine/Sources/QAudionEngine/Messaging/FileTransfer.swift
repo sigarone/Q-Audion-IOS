@@ -61,12 +61,21 @@ public final class FileTransfer: @unchecked Sendable {
             /// W79 — voice-note duration in ms. Lets the chat UI render
             /// "🎤 Nota vocale (4.2s)" before downloading the audio.
             public let durationMs: Int64?
+            /// W447 — per-attachment ephemeral-timer override, mirrors
+            /// Desktop's `ex` field (commit `488215b`) and Android's
+            /// convention for the same concept. Additive/backward-
+            /// compatible: absent or 0 = no override (conversation
+            /// default applies, today's behavior unchanged); -1 =
+            /// view-once; positive N = TTL in seconds. Old decoders
+            /// ignore the unknown key; old encoders simply omit it.
+            public let ex: Int?
 
             public init(fileId: String, name: String, size: Int, mime: String,
                         salt: String, nonce: String, tag: String, keyId: String,
                         ts: Int64,
                         downloadClaim: DownloadTokenClaim? = nil,
-                        durationMs: Int64? = nil) {
+                        durationMs: Int64? = nil,
+                        ex: Int? = nil) {
                 self.fileId = fileId
                 self.name = name
                 self.size = size
@@ -78,12 +87,14 @@ public final class FileTransfer: @unchecked Sendable {
                 self.ts = ts
                 self.downloadClaim = downloadClaim
                 self.durationMs = durationMs
+                self.ex = ex
             }
 
             private enum CodingKeys: String, CodingKey {
                 case fileId, name, size, mime, salt, nonce, tag, keyId, ts
                 case downloadClaim = "download_claim"
                 case durationMs = "duration_ms"
+                case ex
             }
         }
         public let qfile: QFile

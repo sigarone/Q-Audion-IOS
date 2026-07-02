@@ -65,6 +65,11 @@ final class ChatVoiceNoteSender {
     ///   - recording: handed back by ``VoiceNoteRecorder/stop``.
     ///   - recipientUserId: peer UUID — bound into the issued token's HMAC
     ///     so a leaked claim cannot be redeemed by any other account.
+    ///   - timerOverrideSeconds: W447 — per-attachment ephemeral-timer
+    ///     override chosen in the pre-send dialog. `nil`/`0` = no
+    ///     override (conversation default applies at receive time via
+    ///     ``AttachmentTimerResolver``); embedded as `qfile.ex` /
+    ///     `attach_announce.att.ex` so the receiver honors it too.
     ///   - onProgress: optional local-UI callback, `(bytesUploaded,
     ///     totalBytes)`. Only wired on the legacy qfile path (the
     ///     `attach_announce` cross-platform path, gated behind
@@ -76,6 +81,7 @@ final class ChatVoiceNoteSender {
     func prepareMarkerJson(
         for recording: VoiceNoteRecorder.Recording,
         recipientUserId: String,
+        timerOverrideSeconds: Int? = nil,
         onProgress: ((Int64, Int64) -> Void)? = nil
     ) async throws -> String {
         // W362: when UserDefaults["VoiceNote.attachAnnounce.enabled"]
@@ -87,7 +93,8 @@ final class ChatVoiceNoteSender {
             do {
                 return try await ChatAttachAnnounceSender(appState: appState)
                     .prepareEnvelopeJson(recording: recording,
-                                          recipientUserId: recipientUserId)
+                                          recipientUserId: recipientUserId,
+                                          timerOverrideSeconds: timerOverrideSeconds)
             } catch {
                 // Fall back to the legacy qfile path on any error so
                 // the user can still send during the rollover.
@@ -116,6 +123,7 @@ final class ChatVoiceNoteSender {
             filename: "voicenote-\(recording.fileURL.deletingPathExtension().lastPathComponent).m4a",
             durationMs: Int64(recording.durationMs),
             recipientUserId: recipientUserId,
+            timerOverrideSeconds: timerOverrideSeconds,
             onProgress: onProgress
         )
     }
@@ -126,6 +134,13 @@ final class ChatVoiceNoteSender {
     /// covers all of them. The `mime` is stamped into `marker.qfile.mime`
     /// so the receiver can route to the right bubble; `durationMs` is
     /// optional and only set for voice notes.
+    /// - Parameter timerOverrideSeconds: W447 — per-attachment
+    ///   ephemeral-timer override chosen in the pre-send dialog.
+    ///   `nil`/`0` = no override, embedded verbatim into `qfile.ex` so
+    ///   the receiver can prefer it over the conversation default (see
+    ///   ``AttachmentTimerResolver``). `nil` by default so existing
+    ///   callers keep compiling unchanged and the wire shape stays
+    ///   byte-identical to today when no override is chosen.
     /// - Parameter onProgress: optional local-UI callback,
     ///   `(bytesUploaded, totalBytes)`, invoked as TUS chunks complete
     ///   during the upload step. Purely local UI state — never touches
@@ -137,6 +152,7 @@ final class ChatVoiceNoteSender {
         filename: String,
         durationMs: Int64?,
         recipientUserId: String,
+        timerOverrideSeconds: Int? = nil,
         onProgress: ((Int64, Int64) -> Void)? = nil
     ) async throws -> String {
         // 1. Build the FileTransfer dependencies. We rebuild per-call so
@@ -214,7 +230,8 @@ final class ChatVoiceNoteSender {
             throw Error.tokenIssueFailed(error.localizedDescription)
         }
 
-        // 5. Repack the marker with the claim + duration (optional).
+        // 5. Repack the marker with the claim + duration (optional) +
+        //    W447 per-attachment timer override (optional).
         let q = baseMarker.qfile
         let enriched = FileTransfer.FileMarker(qfile: .init(
             fileId: q.fileId,
@@ -227,7 +244,8 @@ final class ChatVoiceNoteSender {
             keyId: q.keyId,
             ts: q.ts,
             downloadClaim: issued.claim,
-            durationMs: durationMs
+            durationMs: durationMs,
+            ex: timerOverrideSeconds
         ))
 
         // 6. Serialize.

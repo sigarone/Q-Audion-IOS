@@ -469,6 +469,26 @@ final class ChatContainer: ObservableObject {
         syncEphemeralTimerToPeer(seconds: seconds)
     }
 
+    /// W447: resolve the effective per-message timer for an outbound
+    /// attachment — the pre-send dialog's override wins over the
+    /// conversation default when present and non-zero, same precedence
+    /// as ``AttachmentTimerResolver`` on the receive side (and Desktop's
+    /// `resolveAttachmentTimerSec`). Returns `(expiresAt, isViewOnce)`
+    /// ready to stamp on the local echo `Message`, computed from `now`.
+    private func resolveOutboundAttachmentTimer(
+        overrideSeconds: Int?, now: Date
+    ) -> (expiresAt: Date?, isViewOnce: Bool) {
+        let effective = AttachmentTimerResolver.resolve(
+            overrideSeconds: overrideSeconds,
+            conversationDefault: viewModel.conversation.ephemeralTimerSeconds
+        )
+        let expiresAt: Date? = effective.flatMap { s in
+            s > 0 ? now.addingTimeInterval(Double(s)) : nil
+        }
+        let isViewOnce = (effective ?? 0) == -1
+        return (expiresAt, isViewOnce)
+    }
+
     /// W90: clear the active-peer hint so inbound banners resume firing
     /// once the user navigates away. Called from
     /// `ChatDetailScreen.onDisappear`.
@@ -661,7 +681,15 @@ final class ChatContainer: ObservableObject {
     /// Receiver-side handling: `AppState.handleIncomingMessage`
     /// detects the qfile marker; today (v1.0.143) it shows the same
     /// placeholder text (download/playback wiring lands in v1.0.144).
-    func sendVoiceNote(_ recording: VoiceNoteRecorder.Recording) {
+    ///
+    /// - Parameter overrideTimerSeconds: W447 — per-attachment timer
+    ///   chosen in the pre-send dialog. `nil` (default) means "no
+    ///   override, use the conversation default" — identical behavior
+    ///   to before this parameter existed. Threaded into the `qfile`
+    ///   marker's `ex` field AND used to stamp this send's own local
+    ///   echo `expiresAt`/`isViewOnce`, taking precedence over the
+    ///   conversation default for this one message.
+    func sendVoiceNote(_ recording: VoiceNoteRecorder.Recording, overrideTimerSeconds: Int? = nil) {
         let peerId = peerUserId
         let convId = conversationId
         let durSec = Double(recording.durationMs) / 1000.0
@@ -674,6 +702,13 @@ final class ChatContainer: ObservableObject {
         // launch; Library/Caches survives suspension.
         let localCachePath: String? = Self.persistOutboundVoiceNote(
             from: recording.fileURL, msgId: msgId
+        )
+
+        // W447: resolve this send's effective timer (override wins over
+        // conversation default) and stamp the local echo the same way
+        // sendMessage() does for text.
+        let (ephExpiry, isViewOnce) = resolveOutboundAttachmentTimer(
+            overrideSeconds: overrideTimerSeconds, now: Date()
         )
 
         // Local row first so the chat reflects the action immediately.
@@ -692,7 +727,9 @@ final class ChatContainer: ObservableObject {
             mediaDurationMs: Int64(recording.durationMs),
             mediaMimeType: recording.mimeType,
             // W86: stamp clientMsgId so peer can target with edit/delete.
-            clientMsgId: msgId.uuidString
+            clientMsgId: msgId.uuidString,
+            expiresAt: ephExpiry,
+            isViewOnce: isViewOnce ? true : nil
         )
         store.appendMessage(local)
         store.recordNewMessage(
@@ -724,7 +761,8 @@ final class ChatContainer: ObservableObject {
             await ChatContainer.sendVoiceNoteAsync(
                 weakContainer: Weak(self), recording: recording, peerId: peerId,
                 convId: convId, msgId: msgId,
-                sendService: sendService, appState: appState
+                sendService: sendService, appState: appState,
+                overrideTimerSeconds: overrideTimerSeconds
             )
         }
     }
@@ -767,7 +805,8 @@ final class ChatContainer: ObservableObject {
         convId: String,
         msgId: UUID,
         sendService: ChatMessageSendService,
-        appState: AppState
+        appState: AppState,
+        overrideTimerSeconds: Int? = nil
     ) async {
         // W-BGUP: extend the process's execution window past the ~30s
         // the OS grants a freshly-backgrounded app, so a large voice
@@ -781,7 +820,8 @@ final class ChatContainer: ObservableObject {
             await ChatContainer.completeVoiceNoteSend(
                 weakContainer: weakContainer, recording: recording, peerId: peerId,
                 convId: convId, msgId: msgId,
-                sendService: sendService, appState: appState
+                sendService: sendService, appState: appState,
+                overrideTimerSeconds: overrideTimerSeconds
             )
         }
     }
@@ -793,7 +833,8 @@ final class ChatContainer: ObservableObject {
         convId: String,
         msgId: UUID,
         sendService: ChatMessageSendService,
-        appState: AppState
+        appState: AppState,
+        overrideTimerSeconds: Int? = nil
     ) async {
         let prep = ChatVoiceNoteSender(appState: appState)
         let markerJson: String
@@ -801,6 +842,7 @@ final class ChatContainer: ObservableObject {
             markerJson = try await prep.prepareMarkerJson(
                 for: recording,
                 recipientUserId: peerId,
+                timerOverrideSeconds: overrideTimerSeconds,
                 onProgress: { bytesUploaded, totalBytes in
                     // W446: called from TusUploadClient's upload loop,
                     // not guaranteed to already be on the MainActor —
@@ -1020,7 +1062,12 @@ final class ChatContainer: ObservableObject {
     ///      blow the recipient's cache budget. Aspect-preserved.
     ///   3. Cap the encoded JPEG at 10 MB hard ceiling — anything larger
     ///      is rejected (the user gets a snackbar via the failure flag).
-    func sendImage(_ rawImageData: Data) {
+    ///
+    /// - Parameter overrideTimerSeconds: W447 — per-attachment timer
+    ///   chosen in the pre-send dialog. `nil` (default) means "no
+    ///   override, use the conversation default" — identical behavior
+    ///   to before this parameter existed.
+    func sendImage(_ rawImageData: Data, overrideTimerSeconds: Int? = nil) {
         let peerId = peerUserId
         let convId = conversationId
         let msgId = UUID()
@@ -1040,6 +1087,13 @@ final class ChatContainer: ObservableObject {
         // image immediately while the upload is in flight.
         let localCachePath = Self.persistOutboundImage(jpeg: jpeg, msgId: msgId)
 
+        // W447: resolve this send's effective timer (override wins over
+        // conversation default) and stamp the local echo the same way
+        // sendMessage() does for text.
+        let (ephExpiry, isViewOnce) = resolveOutboundAttachmentTimer(
+            overrideSeconds: overrideTimerSeconds, now: Date()
+        )
+
         let local = Message(
             id: msgId,
             conversationId: convId,
@@ -1053,7 +1107,9 @@ final class ChatContainer: ObservableObject {
             mediaDurationMs: nil,
             mediaMimeType: "image/jpeg",
             // W86: stamp clientMsgId so peer can target with edit/delete.
-            clientMsgId: msgId.uuidString
+            clientMsgId: msgId.uuidString,
+            expiresAt: ephExpiry,
+            isViewOnce: isViewOnce ? true : nil
         )
         store.appendMessage(local)
         store.recordNewMessage(
@@ -1082,6 +1138,7 @@ final class ChatContainer: ObservableObject {
             await ChatContainer.sendImageAsync(
                 weakContainer: Weak(self), jpeg: jpeg, peerId: peerId,
                 convId: convId, msgId: msgId,
+                overrideTimerSeconds: overrideTimerSeconds,
                 sendService: sendService, appState: appState
             )
         }
@@ -1097,6 +1154,7 @@ final class ChatContainer: ObservableObject {
         peerId: String,
         convId: String,
         msgId: UUID,
+        overrideTimerSeconds: Int? = nil,
         sendService: ChatMessageSendService,
         appState: AppState
     ) async {
@@ -1106,6 +1164,7 @@ final class ChatContainer: ObservableObject {
             await ChatContainer.completeImageSend(
                 weakContainer: weakContainer, jpeg: jpeg, peerId: peerId,
                 convId: convId, msgId: msgId,
+                overrideTimerSeconds: overrideTimerSeconds,
                 sendService: sendService, appState: appState
             )
         }
@@ -1117,6 +1176,7 @@ final class ChatContainer: ObservableObject {
         peerId: String,
         convId: String,
         msgId: UUID,
+        overrideTimerSeconds: Int? = nil,
         sendService: ChatMessageSendService,
         appState: AppState
     ) async {
@@ -1129,6 +1189,7 @@ final class ChatContainer: ObservableObject {
                 filename: "image-\(msgId.uuidString).jpg",
                 durationMs: nil,
                 recipientUserId: peerId,
+                timerOverrideSeconds: overrideTimerSeconds,
                 onProgress: { bytesUploaded, totalBytes in
                     // W446: see sendVoiceNote — hop to MainActor
                     // before touching @Published upload state. Re-read
@@ -1333,7 +1394,12 @@ final class ChatContainer: ObservableObject {
     /// Send a generic file attachment selected from UIDocumentPickerViewController.
     /// Reads the file data and sends via the existing qfile v3 upload pipeline
     /// (same path as voice notes and images).
-    func sendFileAttachment(url: URL) {
+    ///
+    /// - Parameter overrideTimerSeconds: W447 — per-attachment timer
+    ///   chosen in the pre-send dialog. `nil` (default) means "no
+    ///   override, use the conversation default" — identical behavior
+    ///   to before this parameter existed.
+    func sendFileAttachment(url: URL, overrideTimerSeconds: Int? = nil) {
         let peerId = peerUserId
         let convId = conversationId
         let msgId = UUID()
@@ -1347,6 +1413,12 @@ final class ChatContainer: ObservableObject {
         }
         let mime = Self.mimeType(for: url)
         let displayText: String = "📎 " + filename
+        // W447: resolve this send's effective timer (override wins over
+        // conversation default) and stamp the local echo the same way
+        // sendMessage() does for text.
+        let (ephExpiry, isViewOnce) = resolveOutboundAttachmentTimer(
+            overrideSeconds: overrideTimerSeconds, now: Date()
+        )
         let local = Message(
             id: msgId,
             conversationId: convId,
@@ -1356,7 +1428,9 @@ final class ChatContainer: ObservableObject {
             deliveredAt: nil,
             readAt: nil,
             status: .sending,
-            clientMsgId: msgId.uuidString
+            clientMsgId: msgId.uuidString,
+            expiresAt: ephExpiry,
+            isViewOnce: isViewOnce ? true : nil
         )
         store.appendMessage(local)
         store.recordNewMessage(
@@ -1383,6 +1457,7 @@ final class ChatContainer: ObservableObject {
             await ChatContainer.sendFileAttachmentAsync(
                 weakContainer: Weak(self), data: data, mime: mime, filename: filename,
                 peerId: peerId, convId: convId, msgId: msgId,
+                overrideTimerSeconds: overrideTimerSeconds,
                 sendService: sendService, appState: appState
             )
         }
@@ -1402,6 +1477,7 @@ final class ChatContainer: ObservableObject {
         peerId: String,
         convId: String,
         msgId: UUID,
+        overrideTimerSeconds: Int? = nil,
         sendService: ChatMessageSendService,
         appState: AppState
     ) async {
@@ -1412,6 +1488,7 @@ final class ChatContainer: ObservableObject {
             await ChatContainer.completeFileAttachmentSend(
                 weakContainer: weakContainer, data: data, mime: mime, filename: filename,
                 peerId: peerId, convId: convId, msgId: msgId,
+                overrideTimerSeconds: overrideTimerSeconds,
                 sendService: sendService, appState: appState
             )
         }
@@ -1425,6 +1502,7 @@ final class ChatContainer: ObservableObject {
         peerId: String,
         convId: String,
         msgId: UUID,
+        overrideTimerSeconds: Int? = nil,
         sendService: ChatMessageSendService,
         appState: AppState
     ) async {
@@ -1437,6 +1515,7 @@ final class ChatContainer: ObservableObject {
                 filename: filename,
                 durationMs: nil,
                 recipientUserId: peerId,
+                timerOverrideSeconds: overrideTimerSeconds,
                 onProgress: { bytesUploaded, totalBytes in
                     // W446: see sendVoiceNote — hop to MainActor
                     // before touching @Published upload state. Re-read
