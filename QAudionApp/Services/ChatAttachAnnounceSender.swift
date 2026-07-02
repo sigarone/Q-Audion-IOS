@@ -63,9 +63,16 @@ final class ChatAttachAnnounceSender {
     /// send path so the outer message rides the per-pair PSK / v3
     /// ratchet path and the recipient's parser dispatches on the
     /// `qa_ctl` marker.
+    ///
+    /// - Parameter timerOverrideSeconds: W447 — per-attachment
+    ///   ephemeral-timer override chosen in the pre-send dialog.
+    ///   `nil`/`0` = no override, embedded verbatim into `att.ex` so the
+    ///   receiver can prefer it over the conversation default (see
+    ///   ``AttachmentTimerResolver``).
     func prepareEnvelopeJson(
         recording: VoiceNoteRecorder.Recording,
-        recipientUserId: String
+        recipientUserId: String,
+        timerOverrideSeconds: Int? = nil
     ) async throws -> String {
         guard let token = appState.authService.loadToken(), !token.isEmpty,
               let senderId = appState.currentUserId, !senderId.isEmpty else {
@@ -122,7 +129,8 @@ final class ChatAttachAnnounceSender {
             byteLength: Int64(bytes.count),
             sha256B64: encrypted.sha256Plain.base64EncodedString(),
             fileId: fileId,
-            durationMs: Int64(recording.durationMs)
+            durationMs: Int64(recording.durationMs),
+            ex: timerOverrideSeconds
         )
         let envelope = AttachAnnounceEnvelope(
             att: attMeta,
