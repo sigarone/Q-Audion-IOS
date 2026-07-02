@@ -1,6 +1,27 @@
 import SwiftUI
 import QAudionEngine
 
+/// W-BGUP: trivial weak-reference box.
+///
+/// A plain `ChatContainer?` function parameter is a **strong** reference
+/// for the entire lifetime of the call — including every `await` suspension
+/// inside it — even if the caller resolved it from `[weak self]` right
+/// before passing it in. `[weak weakContainer]` on a closure that merely
+/// *captures* an already-strong local does nothing to fix this: the local
+/// itself is what's keeping the object alive.
+///
+/// `Weak<T>` sidesteps that: the box itself is passed (and captured) by
+/// reference with no effect on `T`'s refcount, and each read of `.value`
+/// re-resolves the weak reference at that exact point. Passing the box
+/// down through `sendXAsync` → `completeXSend` → the `onProgress`/`catch`/
+/// terminal-`MainActor.run` sites means `ChatContainer` can deallocate at
+/// any point — including mid-upload — exactly like the original
+/// `Task { [weak self] in ... self?.foo() ... }` pattern on `main`.
+private final class Weak<T: AnyObject> {
+    weak var value: T?
+    init(_ value: T?) { self.value = value }
+}
+
 @MainActor
 final class ChatContainer: ObservableObject {
 
@@ -701,7 +722,7 @@ final class ChatContainer: ObservableObject {
 
         Task { [weak self] in
             await ChatContainer.sendVoiceNoteAsync(
-                weakContainer: self, recording: recording, peerId: peerId,
+                weakContainer: Weak(self), recording: recording, peerId: peerId,
                 convId: convId, msgId: msgId,
                 sendService: sendService, appState: appState
             )
@@ -714,17 +735,24 @@ final class ChatContainer: ObservableObject {
     /// `weakContainer:` parameter rather than an instance method reached
     /// via `self?.` at the call site:
     ///
-    /// 1. **Preserves original weak-self semantics exactly.** Before this
-    ///    change, `sendService`/`appState` were captured *strongly* by the
-    ///    `Task` (plain closure capture, not listed in `[weak self, ...]`),
-    ///    so `sendEncrypted` always ran to completion even if the user had
+    /// 1. **Preserves original weak-self semantics.** Before this change,
+    ///    `sendService`/`appState` were captured *strongly* by the `Task`
+    ///    (plain closure capture, not listed in `[weak self, ...]`), so
+    ///    `sendEncrypted` always ran to completion even if the user had
     ///    already navigated away and `ChatContainer` (a `@StateObject` on
     ///    `ChatDetailScreen`) deallocated mid-upload — only the `self?.`
-    ///    UI-update calls silently no-op'd. Routing the whole body through
-    ///    `self?.instanceMethod(...)` would have skipped the network call
-    ///    entirely once `self` went away, which is a real behavior change
-    ///    this task's constraints explicitly rule out ("purely about
-    ///    background-execution survival, additive").
+    ///    UI-update calls silently no-op'd. `weakContainer` is a `Weak<
+    ///    ChatContainer>` **box** (see the file-top `Weak<T>` type), not a
+    ///    plain `ChatContainer?` — a plain optional parameter would hold a
+    ///    STRONG reference for the whole call (including every `await`
+    ///    inside it), which is the opposite of the original behavior. The
+    ///    box is captured by reference (zero refcount effect on
+    ///    `ChatContainer`) and `.value` is re-read at each of the three
+    ///    points below that touch `self`, so `ChatContainer` stays exactly
+    ///    as free to deallocate mid-upload as it was on `main`. The
+    ///    network call itself (`sendEncrypted`) never reads `weakContainer`
+    ///    — it only closes over the strongly-captured `sendService`/
+    ///    `appState`, so it always runs to completion regardless.
     /// 2. **SWIFT6_PATTERNS.md rule 5** (closure depth): the pre-existing
     ///    `do/catch` + `onProgress`/`MainActor.run` nesting was already at
     ///    the documented risk depth; wrapping it in one more inline
@@ -733,7 +761,7 @@ final class ChatContainer: ObservableObject {
     ///    failure this codebase has hit repeatedly. Moving the body to a
     ///    named method (regardless of static/instance) sidesteps that.
     private static func sendVoiceNoteAsync(
-        weakContainer: ChatContainer?,
+        weakContainer: Weak<ChatContainer>,
         recording: VoiceNoteRecorder.Recording,
         peerId: String,
         convId: String,
@@ -759,7 +787,7 @@ final class ChatContainer: ObservableObject {
     }
 
     private static func completeVoiceNoteSend(
-        weakContainer: ChatContainer?,
+        weakContainer: Weak<ChatContainer>,
         recording: VoiceNoteRecorder.Recording,
         peerId: String,
         convId: String,
@@ -773,12 +801,16 @@ final class ChatContainer: ObservableObject {
             markerJson = try await prep.prepareMarkerJson(
                 for: recording,
                 recipientUserId: peerId,
-                onProgress: { [weak weakContainer] bytesUploaded, totalBytes in
+                onProgress: { bytesUploaded, totalBytes in
                     // W446: called from TusUploadClient's upload loop,
                     // not guaranteed to already be on the MainActor —
                     // hop explicitly before touching @Published state.
-                    Task { @MainActor [weak weakContainer] in
-                        weakContainer?.updateUploadProgress(
+                    // Re-read `.value` at the point of use so this stays
+                    // weak across the hop (the box itself is safe to
+                    // capture strongly — it has no effect on
+                    // ChatContainer's refcount).
+                    Task { @MainActor in
+                        weakContainer.value?.updateUploadProgress(
                             messageId: msgId,
                             bytesUploaded: bytesUploaded,
                             totalBytes: totalBytes
@@ -789,13 +821,13 @@ final class ChatContainer: ObservableObject {
         } catch let e as ChatVoiceNoteSender.Error {
             print("[ChatContainer] voice note prep failed: \(e.localizedDescription)")
             await MainActor.run {
-                weakContainer?.markFailed(messageId: msgId, reason: .uploadFailure)
+                weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure)
             }
             return
         } catch {
             print("[ChatContainer] voice note prep failed: \(error)")
             await MainActor.run {
-                weakContainer?.markFailed(messageId: msgId, reason: .generic)
+                weakContainer.value?.markFailed(messageId: msgId, reason: .generic)
             }
             return
         }
@@ -809,7 +841,7 @@ final class ChatContainer: ObservableObject {
             plaintext: markerJson
         )
         await MainActor.run {
-            guard let self = weakContainer else { return }
+            guard let self = weakContainer.value else { return }
             // W446: upload is done (prepareMarkerJson already
             // returned) and we're now at a terminal send outcome —
             // clear the local progress entry so the bubble falls
@@ -1048,7 +1080,7 @@ final class ChatContainer: ObservableObject {
 
         Task { [weak self] in
             await ChatContainer.sendImageAsync(
-                weakContainer: self, jpeg: jpeg, peerId: peerId,
+                weakContainer: Weak(self), jpeg: jpeg, peerId: peerId,
                 convId: convId, msgId: msgId,
                 sendService: sendService, appState: appState
             )
@@ -1056,10 +1088,11 @@ final class ChatContainer: ObservableObject {
     }
 
     /// Extracted body of the `sendImage` upload `Task` — same rationale
-    /// as `sendVoiceNoteAsync` (weak-self semantics preserved exactly +
-    /// SWIFT6_PATTERNS.md rule 5 closure-depth avoidance).
+    /// as `sendVoiceNoteAsync` (weak-self semantics preserved via the
+    /// `Weak<ChatContainer>` box + SWIFT6_PATTERNS.md rule 5 closure-depth
+    /// avoidance).
     private static func sendImageAsync(
-        weakContainer: ChatContainer?,
+        weakContainer: Weak<ChatContainer>,
         jpeg: Data,
         peerId: String,
         convId: String,
@@ -1079,7 +1112,7 @@ final class ChatContainer: ObservableObject {
     }
 
     private static func completeImageSend(
-        weakContainer: ChatContainer?,
+        weakContainer: Weak<ChatContainer>,
         jpeg: Data,
         peerId: String,
         convId: String,
@@ -1096,11 +1129,13 @@ final class ChatContainer: ObservableObject {
                 filename: "image-\(msgId.uuidString).jpg",
                 durationMs: nil,
                 recipientUserId: peerId,
-                onProgress: { [weak weakContainer] bytesUploaded, totalBytes in
+                onProgress: { bytesUploaded, totalBytes in
                     // W446: see sendVoiceNote — hop to MainActor
-                    // before touching @Published upload state.
-                    Task { @MainActor [weak weakContainer] in
-                        weakContainer?.updateUploadProgress(
+                    // before touching @Published upload state. Re-read
+                    // `.value` at the point of use so this stays weak
+                    // across the hop.
+                    Task { @MainActor in
+                        weakContainer.value?.updateUploadProgress(
                             messageId: msgId,
                             bytesUploaded: bytesUploaded,
                             totalBytes: totalBytes
@@ -1110,14 +1145,14 @@ final class ChatContainer: ObservableObject {
             )
         } catch {
             print("[ChatContainer] sendImage prep failed: \(error)")
-            await MainActor.run { weakContainer?.markFailed(messageId: msgId, reason: .uploadFailure) }
+            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
             return
         }
         let outcome = await sendService.sendEncrypted(
             messageId: msgId, peerUserId: peerId, plaintext: markerJson
         )
         await MainActor.run {
-            guard let self = weakContainer else { return }
+            guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
             switch outcome {
             case .delivered(let serverMsgId):
@@ -1346,7 +1381,7 @@ final class ChatContainer: ObservableObject {
         }
         Task { [weak self] in
             await ChatContainer.sendFileAttachmentAsync(
-                weakContainer: self, data: data, mime: mime, filename: filename,
+                weakContainer: Weak(self), data: data, mime: mime, filename: filename,
                 peerId: peerId, convId: convId, msgId: msgId,
                 sendService: sendService, appState: appState
             )
@@ -1354,13 +1389,13 @@ final class ChatContainer: ObservableObject {
     }
 
     /// Extracted body of the `sendFileAttachment` upload `Task` — same
-    /// rationale as `sendVoiceNoteAsync` (weak-self semantics preserved
-    /// exactly + SWIFT6_PATTERNS.md rule 5 closure-depth avoidance).
-    /// Files can be the largest attachments sent (up to the 10 MB
-    /// app-level cap enforced elsewhere), making the background-execution
-    /// grace period especially relevant here.
+    /// rationale as `sendVoiceNoteAsync` (weak-self semantics preserved via
+    /// the `Weak<ChatContainer>` box + SWIFT6_PATTERNS.md rule 5
+    /// closure-depth avoidance). Files can be the largest attachments sent
+    /// (up to the 10 MB app-level cap enforced elsewhere), making the
+    /// background-execution grace period especially relevant here.
     private static func sendFileAttachmentAsync(
-        weakContainer: ChatContainer?,
+        weakContainer: Weak<ChatContainer>,
         data: Data,
         mime: String,
         filename: String,
@@ -1383,7 +1418,7 @@ final class ChatContainer: ObservableObject {
     }
 
     private static func completeFileAttachmentSend(
-        weakContainer: ChatContainer?,
+        weakContainer: Weak<ChatContainer>,
         data: Data,
         mime: String,
         filename: String,
@@ -1402,11 +1437,13 @@ final class ChatContainer: ObservableObject {
                 filename: filename,
                 durationMs: nil,
                 recipientUserId: peerId,
-                onProgress: { [weak weakContainer] bytesUploaded, totalBytes in
+                onProgress: { bytesUploaded, totalBytes in
                     // W446: see sendVoiceNote — hop to MainActor
-                    // before touching @Published upload state.
-                    Task { @MainActor [weak weakContainer] in
-                        weakContainer?.updateUploadProgress(
+                    // before touching @Published upload state. Re-read
+                    // `.value` at the point of use so this stays weak
+                    // across the hop.
+                    Task { @MainActor in
+                        weakContainer.value?.updateUploadProgress(
                             messageId: msgId,
                             bytesUploaded: bytesUploaded,
                             totalBytes: totalBytes
@@ -1416,14 +1453,14 @@ final class ChatContainer: ObservableObject {
             )
         } catch {
             print("[ChatContainer] sendFileAttachment prep failed: \(error)")
-            await MainActor.run { weakContainer?.markFailed(messageId: msgId, reason: .uploadFailure) }
+            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
             return
         }
         let outcome = await sendService.sendEncrypted(
             messageId: msgId, peerUserId: peerId, plaintext: markerJson
         )
         await MainActor.run {
-            guard let self = weakContainer else { return }
+            guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
             switch outcome {
             case .delivered(let serverMsgId):

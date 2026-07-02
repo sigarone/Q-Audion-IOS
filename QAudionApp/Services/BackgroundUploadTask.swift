@@ -44,9 +44,25 @@ enum BackgroundUploadTask {
     /// - Parameters:
     ///   - name: passed through to `beginBackgroundTask(withName:)`,
     ///     surfaced in Xcode's background-task debugger / device logs.
-    ///   - application: injected so this is unit-testable against a fake
-    ///     conforming to `BackgroundTaskProviding` instead of the real
-    ///     `UIApplication.shared` singleton. Defaults to the real app.
+    ///   - application: injected so `run` is *structured* for testing
+    ///     against a fake conforming to `BackgroundTaskProviding` instead
+    ///     of the real `UIApplication.shared` singleton. Defaults to the
+    ///     real app. **Honesty note (checked, not assumed):** this repo
+    ///     has no actually-wired test runner for `QAudionApp` — no test
+    ///     target in `QAudionApp/project.yml`, no `xcodebuild test` step
+    ///     in `.github/workflows/ios-testflight.yml` (archive/build only).
+    ///     Moving this type to `QAudionEngine` (the one target with a
+    ///     working `swift test`, see `engine-tests.yml`) isn't viable
+    ///     either: that job runs on a macOS runner, and this type depends
+    ///     on `UIApplication`/`UIBackgroundTaskIdentifier`, which are
+    ///     iOS-only with no macOS analog (every other `UIKit` use in
+    ///     `QAudionEngine` is guarded behind `#if canImport(UIKit)` /
+    ///     `#if os(iOS)` for exactly this reason — see
+    ///     `Audio/AudioProcessingPipeline.swift`,
+    ///     `Integration/CallKitProvider.swift`). So the seam exists and
+    ///     the logic below is written to be exercised by a fake, but
+    ///     nothing in CI currently runs that fake. Do not read this as
+    ///     "tested" — it isn't, today.
     ///   - operation: the async work to protect (upload + seal + announce
     ///     — the whole logical send, not just the raw byte-PATCH loop).
     ///
@@ -132,9 +148,13 @@ enum BackgroundUploadTask {
 }
 
 /// Thin seam over the two `UIApplication` background-task APIs so
-/// `BackgroundUploadTask.run` can be exercised with a fake in unit tests
-/// without touching the real `UIApplication.shared` singleton (which
-/// isn't meaningfully usable outside a running app host).
+/// `BackgroundUploadTask.run` is *structured* to be exercised with a fake
+/// in unit tests, without touching the real `UIApplication.shared`
+/// singleton (which isn't meaningfully usable outside a running app
+/// host). See the honesty note on `BackgroundUploadTask.run`'s
+/// `application:` parameter doc: this target has no test runner wired up
+/// today, so nothing currently exercises the fake — the seam is real,
+/// the "tested" claim would not be.
 protocol BackgroundTaskProviding {
     func beginBackgroundTask(withName taskName: String?, expirationHandler handler: (() -> Void)?) -> UIBackgroundTaskIdentifier
     func endBackgroundTask(_ identifier: UIBackgroundTaskIdentifier)
