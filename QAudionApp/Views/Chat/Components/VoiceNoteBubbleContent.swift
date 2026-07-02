@@ -28,6 +28,18 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
 ///
 /// Tap toggles between play / pause (resume) for the currently-playing
 /// id; tapping any other ready bubble hijacks playback to that one.
+///
+/// W446: "Condividi audio" used to live in an inner `.contextMenu` on
+/// `bubbleRow` (i.e. the entire body of this view). That competed
+/// with `ChatDetailScreen`'s outer `.onLongPressGesture` (which opens
+/// `BubbleActionSheet`) for the same long-press touch — a
+/// `.contextMenu` registers a `UIContextMenuInteraction` directly on
+/// its view and wins over an ancestor's plain SwiftUI
+/// `.onLongPressGesture`, so long-pressing a voice note opened this
+/// menu instead of the shared action sheet every other bubble type
+/// uses. The action now lives in `BubbleActionSheet` (gated on
+/// `mediaKind == .voiceNote`); this view exposes `shareRequest` so
+/// `ChatDetailScreen` can trigger it from there.
 struct VoiceNoteBubbleContent: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
@@ -36,6 +48,10 @@ struct VoiceNoteBubbleContent: View {
     let messageId: UUID
     let mediaLocalPath: String?
     let durationMs: Int64
+    /// W446: bound by `ChatDetailScreen` so `BubbleActionSheet`'s
+    /// "Condividi audio" row can trigger the share sheet here, where
+    /// the cached file path already lives.
+    var shareRequest: Binding<Bool>? = nil
 
     private var isReady: Bool { mediaLocalPath != nil }
     private var isActive: Bool { player.currentlyPlayingId == messageId }
@@ -63,29 +79,21 @@ struct VoiceNoteBubbleContent: View {
 
     var body: some View {
         bubbleRow
-            // W99: long-press → context menu with "Condividi" action
-            // that opens the system share sheet with the cached M4A
-            // file URL. User can then save to Files / send via AirDrop /
-            // email / etc. Disabled while the file is still downloading.
-            .contextMenu(menuItems: {
-                if let path = mediaLocalPath, !path.isEmpty {
-                    Button {
-                        sharingURL = ShareTarget(url: URL(fileURLWithPath: path))
-                    } label: {
-                        Label("Condividi audio", systemImage: "square.and.arrow.up")
-                    }
-                    // W117: tech info — file size + cache path.
-                    if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-                       let size = attrs[.size] as? UInt64 {
-                        let kb = Double(size) / 1024.0
-                        Text(String(format: "%.1f KB · %@",
-                                    kb,
-                                    (path as NSString).lastPathComponent))
-                    }
-                }
-            })
             .sheet(item: $sharingURL) { target in
                 ActivityShareSheet(activityItems: [target.url])
+            }
+            // W446: "Condividi audio" moved to `BubbleActionSheet` (see
+            // the struct doc comment above) — `shareRequest` is flipped
+            // by that sheet's row and drives the same share-sheet
+            // presentation the old inner `.contextMenu` used. Disabled
+            // while the file is still downloading, same as before.
+            .onChange(of: shareRequest?.wrappedValue ?? false) { requested in
+                guard requested, let path = mediaLocalPath, !path.isEmpty else {
+                    shareRequest?.wrappedValue = false
+                    return
+                }
+                sharingURL = ShareTarget(url: URL(fileURLWithPath: path))
+                shareRequest?.wrappedValue = false
             }
     }
 
