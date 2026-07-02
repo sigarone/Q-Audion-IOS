@@ -858,7 +858,13 @@ final class ChatContainer: ObservableObject {
                             totalBytes: totalBytes
                         )
                     }
-                }
+                },
+                // W-TUSRESUME: every send (not just retries) writes a
+                // resume breadcrumb keyed by this message's own id, so
+                // if the app is killed mid-upload on the FIRST attempt,
+                // the next retry still has something to resume from
+                // (the persisted state predates any retry).
+                resumeClientMsgId: msgId.uuidString
             )
         } catch let e as ChatVoiceNoteSender.Error {
             print("[ChatContainer] voice note prep failed: \(e.localizedDescription)")
@@ -967,6 +973,23 @@ final class ChatContainer: ObservableObject {
     ///
     /// In all three branches the OLD failed row is hard-removed so the
     /// chat doesn't show two bubbles for the same message.
+    ///
+    /// **W-TUSRESUME (2026-07-02)**: before falling into the audio/image
+    /// tier-3 branches above (drop row, mint fresh msgId, full
+    /// re-upload), both now first check for a persisted `TusResumeState`
+    /// keyed by the failed message's `clientMsgId`:
+    ///   - Found + `TusResumeStateStore.checkCorruption` passes → attempt
+    ///     tier 1 (`resumeAttachmentIfPossible`), reusing the message's EXISTING
+    ///     id (never minting a new one — from the user's view this is
+    ///     "my stuck upload continued," not a new message appearing).
+    ///     Wrapped in the same `Weak<ChatContainer>` +
+    ///     `BackgroundUploadTask.run` protection as a fresh send.
+    ///   - `TusError.uploadNotFound` (past the 24h server retention
+    ///     window, or the record never existed) or any other resume
+    ///     failure (tier-2 chunk-retries exhausted, corruption check
+    ///     failed) → clear the stale `TusResumeState` entry and fall
+    ///     through to the UNCHANGED tier-3 path below (drop+mint-fresh).
+    ///   - No persisted state at all → today's behavior, nothing changes.
     func retryFailedMessage() {
         guard let id = failedMessageId,
               let msg = store.loadMessages(conversationId: conversationId)
@@ -982,6 +1005,15 @@ final class ChatContainer: ObservableObject {
            let path = msg.mediaLocalPath, !path.isEmpty,
            FileManager.default.fileExists(atPath: path),
            let durMs = msg.mediaDurationMs {
+            // W-TUSRESUME: tier-1 resume attempt before the tier-3 drop
+            // + fresh-send fallback below. `resumeAttachmentIfPossible` returns
+            // `true` only when it actually kicked off a resume Task (in
+            // which case IT owns the row — do not fall through); `false`
+            // means "nothing to resume" or "resume state was stale and
+            // has been cleared" — proceed to tier 3 exactly as before.
+            if resumeAttachmentIfPossible(msg: msg, sourcePath: path) {
+                return
+            }
             // Voice-note retry: rebuild a Recording from the cache and
             // re-ship via sendVoiceNote.
             store.removeMessage(id: id, conversationId: conversationId)
@@ -1008,6 +1040,10 @@ final class ChatContainer: ObservableObject {
         if mime.hasPrefix("image/"),
            let path = msg.mediaLocalPath, !path.isEmpty,
            let bytes = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+            // W-TUSRESUME: same tier-1 attempt as the audio branch above.
+            if resumeAttachmentIfPossible(msg: msg, sourcePath: path) {
+                return
+            }
             // Image retry: re-read the JPEG and re-ship via sendImage.
             store.removeMessage(id: id, conversationId: conversationId)
             refreshFromStore()
@@ -1032,6 +1068,258 @@ final class ChatContainer: ObservableObject {
         refreshFromStore()
         composerText = msg.plaintext
         sendMessage()
+    }
+
+    /// W-TUSRESUME — checks for a persisted `TusResumeState` matching
+    /// `msg.clientMsgId` and, if the source file at `sourcePath` passes
+    /// the corruption check, kicks off a tier-1 resume attempt on a
+    /// background `Task` and returns `true` (caller must NOT also run
+    /// its tier-3 fallback — the resume Task owns the message row from
+    /// here, including its own internal fallback to tier 3 on failure).
+    ///
+    /// Returns `false` — synchronously, no `Task` spawned — when there's
+    /// nothing to resume (no persisted state) or the state is stale
+    /// (corruption check failed, entry already cleared): the caller
+    /// proceeds with its existing tier-3 drop+mint-fresh path unchanged.
+    ///
+    /// - Important: `msg.id` (the EXISTING message id) is threaded all
+    ///   the way through — `resumeAttachmentIfPossible` never mints a new UUID.
+    ///   This is what makes a successful resume invisible to the user as
+    ///   anything other than "the stuck upload finished" rather than a
+    ///   duplicate bubble.
+    private func resumeAttachmentIfPossible(msg: Message, sourcePath: String) -> Bool {
+        guard let clientMsgId = msg.clientMsgId,
+              let state = TusResumeStateStore.load(clientMsgId: clientMsgId)
+        else { return false }
+
+        let check = TusResumeStateStore.checkCorruption(state: state, sourcePath: sourcePath)
+        guard case .resumable = check else {
+            if case .corrupted(let reason) = check {
+                print("[ChatContainer] resumeAttachmentIfPossible: stale TusResumeState for \(clientMsgId): \(reason) — clearing, falling through to tier 3")
+            }
+            TusResumeStateStore.clear(clientMsgId: clientMsgId)
+            return false
+        }
+
+        guard let sendService = self.sendService, let appState = self.appState else {
+            // No backend wired (preview / unit test) — nothing sane to
+            // resume against; let the caller's existing preview fallback
+            // (inside sendVoiceNote/sendImage's tier-3 path) handle it.
+            return false
+        }
+
+        let convId = conversationId
+        let msgId = msg.id
+        let peerId = peerUserId
+        let mime = msg.mediaMimeType ?? ""
+
+        Task { [weak self] in
+            await ChatContainer.resumeAttachmentAsync(
+                weakContainer: Weak(self), state: state, sourcePath: sourcePath,
+                convId: convId, msgId: msgId, peerId: peerId, mime: mime,
+                sendService: sendService, appState: appState
+            )
+        }
+        return true
+    }
+
+    /// W-TUSRESUME — tier-1 resume `Task` body. Same `Weak<ChatContainer>`
+    /// + `BackgroundUploadTask.run` protection as a fresh send (see
+    /// `sendVoiceNoteAsync`/`sendImageAsync`) — a resumed upload can still
+    /// be large enough to need the background-execution grace period,
+    /// and the container can still deallocate mid-resume if the user
+    /// navigates away.
+    private static func resumeAttachmentAsync(
+        weakContainer: Weak<ChatContainer>,
+        state: TusResumeState,
+        sourcePath: String,
+        convId: UUID,
+        msgId: UUID,
+        peerId: String,
+        mime: String,
+        sendService: ChatMessageSendService,
+        appState: AppState
+    ) async {
+        await BackgroundUploadTask.run(name: "attachment-upload-resume") {
+            await ChatContainer.completeResumeAttachmentSend(
+                weakContainer: weakContainer, state: state, sourcePath: sourcePath,
+                convId: convId, msgId: msgId, peerId: peerId, mime: mime,
+                sendService: sendService, appState: appState
+            )
+        }
+    }
+
+    private static func completeResumeAttachmentSend(
+        weakContainer: Weak<ChatContainer>,
+        state: TusResumeState,
+        sourcePath: String,
+        convId: UUID,
+        msgId: UUID,
+        peerId: String,
+        mime: String,
+        sendService: ChatMessageSendService,
+        appState: AppState
+    ) async {
+        // Re-read the source bytes fresh (the corruption check already
+        // confirmed size+hash match at the call site, but re-reading
+        // here rather than threading `Data` through keeps this method's
+        // failure modes identical to a fresh send's file-read step).
+        guard let bytes = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)) else {
+            print("[ChatContainer] completeResumeAttachmentSend: source unreadable at \(sourcePath) — clearing resume state, falling back to tier 3")
+            TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
+            await MainActor.run {
+                weakContainer.value?.fallBackToFreshSend(msgId: msgId, sourcePath: sourcePath, mime: mime, state: state)
+            }
+            return
+        }
+
+        let prep = ChatVoiceNoteSender(appState: appState)
+        let markerJson: String
+        do {
+            markerJson = try await prep.resumeAttachmentMarkerJson(
+                state: state,
+                bytes: bytes,
+                onProgress: { bytesUploaded, totalBytes in
+                    // W446: see sendVoiceNote — hop to MainActor before
+                    // touching @Published upload state.
+                    Task { @MainActor in
+                        weakContainer.value?.updateUploadProgress(
+                            messageId: msgId,
+                            bytesUploaded: bytesUploaded,
+                            totalBytes: totalBytes
+                        )
+                    }
+                }
+            )
+        } catch let tusError as TusUploadClient.TusError {
+            // W-TUSRESUME: the specific "no longer resumable" signal —
+            // whether `.uploadNotFound` (purged past 24h, or never
+            // existed server-side) or any other TUS-layer failure after
+            // tier-2's bounded per-chunk retries have already been
+            // exhausted inside `resume()`. Either way: clear the stale
+            // breadcrumb and fall through to tier 3 (fresh upload),
+            // exactly as the product decision specifies. Never surfaces
+            // as a user-facing failure on its own — tier 3 gets its own
+            // chance to succeed or fail.
+            print("[ChatContainer] completeResumeAttachmentSend: resume failed (\(tusError.localizedDescription)) — clearing resume state, falling back to tier 3")
+            TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
+            await MainActor.run {
+                weakContainer.value?.fallBackToFreshSend(msgId: msgId, sourcePath: sourcePath, mime: mime, state: state)
+            }
+            return
+        } catch {
+            // Any other failure (auth, crypto, token issuance, source
+            // unreadable) — same graceful degradation: clear + fall back
+            // to tier 3 rather than leaving the message stuck failed.
+            print("[ChatContainer] completeResumeAttachmentSend: resume failed (\(error)) — clearing resume state, falling back to tier 3")
+            TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
+            await MainActor.run {
+                weakContainer.value?.fallBackToFreshSend(msgId: msgId, sourcePath: sourcePath, mime: mime, state: state)
+            }
+            return
+        }
+
+        // Resume succeeded — ship using the EXISTING msgId, same
+        // seal/announce + status-update tail as a fresh send.
+        let outcome = await sendService.sendEncrypted(
+            messageId: msgId,
+            peerUserId: peerId,
+            plaintext: markerJson
+        )
+        await MainActor.run {
+            guard let self = weakContainer.value else { return }
+            self.clearUploadProgress(messageId: msgId)
+            switch outcome {
+            case .delivered(let serverMsgId):
+                self.store.setServerMessageId(
+                    localId: msgId,
+                    conversationId: convId,
+                    serverMessageId: serverMsgId
+                )
+                self.store.updateMessageStatus(
+                    id: msgId, conversationId: convId,
+                    newStatus: .delivered, deliveredAt: Date()
+                )
+                // Successful full completion — clear the breadcrumb.
+                TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
+            case .sent:
+                self.store.updateMessageStatus(
+                    id: msgId, conversationId: convId,
+                    newStatus: .delivered, deliveredAt: Date()
+                )
+                TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
+            case .failed(let reason):
+                // The upload itself succeeded (we got a marker) but the
+                // encrypted chat send failed — the underlying fileId is
+                // now fully uploaded server-side, so there's nothing left
+                // to resume; a subsequent retry would need a fresh
+                // upload regardless. Clear rather than leaving a
+                // breadcrumb that would only ever resume into
+                // `uploadNotFound`-equivalent dead weight at best (the
+                // fileId is complete, not partial).
+                TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
+                self.markFailed(messageId: msgId, reason: reason)
+            }
+            self.refreshFromStore()
+        }
+    }
+
+    /// W-TUSRESUME — shared tier-3 fallback invoked from the resume
+    /// path's own failure handling (as opposed to `retryFailedMessage`'s
+    /// initial dispatch, which never calls this — it takes the identical
+    /// but separately-written drop+mint-fresh branches inline). Drops the
+    /// still-present message row (the resume attempt never removed it —
+    /// only the ORIGINAL tier-3 path in `retryFailedMessage` does that
+    /// eagerly) and re-ships via the normal `sendVoiceNote`/`sendImage`
+    /// entry points, mirroring `retryFailedMessage`'s own tier-3 branches
+    /// exactly (mint-fresh, best-effort old-cache-file cleanup).
+    private func fallBackToFreshSend(msgId: UUID, sourcePath: String, mime: String, state: TusResumeState) {
+        guard store.loadMessages(conversationId: conversationId).contains(where: { $0.id == msgId }) else {
+            // Row already gone (e.g. user deleted it while the resume
+            // attempt was in flight) — nothing to fall back to.
+            return
+        }
+
+        // Resolve what we're about to do BEFORE touching the row — if the
+        // source vanished between the resume attempt starting and failing,
+        // there's nothing to re-send, so leave the existing (still-failed
+        // looking, pre-this-retry) row alone and just mark it failed again
+        // rather than removing it out from under a subsequent no-op
+        // `markFailed` call.
+        if mime.hasPrefix("audio/"), FileManager.default.fileExists(atPath: sourcePath) {
+            store.removeMessage(id: msgId, conversationId: conversationId)
+            refreshFromStore()
+            let rec = VoiceNoteRecorder.Recording(
+                fileURL: URL(fileURLWithPath: sourcePath),
+                durationMs: Int(state.durationMs ?? 0),
+                mimeType: mime
+            )
+            sendVoiceNote(rec, overrideTimerSeconds: state.timerOverrideSeconds)
+        } else if mime.hasPrefix("image/"),
+                  let bytes = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)) {
+            store.removeMessage(id: msgId, conversationId: conversationId)
+            refreshFromStore()
+            sendImage(bytes, overrideTimerSeconds: state.timerOverrideSeconds)
+        } else {
+            // Source vanished between the resume attempt starting and
+            // failing — signal_not_kill: surface as a normal failed
+            // state rather than silently dropping the message. The row
+            // is left in place (never removed) so `markFailed` has a
+            // real row to flip to `.failed`.
+            markFailed(messageId: msgId, reason: .uploadFailure)
+            return
+        }
+
+        // Best-effort reclaim of the orphaned old-path blob, mirroring
+        // retryFailedMessage's tier-3 branches. Never propagate failures
+        // here: the fresh send already kicked off.
+        if FileManager.default.fileExists(atPath: sourcePath) {
+            do {
+                try FileManager.default.removeItem(at: URL(fileURLWithPath: sourcePath))
+            } catch {
+                print("[ChatContainer] fallBackToFreshSend: cache cleanup failed for \(sourcePath): \(error)")
+            }
+        }
     }
 
     /// Test/dev hook per simulare un fallimento di invio. Da rimuovere
@@ -1202,7 +1490,11 @@ final class ChatContainer: ObservableObject {
                             totalBytes: totalBytes
                         )
                     }
-                }
+                },
+                // W-TUSRESUME: see sendVoiceNote — breadcrumb keyed by
+                // this message's own id so a first-attempt kill still
+                // leaves something to resume from on retry.
+                resumeClientMsgId: msgId.uuidString
             )
         } catch {
             print("[ChatContainer] sendImage prep failed: \(error)")

@@ -16,11 +16,17 @@ import UIKit
 ///
 /// **What this does NOT solve.** This is purely an in-process grace-period
 /// extension — it does not survive the OS fully terminating the app, and
-/// it does not persist upload state to resume after a cold relaunch. True
-/// cross-launch TUS resume (using the server's `HEAD /files/tus/{id}`
-/// endpoint to pick up where a killed process left off) is a separate,
-/// deliberately deferred piece of work — see the note at the call sites
-/// in `ChatContainer.swift`.
+/// it does not itself persist upload state to resume after a cold
+/// relaunch. **Update (W-TUSRESUME, 2026-07-02):** that gap is now closed
+/// separately — `TusResumeState`/`TusResumeStateStore` persist a
+/// cross-launch breadcrumb, and `ChatContainer.retryFailedMessage()` uses
+/// the server's `HEAD /files/tus/{id}` + `TusUploadClient.resume(...)` to
+/// pick up where a killed process left off, falling back to a fresh
+/// upload when that's not possible (see `ChatContainer.swift`'s
+/// `resumeAttachmentIfPossible`/`completeResumeAttachmentSend`). This type
+/// still only covers the *backgrounding* grace period; cross-launch
+/// resume is a distinct mechanism layered on top, not provided by
+/// `BackgroundUploadTask` itself.
 ///
 /// **A nuance worth being honest about.** Calling `endBackgroundTask`
 /// (whether from the normal completion path or from the expiration

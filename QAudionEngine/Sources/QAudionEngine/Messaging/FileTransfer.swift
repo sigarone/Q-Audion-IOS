@@ -109,13 +109,43 @@ public final class FileTransfer: @unchecked Sendable {
         public let downloadFile: (_ fileId: String) async throws -> Data
         /// W446 — optional progress-reporting variant. When supplied, the
         /// caller-provided closure is preferred over `uploadFile` so
-        /// ``upload(recipientId:bytes:filename:mime:onProgress:)`` can
-        /// report bytes-uploaded/total to the UI as chunks complete.
+        /// ``upload(recipientId:bytes:filename:mime:onProgress:resumeContext:)``
+        /// can report bytes-uploaded/total to the UI as chunks complete.
         /// `nil` by default — local-only UI plumbing, never touches the
         /// wire schema.
+        ///
+        /// W-TUSRESUME: the closure's last parameter is an optional
+        /// `(clientMsgId, sourceBytes, onFileIdMinted)` triple forwarded
+        /// verbatim to the concrete uploader
+        /// (`BCryptoStorageApiImpl`/`TusUploadClient`). `onFileIdMinted`
+        /// — when the concrete uploader is a `TusUploadClient` taking the
+        /// chunked path — fires exactly once right after the server's
+        /// `POST /files/tus` `create()` call succeeds, before the chunk
+        /// loop starts, so the caller (`FileTransfer.upload`, which has
+        /// the salt/nonce/ts/keyId already computed at that point — see
+        /// below) can persist a `TusResumeState` breadcrumb. Kept as a
+        /// primitive closure (not the concrete `TusUploadClient` type) so
+        /// this generic `FileTransfer` abstraction — mirrored by the
+        /// Desktop client — stays decoupled from one backend's resume
+        /// implementation detail; a non-TUS uploader (small-file
+        /// multipart fast-path, avatar upload, etc.) simply never calls
+        /// it.
         public let uploadFileWithProgress: (
             (_ data: Data, _ filename: String,
-             _ onProgress: ((Int64, Int64) -> Void)?) async throws -> String
+             _ onProgress: ((Int64, Int64) -> Void)?,
+             _ resumeContext: (clientMsgId: String, sourceBytes: Data, onFileIdMinted: (String) -> Void)?) async throws -> String
+        )?
+        /// W-TUSRESUME — tier-1 resume primitive: given an existing
+        /// `fileId` (from a persisted `TusResumeState`), HEAD the server
+        /// for the confirmed offset and PATCH-continue from there instead
+        /// of re-uploading from byte zero. `nil` when the caller doesn't
+        /// wire a resume-capable uploader — ``resumeUpload`` throws
+        /// ``FileTransferError/resumeNotSupported`` in that case so
+        /// callers get an explicit signal to fall back to tier 3 rather
+        /// than a silent full re-upload masquerading as a resume.
+        public let resumeFile: (
+            (_ fileId: String, _ ciphertext: Data,
+             _ onProgress: ((Int64, Int64) -> Void)?) async throws -> Void
         )?
 
         public init(
@@ -123,12 +153,18 @@ public final class FileTransfer: @unchecked Sendable {
             downloadFile: @escaping (_ fileId: String) async throws -> Data,
             uploadFileWithProgress: (
                 (_ data: Data, _ filename: String,
-                 _ onProgress: ((Int64, Int64) -> Void)?) async throws -> String
+                 _ onProgress: ((Int64, Int64) -> Void)?,
+                 _ resumeContext: (clientMsgId: String, sourceBytes: Data, onFileIdMinted: (String) -> Void)?) async throws -> String
+            )? = nil,
+            resumeFile: (
+                (_ fileId: String, _ ciphertext: Data,
+                 _ onProgress: ((Int64, Int64) -> Void)?) async throws -> Void
             )? = nil
         ) {
             self.uploadFile = uploadFile
             self.downloadFile = downloadFile
             self.uploadFileWithProgress = uploadFileWithProgress
+            self.resumeFile = resumeFile
         }
     }
 
@@ -180,12 +216,42 @@ public final class FileTransfer: @unchecked Sendable {
     ///   ``StorageApi``). Ignored (never called) when the caller only
     ///   supplied the plain `uploadFile` closure. `nil` by default so
     ///   existing call sites keep compiling unchanged.
+    /// - Parameter resumeContext: W-TUSRESUME — optional
+    ///   `(clientMsgId, sourceBytes)` pair. `sourceBytes` should be the
+    ///   same plaintext `bytes` being uploaded here — passed separately
+    ///   (rather than reusing `bytes` implicitly) so the call site stays
+    ///   explicit about what gets fingerprinted. `nil` by default so
+    ///   existing call sites keep compiling unchanged and write no
+    ///   breadcrumb.
+    /// - Parameter onResumeStateReady: W-TUSRESUME — optional callback
+    ///   invoked at most once, synchronously from inside
+    ///   `storage.uploadFileWithProgress`'s `onFileIdMinted` hook (i.e.
+    ///   right after the server confirms the new `fileId`, before the
+    ///   chunk loop starts), with everything the caller needs to build
+    ///   and persist a `TusResumeState`:
+    ///   `(fileId, saltHex, nonceHex, ts, keyId, pskFingerprintHex)`.
+    ///   `FileTransfer` computes the salt/nonce/ts/keyId/PSK used for THIS
+    ///   seal before the upload even starts, so it's the only layer that
+    ///   can hand back byte-identical encryption-continuity fields —
+    ///   `ChatVoiceNoteSender` (which owns `clientMsgId`/duration/
+    ///   timer-override/recipient — the remaining `TusResumeState` fields)
+    ///   has no other way to obtain them at the right moment.
+    ///   `pskFingerprintHex` (security-review follow-up, 2026-07-02) is a
+    ///   SHA-256 of the PSK bytes actually used for this seal — see
+    ///   `TusResumeState.pskFingerprintHex`'s doc for why this closes a
+    ///   real gap the plaintext-only corruption check can't catch (a
+    ///   rotated/re-bound PSK between the failed attempt and the resume).
+    ///   Never called when `resumeContext` is `nil`, when the uploader
+    ///   takes the small-file multipart fast-path (nothing to resume), or
+    ///   when the caller only supplied the plain `uploadFile` closure.
     public func upload(
         recipientId: String,
         bytes: Data,
         filename: String,
         mime: String,
-        onProgress: ((Int64, Int64) -> Void)? = nil
+        onProgress: ((Int64, Int64) -> Void)? = nil,
+        resumeContext: (clientMsgId: String, sourceBytes: Data)? = nil,
+        onResumeStateReady: ((_ fileId: String, _ saltHex: String, _ nonceHex: String, _ ts: Int64, _ keyId: String, _ pskFingerprintHex: String) -> Void)? = nil
     ) async throws -> FileMarker {
         guard let psk = vault.forContact(recipientId) ?? vault.primary() else {
             throw FileTransferError.noPskAvailable
@@ -207,7 +273,22 @@ public final class FileTransfer: @unchecked Sendable {
         // Upload ONLY the ciphertext — salt/nonce/tag ride in the chat marker.
         let fileId: String
         if let withProgress = storage.uploadFileWithProgress {
-            fileId = try await withProgress(ciphertext, filename, onProgress)
+            let fullResumeContext: (clientMsgId: String, sourceBytes: Data, onFileIdMinted: (String) -> Void)?
+            if let ctx = resumeContext {
+                fullResumeContext = (
+                    clientMsgId: ctx.clientMsgId,
+                    sourceBytes: ctx.sourceBytes,
+                    onFileIdMinted: { mintedFileId in
+                        onResumeStateReady?(
+                            mintedFileId, Self.hex(salt), Self.hex(nonceBytes), ts, psk.keyId,
+                            Self.pskFingerprint(psk.material)
+                        )
+                    }
+                )
+            } else {
+                fullResumeContext = nil
+            }
+            fileId = try await withProgress(ciphertext, filename, onProgress, fullResumeContext)
         } else {
             fileId = try await storage.uploadFile(ciphertext, filename)
         }
@@ -221,6 +302,96 @@ public final class FileTransfer: @unchecked Sendable {
             nonce: Self.hex(nonceBytes),
             tag: Self.hex(tag),
             keyId: psk.keyId,
+            ts: ts
+        ))
+    }
+
+    // MARK: - W-TUSRESUME: Tier-1 resume
+
+    /// W-TUSRESUME — tier 1 of the 3-tier retry: continue a
+    /// previously-attempted-but-incomplete upload for the SAME logical
+    /// file, using the SAME encryption continuity fields (`saltHex`/
+    /// `nonceHex`/`ts`) a persisted `TusResumeState` recorded, rather than
+    /// re-sealing with fresh randomness. This is what makes a resume
+    /// possible at all: `upload()` mints a new random salt/nonce/ts on
+    /// every call, and re-encrypting identical plaintext with different
+    /// randomness never reproduces the same ciphertext bytes the server
+    /// already has a partial PATCH stream for — see `TusResumeState`'s
+    /// doc comment.
+    ///
+    /// - Parameters:
+    ///   - bytes: the SAME plaintext `upload()` was originally called
+    ///     with — caller is responsible for the corruption check
+    ///     (``TusResumeStateStore/checkCorruption``) BEFORE calling this;
+    ///     this method has no way to detect a changed source itself since
+    ///     `saltHex`/`nonceHex`/`ts`/`keyId` are trusted inputs, not
+    ///     re-derived.
+    ///   - fileId: the fileId from the persisted `TusResumeState` — HEAD'd
+    ///     and PATCH-continued, never re-created.
+    ///   - keyId: the vault entry key used for the original seal — looked
+    ///     up via ``VaultAdapter/forContact`` first (mirrors `upload()`),
+    ///     falling back to ``VaultAdapter/primary`` if the exact binding
+    ///     is no longer present (contact re-bound since the failed
+    ///     attempt); either way the SAME PSK material must still decrypt
+    ///     to reproduce byte-identical ciphertext, so a changed/rotated
+    ///     PSK surfaces as a `CryptoKit` seal that silently produces
+    ///     different ciphertext bytes — the server-side PATCH continuation
+    ///     would then fail its byte-range assumption. Callers should
+    ///     treat any error from this method as "resume didn't work,
+    ///     fall through to tier 3", never retry `resumeUpload` itself.
+    ///
+    /// Throws ``FileTransferError/resumeNotSupported`` if the caller's
+    /// `StorageApi` didn't wire ``StorageApi/resumeFile`` (e.g. a
+    /// small-file multipart-only backend) — this is an explicit signal
+    /// distinct from a network/HTTP failure so callers don't mistake "not
+    /// wired" for "transient, worth another tier-2 retry".
+    public func resumeUpload(
+        recipientId: String,
+        bytes: Data,
+        filename: String,
+        mime: String,
+        fileId: String,
+        saltHex: String,
+        nonceHex: String,
+        ts: Int64,
+        keyId: String,
+        onProgress: ((Int64, Int64) -> Void)? = nil
+    ) async throws -> FileMarker {
+        guard let resumeFile = storage.resumeFile else {
+            throw FileTransferError.resumeNotSupported
+        }
+        guard let psk = vault.forContact(recipientId) ?? vault.primary() else {
+            throw FileTransferError.noPskAvailable
+        }
+
+        let salt = try Self.unhex(saltHex, expected: Self.saltSize, field: "salt")
+        let nonceBytes = try Self.unhex(nonceHex, expected: Self.nonceSize, field: "nonce")
+
+        let fileKey = Self.deriveFileKey(psk: psk.material, salt: salt)
+        let aad = Self.buildFileAad(senderId: selfUserId, recipientId: recipientId, ts: ts)
+
+        // Re-seal with the PINNED salt/nonce/ts (not fresh randomness) so
+        // the ciphertext bytes are byte-identical to the original attempt
+        // — required for the server's partial PATCH stream to continue
+        // correctly. AES-GCM is deterministic given the same key+nonce+
+        // plaintext+AAD, so this reproduces the exact same ciphertext+tag
+        // the interrupted attempt would have produced.
+        let nonce = try AES.GCM.Nonce(data: nonceBytes)
+        let sealed = try AES.GCM.seal(bytes, using: fileKey, nonce: nonce, authenticating: aad)
+        let ciphertext = sealed.ciphertext
+        let tag = sealed.tag
+
+        try await resumeFile(fileId, ciphertext, onProgress)
+
+        return FileMarker(qfile: .init(
+            fileId: fileId,
+            name: filename,
+            size: bytes.count,
+            mime: mime,
+            salt: saltHex,
+            nonce: nonceHex,
+            tag: Self.hex(tag),
+            keyId: keyId,
             ts: ts
         ))
     }
@@ -313,6 +484,15 @@ public final class FileTransfer: @unchecked Sendable {
         return data.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// W-TUSRESUME (security-review follow-up) — one-way SHA-256
+    /// fingerprint of PSK bytes, used to detect a rotated/re-bound PSK
+    /// between an interrupted upload attempt and a later resume. Never
+    /// reveals the key itself — same one-way-digest reasoning as hashing
+    /// the plaintext source in `TusResumeStateStore.fingerprint(of:)`.
+    private static func pskFingerprint(_ psk: Data) -> String {
+        SHA256.hash(data: psk).map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func unhex(_ string: String, expected: Int, field: String) throws -> Data {
         guard string.count == expected * 2 else {
             throw FileTransferError.badHexField(field, string.count)
@@ -337,4 +517,10 @@ public enum FileTransferError: Error, Equatable {
     case noPskDecrypted
     case legacyV1MarkerRejected
     case badHexField(String, Int)
+    /// W-TUSRESUME: `resumeUpload` was called against a `StorageApi` that
+    /// didn't wire `resumeFile` — an explicit "resume isn't available
+    /// here" signal, distinct from a network/HTTP failure, so callers
+    /// fall straight through to tier 3 instead of treating it as
+    /// tier-2-retryable.
+    case resumeNotSupported
 }

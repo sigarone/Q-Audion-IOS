@@ -46,14 +46,34 @@ public final class BCryptoStorageApiImpl: StorageApi {
     /// `BCryptoBackendProvider.storageApi` cast, not the protocol type.
     ///
     /// - Parameter onProgress: forwarded verbatim to
-    ///   ``TusUploadClient/upload(data:onProgress:)`` for files that take
-    ///   the >1 MB chunked path. Never called for the small-file multipart
-    ///   fast-path (single atomic POST — no intermediate progress to
-    ///   report). Purely local UI state; not part of any wire schema.
+    ///   ``TusUploadClient/upload(data:onProgress:onCreated:)`` for
+    ///   files that take the >1 MB chunked path. Never called for the
+    ///   small-file multipart fast-path (single atomic POST — no
+    ///   intermediate progress to report). Purely local UI state; not
+    ///   part of any wire schema.
     public func uploadFile(
         data: Data,
         filename: String,
         onProgress: ((Int64, Int64) -> Void)?
+    ) async throws -> String {
+        try await uploadFile(data: data, filename: filename, onProgress: onProgress, resumeContext: nil)
+    }
+
+    /// W-TUSRESUME — same as ``uploadFile(data:filename:onProgress:)`` with
+    /// an optional resume-breadcrumb context. When `resumeContext` is
+    /// supplied AND the file takes the TUS chunked path, `resumeContext.
+    /// onFileIdMinted` is wired to `TusUploadClient.upload(onCreated:)` —
+    /// fired right after `create()` succeeds, before the chunk loop starts
+    /// — so the caller (ultimately `FileTransfer.upload`, see
+    /// `onResumeStateReady` there) can persist a `TusResumeState` for a
+    /// future cross-launch resume instead of re-uploading from byte zero.
+    /// Ignored entirely on the small-file multipart fast-path — single
+    /// atomic POST has nothing to resume.
+    public func uploadFile(
+        data: Data,
+        filename: String,
+        onProgress: ((Int64, Int64) -> Void)?,
+        resumeContext: (clientMsgId: String, sourceBytes: Data, onFileIdMinted: (String) -> Void)?
     ) async throws -> String {
         // W443 — TUS resumable protocol for files > 1 MB; multipart fast-path
         // for small payloads (voice notes ~50–200 KB, thumbnails).
@@ -65,7 +85,11 @@ public final class BCryptoStorageApiImpl: StorageApi {
                 serverUrl: capturedRest.serverUrl,
                 getToken: { capturedRest.accessToken }
             )
-            return try await tusClient.upload(data: data, onProgress: onProgress)
+            return try await tusClient.upload(
+                data: data,
+                onProgress: onProgress,
+                onCreated: resumeContext?.onFileIdMinted
+            )
         }
         // Existing multipart POST for small payloads.
         let boundary = "Boundary-\(UUID().uuidString)"
@@ -80,6 +104,22 @@ public final class BCryptoStorageApiImpl: StorageApi {
 
     public func downloadFile(fileId: String) async throws -> Data {
         return try await rest.get("/api/v1/files/\(fileId)")
+    }
+
+    /// W-TUSRESUME — expose the TUS resume primitives (`head`/`resume`)
+    /// for `ChatContainer.retryFailedMessage()`'s tier-1 resume attempt.
+    /// Not part of `StorageApi` (same rationale as the progress-reporting
+    /// overloads above) — the caller already casts to this concrete type
+    /// to reach `uploadFile(...:resumeContext:)`, so exposing a
+    /// ready-to-use `TusUploadClient` here avoids duplicating its
+    /// construction (session/serverUrl/getToken wiring) at the call site.
+    public func makeTusClient() -> TusUploadClient {
+        let capturedRest = rest
+        return TusUploadClient(
+            session: capturedRest.urlSession,
+            serverUrl: capturedRest.serverUrl,
+            getToken: { capturedRest.accessToken }
+        )
     }
 
     // MARK: - Client Config
