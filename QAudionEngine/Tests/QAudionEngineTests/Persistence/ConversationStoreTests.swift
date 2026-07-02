@@ -105,4 +105,47 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertTrue(store.loadConversations().isEmpty)
         XCTAssertTrue(store.loadMessages(conversationId: convId).isEmpty)
     }
+
+    // MARK: - View-once
+
+    /// Recipient (incoming) view-once rows must still be armed for
+    /// deletion when opened: viewOnceOpened=true + expiresAt set so
+    /// EphemeralMessageJanitor sweeps them shortly after. Regression
+    /// guard for the existing, correct recipient-side behavior.
+    func test_markViewOnceOpened_incomingRow_armsExpiryAndOpensIt() {
+        store.upsertConversation(makeConv(id: convId))
+        let mid = UUID()
+        let msg = Message(id: mid, conversationId: convId, direction: .incoming,
+                          plaintext: "peek-a-boo", sentAt: Date(timeIntervalSince1970: 1_745_000_000),
+                          deliveredAt: nil, readAt: nil, status: .delivered,
+                          isViewOnce: true, viewOnceOpened: nil)
+        store.appendMessage(msg)
+
+        store.markViewOnceOpened(messageId: mid, conversationId: convId)
+
+        let updated = store.loadMessages(conversationId: convId).first!
+        XCTAssertEqual(updated.viewOnceOpened, true)
+        XCTAssertNotNil(updated.expiresAt)
+    }
+
+    /// SENDER's own outgoing view-once row must NEVER be armed for
+    /// deletion by markViewOnceOpened, even if called directly (the UI
+    /// gate in ChatDetailScreen already prevents this in practice — this
+    /// is the defense-in-depth guard at the store layer). The sender
+    /// should keep their own copy like any other message.
+    func test_markViewOnceOpened_outgoingRow_isNoOp() {
+        store.upsertConversation(makeConv(id: convId))
+        let mid = UUID()
+        let msg = Message(id: mid, conversationId: convId, direction: .outgoing,
+                          plaintext: "peek-a-boo", sentAt: Date(timeIntervalSince1970: 1_745_000_000),
+                          deliveredAt: nil, readAt: nil, status: .sent,
+                          isViewOnce: true, viewOnceOpened: nil)
+        store.appendMessage(msg)
+
+        store.markViewOnceOpened(messageId: mid, conversationId: convId)
+
+        let updated = store.loadMessages(conversationId: convId).first!
+        XCTAssertNil(updated.viewOnceOpened)
+        XCTAssertNil(updated.expiresAt)
+    }
 }
