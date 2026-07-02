@@ -766,12 +766,16 @@ struct ChatDetailScreen: View {
         // local-only progress state over the status-derived icon. The
         // container removes the entry once the send reaches a terminal
         // state, so this only overrides `.sending` rows mid-upload.
-        let delivery: MessageDelivery
-        if let progress = container.uploadProgress[msg.id] {
-            delivery = .uploading(progress: progress)
-        } else {
-            delivery = mapDelivery(msg.status)
-        }
+        // Plain expression (not an if/else statement) — inside a
+        // @ViewBuilder function body, a literal if/else is transformed by
+        // the result-builder DSL and expects each branch to produce a
+        // `View`; an assignment statement evaluates to `Void`, which the
+        // transform then tries to conform to `View` and fails to compile
+        // ("type '()' cannot conform to 'View'"). `.map`/`??` is a normal
+        // expression, not a control-flow statement, so it's untouched by
+        // the ViewBuilder transform.
+        let delivery: MessageDelivery = container.uploadProgress[msg.id]
+            .map { MessageDelivery.uploading(progress: $0) } ?? mapDelivery(msg.status)
         // W87: build reactions strip from Message.reactions (emoji →
         // [userId]). `highlighted = true` when the local user is among
         // the userIds — lets the chip render with the local accent so
