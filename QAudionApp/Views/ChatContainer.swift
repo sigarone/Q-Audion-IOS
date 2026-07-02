@@ -808,6 +808,17 @@ final class ChatContainer: ObservableObject {
                 mimeType: mime
             )
             sendVoiceNote(rec)
+            // Old cache file has been re-persisted under the new msgId by
+            // sendVoiceNote -> persistOutboundVoiceNote; best-effort reclaim
+            // the orphaned old-path blob. Never propagate failures here:
+            // the retry already succeeded.
+            if FileManager.default.fileExists(atPath: path) {
+                do {
+                    try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
+                } catch {
+                    print("[ChatContainer] retryFailedMessage: cache cleanup failed for \(path): \(error)")
+                }
+            }
             return
         }
         if mime.hasPrefix("image/"),
@@ -817,6 +828,17 @@ final class ChatContainer: ObservableObject {
             store.removeMessage(id: id, conversationId: conversationId)
             refreshFromStore()
             sendImage(bytes)
+            // Old cache file has been re-persisted under the new msgId by
+            // sendImage -> persistOutboundImage; best-effort reclaim the
+            // orphaned old-path blob. Never propagate failures here: the
+            // retry already succeeded.
+            if FileManager.default.fileExists(atPath: path) {
+                do {
+                    try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
+                } catch {
+                    print("[ChatContainer] retryFailedMessage: cache cleanup failed for \(path): \(error)")
+                }
+            }
             return
         }
         // Text fallback: pop the body back into the composer and ship
