@@ -148,4 +148,92 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertNil(updated.viewOnceOpened)
         XCTAssertNil(updated.expiresAt)
     }
+
+    // MARK: - applyDeleteByClientMsgId blob cleanup
+
+    /// Deleting a message with a cached attachment (voice note / image)
+    /// must remove the on-disk blob, not just tombstone the DB row.
+    func test_applyDeleteByClientMsgId_removesCachedAttachmentFile() throws {
+        store.upsertConversation(makeConv(id: convId))
+        let mid = UUID()
+        let cmid = mid.uuidString
+
+        // Simulate a cached voice-note blob the way ChatContainer /
+        // ChatVoiceNoteReceiver actually write one (Library/Caches/...).
+        let tmpFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("convstore-test-\(cmid).m4a")
+        try Data("fake-m4a-bytes".utf8).write(to: tmpFile)
+        defer { try? FileManager.default.removeItem(at: tmpFile) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tmpFile.path))
+
+        let msg = Message(id: mid, conversationId: convId, direction: .outgoing,
+                          plaintext: "voice note", sentAt: Date(timeIntervalSince1970: 1_745_000_000),
+                          deliveredAt: nil, readAt: nil, status: .delivered,
+                          mediaLocalPath: tmpFile.path,
+                          mediaDurationMs: 4200,
+                          mediaMimeType: "audio/mp4",
+                          clientMsgId: cmid)
+        store.appendMessage(msg)
+
+        let applied = store.applyDeleteByClientMsgId(cmid)
+
+        XCTAssertTrue(applied, "tombstone write must succeed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmpFile.path),
+                       "cached blob must be removed on delete")
+
+        let tombstoned = store.loadMessages(conversationId: convId).first!
+        XCTAssertEqual(tombstoned.plaintext, "Messaggio eliminato")
+        XCTAssertNil(tombstoned.mediaLocalPath)
+        XCTAssertNotNil(tombstoned.deletedAt)
+    }
+
+    /// signal-not-kill: if the cached file is already gone (double-delete,
+    /// OS cache eviction, etc.) the tombstone write must still succeed —
+    /// cleanup failure is non-fatal and must never block the actual delete.
+    func test_applyDeleteByClientMsgId_succeedsEvenWhenCachedFileAlreadyMissing() {
+        store.upsertConversation(makeConv(id: convId))
+        let mid = UUID()
+        let cmid = mid.uuidString
+
+        // Path that was never created / already reclaimed.
+        let missingPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("convstore-test-missing-\(cmid).jpg").path
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missingPath))
+
+        let msg = Message(id: mid, conversationId: convId, direction: .outgoing,
+                          plaintext: "photo", sentAt: Date(timeIntervalSince1970: 1_745_000_000),
+                          deliveredAt: nil, readAt: nil, status: .delivered,
+                          mediaLocalPath: missingPath,
+                          mediaMimeType: "image/jpeg",
+                          clientMsgId: cmid)
+        store.appendMessage(msg)
+
+        let applied = store.applyDeleteByClientMsgId(cmid)
+
+        XCTAssertTrue(applied, "tombstone write must succeed even if cleanup has nothing to remove")
+        let tombstoned = store.loadMessages(conversationId: convId).first!
+        XCTAssertEqual(tombstoned.plaintext, "Messaggio eliminato")
+        XCTAssertNil(tombstoned.mediaLocalPath)
+    }
+
+    /// Text-only messages have no mediaLocalPath — delete must be a no-op
+    /// on the filesystem and still succeed.
+    func test_applyDeleteByClientMsgId_textMessageNoCleanupNeeded() {
+        store.upsertConversation(makeConv(id: convId))
+        let mid = UUID()
+        let cmid = mid.uuidString
+        let msg = Message(id: mid, conversationId: convId, direction: .outgoing,
+                          plaintext: "hello", sentAt: Date(timeIntervalSince1970: 1_745_000_000),
+                          deliveredAt: nil, readAt: nil, status: .delivered,
+                          clientMsgId: cmid)
+        store.appendMessage(msg)
+
+        XCTAssertTrue(store.applyDeleteByClientMsgId(cmid))
+        XCTAssertEqual(store.loadMessages(conversationId: convId).first?.plaintext, "Messaggio eliminato")
+    }
+
+    func test_applyDeleteByClientMsgId_unknownClientMsgId_returnsFalse() {
+        store.upsertConversation(makeConv(id: convId))
+        XCTAssertFalse(store.applyDeleteByClientMsgId("no-such-cmid"))
+    }
 }
