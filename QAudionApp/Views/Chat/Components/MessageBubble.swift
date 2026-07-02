@@ -71,6 +71,13 @@ struct MessageBubble<Body: View>: View {
     let delivery: MessageDelivery?
     let replyQuote: MessageReplyQuote?
     let reactions: [MessageReaction]
+    /// Tap handler for a reaction chip — re-toggles that emoji (second
+    /// tap of an emoji the local user already reacted with removes it;
+    /// symmetric with `BubbleActionSheet`'s emoji row, which calls the
+    /// same underlying `ChatContainer.toggleReaction`). `nil` renders
+    /// the chips non-interactive (e.g. previews) without changing their
+    /// appearance.
+    let onReact: ((String) -> Void)?
     /// Stored as `content` (NOT `body`) to avoid colliding with the
     /// `View` protocol's required `var body: some View`. Both members
     /// would otherwise share the same name in the same type, which the
@@ -82,12 +89,14 @@ struct MessageBubble<Body: View>: View {
          delivery: MessageDelivery? = nil,
          replyQuote: MessageReplyQuote? = nil,
          reactions: [MessageReaction] = [],
+         onReact: ((String) -> Void)? = nil,
          @ViewBuilder content: @escaping () -> Body) {
         self.variant = variant
         self.timeLabel = timeLabel
         self.delivery = delivery
         self.replyQuote = replyQuote
         self.reactions = reactions
+        self.onReact = onReact
         self.content = content
     }
 
@@ -222,27 +231,49 @@ struct MessageBubble<Body: View>: View {
         // wraps cleanly inside the 280pt ceiling.
         HStack(spacing: 6) {
             ForEach(reactions) { r in
-                HStack(spacing: 3) {
-                    Text(r.emoji).font(.system(size: 12))
-                    Text("\(r.count)")
-                        .qaudionStyle(type.labelSmall)
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                }
-                .padding(.horizontal, 6).padding(.vertical, 3)
-                .background(
-                    Capsule().fill(
-                        r.highlighted
-                            ? scheme.primary.opacity(0.22)
-                            : scheme.surface.opacity(0.65)
-                    )
-                )
-                .overlay(
-                    Capsule().stroke(
-                        r.highlighted ? scheme.primary.opacity(0.55) : Color.clear,
-                        lineWidth: 1
-                    )
-                )
+                reactionChip(r)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func reactionChip(_ r: MessageReaction) -> some View {
+        let label = HStack(spacing: 3) {
+            Text(r.emoji).font(.system(size: 12))
+            Text("\(r.count)")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .background(
+            Capsule().fill(
+                r.highlighted
+                    ? scheme.primary.opacity(0.22)
+                    : scheme.surface.opacity(0.65)
+            )
+        )
+        .overlay(
+            Capsule().stroke(
+                r.highlighted ? scheme.primary.opacity(0.55) : Color.clear,
+                lineWidth: 1
+            )
+        )
+
+        // Tapping a chip re-toggles that emoji via the same
+        // toggleReaction path BubbleActionSheet's emoji row uses — no
+        // reaction-sending logic is duplicated here. Chips render
+        // non-interactive when no handler is supplied (e.g. previews).
+        if let onReact {
+            Button {
+                onReact(r.emoji)
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reazione \(r.emoji), \(r.count)")
+            .accessibilityHint(r.highlighted ? "Tocca per rimuovere la tua reazione" : "Tocca per aggiungere questa reazione")
+        } else {
+            label
         }
     }
 

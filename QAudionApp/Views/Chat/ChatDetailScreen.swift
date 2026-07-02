@@ -671,7 +671,14 @@ struct ChatDetailScreen: View {
             timeLabel: timeLabel,
             delivery: variant == .sent ? delivery : nil,
             replyQuote: nil,
-            reactions: reactionChips
+            reactions: reactionChips,
+            onReact: { emoji in
+                // Re-toggle: same path as BubbleActionSheet's emoji row
+                // (ChatContainer.toggleReaction applies the local toggle
+                // + emits the qa_ctl:1 envelope). A second tap on a chip
+                // the local user already reacted with removes it.
+                container.toggleReaction(msg, emoji: emoji)
+            }
         ) {
             if isVO && !voOpened {
                 // View-once: hidden until tapped. Show eye-slash pill.
