@@ -422,7 +422,28 @@ struct ChatDetailScreen: View {
             "Timer per questo allegato",
             isPresented: Binding(
                 get: { pendingAttachmentSend != nil },
-                set: { if !$0 { pendingAttachmentSend = nil } }
+                set: { presented in
+                    guard !presented else { return }
+                    // W447 fix: this setter is SwiftUI's single choke-point
+                    // for EVERY dismissal of this dialog — explicit cancel,
+                    // tapping an option, swipe-to-dismiss, tap-outside — it
+                    // always writes `false` back through this Binding. The
+                    // confirm/option path already clears `pendingAttachmentSend`
+                    // itself before calling performAttachmentSend, so by the
+                    // time SwiftUI's own dismissal reaches here it's already
+                    // nil on that path and there's nothing to clean up. On
+                    // every other (i.e. cancelled) path it's still holding
+                    // the pending value, so this is where we catch a
+                    // cancelled `.voiceNote`: VoiceNoteRecorder.stop() (see
+                    // handleVoiceNoteFinish) already wrote the M4A to disk
+                    // before this dialog ever appeared, and cancelling here
+                    // must not orphan that temp file — mirror
+                    // VoiceNoteRecorder.cancel()'s exact best-effort idiom.
+                    if case .voiceNote(let recording) = pendingAttachmentSend {
+                        try? FileManager.default.removeItem(at: recording.fileURL)
+                    }
+                    pendingAttachmentSend = nil
+                }
             ),
             titleVisibility: .visible
         ) {
