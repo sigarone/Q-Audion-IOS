@@ -35,6 +35,26 @@ public final class BCryptoStorageApiImpl: StorageApi {
     // MARK: - File Upload/Download (matches server /api/v1/files/*)
 
     public func uploadFile(data: Data, filename: String) async throws -> String {
+        try await uploadFile(data: data, filename: filename, onProgress: nil)
+    }
+
+    /// W446 — same upload pipeline as ``uploadFile(data:filename:)`` with an
+    /// optional progress callback for the TUS (chunked) path. Not part of
+    /// the `StorageApi` protocol (mirrors the pattern already used by
+    /// ``AvatarUploader`` for calling this impl directly) — callers that
+    /// want progress reporting go through `BCryptoStorageApiImpl` /
+    /// `BCryptoBackendProvider.storageApi` cast, not the protocol type.
+    ///
+    /// - Parameter onProgress: forwarded verbatim to
+    ///   ``TusUploadClient/upload(data:onProgress:)`` for files that take
+    ///   the >1 MB chunked path. Never called for the small-file multipart
+    ///   fast-path (single atomic POST — no intermediate progress to
+    ///   report). Purely local UI state; not part of any wire schema.
+    public func uploadFile(
+        data: Data,
+        filename: String,
+        onProgress: ((Int64, Int64) -> Void)?
+    ) async throws -> String {
         // W443 — TUS resumable protocol for files > 1 MB; multipart fast-path
         // for small payloads (voice notes ~50–200 KB, thumbnails).
         let tusSizeThreshold = 1_048_576   // 1 MB
@@ -45,7 +65,7 @@ public final class BCryptoStorageApiImpl: StorageApi {
                 serverUrl: capturedRest.serverUrl,
                 getToken: { capturedRest.accessToken }
             )
-            return try await tusClient.upload(data: data)
+            return try await tusClient.upload(data: data, onProgress: onProgress)
         }
         // Existing multipart POST for small payloads.
         let boundary = "Boundary-\(UUID().uuidString)"

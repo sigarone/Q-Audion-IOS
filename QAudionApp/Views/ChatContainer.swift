@@ -41,6 +41,14 @@ final class ChatContainer: ObservableObject {
     /// When true, the NEXT message sent will be flagged as view-once.
     /// Mirrors conversation.screenshotGrantedByPeer for reactive UI.
     @Published private(set) var screenshotGrantedByPeer: Bool? = nil
+    /// W446: local-only attachment upload progress, keyed by the
+    /// outgoing message's local id. `0.0...1.0`, updated as TUS chunks
+    /// complete. Purely in-memory UI state — never persisted to
+    /// `ConversationStore`/`Message.Status` and never touches the wire.
+    /// Entries are removed once the send reaches a terminal state
+    /// (`sent`/`delivered`/`failed`), at which point `messageRow` falls
+    /// back to the normal `mapDelivery(msg.status)` path.
+    @Published private(set) var uploadProgress: [UUID: Double] = [:]
 
     private let store: ConversationStore
     private let conversationId: UUID
@@ -697,7 +705,20 @@ final class ChatContainer: ObservableObject {
             do {
                 markerJson = try await prep.prepareMarkerJson(
                     for: recording,
-                    recipientUserId: peerId
+                    recipientUserId: peerId,
+                    onProgress: { bytesUploaded, totalBytes in
+                        // W446: called from TusUploadClient's upload
+                        // loop, not guaranteed to already be on the
+                        // MainActor — hop explicitly before touching
+                        // @Published state.
+                        Task { @MainActor [weak self] in
+                            self?.updateUploadProgress(
+                                messageId: msgId,
+                                bytesUploaded: bytesUploaded,
+                                totalBytes: totalBytes
+                            )
+                        }
+                    }
                 )
             } catch let e as ChatVoiceNoteSender.Error {
                 print("[ChatContainer] voice note prep failed: \(e.localizedDescription)")
@@ -723,6 +744,11 @@ final class ChatContainer: ObservableObject {
             )
             await MainActor.run {
                 guard let self = self else { return }
+                // W446: upload is done (prepareMarkerJson already
+                // returned) and we're now at a terminal send outcome —
+                // clear the local progress entry so the bubble falls
+                // back to the normal status-derived delivery icon.
+                self.clearUploadProgress(messageId: msgId)
                 switch outcome {
                 case .delivered(let serverMsgId):
                     self.store.setServerMessageId(
@@ -747,6 +773,24 @@ final class ChatContainer: ObservableObject {
         }
     }
 
+    /// W446: record upload progress for an in-flight attachment send.
+    /// Called from the `onProgress` closure passed to
+    /// `ChatVoiceNoteSender` as TUS chunks complete. `bytesUploaded` /
+    /// `totalBytes` come straight from `TusUploadClient` — guards against
+    /// a zero `totalBytes` (small-file multipart path never calls this,
+    /// but stay defensive) to avoid a NaN ratio.
+    func updateUploadProgress(messageId: UUID, bytesUploaded: Int64, totalBytes: Int64) {
+        guard totalBytes > 0 else { return }
+        uploadProgress[messageId] = Double(bytesUploaded) / Double(totalBytes)
+    }
+
+    /// Clear the local-only progress entry once a send reaches a
+    /// terminal state (sent/delivered/failed) so `messageRow` falls back
+    /// to the normal status-derived delivery icon.
+    func clearUploadProgress(messageId: UUID) {
+        uploadProgress.removeValue(forKey: messageId)
+    }
+
     /// Marca un messaggio come fallito e pubblica i flag che la
     /// `ChatDetailScreen` legge per mostrare la snackbar di retry.
     /// Chiamabile dall'engine wiring quando la send pipeline lancia
@@ -760,6 +804,7 @@ final class ChatContainer: ObservableObject {
         )
         failedMessageId = messageId
         failureReason = reason
+        clearUploadProgress(messageId: messageId)
         refreshFromStore()
     }
 
@@ -923,7 +968,18 @@ final class ChatContainer: ObservableObject {
                     mime: "image/jpeg",
                     filename: "image-\(msgId.uuidString).jpg",
                     durationMs: nil,
-                    recipientUserId: peerId
+                    recipientUserId: peerId,
+                    onProgress: { bytesUploaded, totalBytes in
+                        // W446: see sendVoiceNote — hop to MainActor
+                        // before touching @Published upload state.
+                        Task { @MainActor [weak self] in
+                            self?.updateUploadProgress(
+                                messageId: msgId,
+                                bytesUploaded: bytesUploaded,
+                                totalBytes: totalBytes
+                            )
+                        }
+                    }
                 )
             } catch {
                 print("[ChatContainer] sendImage prep failed: \(error)")
@@ -935,6 +991,7 @@ final class ChatContainer: ObservableObject {
             )
             await MainActor.run {
                 guard let self = self else { return }
+                self.clearUploadProgress(messageId: msgId)
                 switch outcome {
                 case .delivered(let serverMsgId):
                     self.store.setServerMessageId(
@@ -1170,7 +1227,18 @@ final class ChatContainer: ObservableObject {
                     mime: mime,
                     filename: filename,
                     durationMs: nil,
-                    recipientUserId: peerId
+                    recipientUserId: peerId,
+                    onProgress: { bytesUploaded, totalBytes in
+                        // W446: see sendVoiceNote — hop to MainActor
+                        // before touching @Published upload state.
+                        Task { @MainActor [weak self] in
+                            self?.updateUploadProgress(
+                                messageId: msgId,
+                                bytesUploaded: bytesUploaded,
+                                totalBytes: totalBytes
+                            )
+                        }
+                    }
                 )
             } catch {
                 print("[ChatContainer] sendFileAttachment prep failed: \(error)")
@@ -1182,6 +1250,7 @@ final class ChatContainer: ObservableObject {
             )
             await MainActor.run {
                 guard let self = self else { return }
+                self.clearUploadProgress(messageId: msgId)
                 switch outcome {
                 case .delivered(let serverMsgId):
                     self.store.setServerMessageId(

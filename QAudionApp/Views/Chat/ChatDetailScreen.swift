@@ -664,7 +664,16 @@ struct ChatDetailScreen: View {
     private func messageRow(for msg: Message) -> some View {
         let variant: MessageBubbleVariant = (msg.direction == .outgoing) ? .sent : .received
         let timeLabel = Self.timeFormatter.string(from: msg.sentAt)
-        let delivery = mapDelivery(msg.status)
+        // W446: while an attachment upload is in flight, prefer the
+        // local-only progress state over the status-derived icon. The
+        // container removes the entry once the send reaches a terminal
+        // state, so this only overrides `.sending` rows mid-upload.
+        let delivery: MessageDelivery
+        if let progress = container.uploadProgress[msg.id] {
+            delivery = .uploading(progress: progress)
+        } else {
+            delivery = mapDelivery(msg.status)
+        }
         // W87: build reactions strip from Message.reactions (emoji →
         // [userId]). `highlighted = true` when the local user is among
         // the userIds — lets the chip render with the local accent so

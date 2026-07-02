@@ -42,6 +42,12 @@ enum MessageBubbleVariant {
 
 enum MessageDelivery {
     case sending     // single grey clock
+    /// W446 — local-only intermediate state while an attachment upload is
+    /// in flight (TUS chunked path). `progress` is `0.0...1.0`. Never
+    /// persisted (not part of `Message.Status`/wire schema) — purely
+    /// derived UI state computed from the in-flight upload's onProgress
+    /// callback and discarded once the send reaches a terminal state.
+    case uploading(progress: Double)
     case sent        // single check, onSurfaceVariant
     case delivered   // double check, onSurfaceVariant
     case read        // double check, primary
@@ -203,6 +209,15 @@ struct MessageBubble<Body: View>: View {
             Image(systemName: "clock")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(scheme.onSurfaceVariant)
+        case .uploading(let progress):
+            // Thin determinate bar, same visual weight as the check-mark
+            // icons around it (11pt-tall footer row). Clamp defensively —
+            // callers pass raw bytesUploaded/totalBytes ratios that could
+            // transiently exceed 1.0 on the final chunk's rounding.
+            ProgressView(value: min(max(progress, 0), 1))
+                .progressViewStyle(.linear)
+                .tint(scheme.onSurfaceVariant)
+                .frame(width: 28)
         case .sent:
             Image(systemName: "checkmark")
                 .font(.system(size: 11, weight: .semibold))

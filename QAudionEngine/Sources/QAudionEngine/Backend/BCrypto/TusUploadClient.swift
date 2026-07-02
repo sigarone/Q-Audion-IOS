@@ -76,14 +76,22 @@ final class TusUploadClient {
     /// Full pipeline: POST create + PATCH all chunks. Returns the fileId
     /// the server assigned to this upload (same UUID used by download
     /// and attach_announce envelope).
-    func upload(data: Data) async throws -> String {
+    ///
+    /// - Parameter onProgress: optional callback invoked on the calling
+    ///   task after each chunk PATCH completes, with
+    ///   `(bytesUploaded, totalBytes)`. Purely local UI feedback — never
+    ///   serialized, never sent over the wire. Defaults to `nil` so
+    ///   existing callers keep compiling unchanged.
+    func upload(data: Data, onProgress: ((Int64, Int64) -> Void)? = nil) async throws -> String {
         let fileId = try await create(totalBytes: data.count)
+        let total = Int64(data.count)
         var offset = 0
         while offset < data.count {
             let end = min(offset + chunkSize, data.count)
             let chunkData = Data(data[offset..<end])
             let newOffset = try await patch(fileId: fileId, offset: offset, bytes: chunkData)
             offset = newOffset
+            onProgress?(Int64(offset), total)
         }
         return fileId
     }
