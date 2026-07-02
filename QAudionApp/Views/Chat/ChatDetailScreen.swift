@@ -663,7 +663,12 @@ struct ChatDetailScreen: View {
                 )
             }
 
-        let isVO = msg.isViewOnce == true
+        // View-once must only constrain the RECIPIENT's experience. The
+        // sender's own outbound copy renders as a normal message and must
+        // never enter the tap-to-reveal flow — that flow is what arms the
+        // 5s deletion timer in ConversationStore.markViewOnceOpened, and
+        // the sender should keep their own copy like any other message.
+        let isVO = msg.isViewOnce == true && msg.direction != .outgoing
         let voOpened = msg.viewOnceOpened == true
 
         MessageBubble(

@@ -482,11 +482,19 @@ public final class ConversationStore {
 
     /// Mark a view-once message as opened: sets viewOnceOpened=true and
     /// expiresAt=now+5s so EphemeralMessageJanitor wipes it quickly.
+    ///
+    /// Defense-in-depth: no-op for the sender's own outgoing rows. The
+    /// UI tap-to-reveal flow that calls this (ChatDetailScreen.messageRow)
+    /// is already gated to never invoke it for `.outgoing` messages, but
+    /// this guard ensures a future or alternate caller can't accidentally
+    /// arm the 5s deletion timer on the sender's own copy — view-once
+    /// must only constrain the recipient's experience.
     public func markViewOnceOpened(messageId: UUID, conversationId: UUID) {
         do {
             let deadline = Date().addingTimeInterval(5)
             try db.writer.write { db in
                 if var msg = try Message.fetchOne(db, key: messageId) {
+                    guard msg.direction != .outgoing else { return }
                     msg = Message(
                         id: msg.id, conversationId: msg.conversationId,
                         direction: msg.direction, plaintext: msg.plaintext,
