@@ -38,6 +38,17 @@ struct ChatDetailScreen: View {
     @State private var replyTarget: MessageComposer.ReplyTarget? = nil
     @State private var editingTarget: MessageComposer.EditingTarget? = nil
     @State private var actionTargetId: UUID? = nil
+    /// W446: which media row (identified by message id) should act on
+    /// the next `BubbleActionSheet` "Salva in Foto" / "Condividi"
+    /// tap. `BubbleActionSheet` itself is media-agnostic — it only
+    /// knows the target message's id — so `onSaveImage`/`onShareMedia`
+    /// set this, and `messageRow(for:)` derives a per-row `Binding<Bool>`
+    /// that flips true only for the matching id. This replaces the
+    /// per-bubble inner `.contextMenu`s that used to own save/share
+    /// directly (see `BubbleActionSheet`'s doc comment for why those
+    /// conflicted with the outer long-press).
+    @State private var mediaSaveRequestId: UUID? = nil
+    @State private var mediaShareRequestId: UUID? = nil
     /// W72: voice-note recorder. One instance per screen; the composer
     /// drives start/stop/cancel via the existing callbacks. The captured
     /// .m4a is appended to the local conversation as an attachment
@@ -268,6 +279,14 @@ struct ChatDetailScreen: View {
                 // open the forward picker sheet. The closure body stays
                 // a single-statement guard to keep type-checker happy.
                 onForward: { handleForward(messageId: msgIdWrapper.id) },
+                // W446: media save/share — gated by mediaKind, routed
+                // back to the specific row's ImageBubbleContent /
+                // VoiceNoteBubbleContent via the id-scoped bindings
+                // (see BubbleActionSheet's doc comment for why the
+                // actions moved here from an inner .contextMenu).
+                mediaKind: mediaKind(for: msgIdWrapper.id),
+                onSaveImage: { mediaSaveRequestId = msgIdWrapper.id },
+                onShareMedia: { mediaShareRequestId = msgIdWrapper.id },
                 // W141: surface the sentAt so BubbleActionSheet can
                 // hide the Modifica row past the 15-min edit window.
                 sentAt: container.viewModel.messages
@@ -715,19 +734,23 @@ struct ChatDetailScreen: View {
                     player: VoiceNotePlayer.shared,
                     messageId: msg.id,
                     mediaLocalPath: msg.mediaLocalPath,
-                    durationMs: msg.mediaDurationMs ?? 0
+                    durationMs: msg.mediaDurationMs ?? 0,
+                    shareRequest: mediaShareRequestBinding(for: msg.id)
                 )
             } else if let mime = msg.mediaMimeType, mime.hasPrefix("image/") {
                 ImageBubbleContent(
                     messageId: msg.id,
-                    mediaLocalPath: msg.mediaLocalPath
+                    mediaLocalPath: msg.mediaLocalPath,
+                    saveRequest: mediaSaveRequestBinding(for: msg.id),
+                    shareRequest: mediaShareRequestBinding(for: msg.id)
                 )
             } else if let dur = msg.mediaDurationMs, dur > 0 {
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
                     messageId: msg.id,
                     mediaLocalPath: msg.mediaLocalPath,
-                    durationMs: dur
+                    durationMs: dur,
+                    shareRequest: mediaShareRequestBinding(for: msg.id)
                 )
             } else {
                 Text(Self.attributedBody(msg.plaintext, linkColor: extras.success))
@@ -1038,6 +1061,52 @@ struct ChatDetailScreen: View {
 
     private func messageIsOwn(_ id: UUID) -> Bool {
         container.viewModel.messages.first(where: { $0.id == id })?.direction == .outgoing
+    }
+
+    /// W446: media kind of a message, used to gate `BubbleActionSheet`'s
+    /// save/share rows. Mirrors the same mime/duration checks
+    /// `messageRow(for:)` uses to pick `ImageBubbleContent` vs
+    /// `VoiceNoteBubbleContent`.
+    private func mediaKind(for id: UUID) -> BubbleActionSheet.MediaKind {
+        guard let msg = container.viewModel.messages.first(where: { $0.id == id }) else {
+            return .none
+        }
+        if let mime = msg.mediaMimeType, mime.hasPrefix("image/") {
+            return .image
+        }
+        if let mime = msg.mediaMimeType, mime.hasPrefix("audio/") {
+            return .voiceNote
+        }
+        if let dur = msg.mediaDurationMs, dur > 0 {
+            return .voiceNote
+        }
+        return .none
+    }
+
+    /// W446: id-scoped `Binding<Bool>` for `ImageBubbleContent.saveRequest`.
+    /// Reads/writes `mediaSaveRequestId` but only exposes `true` to the
+    /// row whose `msgId` currently matches — every other row in the
+    /// `ForEach` sees `false`, so setting the flag never touches the
+    /// wrong bubble.
+    private func mediaSaveRequestBinding(for msgId: UUID) -> Binding<Bool> {
+        Binding(
+            get: { mediaSaveRequestId == msgId },
+            set: { newValue in
+                mediaSaveRequestId = newValue ? msgId : (mediaSaveRequestId == msgId ? nil : mediaSaveRequestId)
+            }
+        )
+    }
+
+    /// W446: id-scoped `Binding<Bool>` for `ImageBubbleContent.shareRequest`
+    /// / `VoiceNoteBubbleContent.shareRequest`. Same pattern as
+    /// `mediaSaveRequestBinding(for:)` above.
+    private func mediaShareRequestBinding(for msgId: UUID) -> Binding<Bool> {
+        Binding(
+            get: { mediaShareRequestId == msgId },
+            set: { newValue in
+                mediaShareRequestId = newValue ? msgId : (mediaShareRequestId == msgId ? nil : mediaShareRequestId)
+            }
+        )
     }
 
     private func startAudioCall() {

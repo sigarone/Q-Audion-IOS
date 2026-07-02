@@ -14,12 +14,34 @@ import QAudionEngine
 ///     missing or unreadable (cache reclaimed). Shows a broken-link
 ///     icon + "Foto non disponibile" — user can long-press the bubble
 ///     to delete the row in a future patch.
+///
+/// W446: "Salva in Foto" / "Condividi" used to live in an inner
+/// `.contextMenu` on the `Image` below. That competed with
+/// `ChatDetailScreen`'s outer `.onLongPressGesture` (which opens
+/// `BubbleActionSheet`) for the same long-press touch — a
+/// `.contextMenu` registers a `UIContextMenuInteraction` directly on
+/// its view and wins over an ancestor's plain SwiftUI
+/// `.onLongPressGesture`, so long-pressing an image opened this menu
+/// instead of the shared action sheet every other bubble type uses.
+/// The actions now live in `BubbleActionSheet` (gated on
+/// `mediaKind == .image`); this view exposes `saveRequest` /
+/// `shareRequest` bindings so `ChatDetailScreen` can trigger them
+/// from there.
 struct ImageBubbleContent: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
 
     let messageId: UUID
     let mediaLocalPath: String?
+    /// W446: bound by `ChatDetailScreen` so `BubbleActionSheet`'s
+    /// "Salva in Foto" row can trigger `UIImageWriteToSavedPhotosAlbum`
+    /// on the currently-loaded `UIImage` without duplicating the image
+    /// decode/cache logic at the call site.
+    var saveRequest: Binding<Bool>? = nil
+    /// W446: bound by `ChatDetailScreen` so `BubbleActionSheet`'s
+    /// "Condividi immagine" row can trigger the share sheet here,
+    /// where the loaded `UIImage`/on-disk path already live.
+    var shareRequest: Binding<Bool>? = nil
 
     @State private var fullscreen: Bool = false
     @State private var loadedImage: UIImage? = nil
@@ -52,33 +74,6 @@ struct ImageBubbleContent: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .contentShape(Rectangle())
                         .onTapGesture { fullscreen = true }
-                        .contextMenu {
-                            // W97: long-press → save to Photos. Use
-                            // the system "Salva immagine" idiom so
-                            // users find it where they expect.
-                            Button {
-                                UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
-                                saveAlertVisible = true
-                            } label: {
-                                Label("Salva in Foto", systemImage: "square.and.arrow.down")
-                            }
-                            // W100: share sheet — AirDrop / Files /
-                            // Messages / Mail. Prefer the on-disk URL
-                            // so receivers get the original JPEG with
-                            // mime preserved; fall back to UIImage if
-                            // path is missing.
-                            Button {
-                                if let path = mediaLocalPath, !path.isEmpty {
-                                    sharingTarget = ImageShareTarget(
-                                        activityItems: [URL(fileURLWithPath: path)]
-                                    )
-                                } else {
-                                    sharingTarget = ImageShareTarget(activityItems: [img])
-                                }
-                            } label: {
-                                Label("Condividi", systemImage: "square.and.arrow.up")
-                            }
-                        }
                 } else if loadFailed {
                     failedBox(path: path)
                 } else {
@@ -101,6 +96,26 @@ struct ImageBubbleContent: View {
         }
         .sheet(item: $sharingTarget) { target in
             ActivityShareSheet(activityItems: target.activityItems)
+        }
+        // W446: `BubbleActionSheet`'s "Salva in Foto" / "Condividi
+        // immagine" rows flip these bindings to trigger the same
+        // save/share logic the old inner `.contextMenu` used —
+        // unchanged behaviour, just invoked from the shared sheet
+        // instead of a competing long-press recognizer.
+        .onChange(of: saveRequest?.wrappedValue ?? false) { requested in
+            guard requested, let img = loadedImage else { return }
+            UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
+            saveAlertVisible = true
+            saveRequest?.wrappedValue = false
+        }
+        .onChange(of: shareRequest?.wrappedValue ?? false) { requested in
+            guard requested, let img = loadedImage else { return }
+            if let path = mediaLocalPath, !path.isEmpty {
+                sharingTarget = ImageShareTarget(activityItems: [URL(fileURLWithPath: path)])
+            } else {
+                sharingTarget = ImageShareTarget(activityItems: [img])
+            }
+            shareRequest?.wrappedValue = false
         }
     }
 

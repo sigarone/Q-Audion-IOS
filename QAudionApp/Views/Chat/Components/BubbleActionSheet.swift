@@ -9,6 +9,9 @@ import SwiftUI
 ///   - Action rows, conditionally shown:
 ///       • "Modifica"             — only if the message is own AND text-only
 ///       • "Copia testo"          — only if text-only
+///       • "Salva in Foto"        — only if the message is an image
+///       • "Condividi immagine"   — only if the message is an image
+///       • "Condividi audio"      — only if the message is a voice note
 ///       • "Elimina per tutti"    — only if own (danger tint)
 ///       • "Elimina solo per me"  — always (danger tint)
 ///
@@ -16,10 +19,28 @@ import SwiftUI
 /// so the sheet sizes itself to its content. The "+" emoji button is
 /// rendered disabled (50% opacity, no callback) — not removed, so the
 /// row layout matches the Android layout pixel-for-pixel.
+///
+/// W446: image/voice-note rows were previously an inner `.contextMenu`
+/// on `ImageBubbleContent`/`VoiceNoteBubbleContent` themselves. That
+/// conflicted with THIS sheet's outer `.onLongPressGesture` on
+/// `ChatDetailScreen` — a `.contextMenu` installs its own
+/// `UIContextMenuInteraction` on the subview it's attached to, which
+/// wins the long-press touch over a plain SwiftUI `.onLongPressGesture`
+/// on an ancestor (it's not part of SwiftUI's `Gesture` arbitration
+/// system at all). Long-pressing an image/voice-note bubble opened the
+/// wrong menu instead of this sheet. Fix: consolidate — the media
+/// actions now live here so every bubble type opens the same sheet.
 struct BubbleActionSheet: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
     @Environment(\.dismiss) private var dismiss
+
+    /// W446: which media-specific action rows to surface, if any.
+    enum MediaKind {
+        case none
+        case image
+        case voiceNote
+    }
 
     let isOwn: Bool
     let isText: Bool
@@ -31,6 +52,18 @@ struct BubbleActionSheet: View {
     /// W445: forward message to another conversation. Default no-op so
     /// existing call sites without forward wiring continue to compile.
     var onForward: () -> Void = {}
+    /// W446: media type of this bubble — gates the save/share rows
+    /// below. Default `.none` preserves old behaviour for text-only
+    /// call sites.
+    var mediaKind: MediaKind = .none
+    /// W446: save the image to the Photos library. Only invoked when
+    /// `mediaKind == .image`. Default no-op keeps existing call sites
+    /// (previews, text messages) compiling without wiring it.
+    var onSaveImage: () -> Void = {}
+    /// W446: open the system share sheet for the image or voice-note
+    /// file. Invoked for both `.image` and `.voiceNote`. Default no-op
+    /// for the same reason as `onSaveImage`.
+    var onShareMedia: () -> Void = {}
     /// W141: edit eligibility window. When the message was sent more
     /// than `editWindowSeconds` ago, "Modifica" is hidden — Telegram
     /// uses 48h, WhatsApp 15min; we follow WhatsApp by default.
@@ -89,6 +122,27 @@ struct BubbleActionSheet: View {
                               icon: "doc.on.doc",
                               danger: false,
                               action: { onCopy(); dismiss() })
+                }
+                // W446: image-only rows — moved here from
+                // ImageBubbleContent's inner .contextMenu (see the
+                // struct doc comment above for why).
+                if mediaKind == .image {
+                    actionRow(label: "Salva in Foto",
+                              icon: "square.and.arrow.down",
+                              danger: false,
+                              action: { onSaveImage(); dismiss() })
+                    actionRow(label: "Condividi immagine",
+                              icon: "square.and.arrow.up",
+                              danger: false,
+                              action: { onShareMedia(); dismiss() })
+                }
+                // W446: voice-note-only row — moved here from
+                // VoiceNoteBubbleContent's inner .contextMenu.
+                if mediaKind == .voiceNote {
+                    actionRow(label: "Condividi audio",
+                              icon: "square.and.arrow.up",
+                              danger: false,
+                              action: { onShareMedia(); dismiss() })
                 }
                 // W445: forward action — always visible (own and peer messages
                 // can both be forwarded). Parity with Android ChatDetailScreen.kt
