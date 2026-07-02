@@ -354,13 +354,29 @@ public final class ConversationStore {
         }
     }
 
+    /// Shared by both the local-delete flow (`ChatContainer.deleteMessage` /
+    /// `deleteMessageLocally`) and the inbound "peer deleted their message"
+    /// flow (`AppState` applying a received `qa_ctl:1` t="delete" envelope).
+    /// Rewrites the row to a tombstone and — best-effort — removes the
+    /// cached attachment blob (voice note / image) the message pointed at.
+    ///
+    /// Cleanup is signal-not-kill: a missing file, a permissions error, or
+    /// any other filesystem failure is logged and swallowed. It NEVER
+    /// blocks or fails the tombstone write itself, which is why the path
+    /// is captured before the DB transaction and the removal happens only
+    /// after the transaction has already committed successfully.
     @discardableResult
     public func applyDeleteByClientMsgId(_ clientMsgId: String,
                                          tombstone: String = "Messaggio eliminato",
                                          at deletedAt: Date = Date()) -> Bool {
+        var cachedPathToRemove: String?
+        let applied: Bool
         do {
-            return try db.writer.write { db in
+            applied = try db.writer.write { db in
                 if var msg = try Message.filter(Column("clientMsgId") == clientMsgId).fetchOne(db) {
+                    // Capture the pre-tombstone path now — msg.mediaLocalPath
+                    // is about to be wiped from the row below.
+                    cachedPathToRemove = msg.mediaLocalPath
                     msg = Message(
                         id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
                         plaintext: tombstone,
@@ -385,6 +401,19 @@ public final class ConversationStore {
             print("[ConversationStore] applyDeleteByClientMsgId failed: \(error)")
             return false
         }
+        // Tombstone is committed — now best-effort reclaim the cached blob.
+        // Never propagate failures here: the delete already succeeded.
+        if applied, let path = cachedPathToRemove, !path.isEmpty {
+            let url = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: path) {
+                do {
+                    try FileManager.default.removeItem(at: url)
+                } catch {
+                    print("[ConversationStore] applyDeleteByClientMsgId: cache cleanup failed for \(path): \(error)")
+                }
+            }
+        }
+        return applied
     }
 
     @discardableResult
