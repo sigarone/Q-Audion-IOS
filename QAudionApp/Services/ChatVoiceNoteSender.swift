@@ -75,6 +75,12 @@ final class ChatVoiceNoteSender {
     ///     `attach_announce` cross-platform path, gated behind
     ///     `VoiceNote.attachAnnounce.enabled` and default OFF, uploads via
     ///     a separate single-shot pipeline and doesn't report progress).
+    ///   - resumeClientMsgId: W-TUSRESUME — forwarded to
+    ///     ``prepareAttachmentMarkerJson(bytes:mime:filename:durationMs:recipientUserId:timerOverrideSeconds:onProgress:resumeClientMsgId:)``
+    ///     so a >1 MB voice note (rare, but possible on longer
+    ///     recordings) gets a resume breadcrumb. Only wired on the
+    ///     legacy qfile path, same as `onProgress` — the
+    ///     `attach_announce` path is untouched by this change.
     /// - Returns: the JSON-serialized ``FileTransfer/FileMarker`` as a
     ///   string; pass this through ``ChatContainer/composerText`` to ride
     ///   the regular send path (AAD-bound chat ciphertext).
@@ -82,7 +88,8 @@ final class ChatVoiceNoteSender {
         for recording: VoiceNoteRecorder.Recording,
         recipientUserId: String,
         timerOverrideSeconds: Int? = nil,
-        onProgress: ((Int64, Int64) -> Void)? = nil
+        onProgress: ((Int64, Int64) -> Void)? = nil,
+        resumeClientMsgId: String? = nil
     ) async throws -> String {
         // W362: when UserDefaults["VoiceNote.attachAnnounce.enabled"]
         // is true, route through the cross-platform attach_announce
@@ -124,7 +131,8 @@ final class ChatVoiceNoteSender {
             durationMs: Int64(recording.durationMs),
             recipientUserId: recipientUserId,
             timerOverrideSeconds: timerOverrideSeconds,
-            onProgress: onProgress
+            onProgress: onProgress,
+            resumeClientMsgId: resumeClientMsgId
         )
     }
 
@@ -146,6 +154,13 @@ final class ChatVoiceNoteSender {
     ///   during the upload step. Purely local UI state — never touches
     ///   `attach_announce`/`ChatControlEnvelope` or any wire schema.
     ///   `nil` by default so existing callers keep compiling unchanged.
+    /// - Parameter resumeClientMsgId: W-TUSRESUME — when supplied
+    ///   (together with a >1 MB payload that takes the TUS chunked
+    ///   path), `TusUploadClient` persists a cross-launch resume
+    ///   breadcrumb keyed by this id right after the upload's `create()`
+    ///   call succeeds. `nil` by default so existing callers (which have
+    ///   no notion of a chat message id at this layer, e.g. avatar
+    ///   upload reuse) keep compiling unchanged and write no breadcrumb.
     func prepareAttachmentMarkerJson(
         bytes: Data,
         mime: String,
@@ -153,7 +168,8 @@ final class ChatVoiceNoteSender {
         durationMs: Int64?,
         recipientUserId: String,
         timerOverrideSeconds: Int? = nil,
-        onProgress: ((Int64, Int64) -> Void)? = nil
+        onProgress: ((Int64, Int64) -> Void)? = nil,
+        resumeClientMsgId: String? = nil
     ) async throws -> String {
         // 1. Build the FileTransfer dependencies. We rebuild per-call so
         //    the service stays stateless and a token rotation is picked
@@ -167,19 +183,24 @@ final class ChatVoiceNoteSender {
         // No `provider.initialize()` — `uploadFile` and `issueToken` are
         // REST-only; a fresh provider with the auth token is sufficient.
 
-        // BCryptoStorageApiImpl.uploadFile(data:filename:onProgress:) is
-        // not part of the StorageApi protocol (mirrors AvatarUploader's
+        // BCryptoStorageApiImpl.uploadFile(data:filename:onProgress:resumeContext:)
+        // is not part of the StorageApi protocol (mirrors AvatarUploader's
         // existing cast for the same reason), so we cast to the concrete
-        // impl to reach the progress-reporting overload. Falls back to
-        // the plain protocol call if the concrete type ever changes —
-        // `uploadFileWithProgress` stays nil and FileTransfer.upload
-        // silently skips progress reporting.
+        // impl to reach the progress-reporting + resume-breadcrumb
+        // overload. Falls back to the plain protocol call if the concrete
+        // type ever changes — `uploadFileWithProgress` stays nil and
+        // FileTransfer.upload silently skips progress reporting AND the
+        // resume breadcrumb (degrades to today's always-fresh-upload
+        // behavior, never crashes).
         let storageImpl = provider.storageApi as? BCryptoStorageApiImpl
         let uploadWithProgress: (
             (_ data: Data, _ filename: String,
-             _ onProgress: ((Int64, Int64) -> Void)?) async throws -> String
-        )? = storageImpl == nil ? nil : { data, filename, progress in
-            try await storageImpl!.uploadFile(data: data, filename: filename, onProgress: progress)
+             _ onProgress: ((Int64, Int64) -> Void)?,
+             _ resumeContext: (clientMsgId: String, sourceBytes: Data, onFileIdMinted: (String) -> Void)?) async throws -> String
+        )? = storageImpl == nil ? nil : { data, filename, progress, resumeCtx in
+            try await storageImpl!.uploadFile(
+                data: data, filename: filename, onProgress: progress, resumeContext: resumeCtx
+            )
         }
 
         let storage = FileTransfer.StorageApi(
@@ -213,7 +234,41 @@ final class ChatVoiceNoteSender {
                 bytes: bytes,
                 filename: filename,
                 mime: mime,
-                onProgress: onProgress
+                onProgress: onProgress,
+                resumeContext: resumeClientMsgId.map { (clientMsgId: $0, sourceBytes: bytes) },
+                onResumeStateReady: { mintedFileId, saltHex, nonceHex, ts, keyId, pskFingerprintHex in
+                    // W-TUSRESUME: fires at most once, right after the
+                    // server confirms `mintedFileId` (before the chunk
+                    // loop starts) — see `FileTransfer.upload`'s
+                    // `onResumeStateReady` doc for why only THIS layer
+                    // can supply salt/nonce/ts/keyId/pskFingerprintHex.
+                    // `resumeClientMsgId` is guaranteed non-nil here (this
+                    // closure is only ever invoked when `resumeContext`
+                    // was non-nil, which only happens when
+                    // `resumeClientMsgId` was supplied), but the `guard`
+                    // keeps this closure provably safe on its own rather
+                    // than relying on that invariant holding across
+                    // future edits.
+                    guard let clientMsgId = resumeClientMsgId else { return }
+                    let fp = TusResumeStateStore.fingerprint(of: bytes)
+                    let state = TusResumeState(
+                        fileId: mintedFileId,
+                        clientMsgId: clientMsgId,
+                        totalBytes: Int64(bytes.count),
+                        sourceSizeAtStart: fp.size,
+                        sourceSha256AtStart: fp.sha256Hex,
+                        saltHex: saltHex,
+                        nonceHex: nonceHex,
+                        ts: ts,
+                        recipientUserId: recipientUserId,
+                        filename: filename,
+                        mime: mime,
+                        pskFingerprintHex: pskFingerprintHex,
+                        durationMs: durationMs,
+                        timerOverrideSeconds: timerOverrideSeconds
+                    )
+                    TusResumeStateStore.save(state)
+                }
             )
         } catch {
             throw Error.uploadFailed(error.localizedDescription)
@@ -249,6 +304,172 @@ final class ChatVoiceNoteSender {
         ))
 
         // 6. Serialize.
+        do {
+            return try FileTransfer.serializeMarker(enriched)
+        } catch {
+            throw Error.markerSerializeFailed(error.localizedDescription)
+        }
+    }
+
+    /// W-TUSRESUME — tier 1 of the 3-tier retry: continue a
+    /// previously-attempted-but-incomplete upload for `state.fileId`
+    /// instead of re-encrypting + re-uploading from byte zero. Caller
+    /// (``ChatContainer/retryFailedMessage()``) is responsible for the
+    /// corruption check (`TusResumeStateStore.checkCorruption`) BEFORE
+    /// calling this — `bytes` is trusted here to be the unchanged source
+    /// blob the original attempt fingerprinted.
+    ///
+    /// Mirrors ``prepareAttachmentMarkerJson`` steps 1 (build deps) and
+    /// 4–6 (mint token / repack marker / serialize) exactly; only step 3
+    /// differs — `FileTransfer.resumeUpload` (HEAD + PATCH-continue with
+    /// the PINNED salt/nonce/ts from `state`) instead of
+    /// `FileTransfer.upload` (fresh random salt/nonce/ts).
+    ///
+    /// - Important: unlike ``prepareAttachmentMarkerJson``, this method
+    ///   does NOT wrap the underlying `TusUploadClient.TusError` in
+    ///   `Error.uploadFailed` — it rethrows it as-is, specifically so
+    ///   `ChatContainer.retryFailedMessage()` can `catch let e as
+    ///   TusUploadClient.TusError, case .uploadNotFound` without string
+    ///   matching. Any other failure (network, crypto, token issuance)
+    ///   surfaces as this type's own `Error` cases, same as
+    ///   ``prepareAttachmentMarkerJson``.
+    func resumeAttachmentMarkerJson(
+        state: TusResumeState,
+        bytes: Data,
+        onProgress: ((Int64, Int64) -> Void)? = nil
+    ) async throws -> String {
+        guard let token = appState.authService.loadToken(), !token.isEmpty,
+              let senderId = appState.currentUserId, !senderId.isEmpty else {
+            throw Error.uploadFailed("non autenticato")
+        }
+        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
+        let provider = BCryptoBackendProvider(config: backendConfig)
+
+        guard let storageImpl = provider.storageApi as? BCryptoStorageApiImpl else {
+            // No concrete impl to reach the TUS resume primitives —
+            // signal_not_kill: never crash, let the caller fall through
+            // to tier 3 (today's fresh-upload behavior).
+            throw Error.uploadFailed("resume non disponibile per questo backend")
+        }
+
+        let storage = FileTransfer.StorageApi(
+            uploadFile: { data, filename in
+                try await provider.storageApi.uploadFile(data: data, filename: filename)
+            },
+            downloadFile: { _ in
+                throw Error.uploadFailed("sender-side download invoked unexpectedly")
+            },
+            resumeFile: { fileId, ciphertext, progress in
+                let tusClient = storageImpl.makeTusClient()
+                let headResult = try await tusClient.head(fileId: fileId)
+                // Guard against a corrupt/inconsistent HEAD: the server's
+                // reported total must match what we're about to send, and
+                // the confirmed offset can't exceed it. Neither should
+                // happen (the server is authoritative), but treating a
+                // nonsensical response as "not resumable" (tier-3
+                // fallback) is safer than PATCHing a bogus byte range.
+                guard headResult.totalLength == Int64(ciphertext.count),
+                      headResult.offset >= 0,
+                      headResult.offset <= Int64(ciphertext.count) else {
+                    throw TusUploadClient.TusError.headFailed(0)
+                }
+                _ = try await tusClient.resume(
+                    fileId: fileId,
+                    data: ciphertext,
+                    fromOffset: headResult.offset,
+                    onProgress: progress
+                )
+            }
+        )
+
+        let vault = SovereignKeyVault()
+
+        // W-TUSRESUME (security-review follow-up, 2026-07-02) — re-check
+        // the PSK fingerprint BEFORE attempting the resume. The plaintext
+        // corruption check (already run by the caller,
+        // `ChatContainer.resumeAttachmentIfPossible`) can't detect a PSK
+        // rotated/re-bound since the original attempt; if it silently
+        // mismatches, `resumeUpload`'s re-seal derives a DIFFERENT file
+        // key, corrupting the byte-range continuation the server already
+        // has (see `TusResumeState.pskFingerprintHex`'s doc). Treat a
+        // mismatch exactly like any other "can't safely resume" signal —
+        // throw so the caller clears the stale state and falls through
+        // to tier 3, never PATCH a continuation with a key that doesn't
+        // match what the server's partial upload was sealed with.
+        guard let currentPsk = Self.resolvePsk(vault: vault, peerUserId: state.recipientUserId, senderId: senderId) else {
+            throw Error.uploadFailed("PSK non risolvibile per il resume")
+        }
+        guard TusResumeStateStore.fingerprint(ofPsk: currentPsk) == state.pskFingerprintHex else {
+            throw Error.uploadFailed("PSK cambiata dal tentativo originale — resume non sicuro")
+        }
+
+        let vaultAdapter = Self.makeVaultAdapter(
+            vault: vault,
+            peerUserId: state.recipientUserId,
+            senderId: senderId
+        )
+        let fileTransfer = FileTransfer(
+            storage: storage,
+            vault: vaultAdapter,
+            selfUserId: senderId
+        )
+
+        let baseMarker: FileTransfer.FileMarker
+        do {
+            baseMarker = try await fileTransfer.resumeUpload(
+                recipientId: state.recipientUserId,
+                bytes: bytes,
+                filename: state.filename,
+                mime: state.mime,
+                fileId: state.fileId,
+                saltHex: state.saltHex,
+                nonceHex: state.nonceHex,
+                ts: state.ts,
+                // `keyId` isn't persisted on `TusResumeState` — it doesn't
+                // need to be. `makeVaultAdapter` (below) always sets
+                // `VaultEntry.keyId` to the looked-up contact id, never
+                // anything random/session-specific (see
+                // `forContact`/`primary` closures), so `recipientUserId`
+                // IS the deterministic keyId for this app's PSK
+                // resolution scheme — identical to what the original,
+                // interrupted `upload()` call would have stamped via
+                // `psk.keyId`.
+                keyId: state.recipientUserId,
+                onProgress: onProgress
+            )
+        } catch let tusError as TusUploadClient.TusError {
+            // Rethrow verbatim — see doc comment above.
+            throw tusError
+        } catch {
+            throw Error.uploadFailed(error.localizedDescription)
+        }
+
+        let issued: IssuedDownloadToken
+        do {
+            issued = try await provider.downloadTokenClient.issueToken(
+                fileId: baseMarker.qfile.fileId,
+                recipientUserId: state.recipientUserId
+            )
+        } catch {
+            throw Error.tokenIssueFailed(error.localizedDescription)
+        }
+
+        let q = baseMarker.qfile
+        let enriched = FileTransfer.FileMarker(qfile: .init(
+            fileId: q.fileId,
+            name: q.name,
+            size: q.size,
+            mime: q.mime,
+            salt: q.salt,
+            nonce: q.nonce,
+            tag: q.tag,
+            keyId: q.keyId,
+            ts: q.ts,
+            downloadClaim: issued.claim,
+            durationMs: state.durationMs,
+            ex: state.timerOverrideSeconds
+        ))
+
         do {
             return try FileTransfer.serializeMarker(enriched)
         } catch {
