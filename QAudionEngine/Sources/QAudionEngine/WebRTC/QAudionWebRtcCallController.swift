@@ -660,6 +660,38 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
+    /// W536 — initiator side, decline/timeout rollback. Undo everything
+    /// `upgradeToVideo()` did so the call cleanly returns to audio-only and
+    /// a LATER upgrade (ours or the peer's) starts from a clean slate.
+    ///
+    /// Without this, a single decline (or 30s response timeout) poisoned the
+    /// call permanently: `videoUpgradeInProgress` stayed latched and the
+    /// local video track stayed attached (so our retries threw
+    /// `.alreadyHasVideo` and sent nothing), and the PC stayed parked in
+    /// `have-local-offer` (so the PEER's next upgrade offer failed
+    /// setRemoteOffer wrong-state and got auto-declined) — upgrades dead in
+    /// both directions for the rest of the call.
+    ///
+    /// Steps mirror Android CallController's decline path: stop camera,
+    /// remove the upgrade's video track, JSEP-rollback the pending offer,
+    /// re-latch the answer slot (the ORIGINAL audio answer had been applied;
+    /// `upgradeToVideo` cleared the slot for the upgrade answer, so a stray
+    /// late `call_upgrade_response` must be swallowed as a duplicate again).
+    /// Safe no-op when no upgrade is in flight.
+    public func cancelVideoUpgrade() async {
+        guard videoUpgradeInProgress else { return }
+        stopCameraCapture()
+        if let pc = peerConnection {
+            pc.removeLocalVideoTrack()
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                pc.rollbackLocalOffer { _ in cont.resume() }
+            }
+        }
+        hasAppliedRemoteAnswer = true
+        videoUpgradeInProgress = false
+        print("[WebRTC] video upgrade cancelled — rolled back to audio-only stable state")
+    }
+
     /// W536 — responder side. Accept a `call_upgrade_request`: add a
     /// local video track if not already present, apply the remote
     /// offer, generate the local answer, and return the answer SDP.

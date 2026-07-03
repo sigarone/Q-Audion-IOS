@@ -355,6 +355,48 @@ public final class QAudionPeerConnection: NSObject {
         return localVideoTrack != nil
     }
 
+    /// W536 decline-rollback — remove the local video track added by a
+    /// mid-call upgrade attempt. Without this, a declined upgrade left the
+    /// track attached forever: hasLocalVideoTrack() stayed true, so every
+    /// LATER upgrade attempt threw `.alreadyHasVideo` (misdiagnosed by
+    /// AppState as "peer raced us") and upgrades were dead for the rest of
+    /// the call. Mirrors Android CallController's
+    /// `pc.removeLocalVideoTrack()` on the decline path. Safe no-op when
+    /// no video track exists.
+    public func removeLocalVideoTrack() {
+        guard let pc = peerConnection else { return }
+        if let sender = videoSender {
+            pc.removeTrack(sender)
+        }
+        videoSender = nil
+        localVideoTrack = nil
+        print("[WebRTC] local VIDEO track removed (upgrade rollback)")
+    }
+
+    /// W536 decline-rollback — JSEP rollback of a pending local offer so
+    /// the PC returns to `stable`. After a declined/timed-out upgrade the
+    /// PC was parked in `have-local-offer`; the peer's NEXT upgrade offer
+    /// then failed `setRemoteOffer` with "Called in wrong state:
+    /// have-local-offer" (the same engine-family error Android documents in
+    /// its explicit-rollback fix), which auto-sent accepted=false — one
+    /// decline killed upgrades in BOTH directions. No-op unless
+    /// signalingState == haveLocalOffer.
+    public func rollbackLocalOffer(completion: @escaping (Error?) -> Void) {
+        guard let pc = peerConnection, pc.signalingState == .haveLocalOffer else {
+            completion(nil)
+            return
+        }
+        let rollback = RTCSessionDescription(type: .rollback, sdp: "")
+        pc.setLocalDescription(rollback) { err in
+            if let err = err {
+                print("[WebRTC] rollbackLocalOffer failed: \(err.localizedDescription)")
+            } else {
+                print("[WebRTC] local offer rolled back — signaling state stable")
+            }
+            completion(err)
+        }
+    }
+
     // MARK: - Offer / Answer
 
     public func createOffer(audioOnly: Bool = true,

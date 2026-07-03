@@ -2880,6 +2880,20 @@ final class AppState: ObservableObject {
                 self.videoPipeline = nil
                 self.errorMessage = "Il peer non ha attivato il video — la chiamata continua in voce."
             }
+            // Decline-poisoning fix: the UI rollback above is not enough — the
+            // WebRTC controller still has videoUpgradeInProgress latched, the
+            // upgrade's video track attached, and the PC parked in
+            // have-local-offer. That state killed every later upgrade in BOTH
+            // directions (our retry threw .alreadyHasVideo and sent nothing,
+            // the peer's next offer failed setRemoteOffer wrong-state and was
+            // auto-declined). Roll the controller back too. Covers the
+            // explicit decline AND the 30s response timeout (which funnels
+            // through this same handler).
+            #if canImport(WebRTC)
+            if let controller = webRtcController as? QAudionWebRtcCallController {
+                Task { await controller.cancelVideoUpgrade() }
+            }
+            #endif
             return
         }
         if isCameraUpgrade {
