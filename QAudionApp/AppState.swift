@@ -703,6 +703,38 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Build a backend provider for one-shot REST attachment uploads
+    /// (file / image / voice-note) with BOTH token-refresh legs armed:
+    /// the primary POST /auth/refresh (which fires only when the config
+    /// carries the stored refresh token) AND the Ed25519 device-renew
+    /// fallback (wired explicitly via `wireDeviceRenewFallback`).
+    ///
+    /// UPLOAD-401 FIX (2026-07-03) — `ChatVoiceNoteSender` used to build a
+    /// bare `BCryptoBackendProvider(config: .pinned(serverUrl:accessToken:))`
+    /// per upload: the config carried NO refresh token (so the primary
+    /// leg could never fire, see `wireDeviceRenewFallback`'s doc) and
+    /// `wireDeviceRenewFallback` was never called on it (so the device-
+    /// renew leg was nil). With both refresh legs dead, once the access
+    /// token expired mid-session EVERY attachment upload — and every
+    /// retry — 401'd permanently with no self-heal: `tryRefreshToken`
+    /// returned false immediately and never even reached `/auth/refresh`
+    /// (confirmed in the server journal — three endpoints 401'd together
+    /// at token expiry, zero refresh call). Prefers the already-wired
+    /// `liveProvider` when present; otherwise builds a transient provider
+    /// wired the same way `performProactiveRefresh` does, so a 401 runs
+    /// the full refresh cascade + retry and the upload self-heals.
+    func makeUploadProvider() -> BCryptoBackendProvider {
+        if let live = liveProvider { return live }
+        let cfg = pinnedConfig(
+            token: authService.loadToken(),
+            refreshToken: authService.loadRefreshToken(),
+            userId: currentUserId
+        )
+        let p = BCryptoBackendProvider(config: cfg)
+        wireDeviceRenewFallback(on: p)
+        return p
+    }
+
     // MARK: - Proactive token refresh (FORCED-QR FIX 2026-06-24)
 
     /// Format + emit a session-auth diagnostic line. Lives at top level
