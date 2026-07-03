@@ -372,8 +372,11 @@ final class AppState: ObservableObject {
     /// NATs that put audio on the relay in the first place). Reset on teardown.
     private var audioPinnedToWsRelay: Bool = false
 
-    /// Auto-decline timer for [pendingIncomingUpgrade] (25s — below the
-    /// initiator's 30s response window so it sees an explicit decline).
+    /// Auto-decline timer for [pendingIncomingUpgrade]. WIRE_SPEC §8.2:
+    /// responder auto-decline and requester watchdog are ALIGNED at 30s.
+    /// (Was 25s; now matches the initiator's `upgradeResponseTimeoutTask`
+    /// window — an explicit decline still races ahead of the initiator's
+    /// own timeout because we ship `accepted=false` the instant this fires.)
     private var pendingUpgradeAutoDeclineTask: Task<Void, Never>?
 
     /// Initiator-side watchdog for OUR camera upgrade request: if no
@@ -384,6 +387,14 @@ final class AppState: ObservableObject {
     /// "screen"), so the response handler knows whether to unpause the
     /// camera pipeline / roll it back. nil when nothing is in flight.
     private var pendingOutgoingUpgradeMedia: String?
+
+    /// WIRE_SPEC §8.3 — the ORIGINAL role of THIS endpoint in the active
+    /// call. Glare politeness is keyed to it: `.callee` = polite (rolls back
+    /// its own colliding upgrade and accepts the peer's), `.caller` =
+    /// impolite (ignores the peer's colliding request). Set at call setup
+    /// (`.caller` in startCall; `.callee` on both incoming paths), reset on
+    /// teardown. nil when not in a call.
+    private var originalCallRole: UpgradeFlowDecisions.CallRole?
 
     /// WIRE_SPEC §8.7 — dedup for outbound `call_media_ready`: one send
     /// per "call_id:mid" combo (survives controller rebuilds on the
@@ -2385,6 +2396,8 @@ final class AppState: ObservableObject {
                     await MainActor.run {
                         if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
                         self.callContactId = senderId
+                        // WIRE_SPEC §8.3 — we answered → polite on any later glare.
+                        self.originalCallRole = .callee
                         self.incomingCallerName = resolvedCallerName
                         self.isVideoCall = (callType == "video")
                         // W450-fix: when PushKit woke the device first, CallKit's
@@ -2573,7 +2586,7 @@ final class AppState: ObservableObject {
     ///   - "camera", first time: PRIVACY GATE — publish
     ///     [pendingIncomingUpgrade] so the UI shows the consent dialog.
     ///     Nothing is answered and no camera opens until the user decides;
-    ///     a 25s timer auto-declines.
+    ///     a 30s timer auto-declines (WIRE_SPEC §8.2 aligned timeout).
     /// Works on both transports: WebRTC (sdp carries the peer's offer) and
     /// the iOS↔iOS WS-HEVC relay (sdp is empty; the response carries an
     /// empty answer and pipelines start on each side independently).
@@ -2593,6 +2606,13 @@ final class AppState: ObservableObject {
         if media == "screen" {
             acceptIncomingScreenShareRenegotiation(
                 callId: callId, senderId: senderId, sdp: sdp)
+            return
+        }
+        // WIRE_SPEC §8.3 — GLARE: the peer's `call_upgrade_request` collided
+        // with our OWN in-flight camera upgrade request (we already shipped one
+        // and are awaiting its response). Resolve by the ORIGINAL call role.
+        if pendingOutgoingUpgradeMedia != nil {
+            handleGlareCollision(callId: callId, senderId: senderId, sdp: sdp)
             return
         }
         // W-VIDUP: a video upgrade for this call is already being built (the
@@ -2618,11 +2638,70 @@ final class AppState: ObservableObject {
             callId: callId, senderId: senderId, sdp: sdp)
         pendingUpgradeAutoDeclineTask?.cancel()
         pendingUpgradeAutoDeclineTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 25_000_000_000)
+            // WIRE_SPEC §8.2 — 30s, aligned with the requester watchdog.
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
             guard !Task.isCancelled, let self = self,
                   self.pendingIncomingUpgrade?.callId == callId else { return }
             RTLog.info("call", "incoming upgrade consent timed out — auto-declining")
             self.declineIncomingUpgrade()
+        }
+    }
+
+    /// WIRE_SPEC §8.3 — glare: a peer `call_upgrade_request` arrived while OUR
+    /// own camera upgrade request is still in flight (`pendingOutgoingUpgradeMedia
+    /// != nil`). Politeness is keyed to the ORIGINAL call role:
+    ///   - polite (original CALLEE): JSEP-rollback our pending local offer,
+    ///     accept the peer's offer, and treat our own request as satisfied.
+    ///   - impolite (original CALLER): ignore the peer's request (send NO
+    ///     decline) and keep waiting for the response to our own.
+    /// Both branches keep the call retry-able (never poison state, §8.4): the
+    /// impolite side leaves its own watchdog running; the polite side scrubs its
+    /// abandoned outgoing metadata BEFORE accepting so a late
+    /// `call_upgrade_response` for the abandoned request is a no-op.
+    @MainActor
+    private func handleGlareCollision(callId: String, senderId: String, sdp: String) {
+        // Default role is CALLEE (polite) when unknown — the fail-safe here is
+        // to accept the peer rather than deadlock both sides on a timeout.
+        let role = originalCallRole ?? .callee
+        switch UpgradeFlowDecisions.glareResolution(callRole: role) {
+        case .impoliteIgnorePeer:
+            // Original CALLER: ignore the colliding request. Our own watchdog
+            // (upgradeResponseTimeoutTask) stays armed; the peer, being polite,
+            // rolls back and accepts OUR offer, so we expect a normal
+            // `call_upgrade_response` shortly. Send NO decline.
+            RTLog.info("call", "glare (impolite/caller): ignoring peer upgrade request — awaiting our own response")
+        case .politeAcceptPeer:
+            // Original CALLEE: yield to the peer. Scrub our abandoned outgoing
+            // upgrade FIRST so a stray `call_upgrade_response` for it can't
+            // double-apply an answer (handleUpgradeResponse keys on
+            // pendingOutgoingUpgradeMedia), then roll our controller back to
+            // `stable` and accept the peer's offer via the normal accept path.
+            RTLog.info("call", "glare (polite/callee): rolling back our request, accepting peer upgrade")
+            pendingOutgoingUpgradeMedia = nil
+            upgradeResponseTimeoutTask?.cancel()
+            upgradeResponseTimeoutTask = nil
+            // Our own request's camera/preview: keep it — accepting the peer's
+            // upgrade means bidirectional video anyway (acceptPendingIncomingUpgrade
+            // sets camera on). The controller rollback only tears down the
+            // JSEP offer + upgrade latch, not the camera we already started.
+            let pending = PendingIncomingUpgrade(callId: callId, senderId: senderId, sdp: sdp)
+            #if canImport(WebRTC)
+            if let controller = webRtcController as? QAudionWebRtcCallController {
+                // Roll back the pending local offer to `stable`, THEN accept the
+                // peer offer. Ordered + awaited so setRemoteOffer never lands on
+                // a PC still parked in have-local-offer (§8.3 correctness).
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    await controller.cancelVideoUpgrade()
+                    self.acceptPendingIncomingUpgrade(pending)
+                }
+                return
+            }
+            #endif
+            // No live controller (WS-relay-only call): nothing to JSEP-roll-back;
+            // accept directly (the accept path builds an on-demand controller if
+            // the peer's offer carries SDP).
+            acceptPendingIncomingUpgrade(pending)
         }
     }
 
@@ -2719,6 +2798,10 @@ final class AppState: ObservableObject {
         // per call+mid inside sendCallMediaReadyOnce).
         controller.onInboundVideoReady = { [weak self] mid in
             Task { @MainActor [weak self] in self?.sendCallMediaReadyOnce(mid: mid) }
+        }
+        // WIRE_SPEC §8.7 (INT-4a) — receiver decode stall → nudge the sender.
+        controller.onVideoStallDetected = { [weak self] in
+            Task { @MainActor [weak self] in self?.requestKeyframeFromSender() }
         }
         controller.videoTelemetry = { kind, attrs in
             TelemetryService.shared.emit(kind: kind, attrs: attrs)
@@ -2985,6 +3068,26 @@ final class AppState: ObservableObject {
                 mid: midValue,
                 keyEpoch: 0,
                 dir: "recv")
+        }
+    }
+
+    /// WIRE_SPEC §8.7 (INT-4a) — receiver-side keyframe nudge. Fired by the
+    /// controller's `onVideoStallDetected` (inbound `framesDecoded` flat for
+    /// ~5s while bytes still arrive → decoder is missing its keyframe). Ships
+    /// `video_keyframe_request` to the in-call sender, which forces a local
+    /// encoder IDR (WS-HEVC rail) or is a harmless no-op (pure-WebRTC sender).
+    /// The API layer rate-limits to 1/s per §8.7, so the controller may fire
+    /// this freely on a persistent stall.
+    @MainActor
+    private func requestKeyframeFromSender() {
+        guard isInCall,
+              let peerId = callContactId,
+              let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId() else { return }
+        RTLog.info("call", "INT-4a — inbound video stalled, requesting keyframe from sender")
+        Task {
+            try? await impl.sendVideoKeyframeRequest(
+                callId: callId, recipientId: peerId)
         }
     }
 
@@ -5182,6 +5285,8 @@ final class AppState: ObservableObject {
     private func prepareIncomingPushCall(callId: UUID, callerId: String, hasVideo: Bool, fallbackName: String) -> String {
         activeCallKitId = callId
         callContactId = callerId
+        // WIRE_SPEC §8.3 — PushKit-woken incoming call: we answered → polite.
+        originalCallRole = .callee
         isVideoCall = hasVideo
         return callKitDisplayName(callerId: callerId, fallback: fallbackName)
     }
@@ -5525,6 +5630,8 @@ final class AppState: ObservableObject {
         callState = .connecting
         isInCall = true
         isVideoCall = video
+        // WIRE_SPEC §8.3 — we placed the call → impolite on any later glare.
+        originalCallRole = .caller
         // PersistentCallRecord — register outgoing call. Use activeCallKitId if
         // already set, otherwise mint a placeholder id that endCall will match.
         // The id is updated to the real outgoingCallId once beginAndroidOutgoing
@@ -6001,6 +6108,12 @@ final class AppState: ObservableObject {
                         self?.sendCallMediaReadyOnce(mid: mid)
                     }
                 }
+                // WIRE_SPEC §8.7 (INT-4a) — receiver decode stall → nudge sender.
+                controller.onVideoStallDetected = { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.requestKeyframeFromSender()
+                    }
+                }
                 // Remote-readable video diagnostics (mirrors Android). Ships
                 // outbound/inbound video RTP stats + remote-track arrival to
                 // the server so an iOS→Android video failure is diagnosable
@@ -6354,6 +6467,7 @@ final class AppState: ObservableObject {
         upgradeResponseTimeoutTask?.cancel()
         upgradeResponseTimeoutTask = nil
         pendingOutgoingUpgradeMedia = nil
+        originalCallRole = nil  // WIRE_SPEC §8.3 — next call re-derives its role
         decodeOnlyPipelineForPeerScreen = false
         // WIRE_SPEC §8.7 — drop this call's call_media_ready dedup keys
         // (keys embed the call_id so growth, not correctness, is at stake).
@@ -7964,6 +8078,12 @@ extension AppState {
         controller.onInboundVideoReady = { [weak self] mid in
             Task { @MainActor [weak self] in
                 self?.sendCallMediaReadyOnce(mid: mid)
+            }
+        }
+        // WIRE_SPEC §8.7 (INT-4a) — receiver decode stall → nudge the sender.
+        controller.onVideoStallDetected = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.requestKeyframeFromSender()
             }
         }
         // Remote-readable video diagnostics (responder side, mirrors caller).

@@ -59,6 +59,31 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// @MainActor themselves (same contract as onRemoteVideoTrack).
     public var onInboundVideoReady: ((String?) -> Void)?
 
+    /// WIRE_SPEC §8.7 (INT-4a) — fired when the RECEIVER-side video decode
+    /// has STALLED: the inbound video track exists and bytes are arriving,
+    /// but `framesDecoded` has not advanced for ~5s (the decoder is missing
+    /// its keyframe — the E2EE frame-transform suppresses libwebrtc's native
+    /// PLI, so recovery needs an explicit wire nudge). AppState wires this to
+    /// `sendVideoKeyframeRequest` (rate-limited 1/s at the API layer per §8.7).
+    ///
+    /// INT-4a rail choice (documented): the pure WebRTC RTP rail on THIS
+    /// libwebrtc binary exposes NO app-visible per-encoder keyframe-forcing
+    /// handle — `QAudionPeerConnectionFactory` installs the plain
+    /// `HevcPreferredVideoEncoderFactory` (no `SFrameVideoEncoderDecorator`),
+    /// and video E2EE lives in the native RTP-layer `RTCFrameCryptor`, so the
+    /// encoder is driven entirely by libwebrtc. A SENDER-side periodic IDR
+    /// forcer is therefore not implementable here. Instead the RECEIVER
+    /// detects the stall (from the `framesDecoded` stat it already polls) and
+    /// nudges the sender over the already-wired `video_keyframe_request`. The
+    /// sender's honor path (`videoPipeline.forceKeyFrame()` on the WS-HEVC
+    /// rail) still forces the IDR; on a pure-WebRTC sender the wire request is
+    /// a harmless no-op (log-and-ignore) — but at least ONE end of any real
+    /// deployment (iOS↔iOS relay, or the Android/Desktop peer, which CAN force
+    /// IDR) honors it, which is the recovery the black-GOP class needed.
+    /// May fire from the WebRTC stats callback thread — consumers hop to
+    /// @MainActor themselves.
+    public var onVideoStallDetected: (() -> Void)?
+
     /// W-DCAUDIO — inbound sealed-audio frames received over the WebRTC
     /// DataChannel ("qaudion-audio"). Set by the app layer (CallService) to route
     /// the raw WireRelayFrameCodec bytes into `handleIncomingEncryptedFrame`,
@@ -84,6 +109,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// Repeating timer that polls outbound/inbound video RTP stats while a
     /// call is connected. Created on ICE-connected, invalidated on close.
     private var videoStatsTimer: Timer?
+
+    // WIRE_SPEC §8.7 (INT-4a) — receiver-side decode-stall detector state,
+    // driven off the 3s `pollVideoStatsOnce` cadence. `framesDecoded` is
+    // monotonic; when it fails to advance across consecutive polls WHILE
+    // bytes are still arriving, the decoder is stuck on a missing keyframe.
+    // Two stalled polls (~6s, ≥ the §8.7 ~5s guidance) trigger the nudge.
+    private var _lastFramesDecoded: Int = -1
+    private var _lastBytesReceived: Int = -1
+    private var _videoStallPolls: Int = 0
+    /// Consecutive stalled polls before firing (3s cadence × 2 ≈ 6s ≥ ~5s).
+    private let videoStallPollThreshold: Int = 2
 
     /// R-4 (vkey-v1 / sovereign-only) — injectable policy hook consulted
     /// when a remote VIDEO track arrives. When it returns `true` the
@@ -786,6 +822,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         inboundReadyLock.lock()
         _inboundVideoReadyFired = false
         inboundReadyLock.unlock()
+        // WIRE_SPEC §8.7 (INT-4a) — reset the receiver decode-stall detector
+        // so the next call's monotonic counters start from a clean baseline.
+        _lastFramesDecoded = -1
+        _lastBytesReceived = -1
+        _videoStallPolls = 0
         state = .disconnected
     }
 
@@ -1389,6 +1430,61 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 "in_frame_h": inH,
                 "in_codec": mime(inCodecId),
             ])
+            // WIRE_SPEC §8.7 (INT-4a) — receiver decode-stall detection. Runs
+            // on the stats callback thread; the controller is @unchecked
+            // Sendable and these fields are touched ONLY here + on close (the
+            // 3s single-timer serializes them).
+            self.evaluateVideoStall(framesDecoded: inFramesDec, bytesReceived: inBytes)
+        }
+    }
+
+    /// WIRE_SPEC §8.7 (INT-4a) — decide whether the inbound video decode has
+    /// stalled and, if so, fire `onVideoStallDetected` so AppState can nudge
+    /// the sender via `video_keyframe_request`. Pure state machine over the
+    /// monotonic `framesDecoded` / `bytesReceived` counters:
+    ///   - no inbound video yet (framesDecoded < 0): reset, do nothing.
+    ///   - framesDecoded advanced since last poll: healthy, reset.
+    ///   - framesDecoded flat BUT bytesReceived advanced (frames arriving,
+    ///     none decoding → missing keyframe): count a stalled poll; at the
+    ///     threshold, fire once and re-arm (so a persistent stall re-nudges
+    ///     every threshold window, the API-layer 1/s limiter absorbing bursts).
+    ///   - framesDecoded flat AND bytesReceived flat (no media at all): NOT a
+    ///     decode stall (nothing to recover) → reset, don't nudge.
+    private func evaluateVideoStall(framesDecoded: Int, bytesReceived: Int) {
+        // No inbound video RTP present (no inbound-rtp video stat) → nothing
+        // to recover. The -1 sentinel means the stat was absent this poll.
+        guard framesDecoded >= 0 else {
+            _lastFramesDecoded = -1
+            _lastBytesReceived = -1
+            _videoStallPolls = 0
+            return
+        }
+        let framesAdvanced = _lastFramesDecoded >= 0 && framesDecoded > _lastFramesDecoded
+        let bytesAdvanced = _lastBytesReceived >= 0 && bytesReceived > _lastBytesReceived
+        defer {
+            _lastFramesDecoded = framesDecoded
+            _lastBytesReceived = bytesReceived
+        }
+        // First observation (no prior sample) → establish the baseline only.
+        guard _lastFramesDecoded >= 0 else {
+            _videoStallPolls = 0
+            return
+        }
+        if framesAdvanced {
+            _videoStallPolls = 0
+            return
+        }
+        // Frames flat. Only a STALL if bytes are still arriving (frames land
+        // but don't decode → decoder waiting on a keyframe). No bytes = idle.
+        guard bytesAdvanced else {
+            _videoStallPolls = 0
+            return
+        }
+        _videoStallPolls += 1
+        if _videoStallPolls >= videoStallPollThreshold {
+            _videoStallPolls = 0  // re-arm for the next window
+            print("[WebRtcCallController] INT-4a — inbound video decode STALLED (framesDecoded flat, bytes still arriving) → requesting keyframe")
+            onVideoStallDetected?()
         }
     }
 

@@ -1,0 +1,169 @@
+{
+  "version": 1,
+  "spec": "WIRE_SPEC §8 — mid-call media upgrade state machine",
+  "notes": "Behavioral conformance vectors, not byte-KATs. Each scenario is a sequence of protocol events fed to the platform's upgrade state machine driver; 'expect' entries are asserted after the step in which they appear. Roles: callRole = caller|callee (original call), upDir = local|remote (who initiates the upgrade step).",
+  "scenarios": [
+    {
+      "id": "accept-local-upgrade",
+      "callRole": "caller",
+      "steps": [
+        { "do": "local_upgrade_request", "media": "camera",
+          "expect": { "state": "UpgradeRequested", "sent": ["call_upgrade_request"], "localVideoTrack": true } },
+        { "do": "recv_upgrade_response", "accepted": true, "sdp": "answer",
+          "expect": { "state": "VideoActive", "dtlsRoleChanged": false, "videoMlineCount": 1 } }
+      ]
+    },
+    {
+      "id": "accept-remote-upgrade",
+      "callRole": "callee",
+      "steps": [
+        { "do": "recv_upgrade_request", "media": "camera",
+          "expect": { "state": "ConsentPending", "consentDialogShown": true } },
+        { "do": "user_accepts",
+          "expect": { "state": "VideoActive", "sent": ["call_upgrade_response:accepted"], "dtlsRoleChanged": false, "videoMlineCount": 1 } }
+      ]
+    },
+    {
+      "id": "decline-then-local-retry",
+      "callRole": "caller",
+      "steps": [
+        { "do": "local_upgrade_request", "media": "camera", "expect": { "state": "UpgradeRequested" } },
+        { "do": "recv_upgrade_response", "accepted": false,
+          "expect": { "state": "AudioOnly", "localVideoTrack": false, "signalingState": "stable", "upgradeLatchCleared": true } },
+        { "do": "local_upgrade_request", "media": "camera",
+          "expect": { "state": "UpgradeRequested", "sent": ["call_upgrade_request"] } }
+      ]
+    },
+    {
+      "id": "decline-then-peer-retry",
+      "callRole": "caller",
+      "steps": [
+        { "do": "local_upgrade_request", "media": "camera", "expect": { "state": "UpgradeRequested" } },
+        { "do": "recv_upgrade_response", "accepted": false, "expect": { "state": "AudioOnly", "signalingState": "stable" } },
+        { "do": "recv_upgrade_request", "media": "camera",
+          "expect": { "state": "ConsentPending", "noWrongStateError": true } }
+      ]
+    },
+    {
+      "id": "timeout-equals-decline",
+      "callRole": "callee",
+      "steps": [
+        { "do": "local_upgrade_request", "media": "camera", "expect": { "state": "UpgradeRequested" } },
+        { "do": "advance_time_s", "seconds": 30,
+          "expect": { "state": "AudioOnly", "localVideoTrack": false, "signalingState": "stable" } }
+      ]
+    },
+    {
+      "id": "responder-auto-decline-30s",
+      "callRole": "callee",
+      "steps": [
+        { "do": "recv_upgrade_request", "media": "camera", "expect": { "state": "ConsentPending" } },
+        { "do": "advance_time_s", "seconds": 30,
+          "expect": { "state": "AudioOnly", "sent": ["call_upgrade_response:declined"] } }
+      ]
+    },
+    {
+      "id": "glare-polite-callee-rolls-back",
+      "callRole": "callee",
+      "steps": [
+        { "do": "local_upgrade_request", "media": "camera", "expect": { "state": "UpgradeRequested" } },
+        { "do": "recv_upgrade_request", "media": "camera",
+          "expect": { "politeRollback": true, "sent": ["call_upgrade_response:accepted"], "noWrongStateError": true, "videoMlineCount": 1 } }
+      ],
+      "transitional": "mutual clean decline permitted (both sides back to AudioOnly, retry possible) — MUST NOT poison state"
+    },
+    {
+      "id": "glare-impolite-caller-ignores",
+      "callRole": "caller",
+      "steps": [
+        { "do": "local_upgrade_request", "media": "camera", "expect": { "state": "UpgradeRequested" } },
+        { "do": "recv_upgrade_request", "media": "camera",
+          "expect": { "peerRequestIgnoredOrDeclinedClean": true } },
+        { "do": "recv_upgrade_response", "accepted": true, "sdp": "answer",
+          "expect": { "state": "VideoActive" } }
+      ],
+      "transitional": "mutual clean decline permitted — MUST NOT poison state"
+    },
+    {
+      "id": "screen-auto-accept",
+      "callRole": "callee",
+      "steps": [
+        { "do": "recv_upgrade_request", "media": "screen",
+          "expect": { "consentDialogShown": false, "sent": ["call_upgrade_response:accepted"] } }
+      ]
+    },
+    {
+      "id": "unknown-media-treated-as-camera",
+      "callRole": "callee",
+      "steps": [
+        { "do": "recv_upgrade_request", "media": "hologram-v9",
+          "expect": { "state": "ConsentPending", "consentDialogShown": true } }
+      ]
+    },
+    {
+      "id": "phantom-recvonly-ignored",
+      "callRole": "caller",
+      "steps": [
+        { "do": "video_active_baseline", "mid": "2", "expect": { "state": "VideoActive" } },
+        { "do": "ontrack_video", "mid": "5", "transceiverDirection": "recvonly", "senderTrack": false,
+          "expect": { "sinkMid": "2", "cryptorBoundMid": "2", "phantomIgnored": true } }
+      ]
+    },
+    {
+      "id": "relatch-on-new-mid-after-stop",
+      "callRole": "caller",
+      "steps": [
+        { "do": "video_active_baseline", "mid": "2", "expect": { "state": "VideoActive" } },
+        { "do": "transceiver_stopped", "mid": "2" },
+        { "do": "ontrack_video", "mid": "5", "transceiverDirection": "sendrecv", "senderTrack": true,
+          "expect": { "sinkMid": "5", "cryptorBoundMid": "5" } }
+      ]
+    },
+    {
+      "id": "media-ready-once-per-call-mid",
+      "callRole": "callee",
+      "steps": [
+        { "do": "receiver_cryptor_keyed_and_bound", "mid": "2",
+          "expect": { "sent": ["call_media_ready:mid=2"] } },
+        { "do": "receiver_cryptor_keyed_and_bound", "mid": "2",
+          "expect": { "sentCount": { "call_media_ready": 1 } } }
+      ]
+    },
+    {
+      "id": "keyframe-request-honored-rate-limited",
+      "callRole": "caller",
+      "steps": [
+        { "do": "video_active_baseline", "mid": "2" },
+        { "do": "recv_video_keyframe_request", "expect": { "forcedIdrCount": 1 } },
+        { "do": "recv_video_keyframe_request", "expect": { "forcedIdrCount": 1 } },
+        { "do": "advance_time_s", "seconds": 2 },
+        { "do": "recv_video_keyframe_request", "expect": { "forcedIdrCount": 2 } }
+      ]
+    },
+    {
+      "id": "rekey-previous-key-grace",
+      "callRole": "caller",
+      "steps": [
+        { "do": "video_active_baseline", "mid": "2", "keyEpoch": 0 },
+        { "do": "rekey", "keyEpoch": 1 },
+        { "do": "recv_frame_sealed_with_epoch", "keyEpoch": 0,
+          "expect": { "frameDecrypts": true, "note": "previousKey grace window" } },
+        { "do": "recv_frame_sealed_with_epoch", "keyEpoch": 1,
+          "expect": { "frameDecrypts": true } }
+      ],
+      "pending": "epoch wire not implemented yet — driver may skip until key_epoch ships"
+    },
+    {
+      "id": "relay-flap-sealers-survive",
+      "callRole": "caller",
+      "platform": "android-only-today",
+      "steps": [
+        { "do": "video_active_baseline", "mid": "2" },
+        { "do": "transport_downgrade_ws_relay", "expect": { "relayArmed": true, "relaySealed": true } },
+        { "do": "transport_upgrade_p2p", "expect": { "relayArmed": false } },
+        { "do": "transport_downgrade_ws_relay",
+          "expect": { "relayArmed": true, "relaySealed": true, "note": "sealers not disposed by previous leg close()" } }
+      ]
+    }
+  ]
+}
