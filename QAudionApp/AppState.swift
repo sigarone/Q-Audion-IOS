@@ -6512,8 +6512,44 @@ final class AppState: ObservableObject {
             await sendUpgradeConsentRequest(to: peerId, sdp: "", media: "camera")
             return
         }
+        // W-VIDUPCALLER — tell the controller VideoCallPipeline (started above)
+        // owns the camera, so upgradeToVideo()'s startCameraCapture() creates a
+        // WebRTCPixelBufferCapturer instead of its own RTCCameraVideoCapturer.
+        // MUST be set before upgradeToVideo() — startCameraCapture() reads this
+        // flag synchronously while building the offer. Without it, the
+        // controller opens a SECOND, independent AVCaptureSession that
+        // contends with VideoCallPipeline.captureSession (the one
+        // LocalCameraPreview is bound to) for the same camera hardware —
+        // the local self-preview goes black even though the controller's own
+        // session keeps streaming real frames to the peer over WebRTC RTP.
+        // Mirrors the callee-side upgrade wiring (acceptPendingIncomingUpgrade,
+        // above) and the initial-outgoing/-incoming video call wiring
+        // (startCall / handleIncomingWebRtcOffer).
+        controller.useExternalVideoSource = true
         do {
             let offerSdp = try await controller.upgradeToVideo()
+            // W-VIDUPCALLER — bridge VideoCallPipeline's captured frames into
+            // the WebRTC RTCVideoSource now that upgradeToVideo() has created
+            // webrtcPixelBufferCapturer (via startCameraCapture, gated on
+            // useExternalVideoSource above). Belt-and-braces alongside the
+            // useExternalVideoSource flag: with the flag alone (fix above),
+            // the controller's OWN RTCCameraVideoCapturer path is correctly
+            // skipped and the dual-AVCaptureSession conflict is gone — but
+            // without ALSO wiring this bridge, webrtcPixelBufferCapturer
+            // exists yet is never pushed a single frame, so it would carry
+            // NOTHING to Android (worse than the pre-fix state, which at
+            // least streamed real frames from its own capturer). This is
+            // the same class of gap the responder-side comment above
+            // documents ("W-VIDTX"). Mirrors that fix + the
+            // startCall/acceptIncomingCall wiring for the caller-initiated
+            // MID-CALL upgrade path, which never received it.
+            #if os(iOS)
+            if let capturer = controller.webrtcPixelBufferCapturer {
+                self.videoPipeline?.onCapturedPixelBuffer = { [weak capturer] pixelBuffer, timestampNs in
+                    capturer?.push(pixelBuffer, rotation: ._0, timestampNs: timestampNs)
+                }
+            }
+            #endif
             await sendUpgradeConsentRequest(to: peerId, sdp: offerSdp, media: "camera")
         } catch QAudionWebRtcCallController.ControllerError.alreadyHasVideo {
             // Peer raced us; their upgrade offer arrives via wireUpgradeHandlers.
