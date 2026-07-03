@@ -20,12 +20,18 @@ import QAudionEngine
 ///                              feed from deepfake detector)
 ///   - `recentSamples`       ← `appState.txWaveformSamples` (last N tx samples)
 ///   - `muted`               ← local @State mirror, set + read by button tap
-///   - `transportMode`       ← `.bcryptoWsRelay` if `backendType == "PQC"`
-///                              else `.disconnected` (richer mapping when
-///                              engine surfaces real transport feedback)
+///   - `transportMode`       ← maps live `backendType` ("p2p"/"turn"/"relay")
+///                              to the corresponding TransportMode case
+///                              (see `liveTransportMode`) — FIXED: this used
+///                              to compare `backendType == "PQC"`, a literal
+///                              backendType never holds, so the chip always
+///                              fell through to `.disconnected`.
 ///   - `keyInfo`             ← built from `appState.callPqcSessionKey` +
 ///                              `appState.pskActive`/`pskName`/`pskFingerprint`
 ///                              when ML-KEM session key is available (W502)
+///   - `voiceBiometrics`     ← built from `appState.voiceAnalysis` (Guardian
+///                              ribbon + security-sheet biometrics; unified
+///                              call UI pass — see `liveVoiceBiometrics`)
 ///
 /// Stub fields (kept until engine exposes them — see W29 spec from
 /// the parallel agent):
@@ -164,7 +170,14 @@ struct LiveInCallScreen: View {
                 recentSamples: liveSamples,
                 rekeyInSeconds: liveRekeyInSeconds,
                 rekeyTotalSeconds: Self.rekeyTotalSeconds,
-                pqcActive: appState.backendType == "PQC",
+                // W-TRUSTBAR-FIX: backendType is one of "p2p"/"turn"/"relay"
+                // (see AppState.swift ~line 267) — it is NEVER the literal
+                // "PQC". The PQC handshake is a SEPARATE layer from the
+                // media transport; "PQC active" should reflect whether the
+                // ML-KEM session key has actually been established, i.e.
+                // the same live source the trust-bar/key-info panel already
+                // uses (liveKeyInfo != nil), not the transport string.
+                pqcActive: liveKeyInfo != nil,
                 // W339: real SAS from ComputeSasUseCase — derived from
                 // appState.callPqcSessionKey when set by the call setup
                 // path. While the key is nil (current state in most
@@ -186,6 +199,19 @@ struct LiveInCallScreen: View {
                 peerShortNumber: cachedPeerShortNumber,
                 rxSamples: liveRxSamples,
                 cipherSamples: liveCipherSamples,
+                // Unified call UI — Guardian ribbon + security-sheet
+                // biometrics. nil while appState.voiceAnalysis is nil
+                // (engine flag off, incoming-call wiring gap, or no
+                // result has arrived yet) — InCallScreen renders the
+                // graceful "not available" state in that case.
+                voiceBiometrics: liveVoiceBiometrics,
+                // No live rekey-count/epoch source exists yet (see
+                // AppState.rekeyCount doc comment — it is declared but
+                // never incremented by any current rotation hook), so we
+                // pass nil rather than a fabricated epoch. If a future
+                // pass wires a real rekey event, swap this for
+                // `appState.rekeyCount`.
+                keyEpoch: nil,
                 onToggleMute: handleToggleMute,
                 onToggleSpeaker: handleToggleSpeaker,
                 onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
@@ -440,6 +466,27 @@ struct LiveInCallScreen: View {
         )
     }
 
+    /// Unified call UI — maps the live `AppState.voiceAnalysis` (raw
+    /// engine result, see QAudionEngine.VoiceAnalysisResult) onto
+    /// InCallScreen's small display-only `VoiceBiometrics` struct. Returns
+    /// nil while no result has arrived (engine flag off, incoming-call
+    /// wiring gap per CallService.swift, or genuinely no analysis yet) —
+    /// InCallScreen then omits the biometrics rows entirely rather than
+    /// showing zeros.
+    private var liveVoiceBiometrics: InCallScreen.VoiceBiometrics? {
+        guard let result = appState.voiceAnalysis else { return nil }
+        return InCallScreen.VoiceBiometrics(
+            stressScore: result.stress.score,
+            jitter: result.stress.jitter,
+            shimmer: result.stress.shimmer,
+            hnr: result.voiceHealth.hnr,
+            breathiness: result.voiceHealth.breathiness,
+            pitchHz: result.pitch.f0Hz,
+            syllablesPerSec: result.speechRate.syllablesPerSec,
+            confidence: result.confidence
+        )
+    }
+
     /// Compute a short display fingerprint from the ML-KEM session key.
     /// Format: first 8 hex chars + "…" + last 4 hex chars of SHA-256(key).
     /// E.g. "7f3bd2a1…d2e9" — matches Android KeyInfoPanel.
@@ -586,7 +633,7 @@ struct LiveInCallScreen: View {
             let s = AppState()
             s.callContactId = "user-mario"
             s.confidenceScore = 0.92
-            s.backendType = "PQC"
+            s.backendType = "p2p"
             s.isInCall = true
             return s
         }())

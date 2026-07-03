@@ -37,6 +37,20 @@ struct VideoCallView: View {
                 if showControls {
                     topBar
                         .transition(.move(edge: .top).combined(with: .opacity))
+                    // Unified call UI — compact trust bar (SAS ✓ / PQC /
+                    // transport chips). Additive: topBar's existing lock
+                    // icon + CallSecurityBadge are untouched; this is a
+                    // second, small row directly under it, matching the
+                    // "trust bar → Guardian ribbon" order from
+                    // call-guardian-reference.html. The Guardian ribbon
+                    // itself lives inside the existing diagnostics sheet
+                    // here (videoDiagPanel) rather than a second overlay,
+                    // to avoid stacking two bottom sheets on the video
+                    // surface.
+                    trustBar
+                        .padding(.horizontal, 16)
+                        .padding(.top, 6)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
                 Spacer()
@@ -238,6 +252,66 @@ struct VideoCallView: View {
         .padding(.top, 8)
     }
 
+    // MARK: - Trust bar (unified call UI)
+
+    /// Compact security-chip row: SAS ✓ (only once actually verified),
+    /// PQC (only once a real ML-KEM session key is live — same source as
+    /// `videoDiagSessionKey` below, NOT the literal string "PQC" that
+    /// `appState.backendType` never equals), and the media-transport
+    /// label (`p2p`/`turn`/`relay` from AppState, mapped to the same
+    /// wording InCallScreen's TransportMode.label uses so the two call
+    /// surfaces read consistently). Tapping the shield opens the existing
+    /// diagnostics sheet, now extended with the Guardian mini-gauges
+    /// (see videoDiagPanel) — reusing one sheet rather than stacking a
+    /// second one on the video surface.
+    private var trustBar: some View {
+        HStack(spacing: 6) {
+            if sasVerified {
+                trustChip(icon: "checkmark", label: "SAS ✓", color: .green, filled: true)
+            }
+            if appState.callPqcSessionKey != nil && !(appState.callPqcSessionKey?.isEmpty ?? true) {
+                trustChip(icon: "lock.shield.fill", label: "PQC", color: .purple, filled: false)
+            }
+            trustChip(icon: nil, label: transportChipLabel, color: .white.opacity(0.75), filled: false)
+            Spacer()
+        }
+    }
+
+    private func trustChip(icon: String?, label: String, color: Color, filled: Bool) -> some View {
+        HStack(spacing: 4) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 8, weight: .bold))
+            }
+            Text(label)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(0.4)
+        }
+        .foregroundColor(color)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            Capsule().fill(filled ? color.opacity(0.16) : Color.clear)
+        )
+        .overlay(
+            Capsule().stroke(color.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    /// Maps the live `backendType` ("p2p"/"turn"/"relay") to the same
+    /// wording InCallScreen.TransportMode.label uses, so the audio and
+    /// video call surfaces read consistently. Falls back to "CONNECTING…"
+    /// for any other/unrecognised value, matching TransportMode's default
+    /// case.
+    private var transportChipLabel: String {
+        switch appState.backendType {
+        case "p2p":   return "P2P SRTP"
+        case "turn":  return "TURN"
+        case "relay": return "RELAY"
+        default:      return "CONNECTING…"
+        }
+    }
+
     // MARK: - SAS mini panel (bottom-left overlay)
 
     private var sasMiniPanel: some View {
@@ -323,12 +397,33 @@ struct VideoCallView: View {
         .padding(.bottom, 8)
     }
 
-    // MARK: - Bottom controls
+    // MARK: - Bottom controls (unified call UI — cosmetic regroup only)
+    //
+    // Same 5 buttons, same closures (videoFlipCamera / videoSetCameraEnabled
+    // / setMuted / setSpeaker / endCall) — nothing added or removed. Order
+    // changed to match the unified dock's primary-controls-together,
+    // hangup-last convention from call-guardian-reference.html /
+    // InCallScreen's regrouped dock: mute · speaker · video · invert ·
+    // end (was: invert · video · mute · end · speaker, with hangup
+    // stranded in the middle).
 
     private var bottomControls: some View {
         HStack(spacing: 24) {
-            videoButton(icon: "camera.rotate.fill", label: "Inverti") {
-                appState.videoFlipCamera()
+            videoButton(
+                icon: isMuted ? "mic.slash.fill" : "mic.fill",
+                label: isMuted ? "Riattiva" : "Muto",
+                isActive: isMuted
+            ) {
+                isMuted.toggle()
+                appState.setMuted(isMuted)
+            }
+            videoButton(
+                icon: isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
+                label: "Altoparlante",
+                isActive: isSpeaker
+            ) {
+                isSpeaker.toggle()
+                appState.setSpeaker(isSpeaker)
             }
             videoButton(
                 icon: isCameraOn ? "video.fill" : "video.slash.fill",
@@ -338,24 +433,11 @@ struct VideoCallView: View {
                 isCameraOn.toggle()
                 appState.videoSetCameraEnabled(isCameraOn)
             }
-            videoButton(
-                icon: isMuted ? "mic.slash.fill" : "mic.fill",
-                label: isMuted ? "Riattiva" : "Muto",
-                isActive: isMuted
-            ) {
-                isMuted.toggle()
-                appState.setMuted(isMuted)
+            videoButton(icon: "camera.rotate.fill", label: "Inverti") {
+                appState.videoFlipCamera()
             }
             videoButton(icon: "phone.down.fill", label: "Termina", isEndCall: true) {
                 appState.endCall()
-            }
-            videoButton(
-                icon: isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
-                label: "Altoparlante",
-                isActive: isSpeaker
-            ) {
-                isSpeaker.toggle()
-                appState.setSpeaker(isSpeaker)
             }
         }
     }
@@ -415,10 +497,54 @@ struct VideoCallView: View {
             videoDiagTransport
             videoDiagFrameCounters
             videoDiagSessionKey
+            // Unified call UI — Guardian voice biometrics, interpreted
+            // (value + plain-language meaning), reusing the existing
+            // diagnostics sheet as the aggregation point for video calls
+            // rather than a second sheet. Omitted entirely (not the
+            // section header either) when no result is available, so the
+            // sheet never shows a fabricated "0.00" row.
+            if appState.voiceAnalysis != nil {
+                Divider().background(Color.white.opacity(0.2))
+                videoDiagVoiceBiometrics
+            }
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.88)))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.green.opacity(0.35), lineWidth: 1))
+    }
+
+    /// Interpreted voice biometrics — same thresholds as InCallScreen's
+    /// security sheet (StressDetector composite score bands, and the REAL
+    /// VoiceHealthMonitor >20dB/<10dB HNR bands, since breathiness = 1 −
+    /// hnr/20 is the engine's own formula, not a UI-invented threshold).
+    @ViewBuilder
+    private var videoDiagVoiceBiometrics: some View {
+        if let bio = appState.voiceAnalysis {
+            let stressPct = Int((bio.stress.score * 100).rounded())
+            let stressWord = Self.videoStressWord(bio.stress.score * 100)
+            let hnrWord = Self.videoHnrWord(bio.voiceHealth.hnr)
+            videoDiagRow("STRESS", "\(stressPct)/100 · \(stressWord)")
+            videoDiagRow("RESPIRO · HNR", "\(Int(bio.voiceHealth.hnr.rounded())) dB · \(hnrWord)")
+            videoDiagRow("PITCH f0", "\(Int(bio.pitch.f0Hz.rounded())) Hz")
+        }
+    }
+
+    /// UI-only interpretive band (the engine's composite stress score has
+    /// no named bands of its own) — matches InCallScreen's
+    /// stressStatusWord thresholds so the two surfaces never disagree.
+    private static func videoStressWord(_ pct: Float) -> String {
+        if pct < 35 { return "calmo" }
+        if pct < 60 { return "elevato" }
+        return "agitato"
+    }
+
+    /// REAL threshold: VoiceHealthMonitor.analyze computes
+    /// `breathiness = max(0, 1 - hnr/20)`, so >20dB clear / <10dB hoarse
+    /// is a direct reading of that formula.
+    private static func videoHnrWord(_ hnr: Float) -> String {
+        if hnr > 20 { return "chiara" }
+        if hnr < 10 { return "rauca" }
+        return "media"
     }
 
     @ViewBuilder

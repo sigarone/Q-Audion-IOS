@@ -467,6 +467,16 @@ final class AppState: ObservableObject {
     @Published var encryptionAlgo: String = "ML-KEM-1024 + AES-256-GCM"
     @Published var transportType: String = "P2P Direct"
     @Published var latencyMs: Int = 0
+    /// Unified call UI — Guardian ribbon voice biometrics (pitch, stress,
+    /// voice health, speech rate, confidence). Fed by
+    /// `CallService.onVoiceAnalysis`, itself wired from
+    /// `QAudionCallIntegration.getVoiceAnalysis().onResult` on the OUTGOING
+    /// call-setup path only (mirrors the existing `onDeepfakeAlert`/
+    /// `onDeepfakeScore` wiring site — see CallService.swift). nil until
+    /// the first analysis result arrives (or forever, on an incoming call —
+    /// the responder integration does not currently wire this closure,
+    /// same pre-existing asymmetry as onDeepfakeAlert). Reset in endCall().
+    @Published var voiceAnalysis: VoiceAnalysisResult?
 
     // MARK: - Server connection state
     /// Pinned to `PinnedServerHost.url` (`https://voip.bcrypto.com`).
@@ -1277,6 +1287,16 @@ final class AppState: ObservableObject {
                 case .green:
                     self.confidenceLevel = "green"
                 }
+            }
+        }
+
+        // Unified call UI — Guardian ribbon voice biometrics. Mirrors the
+        // onDeepfakeScore subscription immediately above: hop to MainActor,
+        // publish the result. This does NOT touch/invert deepfakeAlert —
+        // it is a separate @Published field driven by a separate closure.
+        callService.onVoiceAnalysis = { [weak self] result in
+            Task { @MainActor in
+                self?.voiceAnalysis = result
             }
         }
 
@@ -6455,6 +6475,10 @@ final class AppState: ObservableObject {
         isInCall = false
         isVideoCall = false
         deepfakeAlert = false
+        // Unified call UI — drop the Guardian voice-biometrics snapshot so
+        // it doesn't leak into the next call's security sheet before the
+        // first analysis result of that new call arrives.
+        voiceAnalysis = nil
         // W564 — proactively trigger X25519 key exchange with the peer right
         // before clearing callContactId. After a call both sides have done a
         // PQC ML-KEM handshake (strong auth) so this is the ideal moment to

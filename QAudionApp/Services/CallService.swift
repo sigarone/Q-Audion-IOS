@@ -10,6 +10,13 @@ final class CallService {
     var onTxWaveformUpdate: (([Float]) -> Void)?
     var onRxWaveformUpdate: (([Float]) -> Void)?
     var onCipherWaveformUpdate: (([Float]) -> Void)?
+    /// Unified call UI — Guardian ribbon voice biometrics (pitch/stress/
+    /// health/speech-rate/confidence). Wired 1:1 alongside onDeepfakeAlert/
+    /// onDeepfakeScore below, on the same outgoing-integration construction
+    /// site. Gated on `EngineConfig.production().enableVoiceAnalysis` at the
+    /// wiring call site (not here) — mirrors how `VoiceAnalysisEngine` itself
+    /// gates processing via its own internal `enabled` flag.
+    var onVoiceAnalysis: ((VoiceAnalysisResult) -> Void)?
 
     /// W65+W66: Full audio capture + processing pipeline.
     ///
@@ -474,6 +481,22 @@ final class CallService {
             }
             self.onDeepfakeAlert?(isAlert)
             self.onDeepfakeScore?(level, score)
+        }
+
+        // Unified call UI — Guardian ribbon voice biometrics. Battery/perf
+        // gate: only assign `onResult` (i.e. only ever receive callbacks)
+        // when the engine config has voice analysis enabled. EngineConfig
+        // .production() has enableVoiceAnalysis=true; .batteryOptimized()
+        // (not currently selected anywhere) has it false — this check keeps
+        // the wiring inert automatically if/when the app switches profiles,
+        // without adding a second gate that could drift from the engine's
+        // own config. VoiceAnalysisEngine.processFrame() ALSO internally
+        // downsamples via analysisRate (default every 5th frame), so this
+        // wiring does not run the full analysis pipeline unconditionally.
+        if EngineConfig.production().enableVoiceAnalysis {
+            integration.getVoiceAnalysis().onResult = { [weak self] result in
+                self?.onVoiceAnalysis?(result)
+            }
         }
 
         // NOTE: do NOT call `integration.onCallSetupStarted` here.

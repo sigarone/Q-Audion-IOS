@@ -37,6 +37,11 @@ struct InCallScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
+    /// Unified call UI — security sheet presentation state. Local to this
+    /// view (not plumbed from AppState): purely a "is the aggregating
+    /// sheet open" UI flag, nothing security-critical is gated by it.
+    @State private var showSecuritySheet: Bool = false
+
     // MARK: - Cross-platform model types (shared vocabulary)
 
     enum TransportMode: Equatable {
@@ -61,6 +66,24 @@ struct InCallScreen: View {
         let pskMethodLabel: String?        // "NFC" | "QR" | "Manuale" | …
         let pskName: String?               // "Yubi5"
         let pskFingerprint: String?        // "a83c-9f12"
+    }
+
+    /// Unified call UI — Guardian ribbon voice-biometrics snapshot. Maps
+    /// 1:1 onto `QAudionEngine.VoiceAnalysisResult` fields the security
+    /// sheet needs; kept as a small local struct (rather than importing
+    /// QAudionEngine's type directly into the view's public API) so
+    /// InCallScreen's previews/tests don't need to construct the full
+    /// engine result type. nil at the call site ⇒ every biometrics row
+    /// in the security sheet is omitted gracefully (no fabricated data).
+    struct VoiceBiometrics: Equatable {
+        let stressScore: Float        // 0...1 (VoiceAnalysisResult.Stress.score)
+        let jitter: Float             // 0...1 fraction (not yet ×100)
+        let shimmer: Float            // 0...1 fraction
+        let hnr: Float                // dB (VoiceAnalysisResult.VoiceHealth.hnr)
+        let breathiness: Float        // 0...1
+        let pitchHz: Float            // VoiceAnalysisResult.Pitch.f0Hz
+        let syllablesPerSec: Float    // VoiceAnalysisResult.SpeechRate.syllablesPerSec
+        let confidence: Float         // 0...1 (VoiceAnalysisResult.confidence)
     }
 
     // MARK: - Inputs
@@ -97,6 +120,21 @@ struct InCallScreen: View {
     /// Drives the "CIFRATURA" waveform — visually represents the
     /// encryption/decryption process on received audio packets.
     let cipherSamples: [Float]
+    /// Unified call UI — live Guardian voice-biometrics snapshot for the
+    /// security sheet + Guardian ribbon mini-gauges. nil while unavailable
+    /// (engine flag off, incoming-call wiring gap, or no result yet) —
+    /// every dependent row is omitted gracefully, never fabricated.
+    let voiceBiometrics: VoiceBiometrics?
+    /// Unified call UI — KMS key epoch counter (0-based count of rekeys
+    /// this call has performed so far). nil when no live rekey-count
+    /// source is available; the security sheet then shows the static
+    /// "PQC session key" row without an epoch/countdown line rather than
+    /// fabricating one. Currently sourced from `AppState.rekeyCount`,
+    /// which increments only if a live rotation hook exists (see
+    /// CallSessionKeyBroker / KeyRotationCoordinator — as of this pass
+    /// neither exposes an in-call rekey EVENT, only the one-time initial
+    /// key registration, so this is expected to render nil / omitted).
+    let keyEpoch: Int?
     let onToggleMute: () -> Void
     let onToggleSpeaker: () -> Void
     let onToggleVoiceEnhancement: () -> Void
@@ -150,6 +188,8 @@ struct InCallScreen: View {
          peerShortNumber: String? = nil,
          rxSamples: [Float] = [],
          cipherSamples: [Float] = [],
+         voiceBiometrics: VoiceBiometrics? = nil,
+         keyEpoch: Int? = nil,
          onToggleMute: @escaping () -> Void = {},
          onToggleSpeaker: @escaping () -> Void = {},
          onToggleVoiceEnhancement: @escaping () -> Void = {},
@@ -183,6 +223,8 @@ struct InCallScreen: View {
         self.peerShortNumber = peerShortNumber
         self.rxSamples = rxSamples
         self.cipherSamples = cipherSamples
+        self.voiceBiometrics = voiceBiometrics
+        self.keyEpoch = keyEpoch
         self.onToggleMute = onToggleMute
         self.onToggleSpeaker = onToggleSpeaker
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
@@ -221,6 +263,17 @@ struct InCallScreen: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .animation(.easeInOut(duration: 0.2), value: peerScreenSharing)
             }
+        }
+        // Unified call UI — security sheet aggregates SAS + PQC handshake +
+        // cipher/key/epoch + transport + interpreted voice biometrics.
+        // Presented as a system sheet (not a custom overlay) so it gets
+        // native drag-to-dismiss. Matches the existing sheet convention in
+        // this codebase (e.g. ContactDetailScreen's SasVerifySheet): the
+        // qaudionScheme/extras/type environment values propagate down from
+        // ContentView's single root `.qAudionTheme(dark: true)` — no need
+        // to reapply the modifier at each sheet call site.
+        .sheet(isPresented: $showSecuritySheet) {
+            securitySheet
         }
     }
 
@@ -296,6 +349,14 @@ struct InCallScreen: View {
                     recentSamples: recentSamples,
                     rekeyInSeconds: rekeyInSeconds
                 )
+
+                Spacer().frame(height: 8)
+
+                trustBar.padding(.horizontal, 20)
+
+                Spacer().frame(height: 8)
+
+                guardianRibbon.padding(.horizontal, 20)
 
                 Spacer().frame(height: 8)
 
@@ -654,6 +715,304 @@ struct InCallScreen: View {
         }
     }
 
+    // MARK: - Trust bar (unified call UI)
+
+    /// Compact row of security chips + an expand shield, matching the
+    /// "Aegis Cipher" trust-bar from call-guardian-reference.html: SAS ✓
+    /// (green, only once actually verified), PQC (accent, only once a
+    /// real ML-KEM session key is live), and the transport chip (reusing
+    /// the exact `transportMode.label` the transport row already shows).
+    /// Tapping the shield opens the aggregating security sheet — the
+    /// single place SAS words / handshake / cipher / transport / voice
+    /// biometrics live together, instead of scattering them across the
+    /// scroll content.
+    private var trustBar: some View {
+        HStack(spacing: 7) {
+            if sasVerified {
+                trustChip(
+                    icon: "checkmark",
+                    label: "SAS ✓",
+                    color: extras.success,
+                    filled: true
+                )
+            }
+            if pqcActive {
+                trustChip(
+                    icon: "lock.shield.fill",
+                    label: "PQC",
+                    color: extras.pqcAccent,
+                    filled: false
+                )
+            }
+            trustChip(
+                icon: nil,
+                label: transportMode.label,
+                color: scheme.onSurfaceVariant,
+                filled: false
+            )
+            Spacer(minLength: 0)
+            Button {
+                showSecuritySheet = true
+            } label: {
+                Image(systemName: "checkmark.shield")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(extras.pqcAccent)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(scheme.surfaceVariant)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Apri sicurezza sessione")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(scheme.surfaceVariant.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(scheme.outline.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    /// Small monospace chip used only inside `trustBar`. Distinct from
+    /// `MetaPill` (rounded-rect not capsule, smaller, optional leading
+    /// icon) to match the reference's `.chip` visual — kept private and
+    /// local rather than promoted to a shared component since nothing
+    /// else in the call UI needs this exact shape yet.
+    private func trustChip(icon: String?, label: String, color: Color, filled: Bool) -> some View {
+        HStack(spacing: 4) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .bold))
+            }
+            Text(label)
+                .qaudionStyle(type.labelSmall)
+                .tracking(0.4)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(filled ? color.opacity(0.14) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(color.opacity(0.4), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Guardian ribbon (unified call UI)
+
+    /// Compact Guardian strip: a small live remote-voice spectrum on the
+    /// left, a cipher/seal visual on the right, and 3 mini gauges below
+    /// (stress / breath·HNR / pitch) with a one-word status per gauge.
+    /// Additive and small per spec — NOT the full decorative canvas
+    /// spectrum-analyzer from the HTML reference; the spectrum here reuses
+    /// the existing RX waveform samples (already computed live) rather
+    /// than introducing a second FFT-ish visual pipeline. When
+    /// `voiceBiometrics == nil` (engine flag off, or no result yet) the
+    /// gauges render an em-dash rather than fabricated numbers.
+    private var guardianRibbon: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("REMOTE VOICE")
+                        .qaudionStyle(type.labelSmall)
+                        .tracking(1.0)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                    miniSpectrum
+                        .frame(height: 30)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Divider()
+                    .background(scheme.outline.opacity(0.4))
+                    .frame(height: 40)
+                    .padding(.horizontal, 10)
+
+                cipherSeal
+                    .frame(width: 40, height: 40)
+            }
+            .padding(10)
+
+            Rectangle()
+                .fill(scheme.outline.opacity(0.3))
+                .frame(height: 1)
+
+            HStack(spacing: 0) {
+                guardianGauge(
+                    label: "STRESS",
+                    value: stressDisplayValue,
+                    status: stressStatusWord,
+                    statusColor: stressStatusColor
+                )
+                guardianGauge(
+                    label: "BREATH·HNR",
+                    value: hnrDisplayValue,
+                    status: hnrStatusWord,
+                    statusColor: hnrStatusColor
+                )
+                guardianGauge(
+                    label: "PITCH",
+                    value: pitchDisplayValue,
+                    status: pitchStatusWord,
+                    statusColor: scheme.onSurfaceVariant
+                )
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scheme.surfaceVariant.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(scheme.outline.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    /// Reuses the live RX samples (same feed as the "VOCE RICEVUTA"
+    /// oscilloscope in `statsCard`) rather than a separate spectrum
+    /// pipeline — additive/small per spec, not a second decorative canvas.
+    private var miniSpectrum: some View {
+        Canvas { ctx, size in
+            let midY = size.height / 2
+            guard rxSamples.count > 1 else {
+                var flat = Path()
+                flat.move(to: CGPoint(x: 0, y: midY))
+                flat.addLine(to: CGPoint(x: size.width, y: midY))
+                ctx.stroke(flat, with: .color(extras.success.opacity(0.25)), lineWidth: 1)
+                return
+            }
+            var peak: Float = 0.10
+            for s in rxSamples {
+                let a = abs(s)
+                if a > peak { peak = a }
+            }
+            let gain = CGFloat(min(1.0, 0.92 / peak))
+            let count = rxSamples.count - 1
+            let stepX = size.width / CGFloat(count)
+            var wave = Path()
+            for (i, sample) in rxSamples.enumerated() {
+                let x = CGFloat(i) * stepX
+                let scaled = max(-1.0, min(1.0, CGFloat(sample) * gain))
+                let y = midY - scaled * midY * 0.85
+                if i == 0 { wave.move(to: CGPoint(x: x, y: y)) }
+                else       { wave.addLine(to: CGPoint(x: x, y: y)) }
+            }
+            ctx.stroke(wave, with: .color(extras.success), lineWidth: 1.3)
+        }
+    }
+
+    /// Small cipher/seal glyph — a static lock badge (not an animated
+    /// particle canvas like the HTML reference) tinted by whether a PQC
+    /// session key is actually live, so the glyph itself carries meaning
+    /// rather than being purely decorative.
+    private var cipherSeal: some View {
+        ZStack {
+            Circle()
+                .fill(scheme.background.opacity(0.6))
+                .overlay(
+                    Circle().stroke((pqcActive ? extras.pqcAccent : scheme.outline).opacity(0.5), lineWidth: 1)
+                )
+            Image(systemName: "lock.rectangle.stack.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(pqcActive ? extras.pqcAccent : scheme.onSurfaceVariant)
+        }
+    }
+
+    private func guardianGauge(label: String, value: String, status: String, statusColor: Color) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .qaudionStyle(type.labelSmall)
+                .tracking(0.6)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .font(.system(size: 8))
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(scheme.onSurface)
+            Text(status)
+                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .tracking(0.4)
+                .foregroundStyle(statusColor)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Guardian ribbon — interpreted display values (shared with
+    //         the security-sheet biometrics rows so the two never disagree)
+
+    /// Real thresholds from `StressDetector`/`ConfidenceIndex`
+    /// (QAudionEngine/Sources/QAudionEngine/Analysis + Deepfake):
+    /// `stress.score` is already normalised to [0,1]
+    /// (`min(1, (jitter*10 + shimmer*5)/2)`). Displayed ×100 as "/100"
+    /// to match the reference's convention; bands below are a UI-only
+    /// interpretive convention (the engine itself has no named bands for
+    /// this composite score) loosely aligned to common voice-stress
+    /// literature: <35 calm, 35-60 elevated, >60 agitated/possible duress.
+    private var stressDisplayValue: String {
+        guard let bio = voiceBiometrics else { return "—" }
+        return "\(Int((bio.stressScore * 100).rounded()))"
+    }
+    private var stressStatusWord: String {
+        guard let bio = voiceBiometrics else { return "n/d" }
+        let pct = bio.stressScore * 100
+        if pct < 35 { return "calm" }
+        if pct < 60 { return "elevated" }
+        return "agitated"
+    }
+    private var stressStatusColor: Color {
+        guard let bio = voiceBiometrics else { return scheme.onSurfaceVariant }
+        let pct = bio.stressScore * 100
+        if pct < 35 { return extras.success }
+        if pct < 60 { return extras.warning }
+        return extras.riskHigh
+    }
+
+    /// HNR threshold is REAL and load-bearing: `VoiceHealthMonitor.analyze`
+    /// computes `breathiness = max(0, 1 - hnr/20)`, i.e. the engine itself
+    /// treats 20 dB as the "fully clear" reference point and 0 dB as
+    /// maximally breathy — so >20 dB clear / <10 dB hoarse-or-noisy-link
+    /// (breathiness ≥ 0.5) is a direct reading of that formula, not an
+    /// invented band.
+    private var hnrDisplayValue: String {
+        guard let bio = voiceBiometrics else { return "—" }
+        return "\(Int(bio.hnr.rounded()))"
+    }
+    private var hnrStatusWord: String {
+        guard let bio = voiceBiometrics else { return "n/d" }
+        if bio.hnr > 20 { return "clear" }
+        if bio.hnr < 10 { return "hoarse" }
+        return "fair"
+    }
+    private var hnrStatusColor: Color {
+        guard let bio = voiceBiometrics else { return scheme.onSurfaceVariant }
+        if bio.hnr > 20 { return extras.success }
+        if bio.hnr < 10 { return extras.warning }
+        return scheme.onSurfaceVariant
+    }
+
+    private var pitchDisplayValue: String {
+        guard let bio = voiceBiometrics else { return "—" }
+        return "\(Int(bio.pitchHz.rounded()))"
+    }
+    /// SpeechRateAnalyzer/PitchExtractor expose no explicit "steady vs
+    /// shifting" band — this is a coarse UI-only heuristic (no baseline
+    /// history is tracked here) so it always reads "steady" while voiced.
+    /// It exists only so the gauge has a status word rather than a blank;
+    /// a real "shifted from this peer's baseline" comparison would need
+    /// a per-peer stored baseline, which is out of scope for this pass.
+    private var pitchStatusWord: String {
+        guard let bio = voiceBiometrics else { return "n/d" }
+        return bio.pitchHz > 0 ? "steady" : "silent"
+    }
+
     // MARK: - Pills row
 
     private var pillsRow: some View {
@@ -685,24 +1044,255 @@ struct InCallScreen: View {
         }
     }
 
+    // MARK: - Security sheet (unified call UI)
+    //
+    // Aggregates, in one place: SAS words + verify (reuses sasPanel's
+    // sub-pieces), PQC handshake/key info (reuses keyInfoPanel's KeyInfo
+    // model — same `keyInfo` input, no new data source), cipher + key +
+    // epoch/rekey (epoch shown only when `keyEpoch != nil`; no live rekey
+    // countdown hook exists as of this pass — see `keyEpoch` doc comment —
+    // so it is omitted rather than fabricated), transport, and INTERPRETED
+    // voice biometrics (reusing the same display/status helpers as
+    // `guardianRibbon` so the two surfaces never disagree).
+
+    private var securitySheet: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Sicurezza sessione")
+                        .qaudionStyle(type.titleMedium)
+                        .foregroundStyle(scheme.onSurface)
+                    Spacer()
+                    Button {
+                        showSecuritySheet = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .frame(width: 28, height: 28)
+                            .background(Circle().fill(scheme.surfaceVariant))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 12)
+
+                Divider().background(scheme.outline.opacity(0.35))
+
+                VStack(alignment: .leading, spacing: 0) {
+                    if sasWords.count == 6 {
+                        securitySection(title: "SAS · leggi ad alta voce per verificare \(peerDisplayName)") {
+                            sasPanel
+                        }
+                    }
+
+                    if let keyInfo {
+                        securitySection(title: "Handshake · post-quantum") {
+                            keyInfoPanel(keyInfo)
+                        }
+                    }
+
+                    // Cipher + key + epoch/rekey. Epoch row shown ONLY when
+                    // a live `keyEpoch` source exists (see its doc comment —
+                    // no rotation-event hook exists as of this pass, so the
+                    // call site passes nil and this row is simply absent
+                    // rather than showing a fabricated "epoch 0" / countdown).
+                    if keyInfo != nil || keyEpoch != nil {
+                        securitySection(title: "Cifra e chiave") {
+                            cipherKeySectionBody
+                        }
+                    }
+
+                    securitySection(title: "Trasporto") {
+                        transportSectionBody
+                    }
+
+                    securitySection(title: "Biometria vocale · \(peerDisplayName)", isLast: true) {
+                        voiceBiometricsSectionBody
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .presentationDetents([.large, .medium])
+        .presentationDragIndicator(.visible)
+    }
+
+    /// Shared section chrome for the security sheet — title row + content
+    /// + bottom divider (omitted for the last section).
+    @ViewBuilder
+    private func securitySection<Content: View>(
+        title: String,
+        isLast: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased())
+                .qaudionStyle(type.labelSmall)
+                .tracking(1.2)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            content()
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        if !isLast {
+            Divider().background(scheme.outline.opacity(0.25))
+        }
+    }
+
+    /// Cipher + key + epoch/rekey section body.
+    ///
+    /// "CIFRA" intentionally reuses `keyInfo.pqcAlgorithm` (the SAME field
+    /// keyInfoPanel already shows) rather than a hardcoded transport-cipher
+    /// string: `CallCapabilities.sframeAes256V1` exists in the engine but
+    /// is a VIDEO-only, Phase-2 kill-switch tag that defaults OFF
+    /// (`v4SFrameAes256Enabled`) — labelling every call "sframe-aes256-v1"
+    /// would be false for audio-only calls and for any call where that
+    /// switch is off. Better to repeat the one algorithm string we KNOW is
+    /// live than fabricate a second, possibly-wrong one.
+    ///
+    /// "EPOCA" is the one row gated on `keyEpoch`: shown only when a real
+    /// counter is supplied, omitted entirely otherwise (see `keyEpoch` doc
+    /// comment for why no live rekey countdown is offered).
+    private var cipherKeySectionBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let keyInfo {
+                keyInfoRow("CIFRA", keyInfo.pqcAlgorithm)
+            }
+            if let keyEpoch {
+                keyInfoRow("EPOCA", "\(keyEpoch)")
+            }
+        }
+    }
+
+    /// Transport section body: media path + codec-ish info, reusing the
+    /// exact same `transportMode` the trust-bar/transport-row already show
+    /// — no second source of truth for "what transport is this call on".
+    private var transportSectionBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            keyInfoRow("PERCORSO", transportMode.label)
+            keyInfoRow("STATO", transportMode == .disconnected ? "in negoziazione…" : "attivo")
+        }
+    }
+
+    /// INTERPRETED voice biometrics: value + plain-language meaning, using
+    /// the SAME thresholds/status helpers as `guardianRibbon` (stress/HNR
+    /// bands) plus jitter/shimmer and speech-rate rows that the compact
+    /// ribbon has no room for. All rows omitted (not zero-filled) when
+    /// `voiceBiometrics == nil`.
+    @ViewBuilder
+    private var voiceBiometricsSectionBody: some View {
+        if let bio = voiceBiometrics {
+            VStack(alignment: .leading, spacing: 10) {
+                biometricRow(
+                    label: "Autenticità",
+                    value: "\(confidenceWord(bio.confidence)) · \(String(format: "%.2f", bio.confidence))",
+                    valueColor: confidenceColorFor(bio.confidence),
+                    meaning: ">0.70 genuina · 0.25–0.70 verifica con SAS · <0.25 possibile voce sintetica (soglie ConfidenceIndex/ConfidenceThresholds)."
+                )
+                biometricRow(
+                    label: "Stress",
+                    value: "\(stressDisplayValue)/100 · \(stressStatusWord)",
+                    valueColor: stressStatusColor,
+                    meaning: "<35 calmo · 35–60 elevato · >60 agitato — un picco sostenuto può indicare pressione/coercizione."
+                )
+                biometricRow(
+                    label: "Jitter / Shimmer",
+                    value: "\(String(format: "%.1f", bio.jitter * 100))% / \(String(format: "%.1f", bio.shimmer * 100))%",
+                    valueColor: scheme.onSurface,
+                    meaning: "Normale <1% / <3% (convenzione voice-science). Valori troppo perfetti (≈0) sono a loro volta sospetti — una voce umana non è mai così stabile."
+                )
+                biometricRow(
+                    label: "Respiro · HNR",
+                    value: "\(hnrDisplayValue) dB · \(String(format: "%.2f", bio.breathiness))",
+                    valueColor: hnrStatusColor,
+                    meaning: ">20 dB chiara · <10 dB rauca o link rumoroso (VoiceHealthMonitor: breathiness = 1 − hnr/20)."
+                )
+                biometricRow(
+                    label: "Pitch f0 · rate",
+                    value: "\(pitchDisplayValue) Hz · \(String(format: "%.1f", bio.syllablesPerSec)) syl/s",
+                    valueColor: scheme.onSurface,
+                    meaning: "Uno scarto improvviso dal basale di \(peerDisplayName) può segnalare una sostituzione/impersonificazione."
+                )
+            }
+        } else {
+            Text("Biometria vocale non disponibile per questa chiamata.")
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        }
+    }
+
+    private func biometricRow(label: String, value: String, valueColor: Color, meaning: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label)
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                Spacer()
+                Text(value)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(valueColor)
+            }
+            Text(meaning)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// `ConfidenceIndex.greenThreshold`/`redThreshold` equivalents exposed
+    /// via `ConfidenceThresholds` (0.70 / 0.25) — same values already used
+    /// by `confidenceColor` below, reused here for the biometrics row so
+    /// the "Autenticità" wording and its color never diverge from the
+    /// avatar-halo tone.
+    private func confidenceWord(_ value: Float) -> String {
+        switch ConfidenceThresholds.category(of: Double(value)) {
+        case 0:  return "genuina"
+        case 1:  return "verifica con SAS"
+        default: return "a rischio"
+        }
+    }
+    private func confidenceColorFor(_ value: Float) -> Color {
+        switch ConfidenceThresholds.category(of: Double(value)) {
+        case 0:  return extras.success
+        case 1:  return extras.warning
+        default: return extras.riskHigh
+        }
+    }
+
     // MARK: - Bottom action row (pinned)
 
-    // MARK: - Bottom action row (W557: 2-row adaptive layout for iPhone)
+    // MARK: - Control dock (unified call UI — cosmetic regroup only)
     //
-    // Previous design: single HStack with 7 buttons.
-    // Problem: 7×48pt + 1×60pt + 6×12pt spacing ≈ 420pt — overflows any
-    // iPhone screen (narrowest = iPhone SE 375pt safe area ≈ 343pt).
-    // The row was clipped / invisible on every iPhone in portrait mode.
+    // Every button below calls the EXACT SAME closure it did before this
+    // pass (onToggleMute / onToggleSpeaker / onToggleCamera /
+    // onUpgradeToVideo / onToggleScreenShare / onToggleVoiceEnhancement /
+    // onAddParticipant / onHangup) — no new control was invented and no
+    // existing one was removed. Only the grouping changed, to match the
+    // unified dock layout from call-guardian-reference.html:
+    //   Row 1 (primary):   Mute · Speaker · Video · Share screen
+    //   Row 2 (secondary): Enhance · Add(disabled) · End
+    // The reference's Row 2 also has "Chat" as its first button — chat-
+    // over-call is explicitly wave-2 scope (deferred), so it is omitted
+    // here rather than added as a non-functional placeholder button.
     //
-    // New design: two rows inside a rounded-rectangle card.
-    //   Row 1 (secondary): camera/upgrade · screenshare · voice-enhance · add
-    //   Row 2 (primary):   mute · speaker ·  [ HANGUP (centred, 60pt) ]
-    // Each row fits comfortably on a 375pt screen.
+    // W557 constraint carried over unchanged: two rows inside a rounded-
+    // rectangle card so 4-5 buttons per row always fit on a 375pt screen
+    // (the previous single-HStack-of-7 design overflowed iPhone SE).
+    //
+    // Add-participant: per spec, no API exists yet — CircularAction's
+    // existing `isDisabled` (already supported, see Components/
+    // CircularAction.swift) renders it visibly dimmed + non-interactive,
+    // matching Android's current no-op state for this button. This is
+    // NOT a new capability — onAddParticipant is still wired verbatim,
+    // it simply never fires because CircularAction gates the tap.
 
     private var bottomActionRow: some View {
         VStack(spacing: 10) {
-            secondaryControlsRow
             primaryControlsRow
+            secondaryControlsRow
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -718,60 +1308,11 @@ struct InCallScreen: View {
         .padding(.bottom, 20)
     }
 
-    /// Row 1: secondary / contextual controls.
-    /// camera/upgrade-video | screen-share | voice-enhance | add-participant
-    private var secondaryControlsRow: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            if hasVideo {
-                CircularAction(
-                    icon: cameraOn ? "video.fill" : "video.slash.fill",
-                    action: onToggleCamera,
-                    diameter: 48,
-                    background: cameraOn ? extras.success : scheme.surfaceVariant,
-                    iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
-                )
-            } else {
-                CircularAction(
-                    icon: "video.badge.plus",
-                    action: onUpgradeToVideo,
-                    diameter: 48,
-                    background: scheme.surfaceVariant,
-                    iconColor: scheme.onSurface
-                )
-            }
-            Spacer(minLength: 0)
-            // W538: screen-share (hidden on Mac Catalyst).
-            if screenShareAvailable {
-                CircularAction(
-                    icon: screenSharing ? "square.on.square.fill" : "square.on.square",
-                    action: onToggleScreenShare,
-                    diameter: 48,
-                    background: screenSharing ? extras.success : scheme.surfaceVariant,
-                    iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
-                )
-                Spacer(minLength: 0)
-            }
-            CircularAction(
-                icon: "line.3.horizontal",
-                action: onToggleVoiceEnhancement,
-                diameter: 48,
-                background: voiceEnhancement ? extras.success : scheme.surfaceVariant,
-                iconColor: voiceEnhancement ? extras.onSuccess : scheme.onSurface
-            )
-            Spacer(minLength: 0)
-            CircularAction(
-                icon: "person.badge.plus",
-                action: onAddParticipant,
-                diameter: 48,
-                background: scheme.surfaceVariant,
-                iconColor: scheme.onSurface
-            )
-            Spacer(minLength: 0)
-        }
-    }
-
-    /// Row 2: primary controls — mute, speaker, hangup (centred).
+    /// Row 1 (primary, top): mute · speaker · video/upgrade · screen-share.
+    /// Same four controls as before the regroup, same closures — only the
+    /// row they live in changed (previously mute/speaker/hangup shared a
+    /// row; hangup now anchors the end of Row 2 instead, matching the
+    /// reference's "End" position).
     private var primaryControlsRow: some View {
         HStack(spacing: 0) {
             Spacer(minLength: 0)
@@ -791,7 +1332,68 @@ struct InCallScreen: View {
                 iconColor: speakerOn ? extras.onSuccess : scheme.onSurface
             )
             Spacer(minLength: 0)
-            // Hangup — prominent, centred, larger than secondary buttons.
+            if hasVideo {
+                CircularAction(
+                    icon: cameraOn ? "video.fill" : "video.slash.fill",
+                    action: onToggleCamera,
+                    diameter: 52,
+                    background: cameraOn ? extras.success : scheme.surfaceVariant,
+                    iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
+                )
+            } else {
+                CircularAction(
+                    icon: "video.badge.plus",
+                    action: onUpgradeToVideo,
+                    diameter: 52,
+                    background: scheme.surfaceVariant,
+                    iconColor: scheme.onSurface
+                )
+            }
+            Spacer(minLength: 0)
+            // W538: screen-share (hidden on Mac Catalyst).
+            if screenShareAvailable {
+                CircularAction(
+                    icon: screenSharing ? "square.on.square.fill" : "square.on.square",
+                    action: onToggleScreenShare,
+                    diameter: 52,
+                    background: screenSharing ? extras.success : scheme.surfaceVariant,
+                    iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
+                )
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// Row 2 (secondary, bottom): voice-enhance · add-participant
+    /// (visually present, disabled/no-op) · hangup (prominent, larger,
+    /// anchors the end of the dock — matches the reference's "End"
+    /// position instead of floating mid-row).
+    private var secondaryControlsRow: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            CircularAction(
+                icon: "line.3.horizontal",
+                action: onToggleVoiceEnhancement,
+                diameter: 48,
+                background: voiceEnhancement ? extras.success : scheme.surfaceVariant,
+                iconColor: voiceEnhancement ? extras.onSuccess : scheme.onSurface
+            )
+            Spacer(minLength: 0)
+            // No add-participant API exists yet (spec: render present but
+            // disabled/no-op, matching Android's current state — do not
+            // build 1:1→group escalation now). CircularAction's isDisabled
+            // dims the icon and blocks the tap at the button level.
+            CircularAction(
+                icon: "person.badge.plus",
+                action: onAddParticipant,
+                diameter: 48,
+                background: scheme.surfaceVariant,
+                iconColor: scheme.onSurface,
+                isDisabled: true
+            )
+            Spacer(minLength: 0)
+            // Hangup — prominent, larger than secondary buttons, anchors
+            // the end of the dock (matches the reference's "End" slot).
             CircularAction(
                 icon: "phone.down.fill",
                 action: onHangup,
@@ -850,6 +1452,13 @@ struct InCallScreen: View {
                        pskName: "Yubi5",
                        pskFingerprint: "a83c-9f12"),
         transportMode: .p2pSrtp,
+        rxSamples: [0.1, 0.3, -0.2, 0.4, -0.3, 0.2, 0.1, -0.15],
+        voiceBiometrics: .init(
+            stressScore: 0.18, jitter: 0.006, shimmer: 0.021,
+            hnr: 21, breathiness: 0.12, pitchHz: 142,
+            syllablesPerSec: 4.1, confidence: 0.94
+        ),
+        keyEpoch: nil,
         onHangup: {}
     )
     .qAudionTheme(dark: true)
