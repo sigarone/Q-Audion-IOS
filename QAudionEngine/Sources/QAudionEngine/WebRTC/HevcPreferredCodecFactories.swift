@@ -34,15 +34,25 @@ public final class HevcPreferredVideoEncoderFactory: NSObject, RTCVideoEncoderFa
     }
 
     public func createEncoder(_ info: RTCVideoCodecInfo) -> RTCVideoEncoder? {
+        // WIRE_SPEC §8.7 (INT-4a) — every encoder is wrapped in
+        // KeyframeForcingVideoEncoder so the sender can force an IDR on
+        // `video_keyframe_request` / `call_media_ready` (plus the ~5s
+        // periodic safety net). The E2EE frame-transform suppresses
+        // libwebrtc's native PLI, so this wire-driven forcing handle is
+        // the ONLY decoder-recovery path on the WebRTC RTP rail. Mirrors
+        // Android's VideoFactories.kt (KeyframeForcingVideoEncoder wraps
+        // every created encoder).
+        //
         // H265/HEVC: build the VideoToolbox encoder directly. The webrtc-sdk
         // (LiveKit) binary ships RTCVideoEncoderH265 but its
         // RTCDefaultVideoEncoderFactory does NOT list/handle H265 by default
         // (it's gated, same as upstream libwebrtc), so the delegate would return
         // nil. Constructing it here is what actually lets iOS ENCODE H265.
         if info.name.uppercased() == "H265" {
-            return RTCVideoEncoderH265(codecInfo: info)
+            return KeyframeForcingVideoEncoder(inner: RTCVideoEncoderH265(codecInfo: info))
         }
-        return delegate.createEncoder(info)
+        guard let encoder = delegate.createEncoder(info) else { return nil }
+        return KeyframeForcingVideoEncoder(inner: encoder)
     }
 
     public func supportedCodecs() -> [RTCVideoCodecInfo] {

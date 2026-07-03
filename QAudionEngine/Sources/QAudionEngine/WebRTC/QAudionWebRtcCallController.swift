@@ -66,20 +66,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// PLI, so recovery needs an explicit wire nudge). AppState wires this to
     /// `sendVideoKeyframeRequest` (rate-limited 1/s at the API layer per §8.7).
     ///
-    /// INT-4a rail choice (documented): the pure WebRTC RTP rail on THIS
-    /// libwebrtc binary exposes NO app-visible per-encoder keyframe-forcing
-    /// handle — `QAudionPeerConnectionFactory` installs the plain
-    /// `HevcPreferredVideoEncoderFactory` (no `SFrameVideoEncoderDecorator`),
-    /// and video E2EE lives in the native RTP-layer `RTCFrameCryptor`, so the
-    /// encoder is driven entirely by libwebrtc. A SENDER-side periodic IDR
-    /// forcer is therefore not implementable here. Instead the RECEIVER
-    /// detects the stall (from the `framesDecoded` stat it already polls) and
-    /// nudges the sender over the already-wired `video_keyframe_request`. The
-    /// sender's honor path (`videoPipeline.forceKeyFrame()` on the WS-HEVC
-    /// rail) still forces the IDR; on a pure-WebRTC sender the wire request is
-    /// a harmless no-op (log-and-ignore) — but at least ONE end of any real
-    /// deployment (iOS↔iOS relay, or the Android/Desktop peer, which CAN force
-    /// IDR) honors it, which is the recovery the black-GOP class needed.
+    /// INT-4a rails (updated): the receiver detects the stall (from the
+    /// `framesDecoded` stat it already polls) and nudges the sender over
+    /// the already-wired `video_keyframe_request`. On the WS-HEVC relay
+    /// rail the sender's honor path is `videoPipeline.forceKeyFrame()`;
+    /// on the pure WebRTC RTP rail it is `forceWebRtcKeyframe()` — the
+    /// `KeyframeForcingVideoEncoder` wrapper installed by
+    /// `HevcPreferredVideoEncoderFactory.createEncoder` rewrites the next
+    /// `encode()` call's `frameTypes` to `.videoFrameKey` (exactly how
+    /// libwebrtc itself requests an IDR on a PLI), plus a ~5s periodic
+    /// safety net — mirroring Android's KeyframeForcingVideoEncoder.
+    /// (An earlier note here claimed sender-side forcing was impossible
+    /// on this binary; that was wrong — the ObjC encoder protocol makes
+    /// `frameTypes` substitutable by any wrapper.)
     /// May fire from the WebRTC stats callback thread — consumers hop to
     /// @MainActor themselves.
     public var onVideoStallDetected: (() -> Void)?
@@ -608,6 +607,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         //    the PC was built silently dropped them → cryptor never keyed →
         //    discardFrameWhenCryptorNotReady drops every frame → black video.
         acceptPeerCapabilities(peerCapabilities)
+        // WIRE_SPEC §8.7 (SHOULD) — upgradee path (fresh-PC build):
+        // same TX-hold as acceptUpgradeOffer above.
+        beginVideoTxHold()
         state = .connecting
         return answerSdp
     }
@@ -701,6 +703,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
             videoUpgradeInProgress = false
+            // WIRE_SPEC §8.7 (SHOULD) — upgrader path: we start sending
+            // video now that the answer is applied. Hold TX until the
+            // peer's call_media_ready (or 2s), then enable + force IDR.
+            beginVideoTxHold()
         } catch {
             videoUpgradeInProgress = false
             throw error
@@ -736,7 +742,85 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         hasAppliedRemoteAnswer = true
         videoUpgradeInProgress = false
+        // §8.7 TX-hold — a hold can only be armed AFTER a successful
+        // answer, so none should exist here; clear defensively so a
+        // rolled-back upgrade can't leave the track latched disabled.
+        clearVideoTxHold()
         print("[WebRTC] video upgrade cancelled — rolled back to audio-only stable state")
+    }
+
+    // MARK: - WIRE_SPEC §8.7 — sender-side IDR forcing + TX-hold
+
+    /// §8.7 TX-hold state. `true` while the LOCAL video track is held
+    /// disabled waiting for the peer's `call_media_ready` (or the 2s
+    /// timeout). NSLock-protected because the controller is
+    /// `@unchecked Sendable` (upgrade methods resume on arbitrary
+    /// executors; the release can come from the WS handler hop).
+    private let txHoldLock = NSLock()
+    private var _videoTxHoldArmed = false
+    private var _videoTxHoldTimeoutTask: Task<Void, Never>?
+
+    /// WIRE_SPEC §8.7 (INT-4a) — force an IDR on the next WebRTC-rail
+    /// `encode()`: sets the process-wide force-next flag consumed by the
+    /// `KeyframeForcingVideoEncoder` wrapper that
+    /// `HevcPreferredVideoEncoderFactory` installs around every encoder.
+    /// Harmless no-op when no video encoder is live (flag is consumed by
+    /// the next encoder that starts). Callable from any thread.
+    public func forceWebRtcKeyframe() {
+        VideoKeyframeController.shared.requestKeyFrame()
+    }
+
+    /// WIRE_SPEC §8.7 (SHOULD) — hold LOCAL video TX at upgrade time:
+    /// disable the local video track until EITHER the peer's
+    /// `call_media_ready` arrives (`releaseVideoTxHold`) OR a 2s timeout
+    /// elapses. Never blocks: the timeout path degrades to today's
+    /// behavior (signal-not-kill). One-shot per upgrade — re-arming
+    /// replaces any previous hold. No-op without a local video track.
+    func beginVideoTxHold() {
+        guard let pc = peerConnection, pc.hasLocalVideoTrack() else { return }
+        txHoldLock.lock()
+        _videoTxHoldArmed = true
+        _videoTxHoldTimeoutTask?.cancel()
+        // Mute INSIDE the lock — otherwise an early release (peer's
+        // call_media_ready racing the arm) could unmute BEFORE this
+        // mute lands, latching the track disabled until endCall.
+        pc.setVideoMuted(true)
+        _videoTxHoldTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.releaseVideoTxHold(reason: "2s timeout")
+        }
+        txHoldLock.unlock()
+        print("[WebRTC] §8.7 TX-hold armed — local video held until peer call_media_ready (max 2s)")
+    }
+
+    /// Release the §8.7 TX-hold: enable the local video track and force
+    /// one keyframe so the (now-ready) peer decoder bootstraps from a
+    /// clean IDR. Idempotent — the first caller (peer readiness or
+    /// timeout) wins, later calls are no-ops. Callable from any thread.
+    public func releaseVideoTxHold(reason: String) {
+        txHoldLock.lock()
+        let wasArmed = _videoTxHoldArmed
+        _videoTxHoldArmed = false
+        _videoTxHoldTimeoutTask?.cancel()
+        _videoTxHoldTimeoutTask = nil
+        // Unmute inside the lock, symmetric with beginVideoTxHold's mute
+        // (see the race note there).
+        if wasArmed { peerConnection?.setVideoMuted(false) }
+        txHoldLock.unlock()
+        guard wasArmed else { return }
+        forceWebRtcKeyframe()
+        print("[WebRTC] §8.7 TX-hold released (\(reason)) — video track enabled + IDR forced")
+    }
+
+    /// Drop TX-hold state WITHOUT touching the track (teardown paths —
+    /// the PC is going away or the upgrade was rolled back).
+    private func clearVideoTxHold() {
+        txHoldLock.lock()
+        _videoTxHoldArmed = false
+        _videoTxHoldTimeoutTask?.cancel()
+        _videoTxHoldTimeoutTask = nil
+        txHoldLock.unlock()
     }
 
     /// W536 — responder side. Accept a `call_upgrade_request`: add a
@@ -768,6 +852,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
         }
+        // WIRE_SPEC §8.7 (SHOULD) — upgradee path: our answer is built,
+        // video TX starts once it ships. Hold TX until the peer's
+        // call_media_ready (or 2s), then enable + force IDR.
+        beginVideoTxHold()
         return answerSdp
     }
 
@@ -827,6 +915,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         _lastFramesDecoded = -1
         _lastBytesReceived = -1
         _videoStallPolls = 0
+        // WIRE_SPEC §8.7 — drop any armed TX-hold (endCall funnels through
+        // here via sendHangupAndClose): cancel the 2s watchdog and clear
+        // the one-shot latch so the next call/upgrade starts clean. The
+        // track itself is gone with the closed PC — nothing to unmute.
+        clearVideoTxHold()
         state = .disconnected
     }
 

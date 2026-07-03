@@ -3093,11 +3093,20 @@ final class AppState: ObservableObject {
 
     /// WIRE_SPEC §8.7 — sender-side honor of `call_media_ready` /
     /// `video_keyframe_request`: force a local encoder IDR so the peer's
-    /// decoder can (re)bootstrap. Rate-limited to 1/s. On the WS-HEVC
-    /// relay rail the forcing handle is `videoPipeline.forceKeyFrame()`
-    /// (same HevcEncoder mechanism as the W567 first-frame IDR); the pure
-    /// WebRTC RTP rail exposes no encoder handle on this libwebrtc binary
-    /// — log-and-ignore, documented follow-up (never crash).
+    /// decoder can (re)bootstrap. Rate-limited to 1/s. Forcing handles,
+    /// one per rail (both forced when both are live — e.g. iOS↔Android
+    /// upgrades run the WS-HEVC pipeline for capture while the peer
+    /// consumes WebRTC RTP):
+    ///   - WS-HEVC relay rail: `videoPipeline.forceKeyFrame()` (same
+    ///     HevcEncoder mechanism as the W567 first-frame IDR);
+    ///   - WebRTC RTP rail: `controller.forceWebRtcKeyframe()` — the
+    ///     `KeyframeForcingVideoEncoder` wrapper rewrites the next
+    ///     encode()'s frameTypes to `.videoFrameKey` (INT-4a, mirrors
+    ///     Android's KeyframeForcingVideoEncoder).
+    /// A `call_media_ready` additionally releases the §8.7 TX-hold
+    /// (upgrade paths hold the local video track until the peer's
+    /// receiver is provably ready, max 2s) — BEFORE the rate limit, so
+    /// a burst can't swallow the one-shot release.
     @MainActor
     private func handleInboundKeyframeSignal(callId: String, senderId: String, kind: String) {
         guard isInCall,
@@ -3113,15 +3122,33 @@ final class AppState: ObservableObject {
             RTLog.warn("call", "\(kind): sender \(senderId.prefix(8))… is not the in-call peer — ignored")
             return
         }
+        // §8.7 TX-hold release — idempotent one-shot, NOT subject to the
+        // IDR rate limit below (the release forces its own keyframe).
+        #if canImport(WebRTC)
+        if kind == "call_media_ready",
+           let controller = webRtcController as? QAudionWebRtcCallController {
+            controller.releaseVideoTxHold(reason: "peer call_media_ready")
+        }
+        #endif
         // §8.7 honor rate limit: at most one forced IDR per second.
         let now = Date()
         guard now.timeIntervalSince(lastKeyframeForcedAt) >= 1.0 else { return }
         lastKeyframeForcedAt = now
+        var forced = false
         if let pipeline = videoPipeline {
             pipeline.forceKeyFrame()
-            RTLog.info("call", "\(kind): forced local HEVC encoder IDR")
-        } else {
-            RTLog.warn("call", "keyframe request: WebRTC rail — no forcing handle, ignored")
+            forced = true
+            RTLog.info("call", "\(kind): forced local HEVC encoder IDR (relay rail)")
+        }
+        #if canImport(WebRTC)
+        if let controller = webRtcController as? QAudionWebRtcCallController {
+            controller.forceWebRtcKeyframe()
+            forced = true
+            RTLog.info("call", "\(kind): forced WebRTC encoder IDR (KeyframeForcingVideoEncoder)")
+        }
+        #endif
+        if !forced {
+            RTLog.warn("call", "\(kind): no live video encoder rail — ignored")
         }
     }
 
