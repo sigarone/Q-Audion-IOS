@@ -385,6 +385,16 @@ final class AppState: ObservableObject {
     /// camera pipeline / roll it back. nil when nothing is in flight.
     private var pendingOutgoingUpgradeMedia: String?
 
+    /// WIRE_SPEC §8.7 — dedup for outbound `call_media_ready`: one send
+    /// per "call_id:mid" combo (survives controller rebuilds on the
+    /// upgrade paths). Cleared on call teardown in endCall().
+    private var mediaReadySentKeys: Set<String> = []
+
+    /// WIRE_SPEC §8.7 — honor-side rate limit: at most one forced local
+    /// encoder IDR per second, however many call_media_ready /
+    /// video_keyframe_request envelopes the peer ships.
+    private var lastKeyframeForcedAt: Date = .distantPast
+
     /// True when [videoPipeline] was started decode-only (external source,
     /// paused) just to RENDER a WS-relay peer's screen share on an
     /// audio-only call — torn down again on SCREEN_SHARE:stop.
@@ -2533,6 +2543,24 @@ final class AppState: ObservableObject {
                     callId: callId, accepted: accepted, sdp: sdp)
             }
         }
+
+        // WIRE_SPEC §8.7 (v1.1) — media readiness + keyframe recovery.
+        // Both events funnel into the same honor path: force a local
+        // encoder IDR for the active call (rate-limited to 1/s inside).
+        ws.onCallMediaReady = { [weak self] callId, senderId, _, _, _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.handleInboundKeyframeSignal(
+                    callId: callId, senderId: senderId, kind: "call_media_ready")
+            }
+        }
+        ws.onVideoKeyframeRequest = { [weak self] callId, senderId in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.handleInboundKeyframeSignal(
+                    callId: callId, senderId: senderId, kind: "video_keyframe_request")
+            }
+        }
     }
 
     /// media-consent v1 — responder side of a mid-call renegotiation.
@@ -2686,6 +2714,11 @@ final class AppState: ObservableObject {
         controller.useExternalVideoSource = true
         controller.onRemoteVideoTrack = { [weak self] track in
             Task { @MainActor [weak self] in self?.remoteWebRtcVideoTrack = track }
+        }
+        // WIRE_SPEC §8.7 — receiver readiness → call_media_ready (dedup
+        // per call+mid inside sendCallMediaReadyOnce).
+        controller.onInboundVideoReady = { [weak self] mid in
+            Task { @MainActor [weak self] in self?.sendCallMediaReadyOnce(mid: mid) }
         }
         controller.videoTelemetry = { kind, attrs in
             TelemetryService.shared.emit(kind: kind, attrs: attrs)
@@ -2926,6 +2959,67 @@ final class AppState: ObservableObject {
             }
         }
         #endif
+    }
+
+    /// WIRE_SPEC §8.7 — receiver-side readiness handoff. Fired (engine
+    /// one-shot latch) by QAudionWebRtcCallController.onInboundVideoReady
+    /// when the receiver video cryptor is BOTH attached and keyed. Ships
+    /// `call_media_ready` (dir "recv", key_epoch 0) to the sender so it
+    /// forces an IDR the moment we can actually decrypt — once per
+    /// (call, mid) even across controller rebuilds (upgrade paths).
+    @MainActor
+    private func sendCallMediaReadyOnce(mid: String?) {
+        guard let peerId = callContactId,
+              let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId() else { return }
+        let midValue: String = mid ?? ""
+        let dedupKey: String = callId.lowercased() + ":" + midValue
+        guard !mediaReadySentKeys.contains(dedupKey) else { return }
+        mediaReadySentKeys.insert(dedupKey)
+        let midLabel: String = midValue.isEmpty ? "-" : midValue
+        RTLog.info("call", "call_media_ready → sender (mid=\(midLabel), dir=recv, epoch=0)")
+        Task {
+            try? await impl.sendCallMediaReady(
+                callId: callId,
+                recipientId: peerId,
+                mid: midValue,
+                keyEpoch: 0,
+                dir: "recv")
+        }
+    }
+
+    /// WIRE_SPEC §8.7 — sender-side honor of `call_media_ready` /
+    /// `video_keyframe_request`: force a local encoder IDR so the peer's
+    /// decoder can (re)bootstrap. Rate-limited to 1/s. On the WS-HEVC
+    /// relay rail the forcing handle is `videoPipeline.forceKeyFrame()`
+    /// (same HevcEncoder mechanism as the W567 first-frame IDR); the pure
+    /// WebRTC RTP rail exposes no encoder handle on this libwebrtc binary
+    /// — log-and-ignore, documented follow-up (never crash).
+    @MainActor
+    private func handleInboundKeyframeSignal(callId: String, senderId: String, kind: String) {
+        guard isInCall,
+              let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let activeCallId = impl.getActiveCallId(),
+              callId.caseInsensitiveCompare(activeCallId) == .orderedSame else {
+            RTLog.info("call", "\(kind): not for the active call — ignored")
+            return
+        }
+        // Server-stamped sender_id must be the in-call peer (same check
+        // handleIncomingUpgradeRequest applies to upgrade offers).
+        guard callContactId == senderId else {
+            RTLog.warn("call", "\(kind): sender \(senderId.prefix(8))… is not the in-call peer — ignored")
+            return
+        }
+        // §8.7 honor rate limit: at most one forced IDR per second.
+        let now = Date()
+        guard now.timeIntervalSince(lastKeyframeForcedAt) >= 1.0 else { return }
+        lastKeyframeForcedAt = now
+        if let pipeline = videoPipeline {
+            pipeline.forceKeyFrame()
+            RTLog.info("call", "\(kind): forced local HEVC encoder IDR")
+        } else {
+            RTLog.warn("call", "keyframe request: WebRTC rail — no forcing handle, ignored")
+        }
     }
 
     /// C-3 — remote hangup / decline / timeout teardown. Runs the full
@@ -5900,6 +5994,13 @@ final class AppState: ObservableObject {
                         self?.remoteWebRtcVideoTrack = track
                     }
                 }
+                // WIRE_SPEC §8.7 — receiver readiness → call_media_ready
+                // (dedup per call+mid inside sendCallMediaReadyOnce).
+                controller.onInboundVideoReady = { [weak self] mid in
+                    Task { @MainActor [weak self] in
+                        self?.sendCallMediaReadyOnce(mid: mid)
+                    }
+                }
                 // Remote-readable video diagnostics (mirrors Android). Ships
                 // outbound/inbound video RTP stats + remote-track arrival to
                 // the server so an iOS→Android video failure is diagnosable
@@ -6254,6 +6355,9 @@ final class AppState: ObservableObject {
         upgradeResponseTimeoutTask = nil
         pendingOutgoingUpgradeMedia = nil
         decodeOnlyPipelineForPeerScreen = false
+        // WIRE_SPEC §8.7 — drop this call's call_media_ready dedup keys
+        // (keys embed the call_id so growth, not correctness, is at stake).
+        mediaReadySentKeys.removeAll()
         // W339: drop the PQC session key so the SAS panel hides on the
         // next call setup. Holding stale key material across calls
         // would otherwise let one call's verified SAS appear on the
@@ -7853,6 +7957,13 @@ extension AppState {
         controller.onRemoteVideoTrack = { [weak self] track in
             Task { @MainActor [weak self] in
                 self?.remoteWebRtcVideoTrack = track
+            }
+        }
+        // WIRE_SPEC §8.7 — receiver readiness → call_media_ready (dedup
+        // per call+mid inside sendCallMediaReadyOnce; responder side).
+        controller.onInboundVideoReady = { [weak self] mid in
+            Task { @MainActor [weak self] in
+                self?.sendCallMediaReadyOnce(mid: mid)
             }
         }
         // Remote-readable video diagnostics (responder side, mirrors caller).

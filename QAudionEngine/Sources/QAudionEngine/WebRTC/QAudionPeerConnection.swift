@@ -80,7 +80,9 @@ public final class QAudionPeerConnection: NSObject {
     /// track (mirrors Android `cryptorBoundMid` +
     /// `shouldIgnorePhantomVideoTransceiver`, qaudion-android-new 39ea0e5f).
     /// nil until the first video receiver arrives; cleared in `close()`.
-    private var establishedVideoReceiverMid: String?
+    /// Read-public (WIRE_SPEC §8.7): the call controller ships it as the
+    /// `mid` field of `call_media_ready` when the receiver cryptor is ready.
+    public private(set) var establishedVideoReceiverMid: String?
     private let mediaConstraints = RTCMediaConstraints(
         mandatoryConstraints: nil,
         optionalConstraints: ["DtlsSrtpKeyAgreement": "true"]

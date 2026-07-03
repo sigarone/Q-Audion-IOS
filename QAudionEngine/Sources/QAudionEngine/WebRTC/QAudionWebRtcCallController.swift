@@ -48,6 +48,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onRemoteAudioTrack: ((RTCAudioTrack) -> Void)?
     public var onRemoteVideoTrack: ((RTCVideoTrack) -> Void)?
 
+    /// WIRE_SPEC §8.7 — fired ONCE per call when the RECEIVER-side native
+    /// video cryptor is BOTH attached to the inbound RTP receiver AND
+    /// keyed (K_video published). The argument is the established inbound
+    /// video mid, or `nil` when the transceiver mid could not be resolved.
+    /// AppState wires this to `sendCallMediaReady(dir:"recv", keyEpoch:0)`
+    /// so the sender forces an IDR the moment we can actually decrypt.
+    /// May be invoked from the WebRTC signalling thread OR from whichever
+    /// thread published the PQC key last — consumers must hop to
+    /// @MainActor themselves (same contract as onRemoteVideoTrack).
+    public var onInboundVideoReady: ((String?) -> Void)?
+
     /// W-DCAUDIO — inbound sealed-audio frames received over the WebRTC
     /// DataChannel ("qaudion-audio"). Set by the app layer (CallService) to route
     /// the raw WireRelayFrameCodec bytes into `handleIncomingEncryptedFrame`,
@@ -770,6 +781,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                                          // re-runs ensureVideoSealer().
         videoKeyIsPhoneLevel = false     // vkey-v1 — reset dual-trust flag.
         videoContactPsk = nil            // vkey-v1 — clear per-call PSK.
+        // WIRE_SPEC §8.7 — re-arm the one-shot inbound-video-ready latch
+        // so the NEXT call fires onInboundVideoReady again.
+        inboundReadyLock.lock()
+        _inboundVideoReadyFired = false
+        inboundReadyLock.unlock()
         state = .disconnected
     }
 
@@ -822,6 +838,29 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// ```
     public func acceptPeerCapabilities(_ peer: [String]?) {
         peerConnection?.acceptPeerCapabilities(peer)
+        // WIRE_SPEC §8.7 / .legacy-latch fix — UPWARD re-evaluation only.
+        // The AES-256 fail-close path (ensureVideoSealer) latches
+        // `videoSealer = .legacy` when the caps known AT THAT MOMENT don't
+        // advertise sframe-aes256-v1 (e.g. a caps-less duplicate envelope
+        // negotiated an empty tag set first). Before this fix the latch was
+        // permanent until closeSynchronously: a LATER caps update that DOES
+        // satisfy the AES-256 requirement left the receiver cryptor
+        // attached-but-unkeyed and discardFrameWhenCryptorNotReady dropped
+        // every inbound frame — permanent black video. Clear the latch and
+        // let ensureVideoSealerInternal below re-run the pick ONLY when the
+        // fresh negotiation would now select the native path (useSFrame AND
+        // the AES-256 gate satisfied). Strictly an upgrade: a peer that
+        // still does NOT advertise aes256 keeps the fail-closed .legacy
+        // latch (never auto-downgrade — downgrades stay explicit/close-only,
+        // and `.native`/`.sframe`/`.livekit` picks are never touched).
+        if case .legacy = videoSealer,
+           let negotiated = peerNegotiated(),
+           negotiated.useSFrame,
+           !CallCapabilities.v4SFrameAes256Enabled || negotiated.useSFrameAes256 {
+            let tags = negotiated.agreedTags
+            print("[WebRtcCallController] .legacy latch CLEARED — caps update satisfies the video-sealer requirements (agreed=\(tags)); re-running pipeline pick")
+            videoSealer = nil
+        }
         // W539 — opportunistic install: if the PQC key is already
         // present (typical on responder path where the PQC handshake
         // ran BEFORE the WebRTC offer applied), install the LiveKit
@@ -836,6 +875,40 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// to pick the video pipeline" and defer.
     public func peerNegotiated() -> CallCapabilities.Negotiated? {
         peerConnection?.peerNegotiated()
+    }
+
+    /// WIRE_SPEC §8.7 — one-shot latch for `onInboundVideoReady`. Set via
+    /// the atomic test-and-set below (the controller is `@unchecked
+    /// Sendable`: the receiver attach fires on the WebRTC signalling
+    /// thread while the key can land from MainActor). Reset in
+    /// `closeSynchronously()` for the next call.
+    private let inboundReadyLock = NSLock()
+    private var _inboundVideoReadyFired = false
+    private func tryMarkInboundVideoReadyFired() -> Bool {
+        inboundReadyLock.lock()
+        defer { inboundReadyLock.unlock() }
+        if _inboundVideoReadyFired { return false }
+        _inboundVideoReadyFired = true
+        return true
+    }
+
+    /// WIRE_SPEC §8.7 — fire `onInboundVideoReady` exactly once per call,
+    /// the moment the receiver-side native cryptor is BOTH attached and
+    /// keyed. Called from every site that can complete the pair last:
+    /// the receiver attach (`didReceiveRemoteVideoReceiver`) and the
+    /// keying paths (`ensureVideoSealerInternal`, reached from the
+    /// `pqcSessionKey` didSet and `acceptPeerCapabilities`). Cheap no-op
+    /// until both halves are true.
+    private func notifyInboundVideoReadyIfNeeded() {
+        guard let pc = peerConnection,
+              let cryptor = pc.nativeVideoCryptor,
+              cryptor.keyIsSet,
+              cryptor.receiverIsAttached else { return }
+        guard tryMarkInboundVideoReadyFired() else { return }
+        let mid = pc.establishedVideoReceiverMid
+        let midDesc: String = mid ?? "nil"
+        print("[WebRtcCallController] inbound video READY (receiver cryptor attached+keyed, mid=" + midDesc + ") — signalling call_media_ready")
+        onInboundVideoReady?(mid)
     }
 
     /// W539 — internal autopilot: install the LiveKit video cryptor as
@@ -863,7 +936,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// final AES key.
     @discardableResult
     private func ensureVideoSealerInternal() -> VideoCallSealer? {
-        return ensureVideoSealer { [weak self] in
+        let sealer = ensureVideoSealer { [weak self] in
             guard let self = self else { return Data() }
             let sessionKey = self.pqcSessionKey ?? Data()
             // Only swap to K_video when BOTH sides advertised vkey-v1 and
@@ -895,6 +968,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 psk: self.videoContactPsk
             )
         }
+        // WIRE_SPEC §8.7 — a successful pick/rekey above may have just
+        // completed the "receiver cryptor attached AND keyed" pair
+        // (key/caps arriving AFTER the receiver attach). One-shot inside.
+        notifyInboundVideoReadyIfNeeded()
+        return sealer
     }
 
     /// Idempotently pick the video pipeline based on the peer's
@@ -1389,6 +1467,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         _ = ensureVideoSealerInternal()
         let attached = pc.attachVideoReceiverCryptor(receiver)
         print("[WebRtcCallController] native video receiver cryptor attached=\(attached)")
+        // WIRE_SPEC §8.7 — the attach may have just completed the
+        // "receiver cryptor attached AND keyed" pair (receiver arriving
+        // AFTER key+caps). One-shot inside.
+        notifyInboundVideoReadyIfNeeded()
     }
 }
 #endif

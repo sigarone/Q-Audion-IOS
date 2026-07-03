@@ -57,6 +57,21 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     public var onCallUpgradeRequest: ((_ callId: String, _ senderId: String, _ sdp: String, _ media: String) -> Void)?
     public var onCallUpgradeResponse: ((_ callId: String, _ accepted: Bool, _ sdp: String) -> Void)?
 
+    /// WIRE_SPEC §8.7 (v1.1) — receiver→sender media readiness. The peer's
+    /// receiver-side video cryptor is BOTH keyed and bound to the negotiated
+    /// mid; we (the video SENDER) must force a local encoder IDR so the
+    /// peer's decoder bootstraps immediately. Server stamps `sender_id` and
+    /// relays transparently (same envelope class as call_upgrade_*).
+    /// `mid` may be empty when the peer could not resolve the transceiver
+    /// mid; `dir` is "recv" today; `keyEpoch` is 0 until rekey epochs ship.
+    public var onCallMediaReady: ((_ callId: String, _ senderId: String, _ mid: String, _ keyEpoch: Int, _ dir: String) -> Void)?
+
+    /// WIRE_SPEC §8.7 (v1.1) — receiver→sender explicit keyframe recovery.
+    /// The E2EE frame-transform suppresses libwebrtc's native PLI, so the
+    /// peer's decoder recovery REQUIRES this wire path. Honor side MUST
+    /// force a local encoder IDR, rate-limited to 1/s.
+    public var onVideoKeyframeRequest: ((_ callId: String, _ senderId: String) -> Void)?
+
     private var webSocketTask: URLSessionWebSocketTask?
     /// SECURITY C-6 / H-5 — strong ref to the session delegate so it
     /// survives the lifetime of the `URLSession` (URLSession only holds
@@ -287,6 +302,32 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             let sdp = (data["sdp"] as? String) ?? ""
             let accepted = (data["accepted"] as? Bool) ?? true
             self.onCallUpgradeResponse?(callId, accepted, sdp)
+        }
+
+        // WIRE_SPEC §8.7 (v1.1) — call_media_ready (receiver→sender).
+        // Same envelope class as call_upgrade_*: the server stamps
+        // `sender_id` and relays transparently. `from` fallback mirrors
+        // the call_upgrade_request handler above.
+        registerHandler(type: "call_media_ready") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let senderId = (data["sender_id"] as? String)
+                ?? (data["from"] as? String)
+                ?? ""
+            let mid = (data["mid"] as? String) ?? ""
+            let keyEpoch = (data["key_epoch"] as? Int) ?? 0
+            let dir = (data["dir"] as? String) ?? "recv"
+            self.onCallMediaReady?(callId, senderId, mid, keyEpoch, dir)
+        }
+
+        // WIRE_SPEC §8.7 (v1.1) — video_keyframe_request (receiver→sender).
+        registerHandler(type: "video_keyframe_request") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let senderId = (data["sender_id"] as? String)
+                ?? (data["from"] as? String)
+                ?? ""
+            self.onVideoKeyframeRequest?(callId, senderId)
         }
     }
 

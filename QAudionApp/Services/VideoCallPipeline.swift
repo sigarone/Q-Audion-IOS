@@ -404,6 +404,17 @@ public final class VideoCallPipeline: NSObject {
         encoder.setFps(newFps)
     }
 
+    /// WIRE_SPEC §8.7 — force the NEXT encoded frame to be an IDR
+    /// keyframe (VPS/SPS/PPS included, so the peer's decoder bootstraps
+    /// immediately). Reuses the same `HevcEncoder.requestForcedKeyFrame`
+    /// mechanism as the first-frame IDR (W567, `start()`). Called by
+    /// AppState when the peer signals `call_media_ready` or
+    /// `video_keyframe_request` on the WS-HEVC relay rail. Thread-safe
+    /// (the encoder's own lock), hence `nonisolated` like the ABR hooks.
+    public nonisolated func forceKeyFrame() {
+        encoder.requestForcedKeyFrame()
+    }
+
     /// W524 — pause/resume outbound video without tearing down the
     /// capture session. The local preview stays live; the captureOutput
     /// delegate just stops feeding the encoder. Used by ABR layer 4
