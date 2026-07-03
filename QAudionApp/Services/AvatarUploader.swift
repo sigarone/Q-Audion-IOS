@@ -37,8 +37,15 @@ final class AvatarUploader {
             throw Error.imageEncodingFailed
         }
 
-        let config = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
-        let provider = BCryptoBackendProvider(config: config)
+        // `token` only gates the "authenticated" early-throw above.
+        _ = token
+        // UPLOAD-401 FIX (2026-07-03) — use the refresher-wired provider
+        // builder instead of a bare BCryptoBackendProvider(config: .pinned(
+        // serverUrl:accessToken:)). The bare provider had neither refresh leg
+        // armed, so avatar upload + profile update 401'd permanently once the
+        // access token expired mid-session (same class as ChatVoiceNoteSender,
+        // see AppState.makeUploadProvider).
+        let provider = appState.makeUploadProvider()
         // BCryptoStorageApiImpl.uploadFile(data:filename:) is not part of StorageApi
         // protocol, so we cast to the concrete impl.
         guard let storageImpl = provider.storageApi as? BCryptoStorageApiImpl else {

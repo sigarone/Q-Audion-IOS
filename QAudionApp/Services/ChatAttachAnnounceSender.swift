@@ -110,8 +110,13 @@ final class ChatAttachAnnounceSender {
         }
 
         // 4. Upload ciphertext.
-        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
-        let provider = BCryptoBackendProvider(config: backendConfig)
+        // `token` only gates the "authenticated" early-throw above.
+        _ = token
+        // UPLOAD-401 FIX (2026-07-03) — refresher-wired provider builder
+        // instead of a bare BCryptoBackendProvider, so this voice-note
+        // upload self-heals on token expiry instead of 401'ing forever
+        // (see AppState.makeUploadProvider).
+        let provider = appState.makeUploadProvider()
         let fileId: String
         do {
             fileId = try await provider.storageApi.uploadFile(
