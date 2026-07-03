@@ -68,8 +68,13 @@ final class ChatAttachAnnounceReceiver {
         }
 
         // 1. Download ciphertext.
-        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
-        let provider = BCryptoBackendProvider(config: backendConfig)
+        // `token` only gates the "authenticated" early-throw above.
+        _ = token
+        // UPLOAD-401 FIX (2026-07-03) — refresher-wired provider builder
+        // instead of a bare BCryptoBackendProvider, so downloading a
+        // received voice note self-heals on token expiry instead of 401'ing
+        // forever (see AppState.makeUploadProvider).
+        let provider = appState.makeUploadProvider()
         let ciphertext: Data
         do {
             ciphertext = try await provider.storageApi.downloadFile(fileId: envelope.att.fileId)
