@@ -64,6 +64,14 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
         return hasKey
     }
 
+    /// WIRE_SPEC §8.7 — true once `attachReceiver` succeeded. Combined
+    /// with `keyIsSet` this is the "receiver cryptor is BOTH attached
+    /// and keyed" readiness predicate that gates `call_media_ready`.
+    public var receiverIsAttached: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return receiverCryptor != nil
+    }
+
     /// Publish / rotate the 32-byte K_video at index 0 (Android setSharedKey(0,key)).
     /// Safe to call before OR after the cryptors are attached — the native
     /// KeyProvider drops inbound frames until a key is present

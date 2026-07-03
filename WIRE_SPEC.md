@@ -468,4 +468,146 @@ handshake — a 0xc4 frame from a previous session cannot be replayed because
 the session key differs). A within-session replay window is NOT closed; a
 dedicated 0xc4 counter is a planned hardening (audit D10-3).
 
-Last reviewed: 2026-06-27 (realignment: §1.1 SRTP labels, §2.7 KMS v2 AAD-bound wire, §3.3 caller-priority PSK, §4 uint24 SAS, §7 earbud GATT family).
+---
+
+## 8. Mid-call media upgrade (video / screen) — state machine & readiness
+
+Added 2026-07-03. Until this section existed, the upgrade protocol had NO
+written contract: each client re-derived it from the others' commits, every
+protection (DTLS pin, glare rule, phantom guard, rollback) shipped on one
+platform/role only, and the recurring black/purple-video class was the
+result. This section is NORMATIVE for all three clients and the server.
+
+### 8.1 Message inventory (WS envelope `{type, data}`)
+
+| type | data | dir | server behavior |
+|---|---|---|---|
+| `call_upgrade_request` | `{call_id, recipient_id, sdp, media}` | initiator→peer | stamp `sender_id`, transparent relay; federated cross-node |
+| `call_upgrade_response` | `{call_id, recipient_id, sdp, accepted}` | peer→initiator | same |
+| `call_video_state` | `{call_id, recipient_id, ...}` | either | same |
+| `screen_share_state` | `{call_id, recipient_id, on}` | either | same |
+| `call_media_ready` (v1.1) | `{call_id, recipient_id, mid, key_epoch, dir}` | receiver→sender | same |
+| `video_keyframe_request` (v1.1) | `{call_id, recipient_id}` | receiver→sender | same |
+
+- `media` = `"camera"` (explicit consent dialog required) or `"screen"`
+  (auto-accept). An UNKNOWN value MUST be treated as `"camera"`
+  (fail-safe: consent required). The field is part of the wire contract —
+  any server implementation that re-marshals typed structs MUST carry it.
+- `sdp` non-empty ⇒ WebRTC renegotiation. `sdp` empty ⇒ WS-relay rail
+  (no live PC); `accepted=true` with empty `sdp` is an accept WITHOUT
+  renegotiation, not a malformed response.
+
+### 8.2 Upgrade state machine (per side)
+
+```
+AudioOnly
+  --local request sent----------------→ UpgradeRequested(local)
+  --peer request received-------------→ ConsentPending(remote)
+UpgradeRequested(local)
+  --response accepted+sdp-------------→ Renegotiating
+  --response accepted, empty sdp------→ VideoActive (WS-relay rail)
+  --response declined OR 30s timeout--→ AudioOnly   [ROLLBACK, §8.4]
+ConsentPending(remote)
+  --user accepts----------------------→ Renegotiating (answer shipped)
+  --user declines OR 30s auto-decline-→ AudioOnly   (send accepted=false)
+Renegotiating
+  --answer applied / answer shipped---→ VideoActive
+  --failure---------------------------→ AudioOnly   [ROLLBACK, §8.4]
+VideoActive
+  --video toggled off (both dirs)-----→ AudioOnly   (state msg, no SDP teardown)
+```
+
+Timeouts are ALIGNED at **30 s** on both roles (requester watchdog AND
+responder auto-decline). A decline/timeout MUST leave both sides able to
+upgrade again later in the same call.
+
+### 8.3 Glare (simultaneous upgrade requests)
+
+Politeness is keyed to the ORIGINAL call role, not the upgrade role:
+**polite = original CALLEE, impolite = original CALLER.**
+
+- Polite peer, on receiving `call_upgrade_request` while its own request
+  is in flight: JSEP-rollback its pending local offer, answer the peer's
+  offer, and treat its own request as satisfied by the resulting video
+  state.
+- Impolite peer: ignore the peer's colliding request (no decline) and
+  wait for the response to its own.
+- TRANSITIONAL (until all clients implement the rule): degrading to a
+  clean mutual decline is permitted, but MUST NOT poison state — both
+  sides MUST be able to retry (§8.4).
+- A responder MUST NOT silently drop a colliding request (that leaves
+  the requester burning its full timeout).
+
+### 8.4 Rollback obligations (decline / timeout / failure)
+
+The initiator MUST undo everything its request did, atomically w.r.t.
+later upgrades:
+
+1. stop the camera capture it started;
+2. remove the local video track added for the upgrade;
+3. JSEP-rollback the pending local offer (PC returns to `stable`);
+4. clear the upgrade-in-progress latch and re-arm the duplicate-answer
+   guard for the ORIGINAL call answer.
+
+A PC parked in `have-local-offer` after a decline is a protocol violation
+(it makes the peer's next offer fail wrong-state → auto-decline → upgrades
+dead in both directions).
+
+### 8.5 DTLS role invariant
+
+The `a=setup` role negotiated by the ORIGINAL call answer NEVER changes
+across any renegotiation (upgrade, ICE restart, screen-share stop, …).
+BOTH sides MUST pin the role on EVERY applied answer — the upgrade
+envelope path AND any generic remote-SDP path. (History: the pin shipped
+offerer-side only, per-platform, months apart; iOS never had it.)
+
+### 8.6 m-line / mid stability & the phantom transceiver
+
+- A 1:1 call has exactly ONE video m-line per direction pair. Reuse the
+  existing video transceiver on re-upgrade; never add a second one.
+- PHANTOM: on a callee-initiated upgrade, libwebrtc (observed M144) can
+  mint an extra RECV_ONLY video transceiver with no sender track. It MUST
+  be ignored: renderer sink and receiver-cryptor stay bound to the
+  ESTABLISHED mid. "Last receiver wins" sink policies are forbidden.
+- If a legitimate re-negotiation lands the video on a NEW mid, the
+  receiver MUST re-latch sink + cryptor to the new mid (and MAY treat the
+  old one as closed).
+
+### 8.7 Media readiness & keyframe recovery (v1.1)
+
+- `call_media_ready`: the RECEIVER sends it when its receiver-cryptor is
+  BOTH keyed and bound to the negotiated video mid. The SENDER SHOULD
+  hold video TX (camera or gate) until ready arrives or a **2 s** timeout
+  elapses (timeout ⇒ proceed as today — the handshake is an optimization
+  for correctness, never a hard gate: signal-not-kill). On receiving
+  ready, the sender MUST force an IDR.
+- `video_keyframe_request`: receiver→sender; the sender MUST force a
+  local encoder IDR. Senders rate-limit to 1/s. Rationale: the E2EE
+  frame-transform suppresses libwebrtc's native PLI on every platform,
+  so decoder recovery REQUIRES an explicit wire path. Platforms SHOULD
+  additionally run a periodic (~5 s) sender-side IDR forcer.
+- Rekey: `key_epoch` is monotonic per call. Receivers keep the PREVIOUS
+  video key valid for a grace window (mirror of the audio `previousKey`
+  fallback) so in-flight frames sealed under the old epoch still decrypt.
+
+### 8.8 Transport rails & key custody
+
+- The WebRTC RTP rail is primary whenever a live PC exists. The WS-relay
+  video rail (`video_frame` fragments) is armed ONLY while the frame-relay
+  transport reports `BcryptoWsRelay` AND video is active.
+- Relay-rail PQC sealers are OWNED by the call controller for the whole
+  call; transient transport legs BORROW them by reference and MUST NOT
+  dispose them on their own close(). ("Who creates, disposes; transports
+  borrow.")
+- The server relays media frames only between the two REGISTERED call
+  parties; a party-gate miss drops the FRAME (advisory
+  `call_relay_reject {call_id, media, reason}`) and MUST NOT tear the
+  call down.
+
+---
+
+Last reviewed: 2026-07-03 (added §8 mid-call upgrade state machine, glare,
+DTLS/mid invariants, media-readiness + keyframe wire, rail/key-custody
+rules). Previous: 2026-06-27 (realignment: §1.1 SRTP labels, §2.7 KMS v2
+AAD-bound wire, §3.3 caller-priority PSK, §4 uint24 SAS, §7 earbud GATT
+family).

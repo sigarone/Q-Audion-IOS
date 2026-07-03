@@ -366,6 +366,44 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ])
     }
 
+    /// WIRE_SPEC §8.7 (v1.1) — receiver→sender media readiness. Sent by
+    /// the RECEIVER when its receiver-side video cryptor is BOTH keyed
+    /// and bound to the negotiated video mid; the sender responds by
+    /// forcing a local encoder IDR. `dir` is "recv" today; `keyEpoch`
+    /// is 0 until rekey epochs ship. The server stamps `sender_id` and
+    /// relays transparently (same class as call_upgrade_*).
+    public func sendCallMediaReady(
+        callId: String,
+        recipientId: String,
+        mid: String,
+        keyEpoch: Int,
+        dir: String
+    ) async throws {
+        ws.send(type: "call_media_ready", data: [
+            "call_id":      callId,
+            "recipient_id": recipientId,
+            "mid":          mid,
+            "key_epoch":    keyEpoch,
+            "dir":          dir,
+        ])
+    }
+
+    /// WIRE_SPEC §8.7 (v1.1) — receiver→sender explicit keyframe
+    /// recovery (the E2EE frame-transform suppresses libwebrtc's native
+    /// PLI, so decoder recovery requires this wire path). Rate-limited
+    /// HERE to 1/s per the spec — callers may invoke it freely; excess
+    /// requests inside the window are silently dropped.
+    public func sendVideoKeyframeRequest(
+        callId: String,
+        recipientId: String
+    ) async throws {
+        guard checkKeyframeRequestRateLimit() else { return }
+        ws.send(type: "video_keyframe_request", data: [
+            "call_id":      callId,
+            "recipient_id": recipientId,
+        ])
+    }
+
     public func getRelays() async throws -> [RelayServer] {
         return try await getRelaysResponse().relays
     }
@@ -415,6 +453,21 @@ public final class BCryptoCallingApiImpl: CallingApi {
         _answerSent = true
         return false
     }
+
+    /// WIRE_SPEC §8.7 — outbound video_keyframe_request rate limiter
+    /// (1/s). Returns `true` when the send may proceed and records the
+    /// timestamp; `false` when a request already went out inside the
+    /// window. Same sync-helper pattern as `checkAndMarkAnswerSent` so
+    /// the NSLock never touches an async context (Swift 6 rule above).
+    private func checkKeyframeRequestRateLimit() -> Bool {
+        keyframeRequestLock.lock(); defer { keyframeRequestLock.unlock() }
+        let now = Date().timeIntervalSinceReferenceDate
+        if now - _lastKeyframeRequestAt < 1.0 { return false }
+        _lastKeyframeRequestAt = now
+        return true
+    }
+    private var _lastKeyframeRequestAt: TimeInterval = 0
+    private let keyframeRequestLock = NSLock()
 
     private func setActiveCallId(_ cid: String) {
         callIdLock.lock(); activeCallId = cid; callIdLock.unlock()
