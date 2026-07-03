@@ -212,6 +212,12 @@ final class VpnService: ObservableObject {
 
         try await mgr.saveToPreferences()
         try await mgr.loadFromPreferences()
+        // loadFromPreferences() replaces mgr.connection with a fresh object, so the
+        // observer registered in loadManager() (bound to the OLD connection via
+        // `object:`) would never fire for this tunnel — leaving `state` stuck at
+        // .connecting and the status badge grey for every node. Re-subscribe to the
+        // new connection before starting so NEVPNStatusDidChange actually reaches us.
+        subscribeToStatus(connection: mgr.connection)
         try (mgr.connection as? NETunnelProviderSession)?
             .startTunnel(options: nil)
     }
