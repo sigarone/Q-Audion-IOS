@@ -6531,13 +6531,18 @@ final class AppState: ObservableObject {
             // W-VIDUPCALLER — bridge VideoCallPipeline's captured frames into
             // the WebRTC RTCVideoSource now that upgradeToVideo() has created
             // webrtcPixelBufferCapturer (via startCameraCapture, gated on
-            // useExternalVideoSource above). Without this the pixel-buffer
-            // capturer never receives frames, so the peer renders a black/
-            // frozen remote video even though signaling succeeds — the exact
-            // same class of gap the responder-side comment above documents
-            // ("W-VIDTX"). Mirrors that fix + the startCall/acceptIncomingCall
-            // wiring for the caller-initiated MID-CALL upgrade path, which
-            // never received it.
+            // useExternalVideoSource above). Belt-and-braces alongside the
+            // useExternalVideoSource flag: with the flag alone (fix above),
+            // the controller's OWN RTCCameraVideoCapturer path is correctly
+            // skipped and the dual-AVCaptureSession conflict is gone — but
+            // without ALSO wiring this bridge, webrtcPixelBufferCapturer
+            // exists yet is never pushed a single frame, so it would carry
+            // NOTHING to Android (worse than the pre-fix state, which at
+            // least streamed real frames from its own capturer). This is
+            // the same class of gap the responder-side comment above
+            // documents ("W-VIDTX"). Mirrors that fix + the
+            // startCall/acceptIncomingCall wiring for the caller-initiated
+            // MID-CALL upgrade path, which never received it.
             #if os(iOS)
             if let capturer = controller.webrtcPixelBufferCapturer {
                 self.videoPipeline?.onCapturedPixelBuffer = { [weak capturer] pixelBuffer, timestampNs in
