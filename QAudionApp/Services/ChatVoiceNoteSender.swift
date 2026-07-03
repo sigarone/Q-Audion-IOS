@@ -178,10 +178,19 @@ final class ChatVoiceNoteSender {
               let senderId = appState.currentUserId, !senderId.isEmpty else {
             throw Error.uploadFailed("non autenticato")
         }
-        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
-        let provider = BCryptoBackendProvider(config: backendConfig)
-        // No `provider.initialize()` — `uploadFile` and `issueToken` are
-        // REST-only; a fresh provider with the auth token is sufficient.
+        // `token` here only gates the "authenticated" early-throw above;
+        // `makeUploadProvider` re-reads it (plus the refresh token) itself.
+        _ = token
+        // UPLOAD-401 FIX (2026-07-03) — use the shared, refresher-wired
+        // provider builder instead of a bare per-call
+        // `BCryptoBackendProvider(config: .pinned(serverUrl:accessToken:))`.
+        // That bare provider had NEITHER refresh leg armed (no refresh
+        // token in the config, no device-renew wired), so once the access
+        // token expired mid-session every attachment upload + retry 401'd
+        // permanently with no self-heal. `makeUploadProvider` arms both
+        // legs (see its doc in AppState). Still REST-only — no
+        // `provider.initialize()` needed for uploadFile / issueToken.
+        let provider = appState.makeUploadProvider()
 
         // BCryptoStorageApiImpl.uploadFile(data:filename:onProgress:resumeContext:)
         // is not part of the StorageApi protocol (mirrors AvatarUploader's
@@ -342,8 +351,13 @@ final class ChatVoiceNoteSender {
               let senderId = appState.currentUserId, !senderId.isEmpty else {
             throw Error.uploadFailed("non autenticato")
         }
-        let backendConfig = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
-        let provider = BCryptoBackendProvider(config: backendConfig)
+        // `token` here only gates the "authenticated" early-throw above.
+        _ = token
+        // UPLOAD-401 FIX (2026-07-03) — same as prepareAttachmentMarkerJson:
+        // the tier-1 resume path also went through a bare, refresher-less
+        // provider, so a resume attempt on an expired access token would
+        // 401 with no self-heal. Use the refresher-wired builder.
+        let provider = appState.makeUploadProvider()
 
         guard let storageImpl = provider.storageApi as? BCryptoStorageApiImpl else {
             // No concrete impl to reach the TUS resume primitives —
