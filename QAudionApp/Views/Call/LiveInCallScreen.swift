@@ -201,10 +201,15 @@ struct LiveInCallScreen: View {
                 cipherSamples: liveCipherSamples,
                 // Unified call UI — Guardian ribbon + security-sheet
                 // biometrics. nil while appState.voiceAnalysis is nil
-                // (engine flag off, incoming-call wiring gap, or no
-                // result has arrived yet) — InCallScreen renders the
-                // graceful "not available" state in that case.
+                // (engine flag off, or no result has arrived yet) —
+                // InCallScreen renders the graceful "not available"
+                // state in that case. Wired on both call directions.
                 voiceBiometrics: liveVoiceBiometrics,
+                // Unified call UI — REAL RX spectrum (40 bands 0..1,
+                // ≤15 Hz, SpectrumExtractor over the decoded remote
+                // PCM). nil before the first decoded frame → the
+                // MiniSpectrum bars decay to rest, never fabricated.
+                voiceSpectrum: appState.voiceSpectrum,
                 // No live rekey-count/epoch source exists yet (see
                 // AppState.rekeyCount doc comment — it is declared but
                 // never incremented by any current rotation hook), so we
@@ -475,8 +480,8 @@ struct LiveInCallScreen: View {
     /// Unified call UI — maps the live `AppState.voiceAnalysis` (raw
     /// engine result, see QAudionEngine.VoiceAnalysisResult) onto
     /// InCallScreen's small display-only `VoiceBiometrics` struct. Returns
-    /// nil while no result has arrived (engine flag off, incoming-call
-    /// wiring gap per CallService.swift, or genuinely no analysis yet) —
+    /// nil while no result has arrived (engine flag off, or genuinely no
+    /// analysis yet — both call directions are wired as of 2026-07-04) —
     /// InCallScreen then omits the biometrics rows entirely rather than
     /// showing zeros.
     private var liveVoiceBiometrics: InCallScreen.VoiceBiometrics? {

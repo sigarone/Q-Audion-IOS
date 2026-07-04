@@ -88,14 +88,15 @@ struct InCallScreen: View {
         let pitchHz: Float            // VoiceAnalysisResult.Pitch.f0Hz
         let syllablesPerSec: Float    // VoiceAnalysisResult.SpeechRate.syllablesPerSec
         let confidence: Float         // 0...1 (VoiceAnalysisResult.confidence)
-        // Unified call UI — formant/energy fields driving the animated
-        // mini-spectrum (Guardian ribbon). f1…f4 are the REAL vocal-resonance
-        // peak frequencies (Hz) from VoiceAnalysisResult.Formants; a zero
-        // formant simply contributes no gaussian bump. `speaking` gates the
-        // cyan→green "active" tint (VoiceAnalysisResult.speechRate.isSpeaking
-        // && .pitch.voiced). These are display-only inputs to the spectrum;
-        // the security sheet ignores them. Defaulted so preview/test call
-        // sites that don't care about the spectrum keep compiling.
+        // Unified call UI — f1…f4 are the REAL vocal-resonance peak
+        // frequencies (Hz) from VoiceAnalysisResult.Formants. As of the
+        // real-FFT MiniSpectrum (2026-07-04) they NO LONGER drive the
+        // spectrum bars — the bars are the actual `voiceSpectrum` bands —
+        // but the fields are retained (call sites/previews already
+        // populate them, and a future formant overlay may use them).
+        // `speaking` still gates the MiniSpectrum's cyan→green "active"
+        // tint (VoiceAnalysisResult.speechRate.isSpeaking && .pitch.voiced).
+        // Defaulted so preview/test call sites keep compiling.
         let f1: Float                 // VoiceAnalysisResult.Formants.f1 (Hz)
         let f2: Float                 // .f2 (Hz)
         let f3: Float                 // .f3 (Hz)
@@ -156,9 +157,16 @@ struct InCallScreen: View {
     let cipherSamples: [Float]
     /// Unified call UI — live Guardian voice-biometrics snapshot for the
     /// security sheet + Guardian ribbon mini-gauges. nil while unavailable
-    /// (engine flag off, incoming-call wiring gap, or no result yet) —
+    /// (engine flag off, or no result yet — both call directions wired) —
     /// every dependent row is omitted gracefully, never fabricated.
     let voiceBiometrics: VoiceBiometrics?
+    /// Unified call UI — REAL remote-voice spectrum: 40 log-spaced bands
+    /// (0..1) of ACTUAL RX-PCM FFT magnitude (`SpectrumExtractor`, ≤15 Hz).
+    /// Drives the Guardian ribbon MiniSpectrum bars 1:1 — parity with
+    /// Android's real-FFT MiniSpectrum, no synthetic shimmer, no formant
+    /// fake. nil ⇒ no decoded frame yet / between calls ⇒ the bars decay
+    /// to rest rather than animating fabricated motion.
+    let voiceSpectrum: [Float]?
     /// Unified call UI — KMS key epoch counter (0-based count of rekeys
     /// this call has performed so far). nil when no live rekey-count
     /// source is available; the security sheet then shows the static
@@ -231,6 +239,7 @@ struct InCallScreen: View {
          rxSamples: [Float] = [],
          cipherSamples: [Float] = [],
          voiceBiometrics: VoiceBiometrics? = nil,
+         voiceSpectrum: [Float]? = nil,
          keyEpoch: Int? = nil,
          cryptoOpsPerSec: Int = 0,
          onToggleMute: @escaping () -> Void = {},
@@ -267,6 +276,7 @@ struct InCallScreen: View {
         self.rxSamples = rxSamples
         self.cipherSamples = cipherSamples
         self.voiceBiometrics = voiceBiometrics
+        self.voiceSpectrum = voiceSpectrum
         self.keyEpoch = keyEpoch
         self.cryptoOpsPerSec = cryptoOpsPerSec
         self.onToggleMute = onToggleMute
@@ -401,6 +411,10 @@ struct InCallScreen: View {
                 Spacer().frame(height: 8)
 
                 guardianRibbon.padding(.horizontal, 20)
+
+                Spacer().frame(height: 8)
+
+                trustChainCard.padding(.horizontal, 20)
 
                 Spacer().frame(height: 8)
 
@@ -855,10 +869,10 @@ struct InCallScreen: View {
     /// Compact Guardian strip: a small live remote-voice spectrum on the
     /// left, a cipher/seal visual on the right, 3 mini gauges below
     /// (stress / breath·HNR / pitch) with a one-word status per gauge, and —
-    /// when the crypto engine is doing real work (ops/s > 0) — a thin pulsing
-    /// crypto-engine meter at the bottom. Additive and small per spec — NOT
+    /// when the crypto engine is doing real work (ops/s > 0) — a thin
+    /// cipher-flow tube at the bottom. Additive and small per spec — NOT
     /// the full decorative canvas spectrum-analyzer from the HTML reference.
-    /// The mini-spectrum is formant-driven + animated (see `miniSpectrum`),
+    /// The mini-spectrum shows the REAL RX FFT bands (see `miniSpectrum`),
     /// for parity with Android's `MiniSpectrum`. When `voiceBiometrics == nil`
     /// (engine flag off, or no result yet) the gauges render an em-dash rather
     /// than fabricated numbers.
@@ -930,68 +944,72 @@ struct InCallScreen: View {
         )
     }
 
-    /// Live remote-voice mini-spectrum — parity with Android `MiniSpectrum`
-    /// (feature-call/ui/GuardianRibbon.kt). A small (≤30pt) 16-bar spectrum
-    /// whose SHAPE is the real `VoiceAnalysisResult` formants (f1…f4 vocal-
-    /// resonance peaks mapped onto a 0…3800 Hz display band as soft gaussian
-    /// bumps), whose AMPLITUDE tracks live speaking energy (analysis
-    /// confidence when voiced/speaking, decaying to a low idle floor
-    /// otherwise), with ONE cheap continuous phase (a single `TimelineView
-    /// (.animation)` redraw) adding a travelling shimmer so it stays alive
-    /// between the ~10 Hz analysis updates. Cost: one Canvas redraw per
-    /// display frame reading a time-derived phase — NOT a per-frame
-    /// recomposition, NOT a real FFT.
+    /// Per-band displayed bar height with asymmetric attack/decay smoothing
+    /// (instant rise to a louder band, gentle 0.78 fall) — the exact
+    /// `display[]` logic of Android's `MiniSpectrum`. A plain
+    /// (non-observable) final class kept in `@State` so the SAME buffer
+    /// survives re-renders, while mutating it during the Canvas draw phase
+    /// never invalidates/recomposes the view tree (2026-07-04 never-block
+    /// rules: the draw is the only thing that runs per display frame).
+    private final class SpectrumDisplayHolder {
+        var levels = [Float](repeating: 0, count: 40)
+    }
+    @State private var spectrumDisplay = SpectrumDisplayHolder()
+
+    /// Live remote-voice mini-spectrum — the REAL thing, parity with Android
+    /// `MiniSpectrum` (feature-call/ui/GuardianRibbon.kt). Each bar is the
+    /// actual FFT magnitude of the decoded remote PCM (40 log-spaced bands,
+    /// 0..1, computed by `SpectrumExtractor` on the RX audio at ≤15 Hz), so
+    /// the bars move with what is genuinely being said. No synthetic
+    /// shimmer, no formant fake — the old gaussian-bump code path is gone.
     ///
-    /// Colors: cyan (pqcAccent) → green (success) gradient when speaking, dim
-    /// (onSurfaceVariant) when idle. When Reduce Motion is on the phase is
-    /// frozen to a single representative frame (the animation stops), so the
-    /// bars still show the formant shape + energy but don't shimmer.
+    /// The only smoothing is a per-band fall decay held in
+    /// `spectrumDisplay` (the bar can jump UP instantly to a new peak, then
+    /// eases DOWN) so the display reads as a fluid analyser rather than a
+    /// strobing histogram. When `voiceSpectrum` is nil (pre-first-frame /
+    /// between calls) the bars decay to the idle floor and rest.
+    ///
+    /// Frame source: the existing `TimelineView(.animation(paused:
+    /// reduceMotion))` — one Canvas redraw per display frame, zero
+    /// recomposition. Under Reduce Motion the timeline pauses and the bars
+    /// simply snap to each ≤15 Hz spectrum update without the decay tween.
     private var miniSpectrum: some View {
         TimelineView(.animation(paused: reduceMotion)) { timeline in
             Canvas { ctx, size in
-                // One continuous looping phase, period 1500 ms (matches
-                // Android's spectrumPhase tween). Frozen to 0 under Reduce
-                // Motion for a static representative frame.
-                let phase: Double
-                if reduceMotion {
-                    phase = 0
-                } else {
-                    let period = 1.5
-                    let t = timeline.date.timeIntervalSinceReferenceDate
-                    phase = (t.truncatingRemainder(dividingBy: period)) / period * 2.0 * .pi
-                }
-                drawMiniSpectrum(ctx: &ctx, size: size, phase: phase)
+                // Explicitly read the timeline date so each tick is a real
+                // dependency of this draw — the decay smoothing advances per
+                // display frame even though the value itself is unused.
+                _ = timeline.date
+                drawMiniSpectrum(ctx: &ctx, size: size)
             }
         }
     }
 
     /// Pure Canvas draw for `miniSpectrum` — extracted so the TimelineView
-    /// body stays shallow (SWIFT6_PATTERNS §5/§6) and the parameters mirror
-    /// Android's `MiniSpectrum` Canvas block 1:1.
-    private func drawMiniSpectrum(ctx: inout GraphicsContext, size: CGSize, phase: Double) {
-        let bio = voiceBiometrics
-        // Speaking gate (cyan→green tint) + energy driver. iOS `Pitch` has
-        // no per-frame `confidence` field (only f0Hz/voiced/rms), so — unlike
-        // Android which reads `pitch.confidence` — the energy uses the
-        // top-level `VoiceAnalysisResult.confidence` (the overall analysis
-        // confidence, the closest analog). isSpeaking && voiced already fold
-        // into `bio.speaking` at the map site (liveVoiceBiometrics).
-        let speaking = bio?.speaking ?? false
-        let conf = CGFloat(max(0, min(1, bio?.confidence ?? 0)))
-        let energy: CGFloat = speaking ? (0.45 + 0.55 * conf) : 0.12
-
-        // Formant peaks (Hz) → normalised x in [0,1] over a 0…3800 Hz band.
-        // A zero formant contributes no peak (filtered out).
-        var peaks: [CGFloat] = []
-        if let bio {
-            for hz in [bio.f1, bio.f2, bio.f3, bio.f4] {
-                let xn = CGFloat(max(0, min(1, hz / 3800.0)))
-                if xn > 0.001 { peaks.append(xn) }
+    /// body stays shallow (SWIFT6_PATTERNS §5/§6); mirrors Android's
+    /// `MiniSpectrum` Canvas block 1:1 (instant-rise / 0.78-decay smoothing
+    /// INSIDE the draw, 40 bars, per-bar active/idle brush).
+    private func drawMiniSpectrum(ctx: inout GraphicsContext, size: CGSize) {
+        // Advance the per-band display levels (mutating the class holder —
+        // never triggers a view update; see SpectrumDisplayHolder).
+        let holder = spectrumDisplay
+        if let bands = voiceSpectrum {
+            let n = min(holder.levels.count, bands.count)
+            for i in 0..<n {
+                let target = bands[i]
+                // Instant rise to a louder band, gentle fall — analyser feel.
+                holder.levels[i] = target > holder.levels[i]
+                    ? target
+                    : holder.levels[i] * 0.78 + target * 0.22
             }
+        } else {
+            for i in holder.levels.indices { holder.levels[i] *= 0.85 }
         }
 
-        let n = 16
-        let gap = size.width * 0.28 / CGFloat(n)
+        let speaking = voiceBiometrics?.speaking ?? false
+        let n = holder.levels.count
+        guard n > 0 else { return }
+        let gap = min(size.width * 0.20 / CGFloat(n), 2.2)
         let bw = (size.width - gap * CGFloat(n - 1)) / CGFloat(n)
         let baseY = size.height
         let activeGradient = GraphicsContext.Shading.linearGradient(
@@ -1003,23 +1021,12 @@ struct InCallScreen: View {
 
         for i in 0..<n {
             let x = CGFloat(i) * (bw + gap)
-            let xn: CGFloat = n <= 1 ? 0 : CGFloat(i) / CGFloat(n - 1)
-            // Formant-shaped envelope: a soft gaussian bump near each real peak.
-            var env: CGFloat = 0.10
-            for p in peaks {
-                let d = xn - p
-                env += 0.9 * CGFloat(exp(-(Double(d * d)) / 0.010))
-            }
-            // Spectral tilt (voice rolls off toward high freq).
-            env *= (1.0 - 0.35 * xn)
-            // Travelling shimmer keeps it alive between analysis updates.
-            let shimmer = 0.5 + 0.5 * sin(phase + Double(i) * 0.55)
-            var h = env * (0.55 + 0.45 * CGFloat(shimmer)) * energy
-            h = max(0.04, min(1.0, h))
+            let h = CGFloat(min(max(holder.levels[i], 0.02), 1.0))
             let barH = h * size.height
-            let rect = CGRect(x: x, y: baseY - barH, width: bw, height: barH)
-            let barPath = Path(roundedRect: rect, cornerRadius: bw / 2.0)
-            ctx.fill(barPath, with: speaking ? activeGradient : idleShading)
+            let rect = CGRect(x: x, y: baseY - barH, width: max(bw, 1), height: barH)
+            let barPath = Path(roundedRect: rect, cornerRadius: 1.2)
+            ctx.fill(barPath,
+                     with: (speaking || h > 0.08) ? activeGradient : idleShading)
         }
     }
 
@@ -1060,41 +1067,165 @@ struct InCallScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    // MARK: - Trust-chain card (unified call UI — custody of your voice)
+
+    /// Protection-envelope start fraction for the SOFTWARE path: the seal
+    /// happens on the phone, so the envelope covers Seal→Air and the MIC
+    /// sits just OUTSIDE it on the left. Same 0.42 constant as Android's
+    /// `TrustChainCard` software branch.
+    private static let trustEnvelopeStart: CGFloat = 0.42
+
+    /// Trust-chain card — the honest "where is the voice sealed, and does
+    /// the protection reach the microphone?" visual. Port of the CONCEPT
+    /// from Android `GuardianRibbon.kt` `TrustChainCard`, SOFTWARE variant
+    /// only: iOS has no earbud secure-element media path, so there is no
+    /// earbud branch, no animation of the envelope boundary, and the grade
+    /// is fixed at "GRADE A" (never the earbud-only "A+ · SOVEREIGN").
+    ///
+    /// The load-bearing idea, stated honestly: the seal happens ON THE
+    /// PHONE, so the protection envelope starts at 42% and the MICROPHONE
+    /// sits just outside it — raw audio exists in the phone's audio
+    /// pipeline for an instant before it is sealed. The OS keystore keeps
+    /// the KEYS safe, but a compromised OS could tap the mic upstream of
+    /// encryption. Nothing here is fabricated and nothing animates
+    /// continuously (static card — zero per-frame cost).
+    private var trustChainCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // header
+            HStack {
+                Text("CUSTODY OF YOUR VOICE")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                Spacer(minLength: 0)
+                Text("GRADE A")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(extras.pqcAccent)
+            }
+            Spacer().frame(height: 10)
+
+            // the three stages: Mic → Seal (phone) → Air
+            HStack(spacing: 0) {
+                trustNode(title: "Mic", sub: "exposed", accent: extras.riskHigh)
+                trustArrow
+                trustNode(title: "Seal", sub: "phone", accent: extras.pqcAccent)
+                trustArrow
+                trustNode(title: "Air", sub: "ciphertext", accent: scheme.onSurfaceVariant)
+            }
+            Spacer().frame(height: 8)
+
+            // protection envelope bar — the protected segment starts at 42%
+            // (the seal), leaving the mic just outside on the left. Static
+            // Canvas: drawn once per layout, no TimelineView.
+            Canvas { ctx, size in
+                let h = size.height
+                // dim full track
+                ctx.fill(
+                    Path(roundedRect: CGRect(x: 0, y: 0, width: size.width, height: h),
+                         cornerRadius: h / 2.0),
+                    with: .color(scheme.onSurfaceVariant.opacity(0.15))
+                )
+                // protected segment from start*width → end
+                let sx = Self.trustEnvelopeStart * size.width
+                let shading = GraphicsContext.Shading.linearGradient(
+                    Gradient(colors: [extras.pqcAccent.opacity(0.9),
+                                      extras.pqcAccent.opacity(0.5)]),
+                    startPoint: CGPoint(x: sx, y: 0),
+                    endPoint: CGPoint(x: size.width, y: 0)
+                )
+                ctx.fill(
+                    Path(roundedRect: CGRect(x: sx, y: 0,
+                                             width: size.width - sx, height: h),
+                         cornerRadius: h / 2.0),
+                    with: shading
+                )
+            }
+            .frame(height: 6)
+            Spacer().frame(height: 6)
+
+            Text("protected from the seal onward — mic just outside")
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Spacer().frame(height: 9)
+
+            // verdict — the honest software-path statement (Android's
+            // wording, with the key-custody claim adapted to iOS: keys live
+            // in the OS keystore/Keychain here, not TrustZone/StrongBox).
+            Text("Keys stay safe in the OS keystore, but the raw mic audio exists in the phone for an instant before the seal — an OS compromise could tap it upstream of encryption.")
+                .font(.system(size: 11))
+                .foregroundStyle(scheme.onSurface.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scheme.surfaceVariant.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(scheme.outline.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    /// One stage of the trust chain (title + monospace sub-caption).
+    /// Mirrors Android's `TrustNode`.
+    private func trustNode(title: String, sub: String, accent: Color) -> some View {
+        VStack(spacing: 1) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(scheme.onSurface)
+            Text(sub)
+                .font(.system(size: 7.5, design: .monospaced))
+                .foregroundStyle(accent)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var trustArrow: some View {
+        Text("→")
+            .font(.system(size: 12))
+            .foregroundStyle(scheme.onSurfaceVariant)
+    }
+
     // MARK: - Crypto-engine meter (unified call UI)
 
-    /// Thin pulsing crypto-engine meter — parity with Android
-    /// `CryptoEngineMeterRow` (feature-call/ui/GuardianRibbon.kt). A bright
-    /// COMET sweeps across a dim track; its sweep PERIOD shortens as
-    /// `cryptoOpsPerSec` rises (~1700 ms idle → ~450 ms busy) and its
-    /// height/brightness rise with intensity (`opsPerSec / 200` clamped).
-    /// Real per-frame AES-256-GCM work — the rate is the live delta of the
-    /// `CallService` seal(TX)+open(RX) frame counters, never fabricated.
+    /// Cipher flow tube — parity with Android `CipherFlowTube`
+    /// (feature-call/ui/GuardianRibbon.kt): the "myriad of chaotic dots"
+    /// representation of the live encryption stream. A fixed-width rounded
+    /// tube through which a swarm of dots flows left→right; every visual
+    /// parameter is bound to REAL crypto-engine telemetry (no canned
+    /// animation):
+    ///
+    ///  - dot COUNT   ∝ real AES-256-GCM frame ops/s (`cryptoOpsPerSec`):
+    ///                  the swarm literally is ~1.4 s worth of sealed/opened
+    ///                  frames in flight (clamped 24…220 for GPU sanity), so
+    ///                  a busier engine shows a visibly denser stream;
+    ///  - dot chaos     deterministic per-dot pseudo-random phase/speed/
+    ///                  lane/wobble/radius via golden-ratio index hashing —
+    ///                  zero allocation, stable across frames, chaotic to
+    ///                  the eye: ciphertext-like;
+    ///  - colour        cyan (pqcAccent, plaintext side) → success-green
+    ///                  (sealed side) by x/w, with a mid-tube alpha bloom.
     ///
     /// Readout is "N/s" only. Android also prints "X kB/s", but iOS has no
     /// byte counter (only frame counts), so — per the honest-data rule — no
     /// byte rate is shown rather than fabricating one from an assumed frame
-    /// size. Under Reduce Motion the comet freezes to a representative frame.
+    /// size. The TimelineView is PAUSED under Reduce Motion or while the
+    /// engine is idle (ops == 0): only the static tube walls render then.
     private var cryptoEngineMeterRow: some View {
         HStack(spacing: 8) {
             Text("ENGINE")
                 .font(.system(size: 7, weight: .semibold, design: .monospaced))
                 .foregroundStyle(scheme.onSurfaceVariant)
-            TimelineView(.animation(paused: reduceMotion)) { timeline in
+            TimelineView(.animation(paused: reduceMotion || cryptoOpsPerSec == 0)) { timeline in
                 Canvas { ctx, size in
-                    // Sweep period shortens as ops/s rises: mirrors Android's
-                    // (1_800_000 / (ops + 60)) clamped to [420, 1700] ms.
-                    let periodMs = min(1700.0, max(420.0, 1_800_000.0 / (Double(cryptoOpsPerSec) + 60.0)))
-                    let period = periodMs / 1000.0
-                    let sweep: Double
-                    if reduceMotion {
-                        sweep = 0.5   // representative mid-sweep frame
-                    } else {
-                        let t = timeline.date.timeIntervalSinceReferenceDate
-                        sweep = (t.truncatingRemainder(dividingBy: period)) / period
-                    }
-                    drawCryptoComet(ctx: &ctx, size: size, sweep: sweep)
+                    // t == 0 ⇒ paused/idle ⇒ walls only (static tube).
+                    let animate = !reduceMotion && cryptoOpsPerSec > 0
+                    let t = animate ? timeline.date.timeIntervalSinceReferenceDate : 0
+                    drawCipherTube(ctx: &ctx, size: size, t: t)
                 }
-                .frame(height: 8)
+                .frame(height: 14)
             }
             Text(Self.cryptoReadout(cryptoOpsPerSec))
                 .font(.system(size: 8, design: .monospaced))
@@ -1104,40 +1235,61 @@ struct InCallScreen: View {
         .padding(.vertical, 5)
     }
 
-    /// Pure Canvas draw for the crypto comet — extracted so the TimelineView
-    /// body stays shallow (SWIFT6_PATTERNS §5/§6). Mirrors Android's comet
-    /// geometry: dim track + a travelling bright pulse whose height/alpha
-    /// scale with intensity (`opsPerSec / 200` clamped to [0.15, 1]).
-    private func drawCryptoComet(ctx: inout GraphicsContext, size: CGSize, sweep: Double) {
-        let intensity = CGFloat(min(1.0, max(0.15, Double(cryptoOpsPerSec) / 200.0)))
-        let trackH = size.height * 0.42
-        let ty = (size.height - trackH) / 2.0
-        // Dim track.
-        let trackRect = CGRect(x: 0, y: ty, width: size.width, height: trackH)
+    /// Pure Canvas draw for the cipher tube — extracted so the TimelineView
+    /// body stays shallow (SWIFT6_PATTERNS §5/§6). Ports Android
+    /// `CipherFlowTube`'s draw block 1:1: golden-ratio index hashing for
+    /// per-dot phase/speed/lane/radius, sin wobble, x from
+    /// `fract(ph + t·spd)`, colour lerp cyan→green by x/w (realised as ONE
+    /// horizontal gradient shading each dot samples at its x — same visual
+    /// result as Android's per-dot RGB lerp without needing Color
+    /// components), alpha `0.20 + 0.62·sin(π·x/w)`. `t == 0` ⇒ walls only.
+    /// All per-dot math stays in Double: the reference-date time base
+    /// (~8×10⁸ s) would lose sub-second precision in Float32.
+    private func drawCipherTube(ctx: inout GraphicsContext, size: CGSize, t: Double) {
+        let w = size.width
+        let h = size.height
+        // Tube walls — always drawn, also when idle/paused.
         ctx.fill(
-            Path(roundedRect: trackRect, cornerRadius: trackH / 2.0),
-            with: .color(scheme.onSurfaceVariant.opacity(0.18))
+            Path(roundedRect: CGRect(x: 0, y: 0, width: w, height: h),
+                 cornerRadius: h / 2.0),
+            with: .color(scheme.onSurfaceVariant.opacity(0.14))
         )
-        // Travelling comet — position driven by `sweep`.
-        let cometW = size.width * 0.28
-        let cx = CGFloat(sweep) * (size.width + cometW) - cometW
-        let cometRect = CGRect(
-            x: cx,
-            y: ty - trackH * intensity * 0.6,
-            width: cometW,
-            height: trackH * (1.0 + intensity * 1.2)
+        guard t > 0 else { return }
+
+        // Dot budget = ~1.4 s of real frame ops in flight (clamped for GPU sanity).
+        let n = min(220, max(24, Int(Double(cryptoOpsPerSec) * 1.4)))
+        // One cyan→green gradient across the tube — every dot filled with it
+        // picks up exactly the lerp(cyan, green, x/w) colour at its position.
+        let flowShading = GraphicsContext.Shading.linearGradient(
+            Gradient(colors: [extras.pqcAccent, extras.success]),
+            startPoint: CGPoint(x: 0, y: 0),
+            endPoint: CGPoint(x: w, y: 0)
         )
-        let cometShading = GraphicsContext.Shading.linearGradient(
-            Gradient(stops: [
-                .init(color: extras.pqcAccent.opacity(0), location: 0),
-                .init(color: extras.pqcAccent.opacity(0.9 * Double(intensity)), location: 0.5),
-                .init(color: extras.success.opacity(0), location: 1),
-            ]),
-            startPoint: CGPoint(x: cx, y: 0),
-            endPoint: CGPoint(x: cx + cometW, y: 0)
-        )
-        ctx.fill(Path(roundedRect: cometRect, cornerRadius: trackH / 2.0), with: cometShading)
+        for i in 0..<n {
+            // Deterministic per-dot chaos via golden-ratio index hashing.
+            let ph = Self.fract(Double(i) * 0.61803399)               // spawn phase along the tube
+            let spd = 0.22 + 0.30 * Self.fract(Double(i) * 0.75487767) // per-dot speed (tube lengths/s)
+            let fy = Self.fract(Double(i) * 0.38196601)               // lane inside the tube
+            let x = CGFloat(Self.fract(ph + t * spd)) * w
+            // chaotic vertical wobble, frequency varies per dot
+            let wob = sin(t * (1.7 + fy * 3.1) + Double(i) * 1.618)
+            let y = h / 2.0 + (CGFloat(fy) - 0.5) * (h * 0.58) + CGFloat(wob) * h * 0.14
+            let frac = Double(x / w)
+            // fade in at entry, out at exit; brighter mid-tube
+            let alpha = 0.20 + 0.62 * sin(Double.pi * frac)
+            let radius = CGFloat(0.8 + 1.2 * Self.fract(Double(i) * 0.91113))
+            var dotCtx = ctx
+            dotCtx.opacity = alpha
+            dotCtx.fill(
+                Path(ellipseIn: CGRect(x: x - radius, y: y - radius,
+                                       width: radius * 2, height: radius * 2)),
+                with: flowShading
+            )
+        }
     }
+
+    /// Fractional part — mirrors Android GuardianRibbon's `fract(v)`.
+    private static func fract(_ v: Double) -> Double { v - v.rounded(.down) }
 
     /// Static readout builder kept out of @ViewBuilder (SWIFT6_PATTERNS §1/§6
     /// — avoids String(Int) overload-resolution in a view body). ops/s only;

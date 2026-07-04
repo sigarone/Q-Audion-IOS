@@ -56,6 +56,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private var capabilityExchange: QAudionCapabilityExchange?
     private let guardianMode = GuardianMode()
     private let voiceAnalysis = VoiceAnalysisEngine()
+    /// Unified call UI — REAL remote-voice spectrum extractor (40 log-spaced
+    /// bands over the decoded RX PCM, port of Android's SpectrumExtractor.kt).
+    /// Fed inside `processIncomingAudio` on the SAME thread that already runs
+    /// `guardianMode.processFrame` — no extra dispatch, no Task per frame
+    /// (2026-07-04 never-block rules).
+    private let spectrumExtractor = SpectrumExtractor()
+    /// Monotonic uptime (ns) of the last spectrum compute — 66 ms source
+    /// throttle so `onVoiceSpectrum` fires at ≤15 Hz regardless of the
+    /// ~50 fps RX frame rate. Touched only on the RX processing thread
+    /// (same single-thread contract as the extractor itself).
+    private var lastSpectrumUptimeNs: UInt64 = 0
     private var sendOpaque: ((Data) async throws -> Void)?
     private var resolvedBcryptoUserId: String?
     private var bcryptoUserIdCache: [String: String] = [:]  // recipientId -> BCrypto userId
@@ -135,6 +146,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     public var onStateChanged: ((CallState) -> Void)?
     public var onDeepfakeAlert: ((ConfidenceIndex.Level, Float) -> Void)?
+
+    /// Unified call UI — fires ≤15 Hz with the REAL 40-band (0..1)
+    /// log-magnitude spectrum of the decoded remote voice (RX PCM), computed
+    /// by `SpectrumExtractor` inside `processIncomingAudio`. Same wiring
+    /// pattern as `getVoiceAnalysis().onResult`: CallService forwards it to
+    /// AppState, which hops to MainActor for the `@Published` write. Invoked
+    /// SYNCHRONOUSLY on the RX processing thread — the sink must stay cheap
+    /// and non-blocking (2026-07-04 never-block rules). While nil the FFT is
+    /// skipped entirely (zero cost).
+    public var onVoiceSpectrum: (([Float]) -> Void)?
 
     /// W389 — fired the moment the ML-KEM-1024 PQC handshake completes
     /// successfully on EITHER side (caller `case .accept` after
@@ -2191,13 +2212,37 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 
     public func processOutgoingAudio(pcmFrame: Data) throws -> Data {
-        voiceAnalysis.processFrame(pcmFrame)
         return try engine.processOutgoingAudio(pcmFrame: pcmFrame)
     }
 
     public func processIncomingAudio(serializedFrame: Data) throws -> Data {
         let pcm = try engine.processIncomingAudio(serializedFrame: serializedFrame)
         guardianMode.processFrame(pcm)
+        // Unified call UI — voice biometrics (pitch/stress/HNR) of the REMOTE
+        // party. Moved here from processOutgoingAudio (2026-07-04): it used to
+        // analyze the TX mic (YOUR OWN voice), while the Guardian ribbon
+        // gauges are explicitly about the INTERLOCUTOR — Android has always
+        // analyzed the decoded RX path (CallAudioBridge → feedVoiceAnalysis).
+        // Same thread as the guardian tap; the engine self-throttles
+        // (analysisRate) and runs synchronously — no per-frame dispatch.
+        voiceAnalysis.processFrame(pcm)
+        // Unified call UI — REAL remote-voice spectrum, ≤15 Hz (66 ms
+        // monotonic throttle). Runs INLINE on the same thread as the
+        // guardian tap above: no Task/DispatchQueue per frame (the exact
+        // flood pattern that froze Android — 2026-07-04 never-block rules).
+        // Skipped entirely while nothing is wired to consume it.
+        if let spectrumSink = onVoiceSpectrum {
+            let nowNs = DispatchTime.now().uptimeNanoseconds
+            if nowNs &- lastSpectrumUptimeNs >= 66_000_000 {
+                lastSpectrumUptimeNs = nowNs
+                // Little-endian Int16 PCM @ 48 kHz — the same layout + rate
+                // the sibling analysis DSP assumes (see PitchExtractor).
+                let samples: [Int16] = pcm.withUnsafeBytes { raw in
+                    Array(raw.bindMemory(to: Int16.self))
+                }
+                spectrumSink(spectrumExtractor.compute(samples, sampleRate: 48_000))
+            }
+        }
         return pcm
     }
 

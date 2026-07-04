@@ -470,13 +470,24 @@ final class AppState: ObservableObject {
     /// Unified call UI — Guardian ribbon voice biometrics (pitch, stress,
     /// voice health, speech rate, confidence). Fed by
     /// `CallService.onVoiceAnalysis`, itself wired from
-    /// `QAudionCallIntegration.getVoiceAnalysis().onResult` on the OUTGOING
-    /// call-setup path only (mirrors the existing `onDeepfakeAlert`/
-    /// `onDeepfakeScore` wiring site — see CallService.swift). nil until
-    /// the first analysis result arrives (or forever, on an incoming call —
-    /// the responder integration does not currently wire this closure,
-    /// same pre-existing asymmetry as onDeepfakeAlert). Reset in endCall().
+    /// `QAudionCallIntegration.getVoiceAnalysis().onResult` on BOTH the
+    /// outgoing (`CallService.startCall`) and incoming
+    /// (`CallService.activateIncomingCallAudio`) integration binding sites —
+    /// the old outgoing-only asymmetry (gauges dead on every incoming call)
+    /// was fixed 2026-07-04. nil until the first analysis result arrives.
+    /// Reset in endCall().
     @Published var voiceAnalysis: VoiceAnalysisResult?
+
+    /// Unified call UI — REAL remote-voice spectrum: 40 log-spaced bands
+    /// (0..1), the actual FFT magnitude of the decoded RX PCM computed by
+    /// `SpectrumExtractor` inside `QAudionCallIntegration
+    /// .processIncomingAudio` (66 ms source throttle ⇒ ≤15 Hz `@Published`
+    /// writes — never a per-audio-frame publish). Drives the Guardian ribbon
+    /// MiniSpectrum: no synthetic shimmer, no formant fake. nil before the
+    /// first decoded frame / between calls (bars rest). Wired for BOTH
+    /// outgoing and incoming calls, same as `voiceAnalysis` above.
+    /// Reset in endCall().
+    @Published var voiceSpectrum: [Float]?
 
     /// Unified call UI — crypto-engine meter. Live count of real AES-256-GCM
     /// frame operations per second, sampled once/sec from the ground-truth
@@ -1319,6 +1330,15 @@ final class AppState: ObservableObject {
         callService.onVoiceAnalysis = { [weak self] result in
             Task { @MainActor in
                 self?.voiceAnalysis = result
+            }
+        }
+
+        // Unified call UI — REAL remote-voice spectrum (≤15 Hz, throttled at
+        // the source inside QAudionCallIntegration, so this MainActor hop
+        // never runs per audio frame). Same pattern as onVoiceAnalysis above.
+        callService.onVoiceSpectrum = { [weak self] bands in
+            Task { @MainActor in
+                self?.voiceSpectrum = bands
             }
         }
 
@@ -6543,6 +6563,9 @@ final class AppState: ObservableObject {
         // it doesn't leak into the next call's security sheet before the
         // first analysis result of that new call arrives.
         voiceAnalysis = nil
+        // Unified call UI — drop the last spectrum frame too, so the ribbon
+        // bars decay to rest between calls (mirrors the reset above).
+        voiceSpectrum = nil
         // Unified call UI — stop the 1 Hz crypto-engine sampler and zero its
         // readout so the meter hides between calls and the next call starts
         // from 0 (mirrors the voiceAnalysis reset directly above).
