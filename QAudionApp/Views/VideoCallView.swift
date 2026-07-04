@@ -139,7 +139,10 @@ struct VideoCallView: View {
         // fall through to the WS HEVC pipeline exactly as before.
         if let track = appState.remoteWebRtcVideoTrack as? RTCVideoTrack {
             // RTCMTLVideoView already applies .scaleAspectFit internally.
-            WebRTCRemoteVideoView(track: track)
+            // VIDEODIAG §8.7 — the view wraps its real renderer in a
+            // counting forwarder fed by appState.videoDiag, so the
+            // rendered-hop counter stops whenever this view detaches.
+            WebRTCRemoteVideoView(track: track, diag: appState.videoDiag)
                 .ignoresSafeArea()
         } else if let pipeline = appState.videoPipeline {
             // W562 — fill the whole screen; the AVSampleBufferDisplayLayer's own

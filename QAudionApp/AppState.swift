@@ -428,6 +428,39 @@ final class AppState: ObservableObject {
     /// video_keyframe_request envelopes the peer ships.
     private var lastKeyframeForcedAt: Date = .distantPast
 
+    // VIDEODIAG (WIRE_SPEC §8.7) — self-heal watchdog. SIGNAL-NOT-KILL:
+    // it NEVER drops/tears down a call and never blocks anything — it
+    // only heals (keyframe request, sink re-attach, call_media_ready
+    // re-announce) and logs. NEVER-BLOCK: ONE 1s-tick task per call,
+    // cancelled on endCall/rollback; counters bumped on existing hot
+    // paths (VideoPathDiag), no per-frame tasks.
+
+    /// Per-call video-path counters (arrived/decoded/rendered/IDR).
+    /// Internal (not private) on purpose: VideoCallView hands it to
+    /// WebRTCRemoteVideoView, whose Coordinator wraps the REAL UI renderer
+    /// (RTCMTLVideoView) in a counting forwarder — the rendered-hop counter
+    /// attaches/detaches IN LOCKSTEP with the on-screen renderer, so a
+    /// detached renderer stops the counter and the watchdog can see the
+    /// detached-renderer black-video class (rung 2 heals it).
+    let videoDiag = VideoPathDiag()
+    /// The ONE per-call 1s-tick watchdog task. nil = not running.
+    private var videoDiagWatchdogTask: Task<Void, Never>?
+    /// Escalation ladder state (pure engine, KAT-gated) the tick delegates to.
+    private let videoStallLadder = VideoStallEscalationEngine()
+    /// Tick memos: last observed counter values + the monotonic ms of
+    /// their last increase (stall rule inputs).
+    private var videoDiagPrevArrived: Int64 = 0
+    private var videoDiagPrevRendered: Int64 = 0
+    private var videoDiagLastArrivedIncreaseMs: Int64 = 0
+    private var videoDiagLastRenderedIncreaseMs: Int64 = 0
+    /// Last inbound video mid announced via call_media_ready — the mid
+    /// the rung-3 re-announce re-sends for. Reset with the watchdog.
+    private var lastInboundVideoMid: String?
+    /// Timestamps (monotonic ms) of the most recent inbound
+    /// video_keyframe_request envelopes — TX storm rule input
+    /// (>=3 in 5s → force IDR immediately, one-shot limiter bypass).
+    private var peerKeyframeRequestTimesMs: [Int64] = []
+
     /// True when [videoPipeline] was started decode-only (external source,
     /// paused) just to RENDER a WS-relay peer's screen share on an
     /// audio-only call — torn down again on SCREEN_SHARE:stop.
@@ -2853,6 +2886,9 @@ final class AppState: ObservableObject {
         // WIRE_SPEC §8.7 — the video leg is gone: drop any parked track +
         // failsafe so a rebuilt upgrade PC starts with a fresh RX gate.
         self.resetRemoteVideoRenderGate()
+        // VIDEODIAG — the watched video leg is gone: cancel the watchdog
+        // (a rebuilt upgrade re-starts it on the fresh track).
+        self.stopVideoDiagWatchdog(reason: "video-leg rollback")
         self.videoPipeline?.stop()
         self.videoPipeline = nil
         self.setCamera(false)
@@ -2895,8 +2931,11 @@ final class AppState: ObservableObject {
         controller.onVideoStallDetected = { [weak self] in
             Task { @MainActor [weak self] in self?.requestKeyframeFromSender() }
         }
-        controller.videoTelemetry = { kind, attrs in
+        controller.videoTelemetry = { [weak self] kind, attrs in
             TelemetryService.shared.emit(kind: kind, attrs: attrs)
+            // VIDEODIAG — feed the arrived/decoded counters off the
+            // EXISTING 3s stats poll (thread-safe class; any thread).
+            self?.videoDiag.noteVideoStats(kind: kind, attrs: attrs)
         }
         controller.onAudioDataChannelFrame = { [weak self] data in
             self?.callService.handleIncomingDataChannelAudio(data)
@@ -3109,6 +3148,8 @@ final class AppState: ObservableObject {
             // Frames were held back (paused preview) until this consent.
             videoPipeline?.setVideoPaused(false)
         }
+        // VIDEODIAG — upgrade accepted: video is expected from here on.
+        startVideoDiagWatchdogIfNeeded()
         #if canImport(WebRTC)
         guard let controller = webRtcController as? QAudionWebRtcCallController,
               !sdp.isEmpty else {
@@ -3148,6 +3189,11 @@ final class AppState: ObservableObject {
     /// lifted blind, the decoder most likely joined mid-stream.
     @MainActor
     private func publishRemoteVideoTrackGated(_ track: Any?) {
+        // VIDEODIAG — remote video is now expected on this call: start the
+        // per-call self-heal watchdog (idempotent). The rendered hop is
+        // counted by the forwarding renderer WebRTCRemoteVideoView wraps
+        // around the real RTCMTLVideoView once SwiftUI attaches it.
+        startVideoDiagWatchdogIfNeeded()
         if inboundVideoReadyThisCall {
             remoteWebRtcVideoTrack = track
             return
@@ -3203,6 +3249,9 @@ final class AppState: ObservableObject {
     @MainActor
     private func sendCallMediaReadyOnce(mid: String?) {
         openRemoteVideoRenderGate(reason: "receiver cryptor ready")
+        // VIDEODIAG — remember the announced mid so the watchdog's rung-3
+        // re-announce ships the same (callId, mid) wire bytes.
+        lastInboundVideoMid = mid
         guard let peerId = callContactId,
               let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId() else { return }
@@ -3236,6 +3285,7 @@ final class AppState: ObservableObject {
               let peerId = callContactId,
               let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId() else { return }
+        videoDiag.noteKeyframeRequested()   // VIDEODIAG — lastKeyframeRequestAtMs
         RTLog.info("call", "INT-4a — inbound video stalled, requesting keyframe from sender")
         Task {
             try? await impl.sendVideoKeyframeRequest(
@@ -3287,9 +3337,35 @@ final class AppState: ObservableObject {
             controller.releaseVideoTxHold(reason: "peer call_media_ready")
         }
         #endif
+        // VIDEODIAG — the peer signalling §8.7 readiness/recovery means
+        // video is expected on this call: make sure the watchdog runs
+        // (idempotent) and stamp the diag timestamps.
+        startVideoDiagWatchdogIfNeeded()
+        // VIDEODIAG TX inverse rule — the peer requesting >=3 keyframes in
+        // 5s means its decoder is starving: force an IDR IMMEDIATELY,
+        // bypassing the 1/s honor limiter once (one-shot; the timestamp
+        // ring resets on bypass so a sustained storm can't turn the bypass
+        // into an unlimited IDR firehose).
+        var bypassRateLimit = false
+        if kind == "video_keyframe_request" {
+            let nowMs = VideoPathDiag.nowMs()
+            peerKeyframeRequestTimesMs.append(nowMs)
+            let cap = VideoStallSelfHeal.peerKeyframeStormCount
+            if peerKeyframeRequestTimesMs.count > cap {
+                peerKeyframeRequestTimesMs.removeFirst(peerKeyframeRequestTimesMs.count - cap)
+            }
+            if VideoStallSelfHeal.isPeerKeyframeStorm(
+                requestTimesMs: peerKeyframeRequestTimesMs, nowMs: nowMs) {
+                bypassRateLimit = true
+                peerKeyframeRequestTimesMs.removeAll()
+                RTLog.warn("VIDEODIAG", "peer keyframe-request storm (>=3 in 5s) — forcing IDR immediately (rate-limit bypass)")
+            }
+        } else {
+            videoDiag.notePeerMediaReady()   // lastPeerMediaReadyAtMs
+        }
         // §8.7 honor rate limit: at most one forced IDR per second.
         let now = Date()
-        guard now.timeIntervalSince(lastKeyframeForcedAt) >= 1.0 else { return }
+        guard bypassRateLimit || now.timeIntervalSince(lastKeyframeForcedAt) >= 1.0 else { return }
         lastKeyframeForcedAt = now
         var forced = false
         if let pipeline = videoPipeline {
@@ -3304,10 +3380,234 @@ final class AppState: ObservableObject {
             RTLog.info("call", "\(kind): forced WebRTC encoder IDR (KeyframeForcingVideoEncoder)")
         }
         #endif
-        if !forced {
+        if forced {
+            videoDiag.noteTxKeyframeForced()   // VIDEODIAG — txKeyframesForced
+        } else {
             RTLog.warn("call", "\(kind): no live video encoder rail — ignored")
         }
     }
+
+    // MARK: - VIDEODIAG §8.7 — per-call self-heal watchdog
+
+    /// Start the ONE per-call 1s-tick watchdog (idempotent). Called from
+    /// every site that establishes "video is expected on this call":
+    /// remote track arrival (publishRemoteVideoTrackGated), an accepted
+    /// upgrade (handleUpgradeResponse), and inbound §8.7 signals
+    /// (handleInboundKeyframeSignal). SIGNAL-NOT-KILL: the tick only
+    /// heals + logs, never tears anything down. NEVER-BLOCK: a single
+    /// MainActor task sleeping 1s between ticks — no per-frame work.
+    @MainActor
+    private func startVideoDiagWatchdogIfNeeded() {
+        guard videoDiagWatchdogTask == nil else { return }
+        let now = VideoPathDiag.nowMs()
+        videoDiagPrevArrived = 0
+        videoDiagPrevRendered = 0
+        videoDiagLastArrivedIncreaseMs = 0    // 0 = no arrival observed yet
+        videoDiagLastRenderedIncreaseMs = now // grace: no stall before start+3s
+        videoStallLadder.reset()
+        RTLog.info("VIDEODIAG", "watchdog started (1s tick) — video expected on this call")
+        videoDiagWatchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { break }
+                guard let self = self else { break }
+                self.videoDiagTick()
+            }
+        }
+    }
+
+    /// Cancel the watchdog + drop all per-call VIDEODIAG state. Called on
+    /// endCall and on the video-leg rollback. Safe no-op when not running.
+    @MainActor
+    private func stopVideoDiagWatchdog(reason: String) {
+        if videoDiagWatchdogTask != nil {
+            videoDiagWatchdogTask?.cancel()
+            videoDiagWatchdogTask = nil
+            RTLog.info("VIDEODIAG", "watchdog stopped (" + reason + ")")
+        }
+        videoStallLadder.reset()
+        videoDiag.reset()
+        peerKeyframeRequestTimesMs.removeAll()
+        lastInboundVideoMid = nil
+    }
+
+    /// One 1s tick: sample the lock-free counters, evaluate the §8.7
+    /// BLACK-VIDEO STALL rule, and run any due escalation rung. Silent
+    /// while healthy (logs only on state transitions); one line per tick
+    /// during a stall with every counter + pipeline state so a single log
+    /// line pinpoints the broken hop (MEDIADIAG philosophy).
+    @MainActor
+    private func videoDiagTick() {
+        guard isInCall else { return }
+        let now = VideoPathDiag.nowMs()
+        let snap = videoDiag.snapshot()
+        // Update the last-increase memos off the monotonic counters.
+        if snap.rxVideoFramesArrived > videoDiagPrevArrived {
+            videoDiagPrevArrived = snap.rxVideoFramesArrived
+            videoDiagLastArrivedIncreaseMs = now
+        }
+        if snap.rxFramesRendered > videoDiagPrevRendered {
+            videoDiagPrevRendered = snap.rxFramesRendered
+            videoDiagLastRenderedIncreaseMs = now
+        }
+        // Remote video expected = a remote track arrived (published or
+        // parked behind the RX render gate). Without one there is nothing
+        // to watch on the RX side — stay silent.
+        let remoteExpected = remoteWebRtcVideoTrack != nil || pendingRemoteVideoTrack != nil
+        guard remoteExpected else { return }
+        guard videoDiagLastArrivedIncreaseMs > 0 else { return }  // no RTP yet
+        let renderedFresh =
+            now - videoDiagLastRenderedIncreaseMs < VideoStallSelfHeal.stallWindowMs
+        // Arrivals idle for 2× the window (comfortably above the 3s
+        // stats-poll granularity, so it can't flap between polls): the
+        // peer stopped sending — "no media" is NOT a black-video stall.
+        let arrivedIdle =
+            now - videoDiagLastArrivedIncreaseMs >= 2 * VideoStallSelfHeal.stallWindowMs
+        if videoStallLadder.isStalled {
+            // Recovery is RENDERED-based (frames actually reaching the
+            // renderer again) or true idleness. A mere arrivals hiccup must
+            // NOT reset the ladder — the arrival counter has 3s stats-poll
+            // granularity, so its freshness can flap for one tick between
+            // polls; treating that as recovery would restart the backoff
+            // mid-stall and starve rungs 2/3.
+            if renderedFresh || arrivedIdle {
+                let recoverMs = now - videoStallLadder.stallStartMs
+                let how: String = renderedFresh ? "frames rendering again" : "inbound video went idle"
+                let line = "recovered (" + how + ") — time-to-recover=" +
+                    String(describing: recoverMs) + "ms (backoff + ladder reset)"
+                RTLog.info("VIDEODIAG", line)
+                videoStallLadder.noteRecovered()
+            }
+        } else if VideoStallSelfHeal.isBlackVideoStall(
+            msSinceLastArrivedIncrease: now - videoDiagLastArrivedIncreaseMs,
+            msSinceLastRenderedIncrease: now - videoDiagLastRenderedIncreaseMs) {
+            videoStallLadder.noteStalled(nowMs: now)
+            RTLog.warn("VIDEODIAG", "BLACK-VIDEO STALL detected — frames arriving but none rendered for >=3s; escalation ladder armed (3s/6s/12s)")
+        }
+        guard videoStallLadder.isStalled else { return }
+        // Fire every due rung IN ORDER (pure engine decides; SIGNAL-NOT-
+        // KILL: every rung only heals — nothing here ever ends the call).
+        for action in videoStallLadder.dueActions(nowMs: now) {
+            performVideoStallAction(action)
+        }
+        logVideoDiagStallLine(now: now, snap: snap)
+    }
+
+    /// Execute one escalation rung (§8.7 ladder — keyframe request →
+    /// sink re-attach → media_ready re-announce). ZERO new wire messages.
+    @MainActor
+    private func performVideoStallAction(_ action: VideoStallSelfHeal.EscalationAction) {
+        switch action {
+        case .keyframeRequest:
+            RTLog.warn("VIDEODIAG", "self-heal rung 1 — sending video_keyframe_request (existing wire msg, 1/s limiter)")
+            requestKeyframeFromSender()
+        case .sinkReattach:
+            RTLog.warn("VIDEODIAG", "self-heal rung 2 — re-attaching remote render sink (zero wire traffic)")
+            reattachRemoteVideoSinkForSelfHeal()
+        case .mediaReadyReannounce:
+            RTLog.warn("VIDEODIAG", "self-heal rung 3 — re-announcing call_media_ready (dedup bypass) + forcing local IDR")
+            reannounceCallMediaReadyForSelfHeal()
+        }
+    }
+
+    /// One VIDEODIAG line per stall tick with all counters + state so the
+    /// broken hop is identifiable from a single line.
+    @MainActor
+    private func logVideoDiagStallLine(now: Int64, snap: VideoPathDiag.Snapshot) {
+        var cryptorReady = false
+        var trackAttached = false
+        #if canImport(WebRTC)
+        if let controller = webRtcController as? QAudionWebRtcCallController {
+            cryptorReady = controller.inboundVideoCryptorReady
+        }
+        trackAttached = (remoteWebRtcVideoTrack as? RTCVideoTrack) != nil
+        #endif
+        let idrAgeMs = Int64(Date().timeIntervalSince(lastKeyframeForcedAt) * 1000.0)
+        let kfrAge: Int64 = snap.lastKeyframeRequestAtMs > 0 ? (now - snap.lastKeyframeRequestAtMs) : -1
+        let readyAge: Int64 = snap.lastPeerMediaReadyAtMs > 0 ? (now - snap.lastPeerMediaReadyAtMs) : -1
+        var parts: [String] = []
+        parts.append("stall t+" + String(describing: now - videoStallLadder.stallStartMs) + "ms")
+        parts.append("stage=" + String(describing: videoStallLadder.stage))
+        parts.append("arrived=" + String(describing: snap.rxVideoFramesArrived))
+        parts.append("decoded=" + String(describing: snap.rxFramesDecoded))
+        parts.append("rendered=" + String(describing: snap.rxFramesRendered))
+        parts.append("txIdrForced=" + String(describing: snap.txKeyframesForced))
+        parts.append("trackAttached=" + String(describing: trackAttached))
+        parts.append("gateOpen=" + String(describing: inboundVideoReadyThisCall))
+        parts.append("cryptorReady=" + String(describing: cryptorReady))
+        parts.append("lastIdrAgeMs=" + String(describing: idrAgeMs))
+        parts.append("lastKfrAgeMs=" + String(describing: kfrAge))
+        parts.append("peerReadyAgeMs=" + String(describing: readyAge))
+        RTLog.warn("VIDEODIAG", parts.joined(separator: " "))
+    }
+
+    /// Rung 2 — re-attach the renderer to the remote track: un-publish,
+    /// then re-publish on the next main-queue turn so SwiftUI rebuilds
+    /// WebRTCRemoteVideoView. Its Coordinator re-runs track.add(wrapper)
+    /// with a FRESH counting forwarder around the fresh RTCMTLVideoView —
+    /// so a successful re-attach is exactly what restarts the rendered
+    /// counter and lets the ladder observe the recovery. The one-frame
+    /// fallback flash is acceptable — the video is already black.
+    @MainActor
+    private func reattachRemoteVideoSinkForSelfHeal() {
+        #if canImport(WebRTC)
+        guard let track = remoteWebRtcVideoTrack as? RTCVideoTrack else { return }
+        remoteWebRtcVideoTrack = nil
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isInCall else { return }
+            self.remoteWebRtcVideoTrack = track
+        }
+        #endif
+    }
+
+    /// Rung 3 — re-announce `call_media_ready` for the last announced mid
+    /// (same wire bytes as the normal §8.7 readiness path; DELIBERATE
+    /// bypass of the once-per-(callId, mid) dedup — receivers are
+    /// idempotent) + force a LOCAL encoder IDR through the shared 1/s
+    /// honor limiter (helps the symmetric case where OUR outbound lane
+    /// is the stalled one).
+    @MainActor
+    private func reannounceCallMediaReadyForSelfHeal() {
+        guard let peerId = callContactId,
+              let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId() else { return }
+        let midValue: String = lastInboundVideoMid ?? ""
+        Task {
+            try? await impl.sendCallMediaReady(
+                callId: callId,
+                recipientId: peerId,
+                mid: midValue,
+                keyEpoch: 0,
+                dir: "recv")
+        }
+        // Local IDR through the SAME shared 1/s honor limiter as
+        // handleInboundKeyframeSignal (flag-based force — collapses with
+        // any concurrent request on the next encode()).
+        let now = Date()
+        if now.timeIntervalSince(lastKeyframeForcedAt) >= 1.0 {
+            lastKeyframeForcedAt = now
+            var forced = false
+            if let pipeline = videoPipeline {
+                pipeline.forceKeyFrame()
+                forced = true
+            }
+            #if canImport(WebRTC)
+            if let controller = webRtcController as? QAudionWebRtcCallController {
+                controller.forceWebRtcKeyframe()
+                forced = true
+            }
+            #endif
+            if forced { videoDiag.noteTxKeyframeForced() }
+        }
+    }
+
+    // NOTE (§8.7 rendered hop): there is deliberately NO side-attached
+    // counting sink here anymore. libwebrtc feeds every attached sink, so
+    // a sink added BESIDE the UI view kept rxFramesRendered advancing even
+    // with the real RTCMTLVideoView detached — hiding the detached-renderer
+    // black-video class from the watchdog. The counter now lives in the
+    // DiagForwardingVideoRenderer that WebRTCRemoteVideoView wraps around
+    // the real renderer (attach/detach in lockstep with the view).
 
     /// C-3 — remote hangup / decline / timeout teardown. Runs the full
     /// state reset UNCONDITIONALLY (the old code bailed when
@@ -6306,8 +6606,11 @@ final class AppState: ObservableObject {
                 // outbound/inbound video RTP stats + remote-track arrival to
                 // the server so an iOS→Android video failure is diagnosable
                 // without a Mac console session.
-                controller.videoTelemetry = { kind, attrs in
+                controller.videoTelemetry = { [weak self] kind, attrs in
                     TelemetryService.shared.emit(kind: kind, attrs: attrs)
+                    // VIDEODIAG — feed the arrived/decoded counters off the
+                    // EXISTING 3s stats poll (thread-safe class; any thread).
+                    self?.videoDiag.noteVideoStats(kind: kind, attrs: attrs)
                 }
                 // W-DCAUDIO — RX: inbound sealed-audio DataChannel frames →
                 // CallService decrypt + playback (same path as the WS
@@ -6753,6 +7056,8 @@ final class AppState: ObservableObject {
         // WIRE_SPEC §8.7 — reset the RX render gate (parked track,
         // failsafe watchdog, readiness memo) for the next call.
         resetRemoteVideoRenderGate()
+        // VIDEODIAG — cancel the per-call self-heal watchdog + counters.
+        stopVideoDiagWatchdog(reason: "endCall")
         // M-32: free the ≈150 MB ONNX deepfake model if it was used on
         // this call so it isn't held resident between calls.
         if deepfakeClassifierUsed {
@@ -8331,8 +8636,11 @@ extension AppState {
             }
         }
         // Remote-readable video diagnostics (responder side, mirrors caller).
-        controller.videoTelemetry = { kind, attrs in
+        controller.videoTelemetry = { [weak self] kind, attrs in
             TelemetryService.shared.emit(kind: kind, attrs: attrs)
+            // VIDEODIAG — feed the arrived/decoded counters off the
+            // EXISTING 3s stats poll (thread-safe class; any thread).
+            self?.videoDiag.noteVideoStats(kind: kind, attrs: attrs)
         }
         // W-DCAUDIO — RX: inbound sealed-audio DataChannel frames → CallService
         // decrypt + playback (same path as the WS "audio_frame" handler).

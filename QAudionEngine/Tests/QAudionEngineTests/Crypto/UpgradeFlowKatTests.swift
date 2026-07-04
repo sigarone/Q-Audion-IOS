@@ -35,18 +35,27 @@ final class UpgradeFlowKatTests: XCTestCase {
         let mid: String?
         let transceiverDirection: String?
         let senderTrack: Bool?
+        /// readiness-8.7 — virtual-clock advance (advance_time_ms).
+        let ms: Int?
+        /// readiness-8.7 — arm_video_tx_hold inputs.
+        let midCallUpgrade: Bool?
+        let alreadySendingVideo: Bool?
         let expect: [String: KatValue]?
 
         private enum CodingKeys: String, CodingKey {
             case action = "do"
             case media, accepted, sdp, seconds, mid
             case transceiverDirection, senderTrack, expect
+            case ms, midCallUpgrade, alreadySendingVideo
         }
     }
 
     private struct Scenario: Decodable {
         let id: String
         let callRole: String
+        /// "readiness-8.7" scenarios are replayed by the dedicated
+        /// readiness driver below; nil = legacy decision scenario.
+        let group: String?
         let steps: [Step]
     }
 
@@ -62,6 +71,8 @@ final class UpgradeFlowKatTests: XCTestCase {
         case int(Int)
         case string(String)
         case stringArray([String])
+        /// readiness-8.7 — nested `sentCount` maps ({"call_media_ready": 1}).
+        case intDict([String: Int])
         case other
 
         init(from decoder: Decoder) throws {
@@ -70,6 +81,7 @@ final class UpgradeFlowKatTests: XCTestCase {
             if let i = try? c.decode(Int.self) { self = .int(i); return }
             if let s = try? c.decode(String.self) { self = .string(s); return }
             if let a = try? c.decode([String].self) { self = .stringArray(a); return }
+            if let d = try? c.decode([String: Int].self) { self = .intDict(d); return }
             self = .other
         }
     }
@@ -88,6 +100,9 @@ final class UpgradeFlowKatTests: XCTestCase {
 
         var covered = Set<String>()
         for scenario in kat.scenarios {
+            // readiness-8.7 scenarios are replayed by the dedicated driver
+            // (testReadinessSelfHealVectorsMatch) — not decision vectors.
+            if scenario.group == "readiness-8.7" { continue }
             guard let role = callRole(scenario.callRole) else {
                 XCTFail("[\(scenario.id)] unknown callRole '\(scenario.callRole)'")
                 continue
@@ -274,7 +289,336 @@ final class UpgradeFlowKatTests: XCTestCase {
         return nil
     }
 
+    // MARK: - readiness-8.7 replay driver (WIRE_SPEC §8.7 self-heal)
+
+    /// Replays every `group == "readiness-8.7"` scenario against a pure
+    /// model that delegates the escalation ladder + failsafe/stall rules
+    /// to the PRODUCTION `VideoStallSelfHeal` / `VideoStallEscalationEngine`
+    /// (the exact objects AppState's VIDEODIAG watchdog drives). The
+    /// TX-hold / dedup / 1-per-second limiter rules mirror the production
+    /// call sites 1:1 (`>=` boundary semantics everywhere). Fails on any
+    /// unmodeled verb or expect key so a vector extension can never
+    /// silently no-op on iOS. Sister drivers: Android
+    /// `UpgradeFlowKatTest.kt`, Desktop `upgradeFlow.kat.spec.ts`.
+    func testReadinessSelfHealVectorsMatch() throws {
+        guard let kat = loadKatOrNil() else { return }  // same isolated-checkout policy
+        let group = kat.scenarios.filter { $0.group == "readiness-8.7" }
+        let mustCover: Set<String> = [
+            "readiness-media-ready-once-per-mid",
+            "readiness-tx-hold-released-by-peer-ready",
+            "readiness-tx-hold-timeout-failsafe",
+            "readiness-tx-hold-skip-on-reupgrade-peer-ready-seen",
+            "readiness-keyframe-request-outbound-rate-limit",
+            "readiness-peer-ready-forces-exactly-one-idr",
+            "readiness-receiver-failsafe-lift-2s",
+            "readiness-rekey-bidirectional-resync",
+            "readiness-watchdog-escalation-ladder",
+            "readiness-watchdog-recovery-resets-backoff",
+        ]
+        let found = Set(group.map { $0.id })
+        XCTAssertTrue(
+            mustCover.isSubset(of: found),
+            "missing readiness-8.7 scenarios: \(mustCover.subtracting(found).sorted())"
+        )
+        for scenario in group {
+            let model = ReadinessModel()
+            for (idx, step) in scenario.steps.enumerated() {
+                let ctx = "[\(scenario.id)] step \(idx) (\(step.action))"
+                replayReadinessStep(step, model: model, ctx: ctx)
+                assertReadinessExpect(step.expect, model: model, ctx: ctx)
+            }
+        }
+    }
+
+    /// Apply one readiness-8.7 verb to the model. Unknown verbs FAIL —
+    /// the driver must be extended alongside any vector extension.
+    private func replayReadinessStep(_ step: Step, model: ReadinessModel, ctx: String) {
+        model.perStepSent.removeAll()
+        switch step.action {
+        case "video_active_baseline":
+            if let mid = step.mid { model.boundMid = mid }
+        case "receiver_cryptor_keyed_and_bound":
+            guard let mid = step.mid else {
+                XCTFail("\(ctx): missing mid"); return
+            }
+            model.boundMid = mid
+            if model.receiverGated {
+                model.receiverGated = false
+                model.receiverGateLiftedBy = "ready"
+            }
+            model.announceMediaReady(mid: mid, bypassDedup: false)
+        case "arm_video_tx_hold":
+            let midCall = step.midCallUpgrade ?? false
+            let already = step.alreadySendingVideo ?? false
+            // §8.7 arm rule — Android shouldHoldVideoTx / Desktop parity:
+            // hold ONLY on a mid-call upgrade, not already sending, and the
+            // peer's readiness not yet proven this call.
+            let shouldHold = midCall && !already && !model.peerMediaReadySeen
+            model.txHoldArmedLastAttempt = shouldHold
+            if shouldHold {
+                model.txHolding = true
+                model.txHoldArmAtMs = model.now
+                model.txHoldTimeoutPending = true
+                model.localVideoTxEnabled = false
+            }
+        case "recv_call_media_ready":
+            model.peerMediaReadySeen = true
+            // Release is NOT subject to the honor limiter check itself but
+            // its IDR rides the SHARED 1/s limiter (flag-collapse parity).
+            model.releaseTxHold(by: "media_ready")
+            model.attemptForceIdr()  // honor path (shared limiter)
+        case "recv_video_keyframe_request":
+            model.attemptForceIdr()  // honor path (shared limiter)
+        case "request_peer_keyframe":
+            model.attemptSendKeyframeRequest()
+        case "receiver_video_gate_armed":
+            if let mid = step.mid { model.boundMid = mid }
+            model.receiverGated = true
+            model.receiverGateArmAtMs = model.now
+        case "rekey":
+            // §8.7 bidirectional resync: local IDR (new-epoch frames for
+            // the peer) + video_keyframe_request (peer refreshes ours),
+            // each on its OWN 1/s limiter.
+            model.attemptForceIdr()
+            model.attemptSendKeyframeRequest()
+        case "watchdog_video_stalled":
+            model.ladder.noteStalled(nowMs: model.now)
+        case "watchdog_video_recovered":
+            model.ladder.noteRecovered()
+        case "advance_time_ms":
+            guard let ms = step.ms else {
+                XCTFail("\(ctx): advance_time_ms without ms"); return
+            }
+            model.advance(ms: Int64(ms))
+        default:
+            XCTFail("\(ctx): unmodeled readiness-8.7 verb '\(step.action)'")
+        }
+    }
+
+    /// Assert every expect key of a readiness-8.7 step. Unknown keys FAIL.
+    private func assertReadinessExpect(
+        _ expect: [String: KatValue]?, model: ReadinessModel, ctx: String
+    ) {
+        guard let expect = expect else { return }
+        for (key, value) in expect {
+            switch (key, value) {
+            case ("note", _):
+                break  // documentation only
+            case ("sent", .stringArray(let entries)):
+                for e in entries {
+                    XCTAssertTrue(
+                        model.perStepSent.contains(e),
+                        "\(ctx): expected '\(e)' sent this step; got \(model.perStepSent)")
+                }
+            case ("sentCount", .intDict(let counts)):
+                for (wire, n) in counts {
+                    XCTAssertEqual(
+                        model.sentCount[wire, default: 0], n,
+                        "\(ctx): sentCount[\(wire)]")
+                }
+            case ("forcedIdrCount", .int(let n)):
+                XCTAssertEqual(model.forcedIdrCount, n, "\(ctx): forcedIdrCount")
+            case ("txHoldArmed", .bool(let b)):
+                XCTAssertEqual(model.txHoldArmedLastAttempt, b, "\(ctx): txHoldArmed")
+            case ("txHolding", .bool(let b)):
+                XCTAssertEqual(model.txHolding, b, "\(ctx): txHolding")
+            case ("txHoldReleasedBy", .string(let s)):
+                XCTAssertEqual(model.txHoldReleasedBy, s, "\(ctx): txHoldReleasedBy")
+            case ("localVideoTxEnabled", .bool(let b)):
+                XCTAssertEqual(model.localVideoTxEnabled, b, "\(ctx): localVideoTxEnabled")
+            case ("peerMediaReadySeen", .bool(let b)):
+                XCTAssertEqual(model.peerMediaReadySeen, b, "\(ctx): peerMediaReadySeen")
+            case ("receiverGated", .bool(let b)):
+                XCTAssertEqual(model.receiverGated, b, "\(ctx): receiverGated")
+            case ("receiverGateLiftedBy", .string(let s)):
+                XCTAssertEqual(model.receiverGateLiftedBy, s, "\(ctx): receiverGateLiftedBy")
+            case ("watchdogStage", .int(let n)):
+                XCTAssertEqual(model.ladder.stage, n, "\(ctx): watchdogStage")
+            case ("sinkReattachCount", .int(let n)):
+                XCTAssertEqual(model.sinkReattachCount, n, "\(ctx): sinkReattachCount")
+            case ("callDropped", .bool(let b)):
+                // SIGNAL-NOT-KILL — no vector may ever expect a teardown,
+                // and the model can never drop a call.
+                XCTAssertFalse(b, "\(ctx): a readiness vector may NEVER expect callDropped=true")
+                XCTAssertEqual(model.callDropped, b, "\(ctx): callDropped")
+            default:
+                XCTFail("\(ctx): unhandled expect key '\(key)' = \(value)")
+            }
+        }
+    }
+
+    /// Pure replay model for the readiness-8.7 group. The escalation
+    /// ladder is the PRODUCTION `VideoStallEscalationEngine`; the receiver
+    /// failsafe window is the PRODUCTION `VideoStallSelfHeal` constant.
+    /// Timer-fire order on `advance` is pinned by the KAT notes:
+    /// TX-hold timeout → receiver failsafe → ladder rungs.
+    private final class ReadinessModel {
+        /// Virtual monotonic clock (ms).
+        var now: Int64 = 0
+        /// Wire records sent during the CURRENT step (reset per step).
+        var perStepSent: [String] = []
+        /// Cumulative per-message-type send counts.
+        var sentCount: [String: Int] = [:]
+        /// once-per-(callId, mid) dedup for the NORMAL readiness path.
+        var mediaReadyDedup: Set<String> = []
+        /// The established inbound video mid (rung-3 re-announce target).
+        var boundMid: String = ""
+        /// Outbound video_keyframe_request 1/s limiter (-1 = never sent).
+        var kfrLastSentMs: Int64 = -1
+        /// Shared local-IDR 1/s honor limiter (-1 = never forced).
+        var idrLastForcedMs: Int64 = -1
+        var forcedIdrCount: Int = 0
+        // §8.7 sender TX-hold.
+        var txHoldArmedLastAttempt = false
+        var txHolding = false
+        var txHoldArmAtMs: Int64 = -1
+        var txHoldTimeoutPending = false
+        var txHoldReleasedBy: String?
+        var localVideoTxEnabled = true
+        var peerMediaReadySeen = false
+        // §8.7 receiver render gate.
+        var receiverGated = false
+        var receiverGateArmAtMs: Int64 = -1
+        var receiverGateLiftedBy: String?
+        // §8.7 self-heal ladder — PRODUCTION engine under test.
+        let ladder = VideoStallEscalationEngine()
+        var sinkReattachCount: Int = 0
+        /// SIGNAL-NOT-KILL: the model has no teardown path at all.
+        let callDropped = false
+
+        static let txHoldTimeoutMs: Int64 = 2000
+        static let limiterWindowMs: Int64 = 1000
+
+        func record(_ wire: String) {
+            perStepSent.append(wire)
+            let key = wire.hasPrefix("call_media_ready") ? "call_media_ready" : wire
+            sentCount[key, default: 0] += 1
+        }
+
+        func attemptForceIdr() {
+            if idrLastForcedMs < 0 || now - idrLastForcedMs >= Self.limiterWindowMs {
+                idrLastForcedMs = now
+                forcedIdrCount += 1
+            }
+        }
+
+        func attemptSendKeyframeRequest() {
+            if kfrLastSentMs < 0 || now - kfrLastSentMs >= Self.limiterWindowMs {
+                kfrLastSentMs = now
+                record("video_keyframe_request")
+            }
+        }
+
+        func announceMediaReady(mid: String, bypassDedup: Bool) {
+            if !bypassDedup {
+                guard !mediaReadyDedup.contains(mid) else { return }
+                mediaReadyDedup.insert(mid)
+            }
+            record("call_media_ready:mid=" + mid)
+        }
+
+        func releaseTxHold(by reason: String) {
+            guard txHolding else { return }
+            txHolding = false
+            txHoldTimeoutPending = false
+            txHoldReleasedBy = reason
+            localVideoTxEnabled = true
+            attemptForceIdr()  // release forces one IDR (shared limiter)
+        }
+
+        /// Advance the virtual clock, then fire every DUE timer in the
+        /// KAT-pinned order: sender TX-hold timeout → receiver render-gate
+        /// failsafe → stall-escalation rungs (in ladder order even across
+        /// a large jump — the production engine guarantees that).
+        func advance(ms: Int64) {
+            now += ms
+            if txHoldTimeoutPending, txHolding, now - txHoldArmAtMs >= Self.txHoldTimeoutMs {
+                releaseTxHold(by: "timeout")
+            }
+            if receiverGated, now - receiverGateArmAtMs >= VideoStallSelfHeal.receiverGateFailsafeMs {
+                receiverGated = false
+                receiverGateLiftedBy = "failsafe"
+                // Blind lift ⇒ the decoder joined mid-stream: nudge the
+                // sender (media_ready NOT sent — the cryptor is not ready).
+                attemptSendKeyframeRequest()
+            }
+            for action in ladder.dueActions(nowMs: now) {
+                switch action {
+                case .keyframeRequest:
+                    attemptSendKeyframeRequest()
+                case .sinkReattach:
+                    sinkReattachCount += 1
+                case .mediaReadyReannounce:
+                    // Deliberate dedup BYPASS (last-rung self-heal); the
+                    // normal path's once-per-mid dedup stays untouched.
+                    announceMediaReady(mid: boundMid, bypassDedup: true)
+                }
+            }
+        }
+    }
+
     // MARK: - Direct unit assertions (independent of the JSON, always run)
+
+    /// §8.7 ladder engine — constants + rung ordering + recovery reset
+    /// (always runs, even on isolated checkouts without the KAT tree).
+    func testStallEscalationEngine() {
+        XCTAssertEqual(VideoStallSelfHeal.receiverGateFailsafeMs, 2000)
+        XCTAssertEqual(VideoStallSelfHeal.stallEscalationBackoffMs, [3000, 6000, 12000])
+        XCTAssertEqual(
+            VideoStallSelfHeal.escalationLadder,
+            [.keyframeRequest, .sinkReattach, .mediaReadyReannounce],
+            "rung order is pinned: cheapest wire nudge → local re-attach → dedup-bypass re-announce"
+        )
+        let engine = VideoStallEscalationEngine()
+        XCTAssertFalse(engine.isStalled)
+        XCTAssertEqual(engine.dueActions(nowMs: 99_999), [])
+        engine.noteStalled(nowMs: 1000)
+        engine.noteStalled(nowMs: 2500)  // idempotent — first detection bases the clock
+        XCTAssertEqual(engine.stallStartMs, 1000)
+        XCTAssertEqual(engine.dueActions(nowMs: 3999), [])
+        XCTAssertEqual(engine.dueActions(nowMs: 4000), [.keyframeRequest])  // >= boundary
+        XCTAssertEqual(engine.stage, 1)
+        XCTAssertEqual(engine.dueActions(nowMs: 6999), [])
+        XCTAssertEqual(engine.dueActions(nowMs: 7000), [.sinkReattach])
+        XCTAssertEqual(engine.dueActions(nowMs: 13_000), [.mediaReadyReannounce])
+        XCTAssertEqual(engine.stage, 3)
+        // Exhausted ladder: keeps ticking, takes no further action, NEVER
+        // tears anything down (SIGNAL-NOT-KILL).
+        XCTAssertEqual(engine.dueActions(nowMs: 999_999), [])
+        // Recovery resets stage AND backoff base.
+        engine.noteRecovered()
+        XCTAssertEqual(engine.stage, 0)
+        engine.noteStalled(nowMs: 50_000)
+        XCTAssertEqual(engine.dueActions(nowMs: 52_999), [])
+        XCTAssertEqual(engine.dueActions(nowMs: 53_000), [.keyframeRequest])
+        // Large clock jump fires the remaining rungs IN ORDER.
+        let jump = VideoStallEscalationEngine()
+        jump.noteStalled(nowMs: 0)
+        XCTAssertEqual(
+            jump.dueActions(nowMs: 12_000),
+            [.keyframeRequest, .sinkReattach, .mediaReadyReannounce]
+        )
+    }
+
+    /// §8.7 BLACK-VIDEO STALL rule + TX storm rule (pure predicates).
+    func testStallAndStormRules() {
+        // Arrivals recent + nothing rendered for >=3s = stall.
+        XCTAssertTrue(VideoStallSelfHeal.isBlackVideoStall(
+            msSinceLastArrivedIncrease: 500, msSinceLastRenderedIncrease: 3000))
+        // Rendering recently = healthy.
+        XCTAssertFalse(VideoStallSelfHeal.isBlackVideoStall(
+            msSinceLastArrivedIncrease: 500, msSinceLastRenderedIncrease: 2999))
+        // No arrivals at all = idle, NOT a stall (nothing to recover).
+        XCTAssertFalse(VideoStallSelfHeal.isBlackVideoStall(
+            msSinceLastArrivedIncrease: 3000, msSinceLastRenderedIncrease: 10_000))
+        // 3 peer keyframe requests inside 5s = storm (force IDR now).
+        XCTAssertTrue(VideoStallSelfHeal.isPeerKeyframeStorm(
+            requestTimesMs: [0, 2000, 4000], nowMs: 5000))
+        XCTAssertFalse(VideoStallSelfHeal.isPeerKeyframeStorm(
+            requestTimesMs: [0, 2000, 4000], nowMs: 5001))
+        XCTAssertFalse(VideoStallSelfHeal.isPeerKeyframeStorm(
+            requestTimesMs: [4000, 4500], nowMs: 5000))
+    }
 
     func testMediaConsentFailSafe() {
         XCTAssertEqual(UpgradeFlowDecisions.resolveMediaConsent(media: "screen"), .autoAccept)

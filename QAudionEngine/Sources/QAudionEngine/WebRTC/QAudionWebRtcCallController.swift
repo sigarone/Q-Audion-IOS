@@ -778,6 +778,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         VideoKeyframeController.shared.requestKeyFrame()
     }
 
+    /// VIDEODIAG (§8.7 self-heal watchdog) — read-only diagnostic: is the
+    /// RECEIVER-side native video cryptor BOTH attached and keyed right
+    /// now? Mirrors the `notifyInboundVideoReadyIfNeeded` readiness pair
+    /// so the watchdog's stall log can pinpoint "frames arrive but the
+    /// cryptor can't open them" vs a renderer problem. Callable from any
+    /// thread (reads only).
+    public var inboundVideoCryptorReady: Bool {
+        guard let pc = peerConnection,
+              let cryptor = pc.nativeVideoCryptor else { return false }
+        return cryptor.keyIsSet && cryptor.receiverIsAttached
+    }
+
     /// WIRE_SPEC §8.7 (SHOULD) — hold LOCAL video TX at upgrade time:
     /// disable the local video track until EITHER the peer's
     /// `call_media_ready` arrives (`releaseVideoTxHold`) OR a 2s timeout
