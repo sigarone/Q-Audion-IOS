@@ -72,6 +72,16 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// force a local encoder IDR, rate-limited to 1/s.
     public var onVideoKeyframeRequest: ((_ callId: String, _ senderId: String) -> Void)?
 
+    /// WIRE_SPEC §8.1 — `call_video_state`, either direction, transparent
+    /// relay. Informational signal: the peer toggled their camera
+    /// off/on (purely a wire-level heads-up so the receiving side can
+    /// show "peer paused their video" / auto-fall-back to the audio-only
+    /// call UI — it never drives renegotiation, the underlying
+    /// PeerConnection and m=video line stay untouched). Same envelope
+    /// class as call_media_ready / video_keyframe_request: the server
+    /// stamps `sender_id` and relays transparently.
+    public var onCallVideoState: ((_ callId: String, _ paused: Bool) -> Void)?
+
     private var webSocketTask: URLSessionWebSocketTask?
     /// SECURITY C-6 / H-5 — strong ref to the session delegate so it
     /// survives the lifetime of the `URLSession` (URLSession only holds
@@ -328,6 +338,21 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                 ?? (data["from"] as? String)
                 ?? ""
             self.onVideoKeyframeRequest?(callId, senderId)
+        }
+
+        // WIRE_SPEC §8.1 — call_video_state (either direction). Same
+        // envelope class as call_upgrade_*/call_media_ready: the server
+        // stamps `sender_id` and relays transparently. `from` fallback
+        // mirrors the call_upgrade_request handler above.
+        registerHandler(type: "call_video_state") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            // sender_id/from is available on the envelope but the
+            // onCallVideoState callback (mirroring the contract used by
+            // the AppState wiring) only needs callId + paused — the
+            // active-call filter happens downstream via getActiveCallId().
+            let paused = (data["paused"] as? Bool) ?? false
+            self.onCallVideoState?(callId, paused)
         }
     }
 

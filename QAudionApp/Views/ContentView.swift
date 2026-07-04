@@ -144,6 +144,10 @@ struct ContentView: View {
         .animation(.easeInOut, value: appState.isVideoCall)
         .animation(.easeInOut, value: appState.callState)
         .animation(.easeInOut, value: splashResolved)
+        // WIRE_SPEC §8.1 — animate the auto-fallback to the audio-only
+        // call screen when both sides pause their camera.
+        .animation(.easeInOut, value: appState.localVideoPaused)
+        .animation(.easeInOut, value: appState.remoteVideoPaused)
         .onChange(of: appState.callContactId) { id in
             resolveOutgoingName(id)
         }
@@ -216,11 +220,23 @@ struct ContentView: View {
     /// already negotiated; the announce just tells the UI to mount the
     /// remote video sink so the encrypted RTP frames actually render.
     /// See `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
+    ///
+    /// WIRE_SPEC §8.1 — when BOTH sides have paused their camera
+    /// (`localVideoPaused && remoteVideoPaused`), fall back to
+    /// `LiveInCallScreen` even though this is nominally a video call
+    /// (`isVideoCall` stays true — the call TYPE hasn't changed, only
+    /// what's currently rendered). Matches Android's existing
+    /// both-paused → audio-screen behavior. Purely a UI-layer switch:
+    /// the call session, PeerConnection and negotiated `m=video` line
+    /// are all untouched — LiveInCallScreen already renders correctly
+    /// with `hasVideo: true, cameraOn: false` (see its InCallScreen
+    /// wiring), so this is a safe surface to fall back to.
     @ViewBuilder
     private var inCallStack: some View {
         let cs = appState.callState
         if cs == .active || cs == .encrypted {
-            if appState.isVideoCall || appState.peerScreenShareActive {
+            let bothCamerasPaused = appState.localVideoPaused && appState.remoteVideoPaused
+            if (appState.isVideoCall || appState.peerScreenShareActive) && !bothCamerasPaused {
                 VideoCallView()
             } else {
                 LiveInCallScreen()

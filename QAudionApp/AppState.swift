@@ -197,6 +197,21 @@ final class AppState: ObservableObject {
     @Published var isVideoCall: Bool = false
     @Published var callState: CallState = .idle
     @Published var callContactId: String?
+    /// WIRE_SPEC §8.1 — true when the remote peer has signalled
+    /// `call_video_state(paused: true)` (they turned their camera off).
+    /// Purely informational UI state: it never touches the PeerConnection
+    /// or the negotiated `m=video` line. Reset to false at the start of
+    /// every new call (same lifecycle as the other call-scoped published
+    /// fields above). Drives the "peer paused their video" badge and,
+    /// combined with the local camera-off state, the auto-fallback to
+    /// the audio-only call screen (ContentView.inCallStack).
+    @Published var remoteVideoPaused: Bool = false
+    /// WIRE_SPEC §8.1 — mirrors VideoCallView's local `isCameraOn` toggle
+    /// (true = camera off) so `ContentView.inCallStack` can decide the
+    /// audio-only-screen fallback without VideoCallView's private @State.
+    /// Set by `videoSetCameraEnabled`; same reset lifecycle as
+    /// `remoteVideoPaused` above.
+    @Published var localVideoPaused: Bool = false
     /// D11 / W-NOBRICK — true when the active call's peer presented an
     /// UNAUTHENTICATED identity-key change (the handshake signer key is ∉ the
     /// server-published per-device set). Drives a NON-BLOCKING advisory banner in
@@ -2336,6 +2351,10 @@ final class AppState: ObservableObject {
             // D11: a fresh incoming call clears any stale unauthenticated-change
             // banner from a previous call.
             self.callIdentityUnauthenticatedChange = false
+            // WIRE_SPEC §8.1: a fresh incoming call clears any stale
+            // "peer paused their camera" state from a previous call.
+            self.remoteVideoPaused = false
+            self.localVideoPaused = false
             // #2 (server-fetch trust source): warm the caller's server identity
             // key now, BEFORE handleIncomingWebRtcOffer runs the §5c verify, so
             // resolveServerPeerKey can cross-check the OFFER's signer key. Race
@@ -2692,6 +2711,21 @@ final class AppState: ObservableObject {
                 guard let self = self else { return }
                 self.handleInboundKeyframeSignal(
                     callId: callId, senderId: senderId, kind: "video_keyframe_request")
+            }
+        }
+
+        // WIRE_SPEC §8.1 — peer toggled their camera off/on. Informational
+        // only: filter to the active call (same getActiveCallId() live-getter
+        // pattern as registerInboundVideoHandler above) and publish the flag
+        // so VideoCallView / ContentView react — no PeerConnection/SDP touch.
+        ws.onCallVideoState = { [weak self] callId, paused in
+            DispatchQueue.main.async {
+                guard let self = self,
+                      let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+                      let activeCallId = impl.getActiveCallId(),
+                      callId.caseInsensitiveCompare(activeCallId) == .orderedSame
+                else { return }
+                self.remoteVideoPaused = paused
             }
         }
     }
@@ -6103,6 +6137,10 @@ final class AppState: ObservableObject {
         // D11: a fresh outgoing call clears any stale unauthenticated-change
         // banner from a previous call.
         callIdentityUnauthenticatedChange = false
+        // WIRE_SPEC §8.1: a fresh outgoing call clears any stale "peer
+        // paused their camera" state from a previous call.
+        remoteVideoPaused = false
+        localVideoPaused = false
         // #2 (server-fetch trust source): warm the peer's server identity key
         // so the handshake verify of the callee's ACCEPT has the §5c server key.
         prefetchServerPeerKey(contactId)
@@ -7018,6 +7056,11 @@ final class AppState: ObservableObject {
         // teardown; we do NOT need (and the spec explicitly says not to
         // send) a final `SCREEN_SHARE:stop` here.
         peerScreenShareActive = false
+        // WIRE_SPEC §8.1 — drop any sticky "peer paused their camera" state
+        // so the next call starts clean (same reasoning as peerScreenShareActive
+        // above: this is UI-only signalling state, not renegotiated per call).
+        remoteVideoPaused = false
+        localVideoPaused = false
         // media-consent v1 — per-call consent + pending dialogs/watchdogs
         // die with the call.
         videoConsentGranted = false
@@ -8473,9 +8516,24 @@ extension AppState {
     }
 
     /// W393: bridge for VideoCallView's "Cam ON/OFF" toggle.
+    ///
+    /// WIRE_SPEC §8.1 — additionally ships a best-effort `call_video_state`
+    /// so the peer's UI knows this is an intentional pause (badge / audio-only
+    /// fallback) rather than a silent stall. Purely informational: the local
+    /// capture pipeline pause/resume above is unchanged and untouched by
+    /// whether the send succeeds — never blocks, never throws into the UI.
     @MainActor
     func videoSetCameraEnabled(_ enabled: Bool) {
         videoPipeline?.setCameraEnabled(enabled)
+        localVideoPaused = !enabled
+        if let peerId = callContactId,
+           let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+           let callId = impl.getActiveCallId() {
+            Task {
+                try? await impl.sendVideoState(
+                    callId: callId, recipientId: peerId, paused: !enabled)
+            }
+        }
     }
 }
 

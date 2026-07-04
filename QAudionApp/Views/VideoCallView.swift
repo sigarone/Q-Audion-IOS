@@ -104,14 +104,34 @@ struct VideoCallView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        // WIRE_SPEC §8.1 — "peer paused their video" badge. Only reached
+        // while this screen is still mounted, i.e. the local camera is
+        // still on (once both sides pause, ContentView.inCallStack has
+        // already swapped to LiveInCallScreen). Mirrors Desktop's
+        // equivalent badge for the same wire signal.
+        .overlay(alignment: .top) {
+            if appState.remoteVideoPaused && !appState.peerScreenShareActive {
+                peerVideoPausedBadge
+                    .padding(.top, 56)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
         .animation(.easeInOut(duration: 0.25), value: showControls)
         .animation(.easeInOut(duration: 0.25), value: showSas)
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
         .animation(.easeInOut(duration: 0.25), value: appState.peerScreenShareActive)
+        .animation(.easeInOut(duration: 0.25), value: appState.remoteVideoPaused)
         .statusBarHidden(!showControls)
         .onAppear {
             ScreenshotLockService.lock()
             resolveDisplayName()
+            // WIRE_SPEC §8.1 — this view can remount after ContentView
+            // swaps back from LiveInCallScreen (both-paused → one side
+            // resumes). Re-sync the local toggle's @State from AppState's
+            // published mirror so "Cam ON/OFF" reflects the camera's
+            // actual current state instead of resetting to the `true`
+            // default on every remount.
+            isCameraOn = !appState.localVideoPaused
         }
         .onDisappear {
             ScreenshotLockService.unlock()
@@ -201,6 +221,32 @@ struct VideoCallView: View {
                 .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
         )
         .accessibilityLabel(Text("Il peer sta condividendo lo schermo"))
+    }
+
+    /// WIRE_SPEC §8.1 — "peer paused their video" badge, shown while the
+    /// remote peer has signalled `call_video_state(paused: true)` and we
+    /// still have our own camera on (so this screen is still mounted).
+    /// Same visual language as `screenShareBadge` above.
+    private var peerVideoPausedBadge: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "video.slash.fill")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Il peer ha messo in pausa la videocamera")
+                .font(.caption)
+                .fontWeight(.medium)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            Capsule()
+                .fill(Color.black.opacity(0.55))
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.white.opacity(0.18), lineWidth: 0.5)
+        )
+        .accessibilityLabel(Text("Il peer ha messo in pausa la videocamera"))
     }
 
     // MARK: - Top bar
