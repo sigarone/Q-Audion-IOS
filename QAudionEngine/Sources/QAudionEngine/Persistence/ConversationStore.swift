@@ -308,6 +308,78 @@ public final class ConversationStore {
         }
     }
 
+    /// W78-fix: bind the *real* server-assigned message id to the local
+    /// outbound row, looked up by `clientMsgId` rather than by the local
+    /// row UUID.
+    ///
+    /// Why this exists: the send path previously stamped `serverMessageId`
+    /// with the value `sendMessage()` returns synchronously — but that
+    /// value is just the caller's own `clientMsgId` echoed back locally
+    /// (see `BCryptoMessageApiImpl.sendMessage`), NOT the server's actual
+    /// DB-assigned `messages.id` (`internal/db/db.go` `StoreMessage` mints
+    /// a fresh `uuid.NewString()` unrelated to `client_msg_id`). The real
+    /// id only ever reaches the sender asynchronously, in the `msg_receive`
+    /// echo the server sends back to the sender's own device
+    /// (`internal/signaling/client.go` `handleMsgSend` → `c.send(MsgReceive,
+    /// receiveData)`). `msg_delivered`/`msg_read` receipts are keyed
+    /// strictly on that real id (`internal/signaling/messages.go`
+    /// `MsgDeliveredData`/`MsgReadData`), so a row that never captured it
+    /// can never be reconciled by a later receipt — this is the root cause
+    /// of image (and text) sends staying stuck on a red `.failed` status
+    /// forever even after the peer genuinely received them.
+    ///
+    /// Call this from the self-echo branch of the `msg_receive` handler
+    /// once the real id is known. Two things happen atomically:
+    ///   1. `serverMessageId` is corrected to the real id (so any *later*
+    ///      `msg_delivered`/`msg_read` for this message can finally match
+    ///      via `updateStatusByServerId`).
+    ///   2. If the row is currently stuck at `.failed`, it is immediately
+    ///      promoted to `.delivered` — the self-echo landing at all is
+    ///      itself proof the server received and stored the message, so
+    ///      there is no need to wait for a further receipt to clear the
+    ///      stale red state. Rows already past `.failed` (`.sending`,
+    ///      `.sent`, `.delivered`, `.read`) are left at their current
+    ///      status — this only *repairs* a wrongly-failed row, it never
+    ///      regresses a row that's already further along (e.g. `.read`).
+    /// Returns `true` if a local row was found and updated.
+    @discardableResult
+    public func bindServerMessageId(clientMsgId: String, serverMessageId: String,
+                                    deliveredAt: Date = Date()) -> Bool {
+        do {
+            return try db.writer.write { db in
+                guard var msg = try Message.filter(Column("clientMsgId") == clientMsgId).fetchOne(db) else {
+                    return false
+                }
+                let repairedStatus: Message.Status = (msg.status == .failed) ? .delivered : msg.status
+                let repairedDeliveredAt: Date? = (msg.status == .failed) ? deliveredAt : msg.deliveredAt
+                msg = Message(
+                    id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
+                    plaintext: msg.plaintext, sentAt: msg.sentAt,
+                    deliveredAt: repairedDeliveredAt,
+                    readAt: msg.readAt,
+                    status: repairedStatus,
+                    senderUserId: msg.senderUserId,
+                    serverMessageId: serverMessageId,
+                    mediaLocalPath: msg.mediaLocalPath,
+                    mediaDurationMs: msg.mediaDurationMs,
+                    mediaMimeType: msg.mediaMimeType,
+                    clientMsgId: msg.clientMsgId,
+                    edited: msg.edited,
+                    deletedAt: msg.deletedAt,
+                    reactions: msg.reactions,
+                    expiresAt: msg.expiresAt,
+                    isViewOnce: msg.isViewOnce,
+                    viewOnceOpened: msg.viewOnceOpened
+                )
+                try msg.save(db)
+                return true
+            }
+        } catch {
+            print("[ConversationStore] bindServerMessageId failed: \(error)")
+            return false
+        }
+    }
+
     public func findByClientMsgId(_ clientMsgId: String) -> (conversationId: UUID, message: Message)? {
         do {
             return try db.reader.read { db in

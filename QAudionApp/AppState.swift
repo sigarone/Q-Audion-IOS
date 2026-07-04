@@ -3731,12 +3731,42 @@ final class AppState: ObservableObject {
                 print("[AppState] msg_receive missing required fields: \(data.keys)")
                 return
             }
+            let clientMsgId = data["client_msg_id"] as? String
             DispatchQueue.main.async {
+                // W78-fix: the server echoes `msg_receive` back to the
+                // SENDER too (`internal/signaling/client.go` handleMsgSend
+                // calls both `relayToUser` to the recipient AND `c.send`
+                // back to the sender itself), carrying the real DB-assigned
+                // `message_id` — the only place that id ever reaches the
+                // client. Previously this echo fell straight into
+                // `handleIncomingMessage`, which has no self-echo handling
+                // and would (at best) no-op into a bogus self-conversation,
+                // and the outbound row's `serverMessageId` was left bound
+                // to the locally-echoed `clientMsgId` instead (see
+                // `ChatMessageSendService`/`BCryptoMessageApiImpl`), which
+                // `msg_delivered`/`msg_read` receipts can never match since
+                // those are keyed on the real id. Detect the self-echo here
+                // and reconcile the outbound row directly by `clientMsgId`
+                // instead of falling through to the inbound pipeline.
+                if senderId == self.currentUserId, let cmid = clientMsgId, !cmid.isEmpty {
+                    let matched = ConversationStore().bindServerMessageId(
+                        clientMsgId: cmid,
+                        serverMessageId: serverMsgId
+                    )
+                    if matched {
+                        NotificationCenter.default.post(
+                            name: AppState.chatRefreshNotification,
+                            object: nil,
+                            userInfo: ["clientMsgId": cmid]
+                        )
+                    }
+                    return
+                }
                 self.handleIncomingMessage(
                     senderId: senderId,
                     serverMsgId: serverMsgId,
                     cipher: cipher,
-                    clientMsgId: data["client_msg_id"] as? String
+                    clientMsgId: clientMsgId
                 )
             }
         }
