@@ -1014,17 +1014,54 @@ struct InCallScreen: View {
     }
 
     // MARK: - Trust-chain card (unified call UI — custody of your voice)
+    //
+    // Full native port of the approved "custody of your voice" mockup
+    // (trust-chain.html, scratchpad design spec): two ambient particle-flow
+    // lanes either side of a glowing pulsing seal core, a morphing bordered
+    // "protection boundary" box with a floating label, a callout-box verdict,
+    // a 5-cell stat ring row, and a collapsible earbud detail panel. This
+    // REPLACES the previous plain 3-label chain + thin progress bar
+    // (2026-07-04 unified-call-ui redesign) — no second component, no dead
+    // code left behind (`trustNode`/`trustStat`/`trustArrow` plain helpers
+    // removed with it).
+    //
+    // All animation follows the two conventions ALREADY established in this
+    // same file rather than inventing new ones:
+    //  - continuous per-frame drawing → `TimelineView(.animation(paused:
+    //    reduceMotion))` + `Canvas`, deterministic golden-ratio index hashing
+    //    for per-particle phase/speed/lane/wobble (see `drawCipherTube`/
+    //    `drawMiniSpectrum` above) — cheap, stable across frames, paused
+    //    under Reduce Motion exactly like the spectrum/cipher-tube visuals.
+    //  - the boundary-box morph (position/width/color/label) is a plain
+    //    `.animation(.linear(duration: 0.6), value: earbudActive)` layout
+    //    tween — the SAME 0.6s duration the old progress-bar envelope used,
+    //    preserved rather than inventing a different timing.
+    //
+    // All data is real, unchanged from the previous implementation:
+    // `earbudActive`/`earbudHwVerified` from the call site (constant `false`
+    // today pending the iOS earbud media-provider — see LiveInCallScreen),
+    // plus `sasVerified`/`pqcActive`/`transportMode` already stored on this
+    // view for the trust bar above. The mockup's manual toggle button is a
+    // demo-only affordance and is intentionally NOT ported — production
+    // state is always driven by these real flags.
+    //
+    // NOT ported: the mockup's bottom "how it reads inside the call" one-
+    // line strip preview. This screen's `trustBar` (SAS ✓ / PQC / transport
+    // chips, rendered just above the Guardian ribbon) already surfaces the
+    // same "how it reads" summary in a slot that exists today — a second
+    // strip directly under this card would duplicate it rather than adding
+    // information, so it is intentionally omitted per the task's own
+    // "don't force it" guidance.
 
     /// Protection-envelope start fraction for the SOFTWARE path: the seal
     /// happens on the phone, so the envelope covers Seal→Air and the MIC
     /// sits just OUTSIDE it on the left. Same 0.42 constant as Android's
-    /// `TrustChainCard` software branch. The earbud path starts at 0.0
-    /// (the envelope reaches the microphone).
+    /// `TrustChainCard` software branch (and the mockup's `left:40%`). The
+    /// earbud path starts at 0.0 (the envelope reaches the microphone).
     private static let trustEnvelopeStartSoftware: CGFloat = 0.42
 
     /// Trust-chain card — the honest "where is the voice sealed, and does
-    /// the protection reach the microphone?" visual. FULL 1:1 port of
-    /// Android `GuardianRibbon.kt` `TrustChainCard`, BOTH branches:
+    /// the protection reach the microphone?" visual.
     ///
     ///  - SOFTWARE (`earbudActive == false`, today's only live iOS state):
     ///    the seal happens ON THE PHONE, so the protection envelope starts
@@ -1040,143 +1077,411 @@ struct InCallScreen: View {
     ///    SOVEREIGN", plus a live "Secure element CRACEN ✓ / linking…"
     ///    stat driven by `earbudHwVerified`. (Android also shows battery/
     ///    ANC from its BudsStatus; iOS has no equivalent source yet, so
-    ///    those rows are omitted rather than fabricated.)
-    ///
-    /// All state is real: `earbudActive`/`earbudHwVerified` come from the
-    /// call site (constant `false` today — see LiveInCallScreen). The only
-    /// animation is the one-shot 0.6s envelope-boundary tween when
-    /// `earbudActive` flips (Android's animateFloatAsState parity) —
-    /// layout/draw-phase only, zero per-frame cost at rest.
+    ///    those rows are omitted rather than fabricated — same discipline
+    ///    as before this redesign.)
     private var trustChainCard: some View {
         let gold = extras.warning          // sovereign-hardware accent (amber/gold)
         let cyan = extras.pqcAccent
+        let cipher = extras.pqcAccent      // mockup's --cipher lane tint (violet)
         let envColor = earbudActive ? gold : cyan
         let envelopeStart: CGFloat = earbudActive ? 0.0 : Self.trustEnvelopeStartSoftware
         return VStack(alignment: .leading, spacing: 0) {
             // header
             HStack {
-                Text("CUSTODY OF YOUR VOICE")
+                Circle()
+                    .fill(extras.success)
+                    .frame(width: 5, height: 5)
+                Text("SESSION SECURITY · CUSTODY OF YOUR VOICE")
                     .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(scheme.onSurfaceVariant)
                 Spacer(minLength: 0)
-                Text(earbudActive ? "GRADE A+ · SOVEREIGN" : "GRADE A")
+                Text(earbudActive ? "HARDWARE-SEALED · SOVEREIGN" : "SOFTWARE-SEALED")
                     .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(envColor)
             }
+            .padding(.horizontal, 14)
+            Spacer().frame(height: 16)
+
+            // Mic ↔ seal ↔ peer chain, with the two particle-flow lanes and
+            // the morphing protection-boundary box layered behind it.
+            trustChainDiagram(envColor: envColor, cipher: cipher, envelopeStart: envelopeStart)
+                .padding(.horizontal, 6)
+                .frame(height: 118)
+            Spacer().frame(height: 14)
+
+            trustVerdictCallout(gold: gold)
+                .padding(.horizontal, 14)
             Spacer().frame(height: 10)
 
-            // the three stages: Mic → Seal → Air
-            HStack(spacing: 0) {
-                trustNode(title: "Mic",
-                          sub: earbudActive ? "protected" : "exposed",
-                          accent: earbudActive ? gold : extras.riskHigh)
-                trustArrow
-                trustNode(title: "Seal",
-                          sub: earbudActive ? "earbud HW" : "phone",
-                          accent: envColor)
-                trustArrow
-                trustNode(title: "Air", sub: "ciphertext", accent: scheme.onSurfaceVariant)
-            }
-            Spacer().frame(height: 8)
-
-            // protection envelope bar — the protected segment that (in
-            // earbud mode) grows left to swallow the mic. Capsule layout
-            // instead of a Canvas so the 0.6s boundary tween on
-            // earbudActive flips is a plain layout animation.
-            GeometryReader { geo in
-                let w = geo.size.width
-                let sx = envelopeStart * w
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(scheme.onSurfaceVariant.opacity(0.15))
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [envColor.opacity(0.9), envColor.opacity(0.5)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: max(w - sx, 0))
-                        .offset(x: sx)
-                }
-            }
-            .frame(height: 6)
-            .animation(.linear(duration: 0.6), value: earbudActive)
-            Spacer().frame(height: 6)
-
-            Text(earbudActive
-                 ? "protection reaches the microphone"
-                 : "protected from the seal onward — mic just outside")
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundStyle(earbudActive ? gold : scheme.onSurfaceVariant)
-            Spacer().frame(height: 9)
-
-            // verdict — Android's wording; the software branch adapts the
-            // key-custody claim to iOS (keys live in the OS keystore/
-            // Keychain here, not TrustZone/StrongBox).
-            Text(earbudActive
-                 ? "The mic and the seal both live inside the earbud's secure chip — your voice is sealed at the source and never reaches the phone."
-                 : "Keys stay safe in the OS keystore, but the raw mic audio exists in the phone for an instant before the seal — an OS compromise could tap it upstream of encryption.")
-                .font(.system(size: 11))
-                .foregroundStyle(scheme.onSurface.opacity(0.85))
-                .fixedSize(horizontal: false, vertical: true)
+            trustStatRing(gold: gold)
+                .padding(.horizontal, 6)
 
             // live earbud stat when connected — CRACEN secure-element
             // confirmation only (no battery/ANC: iOS has no BudsStatus
             // source, and fabricating one would break the honest-data rule).
             if earbudActive {
-                Spacer().frame(height: 10)
-                trustStat(label: "SECURE ELEMENT",
-                          value: earbudHwVerified ? "CRACEN ✓" : "linking…",
-                          valueColor: earbudHwVerified ? gold : scheme.onSurfaceVariant)
+                Divider().background(gold.opacity(0.25))
+                    .padding(.horizontal, 14)
+                trustEarbudPanel(gold: gold)
+                    .padding(.horizontal, 14)
             }
         }
-        .padding(.horizontal, 12)
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(scheme.surfaceVariant.opacity(0.45))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(earbudActive ? gold.opacity(0.5) : scheme.outline.opacity(0.5),
-                        lineWidth: 1)
+                        lineWidth: earbudActive ? 1.3 : 1)
         )
+        .animation(.linear(duration: 0.6), value: earbudActive)
     }
 
-    /// One stage of the trust chain (title + monospace sub-caption).
-    /// Mirrors Android's `TrustNode`.
-    private func trustNode(title: String, sub: String, accent: Color) -> some View {
-        VStack(spacing: 1) {
+    // MARK: Trust-chain diagram (particle lanes + seal core + boundary box)
+
+    /// Mic → seal → peer row, with the two ambient particle canvases and the
+    /// morphing protection-boundary box behind it in one `ZStack` so the
+    /// boundary can span from an arbitrary fraction of the width (0.0 or
+    /// 0.42) to the trailing edge exactly like the mockup's `.boundary`.
+    private func trustChainDiagram(envColor: Color, cipher: Color, envelopeStart: CGFloat) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let laneY = h * 0.42
+            let boundaryX = envelopeStart * w
+            let boundaryWidth = max(w - boundaryX, 0)
+
+            ZStack(alignment: .topLeading) {
+                // Protection boundary — bordered glowing box, grows left to
+                // swallow the mic node in earbud mode. Position/width/color
+                // all animate on the shared 0.6s tween (see trustChainCard).
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        RadialGradient(
+                            colors: [envColor.opacity(0.10), .clear],
+                            center: .center, startRadius: 0, endRadius: w * 0.5
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(envColor.opacity(0.5), lineWidth: 1.3)
+                    )
+                    .frame(width: boundaryWidth, height: h - 20)
+                    .overlay(alignment: .top) {
+                        // Floating label pill on the boundary box's own top
+                        // edge — `.overlay(alignment:)` centers it relative
+                        // to the (not-yet-offset) rectangle's own bounds, so
+                        // it rides along correctly once the whole composite
+                        // is shifted by the trailing `.offset` below.
+                        Text(earbudActive ? "protection reaches the mic" : "protected from here →")
+                            .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(envColor)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 1.5)
+                            .background(
+                                Capsule().fill(scheme.surfaceVariant)
+                            )
+                            .fixedSize()
+                            .offset(y: -6)
+                    }
+                    .offset(x: boundaryX, y: 14)
+
+                // Particle lanes — cheap ambient motion either side of the
+                // seal, sharing ONE TimelineView tick (paused under Reduce
+                // Motion, same convention as drawCipherTube/drawMiniSpectrum).
+                TimelineView(.animation(paused: reduceMotion)) { timeline in
+                    let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                    Canvas { ctx, _ in
+                        drawVoiceParticleLane(ctx: &ctx, rect: CGRect(x: 0, y: laneY - 12, width: w * 0.40, height: 24),
+                                              t: t, cipher: false, tint: envColor)
+                        drawVoiceParticleLane(ctx: &ctx, rect: CGRect(x: w * 0.60, y: laneY - 12, width: w * 0.40, height: 24),
+                                              t: t, cipher: true, tint: cipher)
+                    }
+                }
+                .frame(width: w, height: h)
+                .allowsHitTesting(false)
+
+                // Mic → Seal → Peer row.
+                HStack(spacing: 0) {
+                    trustEndpointNode(
+                        icon: "mic.fill",
+                        title: "Microphone",
+                        sub: earbudActive ? "protected" : "exposed",
+                        accent: earbudActive ? envColor : extras.riskHigh
+                    )
+                    .frame(width: w * 0.30)
+
+                    sealCore(envColor: envColor)
+                        .frame(width: w * 0.40)
+
+                    trustEndpointNode(
+                        icon: "person.wave.2.fill",
+                        title: peerDisplayName,
+                        sub: "ciphertext · over the net",
+                        accent: scheme.onSurfaceVariant
+                    )
+                    .frame(width: w * 0.30)
+                }
+                .frame(width: w, height: h)
+            }
+        }
+    }
+
+    /// One endpoint (mic or peer) — icon disc + title + monospace sub-caption.
+    private func trustEndpointNode(icon: String, title: String, sub: String, accent: Color) -> some View {
+        VStack(spacing: 5) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(
+                        LinearGradient(colors: [scheme.surfaceVariant, scheme.background],
+                                       startPoint: .top, endPoint: .bottom)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(accent.opacity(0.55), lineWidth: 1)
+                    )
+                    .frame(width: 42, height: 42)
+                    .shadow(color: accent.opacity(0.35), radius: 6)
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(accent)
+            }
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(scheme.onSurface)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             Text(sub)
-                .font(.system(size: 7.5, design: .monospaced))
+                .font(.system(size: 7, design: .monospaced))
                 .foregroundStyle(accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity)
     }
 
-    private var trustArrow: some View {
-        Text("→")
-            .font(.system(size: 12))
-            .foregroundStyle(scheme.onSurfaceVariant)
+    /// The glowing seal core — radial-gradient box, colored border, a soft
+    /// pulsing ring (opacity+scale breathing loop) around it, tagged with
+    /// where the seal is currently happening. The pulse reuses the SAME
+    /// TimelineView tick the particle lanes already subscribe to (no extra
+    /// timer): a `sin` breathing curve derived from the shared time base.
+    private func sealCore(envColor: Color) -> some View {
+        TimelineView(.animation(paused: reduceMotion)) { timeline in
+            let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+            let breath = (sin(t * 1.35) + 1) / 2   // 0...1
+            VStack(spacing: 7) {
+                ZStack {
+                    // pulsing ring
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(envColor, lineWidth: 1)
+                        .frame(width: 64, height: 64)
+                        .scaleEffect(1 + breath * 0.22)
+                        .opacity(reduceMotion ? 0.35 : (1 - breath) * 0.5)
+                    // core box
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(
+                            RadialGradient(
+                                colors: [envColor.opacity(0.30), scheme.background.opacity(0.95)],
+                                center: UnitPoint(x: 0.5, y: 0.34), startRadius: 0, endRadius: 46
+                            )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(envColor.opacity(0.6), lineWidth: 1)
+                        )
+                        .frame(width: 64, height: 64)
+                        .shadow(color: envColor.opacity(0.45), radius: 10)
+                    Image(systemName: earbudActive ? "waveform.badge.mic" : "lock.rectangle.stack.fill")
+                        .font(.system(size: 26, weight: .medium))
+                        .foregroundStyle(envColor)
+                }
+                Text(earbudActive ? "Sealed inside the earbud" : "Sealed on the phone")
+                    .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(envColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(envColor.opacity(0.14)))
+                    .overlay(Capsule().stroke(envColor.opacity(0.4), lineWidth: 1))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
-    /// One label+value stat of the trust-chain card's earbud footer.
-    /// Mirrors Android's `TrustStat` (monospace 7sp label / 12sp value).
-    private func trustStat(label: String, value: String, valueColor: Color) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label)
-                .font(.system(size: 7, design: .monospaced))
-                .foregroundStyle(scheme.onSurfaceVariant)
-            Text(value)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(valueColor)
+    /// Deterministic ambient particle lane — sparse warm dots drifting with
+    /// a slow vertical sine bob (raw, unsealed voice) on the LEFT, denser
+    /// cooler/more-randomised dots (already ciphertext) on the RIGHT.
+    /// Same golden-ratio index-hashing technique as `drawCipherTube` (zero
+    /// allocation, stable across frames, cheap — a few dozen points).
+    private func drawVoiceParticleLane(ctx: inout GraphicsContext, rect: CGRect, t: Double, cipher: Bool, tint: Color) {
+        guard rect.width > 0 else { return }
+        let n = cipher ? 22 : 12
+        for i in 0..<n {
+            let ph = Self.fract(Double(i) * 0.61803399 + (cipher ? 0.5 : 0))
+            let spd = cipher
+                ? 0.09 + 0.10 * Self.fract(Double(i) * 0.75487767)
+                : 0.045 + 0.05 * Self.fract(Double(i) * 0.75487767)
+            let lane = Self.fract(Double(i) * 0.38196601)
+            let x = rect.minX + CGFloat(Self.fract(ph + t * spd)) * rect.width
+            let y: CGFloat
+            let alpha: Double
+            let radius: CGFloat
+            if cipher {
+                // denser, more randomised jitter — ciphertext already.
+                let jitter = Self.fract(Double(i) * 0.91113 + t * 0.7)
+                y = rect.minY + CGFloat(lane) * rect.height + CGFloat(jitter - 0.5) * rect.height * 0.6
+                alpha = 0.35 + 0.45 * Self.fract(Double(i) * 0.27 + t * 0.3)
+                radius = 1.1
+            } else {
+                // sparse, smooth vertical sine bob — raw voice.
+                let wob = sin(t * 1.6 + Double(i) * 1.9)
+                y = rect.minY + rect.height / 2 + CGFloat(wob) * rect.height * 0.32
+                alpha = 0.55 + 0.35 * sin(t * 2 + Double(i))
+                radius = 1.3
+            }
+            var dotCtx = ctx
+            dotCtx.opacity = max(0, min(1, alpha))
+            dotCtx.fill(
+                Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)),
+                with: .color(tint)
+            )
         }
+    }
+
+    // MARK: Verdict callout
+
+    /// Verdict callout box — bordered/tinted box with a leading icon,
+    /// matching the mockup's `.verdict .v` treatment (the previous
+    /// implementation had the same copy as a bare paragraph with no box).
+    private func trustVerdictCallout(gold: Color) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: earbudActive ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(earbudActive ? gold : extras.riskHigh)
+                .padding(.top, 1)
+            Text(earbudActive
+                 ? "The mic and the seal both live inside the earbud's secure chip — your voice is sealed at the source and never reaches the phone."
+                 : "Keys stay safe in the OS keystore, but the raw mic audio exists in the phone for an instant before the seal — an OS compromise could tap it upstream of encryption.")
+                .font(.system(size: 11))
+                .foregroundStyle(scheme.onSurface.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(11)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill((earbudActive ? gold : extras.riskHigh).opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke((earbudActive ? gold : extras.riskHigh).opacity(0.28), lineWidth: 1)
+        )
+    }
+
+    // MARK: Stat ring row
+
+    /// Row of 5 stat cells (icon + label + value), wired to REAL state
+    /// already threaded to this view for the trust bar above — no new
+    /// state invented. Only "Seal point" changes with `earbudActive`; the
+    /// rest are informational badges of already-real values:
+    ///  - Identity      → `sasVerified` (same flag the trust bar's "SAS ✓" chip uses)
+    ///  - Post-quantum  → `pqcActive` (same flag the trust bar's "PQC" chip uses)
+    ///  - Cipher        → static "AES-256" label (the one algorithm string this
+    ///                     screen already commits to elsewhere — see
+    ///                     `cipherKeySectionBody`'s doc comment on why no
+    ///                     second, possibly-wrong cipher string is fabricated)
+    ///  - Seal point    → `earbudActive` (Phone vs Earbud HW, cyan vs gold)
+    ///  - Liveness      → static "Guardian" badge, same unconditional
+    ///                     "LIVENESS OK" the pills row already shows today
+    private func trustStatRing(gold: Color) -> some View {
+        HStack(spacing: 0) {
+            trustStatCell(icon: "checkmark.seal.fill", label: "Identity",
+                          value: sasVerified ? "SAS ✓" : "unverified",
+                          active: sasVerified, accent: extras.success)
+            trustStatCell(icon: "shield.lefthalf.filled", label: "Post-quantum",
+                          value: pqcActive ? "ML-KEM" : "off",
+                          active: pqcActive, accent: extras.success)
+            trustStatCell(icon: "lock.rectangle.stack.fill", label: "Cipher",
+                          value: "AES-256", active: true, accent: extras.success)
+            trustStatCell(icon: earbudActive ? "waveform.badge.mic" : "iphone",
+                          label: "Seal point",
+                          value: earbudActive ? "Earbud HW" : "Phone",
+                          active: true, accent: earbudActive ? gold : extras.success)
+            trustStatCell(icon: "shield.checkerboard", label: "Liveness",
+                          value: "Guardian", active: true, accent: extras.success)
+        }
+    }
+
+    private func trustStatCell(icon: String, label: String, value: String, active: Bool, accent: Color) -> some View {
+        VStack(spacing: 5) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(active ? accent.opacity(0.14) : scheme.surfaceVariant)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(active ? accent.opacity(0.4) : scheme.outline.opacity(0.4), lineWidth: 1)
+                    )
+                    .frame(width: 30, height: 30)
+                    .shadow(color: active ? accent.opacity(0.3) : .clear, radius: 5)
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(active ? accent : scheme.onSurfaceVariant)
+            }
+            Text(label)
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(scheme.onSurface)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(value)
+                .font(.system(size: 7, design: .monospaced))
+                .textCase(.uppercase)
+                .foregroundStyle(active ? accent : scheme.onSurfaceVariant)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: Earbud detail panel
+
+    /// Collapsible earbud detail panel — shown ONLY when `earbudActive`.
+    /// iOS has NO real battery/ANC/seals-per-second/key-epoch data source
+    /// (no `BudsStatus`-shaped provider exists here the way Android's does,
+    /// and no live seal-rate or key-epoch counter exists elsewhere in this
+    /// codebase either — `keyEpoch` is a call-level nil-by-default counter
+    /// with no earbud-specific meaning; see its doc comment above). Rather
+    /// than fabricate those cells, this panel keeps the SAME honest single
+    /// row the previous implementation had: CRACEN secure-element
+    /// confirmation, driven by the real `earbudHwVerified` flag.
+    private func trustEarbudPanel(gold: Color) -> some View {
+        HStack(spacing: 9) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(gold.opacity(0.14))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(gold.opacity(0.35), lineWidth: 1)
+                    )
+                    .frame(width: 26, height: 26)
+                Image(systemName: "waveform.badge.mic")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(gold)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("SECURE ELEMENT")
+                    .font(.system(size: 7, design: .monospaced))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                Text(earbudHwVerified ? "CRACEN ✓" : "linking…")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(earbudHwVerified ? gold : scheme.onSurfaceVariant)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 10)
     }
 
     // MARK: - Crypto-engine meter (unified call UI)
