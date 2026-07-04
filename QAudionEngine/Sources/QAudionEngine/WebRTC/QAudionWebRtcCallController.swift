@@ -731,6 +731,29 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `upgradeToVideo` cleared the slot for the upgrade answer, so a stray
     /// late `call_upgrade_response` must be swallowed as a duplicate again).
     /// Safe no-op when no upgrade is in flight.
+    /// 2026-07-04 fix — responder-side counterpart of `cancelVideoUpgrade()`.
+    /// When `acceptUpgradeOffer(remoteSdp:)` fails (a live-call renegotiation
+    /// on this ALREADY-EXISTING controller, as opposed to the on-demand PC
+    /// built by `makeUpgradeResponderController`), the shared PeerConnection
+    /// can be left parked in `have-local-offer` — see
+    /// `QAudionPeerConnection.rollbackLocalOffer`'s kdoc for the exact
+    /// mechanism (libwebrtc's "Called in wrong state" on the next
+    /// `setRemoteOffer`). Unlike `cancelVideoUpgrade()`, this does NOT gate
+    /// on `videoUpgradeInProgress` (that flag is caller-side-only — a pure
+    /// responder failure never sets it, which made calling
+    /// `cancelVideoUpgrade()` here a no-op) and does NOT touch camera
+    /// capture / TX-hold / `videoUpgradeInProgress` — those belong to a
+    /// LOCAL upgrade attempt, not this device's incoming-offer failure.
+    /// `rollbackLocalOffer` is self-guarding (no-op unless
+    /// signalingState == .haveLocalOffer), so this is safe to call
+    /// unconditionally and never touches a healthy PC or the live audio leg.
+    public func recoverPeerConnectionAfterFailedIncomingUpgrade() async {
+        guard let pc = peerConnection else { return }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            pc.rollbackLocalOffer { _ in cont.resume() }
+        }
+    }
+
     public func cancelVideoUpgrade() async {
         guard videoUpgradeInProgress else { return }
         stopCameraCapture()

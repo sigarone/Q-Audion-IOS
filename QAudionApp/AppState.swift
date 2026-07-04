@@ -3056,12 +3056,32 @@ final class AppState: ObservableObject {
                 let desc: String = error.localizedDescription
                 RTLog.warn("call", "incoming upgrade accept failed: " + desc)
                 #if canImport(WebRTC)
-                // The on-demand upgrade controller was published to
-                // webRtcController before this (failed) async build — tear it down
-                // so a stale/half-built PC can't block a later upgrade retry or be
-                // probed per audio frame. ONLY for the on-demand path; a
-                // pre-existing renegotiation controller belongs to the live call.
-                if builtOnDemand { self.rollbackUpgradeVideo() }
+                if builtOnDemand {
+                    // The on-demand upgrade controller was published to
+                    // webRtcController before this (failed) async build — tear it down
+                    // so a stale/half-built PC can't block a later upgrade retry or be
+                    // probed per audio frame.
+                    self.rollbackUpgradeVideo()
+                } else if let controller = self.webRtcController as? QAudionWebRtcCallController {
+                    // 2026-07-04 fix — a failed `acceptUpgradeOffer` on the
+                    // PRE-EXISTING (audio-carrying) controller used to leave that
+                    // shared PeerConnection wedged: `setRemoteOffer` had thrown
+                    // "Called in wrong state" (libwebrtc's signalingState guard),
+                    // and nothing ever rolled the PC back to `stable`. Every
+                    // subsequent upgrade retry — a fresh camera + fresh SDP each
+                    // time — hit the SAME wedged PC and failed identically, so
+                    // the responder's 30s consent dialog never got a stable
+                    // window: the requester's `onUpgradeResponse` unblocks its
+                    // button on this instant `accepted:false` and a re-click
+                    // resets/replaces the still-showing dialog before the user
+                    // can tap it (observed: 8 back-to-back failures, same error,
+                    // one real call). `recoverPeerConnectionAfterFailedIncomingUpgrade()`
+                    // rolls the shared PC back to `stable` (self-guarding, safe
+                    // even if there was nothing to roll back) WITHOUT closing
+                    // the PeerConnection, so the live AUDIO leg keeps flowing
+                    // (signal-not-kill).
+                    await controller.recoverPeerConnectionAfterFailedIncomingUpgrade()
+                }
                 #endif
                 try? await impl.sendCallUpgradeResponse(
                     callId: pending.callId,
