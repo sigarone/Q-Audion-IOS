@@ -1,0 +1,288 @@
+<title>Q-Audion — where your voice gets sealed</title>
+<style>
+  :root{
+    --bg-0:#060E1C;--bg-1:#0C1828;--bg-2:#132038;--bg-3:#1C2E50;
+    --border:#263C62;--border-soft:rgba(38,60,98,0.6);
+    --ink-100:#F9FBFF;--ink-70:#C9D8EC;--ink-45:#8FA6C4;
+    --accent:#50D4FF;--accent-deep:#1B7FC0;--cipher:#7C6CFF;
+    --gold:#F5C451;--gold-deep:#B8862B;--jade:#3BE3B0;--raw:#FF9E5A;
+    --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;min-height:100vh;color:var(--ink-100);font-family:var(--sans);
+    background:radial-gradient(1200px 700px at 50% -12%,#10233f 0%,transparent 58%),var(--bg-0);
+    padding:30px 16px 50px;}
+  .wrap{max-width:640px;margin:0 auto;}
+  .head{text-align:center;margin-bottom:20px;}
+  .head h1{font-size:20px;font-weight:650;letter-spacing:-0.01em;margin:0 0 6px;text-wrap:balance;}
+  .head p{font-size:13px;color:var(--ink-45);margin:0;line-height:1.55;}
+  .head b{color:var(--ink-70);}
+
+  .toggle-row{display:flex;justify-content:center;margin:0 0 22px;}
+  .toggle{display:inline-flex;background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:4px;gap:4px;}
+  .toggle button{font-family:var(--mono);font-size:11px;letter-spacing:0.03em;text-transform:uppercase;
+    padding:9px 16px;border-radius:9px;border:0;cursor:pointer;background:transparent;color:var(--ink-45);transition:.2s;display:flex;align-items:center;gap:7px;}
+  .toggle button svg{width:15px;height:15px;}
+  .toggle button.on{background:rgba(80,212,255,0.14);color:var(--accent);}
+  .toggle button.on.gold{background:rgba(245,196,81,0.16);color:var(--gold);}
+  .toggle button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .panel{border:1px solid var(--border);border-radius:20px;overflow:hidden;
+    background:linear-gradient(180deg,rgba(19,32,56,0.5),rgba(6,12,24,0.72));
+    box-shadow:0 26px 60px -30px rgba(0,0,0,0.85);transition:border-color .5s,box-shadow .5s;}
+  .panel.sov{border-color:rgba(245,196,81,0.4);box-shadow:0 26px 70px -28px rgba(245,196,81,0.22);}
+  .panel-cap{display:flex;align-items:center;gap:8px;padding:13px 18px;border-bottom:1px solid var(--border-soft);
+    font-family:var(--mono);font-size:10.5px;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-45);}
+  .panel-cap .live{width:6px;height:6px;border-radius:50%;background:var(--jade);box-shadow:0 0 8px var(--jade);animation:blink 2.2s infinite;}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+  .panel-cap .grade{margin-left:auto;font-weight:600;color:var(--accent);transition:color .5s;}
+  .panel.sov .panel-cap .grade{color:var(--gold);}
+
+  .chain{position:relative;display:grid;grid-template-columns:1fr 108px 1fr;align-items:center;padding:30px 18px 16px;}
+  @media(max-width:520px){.chain{grid-template-columns:1fr 92px 1fr;padding:24px 8px 12px;}}
+  .node{display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;z-index:2;}
+  .node .disc{width:56px;height:56px;border-radius:18px;display:grid;place-items:center;
+    background:linear-gradient(150deg,#1a2a48,#0b1526);border:1px solid var(--border);color:var(--ink-70);transition:.5s;}
+  .node .disc svg{width:26px;height:26px;}
+  .node .lbl{font-size:11px;font-weight:600;}
+  .node .sub{font-family:var(--mono);font-size:8px;color:var(--ink-45);letter-spacing:0.03em;text-transform:uppercase;transition:.5s;}
+  /* MIC node: software = OUTSIDE the protective envelope (exposed, warm);
+     earbud = pulled INSIDE it (protected, gold). This is the whole point. */
+  #voiceNode .disc{border-color:rgba(255,158,90,0.5);color:var(--raw);box-shadow:0 0 16px -5px var(--raw);transition:.5s;}
+  #voiceNode .sub{color:var(--raw);}
+  .panel.sov #voiceNode .disc{border-color:rgba(245,196,81,0.55);color:var(--gold);box-shadow:0 0 20px -3px var(--gold);}
+  .panel.sov #voiceNode .sub{color:var(--gold);}
+  /* a little "exposed / protected" tag under the mic */
+  #voiceNode .exp{font-family:var(--mono);font-size:7px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;
+    padding:2px 6px;border-radius:5px;background:rgba(255,158,90,0.14);color:var(--raw);border:1px solid rgba(255,158,90,0.32);transition:.5s;}
+  .panel.sov #voiceNode .exp{background:rgba(245,196,81,0.16);color:var(--gold);border-color:rgba(245,196,81,0.4);}
+
+  .seal-node{position:relative;z-index:3;display:flex;flex-direction:column;align-items:center;gap:9px;}
+  .seal-core{position:relative;width:84px;height:84px;border-radius:26px;display:grid;place-items:center;
+    background:radial-gradient(circle at 50% 34%,rgba(80,212,255,0.24),rgba(8,14,28,0.95));
+    border:1px solid rgba(80,212,255,0.5);box-shadow:0 0 0 5px rgba(80,212,255,0.07),0 0 34px -4px var(--accent);
+    transition:all .55s cubic-bezier(.4,.9,.3,1);}
+  .seal-core svg{width:38px;height:38px;color:var(--accent);transition:color .55s;}
+  .panel.sov .seal-core{background:radial-gradient(circle at 50% 34%,rgba(245,196,81,0.28),rgba(20,14,4,0.95));
+    border-color:rgba(245,196,81,0.6);box-shadow:0 0 0 5px rgba(245,196,81,0.09),0 0 46px -2px var(--gold);}
+  .panel.sov .seal-core svg{color:var(--gold);}
+  .seal-ring{position:absolute;inset:0;border-radius:26px;border:1px solid var(--accent);opacity:0;pointer-events:none;}
+  .panel.sov .seal-ring{border-color:var(--gold);}
+  .seal-node .tag{font-family:var(--mono);font-size:8px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;
+    padding:3px 9px;border-radius:7px;background:rgba(80,212,255,0.12);color:var(--accent);border:1px solid rgba(80,212,255,0.3);transition:.5s;white-space:nowrap;}
+  .panel.sov .seal-node .tag{background:rgba(245,196,81,0.15);color:var(--gold);border-color:rgba(245,196,81,0.4);}
+
+  .flow{position:absolute;top:56px;height:2px;z-index:1;}
+  .flow.left{left:15%;right:56%;} .flow.right{left:56%;right:8%;}
+  .flow .rail{position:absolute;inset:0;}
+  .flow.left .rail{background:linear-gradient(90deg,rgba(255,158,90,0.15),rgba(255,158,90,0.5));transition:.5s;}
+  .panel.sov .flow.left .rail{background:linear-gradient(90deg,rgba(245,196,81,0.15),rgba(245,196,81,0.5));}
+  .flow.right .rail{background:linear-gradient(90deg,var(--cipher),rgba(124,108,255,0.12));}
+  .flow canvas{position:absolute;top:-11px;left:0;width:100%;height:24px;}
+
+  /* ── the PROTECTION envelope — the sealed/safe zone. Grows LEFT to
+        swallow the microphone when the earbud is connected. ──────────── */
+  .boundary{position:absolute;top:16px;bottom:70px;border:1.5px solid rgba(80,212,255,0.45);border-radius:20px;z-index:1;pointer-events:none;
+    transition:all .6s cubic-bezier(.4,.9,.3,1);
+    background:radial-gradient(ellipse at 55% 42%,rgba(80,212,255,0.08),transparent 72%);}
+  .boundary .blab{position:absolute;top:-9px;left:50%;transform:translateX(-50%);
+    font-family:var(--mono);font-size:8px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;
+    background:var(--bg-1);padding:1px 9px;border-radius:6px;color:var(--accent);white-space:nowrap;transition:.5s;}
+  /* software: protection starts at the SEAL — the mic (left) is OUTSIDE it */
+  .boundary{left:40%;right:6%;}
+  /* earbud: protection stretches to the MIC — the whole chain is inside, gold */
+  .panel.sov .boundary{left:6%;right:6%;border-color:rgba(245,196,81,0.55);
+    background:radial-gradient(ellipse at 40% 42%,rgba(245,196,81,0.1),transparent 74%);}
+  .panel.sov .boundary .blab{color:var(--gold);}
+
+  .verdict{padding:4px 18px 18px;}
+  .verdict .v{display:flex;gap:10px;align-items:flex-start;padding:11px 12px;border-radius:12px;border:1px solid;transition:.5s;}
+  .verdict .v.soft{background:rgba(255,158,90,0.07);border-color:rgba(255,158,90,0.22);}
+  .verdict .v.sov{background:rgba(245,196,81,0.08);border-color:rgba(245,196,81,0.28);}
+  .verdict .v svg{width:17px;height:17px;flex:0 0 auto;margin-top:1px;}
+  .verdict .v.soft svg{color:var(--raw);} .verdict .v.sov svg{color:var(--gold);}
+  .verdict p{margin:0;font-size:11.5px;line-height:1.5;color:var(--ink-70);}
+  .verdict p b{color:var(--ink-100);}
+
+  .rings{display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--border-soft);}
+  .ring{padding:13px 5px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;border-right:1px solid var(--border-soft);}
+  .ring:last-child{border-right:0;}
+  .ring .gem{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--bg-2);border:1px solid var(--border);color:var(--ink-45);transition:.4s;}
+  .ring .gem svg{width:16px;height:16px;}
+  .ring.active .gem{background:rgba(59,227,176,0.14);border-color:rgba(59,227,176,0.4);color:var(--jade);box-shadow:0 0 14px -4px var(--jade);}
+  .ring.gold .gem{background:rgba(245,196,81,0.16);border-color:rgba(245,196,81,0.45);color:var(--gold);box-shadow:0 0 16px -3px var(--gold);}
+  .ring .rn{font-size:9px;font-weight:600;color:var(--ink-70);}
+  .ring .rv{font-family:var(--mono);font-size:7.5px;letter-spacing:0.02em;text-transform:uppercase;color:var(--ink-45);}
+  .ring.active .rv{color:var(--jade);} .ring.gold .rv{color:var(--gold);}
+
+  .earbud{max-height:0;opacity:0;overflow:hidden;transition:max-height .5s,opacity .4s;}
+  .panel.sov .earbud{max-height:170px;opacity:1;border-top:1px solid rgba(245,196,81,0.25);}
+  .eb-in{padding:13px 18px;background:linear-gradient(180deg,rgba(245,196,81,0.05),transparent);}
+  .eb-head{display:flex;align-items:center;gap:9px;margin-bottom:11px;}
+  .eb-head .ei{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;background:rgba(245,196,81,0.14);color:var(--gold);border:1px solid rgba(245,196,81,0.35);}
+  .eb-head .ei svg{width:15px;height:15px;}
+  .eb-head .en{font-size:12.5px;font-weight:650;} .eb-head .es{font-family:var(--mono);font-size:9px;color:var(--gold);letter-spacing:0.03em;}
+  .eb-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .eb-cell{text-align:center;} .eb-cell .k{font-family:var(--mono);font-size:8px;letter-spacing:0.1em;text-transform:uppercase;color:var(--ink-45);}
+  .eb-cell .v{font-family:var(--mono);font-size:14px;color:var(--ink-100);margin-top:2px;font-variant-numeric:tabular-nums;} .eb-cell .v.gold{color:var(--gold);} .eb-cell .v small{font-size:8.5px;color:var(--ink-45);}
+
+  /* in-call strip */
+  .callpreview{margin-top:24px;}
+  .callpreview h3{font-family:var(--mono);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-45);text-align:center;margin:0 0 12px;}
+  .strip{display:flex;align-items:center;gap:9px;border:1px solid var(--border);border-radius:13px;padding:9px 12px;
+    background:linear-gradient(180deg,rgba(19,32,56,0.5),rgba(8,14,26,0.7));transition:.5s;}
+  .strip.gold{border-color:rgba(245,196,81,0.4);}
+  .strip .shield{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:rgba(80,212,255,0.12);border:1px solid rgba(80,212,255,0.3);color:var(--accent);transition:.5s;flex:0 0 auto;}
+  .strip.gold .shield{background:rgba(245,196,81,0.15);border:1px solid rgba(245,196,81,0.4);color:var(--gold);}
+  .strip .shield svg{width:16px;height:16px;}
+  .strip .l1{font-size:12px;font-weight:600;} .strip .l2{font-family:var(--mono);font-size:9.5px;color:var(--ink-45);letter-spacing:0.02em;}
+  .strip.gold .l2{color:var(--gold);}
+
+  .hint{text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--ink-45);margin-top:16px;letter-spacing:0.02em;line-height:1.5;}
+  @media (prefers-reduced-motion:reduce){.live{animation:none}.seal-core,.boundary,.earbud,.node .disc,.strip{transition:none}}
+</style>
+
+<div class="wrap">
+  <div class="head">
+    <h1>Where does your voice actually get sealed?</h1>
+    <p>Your keys stay safe in <b>TrustZone / StrongBox</b> — that's not the weak point. The exposure is that the
+    <b>microphone captures raw voice inside the phone</b>, an instant before it's sealed. Plug in the earbud and the
+    seal point <span class="mono">moves off the phone entirely</span>.</p>
+  </div>
+
+  <div class="toggle-row">
+    <div class="toggle" id="toggle">
+      <button data-mode="soft" class="on">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M11 18h2"/></svg>
+        Phone seals it
+      </button>
+      <button data-mode="earbud">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 14h3l2-9 4 18 3-13 2 7h4"/></svg>
+        Earbud connected
+      </button>
+    </div>
+  </div>
+
+  <div class="panel" id="panel">
+    <div class="panel-cap"><span class="live"></span> Session security · custody of your voice<span class="grade" id="grade">GRADE A</span></div>
+
+    <div class="chain">
+      <div class="boundary"><span class="blab" id="blab">protected from here →</span></div>
+      <div class="flow left"><div class="rail"></div><canvas id="flowL"></canvas></div>
+      <div class="flow right"><div class="rail"></div><canvas id="flowR"></canvas></div>
+
+      <div class="node" id="voiceNode">
+        <div class="disc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg></div>
+        <div class="lbl">Microphone</div>
+        <div class="exp" id="voiceExp">Exposed</div>
+      </div>
+
+      <div class="seal-node">
+        <div class="seal-core"><div class="seal-ring" id="sealRing"></div>
+          <svg id="sealIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+        </div>
+        <div class="tag" id="sealTag">Sealed on the phone</div>
+      </div>
+
+      <div class="node" id="peerNode">
+        <div class="disc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+        <div class="lbl">Marco</div>
+        <div class="sub">ciphertext · over the net</div>
+      </div>
+    </div>
+
+    <div class="verdict">
+      <div class="v soft" id="vSoft">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+        <p><b>Protection starts at the seal.</b> ML-KEM-1024 + AES-256, keys locked in TrustZone — but the <b>microphone sits just outside</b> the protected zone: raw audio is captured in the phone for the instant before it's sealed, so a compromised OS could tap the mic <b>upstream of encryption</b>, without ever needing the key.</p>
+      </div>
+      <div class="v sov" id="vSov" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+        <p><b>Protection now extends all the way to the microphone.</b> The mic and the seal both live inside the earbud's secure chip, so your voice is protected <b>at the source</b> and never crosses into the phone. Nothing raw is left outside the envelope — even a fully compromised phone only ever handles ciphertext.</p>
+      </div>
+    </div>
+
+    <div class="rings">
+      <div class="ring active"><div class="gem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg></div><div class="rn">Identity</div><div class="rv">SAS ✓</div></div>
+      <div class="ring active"><div class="gem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.5 8 8 11 4.5-3 8-6 8-11V5z"/></svg></div><div class="rn">Post-quantum</div><div class="rv">ML-KEM</div></div>
+      <div class="ring active"><div class="gem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div><div class="rn">Cipher</div><div class="rv">AES-256</div></div>
+      <div class="ring active" id="ringSrc"><div class="gem" id="ringSrcGem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="3"/></svg></div><div class="rn">Seal point</div><div class="rv" id="ringSrcV">Phone</div></div>
+      <div class="ring active"><div class="gem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></div><div class="rn">Liveness</div><div class="rv">Guardian</div></div>
+    </div>
+
+    <div class="earbud"><div class="eb-in">
+      <div class="eb-head"><div class="ei"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 14h3l2-9 4 18 3-13 2 7h4"/></svg></div>
+        <div><div class="en">Q-Audion Buds</div><div class="es">CRACEN secure element · sealing at the mic</div></div></div>
+      <div class="eb-grid">
+        <div class="eb-cell"><div class="k">Battery L/R</div><div class="v gold">82/78<small>%</small></div></div>
+        <div class="eb-cell"><div class="k">ANC</div><div class="v">Active</div></div>
+        <div class="eb-cell"><div class="k">Seals/s</div><div class="v gold" id="ebSeals">48</div></div>
+        <div class="eb-cell"><div class="k">Key epoch</div><div class="v">1</div></div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="callpreview">
+    <h3>How it reads inside the call — one tappable strip</h3>
+    <div class="strip" id="strip">
+      <div class="shield" id="stripShield"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+      <div>
+        <div class="l1" id="stripL1">Sealed on this phone</div>
+        <div class="l2" id="stripL2">TrustZone keys · mic captured in-phone</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="hint" id="hint">Tap "Earbud connected" — watch the seal point &amp; the raw-voice zone jump off the phone.</div>
+</div>
+
+<script>
+(() => {
+  const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const dpr=Math.max(1,Math.min(2,devicePixelRatio||1));
+  const $=id=>document.getElementById(id);
+  const panel=$('panel'); let sov=false;
+
+  function mkFlow(cv,cipher){
+    const g=cv.getContext('2d');
+    const parts=Array.from({length:cipher?24:14},()=>({x:Math.random(),y:Math.random(),v:0.004+Math.random()*0.01}));
+    (function draw(){
+      const w=cv.clientWidth,h=cv.clientHeight; if(!w){requestAnimationFrame(draw);return;}
+      if(cv.width!==w*dpr){cv.width=w*dpr;cv.height=h*dpr;}
+      g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,w,h);
+      for(const p of parts){ p.x+=p.v; if(p.x>1){p.x=0;p.y=Math.random();}
+        const px=p.x*w;
+        if(cipher){ g.fillStyle=`rgba(${124+Math.random()*30|0},${108+Math.random()*40|0},255,${0.5+Math.random()*0.4})`;
+          g.fillRect(px+(Math.random()-0.5)*3,p.y*h+(Math.random()-0.5)*8,1.4,1.4); }
+        else { const c=sov?'245,196,81':'255,158,90'; g.fillStyle=`rgba(${c},0.8)`;
+          g.fillRect(px,h/2+Math.sin(p.x*12+Date.now()*0.004)*5,1.6,1.6); }
+      }
+      if(!reduce)requestAnimationFrame(draw);
+    })();
+  }
+  mkFlow($('flowL'),false); mkFlow($('flowR'),true);
+
+  const ring=$('sealRing'); let rt=0;
+  (function pulse(){rt+=0.05;const p=rt%1;ring.style.opacity=String((1-p)*0.5);ring.style.transform=`scale(${1+p*0.5})`;if(!reduce)requestAnimationFrame(pulse);})();
+  setInterval(()=>{if(sov)$('ebSeals').textContent=(44+Math.floor(Math.random()*8));},900);
+
+  function setMode(s){
+    sov=s; panel.classList.toggle('sov',s);
+    document.querySelectorAll('#toggle button').forEach(b=>{const on=b.dataset.mode===(s?'earbud':'soft');b.classList.toggle('on',on);b.classList.toggle('gold',on&&s);});
+    $('grade').textContent=s?'GRADE A+ · SOVEREIGN':'GRADE A';
+    $('sealTag').textContent=s?'Sealed inside the earbud':'Sealed on the phone';
+    $('blab').textContent=s?'protection reaches the mic':'protected from here →';
+    $('voiceExp').textContent=s?'Protected':'Exposed';
+    $('sealIcon').innerHTML=s?'<path d="M3 14h3l2-9 4 18 3-13 2 7h4"/>':'<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>';
+    $('ringSrcV').textContent=s?'Earbud HW':'Phone'; $('ringSrc').classList.toggle('gold',s);
+    $('ringSrcGem').innerHTML=s?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 14h3l2-9 4 18 3-13 2 7h4"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="3"/></svg>';
+    $('vSoft').style.display=s?'none':'flex'; $('vSov').style.display=s?'flex':'none';
+    $('strip').classList.toggle('gold',s);
+    $('stripL1').textContent=s?'Sealed inside the earbud':'Sealed on this phone';
+    $('stripL2').textContent=s?'mic + seal in hardware · phone sees only ciphertext':'TrustZone keys · mic captured in-phone';
+    $('hint').textContent=s?'The raw-voice zone is now inside the earbud. The phone is just a relay — nothing raw to tap.':'Tap "Earbud connected" — watch the seal point & the raw-voice zone jump off the phone.';
+  }
+  $('toggle').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;setMode(b.dataset.mode==='earbud');});
+})();
+</script>
