@@ -212,6 +212,12 @@ struct LiveInCallScreen: View {
                 // pass wires a real rekey event, swap this for
                 // `appState.rekeyCount`.
                 keyEpoch: nil,
+                // Unified call UI — live crypto-engine rate (real AES-256-GCM
+                // frame ops/s). Sampled once/sec by AppState.startCryptoMeter()
+                // from the CallService frame counters; 0 hides the pulsing
+                // meter. Read inside the per-second TimelineView body so the
+                // ribbon re-renders with a fresh value each tick.
+                cryptoOpsPerSec: appState.cryptoOpsPerSec,
                 onToggleMute: handleToggleMute,
                 onToggleSpeaker: handleToggleSpeaker,
                 onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
@@ -483,7 +489,16 @@ struct LiveInCallScreen: View {
             breathiness: result.voiceHealth.breathiness,
             pitchHz: result.pitch.f0Hz,
             syllablesPerSec: result.speechRate.syllablesPerSec,
-            confidence: result.confidence
+            confidence: result.confidence,
+            // Unified call UI — formant/energy inputs for the animated
+            // mini-spectrum. f1…f4 are the real vocal-resonance peaks; the
+            // spectrum maps them onto a 0…3800 Hz display band. `speaking`
+            // gates the cyan→green active tint (isSpeaking && voiced).
+            f1: result.formants.f1,
+            f2: result.formants.f2,
+            f3: result.formants.f3,
+            f4: result.formants.f4,
+            speaking: result.speechRate.isSpeaking && result.pitch.voiced
         )
     }
 

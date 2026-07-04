@@ -36,6 +36,10 @@ struct InCallScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Unified call UI — respect the system Reduce Motion setting: when on,
+    /// the animated mini-spectrum + crypto-engine comet freeze to a single
+    /// representative frame instead of continuously redrawing.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Unified call UI — security sheet presentation state. Local to this
     /// view (not plumbed from AppState): purely a "is the aggregating
@@ -84,6 +88,36 @@ struct InCallScreen: View {
         let pitchHz: Float            // VoiceAnalysisResult.Pitch.f0Hz
         let syllablesPerSec: Float    // VoiceAnalysisResult.SpeechRate.syllablesPerSec
         let confidence: Float         // 0...1 (VoiceAnalysisResult.confidence)
+        // Unified call UI — formant/energy fields driving the animated
+        // mini-spectrum (Guardian ribbon). f1…f4 are the REAL vocal-resonance
+        // peak frequencies (Hz) from VoiceAnalysisResult.Formants; a zero
+        // formant simply contributes no gaussian bump. `speaking` gates the
+        // cyan→green "active" tint (VoiceAnalysisResult.speechRate.isSpeaking
+        // && .pitch.voiced). These are display-only inputs to the spectrum;
+        // the security sheet ignores them. Defaulted so preview/test call
+        // sites that don't care about the spectrum keep compiling.
+        let f1: Float                 // VoiceAnalysisResult.Formants.f1 (Hz)
+        let f2: Float                 // .f2 (Hz)
+        let f3: Float                 // .f3 (Hz)
+        let f4: Float                 // .f4 (Hz)
+        let speaking: Bool            // .speechRate.isSpeaking && .pitch.voiced
+
+        init(stressScore: Float, jitter: Float, shimmer: Float, hnr: Float,
+             breathiness: Float, pitchHz: Float, syllablesPerSec: Float,
+             confidence: Float,
+             f1: Float = 0, f2: Float = 0, f3: Float = 0, f4: Float = 0,
+             speaking: Bool = false) {
+            self.stressScore = stressScore
+            self.jitter = jitter
+            self.shimmer = shimmer
+            self.hnr = hnr
+            self.breathiness = breathiness
+            self.pitchHz = pitchHz
+            self.syllablesPerSec = syllablesPerSec
+            self.confidence = confidence
+            self.f1 = f1; self.f2 = f2; self.f3 = f3; self.f4 = f4
+            self.speaking = speaking
+        }
     }
 
     // MARK: - Inputs
@@ -135,6 +169,14 @@ struct InCallScreen: View {
     /// neither exposes an in-call rekey EVENT, only the one-time initial
     /// key registration, so this is expected to render nil / omitted).
     let keyEpoch: Int?
+    /// Unified call UI — live crypto-engine rate: real AES-256-GCM frame
+    /// operations per second (seal(TX)+open(RX)), sampled once/sec by
+    /// `AppState.startCryptoMeter()` from the ground-truth `CallService`
+    /// frame counters. 0 when no frames are flowing → the pulsing meter is
+    /// hidden. No kB/s counterpart is shown: iOS has no byte counter (only
+    /// frame counts), so a byte rate would be fabricated — see
+    /// `AppState.cryptoOpsPerSec` doc comment.
+    let cryptoOpsPerSec: Int
     let onToggleMute: () -> Void
     let onToggleSpeaker: () -> Void
     let onToggleVoiceEnhancement: () -> Void
@@ -190,6 +232,7 @@ struct InCallScreen: View {
          cipherSamples: [Float] = [],
          voiceBiometrics: VoiceBiometrics? = nil,
          keyEpoch: Int? = nil,
+         cryptoOpsPerSec: Int = 0,
          onToggleMute: @escaping () -> Void = {},
          onToggleSpeaker: @escaping () -> Void = {},
          onToggleVoiceEnhancement: @escaping () -> Void = {},
@@ -225,6 +268,7 @@ struct InCallScreen: View {
         self.cipherSamples = cipherSamples
         self.voiceBiometrics = voiceBiometrics
         self.keyEpoch = keyEpoch
+        self.cryptoOpsPerSec = cryptoOpsPerSec
         self.onToggleMute = onToggleMute
         self.onToggleSpeaker = onToggleSpeaker
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
@@ -809,14 +853,15 @@ struct InCallScreen: View {
     // MARK: - Guardian ribbon (unified call UI)
 
     /// Compact Guardian strip: a small live remote-voice spectrum on the
-    /// left, a cipher/seal visual on the right, and 3 mini gauges below
-    /// (stress / breath·HNR / pitch) with a one-word status per gauge.
-    /// Additive and small per spec — NOT the full decorative canvas
-    /// spectrum-analyzer from the HTML reference; the spectrum here reuses
-    /// the existing RX waveform samples (already computed live) rather
-    /// than introducing a second FFT-ish visual pipeline. When
-    /// `voiceBiometrics == nil` (engine flag off, or no result yet) the
-    /// gauges render an em-dash rather than fabricated numbers.
+    /// left, a cipher/seal visual on the right, 3 mini gauges below
+    /// (stress / breath·HNR / pitch) with a one-word status per gauge, and —
+    /// when the crypto engine is doing real work (ops/s > 0) — a thin pulsing
+    /// crypto-engine meter at the bottom. Additive and small per spec — NOT
+    /// the full decorative canvas spectrum-analyzer from the HTML reference.
+    /// The mini-spectrum is formant-driven + animated (see `miniSpectrum`),
+    /// for parity with Android's `MiniSpectrum`. When `voiceBiometrics == nil`
+    /// (engine flag off, or no result yet) the gauges render an em-dash rather
+    /// than fabricated numbers.
     private var guardianRibbon: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
@@ -864,6 +909,16 @@ struct InCallScreen: View {
                     statusColor: scheme.onSurfaceVariant
                 )
             }
+
+            // Live crypto-engine meter — real AES-256-GCM frame ops/s
+            // pulsing. Shown only while the engine is doing work (ops > 0),
+            // i.e. once frames are actually flowing on an active call.
+            if cryptoOpsPerSec > 0 {
+                Rectangle()
+                    .fill(scheme.outline.opacity(0.3))
+                    .frame(height: 1)
+                cryptoEngineMeterRow
+            }
         }
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -875,36 +930,96 @@ struct InCallScreen: View {
         )
     }
 
-    /// Reuses the live RX samples (same feed as the "VOCE RICEVUTA"
-    /// oscilloscope in `statsCard`) rather than a separate spectrum
-    /// pipeline — additive/small per spec, not a second decorative canvas.
+    /// Live remote-voice mini-spectrum — parity with Android `MiniSpectrum`
+    /// (feature-call/ui/GuardianRibbon.kt). A small (≤30pt) 16-bar spectrum
+    /// whose SHAPE is the real `VoiceAnalysisResult` formants (f1…f4 vocal-
+    /// resonance peaks mapped onto a 0…3800 Hz display band as soft gaussian
+    /// bumps), whose AMPLITUDE tracks live speaking energy (analysis
+    /// confidence when voiced/speaking, decaying to a low idle floor
+    /// otherwise), with ONE cheap continuous phase (a single `TimelineView
+    /// (.animation)` redraw) adding a travelling shimmer so it stays alive
+    /// between the ~10 Hz analysis updates. Cost: one Canvas redraw per
+    /// display frame reading a time-derived phase — NOT a per-frame
+    /// recomposition, NOT a real FFT.
+    ///
+    /// Colors: cyan (pqcAccent) → green (success) gradient when speaking, dim
+    /// (onSurfaceVariant) when idle. When Reduce Motion is on the phase is
+    /// frozen to a single representative frame (the animation stops), so the
+    /// bars still show the formant shape + energy but don't shimmer.
     private var miniSpectrum: some View {
-        Canvas { ctx, size in
-            let midY = size.height / 2
-            guard rxSamples.count > 1 else {
-                var flat = Path()
-                flat.move(to: CGPoint(x: 0, y: midY))
-                flat.addLine(to: CGPoint(x: size.width, y: midY))
-                ctx.stroke(flat, with: .color(extras.success.opacity(0.25)), lineWidth: 1)
-                return
+        TimelineView(.animation(paused: reduceMotion)) { timeline in
+            Canvas { ctx, size in
+                // One continuous looping phase, period 1500 ms (matches
+                // Android's spectrumPhase tween). Frozen to 0 under Reduce
+                // Motion for a static representative frame.
+                let phase: Double
+                if reduceMotion {
+                    phase = 0
+                } else {
+                    let period = 1.5
+                    let t = timeline.date.timeIntervalSinceReferenceDate
+                    phase = (t.truncatingRemainder(dividingBy: period)) / period * 2.0 * .pi
+                }
+                drawMiniSpectrum(ctx: &ctx, size: size, phase: phase)
             }
-            var peak: Float = 0.10
-            for s in rxSamples {
-                let a = abs(s)
-                if a > peak { peak = a }
+        }
+    }
+
+    /// Pure Canvas draw for `miniSpectrum` — extracted so the TimelineView
+    /// body stays shallow (SWIFT6_PATTERNS §5/§6) and the parameters mirror
+    /// Android's `MiniSpectrum` Canvas block 1:1.
+    private func drawMiniSpectrum(ctx: inout GraphicsContext, size: CGSize, phase: Double) {
+        let bio = voiceBiometrics
+        // Speaking gate (cyan→green tint) + energy driver. iOS `Pitch` has
+        // no per-frame `confidence` field (only f0Hz/voiced/rms), so — unlike
+        // Android which reads `pitch.confidence` — the energy uses the
+        // top-level `VoiceAnalysisResult.confidence` (the overall analysis
+        // confidence, the closest analog). isSpeaking && voiced already fold
+        // into `bio.speaking` at the map site (liveVoiceBiometrics).
+        let speaking = bio?.speaking ?? false
+        let conf = CGFloat(max(0, min(1, bio?.confidence ?? 0)))
+        let energy: CGFloat = speaking ? (0.45 + 0.55 * conf) : 0.12
+
+        // Formant peaks (Hz) → normalised x in [0,1] over a 0…3800 Hz band.
+        // A zero formant contributes no peak (filtered out).
+        var peaks: [CGFloat] = []
+        if let bio {
+            for hz in [bio.f1, bio.f2, bio.f3, bio.f4] {
+                let xn = CGFloat(max(0, min(1, hz / 3800.0)))
+                if xn > 0.001 { peaks.append(xn) }
             }
-            let gain = CGFloat(min(1.0, 0.92 / peak))
-            let count = rxSamples.count - 1
-            let stepX = size.width / CGFloat(count)
-            var wave = Path()
-            for (i, sample) in rxSamples.enumerated() {
-                let x = CGFloat(i) * stepX
-                let scaled = max(-1.0, min(1.0, CGFloat(sample) * gain))
-                let y = midY - scaled * midY * 0.85
-                if i == 0 { wave.move(to: CGPoint(x: x, y: y)) }
-                else       { wave.addLine(to: CGPoint(x: x, y: y)) }
+        }
+
+        let n = 16
+        let gap = size.width * 0.28 / CGFloat(n)
+        let bw = (size.width - gap * CGFloat(n - 1)) / CGFloat(n)
+        let baseY = size.height
+        let activeGradient = GraphicsContext.Shading.linearGradient(
+            Gradient(colors: [extras.pqcAccent, extras.success]),
+            startPoint: CGPoint(x: 0, y: 0),
+            endPoint: CGPoint(x: 0, y: size.height)
+        )
+        let idleShading = GraphicsContext.Shading.color(scheme.onSurfaceVariant.opacity(0.30))
+
+        for i in 0..<n {
+            let x = CGFloat(i) * (bw + gap)
+            let xn: CGFloat = n <= 1 ? 0 : CGFloat(i) / CGFloat(n - 1)
+            // Formant-shaped envelope: a soft gaussian bump near each real peak.
+            var env: CGFloat = 0.10
+            for p in peaks {
+                let d = xn - p
+                env += 0.9 * CGFloat(exp(-(Double(d * d)) / 0.010))
             }
-            ctx.stroke(wave, with: .color(extras.success), lineWidth: 1.3)
+            // Spectral tilt (voice rolls off toward high freq).
+            env *= (1.0 - 0.35 * xn)
+            // Travelling shimmer keeps it alive between analysis updates.
+            let shimmer = 0.5 + 0.5 * sin(phase + Double(i) * 0.55)
+            var h = env * (0.55 + 0.45 * CGFloat(shimmer)) * energy
+            h = max(0.04, min(1.0, h))
+            let barH = h * size.height
+            let rect = CGRect(x: x, y: baseY - barH, width: bw, height: barH)
+            let barPath = Path(roundedRect: rect, cornerRadius: bw / 2.0)
+            ctx.fill(barPath, with: speaking ? activeGradient : idleShading)
         }
     }
 
@@ -943,6 +1058,92 @@ struct InCallScreen: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Crypto-engine meter (unified call UI)
+
+    /// Thin pulsing crypto-engine meter — parity with Android
+    /// `CryptoEngineMeterRow` (feature-call/ui/GuardianRibbon.kt). A bright
+    /// COMET sweeps across a dim track; its sweep PERIOD shortens as
+    /// `cryptoOpsPerSec` rises (~1700 ms idle → ~450 ms busy) and its
+    /// height/brightness rise with intensity (`opsPerSec / 200` clamped).
+    /// Real per-frame AES-256-GCM work — the rate is the live delta of the
+    /// `CallService` seal(TX)+open(RX) frame counters, never fabricated.
+    ///
+    /// Readout is "N/s" only. Android also prints "X kB/s", but iOS has no
+    /// byte counter (only frame counts), so — per the honest-data rule — no
+    /// byte rate is shown rather than fabricating one from an assumed frame
+    /// size. Under Reduce Motion the comet freezes to a representative frame.
+    private var cryptoEngineMeterRow: some View {
+        HStack(spacing: 8) {
+            Text("ENGINE")
+                .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                .foregroundStyle(scheme.onSurfaceVariant)
+            TimelineView(.animation(paused: reduceMotion)) { timeline in
+                Canvas { ctx, size in
+                    // Sweep period shortens as ops/s rises: mirrors Android's
+                    // (1_800_000 / (ops + 60)) clamped to [420, 1700] ms.
+                    let periodMs = min(1700.0, max(420.0, 1_800_000.0 / (Double(cryptoOpsPerSec) + 60.0)))
+                    let period = periodMs / 1000.0
+                    let sweep: Double
+                    if reduceMotion {
+                        sweep = 0.5   // representative mid-sweep frame
+                    } else {
+                        let t = timeline.date.timeIntervalSinceReferenceDate
+                        sweep = (t.truncatingRemainder(dividingBy: period)) / period
+                    }
+                    drawCryptoComet(ctx: &ctx, size: size, sweep: sweep)
+                }
+                .frame(height: 8)
+            }
+            Text(Self.cryptoReadout(cryptoOpsPerSec))
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(extras.pqcAccent)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+    }
+
+    /// Pure Canvas draw for the crypto comet — extracted so the TimelineView
+    /// body stays shallow (SWIFT6_PATTERNS §5/§6). Mirrors Android's comet
+    /// geometry: dim track + a travelling bright pulse whose height/alpha
+    /// scale with intensity (`opsPerSec / 200` clamped to [0.15, 1]).
+    private func drawCryptoComet(ctx: inout GraphicsContext, size: CGSize, sweep: Double) {
+        let intensity = CGFloat(min(1.0, max(0.15, Double(cryptoOpsPerSec) / 200.0)))
+        let trackH = size.height * 0.42
+        let ty = (size.height - trackH) / 2.0
+        // Dim track.
+        let trackRect = CGRect(x: 0, y: ty, width: size.width, height: trackH)
+        ctx.fill(
+            Path(roundedRect: trackRect, cornerRadius: trackH / 2.0),
+            with: .color(scheme.onSurfaceVariant.opacity(0.18))
+        )
+        // Travelling comet — position driven by `sweep`.
+        let cometW = size.width * 0.28
+        let cx = CGFloat(sweep) * (size.width + cometW) - cometW
+        let cometRect = CGRect(
+            x: cx,
+            y: ty - trackH * intensity * 0.6,
+            width: cometW,
+            height: trackH * (1.0 + intensity * 1.2)
+        )
+        let cometShading = GraphicsContext.Shading.linearGradient(
+            Gradient(stops: [
+                .init(color: extras.pqcAccent.opacity(0), location: 0),
+                .init(color: extras.pqcAccent.opacity(0.9 * Double(intensity)), location: 0.5),
+                .init(color: extras.success.opacity(0), location: 1),
+            ]),
+            startPoint: CGPoint(x: cx, y: 0),
+            endPoint: CGPoint(x: cx + cometW, y: 0)
+        )
+        ctx.fill(Path(roundedRect: cometRect, cornerRadius: trackH / 2.0), with: cometShading)
+    }
+
+    /// Static readout builder kept out of @ViewBuilder (SWIFT6_PATTERNS §1/§6
+    /// — avoids String(Int) overload-resolution in a view body). ops/s only;
+    /// no kB/s (no iOS byte counter — see `cryptoEngineMeterRow` doc comment).
+    private static func cryptoReadout(_ ops: Int) -> String {
+        return ops.description + "/s"
     }
 
     // MARK: - Guardian ribbon — interpreted display values (shared with
@@ -1456,9 +1657,11 @@ struct InCallScreen: View {
         voiceBiometrics: .init(
             stressScore: 0.18, jitter: 0.006, shimmer: 0.021,
             hnr: 21, breathiness: 0.12, pitchHz: 142,
-            syllablesPerSec: 4.1, confidence: 0.94
+            syllablesPerSec: 4.1, confidence: 0.94,
+            f1: 620, f2: 1200, f3: 2600, f4: 3400, speaking: true
         ),
         keyEpoch: nil,
+        cryptoOpsPerSec: 96,
         onHangup: {}
     )
     .qAudionTheme(dark: true)

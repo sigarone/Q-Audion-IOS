@@ -478,6 +478,28 @@ final class AppState: ObservableObject {
     /// same pre-existing asymmetry as onDeepfakeAlert). Reset in endCall().
     @Published var voiceAnalysis: VoiceAnalysisResult?
 
+    /// Unified call UI — crypto-engine meter. Live count of real AES-256-GCM
+    /// frame operations per second, sampled once/sec from the ground-truth
+    /// `CallService` frame counters (`framesEncryptedTx` = seal(TX),
+    /// `framesDecryptedRx` = open(RX)) — one op per sealed/opened frame each
+    /// direction, mirroring Android's `CryptoEngineMeter.recordOp` definition.
+    /// The Guardian ribbon renders a pulsing comet whose sweep period and
+    /// intensity track this rate. 0 between calls / before any frame flows,
+    /// which hides the meter. Reset in `endCall()`.
+    ///
+    /// No byte counter exists on iOS (`CallService` tracks frame counts only),
+    /// so — unlike Android — no kB/s is derived: fabricating a byte rate from
+    /// an assumed frame size would be dishonest, so the meter shows ops/s only.
+    @Published var cryptoOpsPerSec: Int = 0
+    /// 1 Hz sampler for `cryptoOpsPerSec`. Gated to the call lifecycle: armed
+    /// at each `isInCall = true` site, invalidated in `endCall()` so it never
+    /// ticks between calls. Reads the `CallService` counters only — never
+    /// touches the frame-counting hot path.
+    private var cryptoMeterTimer: Timer?
+    /// Last sampled `framesEncryptedTx + framesDecryptedRx` total, used to
+    /// derive the per-second delta.
+    private var cryptoMeterLastTotal: Int64 = 0
+
     // MARK: - Server connection state
     /// Pinned to `PinnedServerHost.url` (`https://voip.bcrypto.com`).
     /// We keep it as `@Published var` (not `let`) only because the
@@ -5677,6 +5699,8 @@ final class AppState: ObservableObject {
         callState = .connecting
         isInCall = true
         isVideoCall = video
+        // Unified call UI — arm the 1 Hz crypto-engine sampler for this call.
+        startCryptoMeter()
         // WIRE_SPEC §8.3 — we placed the call → impolite on any later glare.
         originalCallRole = .caller
         // PersistentCallRecord — register outgoing call. Use activeCallKitId if
@@ -6343,6 +6367,8 @@ final class AppState: ObservableObject {
         }
         self.answeredCallKitId = uuid
         self.isInCall = true
+        // Unified call UI — arm the 1 Hz crypto-engine sampler for this call.
+        self.startCryptoMeter()
         self.activeCallKitId = uuid
         if self.callState == .ringing {
             self.callState = .active
@@ -6387,6 +6413,44 @@ final class AppState: ObservableObject {
     /// reports the call ended to CallKit with `.declined` reason.
     func declineIncomingCall() {
         endCall()
+    }
+
+    // MARK: - Unified call UI — crypto-engine meter sampler
+
+    /// Arm the 1 Hz crypto-engine sampler for the current call. Idempotent:
+    /// invalidates any prior timer first, so calling it from both the outgoing
+    /// (`startCall`) and incoming (`performAcceptIncoming`) `isInCall = true`
+    /// sites is safe. The timer reads the ground-truth `CallService` frame
+    /// counters and publishes the per-second delta as `cryptoOpsPerSec` — a
+    /// pure READ, never touching the frame-counting hot path. AppState is
+    /// `@MainActor`; the timer's target closure hops back to MainActor so the
+    /// `@Published` write happens on the main actor.
+    private func startCryptoMeter() {
+        cryptoMeterTimer?.invalidate()
+        cryptoMeterLastTotal = callService.framesEncryptedTx &+ callService.framesDecryptedRx
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let total = self.callService.framesEncryptedTx &+ self.callService.framesDecryptedRx
+                let delta = total &- self.cryptoMeterLastTotal
+                self.cryptoMeterLastTotal = total
+                self.cryptoOpsPerSec = delta > 0 ? Int(delta) : 0
+            }
+        }
+        // .common so the meter keeps ticking while a UITrackingRunLoopMode
+        // interaction (e.g. a scroll on the call surface) is in progress.
+        RunLoop.main.add(timer, forMode: .common)
+        cryptoMeterTimer = timer
+    }
+
+    /// Stop the crypto-engine sampler and zero its readout. Called from
+    /// `endCall()` so the meter never ticks between calls and the next call
+    /// starts from a clean 0 (the ribbon hides the meter when ops == 0).
+    private func stopCryptoMeter() {
+        cryptoMeterTimer?.invalidate()
+        cryptoMeterTimer = nil
+        cryptoMeterLastTotal = 0
+        cryptoOpsPerSec = 0
     }
 
     func endCall() {
@@ -6479,6 +6543,10 @@ final class AppState: ObservableObject {
         // it doesn't leak into the next call's security sheet before the
         // first analysis result of that new call arrives.
         voiceAnalysis = nil
+        // Unified call UI — stop the 1 Hz crypto-engine sampler and zero its
+        // readout so the meter hides between calls and the next call starts
+        // from 0 (mirrors the voiceAnalysis reset directly above).
+        stopCryptoMeter()
         // W564 — proactively trigger X25519 key exchange with the peer right
         // before clearing callContactId. After a call both sides have done a
         // PQC ML-KEM handshake (strong auth) so this is the ideal moment to
