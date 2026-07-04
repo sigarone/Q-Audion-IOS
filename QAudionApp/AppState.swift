@@ -401,6 +401,28 @@ final class AppState: ObservableObject {
     /// upgrade paths). Cleared on call teardown in endCall().
     private var mediaReadySentKeys: Set<String> = []
 
+    // WIRE_SPEC §8.7 — receiver-side RENDER gate (Android parity: the
+    // inbound video track stays disabled until the receiver FrameCryptor
+    // is attached, PeerConnectionHolder's "PURPLE-FRAME-ON-TOGGLE" gate).
+    // iOS equivalent: hold the PUBLICATION of `remoteWebRtcVideoTrack`
+    // (the only thing VideoCallView renders from) until our receiver
+    // cryptor is attached+keyed (`onInboundVideoReady` → the same instant
+    // we ship `call_media_ready`). A 2s failsafe lifts the gate anyway —
+    // signal-not-kill, mirroring Android's watchdog FAILSAFE_LIFT: a
+    // brief garbage frame is strictly better than never rendering.
+
+    /// Remote WebRTC video track parked while the render gate is closed.
+    /// Published to `remoteWebRtcVideoTrack` on gate open. Typed Any? for
+    /// the same canImport(WebRTC) reason as `remoteWebRtcVideoTrack`.
+    private var pendingRemoteVideoTrack: Any?
+    /// True once the receiver cryptor readiness fired for this call —
+    /// remote tracks publish immediately from then on (the readiness is a
+    /// one-shot per call; a re-upgrade on the same call is still keyed).
+    private var inboundVideoReadyThisCall = false
+    /// 2s failsafe that lifts the render gate if readiness never fires
+    /// (e.g. peer without E2EE video caps → no cryptor to attach).
+    private var remoteVideoGateFailsafeTask: Task<Void, Never>?
+
     /// WIRE_SPEC §8.7 — honor-side rate limit: at most one forced local
     /// encoder IDR per second, however many call_media_ready /
     /// video_keyframe_request envelopes the peer ships.
@@ -454,6 +476,9 @@ final class AppState: ObservableObject {
     /// this is always RTCVideoTrack or nil. VideoCallView reads it to
     /// render the remote feed via WebRTCRemoteVideoView when no BCrypto
     /// WS video pipeline is active (i.e. iOS↔Android calls).
+    /// WIRE_SPEC §8.7 — do NOT write this directly from track callbacks:
+    /// publication goes through `publishRemoteVideoTrackGated` (RX render
+    /// gate — parked until the receiver cryptor is ready, 2s failsafe).
     @Published var remoteWebRtcVideoTrack: Any?
 
     /// Commit 540b79c0 parity — peer's advertised SFrame capability tags
@@ -2825,6 +2850,9 @@ final class AppState: ObservableObject {
         }
         self.webRtcController = nil
         self.remoteWebRtcVideoTrack = nil
+        // WIRE_SPEC §8.7 — the video leg is gone: drop any parked track +
+        // failsafe so a rebuilt upgrade PC starts with a fresh RX gate.
+        self.resetRemoteVideoRenderGate()
         self.videoPipeline?.stop()
         self.videoPipeline = nil
         self.setCamera(false)
@@ -2853,8 +2881,10 @@ final class AppState: ObservableObject {
             SFrameVideoSealer.forRotatingKey(keyProvider)
         }
         controller.useExternalVideoSource = true
+        // WIRE_SPEC §8.7 — publication rides the RX render gate (parked
+        // until the receiver cryptor is ready, 2s failsafe).
         controller.onRemoteVideoTrack = { [weak self] track in
-            Task { @MainActor [weak self] in self?.remoteWebRtcVideoTrack = track }
+            Task { @MainActor [weak self] in self?.publishRemoteVideoTrackGated(track) }
         }
         // WIRE_SPEC §8.7 — receiver readiness → call_media_ready (dedup
         // per call+mid inside sendCallMediaReadyOnce).
@@ -3106,14 +3136,73 @@ final class AppState: ObservableObject {
         #endif
     }
 
+    /// WIRE_SPEC §8.7 — receiver-side RENDER-gate publication. All three
+    /// `onRemoteVideoTrack` wiring sites funnel here instead of writing
+    /// `remoteWebRtcVideoTrack` directly: while our receiver cryptor is
+    /// not yet attached+keyed the track is PARKED (the native decoder
+    /// would only emit black/garbage — E2EE frames it cannot open), and a
+    /// 2s failsafe publishes anyway so an exotic peer (no video cryptor
+    /// negotiated → readiness never fires) still renders — signal-not-kill,
+    /// same timeout the §8.7 sender TX-hold uses. The failsafe also nudges
+    /// the sender for a keyframe (Android watchdog RETRY parity): if we
+    /// lifted blind, the decoder most likely joined mid-stream.
+    @MainActor
+    private func publishRemoteVideoTrackGated(_ track: Any?) {
+        if inboundVideoReadyThisCall {
+            remoteWebRtcVideoTrack = track
+            return
+        }
+        pendingRemoteVideoTrack = track
+        RTLog.info("call", "§8.7 RX render gate: remote video track parked until receiver cryptor is ready (max 2s)")
+        remoteVideoGateFailsafeTask?.cancel()
+        remoteVideoGateFailsafeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled, let self = self else { return }
+            RTLog.warn("call", "§8.7 RX render gate: 2s failsafe — publishing without readiness")
+            self.openRemoteVideoRenderGate(reason: "2s failsafe")
+            // Blind lift ⇒ the decoder needs a fresh IDR to sync; the
+            // sender rate-limits honors to 1/s so this is always safe.
+            self.requestKeyframeFromSender()
+        }
+    }
+
+    /// WIRE_SPEC §8.7 — open the receiver render gate (readiness fired or
+    /// failsafe elapsed): publish any parked remote track and let future
+    /// tracks through immediately. Idempotent.
+    @MainActor
+    private func openRemoteVideoRenderGate(reason: String) {
+        remoteVideoGateFailsafeTask?.cancel()
+        remoteVideoGateFailsafeTask = nil
+        inboundVideoReadyThisCall = true
+        if let parked = pendingRemoteVideoTrack {
+            pendingRemoteVideoTrack = nil
+            remoteWebRtcVideoTrack = parked
+            RTLog.info("call", "§8.7 RX render gate OPEN (\(reason)) — remote video track published")
+        }
+    }
+
+    /// WIRE_SPEC §8.7 — drop all render-gate state WITHOUT publishing
+    /// (call teardown / video-leg rollback).
+    @MainActor
+    private func resetRemoteVideoRenderGate() {
+        remoteVideoGateFailsafeTask?.cancel()
+        remoteVideoGateFailsafeTask = nil
+        pendingRemoteVideoTrack = nil
+        inboundVideoReadyThisCall = false
+    }
+
     /// WIRE_SPEC §8.7 — receiver-side readiness handoff. Fired (engine
     /// one-shot latch) by QAudionWebRtcCallController.onInboundVideoReady
     /// when the receiver video cryptor is BOTH attached and keyed. Ships
     /// `call_media_ready` (dir "recv", key_epoch 0) to the sender so it
     /// forces an IDR the moment we can actually decrypt — once per
     /// (call, mid) even across controller rebuilds (upgrade paths).
+    /// Also the readiness edge that opens the local RX render gate —
+    /// BEFORE the guards/dedup below, so gate opening never depends on
+    /// the WS API being resolvable or on the once-per-mid send dedup.
     @MainActor
     private func sendCallMediaReadyOnce(mid: String?) {
+        openRemoteVideoRenderGate(reason: "receiver cryptor ready")
         guard let peerId = callContactId,
               let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId() else { return }
@@ -3135,11 +3224,12 @@ final class AppState: ObservableObject {
 
     /// WIRE_SPEC §8.7 (INT-4a) — receiver-side keyframe nudge. Fired by the
     /// controller's `onVideoStallDetected` (inbound `framesDecoded` flat for
-    /// ~5s while bytes still arrive → decoder is missing its keyframe). Ships
-    /// `video_keyframe_request` to the in-call sender, which forces a local
-    /// encoder IDR (WS-HEVC rail) or is a harmless no-op (pure-WebRTC sender).
-    /// The API layer rate-limits to 1/s per §8.7, so the controller may fire
-    /// this freely on a persistent stall.
+    /// ~5s while bytes still arrive → decoder is missing its keyframe) and by
+    /// the RX render gate's 2s failsafe (blind lift ⇒ decoder joined
+    /// mid-stream). Ships `video_keyframe_request` to the in-call sender,
+    /// which forces a local encoder IDR (WS-HEVC rail) or is a harmless no-op
+    /// (pure-WebRTC sender). The API layer rate-limits to 1/s per §8.7, so
+    /// callers may fire this freely on a persistent stall.
     @MainActor
     private func requestKeyframeFromSender() {
         guard isInCall,
@@ -3186,9 +3276,14 @@ final class AppState: ObservableObject {
         }
         // §8.7 TX-hold release — idempotent one-shot, NOT subject to the
         // IDR rate limit below (the release forces its own keyframe).
+        // notePeerMediaReadySeen() additionally memoizes the readiness so a
+        // LATER re-upgrade this call skips arming a doomed 2s hold
+        // (media_ready is once per (callId, mid) — Android armVideoTxHold
+        // parity).
         #if canImport(WebRTC)
         if kind == "call_media_ready",
            let controller = webRtcController as? QAudionWebRtcCallController {
+            controller.notePeerMediaReadySeen()
             controller.releaseVideoTxHold(reason: "peer call_media_ready")
         }
         #endif
@@ -6187,9 +6282,11 @@ final class AppState: ObservableObject {
                 // Android↔iOS remote video: Android sends video via WebRTC
                 // RTP (not WS video_frame envelopes). Wire the track callback
                 // so VideoCallView can render it via WebRTCRemoteVideoView.
+                // WIRE_SPEC §8.7 — publication rides the RX render gate
+                // (parked until the receiver cryptor is ready, 2s failsafe).
                 controller.onRemoteVideoTrack = { [weak self] track in
                     Task { @MainActor [weak self] in
-                        self?.remoteWebRtcVideoTrack = track
+                        self?.publishRemoteVideoTrackGated(track)
                     }
                 }
                 // WIRE_SPEC §8.7 — receiver readiness → call_media_ready
@@ -6653,6 +6750,9 @@ final class AppState: ObservableObject {
         #endif
         webRtcController = nil
         remoteWebRtcVideoTrack = nil
+        // WIRE_SPEC §8.7 — reset the RX render gate (parked track,
+        // failsafe watchdog, readiness memo) for the next call.
+        resetRemoteVideoRenderGate()
         // M-32: free the ≈150 MB ONNX deepfake model if it was used on
         // this call so it isn't held resident between calls.
         if deepfakeClassifierUsed {
@@ -8210,9 +8310,11 @@ extension AppState {
         webRtcController = controller
         // Mirror of the caller-side wiring: Android sends remote video via
         // WebRTC RTP so the callee also needs this callback.
+        // WIRE_SPEC §8.7 — publication rides the RX render gate (parked
+        // until the receiver cryptor is ready, 2s failsafe).
         controller.onRemoteVideoTrack = { [weak self] track in
             Task { @MainActor [weak self] in
-                self?.remoteWebRtcVideoTrack = track
+                self?.publishRemoteVideoTrackGated(track)
             }
         }
         // WIRE_SPEC §8.7 — receiver readiness → call_media_ready (dedup

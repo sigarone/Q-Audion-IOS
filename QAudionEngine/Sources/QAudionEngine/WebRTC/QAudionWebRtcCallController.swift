@@ -759,6 +759,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private let txHoldLock = NSLock()
     private var _videoTxHoldArmed = false
     private var _videoTxHoldTimeoutTask: Task<Void, Never>?
+    /// §8.7 — true once the peer's `call_media_ready` has been seen this
+    /// call. `call_media_ready` is sent once per (callId, mid) and will
+    /// NOT be re-sent on a re-upgrade of the same mid, so arming a fresh
+    /// TX-hold after it arrived would ALWAYS run into the 2s timeout
+    /// (2s of pointless black on every camera off→on). Mirrors Android
+    /// CallController's `peerMediaReadySeen` skip in `armVideoTxHold`.
+    /// Reset in `closeSynchronously()` for the next call.
+    private var _peerMediaReadySeen = false
 
     /// WIRE_SPEC §8.7 (INT-4a) — force an IDR on the next WebRTC-rail
     /// `encode()`: sets the process-wide force-next flag consumed by the
@@ -779,6 +787,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     func beginVideoTxHold() {
         guard let pc = peerConnection, pc.hasLocalVideoTrack() else { return }
         txHoldLock.lock()
+        // §8.7 skip (Android armVideoTxHold parity): the peer's receiver
+        // was already proven ready this call — media_ready is once per
+        // (callId, mid), so a fresh hold could only end by timeout.
+        if _peerMediaReadySeen {
+            txHoldLock.unlock()
+            print("[WebRTC] §8.7 TX-hold skipped — peer call_media_ready already seen this call")
+            return
+        }
         _videoTxHoldArmed = true
         _videoTxHoldTimeoutTask?.cancel()
         // Mute INSIDE the lock — otherwise an early release (peer's
@@ -792,6 +808,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         txHoldLock.unlock()
         print("[WebRTC] §8.7 TX-hold armed — local video held until peer call_media_ready (max 2s)")
+    }
+
+    /// §8.7 — record that the peer's `call_media_ready` was seen this
+    /// call, so any LATER TX-hold arm (re-upgrade / camera off→on on the
+    /// same mid) is skipped instead of dying on the 2s timeout. Called by
+    /// AppState's `handleInboundKeyframeSignal` alongside
+    /// `releaseVideoTxHold` (kept separate: the timeout release must NOT
+    /// set this). Callable from any thread.
+    public func notePeerMediaReadySeen() {
+        txHoldLock.lock()
+        _peerMediaReadySeen = true
+        txHoldLock.unlock()
     }
 
     /// Release the §8.7 TX-hold: enable the local video track and force
@@ -920,6 +948,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // the one-shot latch so the next call/upgrade starts clean. The
         // track itself is gone with the closed PC — nothing to unmute.
         clearVideoTxHold()
+        // §8.7 — the peer-readiness memo is per call: the NEXT call's
+        // upgrades must arm a real TX-hold again.
+        txHoldLock.lock()
+        _peerMediaReadySeen = false
+        txHoldLock.unlock()
         state = .disconnected
     }
 
@@ -1042,6 +1075,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let mid = pc.establishedVideoReceiverMid
         let midDesc: String = mid ?? "nil"
         print("[WebRtcCallController] inbound video READY (receiver cryptor attached+keyed, mid=" + midDesc + ") — signalling call_media_ready")
+        // Android parity (PeerConnectionHolder.flushPendingCryptors): the
+        // moment OUR receiver cryptor is ready, force OUR encoder's next
+        // frame to be an IDR too — the peer's decoder gets a fresh
+        // reference in <1s instead of waiting for the next ~5s periodic
+        // one. Flag-queue only (consumed by KeyframeForcingVideoEncoder on
+        // the next encode); harmless no-op if we are not sending video.
+        VideoKeyframeController.shared.requestKeyFrame()
         onInboundVideoReady?(mid)
     }
 
