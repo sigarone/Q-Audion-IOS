@@ -332,9 +332,22 @@ public final class AudioCapture {
             // W574c — the output route was overridden: this is the in-call speaker
             // button (`overrideOutputAudioPort(.speaker)` / `.none`). VP-IO is
             // route-dependent and can only be (un)set BEFORE engine start, so restart
-            // to re-evaluate `enableVoiceProcessing`. User-initiated + one-shot → honor
-            // immediately (no throttle), but still arm the suppress window so the
-            // override's own route echo doesn't trigger a second restart.
+            // to re-evaluate `enableVoiceProcessing` on the new route.
+            //
+            // W574p — W574o/14a0c7f assumed this notification was "one-shot" per tap
+            // and left it unthrottled. Device telemetry (W556 session logs) shows
+            // vpio flapping true/false every ~1s with `out=Speaker` UNCHANGED across
+            // the flaps — i.e. `.override` itself re-fires (setCategory +
+            // overrideOutputAudioPort can each provoke a route-change post, and the
+            // restart's own configureForVoIP()→setActive is a further echo) faster
+            // than the single restart it triggers can settle. Because this case
+            // skipped shouldSkipRouteRestart(), every one of those echoes was
+            // honored with a FULL engine teardown/rebuild, thrashing VP-IO and
+            // producing the audible crackling — the exact BT-thrash failure mode
+            // W574o fixed for the other two cases, just not this one. Apply the same
+            // throttle/suppress guard: the first tap still restarts immediately
+            // (nothing to skip yet), only the self-provoked echoes are now dropped.
+            if shouldSkipRouteRestart() { return }
             print("[AudioCapture] route change: output override (speaker toggle) — restarting engine to re-evaluate VP-IO")
             restartEngineForRoute()
         default:
