@@ -704,6 +704,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
             videoUpgradeInProgress = false
+            // OFFERER-UPGRADE DECODE FIX (2026-07-05) — this is the ONLY
+            // flow where our video transceiver was created by a LOCAL
+            // addTrack on a second-round offer; the receiver cryptor
+            // attached at didAdd-time binds before the receiver's RTP
+            // channel is live and inbound video then reaches the decoder
+            // STILL ENCRYPTED (framesDecoded pinned at 0 forever — the
+            // black-screen bug). Re-create it now, against the receiver as
+            // it exists AFTER the answer associated the transceiver. See
+            // QAudionPeerConnection.rebindVideoReceiverCryptorPostNegotiation.
+            _ = pc.rebindVideoReceiverCryptorPostNegotiation()
             // WIRE_SPEC §8.7 (SHOULD) — upgrader path: we start sending
             // video now that the answer is applied. Hold TX until the
             // peer's call_media_ready (or 2s), then enable + force IDR.

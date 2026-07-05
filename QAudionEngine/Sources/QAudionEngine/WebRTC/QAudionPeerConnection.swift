@@ -370,6 +370,56 @@ public final class QAudionPeerConnection: NSObject {
         return c.attachReceiver(receiver)
     }
 
+    /// OFFERER-UPGRADE DECODE FIX (2026-07-05) — dispose + re-create the
+    /// receiver cryptor against the video transceiver's CURRENT receiver,
+    /// AFTER a renegotiation answer has been applied.
+    ///
+    /// Why: the iOS-caller + iOS-video-upgrade combo is the ONLY flow where
+    /// the video transceiver is created by a LOCAL `addTrack` on a
+    /// second-round offer (every other combo receives its video m-line from
+    /// a REMOTE offer — Android pre-creates its video transceiver at PC
+    /// construction so any Android-originated SDP already carries m=video).
+    /// In that flow `didAdd rtpReceiver` fires while the receiver is not yet
+    /// bound to its final RTP channel (device-confirmed: the transceiver
+    /// lookup in didAdd yields an EMPTY mid in exactly this combo, while the
+    /// same mid read later for call_media_ready resolves fine — a pure
+    /// attach-timing artifact). The RTCFrameCryptor created at that moment
+    /// initializes successfully but its native frame transformer stays bound
+    /// to the pre-negotiation state: encrypted inbound H265 then BYPASSES the
+    /// decryptor and hits the decoder as ciphertext — bytesReceived grows,
+    /// framesDecoded stays 0, permanently (the black-screen bug, repro'd ~10
+    /// times with matching key fingerprints and "successful" cryptor attach).
+    ///
+    /// Called from applyUpgradeAnswer after setRemoteAnswer succeeds — the
+    /// point where the transceiver is guaranteed associated (mid assigned,
+    /// channel live). On flows that already work (e.g. iOS-callee + iOS
+    /// upgrade takes this same code path) the dispose+recreate costs one
+    /// keyframe round-trip (<1s, the §8.7 kfreq machinery covers it) and
+    /// re-attaches to the same, already-correct receiver — harmless.
+    @discardableResult
+    public func rebindVideoReceiverCryptorPostNegotiation() -> Bool {
+        guard let pc = peerConnection, let cryptor = nativeVideoCryptor else {
+            print("ev=vpostneg skip=1")
+            return false
+        }
+        let vids = pc.transceivers.filter { $0.mediaType == .video }
+        // Prefer the associated (mid-assigned) transceiver; a phantom/orphan
+        // has no mid post-negotiation.
+        guard let tx = vids.first(where: { !$0.mid.isEmpty }) ?? vids.first else {
+            print("ev=vpostneg tx=0")
+            return false
+        }
+        let receiver = tx.receiver
+        let ok = cryptor.rebindReceiver(receiver)
+        establishedVideoReceiverKey = receiver.receiverId
+        let rawMid = tx.mid
+        if !rawMid.isEmpty { establishedVideoReceiverMid = rawMid }
+        establishedVideoReceiverTransceiver = tx
+        print("[WebRTC] post-negotiation video receiver cryptor rebound mid=\(rawMid) ok=\(ok)")
+        print("ev=vpostneg ok=\(ok ? 1 : 0) mid=\(rawMid)")
+        return ok
+    }
+
     public func setVideoMuted(_ muted: Bool) {
         localVideoTrack?.isEnabled = !muted
     }
