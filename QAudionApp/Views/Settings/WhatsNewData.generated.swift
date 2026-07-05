@@ -9,6 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.733",
+              date: "2026-07-05",
+              title: "v1.0.733",
+              bullets: [
+                "fix(telemetry): make iOS call/video diagnostic logs structured so they actually ship to Loki",
+                "feat(settings): auto-generated version-history changelog on the About/Settings screen",
+                "docs: save approved TrustChainCard mockup as permanent reference (was scratchpad-only)",
+                "feat(call): rich animated TrustChainCard — replace plain 3-label chain with approved mockup port",
+                "fix(chat): capture the real server message id via msg_receive self-echo — fixes stuck red send-failed status",
+                "feat(call): call_video_state wire signal — real camera-off notice + auto-return to audio screen",
+                "fix(audio): throttle speaker-override engine restart — stop vpio flap/crackling",
+              ]),
         .init(id: "v1.0.732",
               date: "2026-07-04",
               title: "v1.0.732",
@@ -138,12 +150,6 @@ extension ReleaseNote {
               title: "v1.0.714",
               bullets: [
                 "fix(video): call_id check on inbound relay frames + single-frame-in-flight reassembly",
-              ]),
-        .init(id: "v1.0.713",
-              date: "2026-07-01",
-              title: "v1.0.713",
-              bullets: [
-                "fix(video): close HevcEncoder data race causing crash on video re-enable",
               ]),
     ]
 }
