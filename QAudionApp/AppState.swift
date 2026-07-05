@@ -2927,7 +2927,7 @@ final class AppState: ObservableObject {
         self.videoPipeline = nil
         self.setCamera(false)
         self.isVideoCall = self.peerScreenShareActive
-        RTLog.warn("call", "video upgrade WebRTC failed — rolled back video only, WS-relay audio preserved")
+        RTLog.warn("call", "video rollback ev=rb media_mode=ws-relay state=active")
     }
 
     /// W-VIDUP — build + wire a responder WebRTC controller on-demand when a
@@ -3085,10 +3085,10 @@ final class AppState: ObservableObject {
                     self.isVideoCall = self.peerScreenShareActive
                     self.setCamera(false)
                 }
-                RTLog.info("call", "incoming upgrade accepted — local video pipeline up")
+                RTLog.info("call", "upgrade accepted ev=upok media_mode=p2p state=active")
             } catch {
                 let desc: String = error.localizedDescription
-                RTLog.warn("call", "incoming upgrade accept failed: " + desc)
+                RTLog.warn("call", "upgrade failed ev=upfail state=active detail=" + desc)
                 #if canImport(WebRTC)
                 if builtOnDemand {
                     // The on-demand upgrade controller was published to
@@ -3150,9 +3150,9 @@ final class AppState: ObservableObject {
                 try await impl.sendCallUpgradeResponse(
                     callId: callId, recipientId: senderId,
                     sdp: answerSdp, accepted: true)
-                RTLog.info("call", "screen-share renegotiation auto-accepted (no camera)")
+                RTLog.info("call", "screenshare accepted ev=ssok media_mode=p2p state=active")
             } catch {
-                RTLog.warn("call", "screen-share renegotiation accept failed: " + error.localizedDescription)
+                RTLog.warn("call", "screenshare failed ev=ssfail detail=" + error.localizedDescription)
                 try? await impl.sendCallUpgradeResponse(
                     callId: callId, recipientId: senderId, sdp: "", accepted: false)
             }
@@ -3173,7 +3173,7 @@ final class AppState: ObservableObject {
         let isCameraUpgrade = pendingOutgoingUpgradeMedia == "camera"
         pendingOutgoingUpgradeMedia = nil
         if !accepted {
-            RTLog.info("call", "onCallUpgradeResponse: peer declined — reverting to audio-only UI")
+            RTLog.info("call", "upgrade declined ev=updecl state=active")
             if isCameraUpgrade {
                 self.isVideoCall = false
                 self.setCamera(false)
@@ -3207,14 +3207,14 @@ final class AppState: ObservableObject {
         #if canImport(WebRTC)
         guard let controller = webRtcController as? QAudionWebRtcCallController,
               !sdp.isEmpty else {
-            RTLog.info("call", "onCallUpgradeResponse: accepted (WS-relay path, no SDP) — video flowing")
+            RTLog.info("call", "upgrade accepted ev=upok media_mode=ws-relay state=active")
             return
         }
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             do {
                 try await controller.applyUpgradeAnswer(sdp: sdp)
-                RTLog.info("call", "onCallUpgradeResponse: WebRTC renegotiation complete — video flowing")
+                RTLog.info("call", "upgrade accepted ev=upok media_mode=p2p state=active")
                 // W402: forward the (possibly newly-derived) PQC key
                 // to the WebRTC controller in case the upgrade
                 // crossed a rekey boundary. Idempotent.
@@ -3224,7 +3224,7 @@ final class AppState: ObservableObject {
                 }
             } catch {
                 let desc: String = error.localizedDescription
-                RTLog.warn("call", "applyUpgradeAnswer failed: " + desc)
+                RTLog.warn("call", "upgrade answer failed ev=ansfail state=active detail=" + desc)
                 self.errorMessage = "Upgrade a video fallito: " + desc
             }
         }
@@ -3340,7 +3340,7 @@ final class AppState: ObservableObject {
               let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId() else { return }
         videoDiag.noteKeyframeRequested()   // VIDEODIAG — lastKeyframeRequestAtMs
-        RTLog.info("call", "INT-4a — inbound video stalled, requesting keyframe from sender")
+        RTLog.info("call", "keyframe request ev=kfreq reason=stall")
         Task {
             try? await impl.sendVideoKeyframeRequest(
                 callId: callId, recipientId: peerId)
@@ -3412,7 +3412,7 @@ final class AppState: ObservableObject {
                 requestTimesMs: peerKeyframeRequestTimesMs, nowMs: nowMs) {
                 bypassRateLimit = true
                 peerKeyframeRequestTimesMs.removeAll()
-                RTLog.warn("VIDEODIAG", "peer keyframe-request storm (>=3 in 5s) — forcing IDR immediately (rate-limit bypass)")
+                RTLog.warn("VIDEODIAG", "keyframe storm ev=kfstorm retry_count=" + String(describing: peerKeyframeRequestTimesMs.count))
             }
         } else {
             videoDiag.notePeerMediaReady()   // lastPeerMediaReadyAtMs
@@ -3425,19 +3425,19 @@ final class AppState: ObservableObject {
         if let pipeline = videoPipeline {
             pipeline.forceKeyFrame()
             forced = true
-            RTLog.info("call", "\(kind): forced local HEVC encoder IDR (relay rail)")
+            RTLog.info("call", "idr forced ev=idrfrc rail=relay")
         }
         #if canImport(WebRTC)
         if let controller = webRtcController as? QAudionWebRtcCallController {
             controller.forceWebRtcKeyframe()
             forced = true
-            RTLog.info("call", "\(kind): forced WebRTC encoder IDR (KeyframeForcingVideoEncoder)")
+            RTLog.info("call", "idr forced ev=idrfrc rail=webrtc")
         }
         #endif
         if forced {
             videoDiag.noteTxKeyframeForced()   // VIDEODIAG — txKeyframesForced
         } else {
-            RTLog.warn("call", "\(kind): no live video encoder rail — ignored")
+            RTLog.warn("call", "idr skipped ev=idrskip reason=no_rail")
         }
     }
 
@@ -3459,7 +3459,7 @@ final class AppState: ObservableObject {
         videoDiagLastArrivedIncreaseMs = 0    // 0 = no arrival observed yet
         videoDiagLastRenderedIncreaseMs = now // grace: no stall before start+3s
         videoStallLadder.reset()
-        RTLog.info("VIDEODIAG", "watchdog started (1s tick) — video expected on this call")
+        RTLog.info("VIDEODIAG", "watchdog ev=wdstart state=active")
         videoDiagWatchdogTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -3477,7 +3477,7 @@ final class AppState: ObservableObject {
         if videoDiagWatchdogTask != nil {
             videoDiagWatchdogTask?.cancel()
             videoDiagWatchdogTask = nil
-            RTLog.info("VIDEODIAG", "watchdog stopped (" + reason + ")")
+            RTLog.info("VIDEODIAG", "watchdog ev=wdstop reason=" + reason.replacingOccurrences(of: " ", with: "_"))
         }
         videoStallLadder.reset()
         videoDiag.reset()
@@ -3536,7 +3536,7 @@ final class AppState: ObservableObject {
             msSinceLastArrivedIncrease: now - videoDiagLastArrivedIncreaseMs,
             msSinceLastRenderedIncrease: now - videoDiagLastRenderedIncreaseMs) {
             videoStallLadder.noteStalled(nowMs: now)
-            RTLog.warn("VIDEODIAG", "BLACK-VIDEO STALL detected — frames arriving but none rendered for >=3s; escalation ladder armed (3s/6s/12s)")
+            RTLog.warn("VIDEODIAG", "stall ev=stall state=active")
         }
         guard videoStallLadder.isStalled else { return }
         // Fire every due rung IN ORDER (pure engine decides; SIGNAL-NOT-
@@ -3553,13 +3553,13 @@ final class AppState: ObservableObject {
     private func performVideoStallAction(_ action: VideoStallSelfHeal.EscalationAction) {
         switch action {
         case .keyframeRequest:
-            RTLog.warn("VIDEODIAG", "self-heal rung 1 — sending video_keyframe_request (existing wire msg, 1/s limiter)")
+            RTLog.warn("VIDEODIAG", "selfheal ev=heal1")
             requestKeyframeFromSender()
         case .sinkReattach:
-            RTLog.warn("VIDEODIAG", "self-heal rung 2 — re-attaching remote render sink (zero wire traffic)")
+            RTLog.warn("VIDEODIAG", "selfheal ev=heal2")
             reattachRemoteVideoSinkForSelfHeal()
         case .mediaReadyReannounce:
-            RTLog.warn("VIDEODIAG", "self-heal rung 3 — re-announcing call_media_ready (dedup bypass) + forcing local IDR")
+            RTLog.warn("VIDEODIAG", "selfheal ev=heal3")
             reannounceCallMediaReadyForSelfHeal()
         }
     }
