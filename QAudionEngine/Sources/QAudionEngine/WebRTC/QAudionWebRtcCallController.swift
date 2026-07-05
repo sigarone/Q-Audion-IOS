@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(WebRTC)
 import WebRTC
 #if os(iOS)
@@ -1222,6 +1223,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// - Returns: the resolved sealer, or `nil` if the peer hasn't
     ///   been heard from yet.
     @discardableResult
+    /// Non-reversible 3-byte (6 hex char) fingerprint of a key, for cross-
+    /// platform key-match diagnostics only — never logs the key itself.
+    /// Mirrors Android's matching helper in PeerConnectionHolder.kt so the
+    /// two hex strings are directly comparable from one test call's logs.
+    static func shortFingerprint(_ key: Data) -> String {
+        SHA256.hash(data: key).prefix(3).map { String(format: "%02x", $0) }.joined()
+    }
+
     public func ensureVideoSealer(
         pqcSessionKeyProvider: @escaping () -> Data
     ) -> VideoCallSealer? {
@@ -1234,6 +1243,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             if k.count == 32, let c = peerConnection?.nativeVideoCryptor {
                 c.setKey(k)
                 peerConnection?.attachVideoSenderCryptor()  // idempotent
+                print("video key fp=\(Self.shortFingerprint(k)) rekey=1")
             }
             return videoSealer
         }
@@ -1276,6 +1286,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             let aes256Active = CallCapabilities.v4SFrameAes256Enabled && negotiated.useSFrameAes256
             let keyKind = negotiated.useVideoKey ? "K_video (phone-level)" : "session-key (legacy)"
             print("[WebRtcCallController] video pipeline → NATIVE RTCFrameCryptor key=\(keyKind) aes256=\(aes256Active) (peerCaps=\(negotiated.agreedTags))")
+            print("video key fp=\(Self.shortFingerprint(kVideo)) uvk=\(negotiated.useVideoKey ? 1 : 0) rekey=0")
             return videoSealer
         }
 
@@ -1744,6 +1755,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         _ = ensureVideoSealerInternal()
         let attached = pc.attachVideoReceiverCryptor(receiver)
         print("[WebRtcCallController] native video receiver cryptor attached=\(attached)")
+        print("video rx att=\(attached ? 1 : 0) uvk=\((peerNegotiated()?.useVideoKey ?? false) ? 1 : 0)")
         // WIRE_SPEC §8.7 — the attach may have just completed the
         // "receiver cryptor attached AND keyed" pair (receiver arriving
         // AFTER key+caps). One-shot inside.

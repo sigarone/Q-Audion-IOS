@@ -591,6 +591,7 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
             ) {
                 let est = establishedVideoReceiverMid ?? "nil"
                 print("[WebRTC] PHANTOM video transceiver IGNORED mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack) (established mid=\(est) still live) — keeping renderer on established track")
+                print("video phantom ign=1")
                 return
             }
             // First real inbound video establishes the mid. Fail-open: if the
@@ -599,6 +600,7 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
             if establishedVideoReceiverMid == nil, let mid = liveMid {
                 establishedVideoReceiverMid = mid
                 print("[WebRTC] inbound VIDEO mid established mid=\(mid)")
+                print("video mid est=1")
             }
             delegate?.peerConnection(self, didReceiveRemoteVideoTrack: video)
             // Attach point for the native FrameCryptor (decrypts inbound video).
