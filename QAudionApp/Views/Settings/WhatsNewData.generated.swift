@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.735",
+              date: "2026-07-05",
+              title: "v1.0.735",
+              bullets: [
+                "fix(call): re-attach video sender cryptor on callee-accepted upgrade",
+              ]),
         .init(id: "v1.0.734",
               date: "2026-07-05",
               title: "v1.0.734",
               bullets: [
+                "chore: regenerate changelog for v1.0.734",
                 "fix(video): serialize ALL AVCaptureSession mutation on one queue — fixes SIGABRT crash mid-video-call",
               ]),
         .init(id: "v1.0.733",
@@ -145,12 +152,6 @@ extension ReleaseNote {
                 "fix(security): XC-4 — bind ratchetV4 + srtpDirKeyV1 into the signed handshake transcript (iOS)",
                 "perf(video): capture Date() once per frame in defragment hot path",
                 "security(pinning): delete deprecated CertificatePinning (M-3 landmine)",
-              ]),
-        .init(id: "v1.0.715",
-              date: "2026-07-01",
-              title: "v1.0.715",
-              bullets: [
-                "fix(video): ignore phantom recv-only video transceiver on callee-side upgrade (iOS mirror of Android 39ea0e5f)",
               ]),
     ]
 }
