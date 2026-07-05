@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.739",
+              date: "2026-07-05",
+              title: "v1.0.739",
+              bullets: [
+                "fix(diag): make video relatch diagnostic lines survive the redaction gate",
+              ]),
         .init(id: "v1.0.738",
               date: "2026-07-05",
               title: "v1.0.738",
               bullets: [
+                "chore: regenerate changelog for v1.0.738",
                 "fix(call): key the video relatch decision on receiverId, not mid",
               ]),
         .init(id: "v1.0.737",
@@ -138,15 +145,6 @@ extension ReleaseNote {
               title: "v1.0.720",
               bullets: [
                 "feat(ios): W-TUSRESUME cross-launch resume for interrupted attachment uploads",
-              ]),
-        .init(id: "v1.0.719",
-              date: "2026-07-02",
-              title: "v1.0.719",
-              bullets: [
-                "fix(ios): W447 pre-send timer dialog — delete orphaned voice-note temp file on cancel",
-                "feat(ios): per-attachment ephemeral-timer override (pre-send picker + ex wire field)",
-                "fix(ios): W-BGUP review fixes — genuine weak reference + honest test claim",
-                "fix(ios): background-task protection for attachment uploads",
               ]),
     ]
 }
