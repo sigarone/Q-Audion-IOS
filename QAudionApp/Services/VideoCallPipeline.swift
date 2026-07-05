@@ -229,7 +229,15 @@ public final class VideoCallPipeline: NSObject {
         // Drop the WebRTC bridge callback before stopping the session so
         // no frames are pushed to a deallocated RTCVideoSource after teardown.
         onCapturedPixelBuffer = nil
-        captureSession.stopRunning()
+        // W-CRASH-AVF: stopRunning() must run on captureQueue, same as
+        // startRunning()/setupSession() — see the note on setupSession().
+        // This used to call stopRunning() directly on whatever thread
+        // called stop() (MainActor), racing any in-flight captureQueue
+        // work on the same session.
+        let session = captureSession
+        captureQueue.sync {
+            session.stopRunning()
+        }
         encoder.invalidate()
         decoder.invalidate()
         outboundFragmenter.reset()
@@ -550,79 +558,98 @@ public final class VideoCallPipeline: NSObject {
         }
     }
 
+    /// W-CRASH-AVF: ALL AVCaptureSession touches — configuration (this
+    /// function) AND start/stop (`start()`/`stop()`/`setCameraEnabled()`)
+    /// — must be serialized on `captureQueue`. Apple's AVCaptureSession is
+    /// not safe to reconfigure (beginConfiguration/addInput/removeInput/
+    /// commitConfiguration) from one thread while startRunning/stopRunning
+    /// is in flight on another: doing so corrupts the session's internal
+    /// FigCaptureSession state and the framework hard-aborts with
+    /// `Assertion failed: (figCaptureSession == _internal->figCaptureSession)`
+    /// (SIGABRT) — observed in production during a video upgrade
+    /// (v1.0.732, iOS 26.5). Before this fix, `setupSession()` ran
+    /// synchronously on the MainActor caller's thread while
+    /// `startRunning()`/`stopRunning()` ran on `captureQueue` — two
+    /// different threads touching the same session with zero
+    /// synchronization between them. Wrapping the whole body in
+    /// `captureQueue.sync` puts every AVCaptureSession mutation on the one
+    /// queue Apple requires, without changing this function's throwing/
+    /// synchronous signature or any caller.
     private func setupSession() throws {
-        // CRITICAL — do NOT let AVCaptureSession touch the shared AVAudioSession.
-        // It defaults to `true`, which means startRunning() reconfigures and
-        // re-activates the app's audio session. During a voice call that session
-        // is owned by CallKit (CXProvider, .playAndRecord/.voiceChat) and driven
-        // by our AVAudioEngine. Letting the camera reconfigure it clobbers the
-        // voice route → the call audio corrupts / goes silent the instant video
-        // starts (user-reported: "la voce si è corrotta/ammutolita appena video").
-        // We add NO audio input to this session (video-only), so we never need
-        // it to manage audio. Must be set BEFORE beginConfiguration/startRunning.
-        captureSession.automaticallyConfiguresApplicationAudioSession = false
+        try captureQueue.sync {
+            // CRITICAL — do NOT let AVCaptureSession touch the shared AVAudioSession.
+            // It defaults to `true`, which means startRunning() reconfigures and
+            // re-activates the app's audio session. During a voice call that session
+            // is owned by CallKit (CXProvider, .playAndRecord/.voiceChat) and driven
+            // by our AVAudioEngine. Letting the camera reconfigure it clobbers the
+            // voice route → the call audio corrupts / goes silent the instant video
+            // starts (user-reported: "la voce si è corrotta/ammutolita appena video").
+            // We add NO audio input to this session (video-only), so we never need
+            // it to manage audio. Must be set BEFORE beginConfiguration/startRunning.
+            captureSession.automaticallyConfiguresApplicationAudioSession = false
 
-        captureSession.beginConfiguration()
-        captureSession.sessionPreset = .hd1280x720
+            captureSession.beginConfiguration()
+            captureSession.sessionPreset = .hd1280x720
 
-        // Drop any existing inputs/outputs (idempotent).
-        captureSession.inputs.forEach { captureSession.removeInput($0) }
-        captureSession.outputs.forEach { captureSession.removeOutput($0) }
+            // Drop any existing inputs/outputs (idempotent).
+            captureSession.inputs.forEach { captureSession.removeInput($0) }
+            captureSession.outputs.forEach { captureSession.removeOutput($0) }
 
-        guard let device = AVCaptureDevice.default(
-            .builtInWideAngleCamera, for: .video, position: cameraPosition)
-        else {
-            captureSession.commitConfiguration()
-            throw PipelineError.cameraUnavailable
-        }
-        let input = try AVCaptureDeviceInput(device: device)
-        guard captureSession.canAddInput(input) else {
-            captureSession.commitConfiguration()
-            throw PipelineError.cameraUnavailable
-        }
-        captureSession.addInput(input)
-        captureInput = input
+            guard let device = AVCaptureDevice.default(
+                .builtInWideAngleCamera, for: .video, position: cameraPosition)
+            else {
+                captureSession.commitConfiguration()
+                throw PipelineError.cameraUnavailable
+            }
+            let input = try AVCaptureDeviceInput(device: device)
+            guard captureSession.canAddInput(input) else {
+                captureSession.commitConfiguration()
+                throw PipelineError.cameraUnavailable
+            }
+            captureSession.addInput(input)
+            captureInput = input
 
-        videoOutput.alwaysDiscardsLateVideoFrames = true
-        videoOutput.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-        ]
-        videoOutput.setSampleBufferDelegate(self, queue: captureQueue)
-        guard captureSession.canAddOutput(videoOutput) else {
-            captureSession.commitConfiguration()
-            throw PipelineError.outputAttachFailed
-        }
-        captureSession.addOutput(videoOutput)
+            videoOutput.alwaysDiscardsLateVideoFrames = true
+            videoOutput.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ]
+            videoOutput.setSampleBufferDelegate(self, queue: captureQueue)
+            guard captureSession.canAddOutput(videoOutput) else {
+                captureSession.commitConfiguration()
+                throw PipelineError.outputAttachFailed
+            }
+            captureSession.addOutput(videoOutput)
 
-        // W523: rotate captured frames to portrait BEFORE handing them to
-        // the encoder. Without this the videoOutput connection delivers
-        // pixel buffers in the sensor's native landscape orientation —
-        // local preview can correct it for display but the encoded
-        // HEVC stream goes out landscape, so the remote peer sees a
-        // 90° counter-clockwise rotated video (confirmed user-report
-        // v1.0.522 iPad↔iPhone). For the front camera we ALSO need to
-        // mirror so the encoded stream matches what the user sees in
-        // their local self-view (otherwise the peer sees a mirrored
-        // image too, which Android does NOT do).
-        if let conn = videoOutput.connection(with: .video) {
-            if #available(iOS 17.0, *) {
-                // 90° = portrait (home button down equivalent on legacy hw).
-                if conn.isVideoRotationAngleSupported(90) {
-                    conn.videoRotationAngle = 90
+            // W523: rotate captured frames to portrait BEFORE handing them to
+            // the encoder. Without this the videoOutput connection delivers
+            // pixel buffers in the sensor's native landscape orientation —
+            // local preview can correct it for display but the encoded
+            // HEVC stream goes out landscape, so the remote peer sees a
+            // 90° counter-clockwise rotated video (confirmed user-report
+            // v1.0.522 iPad↔iPhone). For the front camera we ALSO need to
+            // mirror so the encoded stream matches what the user sees in
+            // their local self-view (otherwise the peer sees a mirrored
+            // image too, which Android does NOT do).
+            if let conn = videoOutput.connection(with: .video) {
+                if #available(iOS 17.0, *) {
+                    // 90° = portrait (home button down equivalent on legacy hw).
+                    if conn.isVideoRotationAngleSupported(90) {
+                        conn.videoRotationAngle = 90
+                    }
+                } else {
+                    if conn.isVideoOrientationSupported {
+                        conn.videoOrientation = .portrait
+                    }
                 }
-            } else {
-                if conn.isVideoOrientationSupported {
-                    conn.videoOrientation = .portrait
+                // Front camera: undo the sensor mirror so the peer sees the
+                // un-mirrored image (faces correct, text readable).
+                if cameraPosition == .front, conn.isVideoMirroringSupported {
+                    conn.automaticallyAdjustsVideoMirroring = false
+                    conn.isVideoMirrored = false
                 }
             }
-            // Front camera: undo the sensor mirror so the peer sees the
-            // un-mirrored image (faces correct, text readable).
-            if cameraPosition == .front, conn.isVideoMirroringSupported {
-                conn.automaticallyAdjustsVideoMirroring = false
-                conn.isVideoMirrored = false
-            }
+            captureSession.commitConfiguration()
         }
-        captureSession.commitConfiguration()
     }
 
     private func wireEngineCallbacks() {

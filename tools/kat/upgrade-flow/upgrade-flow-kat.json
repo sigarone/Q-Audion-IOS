@@ -1,7 +1,7 @@
 {
   "version": 1,
   "spec": "WIRE_SPEC §8 — mid-call media upgrade state machine",
-  "notes": "Behavioral conformance vectors, not byte-KATs. Each scenario is a sequence of protocol events fed to the platform's upgrade state machine driver; 'expect' entries are asserted after the step in which they appear. Roles: callRole = caller|callee (original call), upDir = local|remote (who initiates the upgrade step).",
+  "notes": "Behavioral conformance vectors, not byte-KATs. Each scenario is a sequence of protocol events fed to the platform's upgrade state machine driver; 'expect' entries are asserted after the step in which they appear. Roles: callRole = caller|callee (original call), upDir = local|remote (who initiates the upgrade step). Scenarios tagged group='readiness-8.7' pin WIRE_SPEC 8.7 media-readiness handoff + the self-heal watchdog: advance_time_ms advances a virtual monotonic clock, then fires every DUE timer in this order — sender TX-hold 2000 ms timeout, receiver render-gate 2000 ms failsafe, stall-escalation rungs at 3000/6000/12000 ms since stall detection (video_keyframe_request -> sink re-attach -> call_media_ready re-announce, in that order even after a large jump). SIGNAL-NOT-KILL: no vector may ever expect a teardown; callDropped is pinned false at every self-heal step — the watchdog only heals (keyframe request, sink re-attach, media_ready re-announce) and logs. The self-heal reuses the EXISTING call_media_ready / video_keyframe_request wire messages byte-identically (zero new wire message types; the stage-3 re-announce deliberately bypasses the once-per-(callId,mid) dedup of the NORMAL readiness path). NEVER-BLOCK: implementations run ONE lightweight 1 s-tick watchdog task per call, cancelled on hangup; stall/frame counters are lock-free atomics on existing hot paths, no per-frame task spawning, nothing on shared default-style pools.",
   "scenarios": [
     {
       "id": "accept-local-upgrade",
@@ -163,6 +163,181 @@
         { "do": "transport_upgrade_p2p", "expect": { "relayArmed": false } },
         { "do": "transport_downgrade_ws_relay",
           "expect": { "relayArmed": true, "relaySealed": true, "note": "sealers not disposed by previous leg close()" } }
+      ]
+    },
+    {
+      "id": "readiness-media-ready-once-per-mid",
+      "group": "readiness-8.7",
+      "callRole": "callee",
+      "steps": [
+        { "do": "receiver_cryptor_keyed_and_bound", "mid": "2",
+          "expect": { "sent": ["call_media_ready:mid=2"], "sentCount": { "call_media_ready": 1 } } },
+        { "do": "receiver_cryptor_keyed_and_bound", "mid": "2",
+          "expect": { "sentCount": { "call_media_ready": 1 }, "note": "duplicate (callId, mid) suppressed" } },
+        { "do": "receiver_cryptor_keyed_and_bound", "mid": "5",
+          "expect": { "sentCount": { "call_media_ready": 2 }, "note": "NEW mid = new (callId, mid) key -> announced" } }
+      ]
+    },
+    {
+      "id": "readiness-tx-hold-released-by-peer-ready",
+      "group": "readiness-8.7",
+      "callRole": "caller",
+      "steps": [
+        { "do": "arm_video_tx_hold", "midCallUpgrade": true, "alreadySendingVideo": false,
+          "expect": { "txHoldArmed": true, "txHolding": true, "localVideoTxEnabled": false } },
+        { "do": "advance_time_ms", "ms": 500,
+          "expect": { "txHolding": true } },
+        { "do": "recv_call_media_ready", "mid": "2",
+          "expect": { "txHolding": false, "txHoldReleasedBy": "media_ready", "localVideoTxEnabled": true,
+                      "forcedIdrCount": 1, "peerMediaReadySeen": true,
+                      "note": "peer ready before the 2 s timeout -> no black window; release enables track + one IDR" } },
+        { "do": "advance_time_ms", "ms": 1500,
+          "expect": { "txHolding": false, "forcedIdrCount": 1, "localVideoTxEnabled": true,
+                      "note": "the 2000 ms timeout loser is a one-shot no-op" } }
+      ]
+    },
+    {
+      "id": "readiness-tx-hold-timeout-failsafe",
+      "group": "readiness-8.7",
+      "callRole": "caller",
+      "steps": [
+        { "do": "arm_video_tx_hold", "midCallUpgrade": true, "alreadySendingVideo": false,
+          "expect": { "txHolding": true, "localVideoTxEnabled": false } },
+        { "do": "advance_time_ms", "ms": 1999,
+          "expect": { "txHolding": true, "localVideoTxEnabled": false } },
+        { "do": "advance_time_ms", "ms": 1,
+          "expect": { "txHolding": false, "txHoldReleasedBy": "timeout", "localVideoTxEnabled": true,
+                      "forcedIdrCount": 1, "callDropped": false,
+                      "note": "media_ready never arrived: at exactly 2000 ms the hold releases anyway (optimization, never a hard gate) + one IDR" } },
+        { "do": "recv_call_media_ready", "mid": "2",
+          "expect": { "txHolding": false, "forcedIdrCount": 1,
+                      "note": "late ready: one-shot already spent, IDR inside the 1 s window suppressed" } }
+      ]
+    },
+    {
+      "id": "readiness-tx-hold-skip-on-reupgrade-peer-ready-seen",
+      "group": "readiness-8.7",
+      "callRole": "caller",
+      "steps": [
+        { "do": "recv_call_media_ready", "mid": "2",
+          "expect": { "peerMediaReadySeen": true, "forcedIdrCount": 1,
+                      "note": "no hold armed -> nothing to release; ready still forces one IDR" } },
+        { "do": "advance_time_ms", "ms": 5000 },
+        { "do": "arm_video_tx_hold", "midCallUpgrade": true, "alreadySendingVideo": false,
+          "expect": { "txHoldArmed": false, "txHolding": false, "localVideoTxEnabled": true,
+                      "note": "re-upgrade with peer readiness already seen (media_ready is once per (callId, mid), never re-sent) -> hold NOT re-armed, TX flows immediately" } }
+      ]
+    },
+    {
+      "id": "readiness-keyframe-request-outbound-rate-limit",
+      "group": "readiness-8.7",
+      "callRole": "callee",
+      "steps": [
+        { "do": "request_peer_keyframe",
+          "expect": { "sentCount": { "video_keyframe_request": 1 } } },
+        { "do": "request_peer_keyframe",
+          "expect": { "sentCount": { "video_keyframe_request": 1 }, "note": "second request within 1000 ms suppressed" } },
+        { "do": "advance_time_ms", "ms": 999 },
+        { "do": "request_peer_keyframe",
+          "expect": { "sentCount": { "video_keyframe_request": 1 }, "note": "999 ms elapsed < 1000 -> still suppressed" } },
+        { "do": "advance_time_ms", "ms": 1 },
+        { "do": "request_peer_keyframe",
+          "expect": { "sentCount": { "video_keyframe_request": 2 }, "note": "exactly 1000 ms elapsed -> allowed (>= semantics)" } }
+      ]
+    },
+    {
+      "id": "readiness-peer-ready-forces-exactly-one-idr",
+      "group": "readiness-8.7",
+      "callRole": "caller",
+      "steps": [
+        { "do": "video_active_baseline", "mid": "2" },
+        { "do": "recv_call_media_ready", "mid": "2",
+          "expect": { "forcedIdrCount": 1 } },
+        { "do": "recv_call_media_ready", "mid": "2",
+          "expect": { "forcedIdrCount": 1, "note": "duplicate ready inside the shared 1/s local-IDR limiter -> exactly one IDR" } },
+        { "do": "advance_time_ms", "ms": 1000 },
+        { "do": "recv_video_keyframe_request",
+          "expect": { "forcedIdrCount": 2, "note": "distinct 8.7 trigger, same shared limiter, window elapsed -> honored" } }
+      ]
+    },
+    {
+      "id": "readiness-receiver-failsafe-lift-2s",
+      "group": "readiness-8.7",
+      "callRole": "callee",
+      "steps": [
+        { "do": "receiver_video_gate_armed", "mid": "2",
+          "expect": { "receiverGated": true } },
+        { "do": "advance_time_ms", "ms": 1999,
+          "expect": { "receiverGated": true } },
+        { "do": "advance_time_ms", "ms": 1,
+          "expect": { "receiverGated": false, "receiverGateLiftedBy": "failsafe",
+                      "sent": ["video_keyframe_request"],
+                      "sentCount": { "video_keyframe_request": 1, "call_media_ready": 0 },
+                      "callDropped": false,
+                      "note": "cryptor never became ready: at 2000 ms the render gate lifts anyway (brief garbage beats permanent black) AND a keyframe_request goes out; media_ready NOT sent — the cryptor is not ready" } },
+        { "do": "receiver_cryptor_keyed_and_bound", "mid": "2",
+          "expect": { "sentCount": { "call_media_ready": 1 }, "note": "late cryptor-ready still announces once" } }
+      ]
+    },
+    {
+      "id": "readiness-rekey-bidirectional-resync",
+      "group": "readiness-8.7",
+      "callRole": "caller",
+      "steps": [
+        { "do": "video_active_baseline", "mid": "2", "keyEpoch": 0 },
+        { "do": "rekey", "keyEpoch": 1,
+          "expect": { "forcedIdrCount": 1, "sentCount": { "video_keyframe_request": 1 },
+                      "note": "rekey resyncs BOTH directions: local IDR under the new epoch for the peer's decoder + video_keyframe_request so the peer's encoder refreshes ours" } },
+        { "do": "rekey", "keyEpoch": 2,
+          "expect": { "forcedIdrCount": 1, "sentCount": { "video_keyframe_request": 1 },
+                      "note": "back-to-back rekey inside the 1 s windows -> both legs rate-limited, no storm" } },
+        { "do": "advance_time_ms", "ms": 1000 },
+        { "do": "rekey", "keyEpoch": 3,
+          "expect": { "forcedIdrCount": 2, "sentCount": { "video_keyframe_request": 2 } } }
+      ]
+    },
+    {
+      "id": "readiness-watchdog-escalation-ladder",
+      "group": "readiness-8.7",
+      "callRole": "callee",
+      "steps": [
+        { "do": "video_active_baseline", "mid": "2" },
+        { "do": "watchdog_video_stalled",
+          "expect": { "watchdogStage": 0, "callDropped": false } },
+        { "do": "advance_time_ms", "ms": 2999,
+          "expect": { "watchdogStage": 0, "sentCount": { "video_keyframe_request": 0 },
+                      "note": "below the first rung: the watchdog observes, does nothing" } },
+        { "do": "advance_time_ms", "ms": 1,
+          "expect": { "watchdogStage": 1, "sentCount": { "video_keyframe_request": 1 }, "callDropped": false,
+                      "note": "3000 ms: rung 1 = cheapest self-heal, wire video_keyframe_request (existing message, rate-limited)" } },
+        { "do": "advance_time_ms", "ms": 3000,
+          "expect": { "watchdogStage": 2, "sinkReattachCount": 1, "sentCount": { "video_keyframe_request": 1 }, "callDropped": false,
+                      "note": "6000 ms: rung 2 = local sink re-attach, zero wire traffic" } },
+        { "do": "advance_time_ms", "ms": 6000,
+          "expect": { "watchdogStage": 3, "sentCount": { "call_media_ready": 1 }, "sent": ["call_media_ready:mid=2"], "callDropped": false,
+                      "note": "12000 ms: rung 3 = re-announce call_media_ready for the bound mid (same wire bytes; deliberate dedup bypass as last-rung self-heal). Ladder exhausted: the watchdog keeps ticking + logging but NEVER tears the call down" } }
+      ]
+    },
+    {
+      "id": "readiness-watchdog-recovery-resets-backoff",
+      "group": "readiness-8.7",
+      "callRole": "callee",
+      "steps": [
+        { "do": "video_active_baseline", "mid": "2" },
+        { "do": "watchdog_video_stalled" },
+        { "do": "advance_time_ms", "ms": 3000,
+          "expect": { "watchdogStage": 1, "sentCount": { "video_keyframe_request": 1 } } },
+        { "do": "watchdog_video_recovered",
+          "expect": { "watchdogStage": 0, "callDropped": false,
+                      "note": "frames flowing again -> ladder + backoff fully reset" } },
+        { "do": "advance_time_ms", "ms": 10000,
+          "expect": { "watchdogStage": 0, "sentCount": { "video_keyframe_request": 1 },
+                      "note": "healthy period: no rung fires with no stall" } },
+        { "do": "watchdog_video_stalled",
+          "expect": { "watchdogStage": 0 } },
+        { "do": "advance_time_ms", "ms": 3000,
+          "expect": { "watchdogStage": 1, "sentCount": { "video_keyframe_request": 2 }, "callDropped": false,
+                      "note": "fresh stall starts at rung 1 (keyframe_request at +3000 ms), NOT at the 6/12 s rungs" } }
       ]
     }
   ]

@@ -46,6 +46,20 @@ struct WhatsNewScreen: View {
         return ReleaseNote.releaseNotes
     }
 
+    /// Auto-generated per-build changelog (WhatsNewData.generated.swift),
+    /// produced by scripts/gen_changelog.py from real git tag/commit
+    /// history and regenerated on every release by ios-release.ps1.
+    /// Distinct from `releaseNotes` above (hand-curated, per-milestone):
+    /// this one is per-tag, unfiltered beyond stripping the mechanical
+    /// version-bump commit, newest first, capped to the last 20 tags by
+    /// the generator itself. Empty until the first release runs the
+    /// generator (e.g. a fresh checkout before any release) — in that
+    /// case the "Cronologia versioni" section below renders nothing,
+    /// no placeholder, no fabricated example.
+    private var generatedEntries: [ReleaseNote] {
+        ReleaseNote.generatedReleaseNotes
+    }
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -66,6 +80,12 @@ struct WhatsNewScreen: View {
                     .padding(.vertical, 4)
                     ForEach(visibleEntries) { note in
                         releaseCard(note)
+                    }
+                    // Auto-generated per-build history — only rendered
+                    // when the generator has actually produced entries
+                    // (see `generatedEntries` doc above).
+                    if !generatedEntries.isEmpty {
+                        versionHistorySection
                     }
                     Spacer().frame(height: 24)
                 }
@@ -193,6 +213,69 @@ struct WhatsNewScreen: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Version history (auto-generated, per-build)
+
+    /// "Cronologia versioni" — the auto-generated counterpart to the
+    /// hand-curated cards above. One card per git tag (up to the last
+    /// 20), each showing version + date + the real commit subjects for
+    /// that release, exactly as produced by scripts/gen_changelog.py.
+    /// Kept as a visually distinct section (separate header, compact
+    /// card style) so testers don't confuse per-tag noise with the
+    /// curated per-milestone highlights above.
+    private var versionHistorySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("CRONOLOGIA VERSIONI")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundStyle(scheme.primary)
+                Text("Ultime \(generatedEntries.count) versioni, generate automaticamente dalla cronologia git a ogni release.")
+                    .qaudionStyle(type.bodySmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .padding(.top, 8)
+            ForEach(generatedEntries) { note in
+                versionHistoryCard(note)
+            }
+        }
+    }
+
+    /// Compact card for a single auto-generated entry. Unlike
+    /// `releaseCard`, there's no separate `title` line — generated
+    /// entries set `title == id` (see gen_changelog.py), so showing it
+    /// twice would be redundant.
+    private func versionHistoryCard(_ note: ReleaseNote) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(note.id)
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(scheme.onSurface)
+                Spacer(minLength: 0)
+                Text(note.date)
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(note.bullets, id: \.self) { bullet in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("•")
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                        Text(bullet)
+                            .qaudionStyle(type.labelSmall)
+                            .foregroundStyle(scheme.onSurface)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(scheme.surfaceVariant.opacity(0.3))
         )
     }
 }

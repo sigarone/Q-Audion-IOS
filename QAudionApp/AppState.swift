@@ -197,6 +197,21 @@ final class AppState: ObservableObject {
     @Published var isVideoCall: Bool = false
     @Published var callState: CallState = .idle
     @Published var callContactId: String?
+    /// WIRE_SPEC §8.1 — true when the remote peer has signalled
+    /// `call_video_state(paused: true)` (they turned their camera off).
+    /// Purely informational UI state: it never touches the PeerConnection
+    /// or the negotiated `m=video` line. Reset to false at the start of
+    /// every new call (same lifecycle as the other call-scoped published
+    /// fields above). Drives the "peer paused their video" badge and,
+    /// combined with the local camera-off state, the auto-fallback to
+    /// the audio-only call screen (ContentView.inCallStack).
+    @Published var remoteVideoPaused: Bool = false
+    /// WIRE_SPEC §8.1 — mirrors VideoCallView's local `isCameraOn` toggle
+    /// (true = camera off) so `ContentView.inCallStack` can decide the
+    /// audio-only-screen fallback without VideoCallView's private @State.
+    /// Set by `videoSetCameraEnabled`; same reset lifecycle as
+    /// `remoteVideoPaused` above.
+    @Published var localVideoPaused: Bool = false
     /// D11 / W-NOBRICK — true when the active call's peer presented an
     /// UNAUTHENTICATED identity-key change (the handshake signer key is ∉ the
     /// server-published per-device set). Drives a NON-BLOCKING advisory banner in
@@ -401,10 +416,65 @@ final class AppState: ObservableObject {
     /// upgrade paths). Cleared on call teardown in endCall().
     private var mediaReadySentKeys: Set<String> = []
 
+    // WIRE_SPEC §8.7 — receiver-side RENDER gate (Android parity: the
+    // inbound video track stays disabled until the receiver FrameCryptor
+    // is attached, PeerConnectionHolder's "PURPLE-FRAME-ON-TOGGLE" gate).
+    // iOS equivalent: hold the PUBLICATION of `remoteWebRtcVideoTrack`
+    // (the only thing VideoCallView renders from) until our receiver
+    // cryptor is attached+keyed (`onInboundVideoReady` → the same instant
+    // we ship `call_media_ready`). A 2s failsafe lifts the gate anyway —
+    // signal-not-kill, mirroring Android's watchdog FAILSAFE_LIFT: a
+    // brief garbage frame is strictly better than never rendering.
+
+    /// Remote WebRTC video track parked while the render gate is closed.
+    /// Published to `remoteWebRtcVideoTrack` on gate open. Typed Any? for
+    /// the same canImport(WebRTC) reason as `remoteWebRtcVideoTrack`.
+    private var pendingRemoteVideoTrack: Any?
+    /// True once the receiver cryptor readiness fired for this call —
+    /// remote tracks publish immediately from then on (the readiness is a
+    /// one-shot per call; a re-upgrade on the same call is still keyed).
+    private var inboundVideoReadyThisCall = false
+    /// 2s failsafe that lifts the render gate if readiness never fires
+    /// (e.g. peer without E2EE video caps → no cryptor to attach).
+    private var remoteVideoGateFailsafeTask: Task<Void, Never>?
+
     /// WIRE_SPEC §8.7 — honor-side rate limit: at most one forced local
     /// encoder IDR per second, however many call_media_ready /
     /// video_keyframe_request envelopes the peer ships.
     private var lastKeyframeForcedAt: Date = .distantPast
+
+    // VIDEODIAG (WIRE_SPEC §8.7) — self-heal watchdog. SIGNAL-NOT-KILL:
+    // it NEVER drops/tears down a call and never blocks anything — it
+    // only heals (keyframe request, sink re-attach, call_media_ready
+    // re-announce) and logs. NEVER-BLOCK: ONE 1s-tick task per call,
+    // cancelled on endCall/rollback; counters bumped on existing hot
+    // paths (VideoPathDiag), no per-frame tasks.
+
+    /// Per-call video-path counters (arrived/decoded/rendered/IDR).
+    /// Internal (not private) on purpose: VideoCallView hands it to
+    /// WebRTCRemoteVideoView, whose Coordinator wraps the REAL UI renderer
+    /// (RTCMTLVideoView) in a counting forwarder — the rendered-hop counter
+    /// attaches/detaches IN LOCKSTEP with the on-screen renderer, so a
+    /// detached renderer stops the counter and the watchdog can see the
+    /// detached-renderer black-video class (rung 2 heals it).
+    let videoDiag = VideoPathDiag()
+    /// The ONE per-call 1s-tick watchdog task. nil = not running.
+    private var videoDiagWatchdogTask: Task<Void, Never>?
+    /// Escalation ladder state (pure engine, KAT-gated) the tick delegates to.
+    private let videoStallLadder = VideoStallEscalationEngine()
+    /// Tick memos: last observed counter values + the monotonic ms of
+    /// their last increase (stall rule inputs).
+    private var videoDiagPrevArrived: Int64 = 0
+    private var videoDiagPrevRendered: Int64 = 0
+    private var videoDiagLastArrivedIncreaseMs: Int64 = 0
+    private var videoDiagLastRenderedIncreaseMs: Int64 = 0
+    /// Last inbound video mid announced via call_media_ready — the mid
+    /// the rung-3 re-announce re-sends for. Reset with the watchdog.
+    private var lastInboundVideoMid: String?
+    /// Timestamps (monotonic ms) of the most recent inbound
+    /// video_keyframe_request envelopes — TX storm rule input
+    /// (>=3 in 5s → force IDR immediately, one-shot limiter bypass).
+    private var peerKeyframeRequestTimesMs: [Int64] = []
 
     /// True when [videoPipeline] was started decode-only (external source,
     /// paused) just to RENDER a WS-relay peer's screen share on an
@@ -454,6 +524,9 @@ final class AppState: ObservableObject {
     /// this is always RTCVideoTrack or nil. VideoCallView reads it to
     /// render the remote feed via WebRTCRemoteVideoView when no BCrypto
     /// WS video pipeline is active (i.e. iOS↔Android calls).
+    /// WIRE_SPEC §8.7 — do NOT write this directly from track callbacks:
+    /// publication goes through `publishRemoteVideoTrackGated` (RX render
+    /// gate — parked until the receiver cryptor is ready, 2s failsafe).
     @Published var remoteWebRtcVideoTrack: Any?
 
     /// Commit 540b79c0 parity — peer's advertised SFrame capability tags
@@ -467,6 +540,49 @@ final class AppState: ObservableObject {
     @Published var encryptionAlgo: String = "ML-KEM-1024 + AES-256-GCM"
     @Published var transportType: String = "P2P Direct"
     @Published var latencyMs: Int = 0
+    /// Unified call UI — Guardian ribbon voice biometrics (pitch, stress,
+    /// voice health, speech rate, confidence). Fed by
+    /// `CallService.onVoiceAnalysis`, itself wired from
+    /// `QAudionCallIntegration.getVoiceAnalysis().onResult` on BOTH the
+    /// outgoing (`CallService.startCall`) and incoming
+    /// (`CallService.activateIncomingCallAudio`) integration binding sites —
+    /// the old outgoing-only asymmetry (gauges dead on every incoming call)
+    /// was fixed 2026-07-04. nil until the first analysis result arrives.
+    /// Reset in endCall().
+    @Published var voiceAnalysis: VoiceAnalysisResult?
+
+    /// Unified call UI — REAL remote-voice spectrum: 40 log-spaced bands
+    /// (0..1), the actual FFT magnitude of the decoded RX PCM computed by
+    /// `SpectrumExtractor` inside `QAudionCallIntegration
+    /// .processIncomingAudio` (66 ms source throttle ⇒ ≤15 Hz `@Published`
+    /// writes — never a per-audio-frame publish). Drives the Guardian ribbon
+    /// MiniSpectrum: no synthetic shimmer, no formant fake. nil before the
+    /// first decoded frame / between calls (bars rest). Wired for BOTH
+    /// outgoing and incoming calls, same as `voiceAnalysis` above.
+    /// Reset in endCall().
+    @Published var voiceSpectrum: [Float]?
+
+    /// Unified call UI — crypto-engine meter. Live count of real AES-256-GCM
+    /// frame operations per second, sampled once/sec from the ground-truth
+    /// `CallService` frame counters (`framesEncryptedTx` = seal(TX),
+    /// `framesDecryptedRx` = open(RX)) — one op per sealed/opened frame each
+    /// direction, mirroring Android's `CryptoEngineMeter.recordOp` definition.
+    /// The Guardian ribbon renders a pulsing comet whose sweep period and
+    /// intensity track this rate. 0 between calls / before any frame flows,
+    /// which hides the meter. Reset in `endCall()`.
+    ///
+    /// No byte counter exists on iOS (`CallService` tracks frame counts only),
+    /// so — unlike Android — no kB/s is derived: fabricating a byte rate from
+    /// an assumed frame size would be dishonest, so the meter shows ops/s only.
+    @Published var cryptoOpsPerSec: Int = 0
+    /// 1 Hz sampler for `cryptoOpsPerSec`. Gated to the call lifecycle: armed
+    /// at each `isInCall = true` site, invalidated in `endCall()` so it never
+    /// ticks between calls. Reads the `CallService` counters only — never
+    /// touches the frame-counting hot path.
+    private var cryptoMeterTimer: Timer?
+    /// Last sampled `framesEncryptedTx + framesDecryptedRx` total, used to
+    /// derive the per-second delta.
+    private var cryptoMeterLastTotal: Int64 = 0
 
     // MARK: - Server connection state
     /// Pinned to `PinnedServerHost.url` (`https://voip.bcrypto.com`).
@@ -1277,6 +1393,25 @@ final class AppState: ObservableObject {
                 case .green:
                     self.confidenceLevel = "green"
                 }
+            }
+        }
+
+        // Unified call UI — Guardian ribbon voice biometrics. Mirrors the
+        // onDeepfakeScore subscription immediately above: hop to MainActor,
+        // publish the result. This does NOT touch/invert deepfakeAlert —
+        // it is a separate @Published field driven by a separate closure.
+        callService.onVoiceAnalysis = { [weak self] result in
+            Task { @MainActor in
+                self?.voiceAnalysis = result
+            }
+        }
+
+        // Unified call UI — REAL remote-voice spectrum (≤15 Hz, throttled at
+        // the source inside QAudionCallIntegration, so this MainActor hop
+        // never runs per audio frame). Same pattern as onVoiceAnalysis above.
+        callService.onVoiceSpectrum = { [weak self] bands in
+            Task { @MainActor in
+                self?.voiceSpectrum = bands
             }
         }
 
@@ -2216,6 +2351,10 @@ final class AppState: ObservableObject {
             // D11: a fresh incoming call clears any stale unauthenticated-change
             // banner from a previous call.
             self.callIdentityUnauthenticatedChange = false
+            // WIRE_SPEC §8.1: a fresh incoming call clears any stale
+            // "peer paused their camera" state from a previous call.
+            self.remoteVideoPaused = false
+            self.localVideoPaused = false
             // #2 (server-fetch trust source): warm the caller's server identity
             // key now, BEFORE handleIncomingWebRtcOffer runs the §5c verify, so
             // resolveServerPeerKey can cross-check the OFFER's signer key. Race
@@ -2574,6 +2713,21 @@ final class AppState: ObservableObject {
                     callId: callId, senderId: senderId, kind: "video_keyframe_request")
             }
         }
+
+        // WIRE_SPEC §8.1 — peer toggled their camera off/on. Informational
+        // only: filter to the active call (same getActiveCallId() live-getter
+        // pattern as registerInboundVideoHandler above) and publish the flag
+        // so VideoCallView / ContentView react — no PeerConnection/SDP touch.
+        ws.onCallVideoState = { [weak self] callId, paused in
+            DispatchQueue.main.async {
+                guard let self = self,
+                      let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+                      let activeCallId = impl.getActiveCallId(),
+                      callId.caseInsensitiveCompare(activeCallId) == .orderedSame
+                else { return }
+                self.remoteVideoPaused = paused
+            }
+        }
     }
 
     /// media-consent v1 — responder side of a mid-call renegotiation.
@@ -2763,11 +2917,17 @@ final class AppState: ObservableObject {
         }
         self.webRtcController = nil
         self.remoteWebRtcVideoTrack = nil
+        // WIRE_SPEC §8.7 — the video leg is gone: drop any parked track +
+        // failsafe so a rebuilt upgrade PC starts with a fresh RX gate.
+        self.resetRemoteVideoRenderGate()
+        // VIDEODIAG — the watched video leg is gone: cancel the watchdog
+        // (a rebuilt upgrade re-starts it on the fresh track).
+        self.stopVideoDiagWatchdog(reason: "video-leg rollback")
         self.videoPipeline?.stop()
         self.videoPipeline = nil
         self.setCamera(false)
         self.isVideoCall = self.peerScreenShareActive
-        RTLog.warn("call", "video upgrade WebRTC failed — rolled back video only, WS-relay audio preserved")
+        RTLog.warn("call", "video rollback ev=rb media_mode=ws-relay state=active")
     }
 
     /// W-VIDUP — build + wire a responder WebRTC controller on-demand when a
@@ -2791,8 +2951,10 @@ final class AppState: ObservableObject {
             SFrameVideoSealer.forRotatingKey(keyProvider)
         }
         controller.useExternalVideoSource = true
+        // WIRE_SPEC §8.7 — publication rides the RX render gate (parked
+        // until the receiver cryptor is ready, 2s failsafe).
         controller.onRemoteVideoTrack = { [weak self] track in
-            Task { @MainActor [weak self] in self?.remoteWebRtcVideoTrack = track }
+            Task { @MainActor [weak self] in self?.publishRemoteVideoTrackGated(track) }
         }
         // WIRE_SPEC §8.7 — receiver readiness → call_media_ready (dedup
         // per call+mid inside sendCallMediaReadyOnce).
@@ -2803,8 +2965,11 @@ final class AppState: ObservableObject {
         controller.onVideoStallDetected = { [weak self] in
             Task { @MainActor [weak self] in self?.requestKeyframeFromSender() }
         }
-        controller.videoTelemetry = { kind, attrs in
+        controller.videoTelemetry = { [weak self] kind, attrs in
             TelemetryService.shared.emit(kind: kind, attrs: attrs)
+            // VIDEODIAG — feed the arrived/decoded counters off the
+            // EXISTING 3s stats poll (thread-safe class; any thread).
+            self?.videoDiag.noteVideoStats(kind: kind, attrs: attrs)
         }
         controller.onAudioDataChannelFrame = { [weak self] data in
             self?.callService.handleIncomingDataChannelAudio(data)
@@ -2920,17 +3085,37 @@ final class AppState: ObservableObject {
                     self.isVideoCall = self.peerScreenShareActive
                     self.setCamera(false)
                 }
-                RTLog.info("call", "incoming upgrade accepted — local video pipeline up")
+                RTLog.info("call", "upgrade accepted ev=upok media_mode=p2p state=active")
             } catch {
                 let desc: String = error.localizedDescription
-                RTLog.warn("call", "incoming upgrade accept failed: " + desc)
+                RTLog.warn("call", "upgrade failed ev=upfail state=active detail=" + desc)
                 #if canImport(WebRTC)
-                // The on-demand upgrade controller was published to
-                // webRtcController before this (failed) async build — tear it down
-                // so a stale/half-built PC can't block a later upgrade retry or be
-                // probed per audio frame. ONLY for the on-demand path; a
-                // pre-existing renegotiation controller belongs to the live call.
-                if builtOnDemand { self.rollbackUpgradeVideo() }
+                if builtOnDemand {
+                    // The on-demand upgrade controller was published to
+                    // webRtcController before this (failed) async build — tear it down
+                    // so a stale/half-built PC can't block a later upgrade retry or be
+                    // probed per audio frame.
+                    self.rollbackUpgradeVideo()
+                } else if let controller = self.webRtcController as? QAudionWebRtcCallController {
+                    // 2026-07-04 fix — a failed `acceptUpgradeOffer` on the
+                    // PRE-EXISTING (audio-carrying) controller used to leave that
+                    // shared PeerConnection wedged: `setRemoteOffer` had thrown
+                    // "Called in wrong state" (libwebrtc's signalingState guard),
+                    // and nothing ever rolled the PC back to `stable`. Every
+                    // subsequent upgrade retry — a fresh camera + fresh SDP each
+                    // time — hit the SAME wedged PC and failed identically, so
+                    // the responder's 30s consent dialog never got a stable
+                    // window: the requester's `onUpgradeResponse` unblocks its
+                    // button on this instant `accepted:false` and a re-click
+                    // resets/replaces the still-showing dialog before the user
+                    // can tap it (observed: 8 back-to-back failures, same error,
+                    // one real call). `recoverPeerConnectionAfterFailedIncomingUpgrade()`
+                    // rolls the shared PC back to `stable` (self-guarding, safe
+                    // even if there was nothing to roll back) WITHOUT closing
+                    // the PeerConnection, so the live AUDIO leg keeps flowing
+                    // (signal-not-kill).
+                    await controller.recoverPeerConnectionAfterFailedIncomingUpgrade()
+                }
                 #endif
                 try? await impl.sendCallUpgradeResponse(
                     callId: pending.callId,
@@ -2965,9 +3150,9 @@ final class AppState: ObservableObject {
                 try await impl.sendCallUpgradeResponse(
                     callId: callId, recipientId: senderId,
                     sdp: answerSdp, accepted: true)
-                RTLog.info("call", "screen-share renegotiation auto-accepted (no camera)")
+                RTLog.info("call", "screenshare accepted ev=ssok media_mode=p2p state=active")
             } catch {
-                RTLog.warn("call", "screen-share renegotiation accept failed: " + error.localizedDescription)
+                RTLog.warn("call", "screenshare failed ev=ssfail detail=" + error.localizedDescription)
                 try? await impl.sendCallUpgradeResponse(
                     callId: callId, recipientId: senderId, sdp: "", accepted: false)
             }
@@ -2988,7 +3173,7 @@ final class AppState: ObservableObject {
         let isCameraUpgrade = pendingOutgoingUpgradeMedia == "camera"
         pendingOutgoingUpgradeMedia = nil
         if !accepted {
-            RTLog.info("call", "onCallUpgradeResponse: peer declined — reverting to audio-only UI")
+            RTLog.info("call", "upgrade declined ev=updecl state=active")
             if isCameraUpgrade {
                 self.isVideoCall = false
                 self.setCamera(false)
@@ -3017,17 +3202,19 @@ final class AppState: ObservableObject {
             // Frames were held back (paused preview) until this consent.
             videoPipeline?.setVideoPaused(false)
         }
+        // VIDEODIAG — upgrade accepted: video is expected from here on.
+        startVideoDiagWatchdogIfNeeded()
         #if canImport(WebRTC)
         guard let controller = webRtcController as? QAudionWebRtcCallController,
               !sdp.isEmpty else {
-            RTLog.info("call", "onCallUpgradeResponse: accepted (WS-relay path, no SDP) — video flowing")
+            RTLog.info("call", "upgrade accepted ev=upok media_mode=ws-relay state=active")
             return
         }
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             do {
                 try await controller.applyUpgradeAnswer(sdp: sdp)
-                RTLog.info("call", "onCallUpgradeResponse: WebRTC renegotiation complete — video flowing")
+                RTLog.info("call", "upgrade accepted ev=upok media_mode=p2p state=active")
                 // W402: forward the (possibly newly-derived) PQC key
                 // to the WebRTC controller in case the upgrade
                 // crossed a rekey boundary. Idempotent.
@@ -3037,11 +3224,71 @@ final class AppState: ObservableObject {
                 }
             } catch {
                 let desc: String = error.localizedDescription
-                RTLog.warn("call", "applyUpgradeAnswer failed: " + desc)
+                RTLog.warn("call", "upgrade answer failed ev=ansfail state=active detail=" + desc)
                 self.errorMessage = "Upgrade a video fallito: " + desc
             }
         }
         #endif
+    }
+
+    /// WIRE_SPEC §8.7 — receiver-side RENDER-gate publication. All three
+    /// `onRemoteVideoTrack` wiring sites funnel here instead of writing
+    /// `remoteWebRtcVideoTrack` directly: while our receiver cryptor is
+    /// not yet attached+keyed the track is PARKED (the native decoder
+    /// would only emit black/garbage — E2EE frames it cannot open), and a
+    /// 2s failsafe publishes anyway so an exotic peer (no video cryptor
+    /// negotiated → readiness never fires) still renders — signal-not-kill,
+    /// same timeout the §8.7 sender TX-hold uses. The failsafe also nudges
+    /// the sender for a keyframe (Android watchdog RETRY parity): if we
+    /// lifted blind, the decoder most likely joined mid-stream.
+    @MainActor
+    private func publishRemoteVideoTrackGated(_ track: Any?) {
+        // VIDEODIAG — remote video is now expected on this call: start the
+        // per-call self-heal watchdog (idempotent). The rendered hop is
+        // counted by the forwarding renderer WebRTCRemoteVideoView wraps
+        // around the real RTCMTLVideoView once SwiftUI attaches it.
+        startVideoDiagWatchdogIfNeeded()
+        if inboundVideoReadyThisCall {
+            remoteWebRtcVideoTrack = track
+            return
+        }
+        pendingRemoteVideoTrack = track
+        RTLog.info("call", "§8.7 RX render gate: remote video track parked until receiver cryptor is ready (max 2s)")
+        remoteVideoGateFailsafeTask?.cancel()
+        remoteVideoGateFailsafeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled, let self = self else { return }
+            RTLog.warn("call", "§8.7 RX render gate: 2s failsafe — publishing without readiness")
+            self.openRemoteVideoRenderGate(reason: "2s failsafe")
+            // Blind lift ⇒ the decoder needs a fresh IDR to sync; the
+            // sender rate-limits honors to 1/s so this is always safe.
+            self.requestKeyframeFromSender()
+        }
+    }
+
+    /// WIRE_SPEC §8.7 — open the receiver render gate (readiness fired or
+    /// failsafe elapsed): publish any parked remote track and let future
+    /// tracks through immediately. Idempotent.
+    @MainActor
+    private func openRemoteVideoRenderGate(reason: String) {
+        remoteVideoGateFailsafeTask?.cancel()
+        remoteVideoGateFailsafeTask = nil
+        inboundVideoReadyThisCall = true
+        if let parked = pendingRemoteVideoTrack {
+            pendingRemoteVideoTrack = nil
+            remoteWebRtcVideoTrack = parked
+            RTLog.info("call", "§8.7 RX render gate OPEN (\(reason)) — remote video track published")
+        }
+    }
+
+    /// WIRE_SPEC §8.7 — drop all render-gate state WITHOUT publishing
+    /// (call teardown / video-leg rollback).
+    @MainActor
+    private func resetRemoteVideoRenderGate() {
+        remoteVideoGateFailsafeTask?.cancel()
+        remoteVideoGateFailsafeTask = nil
+        pendingRemoteVideoTrack = nil
+        inboundVideoReadyThisCall = false
     }
 
     /// WIRE_SPEC §8.7 — receiver-side readiness handoff. Fired (engine
@@ -3050,8 +3297,15 @@ final class AppState: ObservableObject {
     /// `call_media_ready` (dir "recv", key_epoch 0) to the sender so it
     /// forces an IDR the moment we can actually decrypt — once per
     /// (call, mid) even across controller rebuilds (upgrade paths).
+    /// Also the readiness edge that opens the local RX render gate —
+    /// BEFORE the guards/dedup below, so gate opening never depends on
+    /// the WS API being resolvable or on the once-per-mid send dedup.
     @MainActor
     private func sendCallMediaReadyOnce(mid: String?) {
+        openRemoteVideoRenderGate(reason: "receiver cryptor ready")
+        // VIDEODIAG — remember the announced mid so the watchdog's rung-3
+        // re-announce ships the same (callId, mid) wire bytes.
+        lastInboundVideoMid = mid
         guard let peerId = callContactId,
               let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId() else { return }
@@ -3073,18 +3327,20 @@ final class AppState: ObservableObject {
 
     /// WIRE_SPEC §8.7 (INT-4a) — receiver-side keyframe nudge. Fired by the
     /// controller's `onVideoStallDetected` (inbound `framesDecoded` flat for
-    /// ~5s while bytes still arrive → decoder is missing its keyframe). Ships
-    /// `video_keyframe_request` to the in-call sender, which forces a local
-    /// encoder IDR (WS-HEVC rail) or is a harmless no-op (pure-WebRTC sender).
-    /// The API layer rate-limits to 1/s per §8.7, so the controller may fire
-    /// this freely on a persistent stall.
+    /// ~5s while bytes still arrive → decoder is missing its keyframe) and by
+    /// the RX render gate's 2s failsafe (blind lift ⇒ decoder joined
+    /// mid-stream). Ships `video_keyframe_request` to the in-call sender,
+    /// which forces a local encoder IDR (WS-HEVC rail) or is a harmless no-op
+    /// (pure-WebRTC sender). The API layer rate-limits to 1/s per §8.7, so
+    /// callers may fire this freely on a persistent stall.
     @MainActor
     private func requestKeyframeFromSender() {
         guard isInCall,
               let peerId = callContactId,
               let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId() else { return }
-        RTLog.info("call", "INT-4a — inbound video stalled, requesting keyframe from sender")
+        videoDiag.noteKeyframeRequested()   // VIDEODIAG — lastKeyframeRequestAtMs
+        RTLog.info("call", "keyframe request ev=kfreq reason=stall")
         Task {
             try? await impl.sendVideoKeyframeRequest(
                 callId: callId, recipientId: peerId)
@@ -3124,33 +3380,288 @@ final class AppState: ObservableObject {
         }
         // §8.7 TX-hold release — idempotent one-shot, NOT subject to the
         // IDR rate limit below (the release forces its own keyframe).
+        // notePeerMediaReadySeen() additionally memoizes the readiness so a
+        // LATER re-upgrade this call skips arming a doomed 2s hold
+        // (media_ready is once per (callId, mid) — Android armVideoTxHold
+        // parity).
         #if canImport(WebRTC)
         if kind == "call_media_ready",
            let controller = webRtcController as? QAudionWebRtcCallController {
+            controller.notePeerMediaReadySeen()
             controller.releaseVideoTxHold(reason: "peer call_media_ready")
         }
         #endif
+        // VIDEODIAG — the peer signalling §8.7 readiness/recovery means
+        // video is expected on this call: make sure the watchdog runs
+        // (idempotent) and stamp the diag timestamps.
+        startVideoDiagWatchdogIfNeeded()
+        // VIDEODIAG TX inverse rule — the peer requesting >=3 keyframes in
+        // 5s means its decoder is starving: force an IDR IMMEDIATELY,
+        // bypassing the 1/s honor limiter once (one-shot; the timestamp
+        // ring resets on bypass so a sustained storm can't turn the bypass
+        // into an unlimited IDR firehose).
+        var bypassRateLimit = false
+        if kind == "video_keyframe_request" {
+            let nowMs = VideoPathDiag.nowMs()
+            peerKeyframeRequestTimesMs.append(nowMs)
+            let cap = VideoStallSelfHeal.peerKeyframeStormCount
+            if peerKeyframeRequestTimesMs.count > cap {
+                peerKeyframeRequestTimesMs.removeFirst(peerKeyframeRequestTimesMs.count - cap)
+            }
+            if VideoStallSelfHeal.isPeerKeyframeStorm(
+                requestTimesMs: peerKeyframeRequestTimesMs, nowMs: nowMs) {
+                bypassRateLimit = true
+                peerKeyframeRequestTimesMs.removeAll()
+                RTLog.warn("VIDEODIAG", "keyframe storm ev=kfstorm retry_count=" + String(describing: peerKeyframeRequestTimesMs.count))
+            }
+        } else {
+            videoDiag.notePeerMediaReady()   // lastPeerMediaReadyAtMs
+        }
         // §8.7 honor rate limit: at most one forced IDR per second.
         let now = Date()
-        guard now.timeIntervalSince(lastKeyframeForcedAt) >= 1.0 else { return }
+        guard bypassRateLimit || now.timeIntervalSince(lastKeyframeForcedAt) >= 1.0 else { return }
         lastKeyframeForcedAt = now
         var forced = false
         if let pipeline = videoPipeline {
             pipeline.forceKeyFrame()
             forced = true
-            RTLog.info("call", "\(kind): forced local HEVC encoder IDR (relay rail)")
+            RTLog.info("call", "idr forced ev=idrfrc rail=relay")
         }
         #if canImport(WebRTC)
         if let controller = webRtcController as? QAudionWebRtcCallController {
             controller.forceWebRtcKeyframe()
             forced = true
-            RTLog.info("call", "\(kind): forced WebRTC encoder IDR (KeyframeForcingVideoEncoder)")
+            RTLog.info("call", "idr forced ev=idrfrc rail=webrtc")
         }
         #endif
-        if !forced {
-            RTLog.warn("call", "\(kind): no live video encoder rail — ignored")
+        if forced {
+            videoDiag.noteTxKeyframeForced()   // VIDEODIAG — txKeyframesForced
+        } else {
+            RTLog.warn("call", "idr skipped ev=idrskip reason=no_rail")
         }
     }
+
+    // MARK: - VIDEODIAG §8.7 — per-call self-heal watchdog
+
+    /// Start the ONE per-call 1s-tick watchdog (idempotent). Called from
+    /// every site that establishes "video is expected on this call":
+    /// remote track arrival (publishRemoteVideoTrackGated), an accepted
+    /// upgrade (handleUpgradeResponse), and inbound §8.7 signals
+    /// (handleInboundKeyframeSignal). SIGNAL-NOT-KILL: the tick only
+    /// heals + logs, never tears anything down. NEVER-BLOCK: a single
+    /// MainActor task sleeping 1s between ticks — no per-frame work.
+    @MainActor
+    private func startVideoDiagWatchdogIfNeeded() {
+        guard videoDiagWatchdogTask == nil else { return }
+        let now = VideoPathDiag.nowMs()
+        videoDiagPrevArrived = 0
+        videoDiagPrevRendered = 0
+        videoDiagLastArrivedIncreaseMs = 0    // 0 = no arrival observed yet
+        videoDiagLastRenderedIncreaseMs = now // grace: no stall before start+3s
+        videoStallLadder.reset()
+        RTLog.info("VIDEODIAG", "watchdog ev=wdstart state=active")
+        videoDiagWatchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { break }
+                guard let self = self else { break }
+                self.videoDiagTick()
+            }
+        }
+    }
+
+    /// Cancel the watchdog + drop all per-call VIDEODIAG state. Called on
+    /// endCall and on the video-leg rollback. Safe no-op when not running.
+    @MainActor
+    private func stopVideoDiagWatchdog(reason: String) {
+        if videoDiagWatchdogTask != nil {
+            videoDiagWatchdogTask?.cancel()
+            videoDiagWatchdogTask = nil
+            RTLog.info("VIDEODIAG", "watchdog ev=wdstop reason=" + reason.replacingOccurrences(of: " ", with: "_"))
+        }
+        videoStallLadder.reset()
+        videoDiag.reset()
+        peerKeyframeRequestTimesMs.removeAll()
+        lastInboundVideoMid = nil
+    }
+
+    /// One 1s tick: sample the lock-free counters, evaluate the §8.7
+    /// BLACK-VIDEO STALL rule, and run any due escalation rung. Silent
+    /// while healthy (logs only on state transitions); one line per tick
+    /// during a stall with every counter + pipeline state so a single log
+    /// line pinpoints the broken hop (MEDIADIAG philosophy).
+    @MainActor
+    private func videoDiagTick() {
+        guard isInCall else { return }
+        let now = VideoPathDiag.nowMs()
+        let snap = videoDiag.snapshot()
+        // Update the last-increase memos off the monotonic counters.
+        if snap.rxVideoFramesArrived > videoDiagPrevArrived {
+            videoDiagPrevArrived = snap.rxVideoFramesArrived
+            videoDiagLastArrivedIncreaseMs = now
+        }
+        if snap.rxFramesRendered > videoDiagPrevRendered {
+            videoDiagPrevRendered = snap.rxFramesRendered
+            videoDiagLastRenderedIncreaseMs = now
+        }
+        // Remote video expected = a remote track arrived (published or
+        // parked behind the RX render gate). Without one there is nothing
+        // to watch on the RX side — stay silent.
+        let remoteExpected = remoteWebRtcVideoTrack != nil || pendingRemoteVideoTrack != nil
+        guard remoteExpected else { return }
+        guard videoDiagLastArrivedIncreaseMs > 0 else { return }  // no RTP yet
+        let renderedFresh =
+            now - videoDiagLastRenderedIncreaseMs < VideoStallSelfHeal.stallWindowMs
+        // Arrivals idle for 2× the window (comfortably above the 3s
+        // stats-poll granularity, so it can't flap between polls): the
+        // peer stopped sending — "no media" is NOT a black-video stall.
+        let arrivedIdle =
+            now - videoDiagLastArrivedIncreaseMs >= 2 * VideoStallSelfHeal.stallWindowMs
+        if videoStallLadder.isStalled {
+            // Recovery is RENDERED-based (frames actually reaching the
+            // renderer again) or true idleness. A mere arrivals hiccup must
+            // NOT reset the ladder — the arrival counter has 3s stats-poll
+            // granularity, so its freshness can flap for one tick between
+            // polls; treating that as recovery would restart the backoff
+            // mid-stall and starve rungs 2/3.
+            if renderedFresh || arrivedIdle {
+                let recoverMs = now - videoStallLadder.stallStartMs
+                let how: String = renderedFresh ? "frames rendering again" : "inbound video went idle"
+                let line = "recovered (" + how + ") — time-to-recover=" +
+                    String(describing: recoverMs) + "ms (backoff + ladder reset)"
+                RTLog.info("VIDEODIAG", line)
+                videoStallLadder.noteRecovered()
+            }
+        } else if VideoStallSelfHeal.isBlackVideoStall(
+            msSinceLastArrivedIncrease: now - videoDiagLastArrivedIncreaseMs,
+            msSinceLastRenderedIncrease: now - videoDiagLastRenderedIncreaseMs) {
+            videoStallLadder.noteStalled(nowMs: now)
+            RTLog.warn("VIDEODIAG", "stall ev=stall state=active")
+        }
+        guard videoStallLadder.isStalled else { return }
+        // Fire every due rung IN ORDER (pure engine decides; SIGNAL-NOT-
+        // KILL: every rung only heals — nothing here ever ends the call).
+        for action in videoStallLadder.dueActions(nowMs: now) {
+            performVideoStallAction(action)
+        }
+        logVideoDiagStallLine(now: now, snap: snap)
+    }
+
+    /// Execute one escalation rung (§8.7 ladder — keyframe request →
+    /// sink re-attach → media_ready re-announce). ZERO new wire messages.
+    @MainActor
+    private func performVideoStallAction(_ action: VideoStallSelfHeal.EscalationAction) {
+        switch action {
+        case .keyframeRequest:
+            RTLog.warn("VIDEODIAG", "selfheal ev=heal1")
+            requestKeyframeFromSender()
+        case .sinkReattach:
+            RTLog.warn("VIDEODIAG", "selfheal ev=heal2")
+            reattachRemoteVideoSinkForSelfHeal()
+        case .mediaReadyReannounce:
+            RTLog.warn("VIDEODIAG", "selfheal ev=heal3")
+            reannounceCallMediaReadyForSelfHeal()
+        }
+    }
+
+    /// One VIDEODIAG line per stall tick with all counters + state so the
+    /// broken hop is identifiable from a single line.
+    @MainActor
+    private func logVideoDiagStallLine(now: Int64, snap: VideoPathDiag.Snapshot) {
+        var cryptorReady = false
+        var trackAttached = false
+        #if canImport(WebRTC)
+        if let controller = webRtcController as? QAudionWebRtcCallController {
+            cryptorReady = controller.inboundVideoCryptorReady
+        }
+        trackAttached = (remoteWebRtcVideoTrack as? RTCVideoTrack) != nil
+        #endif
+        let idrAgeMs = Int64(Date().timeIntervalSince(lastKeyframeForcedAt) * 1000.0)
+        let kfrAge: Int64 = snap.lastKeyframeRequestAtMs > 0 ? (now - snap.lastKeyframeRequestAtMs) : -1
+        let readyAge: Int64 = snap.lastPeerMediaReadyAtMs > 0 ? (now - snap.lastPeerMediaReadyAtMs) : -1
+        var parts: [String] = []
+        parts.append("stall t+" + String(describing: now - videoStallLadder.stallStartMs) + "ms")
+        parts.append("stage=" + String(describing: videoStallLadder.stage))
+        parts.append("arrived=" + String(describing: snap.rxVideoFramesArrived))
+        parts.append("decoded=" + String(describing: snap.rxFramesDecoded))
+        parts.append("rendered=" + String(describing: snap.rxFramesRendered))
+        parts.append("txIdrForced=" + String(describing: snap.txKeyframesForced))
+        parts.append("trackAttached=" + String(describing: trackAttached))
+        parts.append("gateOpen=" + String(describing: inboundVideoReadyThisCall))
+        parts.append("cryptorReady=" + String(describing: cryptorReady))
+        parts.append("lastIdrAgeMs=" + String(describing: idrAgeMs))
+        parts.append("lastKfrAgeMs=" + String(describing: kfrAge))
+        parts.append("peerReadyAgeMs=" + String(describing: readyAge))
+        RTLog.warn("VIDEODIAG", parts.joined(separator: " "))
+    }
+
+    /// Rung 2 — re-attach the renderer to the remote track: un-publish,
+    /// then re-publish on the next main-queue turn so SwiftUI rebuilds
+    /// WebRTCRemoteVideoView. Its Coordinator re-runs track.add(wrapper)
+    /// with a FRESH counting forwarder around the fresh RTCMTLVideoView —
+    /// so a successful re-attach is exactly what restarts the rendered
+    /// counter and lets the ladder observe the recovery. The one-frame
+    /// fallback flash is acceptable — the video is already black.
+    @MainActor
+    private func reattachRemoteVideoSinkForSelfHeal() {
+        #if canImport(WebRTC)
+        guard let track = remoteWebRtcVideoTrack as? RTCVideoTrack else { return }
+        remoteWebRtcVideoTrack = nil
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isInCall else { return }
+            self.remoteWebRtcVideoTrack = track
+        }
+        #endif
+    }
+
+    /// Rung 3 — re-announce `call_media_ready` for the last announced mid
+    /// (same wire bytes as the normal §8.7 readiness path; DELIBERATE
+    /// bypass of the once-per-(callId, mid) dedup — receivers are
+    /// idempotent) + force a LOCAL encoder IDR through the shared 1/s
+    /// honor limiter (helps the symmetric case where OUR outbound lane
+    /// is the stalled one).
+    @MainActor
+    private func reannounceCallMediaReadyForSelfHeal() {
+        guard let peerId = callContactId,
+              let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId() else { return }
+        let midValue: String = lastInboundVideoMid ?? ""
+        Task {
+            try? await impl.sendCallMediaReady(
+                callId: callId,
+                recipientId: peerId,
+                mid: midValue,
+                keyEpoch: 0,
+                dir: "recv")
+        }
+        // Local IDR through the SAME shared 1/s honor limiter as
+        // handleInboundKeyframeSignal (flag-based force — collapses with
+        // any concurrent request on the next encode()).
+        let now = Date()
+        if now.timeIntervalSince(lastKeyframeForcedAt) >= 1.0 {
+            lastKeyframeForcedAt = now
+            var forced = false
+            if let pipeline = videoPipeline {
+                pipeline.forceKeyFrame()
+                forced = true
+            }
+            #if canImport(WebRTC)
+            if let controller = webRtcController as? QAudionWebRtcCallController {
+                controller.forceWebRtcKeyframe()
+                forced = true
+            }
+            #endif
+            if forced { videoDiag.noteTxKeyframeForced() }
+        }
+    }
+
+    // NOTE (§8.7 rendered hop): there is deliberately NO side-attached
+    // counting sink here anymore. libwebrtc feeds every attached sink, so
+    // a sink added BESIDE the UI view kept rxFramesRendered advancing even
+    // with the real RTCMTLVideoView detached — hiding the detached-renderer
+    // black-video class from the watchdog. The counter now lives in the
+    // DiagForwardingVideoRenderer that WebRTCRemoteVideoView wraps around
+    // the real renderer (attach/detach in lockstep with the view).
 
     /// C-3 — remote hangup / decline / timeout teardown. Runs the full
     /// state reset UNCONDITIONALLY (the old code bailed when
@@ -3220,12 +3731,42 @@ final class AppState: ObservableObject {
                 print("[AppState] msg_receive missing required fields: \(data.keys)")
                 return
             }
+            let clientMsgId = data["client_msg_id"] as? String
             DispatchQueue.main.async {
+                // W78-fix: the server echoes `msg_receive` back to the
+                // SENDER too (`internal/signaling/client.go` handleMsgSend
+                // calls both `relayToUser` to the recipient AND `c.send`
+                // back to the sender itself), carrying the real DB-assigned
+                // `message_id` — the only place that id ever reaches the
+                // client. Previously this echo fell straight into
+                // `handleIncomingMessage`, which has no self-echo handling
+                // and would (at best) no-op into a bogus self-conversation,
+                // and the outbound row's `serverMessageId` was left bound
+                // to the locally-echoed `clientMsgId` instead (see
+                // `ChatMessageSendService`/`BCryptoMessageApiImpl`), which
+                // `msg_delivered`/`msg_read` receipts can never match since
+                // those are keyed on the real id. Detect the self-echo here
+                // and reconcile the outbound row directly by `clientMsgId`
+                // instead of falling through to the inbound pipeline.
+                if senderId == self.currentUserId, let cmid = clientMsgId, !cmid.isEmpty {
+                    let matched = ConversationStore().bindServerMessageId(
+                        clientMsgId: cmid,
+                        serverMessageId: serverMsgId
+                    )
+                    if matched {
+                        NotificationCenter.default.post(
+                            name: AppState.chatRefreshNotification,
+                            object: nil,
+                            userInfo: ["clientMsgId": cmid]
+                        )
+                    }
+                    return
+                }
                 self.handleIncomingMessage(
                     senderId: senderId,
                     serverMsgId: serverMsgId,
                     cipher: cipher,
-                    clientMsgId: data["client_msg_id"] as? String
+                    clientMsgId: clientMsgId
                 )
             }
         }
@@ -5626,6 +6167,10 @@ final class AppState: ObservableObject {
         // D11: a fresh outgoing call clears any stale unauthenticated-change
         // banner from a previous call.
         callIdentityUnauthenticatedChange = false
+        // WIRE_SPEC §8.1: a fresh outgoing call clears any stale "peer
+        // paused their camera" state from a previous call.
+        remoteVideoPaused = false
+        localVideoPaused = false
         // #2 (server-fetch trust source): warm the peer's server identity key
         // so the handshake verify of the callee's ACCEPT has the §5c server key.
         prefetchServerPeerKey(contactId)
@@ -5657,6 +6202,8 @@ final class AppState: ObservableObject {
         callState = .connecting
         isInCall = true
         isVideoCall = video
+        // Unified call UI — arm the 1 Hz crypto-engine sampler for this call.
+        startCryptoMeter()
         // WIRE_SPEC §8.3 — we placed the call → impolite on any later glare.
         originalCallRole = .caller
         // PersistentCallRecord — register outgoing call. Use activeCallKitId if
@@ -6123,9 +6670,11 @@ final class AppState: ObservableObject {
                 // Android↔iOS remote video: Android sends video via WebRTC
                 // RTP (not WS video_frame envelopes). Wire the track callback
                 // so VideoCallView can render it via WebRTCRemoteVideoView.
+                // WIRE_SPEC §8.7 — publication rides the RX render gate
+                // (parked until the receiver cryptor is ready, 2s failsafe).
                 controller.onRemoteVideoTrack = { [weak self] track in
                     Task { @MainActor [weak self] in
-                        self?.remoteWebRtcVideoTrack = track
+                        self?.publishRemoteVideoTrackGated(track)
                     }
                 }
                 // WIRE_SPEC §8.7 — receiver readiness → call_media_ready
@@ -6145,8 +6694,11 @@ final class AppState: ObservableObject {
                 // outbound/inbound video RTP stats + remote-track arrival to
                 // the server so an iOS→Android video failure is diagnosable
                 // without a Mac console session.
-                controller.videoTelemetry = { kind, attrs in
+                controller.videoTelemetry = { [weak self] kind, attrs in
                     TelemetryService.shared.emit(kind: kind, attrs: attrs)
+                    // VIDEODIAG — feed the arrived/decoded counters off the
+                    // EXISTING 3s stats poll (thread-safe class; any thread).
+                    self?.videoDiag.noteVideoStats(kind: kind, attrs: attrs)
                 }
                 // W-DCAUDIO — RX: inbound sealed-audio DataChannel frames →
                 // CallService decrypt + playback (same path as the WS
@@ -6323,6 +6875,8 @@ final class AppState: ObservableObject {
         }
         self.answeredCallKitId = uuid
         self.isInCall = true
+        // Unified call UI — arm the 1 Hz crypto-engine sampler for this call.
+        self.startCryptoMeter()
         self.activeCallKitId = uuid
         if self.callState == .ringing {
             self.callState = .active
@@ -6367,6 +6921,44 @@ final class AppState: ObservableObject {
     /// reports the call ended to CallKit with `.declined` reason.
     func declineIncomingCall() {
         endCall()
+    }
+
+    // MARK: - Unified call UI — crypto-engine meter sampler
+
+    /// Arm the 1 Hz crypto-engine sampler for the current call. Idempotent:
+    /// invalidates any prior timer first, so calling it from both the outgoing
+    /// (`startCall`) and incoming (`performAcceptIncoming`) `isInCall = true`
+    /// sites is safe. The timer reads the ground-truth `CallService` frame
+    /// counters and publishes the per-second delta as `cryptoOpsPerSec` — a
+    /// pure READ, never touching the frame-counting hot path. AppState is
+    /// `@MainActor`; the timer's target closure hops back to MainActor so the
+    /// `@Published` write happens on the main actor.
+    private func startCryptoMeter() {
+        cryptoMeterTimer?.invalidate()
+        cryptoMeterLastTotal = callService.framesEncryptedTx &+ callService.framesDecryptedRx
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let total = self.callService.framesEncryptedTx &+ self.callService.framesDecryptedRx
+                let delta = total &- self.cryptoMeterLastTotal
+                self.cryptoMeterLastTotal = total
+                self.cryptoOpsPerSec = delta > 0 ? Int(delta) : 0
+            }
+        }
+        // .common so the meter keeps ticking while a UITrackingRunLoopMode
+        // interaction (e.g. a scroll on the call surface) is in progress.
+        RunLoop.main.add(timer, forMode: .common)
+        cryptoMeterTimer = timer
+    }
+
+    /// Stop the crypto-engine sampler and zero its readout. Called from
+    /// `endCall()` so the meter never ticks between calls and the next call
+    /// starts from a clean 0 (the ribbon hides the meter when ops == 0).
+    private func stopCryptoMeter() {
+        cryptoMeterTimer?.invalidate()
+        cryptoMeterTimer = nil
+        cryptoMeterLastTotal = 0
+        cryptoOpsPerSec = 0
     }
 
     func endCall() {
@@ -6455,6 +7047,17 @@ final class AppState: ObservableObject {
         isInCall = false
         isVideoCall = false
         deepfakeAlert = false
+        // Unified call UI — drop the Guardian voice-biometrics snapshot so
+        // it doesn't leak into the next call's security sheet before the
+        // first analysis result of that new call arrives.
+        voiceAnalysis = nil
+        // Unified call UI — drop the last spectrum frame too, so the ribbon
+        // bars decay to rest between calls (mirrors the reset above).
+        voiceSpectrum = nil
+        // Unified call UI — stop the 1 Hz crypto-engine sampler and zero its
+        // readout so the meter hides between calls and the next call starts
+        // from 0 (mirrors the voiceAnalysis reset directly above).
+        stopCryptoMeter()
         // W564 — proactively trigger X25519 key exchange with the peer right
         // before clearing callContactId. After a call both sides have done a
         // PQC ML-KEM handshake (strong auth) so this is the ideal moment to
@@ -6483,6 +7086,11 @@ final class AppState: ObservableObject {
         // teardown; we do NOT need (and the spec explicitly says not to
         // send) a final `SCREEN_SHARE:stop` here.
         peerScreenShareActive = false
+        // WIRE_SPEC §8.1 — drop any sticky "peer paused their camera" state
+        // so the next call starts clean (same reasoning as peerScreenShareActive
+        // above: this is UI-only signalling state, not renegotiated per call).
+        remoteVideoPaused = false
+        localVideoPaused = false
         // media-consent v1 — per-call consent + pending dialogs/watchdogs
         // die with the call.
         videoConsentGranted = false
@@ -6538,6 +7146,11 @@ final class AppState: ObservableObject {
         #endif
         webRtcController = nil
         remoteWebRtcVideoTrack = nil
+        // WIRE_SPEC §8.7 — reset the RX render gate (parked track,
+        // failsafe watchdog, readiness memo) for the next call.
+        resetRemoteVideoRenderGate()
+        // VIDEODIAG — cancel the per-call self-heal watchdog + counters.
+        stopVideoDiagWatchdog(reason: "endCall")
         // M-32: free the ≈150 MB ONNX deepfake model if it was used on
         // this call so it isn't held resident between calls.
         if deepfakeClassifierUsed {
@@ -7933,9 +8546,24 @@ extension AppState {
     }
 
     /// W393: bridge for VideoCallView's "Cam ON/OFF" toggle.
+    ///
+    /// WIRE_SPEC §8.1 — additionally ships a best-effort `call_video_state`
+    /// so the peer's UI knows this is an intentional pause (badge / audio-only
+    /// fallback) rather than a silent stall. Purely informational: the local
+    /// capture pipeline pause/resume above is unchanged and untouched by
+    /// whether the send succeeds — never blocks, never throws into the UI.
     @MainActor
     func videoSetCameraEnabled(_ enabled: Bool) {
         videoPipeline?.setCameraEnabled(enabled)
+        localVideoPaused = !enabled
+        if let peerId = callContactId,
+           let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+           let callId = impl.getActiveCallId() {
+            Task {
+                try? await impl.sendVideoState(
+                    callId: callId, recipientId: peerId, paused: !enabled)
+            }
+        }
     }
 }
 
@@ -8095,9 +8723,11 @@ extension AppState {
         webRtcController = controller
         // Mirror of the caller-side wiring: Android sends remote video via
         // WebRTC RTP so the callee also needs this callback.
+        // WIRE_SPEC §8.7 — publication rides the RX render gate (parked
+        // until the receiver cryptor is ready, 2s failsafe).
         controller.onRemoteVideoTrack = { [weak self] track in
             Task { @MainActor [weak self] in
-                self?.remoteWebRtcVideoTrack = track
+                self?.publishRemoteVideoTrackGated(track)
             }
         }
         // WIRE_SPEC §8.7 — receiver readiness → call_media_ready (dedup
@@ -8114,8 +8744,11 @@ extension AppState {
             }
         }
         // Remote-readable video diagnostics (responder side, mirrors caller).
-        controller.videoTelemetry = { kind, attrs in
+        controller.videoTelemetry = { [weak self] kind, attrs in
             TelemetryService.shared.emit(kind: kind, attrs: attrs)
+            // VIDEODIAG — feed the arrived/decoded counters off the
+            // EXISTING 3s stats poll (thread-safe class; any thread).
+            self?.videoDiag.noteVideoStats(kind: kind, attrs: attrs)
         }
         // W-DCAUDIO — RX: inbound sealed-audio DataChannel frames → CallService
         // decrypt + playback (same path as the WS "audio_frame" handler).

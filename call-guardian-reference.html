@@ -1,0 +1,386 @@
+<title>Q-Audion — in-call: security, controls & chat</title>
+<style>
+  :root{
+    --bg-0:#060E1C;--bg-1:#0C1828;--bg-2:#132038;--bg-3:#1C2E50;
+    --border:#263C62;--border-soft:rgba(38,60,98,0.6);
+    --ink-100:#F9FBFF;--ink-70:#C9D8EC;--ink-45:#8FA6C4;
+    --accent:#50D4FF;--accent-deep:#1B7FC0;--cipher:#7C6CFF;
+    --good:#3BE3B0;--warn:#FFC24B;--bad:#FF6B7A;
+    --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;min-height:100vh;color:var(--ink-100);font-family:var(--sans);
+    background:radial-gradient(1100px 620px at 50% -8%,#10233f 0%,transparent 58%),var(--bg-0);padding:34px 16px 52px;}
+  .head{text-align:center;max-width:820px;margin:0 auto 24px;}
+  .head h1{font-size:19px;font-weight:650;letter-spacing:-0.01em;margin:0 0 6px;}
+  .head p{font-size:13px;color:var(--ink-45);margin:0;line-height:1.55;}
+  .head .mono{font-family:var(--mono);color:var(--accent);font-size:12px;}
+  .stage{display:flex;gap:44px;justify-content:center;align-items:flex-start;flex-wrap:wrap;}
+  .col{width:322px;}
+  .col-cap{text-align:center;font-family:var(--mono);font-size:10.5px;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-45);margin-bottom:11px;}
+  .col-cap b{color:var(--ink-70);}
+
+  .phone{position:relative;border-radius:42px;padding:10px;background:linear-gradient(160deg,#20304e,#0a1120);
+    box-shadow:0 30px 70px -30px rgba(0,0,0,0.9),inset 0 1px 0 rgba(255,255,255,0.06);}
+  .screen{position:relative;border-radius:33px;overflow:hidden;height:712px;background:linear-gradient(180deg,#0A1524,#060C18);display:flex;flex-direction:column;}
+  .notch{position:absolute;top:12px;left:50%;transform:translateX(-50%);width:104px;height:26px;background:#05090f;border-radius:0 0 16px 16px;z-index:20;}
+  .sb{display:flex;align-items:center;justify-content:space-between;padding:12px 22px 4px;font-size:12px;font-weight:600;color:var(--ink-70);font-variant-numeric:tabular-nums;}
+
+  /* return-to-call banner (only over chat sheet) */
+  .retbar{position:absolute;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;gap:8px;
+    padding:11px 16px 9px;background:linear-gradient(180deg,#0d5c48,#0a3d33);color:#eafff8;
+    font-size:12.5px;font-weight:600;transform:translateY(-102%);transition:transform .3s;cursor:pointer;}
+  .retbar.show{transform:translateY(0);}
+  .retbar .lv{width:7px;height:7px;border-radius:50%;background:#8affd8;box-shadow:0 0 8px #8affd8;animation:blink 1.8s infinite;}
+  .retbar .t{font-family:var(--mono);margin-left:2px;}
+  .retbar .go{margin-left:auto;font-family:var(--mono);font-size:11px;opacity:.85;}
+
+  .ch{display:flex;align-items:center;gap:12px;padding:10px 20px 8px;}
+  .av{width:40px;height:40px;border-radius:12px;flex:0 0 auto;display:grid;place-items:center;background:linear-gradient(135deg,#1C2E50,#0C1828);border:1px solid var(--border);font-family:var(--mono);font-weight:600;color:var(--accent);font-size:15px;}
+  .who{display:flex;flex-direction:column;gap:2px;}
+  .who .n{font-size:15px;font-weight:650;}
+  .who .s{font-family:var(--mono);font-size:10.5px;color:var(--ink-45);display:flex;align-items:center;gap:6px;}
+  .live{width:6px;height:6px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good);animation:blink 2.4s ease-in-out infinite;}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+  .tmr{margin-left:auto;font-family:var(--mono);font-size:14px;color:var(--ink-70);font-variant-numeric:tabular-nums;}
+
+  .stagevid{flex:1;margin:0 14px;border-radius:20px;position:relative;overflow:hidden;background:radial-gradient(120% 90% at 50% 20%,#16233c 0%,#0a1220 70%);border:1px solid var(--border-soft);display:flex;align-items:center;justify-content:center;}
+  .bigav{width:78px;height:78px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#22406e,#0c1a30);color:var(--ink-100);font-size:28px;font-weight:600;border:1px solid rgba(80,212,255,0.25);box-shadow:0 0 40px -6px rgba(80,212,255,0.3);}
+
+  .trust{display:flex;align-items:center;gap:7px;margin:9px 14px 0;padding:8px 10px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(180deg,rgba(19,32,56,0.55),rgba(8,14,26,0.7));}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:0.04em;padding:4px 7px;border-radius:8px;white-space:nowrap;}
+  .chip svg{width:11px;height:11px;}
+  .c-ok{color:var(--good);background:rgba(59,227,176,0.12);border:1px solid rgba(59,227,176,0.28);}
+  .c-info{color:var(--accent);background:rgba(80,212,255,0.1);border:1px solid rgba(80,212,255,0.24);}
+  .c-net{color:var(--ink-70);background:var(--bg-2);border:1px solid var(--border);}
+  .trust .exp{margin-left:auto;width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:var(--bg-2);border:1px solid var(--border);color:var(--accent);cursor:pointer;}
+  .trust .exp svg{width:14px;height:14px;}
+
+  .guard{margin:8px 14px 0;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:linear-gradient(180deg,rgba(19,32,56,0.55),rgba(8,14,26,0.7));}
+  .ribbon{display:flex;height:46px;border-bottom:1px solid var(--border-soft);}
+  .rib-spec{flex:1;position:relative;}.rib-spec canvas{display:block;width:100%;height:100%;}
+  .rib-lab{position:absolute;top:5px;left:9px;font-family:var(--mono);font-size:7.5px;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-45);}
+  .rib-seal{width:46px;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;background:linear-gradient(135deg,rgba(14,11,34,0.6),rgba(7,7,18,0.75));border-left:1px solid var(--border-soft);}
+  .rib-seal canvas{position:absolute;inset:0;width:100%;height:100%;}
+  .seal-core{position:relative;z-index:2;width:22px;height:22px;border-radius:7px;display:grid;place-items:center;background:radial-gradient(circle at 50% 35%,rgba(80,212,255,0.22),rgba(8,14,28,0.9));border:1px solid rgba(80,212,255,0.4);box-shadow:0 0 12px -3px var(--accent);}
+  .seal-core svg{width:11px;height:11px;color:var(--accent);}
+  .rib-seal .sl{position:relative;z-index:2;font-family:var(--mono);font-size:6px;letter-spacing:0.06em;color:var(--ink-45);}
+  .bio{display:grid;grid-template-columns:repeat(3,1fr);}
+  .cell{padding:7px 10px;border-right:1px solid var(--border-soft);}.cell:last-child{border-right:0;}
+  .cell .k{font-family:var(--mono);font-size:7.5px;letter-spacing:0.08em;text-transform:uppercase;color:var(--ink-45);}
+  .cell .v{font-family:var(--mono);font-size:13px;color:var(--ink-100);margin-top:1px;font-variant-numeric:tabular-nums;}
+  .cell .v small{font-size:8px;color:var(--ink-45);margin-left:2px;}
+  .cell .st{font-family:var(--mono);font-size:7.5px;letter-spacing:0.06em;text-transform:uppercase;margin-top:3px;color:var(--good);}
+
+  /* ── CONTROL DOCK ────────────────────────────────────────── */
+  .dock{padding:12px 12px 16px;}
+  .drow{display:flex;justify-content:space-between;gap:6px;}
+  .db{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 2px;border-radius:14px;cursor:pointer;position:relative;}
+  .db .ic{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:var(--bg-2);border:1px solid var(--border);color:var(--ink-70);transition:.12s;}
+  .db .ic svg{width:20px;height:20px;}
+  .db .lbl{font-family:var(--mono);font-size:8px;letter-spacing:0.03em;color:var(--ink-45);text-transform:uppercase;}
+  .db.on .ic{background:rgba(80,212,255,0.16);border-color:var(--accent-deep);color:var(--accent);}
+  .db.on .lbl{color:var(--accent);}
+  .db.end .ic{background:linear-gradient(135deg,#e0384a,#a51226);border-color:transparent;color:#fff;}
+  .db .badge{position:absolute;top:4px;right:calc(50% - 26px);min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--accent);color:#04121f;font-family:var(--mono);font-size:9px;font-weight:700;display:grid;place-items:center;}
+  .dock .row2{margin-top:4px;}
+
+  /* route picker popover */
+  .popover{position:absolute;left:14px;right:14px;bottom:150px;z-index:25;border:1px solid var(--border);border-radius:16px;
+    background:linear-gradient(180deg,#132038,#0a1424);box-shadow:0 20px 50px -18px rgba(0,0,0,.8);overflow:hidden;
+    transform:translateY(12px);opacity:0;pointer-events:none;transition:.2s;}
+  .popover.show{transform:translateY(0);opacity:1;pointer-events:auto;}
+  .pop-t{font-family:var(--mono);font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:var(--ink-45);padding:11px 14px 6px;}
+  .pop-i{display:flex;align-items:center;gap:11px;padding:11px 14px;border-top:1px solid var(--border-soft);cursor:pointer;font-size:13.5px;}
+  .pop-i svg{width:18px;height:18px;color:var(--ink-70);}
+  .pop-i.sel{color:var(--accent);} .pop-i.sel svg{color:var(--accent);} .pop-i.sel .rt{margin-left:auto;color:var(--accent);}
+
+  /* generic bottom sheet (security + chat share) */
+  .sheet{position:absolute;left:0;right:0;bottom:0;top:96px;z-index:15;background:linear-gradient(180deg,#0b1526,#070d18);
+    border-top:1px solid var(--border);border-radius:22px 22px 0 0;transform:translateY(102%);transition:transform .34s cubic-bezier(.4,.9,.3,1);display:flex;flex-direction:column;box-shadow:0 -20px 50px -20px rgba(0,0,0,.7);}
+  .sheet.open{transform:translateY(0);}
+  .sheet-grab{width:36px;height:4px;border-radius:2px;background:var(--border);margin:10px auto 4px;flex:0 0 auto;}
+  .sheet-head{display:flex;align-items:center;gap:8px;padding:4px 18px 12px;border-bottom:1px solid var(--border-soft);flex:0 0 auto;}
+  .sheet-head h2{font-size:14px;font-weight:650;margin:0;}
+  .sheet-head .x{margin-left:auto;width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:var(--bg-2);border:1px solid var(--border);color:var(--ink-70);cursor:pointer;font-size:15px;}
+  .sheet-body{overflow-y:auto;padding:4px 0 18px;flex:1;}
+  .sec{padding:12px 18px;border-bottom:1px solid var(--border-soft);}
+  .sec-t{font-family:var(--mono);font-size:9px;letter-spacing:0.16em;text-transform:uppercase;color:var(--ink-45);margin-bottom:9px;display:flex;align-items:center;gap:6px;}
+  .sec-t .ok{color:var(--good);}.sec-t svg{width:11px;height:11px;}
+  .sasgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;}
+  .sasw{background:var(--bg-2);border:1px solid var(--border);border-radius:9px;padding:8px 6px;text-align:center;font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink-100);}
+  .sasw span{display:block;font-size:8px;color:var(--ink-45);margin-bottom:2px;font-weight:400;}
+  .verify{margin-top:9px;}.verify .vb{text-align:center;padding:8px;border-radius:9px;font-family:var(--mono);font-size:11px;font-weight:600;background:rgba(59,227,176,0.12);color:var(--good);border:1px solid rgba(59,227,176,0.3);}
+  .kv{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;font-family:var(--mono);font-size:12px;}
+  .kv .k{color:var(--ink-45);font-size:10.5px;}.kv .v{color:var(--ink-100);font-variant-numeric:tabular-nums;text-align:right;}
+  .kv .v.acc{color:var(--accent);}.kv .v.ok{color:var(--good);}.kv .v.cy{color:var(--cipher);}
+  .fp{font-size:10px;color:var(--ink-70);word-break:break-all;}
+  .reading{display:flex;gap:9px;align-items:flex-start;padding:10px 11px;border-radius:11px;background:rgba(59,227,176,0.08);border:1px solid rgba(59,227,176,0.24);margin-bottom:11px;}
+  .reading svg{width:15px;height:15px;color:var(--good);flex:0 0 auto;margin-top:1px;}
+  .reading p{margin:0;font-size:11.5px;line-height:1.45;color:var(--ink-70);}.reading p b{color:var(--ink-100);}
+  .brow{padding:8px 0;border-bottom:1px solid rgba(38,60,98,0.35);}.brow:last-child{border-bottom:0;}
+  .brow-top{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono);}
+  .brow-top .k{color:var(--ink-45);font-size:10.5px;}.brow-top .v{font-size:13px;font-variant-numeric:tabular-nums;color:var(--ink-100);}
+  .brow-top .v.ok{color:var(--good);}
+  .brow .mean{font-size:10.5px;color:var(--ink-45);line-height:1.4;margin-top:3px;}.brow .mean b{color:var(--ink-70);}
+  .tag{display:inline-block;font-family:var(--mono);font-size:8px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;padding:1px 5px;border-radius:5px;margin-left:6px;}
+  .tag.ok{color:var(--good);background:rgba(59,227,176,0.14);}
+
+  /* ── CHAT / SHARE sheet ─────────────────────────────────── */
+  .chat-body{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:9px;}
+  .msg{max-width:78%;padding:8px 11px;border-radius:14px;font-size:13px;line-height:1.35;}
+  .msg.them{align-self:flex-start;background:var(--bg-2);border:1px solid var(--border);border-bottom-left-radius:5px;}
+  .msg.me{align-self:flex-end;background:linear-gradient(135deg,#1b5fa0,#134a80);border-bottom-right-radius:5px;color:#eef6ff;}
+  .msg .tm{display:block;font-family:var(--mono);font-size:8.5px;color:var(--ink-45);margin-top:3px;}
+  .msg.me .tm{color:rgba(255,255,255,0.55);}
+  .msg.att{display:flex;align-items:center;gap:9px;}
+  .msg.att .ic{width:30px;height:30px;border-radius:8px;background:rgba(80,212,255,0.15);display:grid;place-items:center;color:var(--accent);flex:0 0 auto;}
+  .msg.att .ic svg{width:16px;height:16px;}
+  .msg .fn{font-size:12px;font-weight:600;}.msg .fs{font-family:var(--mono);font-size:9px;color:var(--ink-45);}
+  .map{width:150px;height:78px;border-radius:10px;background:linear-gradient(135deg,#123, #1a3a2e);position:relative;overflow:hidden;border:1px solid var(--border);}
+  .map::after{content:'📍';position:absolute;top:50%;left:50%;transform:translate(-50%,-60%);font-size:18px;}
+  .composer{flex:0 0 auto;border-top:1px solid var(--border-soft);padding:9px 12px;display:flex;align-items:center;gap:8px;}
+  .attbtns{display:flex;gap:4px;}
+  .ab{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--bg-2);border:1px solid var(--border);color:var(--ink-70);cursor:pointer;}
+  .ab svg{width:17px;height:17px;}
+  .cin{flex:1;background:var(--bg-1);border:1px solid var(--border);border-radius:20px;padding:9px 14px;color:var(--ink-45);font-size:13px;}
+  .send{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-deep));display:grid;place-items:center;color:#04121f;flex:0 0 auto;}
+  .send svg{width:18px;height:18px;}
+  .attsheet{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:6px 12px 12px;}
+  .att-opt{display:flex;flex-direction:column;align-items:center;gap:5px;padding:9px 4px;border-radius:12px;background:var(--bg-2);border:1px solid var(--border);cursor:pointer;}
+  .att-opt .ic{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;color:var(--accent);background:rgba(80,212,255,0.12);}
+  .att-opt .ic svg{width:17px;height:17px;}
+  .att-opt .l{font-family:var(--mono);font-size:8px;letter-spacing:0.04em;text-transform:uppercase;color:var(--ink-45);}
+
+  .scrim{position:absolute;inset:0;z-index:14;background:rgba(4,8,16,0.45);opacity:0;pointer-events:none;transition:.2s;}
+  .scrim.show{opacity:1;pointer-events:auto;}
+
+  .info{max-width:340px;padding-top:34px;}
+  .diffs{border:1px solid var(--border-soft);border-radius:14px;background:rgba(12,24,40,0.5);padding:16px 20px;margin-bottom:16px;}
+  .diffs h3{font-family:var(--mono);font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-45);margin:0 0 10px;}
+  .diffs ul{margin:0;padding-left:18px;color:var(--ink-70);font-size:12.5px;line-height:1.7;}
+  .diffs b{color:var(--ink-100);}.diffs .mono{font-family:var(--mono);color:var(--accent);}
+  @media (prefers-reduced-motion:reduce){.live{animation:none}.sheet,.retbar,.popover{transition:none}}
+</style>
+
+<div class="head">
+  <h1>Everything in reach — without losing the call</h1>
+  <p>The dock keeps the real controls (mute · speaker/Bluetooth route · video · screen-share · chat · end).
+  Open the <b>chat</b> to send a message, photo, file or location mid-call — a green
+  <span class="mono">on-call</span> bar stays pinned so one tap always drops you back into the conversation.</p>
+</div>
+
+<div class="stage">
+  <div class="col">
+    <div class="col-cap"><b>iOS shown</b> · Android identical</div>
+    <div class="phone"><div class="screen" id="scr">
+      <div class="notch"></div>
+
+      <!-- return-to-call bar (shows only over chat) -->
+      <div class="retbar" id="retbar" role="button" tabindex="0">
+        <span class="lv"></span> On call · <span class="t" data-tmr>04:12</span>
+        <span class="go">tap to return ↑</span>
+      </div>
+
+      <div class="sb"><span>9:41</span><span>􀙇 100%</span></div>
+      <div class="ch"><div class="av">MK</div><div class="who"><span class="n">Marco K.</span><span class="s"><span class="live"></span> Encrypted · P2P</span></div><span class="tmr" data-tmr>04:12</span></div>
+      <div class="stagevid"><div class="bigav">MK</div></div>
+
+      <div class="trust">
+        <span class="chip c-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"/></svg>SAS ✓</span>
+        <span class="chip c-info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>PQC</span>
+        <span class="chip c-net">P2P SRTP</span>
+        <div class="exp" id="openSec" role="button" tabindex="0" aria-label="Open security sheet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+      </div>
+
+      <div class="guard">
+        <div class="ribbon">
+          <div class="rib-spec"><div class="rib-lab">Remote voice · genuine 0.94</div><canvas data-spec></canvas></div>
+          <div class="rib-seal"><canvas data-cipher></canvas><div class="seal-core"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div><div class="sl">AES-256</div></div>
+        </div>
+        <div class="bio">
+          <div class="cell"><div class="k">Stress</div><div class="v" data-stress>18<small>/100</small></div><div class="st">calm</div></div>
+          <div class="cell"><div class="k">Breath·HNR</div><div class="v" data-hnr>21<small>dB</small></div><div class="st">clear</div></div>
+          <div class="cell"><div class="k">Pitch</div><div class="v" data-pitch>142<small>Hz</small></div><div class="st">steady</div></div>
+        </div>
+      </div>
+
+      <!-- CONTROL DOCK -->
+      <div class="dock">
+        <div class="drow">
+          <div class="db" id="btnMute"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg></div><div class="lbl">Mute</div></div>
+          <div class="db" id="btnRoute"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></svg></div><div class="lbl">Speaker</div></div>
+          <div class="db" id="btnVideo"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m23 7-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg></div><div class="lbl">Video</div></div>
+          <div class="db" id="btnShare"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="m9 10 3-3 3 3M12 7v6" transform="scale(0.6) translate(8 4)"/></svg></div><div class="lbl">Share screen</div></div>
+        </div>
+        <div class="drow row2">
+          <div class="db" id="btnChat"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div><div class="lbl">Chat</div><div class="badge">2</div></div>
+          <div class="db" id="btnEnhance"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg></div><div class="lbl">Enhance</div></div>
+          <div class="db" id="btnAdd"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg></div><div class="lbl">Add</div></div>
+          <div class="db end" id="btnEnd"><div class="ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 15.46l-5.27-.61-2.52 2.52a15 15 0 0 1-6.59-6.59l2.53-2.53L8.54 3H3.03C2.45 13.18 10.82 21.55 21 20.97v-5.51z"/></svg></div><div class="lbl">End</div></div>
+        </div>
+      </div>
+
+      <!-- route picker -->
+      <div class="popover" id="routePop">
+        <div class="pop-t">Audio output</div>
+        <div class="pop-i" data-route="Earpiece"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 18v-6a10 10 0 0 1 20 0v6"/><path d="M2 18a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H2zM22 18a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/></svg>Earpiece</div>
+        <div class="pop-i sel" data-route="Speaker"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></svg>Speaker<span class="rt">✓</span></div>
+        <div class="pop-i" data-route="Bluetooth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 7 10 10-5 5V2l5 5L7 17"/></svg>Marco's Buds · Bluetooth</div>
+        <div class="pop-i" data-route="Wired"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/></svg>Wired headset</div>
+      </div>
+
+      <!-- SECURITY sheet -->
+      <div class="sheet" id="secSheet">
+        <div class="sheet-grab"></div>
+        <div class="sheet-head"><h2>Session security</h2><div class="x" data-closesheet role="button" tabindex="0">✕</div></div>
+        <div class="sheet-body">
+          <div class="sec"><div class="sec-t"><svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"/></svg>SAS · read aloud to verify Marco</div>
+            <div class="sasgrid"><div class="sasw"><span>1</span>river</div><div class="sasw"><span>2</span>anchor</div><div class="sasw"><span>3</span>violet</div><div class="sasw"><span>4</span>cobalt</div><div class="sasw"><span>5</span>member</div><div class="sasw"><span>6</span>salute</div></div>
+            <div class="verify"><div class="vb">✓ Verified 04:09 · trust pinned</div></div></div>
+          <div class="sec"><div class="sec-t">Handshake · post-quantum</div>
+            <div class="kv"><span class="k">Key exchange</span><span class="v acc">X25519 + ML-KEM-1024</span></div>
+            <div class="kv"><span class="k">Ratchet</span><span class="v">Double-Ratchet v4</span></div>
+            <div class="fp">9F2A·C41E·7B0D·88AE·3C55·E091·A6F7·2D4B</div></div>
+          <div class="sec"><div class="sec-t">Media cipher &amp; keys</div>
+            <div class="kv"><span class="k">Frame seal</span><span class="v cy">sframe-aes256-v1</span></div>
+            <div class="kv"><span class="k">KMS key</span><span class="v">3-7-26 kms · phone</span></div>
+            <div class="kv"><span class="k">Key epoch</span><span class="v ok">1 · acknowledged</span></div>
+            <div class="kv"><span class="k">Last rekey</span><span class="v" data-rekey>0:38 ago</span></div></div>
+          <div class="sec"><div class="sec-t">Transport</div>
+            <div class="kv"><span class="k">Media path</span><span class="v">P2P · DTLS-SRTP</span></div>
+            <div class="kv"><span class="k">Codec</span><span class="v">Opus 48k · sealed DC</span></div></div>
+          <div class="sec" style="border-bottom:0"><div class="sec-t">Voice biometrics · Marco (live)</div>
+            <div class="reading"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg><p><b>Reads as a real, calm human.</b> Natural pitch &amp; breath micro-variations present (a cloned voice lacks them), stress low — no synthesis or duress markers.</p></div>
+            <div class="brow"><div class="brow-top"><span class="k">Authenticity</span><span class="v ok" data-auth>genuine · 0.94<span class="tag ok">verified</span></span></div><div class="mean"><b>&gt;0.80 genuine · 0.50–0.80 verify by SAS · &lt;0.50 likely AI voice.</b></div></div>
+            <div class="brow"><div class="brow-top"><span class="k">Stress</span><span class="v" data-stress2>18/100<span class="tag ok">calm</span></span></div><div class="mean"><b>10–35 relaxed · &gt;60 agitated / under duress</b> — a sustained spike can mean coercion.</div></div>
+            <div class="brow"><div class="brow-top"><span class="k">Jitter / Shimmer</span><span class="v" data-jitshim>0.6% / 2.1%</span></div><div class="mean">Normal &lt;1% / &lt;3%. Too-perfect (≈0) is itself suspicious — human voices are never that steady.</div></div>
+            <div class="brow"><div class="brow-top"><span class="k">Breath · HNR / breathiness</span><span class="v ok" data-hnrbr>21 dB / 0.12</span></div><div class="mean">&gt;20 dB clear · &lt;10 dB hoarse or noisy link.</div></div>
+            <div class="brow"><div class="brow-top"><span class="k">Pitch f0 · rate</span><span class="v" data-pitchrate>142 Hz · 4.1 syl/s</span></div><div class="mean">Sudden shift from Marco's baseline can flag an impersonation swap.</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHAT / SHARE sheet -->
+      <div class="sheet" id="chatSheet">
+        <div class="sheet-grab"></div>
+        <div class="sheet-head"><h2>Marco K. · chat</h2><div class="x" data-closesheet role="button" tabindex="0">✕</div></div>
+        <div class="chat-body">
+          <div class="msg them">See you at 6 by the north entrance.<span class="tm">04:02</span></div>
+          <div class="msg me">Perfect. Sending you the map now.<span class="tm">04:03 ✓✓</span></div>
+          <div class="msg me att"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 12-9 12s-9-5-9-12a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></div><div><div class="fn">Meeting point</div><div class="map"></div></div></div>
+          <div class="msg them att"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></div><div><div class="fn">Contract_v4.pdf</div><div class="fs">1.2 MB · sealed</div></div></div>
+        </div>
+        <div class="attsheet" id="attSheet" style="display:none">
+          <div class="att-opt"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></div><div class="l">Photo</div></div>
+          <div class="att-opt"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></div><div class="l">File</div></div>
+          <div class="att-opt"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 12-9 12s-9-5-9-12a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></div><div class="l">Location</div></div>
+          <div class="att-opt"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div><div class="l">Contact</div></div>
+        </div>
+        <div class="composer">
+          <div class="attbtns"><div class="ab" id="attToggle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></div></div>
+          <div class="cin">Encrypted message…</div>
+          <div class="send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg></div>
+        </div>
+      </div>
+
+      <div class="scrim" id="scrim"></div>
+    </div></div>
+  </div>
+
+  <div class="col info">
+    <div class="diffs" style="margin-top:0">
+      <h3>Controls (all real, reused)</h3>
+      <ul>
+        <li><b>Mute · Route · Video · Screen-share</b> — primary row. Route opens the picker: <b>Speaker / Bluetooth</b> (Marco's Buds) / Earpiece / Wired — driven by <span class="mono">CallAudioRouter</span> + <span class="mono">BluetoothHeadsetController</span>.</li>
+        <li><b>Chat · Enhance · Add · End</b> — second row. Chat badge = unread while in-call.</li>
+      </ul>
+    </div>
+    <div class="diffs">
+      <h3>Send-while-talking</h3>
+      <ul>
+        <li>Chat opens as a sheet over the call. Send <b>message · photo · file · location · contact</b> (the <span class="mono">+</span> tray) — same sealed transport as normal chat.</li>
+        <li>A green <b>On call · 04:12 — tap to return</b> bar stays pinned at the top the whole time. One tap ⇒ straight back to the call. The call never drops.</li>
+      </ul>
+    </div>
+    <div class="diffs">
+      <h3>Try it</h3>
+      <ul><li><b>Chat</b> → send sheet + return bar. <b>Speaker</b> → route picker. <b>Shield</b> → security. Any icon toggles.</li></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const dpr=Math.max(1,Math.min(2,devicePixelRatio||1));
+  const BINS=34;
+  const spec=new Float32Array(BINS),peak=new Float32Array(BINS);
+  const formants=[{f:0.12,a:1},{f:0.3,a:0.65},{f:0.55,a:0.35}];
+  let t=0,syl=0,sylLen=22,rms=0;
+  function step(){t++;if(syl<=0)syl=sylLen=14+(t*37%20|0);syl--;
+    let env=Math.max(0,Math.sin((1-syl/sylLen)*Math.PI))**1.3;env*=(t%150<96)?1:0.14;
+    formants.forEach((fm,i)=>fm.f+=Math.sin(t*0.012*(i+1))*0.0008);let acc=0;
+    for(let i=0;i<BINS;i++){const x=i/BINS;let m=0;for(const fm of formants){const d=x-fm.f;m+=fm.a*Math.exp(-(d*d)/0.004);}
+      const tilt=Math.exp(-x*1.5),noise=(Math.random()*0.5+0.25)*0.2;let v=Math.min(1,env*(m*tilt+noise*tilt*0.5));
+      spec[i]+=(v-spec[i])*0.5;peak[i]=Math.max(peak[i]*0.96,spec[i]);acc+=spec[i]*spec[i];}
+    rms+=(Math.sqrt(acc/BINS)-rms)*0.2;}
+  function drawSpec(cv){const w=cv.clientWidth,h=cv.clientHeight;if(!w||!h)return;if(cv.width!==w*dpr){cv.width=w*dpr;cv.height=h*dpr;}
+    const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);const padT=13,gh=h-padT-3,bw=w/BINS;
+    for(let i=0;i<BINS;i++){const v=spec[i],bh=v*gh,x=i*bw,y=padT+gh-bh;const hue=190-i/BINS*36,light=56+v*24+i/BINS*8;
+      const gr=g.createLinearGradient(0,padT+gh,0,y);gr.addColorStop(0,`hsla(${hue},95%,${light-18}%,0.3)`);gr.addColorStop(1,`hsla(${hue},100%,${light}%,0.95)`);
+      g.fillStyle=gr;g.fillRect(x,y,Math.max(1,bw-1.2),bh);const py=padT+gh-peak[i]*gh;g.fillStyle=`hsla(${hue},100%,${light+10}%,0.85)`;g.fillRect(x,py-1,Math.max(1,bw-1.2),1.2);}}
+  function drawCipher(cv){const w=cv.clientWidth,h=cv.clientHeight;if(!w||!h)return;if(cv.width!==w*dpr){cv.width=w*dpr;cv.height=h*dpr;}
+    const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.fillStyle='rgba(9,8,20,0.4)';g.fillRect(0,0,w,h);
+    const density=7+Math.floor(rms*140),drift=(t*0.5)%w;
+    for(let i=0;i<density;i++){const px=(Math.random()*w+drift)%w,py=Math.random()*h,mix=Math.random();
+      g.fillStyle=`rgba(${80+mix*44|0},${108+(1-mix)*90|0},255,${0.35+Math.random()*0.5})`;g.fillRect(px,py,Math.random()<0.15?1.5:1,1);}}
+  const specs=[...document.querySelectorAll('[data-spec]')],ciphers=[...document.querySelectorAll('[data-cipher]')];
+  let ui=0;
+  function readouts(){if(ui++%14)return;
+    const stress=Math.round(14+rms*22+Math.random()*4),hnr=(19+rms*4+Math.random()).toFixed(0),pitch=Math.round(134+Math.sin(t*0.02)*14),
+      jit=(0.4+rms*0.6).toFixed(1),shim=(1.8+rms*1.4).toFixed(1),rate=(3.8+rms*0.8).toFixed(1),br=(0.10+rms*0.08).toFixed(2);
+    document.querySelectorAll('.cell [data-stress]').forEach(e=>e.firstChild.nodeValue=stress);
+    document.querySelectorAll('.cell [data-hnr]').forEach(e=>e.firstChild.nodeValue=hnr);
+    document.querySelectorAll('.cell [data-pitch]').forEach(e=>e.firstChild.nodeValue=pitch);
+    document.querySelectorAll('[data-stress2]').forEach(e=>e.firstChild.nodeValue=stress+'/100');
+    document.querySelectorAll('[data-jitshim]').forEach(e=>e.textContent=jit+'% / '+shim+'%');
+    document.querySelectorAll('[data-hnrbr]').forEach(e=>e.textContent=hnr+' dB / '+br);
+    document.querySelectorAll('[data-pitchrate]').forEach(e=>e.textContent=pitch+' Hz · '+rate+' syl/s');}
+  function loop(){step();specs.forEach(drawSpec);ciphers.forEach(drawCipher);readouts();if(!reduce)requestAnimationFrame(loop);}
+  requestAnimationFrame(loop);
+  if(reduce){for(let i=0;i<24;i++)step();specs.forEach(drawSpec);ciphers.forEach(drawCipher);readouts();}
+
+  const $=s=>document.getElementById(s);
+  const scrim=$('scrim'),retbar=$('retbar');
+  function showScrim(on){scrim.classList.toggle('show',on);}
+  function openSheet(el,isChat){[...document.querySelectorAll('.sheet')].forEach(s=>s.classList.remove('open'));
+    el.classList.add('open');showScrim(true);retbar.classList.toggle('show',!!isChat);$('routePop').classList.remove('show');}
+  function closeSheets(){[...document.querySelectorAll('.sheet')].forEach(s=>s.classList.remove('open'));showScrim(false);retbar.classList.remove('show');}
+  $('openSec').onclick=()=>openSheet($('secSheet'),false);
+  $('btnChat').onclick=()=>openSheet($('chatSheet'),true);
+  retbar.onclick=closeSheets;
+  scrim.onclick=()=>{closeSheets();$('routePop').classList.remove('show');};
+  document.querySelectorAll('[data-closesheet]').forEach(x=>x.onclick=closeSheets);
+  document.querySelectorAll('.sheet-grab').forEach(g=>g.onclick=closeSheets);
+
+  // route picker
+  $('btnRoute').onclick=()=>{const p=$('routePop');const open=p.classList.toggle('show');showScrim(open);};
+  document.querySelectorAll('[data-route]').forEach(i=>i.onclick=()=>{
+    document.querySelectorAll('.pop-i').forEach(x=>{x.classList.remove('sel');const c=x.querySelector('.rt');if(c)c.remove();});
+    i.classList.add('sel');i.insertAdjacentHTML('beforeend','<span class="rt">✓</span>');
+    const lbl=i.dataset.route;$('btnRoute').querySelector('.lbl').textContent=lbl==='Bluetooth'?'Bluetooth':lbl;
+    $('btnRoute').classList.toggle('on',lbl!=='Earpiece');$('routePop').classList.remove('show');showScrim(false);});
+
+  // simple toggles
+  ['btnMute','btnVideo','btnShare','btnEnhance'].forEach(id=>{const b=$(id);b.onclick=()=>b.classList.toggle('on');});
+  $('attToggle').onclick=()=>{const a=$('attSheet');a.style.display=a.style.display==='none'?'grid':'none';};
+  $('btnEnd').onclick=()=>{};
+
+  let secs=252,rk=38;
+  setInterval(()=>{secs++;rk++;const m=(secs/60|0),s=secs%60;
+    document.querySelectorAll('[data-tmr]').forEach(e=>e.textContent=String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'));
+    const rm=(rk/60|0),rs=rk%60;document.querySelectorAll('[data-rekey]').forEach(e=>e.textContent=rm+':'+String(rs).padStart(2,'0')+' ago');},1000);
+})();
+</script>

@@ -18,19 +18,22 @@ import QAudionEngine
 ///                              (refreshed once per second via TimelineView)
 ///   - `confidence`          ← `appState.confidenceScore` (@Published, live
 ///                              feed from deepfake detector)
-///   - `recentSamples`       ← `appState.txWaveformSamples` (last N tx samples)
 ///   - `muted`               ← local @State mirror, set + read by button tap
-///   - `transportMode`       ← `.bcryptoWsRelay` if `backendType == "PQC"`
-///                              else `.disconnected` (richer mapping when
-///                              engine surfaces real transport feedback)
+///   - `transportMode`       ← maps live `backendType` ("p2p"/"turn"/"relay")
+///                              to the corresponding TransportMode case
+///                              (see `liveTransportMode`) — FIXED: this used
+///                              to compare `backendType == "PQC"`, a literal
+///                              backendType never holds, so the chip always
+///                              fell through to `.disconnected`.
 ///   - `keyInfo`             ← built from `appState.callPqcSessionKey` +
 ///                              `appState.pskActive`/`pskName`/`pskFingerprint`
 ///                              when ML-KEM session key is available (W502)
+///   - `voiceBiometrics`     ← built from `appState.voiceAnalysis` (Guardian
+///                              ribbon + security-sheet biometrics; unified
+///                              call UI pass — see `liveVoiceBiometrics`)
 ///
 /// Stub fields (kept until engine exposes them — see W29 spec from
 /// the parallel agent):
-///   - `recentSamples` if empty → fallback to confidenceScore-derived
-///                                 5-point sparkline
 ///   - `rekeyInSeconds` / `rekeyTotalSeconds` — fixed 252/300
 ///   - `voiceEnhancement` — local @State only
 ///   - `speakerOn` — local @State only (real AVAudioSession routing
@@ -161,10 +164,16 @@ struct LiveInCallScreen: View {
                 avatarUrl: nil,
                 durationSeconds: Int(appState.callService.callDurationSeconds),
                 confidence: Double(appState.confidenceScore),
-                recentSamples: liveSamples,
                 rekeyInSeconds: liveRekeyInSeconds,
                 rekeyTotalSeconds: Self.rekeyTotalSeconds,
-                pqcActive: appState.backendType == "PQC",
+                // W-TRUSTBAR-FIX: backendType is one of "p2p"/"turn"/"relay"
+                // (see AppState.swift ~line 267) — it is NEVER the literal
+                // "PQC". The PQC handshake is a SEPARATE layer from the
+                // media transport; "PQC active" should reflect whether the
+                // ML-KEM session key has actually been established, i.e.
+                // the same live source the trust-bar/key-info panel already
+                // uses (liveKeyInfo != nil), not the transport string.
+                pqcActive: liveKeyInfo != nil,
                 // W339: real SAS from ComputeSasUseCase — derived from
                 // appState.callPqcSessionKey when set by the call setup
                 // path. While the key is nil (current state in most
@@ -184,8 +193,39 @@ struct LiveInCallScreen: View {
                 hasVideo: appState.isVideoCall,
                 cameraOn: cameraOn,
                 peerShortNumber: cachedPeerShortNumber,
-                rxSamples: liveRxSamples,
-                cipherSamples: liveCipherSamples,
+                // TrustChainCard phone-vs-earbud model: iOS has NO earbud
+                // media-provider path yet (EarbudCounterpartyService only
+                // handles the PQC handshake toward a PEER's earbud, never a
+                // local earbud media route), so both flags are a constant
+                // false — the software branch renders. When the earbud
+                // provider lands, wire its "active + CRACEN verified" state
+                // here (Android: SecureMediaProviderSelector).
+                earbudActive: false,
+                earbudHwVerified: false,
+                // Unified call UI — Guardian ribbon + security-sheet
+                // biometrics. nil while appState.voiceAnalysis is nil
+                // (engine flag off, or no result has arrived yet) —
+                // InCallScreen renders the graceful "not available"
+                // state in that case. Wired on both call directions.
+                voiceBiometrics: liveVoiceBiometrics,
+                // Unified call UI — REAL RX spectrum (40 bands 0..1,
+                // ≤15 Hz, SpectrumExtractor over the decoded remote
+                // PCM). nil before the first decoded frame → the
+                // MiniSpectrum bars decay to rest, never fabricated.
+                voiceSpectrum: appState.voiceSpectrum,
+                // No live rekey-count/epoch source exists yet (see
+                // AppState.rekeyCount doc comment — it is declared but
+                // never incremented by any current rotation hook), so we
+                // pass nil rather than a fabricated epoch. If a future
+                // pass wires a real rekey event, swap this for
+                // `appState.rekeyCount`.
+                keyEpoch: nil,
+                // Unified call UI — live crypto-engine rate (real AES-256-GCM
+                // frame ops/s). Sampled once/sec by AppState.startCryptoMeter()
+                // from the CallService frame counters; 0 hides the pulsing
+                // meter. Read inside the per-second TimelineView body so the
+                // ribbon re-renders with a fresh value each tick.
+                cryptoOpsPerSec: appState.cryptoOpsPerSec,
                 onToggleMute: handleToggleMute,
                 onToggleSpeaker: handleToggleSpeaker,
                 onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
@@ -440,6 +480,36 @@ struct LiveInCallScreen: View {
         )
     }
 
+    /// Unified call UI — maps the live `AppState.voiceAnalysis` (raw
+    /// engine result, see QAudionEngine.VoiceAnalysisResult) onto
+    /// InCallScreen's small display-only `VoiceBiometrics` struct. Returns
+    /// nil while no result has arrived (engine flag off, or genuinely no
+    /// analysis yet — both call directions are wired as of 2026-07-04) —
+    /// InCallScreen then omits the biometrics rows entirely rather than
+    /// showing zeros.
+    private var liveVoiceBiometrics: InCallScreen.VoiceBiometrics? {
+        guard let result = appState.voiceAnalysis else { return nil }
+        return InCallScreen.VoiceBiometrics(
+            stressScore: result.stress.score,
+            jitter: result.stress.jitter,
+            shimmer: result.stress.shimmer,
+            hnr: result.voiceHealth.hnr,
+            breathiness: result.voiceHealth.breathiness,
+            pitchHz: result.pitch.f0Hz,
+            syllablesPerSec: result.speechRate.syllablesPerSec,
+            confidence: result.confidence,
+            // Unified call UI — formant/energy inputs for the animated
+            // mini-spectrum. f1…f4 are the real vocal-resonance peaks; the
+            // spectrum maps them onto a 0…3800 Hz display band. `speaking`
+            // gates the cyan→green active tint (isSpeaking && voiced).
+            f1: result.formants.f1,
+            f2: result.formants.f2,
+            f3: result.formants.f3,
+            f4: result.formants.f4,
+            speaking: result.speechRate.isSpeaking && result.pitch.voiced
+        )
+    }
+
     /// Compute a short display fingerprint from the ML-KEM session key.
     /// Format: first 8 hex chars + "…" + last 4 hex chars of SHA-256(key).
     /// E.g. "7f3bd2a1…d2e9" — matches Android KeyInfoPanel.
@@ -525,50 +595,12 @@ struct LiveInCallScreen: View {
         return Self.rekeyTotalSeconds - inWindow
     }
 
-    /// Live samples for the SessionStatusStrip mini-spark inside InCallScreen.
-    /// Prefers the engine's `txWaveformSamples` feed when populated; falls back
-    /// to a confidence-derived sparkline so the strip renders something
-    /// meaningful even before any audio packet has arrived.
-    ///
-    /// NOTE: `appState.txWaveform` (128-element array) is intentionally NOT
-    /// used here — it is initialised to `Array(repeating: 0, count: 128)` so
-    /// it is never empty, causing the old code to always pass 128 zeros to
-    /// MiniSpark → flat line drawn at y=0.  `txWaveformSamples` starts empty
-    /// and only receives real samples once the audio engine delivers frames,
-    /// so the empty-check correctly gates the fallback sparkline.
-    private var liveSamples: [Float] {
-        // W523 — user feedback v1.0.522: the SessionStatusStrip mini-spark
-        // duplicates the main "VOCE RICEVUTA" oscilloscope below the avatar.
-        // Pass an empty array so the strip hides the spark (SessionStatusStrip
-        // guards `if !recentSamples.isEmpty`) and keeps the strip purely as
-        // presence + confidence + rekey-countdown summary. The full waveform
-        // moved to the stats card.
-        return []
-    }
-
-    /// Live RX oscilloscope — received audio from the peer.
-    /// This is the raw PCM that feeds the deepfake detector in real time.
-    /// Normalized to -1…1; up to 64 samples for a smooth waveform.
-    private var liveRxSamples: [Float] {
-        guard appState.callState == .active || appState.callState == .encrypted else {
-            return []
-        }
-        let rx = appState.rxWaveformSamples
-        guard !rx.isEmpty else { return [] }
-        return Array(rx.suffix(64))
-    }
-
-    /// Live cipher oscilloscope — byte amplitudes of the decrypted packet stream.
-    /// Normalized to -1…1 (cipher bytes mapped through 0…1 → -1…1 around midpoint).
-    /// Shows that the ML-KEM-1024 + SFrame pipeline is actively processing frames.
-    private var liveCipherSamples: [Float] {
-        guard appState.callState == .active || appState.callState == .encrypted else {
-            return []
-        }
-        let cipher = appState.cipherWaveformSamples
-        guard !cipher.isEmpty else { return [] }
-        return Array(cipher.suffix(64))
-    }
+    // NOTE (2026-07-04 dedup): the old `liveSamples` / `liveRxSamples` /
+    // `liveCipherSamples` bridges are GONE together with InCallScreen's
+    // SessionStatusStrip call and the synthetic "VOCE RICEVUTA"/"CIFRATURA"
+    // oscilloscopes they fed. The honest replacements are already wired
+    // below: `appState.voiceSpectrum` (real RX FFT → Guardian MiniSpectrum)
+    // and `appState.cryptoOpsPerSec` (real AES-GCM ops/s → CipherFlowTube).
 
     private var liveTransportMode: InCallScreen.TransportMode {
         switch appState.backendType {
@@ -586,7 +618,7 @@ struct LiveInCallScreen: View {
             let s = AppState()
             s.callContactId = "user-mario"
             s.confidenceScore = 0.92
-            s.backendType = "PQC"
+            s.backendType = "p2p"
             s.isInCall = true
             return s
         }())

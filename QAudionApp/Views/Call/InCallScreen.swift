@@ -7,35 +7,52 @@ import QAudionEngine
 ///   - Mobile Stitch mockup `Q-Audion Active Call` (project 15710203507549916868)
 ///
 /// Cross-platform parity is the design contract. Component vocabulary
-/// (MetaPill / CircularAction / AvatarHalo / SessionStatusStrip / QAudionAvatar)
+/// (MetaPill / CircularAction / AvatarHalo / QAudionAvatar)
 /// and color tokens (`scheme.X`, `extras.Y`) are shared with Android and
 /// Desktop — only the layout is mobile-tuned.
 ///
-/// Layout (top → bottom):
-///   1. **SessionStatusStrip** — slim 30pt strip with confidence dot,
-///      "VOCE VERIFICATA" presence, C=0.NN, mini-spark, RE-KEY MM:SS.
-///   2. **Hero avatar** — 220pt halo (success → connected, pqcAccent →
-///      negotiating, warning → degraded) wrapping a 160pt avatar with
+/// Layout (top → bottom) — mirrors the Android InCallScreen ceremony
+/// column 1:1 (2026-07-04 dedup pass: the old SessionStatusStrip call and
+/// the old synthetic "VOCE RICEVUTA"/"CIFRATURA" oscilloscopes were
+/// DELETED — the Guardian ribbon's real-FFT MiniSpectrum + real-ops/s
+/// CipherFlowTube are their one honest replacement):
+///   1. **Hero avatar** — 180pt halo (success → connected, pqcAccent →
+///      negotiating, warning → degraded) wrapping a 120pt avatar with
 ///      the per-name gradient.
-///   3. **Peer name** + presence subtitle.
-///   4. **Stats card** — 3 columns: DURATA, CONFIDENCE, RE-KEY progress.
-///   5. **SAS verification panel** — visible only when `sasWords.count == 6`.
-///   6. **Key info panel** — visible only when `keyInfo != nil`.
-///   7. **Pills row** — RE-KEY / LIVENESS / PSK ROTATION badges.
-///   8. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
+///   2. **Peer name** + presence subtitle.
+///   3. **Stats band** — 3 columns: DURATA, CONFIDENCE, RE-KEY progress
+///      (Android's stats Row; absorbs what SessionStatusStrip showed).
+///   4. **Trust bar** — SAS ✓ / PQC / transport chips + shield-to-expand.
+///   5. **Guardian ribbon** — real-FFT MiniSpectrum + cipher-seal chip +
+///      3 gauges (STRESS / BREATH·HNR / PITCH) + ENGINE CipherFlowTube.
+///   6. **TrustChainCard** — Mic→Seal→Air custody visual, full
+///      phone-vs-earbud model (iOS-only card, honest data).
+///   7. **SAS verification panel** — visible only when `sasWords.count == 6`.
+///   8. **Key info panel** — visible only when `keyInfo != nil`.
+///   9. **Pills row** — LIVENESS / PSK ROTATION badges.
+///  10. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
 ///      optional analytics toggle (`onToggleDiagnostics`).
-///   9. **Pinned bottom action row** — mute / audio-route /
-///      voice-enhance / add-participant / hangup.
+///  11. **Pinned bottom action row** — 2-row dock: mute / speaker /
+///      video / screen-share · enhance / add-participant / hangup.
 ///
 /// Stub fields (not yet wired through `AppState` / engine call state):
-/// `confidence`, `recentSamples`, `rekeyInSeconds`, `sasWords`,
-/// `sasVerified`, `keyInfo`, `transportMode`. Defaults render the screen
-/// for design preview; the real wiring lands once
-/// `AppState.callState`/`InCallContainer` exposes the equivalent fields.
+/// `confidence`, `rekeyInSeconds`, `sasWords`, `sasVerified`, `keyInfo`,
+/// `transportMode`. Defaults render the screen for design preview; the
+/// real wiring lands once `AppState.callState`/`InCallContainer` exposes
+/// the equivalent fields.
 struct InCallScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Unified call UI — respect the system Reduce Motion setting: when on,
+    /// the animated mini-spectrum + crypto-engine comet freeze to a single
+    /// representative frame instead of continuously redrawing.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Unified call UI — security sheet presentation state. Local to this
+    /// view (not plumbed from AppState): purely a "is the aggregating
+    /// sheet open" UI flag, nothing security-critical is gated by it.
+    @State private var showSecuritySheet: Bool = false
 
     // MARK: - Cross-platform model types (shared vocabulary)
 
@@ -63,13 +80,61 @@ struct InCallScreen: View {
         let pskFingerprint: String?        // "a83c-9f12"
     }
 
+    /// Unified call UI — Guardian ribbon voice-biometrics snapshot. Maps
+    /// 1:1 onto `QAudionEngine.VoiceAnalysisResult` fields the security
+    /// sheet needs; kept as a small local struct (rather than importing
+    /// QAudionEngine's type directly into the view's public API) so
+    /// InCallScreen's previews/tests don't need to construct the full
+    /// engine result type. nil at the call site ⇒ every biometrics row
+    /// in the security sheet is omitted gracefully (no fabricated data).
+    struct VoiceBiometrics: Equatable {
+        let stressScore: Float        // 0...1 (VoiceAnalysisResult.Stress.score)
+        let jitter: Float             // 0...1 fraction (not yet ×100)
+        let shimmer: Float            // 0...1 fraction
+        let hnr: Float                // dB (VoiceAnalysisResult.VoiceHealth.hnr)
+        let breathiness: Float        // 0...1
+        let pitchHz: Float            // VoiceAnalysisResult.Pitch.f0Hz
+        let syllablesPerSec: Float    // VoiceAnalysisResult.SpeechRate.syllablesPerSec
+        let confidence: Float         // 0...1 (VoiceAnalysisResult.confidence)
+        // Unified call UI — f1…f4 are the REAL vocal-resonance peak
+        // frequencies (Hz) from VoiceAnalysisResult.Formants. As of the
+        // real-FFT MiniSpectrum (2026-07-04) they NO LONGER drive the
+        // spectrum bars — the bars are the actual `voiceSpectrum` bands —
+        // but the fields are retained (call sites/previews already
+        // populate them, and a future formant overlay may use them).
+        // `speaking` still gates the MiniSpectrum's cyan→green "active"
+        // tint (VoiceAnalysisResult.speechRate.isSpeaking && .pitch.voiced).
+        // Defaulted so preview/test call sites keep compiling.
+        let f1: Float                 // VoiceAnalysisResult.Formants.f1 (Hz)
+        let f2: Float                 // .f2 (Hz)
+        let f3: Float                 // .f3 (Hz)
+        let f4: Float                 // .f4 (Hz)
+        let speaking: Bool            // .speechRate.isSpeaking && .pitch.voiced
+
+        init(stressScore: Float, jitter: Float, shimmer: Float, hnr: Float,
+             breathiness: Float, pitchHz: Float, syllablesPerSec: Float,
+             confidence: Float,
+             f1: Float = 0, f2: Float = 0, f3: Float = 0, f4: Float = 0,
+             speaking: Bool = false) {
+            self.stressScore = stressScore
+            self.jitter = jitter
+            self.shimmer = shimmer
+            self.hnr = hnr
+            self.breathiness = breathiness
+            self.pitchHz = pitchHz
+            self.syllablesPerSec = syllablesPerSec
+            self.confidence = confidence
+            self.f1 = f1; self.f2 = f2; self.f3 = f3; self.f4 = f4
+            self.speaking = speaking
+        }
+    }
+
     // MARK: - Inputs
 
     let peerDisplayName: String
     let avatarUrl: URL?
     let durationSeconds: Int
     let confidence: Double
-    let recentSamples: [Float]
     let rekeyInSeconds: Int
     let rekeyTotalSeconds: Int
     let pqcActive: Bool
@@ -89,14 +154,48 @@ struct InCallScreen: View {
     /// Priorità assoluta nel cerchietto dell'avatar. Port di Android
     /// `AvatarImage.kt` `shortNumber` param.
     let peerShortNumber: String?
-    /// Normalized RX PCM samples (-1…1) from the received audio stream.
-    /// Drives the "VOCE RICEVUTA" waveform — oscilloscope of what the
-    /// peer is saying, which is also the deepfake-detector's live input.
-    let rxSamples: [Float]
-    /// Normalized cipher-stream samples from the active decryption path.
-    /// Drives the "CIFRATURA" waveform — visually represents the
-    /// encryption/decryption process on received audio packets.
-    let cipherSamples: [Float]
+    /// TrustChainCard — true when the active media provider is the earbud
+    /// secure element (mic + seal both live in earbud hardware, so the
+    /// protection envelope reaches the microphone). Android parity:
+    /// `GuardianRibbon.kt` `TrustChainCard(earbudActive:)`. iOS has NO
+    /// earbud media-provider path yet, so live call sites wire a constant
+    /// `false` — the view still implements BOTH states so the card is
+    /// ready the day the provider lands (and for design previews).
+    let earbudActive: Bool
+    /// TrustChainCard — true when the earbud's CRACEN secure element was
+    /// confirmed active (drives the "Secure element CRACEN ✓ / linking…"
+    /// stat row). Only meaningful while `earbudActive == true`.
+    let earbudHwVerified: Bool
+    /// Unified call UI — live Guardian voice-biometrics snapshot for the
+    /// security sheet + Guardian ribbon mini-gauges. nil while unavailable
+    /// (engine flag off, or no result yet — both call directions wired) —
+    /// every dependent row is omitted gracefully, never fabricated.
+    let voiceBiometrics: VoiceBiometrics?
+    /// Unified call UI — REAL remote-voice spectrum: 40 log-spaced bands
+    /// (0..1) of ACTUAL RX-PCM FFT magnitude (`SpectrumExtractor`, ≤15 Hz).
+    /// Drives the Guardian ribbon MiniSpectrum bars 1:1 — parity with
+    /// Android's real-FFT MiniSpectrum, no synthetic shimmer, no formant
+    /// fake. nil ⇒ no decoded frame yet / between calls ⇒ the bars decay
+    /// to rest rather than animating fabricated motion.
+    let voiceSpectrum: [Float]?
+    /// Unified call UI — KMS key epoch counter (0-based count of rekeys
+    /// this call has performed so far). nil when no live rekey-count
+    /// source is available; the security sheet then shows the static
+    /// "PQC session key" row without an epoch/countdown line rather than
+    /// fabricating one. Currently sourced from `AppState.rekeyCount`,
+    /// which increments only if a live rotation hook exists (see
+    /// CallSessionKeyBroker / KeyRotationCoordinator — as of this pass
+    /// neither exposes an in-call rekey EVENT, only the one-time initial
+    /// key registration, so this is expected to render nil / omitted).
+    let keyEpoch: Int?
+    /// Unified call UI — live crypto-engine rate: real AES-256-GCM frame
+    /// operations per second (seal(TX)+open(RX)), sampled once/sec by
+    /// `AppState.startCryptoMeter()` from the ground-truth `CallService`
+    /// frame counters. 0 when no frames are flowing → the pulsing meter is
+    /// hidden. No kB/s counterpart is shown: iOS has no byte counter (only
+    /// frame counts), so a byte rate would be fabricated — see
+    /// `AppState.cryptoOpsPerSec` doc comment.
+    let cryptoOpsPerSec: Int
     let onToggleMute: () -> Void
     let onToggleSpeaker: () -> Void
     let onToggleVoiceEnhancement: () -> Void
@@ -134,7 +233,6 @@ struct InCallScreen: View {
          avatarUrl: URL? = nil,
          durationSeconds: Int = 0,
          confidence: Double = 0.92,
-         recentSamples: [Float] = [],
          rekeyInSeconds: Int = 252,
          rekeyTotalSeconds: Int = 300,
          pqcActive: Bool = true,
@@ -148,8 +246,12 @@ struct InCallScreen: View {
          hasVideo: Bool = false,
          cameraOn: Bool = false,
          peerShortNumber: String? = nil,
-         rxSamples: [Float] = [],
-         cipherSamples: [Float] = [],
+         earbudActive: Bool = false,
+         earbudHwVerified: Bool = false,
+         voiceBiometrics: VoiceBiometrics? = nil,
+         voiceSpectrum: [Float]? = nil,
+         keyEpoch: Int? = nil,
+         cryptoOpsPerSec: Int = 0,
          onToggleMute: @escaping () -> Void = {},
          onToggleSpeaker: @escaping () -> Void = {},
          onToggleVoiceEnhancement: @escaping () -> Void = {},
@@ -167,7 +269,6 @@ struct InCallScreen: View {
         self.avatarUrl = avatarUrl
         self.durationSeconds = durationSeconds
         self.confidence = confidence
-        self.recentSamples = recentSamples
         self.rekeyInSeconds = rekeyInSeconds
         self.rekeyTotalSeconds = rekeyTotalSeconds
         self.pqcActive = pqcActive
@@ -181,8 +282,12 @@ struct InCallScreen: View {
         self.hasVideo = hasVideo
         self.cameraOn = cameraOn
         self.peerShortNumber = peerShortNumber
-        self.rxSamples = rxSamples
-        self.cipherSamples = cipherSamples
+        self.earbudActive = earbudActive
+        self.earbudHwVerified = earbudHwVerified
+        self.voiceBiometrics = voiceBiometrics
+        self.voiceSpectrum = voiceSpectrum
+        self.keyEpoch = keyEpoch
+        self.cryptoOpsPerSec = cryptoOpsPerSec
         self.onToggleMute = onToggleMute
         self.onToggleSpeaker = onToggleSpeaker
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
@@ -221,6 +326,17 @@ struct InCallScreen: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .animation(.easeInOut(duration: 0.2), value: peerScreenSharing)
             }
+        }
+        // Unified call UI — security sheet aggregates SAS + PQC handshake +
+        // cipher/key/epoch + transport + interpreted voice biometrics.
+        // Presented as a system sheet (not a custom overlay) so it gets
+        // native drag-to-dismiss. Matches the existing sheet convention in
+        // this codebase (e.g. ContactDetailScreen's SasVerifySheet): the
+        // qaudionScheme/extras/type environment values propagate down from
+        // ContentView's single root `.qAudionTheme(dark: true)` — no need
+        // to reapply the modifier at each sheet call site.
+        .sheet(isPresented: $showSecuritySheet) {
+            securitySheet
         }
     }
 
@@ -287,17 +403,16 @@ struct InCallScreen: View {
 
     // MARK: - Scroll content (everything above the pinned action row)
 
+    /// One coherent vertical flow, mirroring Android InCallScreen.kt's
+    /// ceremony Column order exactly (avatar → name → stats band → trust
+    /// bar → Guardian ribbon → trust chain → SAS → key info → pills →
+    /// transport). The old SessionStatusStrip call and the old stats card
+    /// (synthetic oscilloscopes) are GONE — their surviving data (duration,
+    /// confidence, rekey countdown) lives in `statsBand`.
     private var scrollContent: some View {
         ScrollView {
             VStack(spacing: 0) {
-                SessionStatusStrip(
-                    confidence: confidence,
-                    presence: sasVerified ? "VOCE VERIFICATA" : "VERIFICA IN CORSO",
-                    recentSamples: recentSamples,
-                    rekeyInSeconds: rekeyInSeconds
-                )
-
-                Spacer().frame(height: 8)
+                Spacer().frame(height: 16)
 
                 ZStack {
                     AvatarHalo(color: confidenceColor, diameter: 180)
@@ -321,7 +436,19 @@ struct InCallScreen: View {
 
                 Spacer().frame(height: 12)
 
-                statsCard.padding(.horizontal, 20)
+                statsBand.padding(.horizontal, 20)
+
+                Spacer().frame(height: 12)
+
+                trustBar.padding(.horizontal, 20)
+
+                Spacer().frame(height: 8)
+
+                guardianRibbon.padding(.horizontal, 20)
+
+                Spacer().frame(height: 8)
+
+                trustChainCard.padding(.horizontal, 20)
 
                 // D11 / W-NOBRICK — non-blocking security advisory. Shown when the
                 // peer's identity key changed and is NOT in the server-published
@@ -333,7 +460,7 @@ struct InCallScreen: View {
                 }
 
                 if sasWords.count == 6 {
-                    Spacer().frame(height: 8)
+                    Spacer().frame(height: 12)
                     sasPanel.padding(.horizontal, 20)
                 }
 
@@ -393,65 +520,35 @@ struct InCallScreen: View {
     /// per SWIFT6_PATTERNS §1 / §6.
     private static let stubBadgeText: String = "DEMO"
 
-    // MARK: - Stats card (waveform panel)
+    // MARK: - Stats band (DURATA / CONFIDENCE / RE-KEY)
 
-    /// The card below the avatar. CONFIDENCE and RE-KEY have been removed
-    /// — both are already visible in the `SessionStatusStrip` at the top.
-    /// The freed space shows two live oscilloscopes:
-    ///   • VOCE RICEVUTA — RX audio from the peer (deepfake detector input)
-    ///   • CIFRATURA — decryption stream (visually represents the crypto work)
-    private var statsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Duration — the only metric not shown elsewhere.
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("DURATA")
-                        .qaudionStyle(type.labelSmall)
-                        .tracking(1.2)
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                    Text(formatMmSs(durationSeconds))
-                        .qaudionStyle(type.titleSmall)
-                        .foregroundStyle(extras.success)
-                }
-                Spacer(minLength: 0)
+    /// Unified stats band under the peer name — 1:1 port of Android
+    /// InCallScreen.kt's stats Row (DURATION / CONFIDENCE / REKEY): three
+    /// columns in one thin outlined card. This band absorbs everything the
+    /// deleted SessionStatusStrip call and the deleted old stats card
+    /// showed that was real (duration, confidence, rekey countdown). The
+    /// old synthetic "VOCE RICEVUTA"/"CIFRATURA" oscilloscopes are gone —
+    /// the Guardian ribbon below carries the one honest voice viz
+    /// (real-FFT MiniSpectrum) and crypto viz (real-ops/s CipherFlowTube).
+    private var statsBand: some View {
+        HStack(alignment: .center, spacing: 0) {
+            statColumn("DURATA", formatMmSs(durationSeconds), extras.success)
+            Spacer(minLength: 8)
+            statColumn("CONFIDENCE",
+                       String(format: "C=%.2f", min(1.0, max(0.0, confidence))),
+                       confidenceColor)
+            Spacer(minLength: 8)
+            VStack(spacing: 4) {
+                Text("RE-KEY")
+                    .qaudionStyle(type.labelSmall)
+                    .tracking(1.2)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                rekeyProgress
             }
-
-            Rectangle()
-                .fill(scheme.outline.opacity(0.3))
-                .frame(height: 1)
-
-            // RX voice waveform — oscilloscope of received audio.
-            // This is what the deepfake detector analyses in real time.
-            // autoGain on so the line stays visibly dynamic even at
-            // conversational levels (typical |sample| peaks at ~0.2-0.4).
-            waveformStrip(
-                label: "VOCE RICEVUTA",
-                samples: rxSamples,
-                color: extras.success,
-                autoGain: true,
-                lineWidth: 1.5,
-                glow: false
-            )
-
-            Rectangle()
-                .fill(scheme.outline.opacity(0.2))
-                .frame(height: 1)
-
-            // Cipher waveform — the encryption/decryption byte stream.
-            // Visually shows that every received packet is being unwrapped
-            // by the ML-KEM-1024 + SFrame pipeline in real time. Thicker
-            // line + soft glow gives a more "scenographic" feel that
-            // distinguishes the crypto layer from the voice trace.
-            waveformStrip(
-                label: "CIFRATURA",
-                samples: cipherSamples,
-                color: extras.pqcAccent,
-                autoGain: false,
-                lineWidth: 2.2,
-                glow: true
-            )
         }
-        .padding(14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 4)
                 .fill(scheme.surface.opacity(0.75))
@@ -462,83 +559,51 @@ struct InCallScreen: View {
         )
     }
 
-    /// Compact oscilloscope strip used inside `statsCard`.
-    /// Label above, Canvas waveform (36 pt tall) below.
-    /// Falls back to a silent flat line when `samples` is empty.
-    ///
-    /// - Parameters:
-    ///   - autoGain: scale samples by `1 / peak` so even quiet voice
-    ///     levels fill the canvas (peak floor 0.1 so total silence stays
-    ///     near the centerline). Cipher samples are uniform-distributed
-    ///     bytes and don't need it.
-    ///   - lineWidth: stroke width (1.5 for voice, 2.2 for cipher).
-    ///   - glow: draws a soft 4-pt blur underneath the main stroke to
-    ///     give the cipher trace a more "scenographic" feel.
-    private func waveformStrip(label: String,
-                               samples: [Float],
-                               color: Color,
-                               autoGain: Bool,
-                               lineWidth: CGFloat,
-                               glow: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+    /// One label+value column of the stats band — mirrors Android's
+    /// `StatColumn(label, value, color)` (monospace label 8.5sp / value 14sp).
+    private func statColumn(_ label: String, _ value: String, _ color: Color) -> some View {
+        VStack(spacing: 2) {
             Text(label)
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.2)
                 .foregroundStyle(scheme.onSurfaceVariant)
-            Canvas { ctx, size in
-                let midY = size.height / 2
-                // Center reference line (always drawn)
-                var centerLine = Path()
-                centerLine.move(to: CGPoint(x: 0, y: midY))
-                centerLine.addLine(to: CGPoint(x: size.width, y: midY))
-                ctx.stroke(centerLine,
-                           with: .color(color.opacity(0.18)),
-                           lineWidth: 0.5)
-                guard samples.count > 1 else { return }
-
-                // W523: peak-based auto-gain for the voice trace. Peak
-                // floor 0.10 keeps silence near the centerline (no
-                // amplification of noise floor). Without this the line
-                // appeared "stuck" at conversational levels because
-                // typical mic Int16 peaks are well under 32768 → after
-                // /32768 normalisation the |y| was 0.15-0.30, eating
-                // only 25 % of the canvas.
-                let gain: CGFloat
-                if autoGain {
-                    var peak: Float = 0.10
-                    for s in samples {
-                        let a = abs(s)
-                        if a > peak { peak = a }
-                    }
-                    gain = CGFloat(min(1.0, 0.92 / peak))
-                } else {
-                    gain = 1.0
-                }
-
-                let count = samples.count - 1
-                let stepX = size.width / CGFloat(count)
-                var wave = Path()
-                for (i, sample) in samples.enumerated() {
-                    let x = CGFloat(i) * stepX
-                    let scaled = max(-1.0, min(1.0, CGFloat(sample) * gain))
-                    let y = midY - scaled * midY * 0.85
-                    if i == 0 { wave.move(to: CGPoint(x: x, y: y)) }
-                    else       { wave.addLine(to: CGPoint(x: x, y: y)) }
-                }
-
-                if glow {
-                    // Soft glow underlay — gives the cipher trace depth
-                    // without sacrificing legibility of the main stroke.
-                    var glowContext = ctx
-                    glowContext.addFilter(.blur(radius: 4))
-                    glowContext.stroke(wave,
-                                       with: .color(color.opacity(0.55)),
-                                       lineWidth: lineWidth + 2.0)
-                }
-                ctx.stroke(wave, with: .color(color), lineWidth: lineWidth)
-            }
-            .frame(height: 36)
+            Text(value)
+                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .foregroundStyle(color)
         }
+    }
+
+    /// Compact circular rekey countdown — port of Android core-ui
+    /// `ReKeyProgress`: a ring that fills with the ELAPSED fraction of the
+    /// rekey window plus a "NNs" remaining readout in the middle. Redrawn
+    /// once per second by the caller's TimelineView tick (LiveInCallScreen);
+    /// the 0.6s tween between ticks is draw-phase only (never-block rules:
+    /// no timers, no per-frame tasks).
+    private var rekeyProgress: some View {
+        let total = max(rekeyTotalSeconds, 1)
+        let remaining = min(max(rekeyInSeconds, 0), total)
+        let elapsedFraction = 1.0 - Double(remaining) / Double(total)
+        return ZStack {
+            Circle()
+                .stroke(scheme.surfaceVariant, lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: CGFloat(elapsedFraction))
+                .stroke(scheme.primary,
+                        style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.easeInOut(duration: 0.6), value: remaining)
+            Text(Self.rekeySecondsText(remaining))
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(scheme.onSurface)
+        }
+        .frame(width: 38, height: 38)
+        .accessibilityLabel("Prossimo re-key tra \(remaining) secondi")
+    }
+
+    /// Static readout builder kept out of @ViewBuilder (SWIFT6_PATTERNS
+    /// §1/§6). Mirrors Android's `seconds(sec)`: "now" at 0, else "NNs".
+    private static func rekeySecondsText(_ remaining: Int) -> String {
+        return remaining <= 0 ? "now" : remaining.description + "s"
     }
 
     // MARK: - SAS panel
@@ -654,10 +719,955 @@ struct InCallScreen: View {
         }
     }
 
+    // MARK: - Trust bar (unified call UI)
+
+    /// Compact row of security chips + an expand shield, matching the
+    /// "Aegis Cipher" trust-bar from call-guardian-reference.html: SAS ✓
+    /// (green, only once actually verified), PQC (accent, only once a
+    /// real ML-KEM session key is live), and the transport chip (reusing
+    /// the exact `transportMode.label` the transport row already shows).
+    /// Tapping the shield opens the aggregating security sheet — the
+    /// single place SAS words / handshake / cipher / transport / voice
+    /// biometrics live together, instead of scattering them across the
+    /// scroll content.
+    private var trustBar: some View {
+        HStack(spacing: 7) {
+            if sasVerified {
+                trustChip(
+                    icon: "checkmark",
+                    label: "SAS ✓",
+                    color: extras.success,
+                    filled: true
+                )
+            }
+            if pqcActive {
+                trustChip(
+                    icon: "lock.shield.fill",
+                    label: "PQC",
+                    color: extras.pqcAccent,
+                    filled: false
+                )
+            }
+            trustChip(
+                icon: nil,
+                label: transportMode.label,
+                color: scheme.onSurfaceVariant,
+                filled: false
+            )
+            Spacer(minLength: 0)
+            Button {
+                showSecuritySheet = true
+            } label: {
+                Image(systemName: "checkmark.shield")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(extras.pqcAccent)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(scheme.surfaceVariant)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Apri sicurezza sessione")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(scheme.surfaceVariant.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(scheme.outline.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    /// Small monospace chip used only inside `trustBar`. Distinct from
+    /// `MetaPill` (rounded-rect not capsule, smaller, optional leading
+    /// icon) to match the reference's `.chip` visual — kept private and
+    /// local rather than promoted to a shared component since nothing
+    /// else in the call UI needs this exact shape yet.
+    private func trustChip(icon: String?, label: String, color: Color, filled: Bool) -> some View {
+        HStack(spacing: 4) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .bold))
+            }
+            Text(label)
+                .qaudionStyle(type.labelSmall)
+                .tracking(0.4)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(filled ? color.opacity(0.14) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(color.opacity(0.4), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Guardian ribbon (unified call UI)
+
+    /// Compact Guardian strip: a small live remote-voice spectrum on the
+    /// left, a cipher/seal visual on the right, 3 mini gauges below
+    /// (stress / breath·HNR / pitch) with a one-word status per gauge, and —
+    /// when the crypto engine is doing real work (ops/s > 0) — a thin
+    /// cipher-flow tube at the bottom. Additive and small per spec — NOT
+    /// the full decorative canvas spectrum-analyzer from the HTML reference.
+    /// The mini-spectrum shows the REAL RX FFT bands (see `miniSpectrum`),
+    /// for parity with Android's `MiniSpectrum`. When `voiceBiometrics == nil`
+    /// (engine flag off, or no result yet) the gauges render an em-dash rather
+    /// than fabricated numbers.
+    private var guardianRibbon: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("REMOTE VOICE")
+                        .qaudionStyle(type.labelSmall)
+                        .tracking(1.0)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                    miniSpectrum
+                        .frame(height: 30)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Divider()
+                    .background(scheme.outline.opacity(0.4))
+                    .frame(height: 40)
+                    .padding(.horizontal, 10)
+
+                cipherSeal
+                    .frame(width: 40, height: 40)
+            }
+            .padding(10)
+
+            Rectangle()
+                .fill(scheme.outline.opacity(0.3))
+                .frame(height: 1)
+
+            HStack(spacing: 0) {
+                guardianGauge(
+                    label: "STRESS",
+                    value: stressDisplayValue,
+                    status: stressStatusWord,
+                    statusColor: stressStatusColor
+                )
+                guardianGauge(
+                    label: "BREATH·HNR",
+                    value: hnrDisplayValue,
+                    status: hnrStatusWord,
+                    statusColor: hnrStatusColor
+                )
+                guardianGauge(
+                    label: "PITCH",
+                    value: pitchDisplayValue,
+                    status: pitchStatusWord,
+                    statusColor: scheme.onSurfaceVariant
+                )
+            }
+
+            // Live crypto-engine meter — real AES-256-GCM frame ops/s
+            // pulsing. Shown only while the engine is doing work (ops > 0),
+            // i.e. once frames are actually flowing on an active call.
+            if cryptoOpsPerSec > 0 {
+                Rectangle()
+                    .fill(scheme.outline.opacity(0.3))
+                    .frame(height: 1)
+                cryptoEngineMeterRow
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scheme.surfaceVariant.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(scheme.outline.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    /// Per-band displayed bar height with asymmetric attack/decay smoothing
+    /// (instant rise to a louder band, gentle 0.78 fall) — the exact
+    /// `display[]` logic of Android's `MiniSpectrum`. A plain
+    /// (non-observable) final class kept in `@State` so the SAME buffer
+    /// survives re-renders, while mutating it during the Canvas draw phase
+    /// never invalidates/recomposes the view tree (2026-07-04 never-block
+    /// rules: the draw is the only thing that runs per display frame).
+    private final class SpectrumDisplayHolder {
+        var levels = [Float](repeating: 0, count: 40)
+    }
+    @State private var spectrumDisplay = SpectrumDisplayHolder()
+
+    /// Live remote-voice mini-spectrum — the REAL thing, parity with Android
+    /// `MiniSpectrum` (feature-call/ui/GuardianRibbon.kt). Each bar is the
+    /// actual FFT magnitude of the decoded remote PCM (40 log-spaced bands,
+    /// 0..1, computed by `SpectrumExtractor` on the RX audio at ≤15 Hz), so
+    /// the bars move with what is genuinely being said. No synthetic
+    /// shimmer, no formant fake — the old gaussian-bump code path is gone.
+    ///
+    /// The only smoothing is a per-band fall decay held in
+    /// `spectrumDisplay` (the bar can jump UP instantly to a new peak, then
+    /// eases DOWN) so the display reads as a fluid analyser rather than a
+    /// strobing histogram. When `voiceSpectrum` is nil (pre-first-frame /
+    /// between calls) the bars decay to the idle floor and rest.
+    ///
+    /// Frame source: the existing `TimelineView(.animation(paused:
+    /// reduceMotion))` — one Canvas redraw per display frame, zero
+    /// recomposition. Under Reduce Motion the timeline pauses and the bars
+    /// simply snap to each ≤15 Hz spectrum update without the decay tween.
+    private var miniSpectrum: some View {
+        TimelineView(.animation(paused: reduceMotion)) { timeline in
+            Canvas { ctx, size in
+                // Explicitly read the timeline date so each tick is a real
+                // dependency of this draw — the decay smoothing advances per
+                // display frame even though the value itself is unused.
+                _ = timeline.date
+                drawMiniSpectrum(ctx: &ctx, size: size)
+            }
+        }
+    }
+
+    /// Pure Canvas draw for `miniSpectrum` — extracted so the TimelineView
+    /// body stays shallow (SWIFT6_PATTERNS §5/§6); mirrors Android's
+    /// `MiniSpectrum` Canvas block 1:1 (instant-rise / 0.78-decay smoothing
+    /// INSIDE the draw, 40 bars, per-bar active/idle brush).
+    private func drawMiniSpectrum(ctx: inout GraphicsContext, size: CGSize) {
+        // Advance the per-band display levels (mutating the class holder —
+        // never triggers a view update; see SpectrumDisplayHolder).
+        let holder = spectrumDisplay
+        if let bands = voiceSpectrum {
+            let n = min(holder.levels.count, bands.count)
+            for i in 0..<n {
+                let target = bands[i]
+                // Instant rise to a louder band, gentle fall — analyser feel.
+                holder.levels[i] = target > holder.levels[i]
+                    ? target
+                    : holder.levels[i] * 0.78 + target * 0.22
+            }
+        } else {
+            for i in holder.levels.indices { holder.levels[i] *= 0.85 }
+        }
+
+        let speaking = voiceBiometrics?.speaking ?? false
+        let n = holder.levels.count
+        guard n > 0 else { return }
+        let gap = min(size.width * 0.20 / CGFloat(n), 2.2)
+        let bw = (size.width - gap * CGFloat(n - 1)) / CGFloat(n)
+        let baseY = size.height
+        let activeGradient = GraphicsContext.Shading.linearGradient(
+            Gradient(colors: [extras.pqcAccent, extras.success]),
+            startPoint: CGPoint(x: 0, y: 0),
+            endPoint: CGPoint(x: 0, y: size.height)
+        )
+        let idleShading = GraphicsContext.Shading.color(scheme.onSurfaceVariant.opacity(0.30))
+
+        for i in 0..<n {
+            let x = CGFloat(i) * (bw + gap)
+            let h = CGFloat(min(max(holder.levels[i], 0.02), 1.0))
+            let barH = h * size.height
+            let rect = CGRect(x: x, y: baseY - barH, width: max(bw, 1), height: barH)
+            let barPath = Path(roundedRect: rect, cornerRadius: 1.2)
+            ctx.fill(barPath,
+                     with: (speaking || h > 0.08) ? activeGradient : idleShading)
+        }
+    }
+
+    /// Small cipher/seal glyph — a static lock badge (not an animated
+    /// particle canvas like the HTML reference) tinted by whether a PQC
+    /// session key is actually live, so the glyph itself carries meaning
+    /// rather than being purely decorative.
+    private var cipherSeal: some View {
+        ZStack {
+            Circle()
+                .fill(scheme.background.opacity(0.6))
+                .overlay(
+                    Circle().stroke((pqcActive ? extras.pqcAccent : scheme.outline).opacity(0.5), lineWidth: 1)
+                )
+            Image(systemName: "lock.rectangle.stack.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(pqcActive ? extras.pqcAccent : scheme.onSurfaceVariant)
+        }
+    }
+
+    private func guardianGauge(label: String, value: String, status: String, statusColor: Color) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .qaudionStyle(type.labelSmall)
+                .tracking(0.6)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .font(.system(size: 8))
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(scheme.onSurface)
+            Text(status)
+                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .tracking(0.4)
+                .foregroundStyle(statusColor)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Trust-chain card (unified call UI — custody of your voice)
+    //
+    // Full native port of the approved "custody of your voice" mockup
+    // (trust-chain.html, scratchpad design spec): two ambient particle-flow
+    // lanes either side of a glowing pulsing seal core, a morphing bordered
+    // "protection boundary" box with a floating label, a callout-box verdict,
+    // a 5-cell stat ring row, and a collapsible earbud detail panel. This
+    // REPLACES the previous plain 3-label chain + thin progress bar
+    // (2026-07-04 unified-call-ui redesign) — no second component, no dead
+    // code left behind (`trustNode`/`trustStat`/`trustArrow` plain helpers
+    // removed with it).
+    //
+    // All animation follows the two conventions ALREADY established in this
+    // same file rather than inventing new ones:
+    //  - continuous per-frame drawing → `TimelineView(.animation(paused:
+    //    reduceMotion))` + `Canvas`, deterministic golden-ratio index hashing
+    //    for per-particle phase/speed/lane/wobble (see `drawCipherTube`/
+    //    `drawMiniSpectrum` above) — cheap, stable across frames, paused
+    //    under Reduce Motion exactly like the spectrum/cipher-tube visuals.
+    //  - the boundary-box morph (position/width/color/label) is a plain
+    //    `.animation(.linear(duration: 0.6), value: earbudActive)` layout
+    //    tween — the SAME 0.6s duration the old progress-bar envelope used,
+    //    preserved rather than inventing a different timing.
+    //
+    // All data is real, unchanged from the previous implementation:
+    // `earbudActive`/`earbudHwVerified` from the call site (constant `false`
+    // today pending the iOS earbud media-provider — see LiveInCallScreen),
+    // plus `sasVerified`/`pqcActive`/`transportMode` already stored on this
+    // view for the trust bar above. The mockup's manual toggle button is a
+    // demo-only affordance and is intentionally NOT ported — production
+    // state is always driven by these real flags.
+    //
+    // NOT ported: the mockup's bottom "how it reads inside the call" one-
+    // line strip preview. This screen's `trustBar` (SAS ✓ / PQC / transport
+    // chips, rendered just above the Guardian ribbon) already surfaces the
+    // same "how it reads" summary in a slot that exists today — a second
+    // strip directly under this card would duplicate it rather than adding
+    // information, so it is intentionally omitted per the task's own
+    // "don't force it" guidance.
+
+    /// Protection-envelope start fraction for the SOFTWARE path: the seal
+    /// happens on the phone, so the envelope covers Seal→Air and the MIC
+    /// sits just OUTSIDE it on the left. Same 0.42 constant as Android's
+    /// `TrustChainCard` software branch (and the mockup's `left:40%`). The
+    /// earbud path starts at 0.0 (the envelope reaches the microphone).
+    private static let trustEnvelopeStartSoftware: CGFloat = 0.42
+
+    /// Trust-chain card — the honest "where is the voice sealed, and does
+    /// the protection reach the microphone?" visual.
+    ///
+    ///  - SOFTWARE (`earbudActive == false`, today's only live iOS state):
+    ///    the seal happens ON THE PHONE, so the protection envelope starts
+    ///    at 42% and the MICROPHONE sits just outside it — raw audio exists
+    ///    in the phone's audio pipeline for an instant before it is sealed.
+    ///    The OS keystore/Keychain keeps the KEYS safe, but a compromised
+    ///    OS could tap the mic upstream of encryption. Cyan accent,
+    ///    "GRADE A".
+    ///  - EARBUD (`earbudActive == true`, ready for when the earbud media
+    ///    provider lands on iOS): mic AND seal both live inside the
+    ///    earbud's secure chip, so the envelope extends to the microphone
+    ///    and raw voice never reaches the phone. Gold accent, "GRADE A+ ·
+    ///    SOVEREIGN", plus a live "Secure element CRACEN ✓ / linking…"
+    ///    stat driven by `earbudHwVerified`. (Android also shows battery/
+    ///    ANC from its BudsStatus; iOS has no equivalent source yet, so
+    ///    those rows are omitted rather than fabricated — same discipline
+    ///    as before this redesign.)
+    private var trustChainCard: some View {
+        let gold = extras.warning          // sovereign-hardware accent (amber/gold)
+        let cyan = extras.pqcAccent
+        let cipher = extras.pqcAccent      // mockup's --cipher lane tint (violet)
+        let envColor = earbudActive ? gold : cyan
+        let envelopeStart: CGFloat = earbudActive ? 0.0 : Self.trustEnvelopeStartSoftware
+        return VStack(alignment: .leading, spacing: 0) {
+            // header
+            HStack {
+                Circle()
+                    .fill(extras.success)
+                    .frame(width: 5, height: 5)
+                Text("SESSION SECURITY · CUSTODY OF YOUR VOICE")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                Spacer(minLength: 0)
+                Text(earbudActive ? "HARDWARE-SEALED · SOVEREIGN" : "SOFTWARE-SEALED")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(envColor)
+            }
+            .padding(.horizontal, 14)
+            Spacer().frame(height: 16)
+
+            // Mic ↔ seal ↔ peer chain, with the two particle-flow lanes and
+            // the morphing protection-boundary box layered behind it.
+            trustChainDiagram(envColor: envColor, cipher: cipher, envelopeStart: envelopeStart)
+                .padding(.horizontal, 6)
+                .frame(height: 118)
+            Spacer().frame(height: 14)
+
+            trustVerdictCallout(gold: gold)
+                .padding(.horizontal, 14)
+            Spacer().frame(height: 10)
+
+            trustStatRing(gold: gold)
+                .padding(.horizontal, 6)
+
+            // live earbud stat when connected — CRACEN secure-element
+            // confirmation only (no battery/ANC: iOS has no BudsStatus
+            // source, and fabricating one would break the honest-data rule).
+            if earbudActive {
+                Divider().background(gold.opacity(0.25))
+                    .padding(.horizontal, 14)
+                trustEarbudPanel(gold: gold)
+                    .padding(.horizontal, 14)
+            }
+        }
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(scheme.surfaceVariant.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(earbudActive ? gold.opacity(0.5) : scheme.outline.opacity(0.5),
+                        lineWidth: earbudActive ? 1.3 : 1)
+        )
+        .animation(.linear(duration: 0.6), value: earbudActive)
+    }
+
+    // MARK: Trust-chain diagram (particle lanes + seal core + boundary box)
+
+    /// Mic → seal → peer row, with the two ambient particle canvases and the
+    /// morphing protection-boundary box behind it in one `ZStack` so the
+    /// boundary can span from an arbitrary fraction of the width (0.0 or
+    /// 0.42) to the trailing edge exactly like the mockup's `.boundary`.
+    private func trustChainDiagram(envColor: Color, cipher: Color, envelopeStart: CGFloat) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let laneY = h * 0.42
+            let boundaryX = envelopeStart * w
+            let boundaryWidth = max(w - boundaryX, 0)
+
+            ZStack(alignment: .topLeading) {
+                // Protection boundary — bordered glowing box, grows left to
+                // swallow the mic node in earbud mode. Position/width/color
+                // all animate on the shared 0.6s tween (see trustChainCard).
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        RadialGradient(
+                            colors: [envColor.opacity(0.10), .clear],
+                            center: .center, startRadius: 0, endRadius: w * 0.5
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(envColor.opacity(0.5), lineWidth: 1.3)
+                    )
+                    .frame(width: boundaryWidth, height: h - 20)
+                    .overlay(alignment: .top) {
+                        // Floating label pill on the boundary box's own top
+                        // edge — `.overlay(alignment:)` centers it relative
+                        // to the (not-yet-offset) rectangle's own bounds, so
+                        // it rides along correctly once the whole composite
+                        // is shifted by the trailing `.offset` below.
+                        Text(earbudActive ? "protection reaches the mic" : "protected from here →")
+                            .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(envColor)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 1.5)
+                            .background(
+                                Capsule().fill(scheme.surfaceVariant)
+                            )
+                            .fixedSize()
+                            .offset(y: -6)
+                    }
+                    .offset(x: boundaryX, y: 14)
+
+                // Particle lanes — cheap ambient motion either side of the
+                // seal, sharing ONE TimelineView tick (paused under Reduce
+                // Motion, same convention as drawCipherTube/drawMiniSpectrum).
+                TimelineView(.animation(paused: reduceMotion)) { timeline in
+                    let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                    Canvas { ctx, _ in
+                        drawVoiceParticleLane(ctx: &ctx, rect: CGRect(x: 0, y: laneY - 12, width: w * 0.40, height: 24),
+                                              t: t, cipher: false, tint: envColor)
+                        drawVoiceParticleLane(ctx: &ctx, rect: CGRect(x: w * 0.60, y: laneY - 12, width: w * 0.40, height: 24),
+                                              t: t, cipher: true, tint: cipher)
+                    }
+                }
+                .frame(width: w, height: h)
+                .allowsHitTesting(false)
+
+                // Mic → Seal → Peer row.
+                HStack(spacing: 0) {
+                    trustEndpointNode(
+                        icon: "mic.fill",
+                        title: "Microphone",
+                        sub: earbudActive ? "protected" : "exposed",
+                        accent: earbudActive ? envColor : extras.riskHigh
+                    )
+                    .frame(width: w * 0.30)
+
+                    sealCore(envColor: envColor)
+                        .frame(width: w * 0.40)
+
+                    trustEndpointNode(
+                        icon: "person.wave.2.fill",
+                        title: peerDisplayName,
+                        sub: "ciphertext · over the net",
+                        accent: scheme.onSurfaceVariant
+                    )
+                    .frame(width: w * 0.30)
+                }
+                .frame(width: w, height: h)
+            }
+        }
+    }
+
+    /// One endpoint (mic or peer) — icon disc + title + monospace sub-caption.
+    private func trustEndpointNode(icon: String, title: String, sub: String, accent: Color) -> some View {
+        VStack(spacing: 5) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(
+                        LinearGradient(colors: [scheme.surfaceVariant, scheme.background],
+                                       startPoint: .top, endPoint: .bottom)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(accent.opacity(0.55), lineWidth: 1)
+                    )
+                    .frame(width: 42, height: 42)
+                    .shadow(color: accent.opacity(0.35), radius: 6)
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(accent)
+            }
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(scheme.onSurface)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text(sub)
+                .font(.system(size: 7, design: .monospaced))
+                .foregroundStyle(accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The glowing seal core — radial-gradient box, colored border, a soft
+    /// pulsing ring (opacity+scale breathing loop) around it, tagged with
+    /// where the seal is currently happening. The pulse reuses the SAME
+    /// TimelineView tick the particle lanes already subscribe to (no extra
+    /// timer): a `sin` breathing curve derived from the shared time base.
+    private func sealCore(envColor: Color) -> some View {
+        TimelineView(.animation(paused: reduceMotion)) { timeline in
+            let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+            let breath = (sin(t * 1.35) + 1) / 2   // 0...1
+            VStack(spacing: 7) {
+                ZStack {
+                    // pulsing ring
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(envColor, lineWidth: 1)
+                        .frame(width: 64, height: 64)
+                        .scaleEffect(1 + breath * 0.22)
+                        .opacity(reduceMotion ? 0.35 : (1 - breath) * 0.5)
+                    // core box
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(
+                            RadialGradient(
+                                colors: [envColor.opacity(0.30), scheme.background.opacity(0.95)],
+                                center: UnitPoint(x: 0.5, y: 0.34), startRadius: 0, endRadius: 46
+                            )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(envColor.opacity(0.6), lineWidth: 1)
+                        )
+                        .frame(width: 64, height: 64)
+                        .shadow(color: envColor.opacity(0.45), radius: 10)
+                    Image(systemName: earbudActive ? "waveform.badge.mic" : "lock.rectangle.stack.fill")
+                        .font(.system(size: 26, weight: .medium))
+                        .foregroundStyle(envColor)
+                }
+                Text(earbudActive ? "Sealed inside the earbud" : "Sealed on the phone")
+                    .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(envColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(envColor.opacity(0.14)))
+                    .overlay(Capsule().stroke(envColor.opacity(0.4), lineWidth: 1))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Deterministic ambient particle lane — sparse warm dots drifting with
+    /// a slow vertical sine bob (raw, unsealed voice) on the LEFT, denser
+    /// cooler/more-randomised dots (already ciphertext) on the RIGHT.
+    /// Same golden-ratio index-hashing technique as `drawCipherTube` (zero
+    /// allocation, stable across frames, cheap — a few dozen points).
+    private func drawVoiceParticleLane(ctx: inout GraphicsContext, rect: CGRect, t: Double, cipher: Bool, tint: Color) {
+        guard rect.width > 0 else { return }
+        let n = cipher ? 22 : 12
+        for i in 0..<n {
+            let ph = Self.fract(Double(i) * 0.61803399 + (cipher ? 0.5 : 0))
+            let spd = cipher
+                ? 0.09 + 0.10 * Self.fract(Double(i) * 0.75487767)
+                : 0.045 + 0.05 * Self.fract(Double(i) * 0.75487767)
+            let lane = Self.fract(Double(i) * 0.38196601)
+            let x = rect.minX + CGFloat(Self.fract(ph + t * spd)) * rect.width
+            let y: CGFloat
+            let alpha: Double
+            let radius: CGFloat
+            if cipher {
+                // denser, more randomised jitter — ciphertext already.
+                let jitter = Self.fract(Double(i) * 0.91113 + t * 0.7)
+                y = rect.minY + CGFloat(lane) * rect.height + CGFloat(jitter - 0.5) * rect.height * 0.6
+                alpha = 0.35 + 0.45 * Self.fract(Double(i) * 0.27 + t * 0.3)
+                radius = 1.1
+            } else {
+                // sparse, smooth vertical sine bob — raw voice.
+                let wob = sin(t * 1.6 + Double(i) * 1.9)
+                y = rect.minY + rect.height / 2 + CGFloat(wob) * rect.height * 0.32
+                alpha = 0.55 + 0.35 * sin(t * 2 + Double(i))
+                radius = 1.3
+            }
+            var dotCtx = ctx
+            dotCtx.opacity = max(0, min(1, alpha))
+            dotCtx.fill(
+                Path(ellipseIn: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)),
+                with: .color(tint)
+            )
+        }
+    }
+
+    // MARK: Verdict callout
+
+    /// Verdict callout box — bordered/tinted box with a leading icon,
+    /// matching the mockup's `.verdict .v` treatment (the previous
+    /// implementation had the same copy as a bare paragraph with no box).
+    private func trustVerdictCallout(gold: Color) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: earbudActive ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(earbudActive ? gold : extras.riskHigh)
+                .padding(.top, 1)
+            Text(earbudActive
+                 ? "The mic and the seal both live inside the earbud's secure chip — your voice is sealed at the source and never reaches the phone."
+                 : "Keys stay safe in the OS keystore, but the raw mic audio exists in the phone for an instant before the seal — an OS compromise could tap it upstream of encryption.")
+                .font(.system(size: 11))
+                .foregroundStyle(scheme.onSurface.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(11)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill((earbudActive ? gold : extras.riskHigh).opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke((earbudActive ? gold : extras.riskHigh).opacity(0.28), lineWidth: 1)
+        )
+    }
+
+    // MARK: Stat ring row
+
+    /// Row of 5 stat cells (icon + label + value), wired to REAL state
+    /// already threaded to this view for the trust bar above — no new
+    /// state invented. Only "Seal point" changes with `earbudActive`; the
+    /// rest are informational badges of already-real values:
+    ///  - Identity      → `sasVerified` (same flag the trust bar's "SAS ✓" chip uses)
+    ///  - Post-quantum  → `pqcActive` (same flag the trust bar's "PQC" chip uses)
+    ///  - Cipher        → static "AES-256" label (the one algorithm string this
+    ///                     screen already commits to elsewhere — see
+    ///                     `cipherKeySectionBody`'s doc comment on why no
+    ///                     second, possibly-wrong cipher string is fabricated)
+    ///  - Seal point    → `earbudActive` (Phone vs Earbud HW, cyan vs gold)
+    ///  - Liveness      → static "Guardian" badge, same unconditional
+    ///                     "LIVENESS OK" the pills row already shows today
+    private func trustStatRing(gold: Color) -> some View {
+        HStack(spacing: 0) {
+            trustStatCell(icon: "checkmark.seal.fill", label: "Identity",
+                          value: sasVerified ? "SAS ✓" : "unverified",
+                          active: sasVerified, accent: extras.success)
+            trustStatCell(icon: "shield.lefthalf.filled", label: "Post-quantum",
+                          value: pqcActive ? "ML-KEM" : "off",
+                          active: pqcActive, accent: extras.success)
+            trustStatCell(icon: "lock.rectangle.stack.fill", label: "Cipher",
+                          value: "AES-256", active: true, accent: extras.success)
+            trustStatCell(icon: earbudActive ? "waveform.badge.mic" : "iphone",
+                          label: "Seal point",
+                          value: earbudActive ? "Earbud HW" : "Phone",
+                          active: true, accent: earbudActive ? gold : extras.success)
+            trustStatCell(icon: "shield.checkerboard", label: "Liveness",
+                          value: "Guardian", active: true, accent: extras.success)
+        }
+    }
+
+    private func trustStatCell(icon: String, label: String, value: String, active: Bool, accent: Color) -> some View {
+        VStack(spacing: 5) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(active ? accent.opacity(0.14) : scheme.surfaceVariant)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(active ? accent.opacity(0.4) : scheme.outline.opacity(0.4), lineWidth: 1)
+                    )
+                    .frame(width: 30, height: 30)
+                    .shadow(color: active ? accent.opacity(0.3) : .clear, radius: 5)
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(active ? accent : scheme.onSurfaceVariant)
+            }
+            Text(label)
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(scheme.onSurface)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(value)
+                .font(.system(size: 7, design: .monospaced))
+                .textCase(.uppercase)
+                .foregroundStyle(active ? accent : scheme.onSurfaceVariant)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: Earbud detail panel
+
+    /// Collapsible earbud detail panel — shown ONLY when `earbudActive`.
+    /// iOS has NO real battery/ANC/seals-per-second/key-epoch data source
+    /// (no `BudsStatus`-shaped provider exists here the way Android's does,
+    /// and no live seal-rate or key-epoch counter exists elsewhere in this
+    /// codebase either — `keyEpoch` is a call-level nil-by-default counter
+    /// with no earbud-specific meaning; see its doc comment above). Rather
+    /// than fabricate those cells, this panel keeps the SAME honest single
+    /// row the previous implementation had: CRACEN secure-element
+    /// confirmation, driven by the real `earbudHwVerified` flag.
+    private func trustEarbudPanel(gold: Color) -> some View {
+        HStack(spacing: 9) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(gold.opacity(0.14))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(gold.opacity(0.35), lineWidth: 1)
+                    )
+                    .frame(width: 26, height: 26)
+                Image(systemName: "waveform.badge.mic")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(gold)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("SECURE ELEMENT")
+                    .font(.system(size: 7, design: .monospaced))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                Text(earbudHwVerified ? "CRACEN ✓" : "linking…")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(earbudHwVerified ? gold : scheme.onSurfaceVariant)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 10)
+    }
+
+    // MARK: - Crypto-engine meter (unified call UI)
+
+    /// Cipher flow tube — parity with Android `CipherFlowTube`
+    /// (feature-call/ui/GuardianRibbon.kt): the "myriad of chaotic dots"
+    /// representation of the live encryption stream. A fixed-width rounded
+    /// tube through which a swarm of dots flows left→right; every visual
+    /// parameter is bound to REAL crypto-engine telemetry (no canned
+    /// animation):
+    ///
+    ///  - dot COUNT   ∝ real AES-256-GCM frame ops/s (`cryptoOpsPerSec`):
+    ///                  the swarm literally is ~1.4 s worth of sealed/opened
+    ///                  frames in flight (clamped 24…220 for GPU sanity), so
+    ///                  a busier engine shows a visibly denser stream;
+    ///  - dot chaos     deterministic per-dot pseudo-random phase/speed/
+    ///                  lane/wobble/radius via golden-ratio index hashing —
+    ///                  zero allocation, stable across frames, chaotic to
+    ///                  the eye: ciphertext-like;
+    ///  - colour        cyan (pqcAccent, plaintext side) → success-green
+    ///                  (sealed side) by x/w, with a mid-tube alpha bloom.
+    ///
+    /// Readout is "N/s" only. Android also prints "X kB/s", but iOS has no
+    /// byte counter (only frame counts), so — per the honest-data rule — no
+    /// byte rate is shown rather than fabricating one from an assumed frame
+    /// size. The TimelineView is PAUSED under Reduce Motion or while the
+    /// engine is idle (ops == 0): only the static tube walls render then.
+    private var cryptoEngineMeterRow: some View {
+        HStack(spacing: 8) {
+            Text("ENGINE")
+                .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                .foregroundStyle(scheme.onSurfaceVariant)
+            TimelineView(.animation(paused: reduceMotion || cryptoOpsPerSec == 0)) { timeline in
+                Canvas { ctx, size in
+                    // t == 0 ⇒ paused/idle ⇒ walls only (static tube).
+                    let animate = !reduceMotion && cryptoOpsPerSec > 0
+                    let t = animate ? timeline.date.timeIntervalSinceReferenceDate : 0
+                    drawCipherTube(ctx: &ctx, size: size, t: t)
+                }
+                .frame(height: 14)
+            }
+            Text(Self.cryptoReadout(cryptoOpsPerSec))
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(extras.pqcAccent)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+    }
+
+    /// Pure Canvas draw for the cipher tube — extracted so the TimelineView
+    /// body stays shallow (SWIFT6_PATTERNS §5/§6). Ports Android
+    /// `CipherFlowTube`'s draw block 1:1: golden-ratio index hashing for
+    /// per-dot phase/speed/lane/radius, sin wobble, x from
+    /// `fract(ph + t·spd)`, colour lerp cyan→green by x/w (realised as ONE
+    /// horizontal gradient shading each dot samples at its x — same visual
+    /// result as Android's per-dot RGB lerp without needing Color
+    /// components), alpha `0.20 + 0.62·sin(π·x/w)`. `t == 0` ⇒ walls only.
+    /// All per-dot math stays in Double: the reference-date time base
+    /// (~8×10⁸ s) would lose sub-second precision in Float32.
+    private func drawCipherTube(ctx: inout GraphicsContext, size: CGSize, t: Double) {
+        let w = size.width
+        let h = size.height
+        // Tube walls — always drawn, also when idle/paused.
+        ctx.fill(
+            Path(roundedRect: CGRect(x: 0, y: 0, width: w, height: h),
+                 cornerRadius: h / 2.0),
+            with: .color(scheme.onSurfaceVariant.opacity(0.14))
+        )
+        guard t > 0 else { return }
+
+        // Dot budget = ~1.4 s of real frame ops in flight (clamped for GPU sanity).
+        let n = min(220, max(24, Int(Double(cryptoOpsPerSec) * 1.4)))
+        // One cyan→green gradient across the tube — every dot filled with it
+        // picks up exactly the lerp(cyan, green, x/w) colour at its position.
+        let flowShading = GraphicsContext.Shading.linearGradient(
+            Gradient(colors: [extras.pqcAccent, extras.success]),
+            startPoint: CGPoint(x: 0, y: 0),
+            endPoint: CGPoint(x: w, y: 0)
+        )
+        for i in 0..<n {
+            // Deterministic per-dot chaos via golden-ratio index hashing.
+            let ph = Self.fract(Double(i) * 0.61803399)               // spawn phase along the tube
+            let spd = 0.22 + 0.30 * Self.fract(Double(i) * 0.75487767) // per-dot speed (tube lengths/s)
+            let fy = Self.fract(Double(i) * 0.38196601)               // lane inside the tube
+            let x = CGFloat(Self.fract(ph + t * spd)) * w
+            // chaotic vertical wobble, frequency varies per dot
+            let wob = sin(t * (1.7 + fy * 3.1) + Double(i) * 1.618)
+            let y = h / 2.0 + (CGFloat(fy) - 0.5) * (h * 0.58) + CGFloat(wob) * h * 0.14
+            let frac = Double(x / w)
+            // fade in at entry, out at exit; brighter mid-tube
+            let alpha = 0.20 + 0.62 * sin(Double.pi * frac)
+            let radius = CGFloat(0.8 + 1.2 * Self.fract(Double(i) * 0.91113))
+            var dotCtx = ctx
+            dotCtx.opacity = alpha
+            dotCtx.fill(
+                Path(ellipseIn: CGRect(x: x - radius, y: y - radius,
+                                       width: radius * 2, height: radius * 2)),
+                with: flowShading
+            )
+        }
+    }
+
+    /// Fractional part — mirrors Android GuardianRibbon's `fract(v)`.
+    private static func fract(_ v: Double) -> Double { v - v.rounded(.down) }
+
+    /// Static readout builder kept out of @ViewBuilder (SWIFT6_PATTERNS §1/§6
+    /// — avoids String(Int) overload-resolution in a view body). ops/s only;
+    /// no kB/s (no iOS byte counter — see `cryptoEngineMeterRow` doc comment).
+    private static func cryptoReadout(_ ops: Int) -> String {
+        return ops.description + "/s"
+    }
+
+    // MARK: - Guardian ribbon — interpreted display values (shared with
+    //         the security-sheet biometrics rows so the two never disagree)
+
+    /// Real thresholds from `StressDetector`/`ConfidenceIndex`
+    /// (QAudionEngine/Sources/QAudionEngine/Analysis + Deepfake):
+    /// `stress.score` is already normalised to [0,1]
+    /// (`min(1, (jitter*10 + shimmer*5)/2)`). Displayed ×100 as "/100"
+    /// to match the reference's convention; bands below are a UI-only
+    /// interpretive convention (the engine itself has no named bands for
+    /// this composite score) loosely aligned to common voice-stress
+    /// literature: <35 calm, 35-60 elevated, >60 agitated/possible duress.
+    private var stressDisplayValue: String {
+        guard let bio = voiceBiometrics else { return "—" }
+        return "\(Int((bio.stressScore * 100).rounded()))"
+    }
+    private var stressStatusWord: String {
+        guard let bio = voiceBiometrics else { return "n/d" }
+        let pct = bio.stressScore * 100
+        if pct < 35 { return "calm" }
+        if pct < 60 { return "elevated" }
+        return "agitated"
+    }
+    private var stressStatusColor: Color {
+        guard let bio = voiceBiometrics else { return scheme.onSurfaceVariant }
+        let pct = bio.stressScore * 100
+        if pct < 35 { return extras.success }
+        if pct < 60 { return extras.warning }
+        return extras.riskHigh
+    }
+
+    /// HNR threshold is REAL and load-bearing: `VoiceHealthMonitor.analyze`
+    /// computes `breathiness = max(0, 1 - hnr/20)`, i.e. the engine itself
+    /// treats 20 dB as the "fully clear" reference point and 0 dB as
+    /// maximally breathy — so >20 dB clear / <10 dB hoarse-or-noisy-link
+    /// (breathiness ≥ 0.5) is a direct reading of that formula, not an
+    /// invented band.
+    private var hnrDisplayValue: String {
+        guard let bio = voiceBiometrics else { return "—" }
+        return "\(Int(bio.hnr.rounded()))"
+    }
+    private var hnrStatusWord: String {
+        guard let bio = voiceBiometrics else { return "n/d" }
+        if bio.hnr > 20 { return "clear" }
+        if bio.hnr < 10 { return "hoarse" }
+        return "fair"
+    }
+    private var hnrStatusColor: Color {
+        guard let bio = voiceBiometrics else { return scheme.onSurfaceVariant }
+        if bio.hnr > 20 { return extras.success }
+        if bio.hnr < 10 { return extras.warning }
+        return scheme.onSurfaceVariant
+    }
+
+    private var pitchDisplayValue: String {
+        guard let bio = voiceBiometrics else { return "—" }
+        return "\(Int(bio.pitchHz.rounded()))"
+    }
+    /// SpeechRateAnalyzer/PitchExtractor expose no explicit "steady vs
+    /// shifting" band — this is a coarse UI-only heuristic (no baseline
+    /// history is tracked here) so it always reads "steady" while voiced.
+    /// It exists only so the gauge has a status word rather than a blank;
+    /// a real "shifted from this peer's baseline" comparison would need
+    /// a per-peer stored baseline, which is out of scope for this pass.
+    private var pitchStatusWord: String {
+        guard let bio = voiceBiometrics else { return "n/d" }
+        return bio.pitchHz > 0 ? "steady" : "silent"
+    }
+
     // MARK: - Pills row
 
     private var pillsRow: some View {
-        // RE-KEY removed here — already shown in SessionStatusStrip at top.
+        // RE-KEY removed here — already shown in the stats band's RE-KEY
+        // progress column above (Android parity keeps its pill because its
+        // band has no countdown text; ours does).
         HStack(spacing: 8) {
             MetaPill("LIVENESS OK",   accent: extras.success, filled: true)
             MetaPill("PSK ROTATION",  accent: extras.success)
@@ -685,24 +1695,255 @@ struct InCallScreen: View {
         }
     }
 
+    // MARK: - Security sheet (unified call UI)
+    //
+    // Aggregates, in one place: SAS words + verify (reuses sasPanel's
+    // sub-pieces), PQC handshake/key info (reuses keyInfoPanel's KeyInfo
+    // model — same `keyInfo` input, no new data source), cipher + key +
+    // epoch/rekey (epoch shown only when `keyEpoch != nil`; no live rekey
+    // countdown hook exists as of this pass — see `keyEpoch` doc comment —
+    // so it is omitted rather than fabricated), transport, and INTERPRETED
+    // voice biometrics (reusing the same display/status helpers as
+    // `guardianRibbon` so the two surfaces never disagree).
+
+    private var securitySheet: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Sicurezza sessione")
+                        .qaudionStyle(type.titleMedium)
+                        .foregroundStyle(scheme.onSurface)
+                    Spacer()
+                    Button {
+                        showSecuritySheet = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .frame(width: 28, height: 28)
+                            .background(Circle().fill(scheme.surfaceVariant))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 12)
+
+                Divider().background(scheme.outline.opacity(0.35))
+
+                VStack(alignment: .leading, spacing: 0) {
+                    if sasWords.count == 6 {
+                        securitySection(title: "SAS · leggi ad alta voce per verificare \(peerDisplayName)") {
+                            sasPanel
+                        }
+                    }
+
+                    if let keyInfo {
+                        securitySection(title: "Handshake · post-quantum") {
+                            keyInfoPanel(keyInfo)
+                        }
+                    }
+
+                    // Cipher + key + epoch/rekey. Epoch row shown ONLY when
+                    // a live `keyEpoch` source exists (see its doc comment —
+                    // no rotation-event hook exists as of this pass, so the
+                    // call site passes nil and this row is simply absent
+                    // rather than showing a fabricated "epoch 0" / countdown).
+                    if keyInfo != nil || keyEpoch != nil {
+                        securitySection(title: "Cifra e chiave") {
+                            cipherKeySectionBody
+                        }
+                    }
+
+                    securitySection(title: "Trasporto") {
+                        transportSectionBody
+                    }
+
+                    securitySection(title: "Biometria vocale · \(peerDisplayName)", isLast: true) {
+                        voiceBiometricsSectionBody
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .presentationDetents([.large, .medium])
+        .presentationDragIndicator(.visible)
+    }
+
+    /// Shared section chrome for the security sheet — title row + content
+    /// + bottom divider (omitted for the last section).
+    @ViewBuilder
+    private func securitySection<Content: View>(
+        title: String,
+        isLast: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased())
+                .qaudionStyle(type.labelSmall)
+                .tracking(1.2)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            content()
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        if !isLast {
+            Divider().background(scheme.outline.opacity(0.25))
+        }
+    }
+
+    /// Cipher + key + epoch/rekey section body.
+    ///
+    /// "CIFRA" intentionally reuses `keyInfo.pqcAlgorithm` (the SAME field
+    /// keyInfoPanel already shows) rather than a hardcoded transport-cipher
+    /// string: `CallCapabilities.sframeAes256V1` exists in the engine but
+    /// is a VIDEO-only, Phase-2 kill-switch tag that defaults OFF
+    /// (`v4SFrameAes256Enabled`) — labelling every call "sframe-aes256-v1"
+    /// would be false for audio-only calls and for any call where that
+    /// switch is off. Better to repeat the one algorithm string we KNOW is
+    /// live than fabricate a second, possibly-wrong one.
+    ///
+    /// "EPOCA" is the one row gated on `keyEpoch`: shown only when a real
+    /// counter is supplied, omitted entirely otherwise (see `keyEpoch` doc
+    /// comment for why no live rekey countdown is offered).
+    private var cipherKeySectionBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let keyInfo {
+                keyInfoRow("CIFRA", keyInfo.pqcAlgorithm)
+            }
+            if let keyEpoch {
+                keyInfoRow("EPOCA", "\(keyEpoch)")
+            }
+        }
+    }
+
+    /// Transport section body: media path + codec-ish info, reusing the
+    /// exact same `transportMode` the trust-bar/transport-row already show
+    /// — no second source of truth for "what transport is this call on".
+    private var transportSectionBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            keyInfoRow("PERCORSO", transportMode.label)
+            keyInfoRow("STATO", transportMode == .disconnected ? "in negoziazione…" : "attivo")
+        }
+    }
+
+    /// INTERPRETED voice biometrics: value + plain-language meaning, using
+    /// the SAME thresholds/status helpers as `guardianRibbon` (stress/HNR
+    /// bands) plus jitter/shimmer and speech-rate rows that the compact
+    /// ribbon has no room for. All rows omitted (not zero-filled) when
+    /// `voiceBiometrics == nil`.
+    @ViewBuilder
+    private var voiceBiometricsSectionBody: some View {
+        if let bio = voiceBiometrics {
+            VStack(alignment: .leading, spacing: 10) {
+                biometricRow(
+                    label: "Autenticità",
+                    value: "\(confidenceWord(bio.confidence)) · \(String(format: "%.2f", bio.confidence))",
+                    valueColor: confidenceColorFor(bio.confidence),
+                    meaning: ">0.70 genuina · 0.25–0.70 verifica con SAS · <0.25 possibile voce sintetica (soglie ConfidenceIndex/ConfidenceThresholds)."
+                )
+                biometricRow(
+                    label: "Stress",
+                    value: "\(stressDisplayValue)/100 · \(stressStatusWord)",
+                    valueColor: stressStatusColor,
+                    meaning: "<35 calmo · 35–60 elevato · >60 agitato — un picco sostenuto può indicare pressione/coercizione."
+                )
+                biometricRow(
+                    label: "Jitter / Shimmer",
+                    value: "\(String(format: "%.1f", bio.jitter * 100))% / \(String(format: "%.1f", bio.shimmer * 100))%",
+                    valueColor: scheme.onSurface,
+                    meaning: "Normale <1% / <3% (convenzione voice-science). Valori troppo perfetti (≈0) sono a loro volta sospetti — una voce umana non è mai così stabile."
+                )
+                biometricRow(
+                    label: "Respiro · HNR",
+                    value: "\(hnrDisplayValue) dB · \(String(format: "%.2f", bio.breathiness))",
+                    valueColor: hnrStatusColor,
+                    meaning: ">20 dB chiara · <10 dB rauca o link rumoroso (VoiceHealthMonitor: breathiness = 1 − hnr/20)."
+                )
+                biometricRow(
+                    label: "Pitch f0 · rate",
+                    value: "\(pitchDisplayValue) Hz · \(String(format: "%.1f", bio.syllablesPerSec)) syl/s",
+                    valueColor: scheme.onSurface,
+                    meaning: "Uno scarto improvviso dal basale di \(peerDisplayName) può segnalare una sostituzione/impersonificazione."
+                )
+            }
+        } else {
+            Text("Biometria vocale non disponibile per questa chiamata.")
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        }
+    }
+
+    private func biometricRow(label: String, value: String, valueColor: Color, meaning: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label)
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                Spacer()
+                Text(value)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(valueColor)
+            }
+            Text(meaning)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// `ConfidenceIndex.greenThreshold`/`redThreshold` equivalents exposed
+    /// via `ConfidenceThresholds` (0.70 / 0.25) — same values already used
+    /// by `confidenceColor` below, reused here for the biometrics row so
+    /// the "Autenticità" wording and its color never diverge from the
+    /// avatar-halo tone.
+    private func confidenceWord(_ value: Float) -> String {
+        switch ConfidenceThresholds.category(of: Double(value)) {
+        case 0:  return "genuina"
+        case 1:  return "verifica con SAS"
+        default: return "a rischio"
+        }
+    }
+    private func confidenceColorFor(_ value: Float) -> Color {
+        switch ConfidenceThresholds.category(of: Double(value)) {
+        case 0:  return extras.success
+        case 1:  return extras.warning
+        default: return extras.riskHigh
+        }
+    }
+
     // MARK: - Bottom action row (pinned)
 
-    // MARK: - Bottom action row (W557: 2-row adaptive layout for iPhone)
+    // MARK: - Control dock (unified call UI — cosmetic regroup only)
     //
-    // Previous design: single HStack with 7 buttons.
-    // Problem: 7×48pt + 1×60pt + 6×12pt spacing ≈ 420pt — overflows any
-    // iPhone screen (narrowest = iPhone SE 375pt safe area ≈ 343pt).
-    // The row was clipped / invisible on every iPhone in portrait mode.
+    // Every button below calls the EXACT SAME closure it did before this
+    // pass (onToggleMute / onToggleSpeaker / onToggleCamera /
+    // onUpgradeToVideo / onToggleScreenShare / onToggleVoiceEnhancement /
+    // onAddParticipant / onHangup) — no new control was invented and no
+    // existing one was removed. Only the grouping changed, to match the
+    // unified dock layout from call-guardian-reference.html:
+    //   Row 1 (primary):   Mute · Speaker · Video · Share screen
+    //   Row 2 (secondary): Enhance · Add(disabled) · End
+    // The reference's Row 2 also has "Chat" as its first button — chat-
+    // over-call is explicitly wave-2 scope (deferred), so it is omitted
+    // here rather than added as a non-functional placeholder button.
     //
-    // New design: two rows inside a rounded-rectangle card.
-    //   Row 1 (secondary): camera/upgrade · screenshare · voice-enhance · add
-    //   Row 2 (primary):   mute · speaker ·  [ HANGUP (centred, 60pt) ]
-    // Each row fits comfortably on a 375pt screen.
+    // W557 constraint carried over unchanged: two rows inside a rounded-
+    // rectangle card so 4-5 buttons per row always fit on a 375pt screen
+    // (the previous single-HStack-of-7 design overflowed iPhone SE).
+    //
+    // Add-participant: per spec, no API exists yet — CircularAction's
+    // existing `isDisabled` (already supported, see Components/
+    // CircularAction.swift) renders it visibly dimmed + non-interactive,
+    // matching Android's current no-op state for this button. This is
+    // NOT a new capability — onAddParticipant is still wired verbatim,
+    // it simply never fires because CircularAction gates the tap.
 
     private var bottomActionRow: some View {
         VStack(spacing: 10) {
-            secondaryControlsRow
             primaryControlsRow
+            secondaryControlsRow
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -718,60 +1959,11 @@ struct InCallScreen: View {
         .padding(.bottom, 20)
     }
 
-    /// Row 1: secondary / contextual controls.
-    /// camera/upgrade-video | screen-share | voice-enhance | add-participant
-    private var secondaryControlsRow: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            if hasVideo {
-                CircularAction(
-                    icon: cameraOn ? "video.fill" : "video.slash.fill",
-                    action: onToggleCamera,
-                    diameter: 48,
-                    background: cameraOn ? extras.success : scheme.surfaceVariant,
-                    iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
-                )
-            } else {
-                CircularAction(
-                    icon: "video.badge.plus",
-                    action: onUpgradeToVideo,
-                    diameter: 48,
-                    background: scheme.surfaceVariant,
-                    iconColor: scheme.onSurface
-                )
-            }
-            Spacer(minLength: 0)
-            // W538: screen-share (hidden on Mac Catalyst).
-            if screenShareAvailable {
-                CircularAction(
-                    icon: screenSharing ? "square.on.square.fill" : "square.on.square",
-                    action: onToggleScreenShare,
-                    diameter: 48,
-                    background: screenSharing ? extras.success : scheme.surfaceVariant,
-                    iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
-                )
-                Spacer(minLength: 0)
-            }
-            CircularAction(
-                icon: "line.3.horizontal",
-                action: onToggleVoiceEnhancement,
-                diameter: 48,
-                background: voiceEnhancement ? extras.success : scheme.surfaceVariant,
-                iconColor: voiceEnhancement ? extras.onSuccess : scheme.onSurface
-            )
-            Spacer(minLength: 0)
-            CircularAction(
-                icon: "person.badge.plus",
-                action: onAddParticipant,
-                diameter: 48,
-                background: scheme.surfaceVariant,
-                iconColor: scheme.onSurface
-            )
-            Spacer(minLength: 0)
-        }
-    }
-
-    /// Row 2: primary controls — mute, speaker, hangup (centred).
+    /// Row 1 (primary, top): mute · speaker · video/upgrade · screen-share.
+    /// Same four controls as before the regroup, same closures — only the
+    /// row they live in changed (previously mute/speaker/hangup shared a
+    /// row; hangup now anchors the end of Row 2 instead, matching the
+    /// reference's "End" position).
     private var primaryControlsRow: some View {
         HStack(spacing: 0) {
             Spacer(minLength: 0)
@@ -791,7 +1983,68 @@ struct InCallScreen: View {
                 iconColor: speakerOn ? extras.onSuccess : scheme.onSurface
             )
             Spacer(minLength: 0)
-            // Hangup — prominent, centred, larger than secondary buttons.
+            if hasVideo {
+                CircularAction(
+                    icon: cameraOn ? "video.fill" : "video.slash.fill",
+                    action: onToggleCamera,
+                    diameter: 52,
+                    background: cameraOn ? extras.success : scheme.surfaceVariant,
+                    iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
+                )
+            } else {
+                CircularAction(
+                    icon: "video.badge.plus",
+                    action: onUpgradeToVideo,
+                    diameter: 52,
+                    background: scheme.surfaceVariant,
+                    iconColor: scheme.onSurface
+                )
+            }
+            Spacer(minLength: 0)
+            // W538: screen-share (hidden on Mac Catalyst).
+            if screenShareAvailable {
+                CircularAction(
+                    icon: screenSharing ? "square.on.square.fill" : "square.on.square",
+                    action: onToggleScreenShare,
+                    diameter: 52,
+                    background: screenSharing ? extras.success : scheme.surfaceVariant,
+                    iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
+                )
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// Row 2 (secondary, bottom): voice-enhance · add-participant
+    /// (visually present, disabled/no-op) · hangup (prominent, larger,
+    /// anchors the end of the dock — matches the reference's "End"
+    /// position instead of floating mid-row).
+    private var secondaryControlsRow: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            CircularAction(
+                icon: "line.3.horizontal",
+                action: onToggleVoiceEnhancement,
+                diameter: 48,
+                background: voiceEnhancement ? extras.success : scheme.surfaceVariant,
+                iconColor: voiceEnhancement ? extras.onSuccess : scheme.onSurface
+            )
+            Spacer(minLength: 0)
+            // No add-participant API exists yet (spec: render present but
+            // disabled/no-op, matching Android's current state — do not
+            // build 1:1→group escalation now). CircularAction's isDisabled
+            // dims the icon and blocks the tap at the button level.
+            CircularAction(
+                icon: "person.badge.plus",
+                action: onAddParticipant,
+                diameter: 48,
+                background: scheme.surfaceVariant,
+                iconColor: scheme.onSurface,
+                isDisabled: true
+            )
+            Spacer(minLength: 0)
+            // Hangup — prominent, larger than secondary buttons, anchors
+            // the end of the dock (matches the reference's "End" slot).
             CircularAction(
                 icon: "phone.down.fill",
                 action: onHangup,
@@ -838,7 +2091,6 @@ struct InCallScreen: View {
         peerDisplayName: "Mario Rossi",
         durationSeconds: 754,
         confidence: 0.92,
-        recentSamples: [0.84, 0.86, 0.89, 0.91, 0.92, 0.92, 0.93, 0.92],
         rekeyInSeconds: 252,
         rekeyTotalSeconds: 300,
         pqcActive: true,
@@ -850,6 +2102,14 @@ struct InCallScreen: View {
                        pskName: "Yubi5",
                        pskFingerprint: "a83c-9f12"),
         transportMode: .p2pSrtp,
+        voiceBiometrics: .init(
+            stressScore: 0.18, jitter: 0.006, shimmer: 0.021,
+            hnr: 21, breathiness: 0.12, pitchHz: 142,
+            syllablesPerSec: 4.1, confidence: 0.94,
+            f1: 620, f2: 1200, f3: 2600, f4: 3400, speaking: true
+        ),
+        keyEpoch: nil,
+        cryptoOpsPerSec: 96,
         onHangup: {}
     )
     .qAudionTheme(dark: true)
@@ -862,6 +2122,26 @@ struct InCallScreen: View {
         confidence: 0.55,
         rekeyInSeconds: 295,
         transportMode: .disconnected,
+        onHangup: {}
+    )
+    .qAudionTheme(dark: true)
+}
+
+#Preview("Earbud sovereign (TrustChainCard A+)") {
+    // Design preview of the TrustChainCard earbud branch (gold accent,
+    // envelope reaching the mic, CRACEN stat). No live iOS call site can
+    // produce this state yet — the earbud media provider lands later.
+    InCallScreen(
+        peerDisplayName: "Mario Rossi",
+        durationSeconds: 340,
+        confidence: 0.95,
+        rekeyInSeconds: 120,
+        rekeyTotalSeconds: 300,
+        pqcActive: true,
+        transportMode: .p2pSrtp,
+        earbudActive: true,
+        earbudHwVerified: true,
+        cryptoOpsPerSec: 102,
         onHangup: {}
     )
     .qAudionTheme(dark: true)

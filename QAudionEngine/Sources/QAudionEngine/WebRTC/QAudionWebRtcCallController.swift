@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(WebRTC)
 import WebRTC
 #if os(iOS)
@@ -703,6 +704,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
             videoUpgradeInProgress = false
+            // OFFERER-UPGRADE DECODE FIX (2026-07-05) — this is the ONLY
+            // flow where our video transceiver was created by a LOCAL
+            // addTrack on a second-round offer; the receiver cryptor
+            // attached at didAdd-time binds before the receiver's RTP
+            // channel is live and inbound video then reaches the decoder
+            // STILL ENCRYPTED (framesDecoded pinned at 0 forever — the
+            // black-screen bug). Re-create it now, against the receiver as
+            // it exists AFTER the answer associated the transceiver. See
+            // QAudionPeerConnection.rebindVideoReceiverCryptorPostNegotiation.
+            _ = pc.rebindVideoReceiverCryptorPostNegotiation()
             // WIRE_SPEC §8.7 (SHOULD) — upgrader path: we start sending
             // video now that the answer is applied. Hold TX until the
             // peer's call_media_ready (or 2s), then enable + force IDR.
@@ -731,6 +742,29 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `upgradeToVideo` cleared the slot for the upgrade answer, so a stray
     /// late `call_upgrade_response` must be swallowed as a duplicate again).
     /// Safe no-op when no upgrade is in flight.
+    /// 2026-07-04 fix — responder-side counterpart of `cancelVideoUpgrade()`.
+    /// When `acceptUpgradeOffer(remoteSdp:)` fails (a live-call renegotiation
+    /// on this ALREADY-EXISTING controller, as opposed to the on-demand PC
+    /// built by `makeUpgradeResponderController`), the shared PeerConnection
+    /// can be left parked in `have-local-offer` — see
+    /// `QAudionPeerConnection.rollbackLocalOffer`'s kdoc for the exact
+    /// mechanism (libwebrtc's "Called in wrong state" on the next
+    /// `setRemoteOffer`). Unlike `cancelVideoUpgrade()`, this does NOT gate
+    /// on `videoUpgradeInProgress` (that flag is caller-side-only — a pure
+    /// responder failure never sets it, which made calling
+    /// `cancelVideoUpgrade()` here a no-op) and does NOT touch camera
+    /// capture / TX-hold / `videoUpgradeInProgress` — those belong to a
+    /// LOCAL upgrade attempt, not this device's incoming-offer failure.
+    /// `rollbackLocalOffer` is self-guarding (no-op unless
+    /// signalingState == .haveLocalOffer), so this is safe to call
+    /// unconditionally and never touches a healthy PC or the live audio leg.
+    public func recoverPeerConnectionAfterFailedIncomingUpgrade() async {
+        guard let pc = peerConnection else { return }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            pc.rollbackLocalOffer { _ in cont.resume() }
+        }
+    }
+
     public func cancelVideoUpgrade() async {
         guard videoUpgradeInProgress else { return }
         stopCameraCapture()
@@ -759,6 +793,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private let txHoldLock = NSLock()
     private var _videoTxHoldArmed = false
     private var _videoTxHoldTimeoutTask: Task<Void, Never>?
+    /// §8.7 — true once the peer's `call_media_ready` has been seen this
+    /// call. `call_media_ready` is sent once per (callId, mid) and will
+    /// NOT be re-sent on a re-upgrade of the same mid, so arming a fresh
+    /// TX-hold after it arrived would ALWAYS run into the 2s timeout
+    /// (2s of pointless black on every camera off→on). Mirrors Android
+    /// CallController's `peerMediaReadySeen` skip in `armVideoTxHold`.
+    /// Reset in `closeSynchronously()` for the next call.
+    private var _peerMediaReadySeen = false
 
     /// WIRE_SPEC §8.7 (INT-4a) — force an IDR on the next WebRTC-rail
     /// `encode()`: sets the process-wide force-next flag consumed by the
@@ -770,6 +812,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         VideoKeyframeController.shared.requestKeyFrame()
     }
 
+    /// VIDEODIAG (§8.7 self-heal watchdog) — read-only diagnostic: is the
+    /// RECEIVER-side native video cryptor BOTH attached and keyed right
+    /// now? Mirrors the `notifyInboundVideoReadyIfNeeded` readiness pair
+    /// so the watchdog's stall log can pinpoint "frames arrive but the
+    /// cryptor can't open them" vs a renderer problem. Callable from any
+    /// thread (reads only).
+    public var inboundVideoCryptorReady: Bool {
+        guard let pc = peerConnection,
+              let cryptor = pc.nativeVideoCryptor else { return false }
+        return cryptor.keyIsSet && cryptor.receiverIsAttached
+    }
+
     /// WIRE_SPEC §8.7 (SHOULD) — hold LOCAL video TX at upgrade time:
     /// disable the local video track until EITHER the peer's
     /// `call_media_ready` arrives (`releaseVideoTxHold`) OR a 2s timeout
@@ -779,6 +833,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     func beginVideoTxHold() {
         guard let pc = peerConnection, pc.hasLocalVideoTrack() else { return }
         txHoldLock.lock()
+        // §8.7 skip (Android armVideoTxHold parity): the peer's receiver
+        // was already proven ready this call — media_ready is once per
+        // (callId, mid), so a fresh hold could only end by timeout.
+        if _peerMediaReadySeen {
+            txHoldLock.unlock()
+            print("[WebRTC] §8.7 TX-hold skipped — peer call_media_ready already seen this call")
+            return
+        }
         _videoTxHoldArmed = true
         _videoTxHoldTimeoutTask?.cancel()
         // Mute INSIDE the lock — otherwise an early release (peer's
@@ -792,6 +854,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         txHoldLock.unlock()
         print("[WebRTC] §8.7 TX-hold armed — local video held until peer call_media_ready (max 2s)")
+    }
+
+    /// §8.7 — record that the peer's `call_media_ready` was seen this
+    /// call, so any LATER TX-hold arm (re-upgrade / camera off→on on the
+    /// same mid) is skipped instead of dying on the 2s timeout. Called by
+    /// AppState's `handleInboundKeyframeSignal` alongside
+    /// `releaseVideoTxHold` (kept separate: the timeout release must NOT
+    /// set this). Callable from any thread.
+    public func notePeerMediaReadySeen() {
+        txHoldLock.lock()
+        _peerMediaReadySeen = true
+        txHoldLock.unlock()
     }
 
     /// Release the §8.7 TX-hold: enable the local video track and force
@@ -837,6 +911,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 startCameraCapture(for: source)
             }
         }
+        // Re-run the sealer pick now that a local video track exists.
+        // The audio-only call already ran ensureVideoSealerInternal via
+        // acceptPeerCapabilities (CallCapabilities.swift advertises
+        // sframe-v1 on every call, video or not) — that attempt silently
+        // failed to attach the sender cryptor because videoSender was
+        // still nil. Without this call, the peer-initiated (Android→iOS)
+        // upgrade path never retries the attach: iOS ships UNSEALED video
+        // RTP, and the peer's discardFrameWhenCryptorNotReady receiver
+        // drops every frame — bytes/packets arrive, framesDecoded stays 0
+        // (purple screen). Mirrors the same fix already applied to the
+        // fresh-PC-build upgrade path below (see the W536 comment there)
+        // and to acceptPeerCapabilities.
+        _ = ensureVideoSealerInternal()
         // 1. Remote offer (with new m=video section).
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             pc.setRemoteOffer(sdp: remoteSdp) { err in
@@ -920,6 +1007,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // the one-shot latch so the next call/upgrade starts clean. The
         // track itself is gone with the closed PC — nothing to unmute.
         clearVideoTxHold()
+        // §8.7 — the peer-readiness memo is per call: the NEXT call's
+        // upgrades must arm a real TX-hold again.
+        txHoldLock.lock()
+        _peerMediaReadySeen = false
+        txHoldLock.unlock()
         state = .disconnected
     }
 
@@ -1042,6 +1134,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let mid = pc.establishedVideoReceiverMid
         let midDesc: String = mid ?? "nil"
         print("[WebRtcCallController] inbound video READY (receiver cryptor attached+keyed, mid=" + midDesc + ") — signalling call_media_ready")
+        // Android parity (PeerConnectionHolder.flushPendingCryptors): the
+        // moment OUR receiver cryptor is ready, force OUR encoder's next
+        // frame to be an IDR too — the peer's decoder gets a fresh
+        // reference in <1s instead of waiting for the next ~5s periodic
+        // one. Flag-queue only (consumed by KeyframeForcingVideoEncoder on
+        // the next encode); harmless no-op if we are not sending video.
+        VideoKeyframeController.shared.requestKeyFrame()
         onInboundVideoReady?(mid)
     }
 
@@ -1134,6 +1233,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// - Returns: the resolved sealer, or `nil` if the peer hasn't
     ///   been heard from yet.
     @discardableResult
+    /// Non-reversible 3-byte (6 hex char) fingerprint of a key, for cross-
+    /// platform key-match diagnostics only — never logs the key itself.
+    /// Mirrors Android's matching helper in PeerConnectionHolder.kt so the
+    /// two hex strings are directly comparable from one test call's logs.
+    static func shortFingerprint(_ key: Data) -> String {
+        SHA256.hash(data: key).prefix(3).map { String(format: "%02x", $0) }.joined()
+    }
+
     public func ensureVideoSealer(
         pqcSessionKeyProvider: @escaping () -> Data
     ) -> VideoCallSealer? {
@@ -1146,6 +1253,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             if k.count == 32, let c = peerConnection?.nativeVideoCryptor {
                 c.setKey(k)
                 peerConnection?.attachVideoSenderCryptor()  // idempotent
+                print("video key fp=\(Self.shortFingerprint(k)) rekey=1")
             }
             return videoSealer
         }
@@ -1188,6 +1296,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             let aes256Active = CallCapabilities.v4SFrameAes256Enabled && negotiated.useSFrameAes256
             let keyKind = negotiated.useVideoKey ? "K_video (phone-level)" : "session-key (legacy)"
             print("[WebRtcCallController] video pipeline → NATIVE RTCFrameCryptor key=\(keyKind) aes256=\(aes256Active) (peerCaps=\(negotiated.agreedTags))")
+            print("video key fp=\(Self.shortFingerprint(kVideo)) uvk=\(negotiated.useVideoKey ? 1 : 0) rekey=0")
             return videoSealer
         }
 
@@ -1656,6 +1765,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         _ = ensureVideoSealerInternal()
         let attached = pc.attachVideoReceiverCryptor(receiver)
         print("[WebRtcCallController] native video receiver cryptor attached=\(attached)")
+        print("video rx att=\(attached ? 1 : 0) uvk=\((peerNegotiated()?.useVideoKey ?? false) ? 1 : 0)")
         // WIRE_SPEC §8.7 — the attach may have just completed the
         // "receiver cryptor attached AND keyed" pair (receiver arriving
         // AFTER key+caps). One-shot inside.

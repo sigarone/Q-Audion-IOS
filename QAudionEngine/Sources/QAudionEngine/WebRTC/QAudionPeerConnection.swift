@@ -83,6 +83,31 @@ public final class QAudionPeerConnection: NSObject {
     /// Read-public (WIRE_SPEC §8.7): the call controller ships it as the
     /// `mid` field of `call_media_ready` when the receiver cryptor is ready.
     public private(set) var establishedVideoReceiverMid: String?
+    /// MID-UNAVAILABLE-AT-FIRE-TIME FIX (2026-07-05, device-repro'd across 3
+    /// separate video upgrades on v1.0.737): `tx.mid` is reliably EMPTY at the
+    /// exact moment `didAdd rtpReceiver` fires in this environment — the SDP
+    /// `mid` is assigned once offer/answer negotiation fully completes, which
+    /// hasn't necessarily happened yet when this delegate runs. Relying on it
+    /// as the bind/relatch/phantom identity key meant `resolveSinkBinding`
+    /// ALWAYS saw an empty `incomingMid` and took the (deliberately
+    /// conservative) fail-open no-op path — never bindInitial, never relatch,
+    /// every single time, confirmed via device log (neither "video mid est=1"
+    /// nor "video relatch=1" printed even once across 3 reproductions).
+    /// `rtpReceiver.receiverId` IS reliably available immediately (it's how
+    /// `tx` gets resolved via `.first { $0.receiver.receiverId == ... }` at
+    /// all), so THIS is the identity key `resolveSinkBinding` actually
+    /// switches on. `establishedVideoReceiverMid` above still holds the best-
+    /// effort real SDP mid (for the WIRE_SPEC §8.7 `call_media_ready` field);
+    /// this field is the separate, reliable one the bind/relatch decision
+    /// itself is keyed on.
+    private var establishedVideoReceiverKey: String?
+    /// The transceiver `establishedVideoReceiverKey` is currently bound to.
+    /// Tracked alongside the key so a later `didAdd rtpReceiver` for a
+    /// DIFFERENT receiver can tell a legitimate re-latch (WIRE_SPEC §8.6, e.g.
+    /// an offerer-side renegotiation replacing the transceiver) from the M144
+    /// phantom duplicate the guard above already handles. nil until the first
+    /// video receiver arrives; cleared in `close()`.
+    private var establishedVideoReceiverTransceiver: RTCRtpTransceiver?
     private let mediaConstraints = RTCMediaConstraints(
         mandatoryConstraints: nil,
         optionalConstraints: ["DtlsSrtpKeyAgreement": "true"]
@@ -345,6 +370,56 @@ public final class QAudionPeerConnection: NSObject {
         return c.attachReceiver(receiver)
     }
 
+    /// OFFERER-UPGRADE DECODE FIX (2026-07-05) — dispose + re-create the
+    /// receiver cryptor against the video transceiver's CURRENT receiver,
+    /// AFTER a renegotiation answer has been applied.
+    ///
+    /// Why: the iOS-caller + iOS-video-upgrade combo is the ONLY flow where
+    /// the video transceiver is created by a LOCAL `addTrack` on a
+    /// second-round offer (every other combo receives its video m-line from
+    /// a REMOTE offer — Android pre-creates its video transceiver at PC
+    /// construction so any Android-originated SDP already carries m=video).
+    /// In that flow `didAdd rtpReceiver` fires while the receiver is not yet
+    /// bound to its final RTP channel (device-confirmed: the transceiver
+    /// lookup in didAdd yields an EMPTY mid in exactly this combo, while the
+    /// same mid read later for call_media_ready resolves fine — a pure
+    /// attach-timing artifact). The RTCFrameCryptor created at that moment
+    /// initializes successfully but its native frame transformer stays bound
+    /// to the pre-negotiation state: encrypted inbound H265 then BYPASSES the
+    /// decryptor and hits the decoder as ciphertext — bytesReceived grows,
+    /// framesDecoded stays 0, permanently (the black-screen bug, repro'd ~10
+    /// times with matching key fingerprints and "successful" cryptor attach).
+    ///
+    /// Called from applyUpgradeAnswer after setRemoteAnswer succeeds — the
+    /// point where the transceiver is guaranteed associated (mid assigned,
+    /// channel live). On flows that already work (e.g. iOS-callee + iOS
+    /// upgrade takes this same code path) the dispose+recreate costs one
+    /// keyframe round-trip (<1s, the §8.7 kfreq machinery covers it) and
+    /// re-attaches to the same, already-correct receiver — harmless.
+    @discardableResult
+    public func rebindVideoReceiverCryptorPostNegotiation() -> Bool {
+        guard let pc = peerConnection, let cryptor = nativeVideoCryptor else {
+            print("ev=vpostneg skip=1")
+            return false
+        }
+        let vids = pc.transceivers.filter { $0.mediaType == .video }
+        // Prefer the associated (mid-assigned) transceiver; a phantom/orphan
+        // has no mid post-negotiation.
+        guard let tx = vids.first(where: { !$0.mid.isEmpty }) ?? vids.first else {
+            print("ev=vpostneg tx=0")
+            return false
+        }
+        let receiver = tx.receiver
+        let ok = cryptor.rebindReceiver(receiver)
+        establishedVideoReceiverKey = receiver.receiverId
+        let rawMid = tx.mid
+        if !rawMid.isEmpty { establishedVideoReceiverMid = rawMid }
+        establishedVideoReceiverTransceiver = tx
+        print("[WebRTC] post-negotiation video receiver cryptor rebound mid=\(rawMid) ok=\(ok)")
+        print("ev=vpostneg ok=\(ok ? 1 : 0) mid=\(rawMid)")
+        return ok
+    }
+
     public func setVideoMuted(_ muted: Bool) {
         localVideoTrack?.isEnabled = !muted
     }
@@ -494,6 +569,8 @@ public final class QAudionPeerConnection: NSObject {
         localVideoTrack = nil
         videoSender = nil
         establishedVideoReceiverMid = nil
+        establishedVideoReceiverKey = nil
+        establishedVideoReceiverTransceiver = nil
     }
 
     // MARK: - Errors
@@ -580,30 +657,88 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
             // `mid` is annotated nonnull but is empty/nil pre-association; Swift
             // bridges a nil NSString to "" — treat empty as "no mid" either way.
             let rawMid = tx?.mid ?? ""
-            let liveMid: String? = rawMid.isEmpty ? nil : rawMid
             let isRecvOnly = tx?.direction == .recvOnly
             let hasSenderTrack = tx?.sender.track != nil
-            if VideoTransceiverPhantomGuard.shouldIgnorePhantomVideoTransceiver(
-                establishedMid: establishedVideoReceiverMid,
-                liveMid: liveMid,
-                isRecvOnly: isRecvOnly,
-                hasSenderTrack: hasSenderTrack
-            ) {
-                let est = establishedVideoReceiverMid ?? "nil"
-                print("[WebRTC] PHANTOM video transceiver IGNORED mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack) (established mid=\(est) still live) — keeping renderer on established track")
+
+            // RELATCH FIX (2026-07-05, device-repro'd + fingerprint-confirmed:
+            // encrypt/decrypt keys matched, cryptor attach reported success, yet
+            // inbound video was permanently undecrypted). The OLD binary
+            // phantom-guard here only had two outcomes: ignore, or silently fall
+            // through as if this were the already-established track. On a
+            // legitimate mid change (an offerer-shaped renegotiation replaces the
+            // transceiver — the shape combo iOS-caller + iOS-upgrade-initiator
+            // takes, per WIRE_SPEC §8.6) the fall-through path never updated
+            // establishedVideoReceiverMid (gated on `== nil`) NOR re-bound the
+            // receiver cryptor (NativeVideoFrameCryptor.attachReceiver is
+            // write-once — it stayed silently bound to the now-dead receiver and
+            // just returned true). Frames kept flowing on the NEW receiver,
+            // undecrypted, forever — permanent black with a healthy key and a
+            // healthy peer. UpgradeFlowDecisions.resolveSinkBinding is the
+            // KAT-tested pure decision this call site was always supposed to use
+            // (see its doc + UpgradeFlowKatTests.swift) but was never wired in.
+            //
+            // establishedTransceiverStopped is conservatively passed as false —
+            // resolveSinkBinding's own fallback already relatches any different-
+            // receiver track that is NOT the recv-only/no-sender phantom shape
+            // (which is exactly what a real bidirectional video m-line is), so
+            // the fix does not depend on knowing the exact stopped-state API.
+            //
+            // MID-UNAVAILABLE-AT-FIRE-TIME FIX (2026-07-05): use receiverId, not
+            // mid, as the identity resolveSinkBinding switches on — see the
+            // establishedVideoReceiverKey field doc for why. rawMid stays in the
+            // logging below (best-effort) but no longer gates the decision.
+            let receiverKey = rtpReceiver.receiverId
+            let binding = UpgradeFlowDecisions.resolveSinkBinding(
+                establishedMid: establishedVideoReceiverKey,
+                incomingMid: receiverKey,
+                transceiverIsRecvOnly: isRecvOnly,
+                establishedTransceiverStopped: false
+            )
+            // REDACTION-GATE FIX (2026-07-05): ship-ios-logs.py's structured
+            // gate requires free-word-count <= structural(key=value)-token
+            // count per line (scripts/ship-ios-logs.py:_passes_structured_gate).
+            // "video phantom ign=1" / "video mid est=1" / "video relatch
+            // cryptor=1" each carry 2 bare free words ("video"+"phantom",
+            // "video"+"mid", "video"+"relatch") against only 1 structural
+            // token — they FAIL the gate and get silently replaced/dropped,
+            // which is exactly why none of them were ever visible in Loki
+            // across every device repro today, even though (confirmed by
+            // deduction: "ev=vrxatt" below DOES ship, and it is only
+            // reachable past this switch, so bindInitial/relatch above it
+            // must have run) the decision logic itself was firing correctly
+            // the whole time. All-kv, zero-bare-free-word lines below so
+            // free==0 and the gate auto-passes regardless of vocab quirks.
+            switch binding {
+            case .keepPhantomIgnored(let key):
+                print("[WebRTC] PHANTOM video transceiver IGNORED mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack) (established receiver=\(key ?? "nil") still live) — keeping renderer on established track")
+                print("ev=vphantom")
                 return
-            }
-            // First real inbound video establishes the mid. Fail-open: if the
-            // transceiver can't be resolved (or its mid is empty) nothing is
-            // established and the guard above stays inert — old behavior.
-            if establishedVideoReceiverMid == nil, let mid = liveMid {
-                establishedVideoReceiverMid = mid
-                print("[WebRTC] inbound VIDEO mid established mid=\(mid)")
+            case .bindInitial(let key):
+                establishedVideoReceiverKey = key
+                if !rawMid.isEmpty { establishedVideoReceiverMid = rawMid }
+                establishedVideoReceiverTransceiver = tx
+                print("[WebRTC] inbound VIDEO receiver established mid=\(rawMid) receiver=\(key)")
+                print("ev=vbind")
+            case .relatch(let key):
+                let prevKey = establishedVideoReceiverKey ?? "nil"
+                establishedVideoReceiverKey = key
+                if !rawMid.isEmpty { establishedVideoReceiverMid = rawMid }
+                establishedVideoReceiverTransceiver = tx
+                print("[WebRTC] inbound VIDEO RE-LATCHED receiver \(prevKey) -> \(key) mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack)")
+                print("ev=vrelatch")
+                // Rebind the receiver cryptor to the NEW live receiver now, before
+                // forwarding to the delegate below — the write-once attachReceiver
+                // would otherwise no-op and leave it bound to the dead receiver.
+                if let cryptor = nativeVideoCryptor {
+                    let rebound = cryptor.rebindReceiver(rtpReceiver)
+                    print("ev=vrelatch cryptor=\(rebound ? 1 : 0)")
+                }
             }
             delegate?.peerConnection(self, didReceiveRemoteVideoTrack: video)
             // Attach point for the native FrameCryptor (decrypts inbound video).
             // This runs on the WebRTC signalling thread — the correct place to
             // create RTCFrameCryptor (mirrors Android enableVideoFrameCryptorOnReceiver).
+            // No-op for the relatch case above (already rebound synchronously).
             delegate?.peerConnection(self, didReceiveRemoteVideoReceiver: rtpReceiver)
         }
     }

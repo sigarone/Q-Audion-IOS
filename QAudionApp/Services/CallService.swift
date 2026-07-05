@@ -10,6 +10,21 @@ final class CallService {
     var onTxWaveformUpdate: (([Float]) -> Void)?
     var onRxWaveformUpdate: (([Float]) -> Void)?
     var onCipherWaveformUpdate: (([Float]) -> Void)?
+    /// Unified call UI — Guardian ribbon voice biometrics (pitch/stress/
+    /// health/speech-rate/confidence). Wired 1:1 alongside onDeepfakeAlert/
+    /// onDeepfakeScore below, on BOTH integration binding sites (`startCall`
+    /// outgoing + `activateIncomingCallAudio` responder — the old
+    /// outgoing-only asymmetry left gauges dead on every incoming call, fixed
+    /// 2026-07-04). Gated on `EngineConfig.production().enableVoiceAnalysis`
+    /// at the wiring call site (not here) — mirrors how `VoiceAnalysisEngine`
+    /// itself gates processing via its own internal `enabled` flag.
+    var onVoiceAnalysis: ((VoiceAnalysisResult) -> Void)?
+    /// Unified call UI — REAL remote-voice spectrum: 40 log-spaced bands
+    /// (0..1), ≤15 Hz (66 ms throttle at the source — see
+    /// `QAudionCallIntegration.onVoiceSpectrum`). Wired alongside
+    /// `onVoiceAnalysis` on BOTH the outgoing and incoming integration
+    /// binding sites; AppState publishes it for the Guardian MiniSpectrum.
+    var onVoiceSpectrum: (([Float]) -> Void)?
 
     /// W65+W66: Full audio capture + processing pipeline.
     ///
@@ -476,6 +491,28 @@ final class CallService {
             self.onDeepfakeScore?(level, score)
         }
 
+        // Unified call UI — Guardian ribbon voice biometrics. Battery/perf
+        // gate: only assign `onResult` (i.e. only ever receive callbacks)
+        // when the engine config has voice analysis enabled. EngineConfig
+        // .production() has enableVoiceAnalysis=true; .batteryOptimized()
+        // (not currently selected anywhere) has it false — this check keeps
+        // the wiring inert automatically if/when the app switches profiles,
+        // without adding a second gate that could drift from the engine's
+        // own config. VoiceAnalysisEngine.processFrame() ALSO internally
+        // downsamples via analysisRate (default every 5th frame), so this
+        // wiring does not run the full analysis pipeline unconditionally.
+        if EngineConfig.production().enableVoiceAnalysis {
+            integration.getVoiceAnalysis().onResult = { [weak self] result in
+                self?.onVoiceAnalysis?(result)
+            }
+            // Unified call UI — REAL RX spectrum for the Guardian ribbon's
+            // MiniSpectrum. Same battery gate as the gauges above; the
+            // integration additionally skips the FFT while this stays nil.
+            integration.onVoiceSpectrum = { [weak self] bands in
+                self?.onVoiceSpectrum?(bands)
+            }
+        }
+
         // NOTE: do NOT call `integration.onCallSetupStarted` here.
         // That legacy entry point flipped the engine state machine into
         // .capabilitySent with an empty send-closure (bytes → /dev/null),
@@ -625,6 +662,21 @@ final class CallService {
         // Bind the integration so handleIncomingEncryptedFrame can decrypt
         // inbound audio_frame packets.
         self.callIntegration = integration
+        // Unified call UI — responder-side Guardian wiring (2026-07-04 gap
+        // fix): the incoming path never wired `getVoiceAnalysis().onResult`,
+        // so the ribbon gauges + spectrum stayed dead on EVERY incoming call
+        // (the old asymmetry noted on `AppState.voiceAnalysis`). Mirror
+        // startCall's block 1:1 so both call directions feed the same sinks.
+        // Placed BEFORE drainRxPreBuffer so even replayed pre-bind frames
+        // already reach the spectrum tap.
+        if EngineConfig.production().enableVoiceAnalysis {
+            integration.getVoiceAnalysis().onResult = { [weak self] result in
+                self?.onVoiceAnalysis?(result)
+            }
+            integration.onVoiceSpectrum = { [weak self] bands in
+                self?.onVoiceSpectrum?(bands)
+            }
+        }
         // For incoming calls the PQC handshake started before answer, so
         // engine.initialize() has already run — apply tuner prefs now.
         integration.reconfigureAudioCodec(

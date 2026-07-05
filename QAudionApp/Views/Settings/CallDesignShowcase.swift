@@ -70,7 +70,6 @@ struct CallDesignShowcase: View {
                         peerDisplayName: "Mario Rossi",
                         durationSeconds: 754,
                         confidence: 0.92,
-                        recentSamples: [0.84, 0.86, 0.89, 0.91, 0.92, 0.92, 0.93, 0.92],
                         rekeyInSeconds: 252,
                         rekeyTotalSeconds: 300,
                         pqcActive: true,
@@ -100,12 +99,28 @@ struct CallDesignShowcase: View {
                         peerDisplayName: "Luigi Verdi",
                         durationSeconds: 1840,
                         confidence: 0.95,
-                        recentSamples: [0.93, 0.94, 0.95, 0.96, 0.95, 0.95, 0.94, 0.95],
                         rekeyInSeconds: 78,
                         rekeyTotalSeconds: 300,
                         sasWords: ["OXYGEN", "ZEPHYR", "GLYPH", "RADIUS", "VESTIGE", "ECHO"],
                         sasVerified: true,
                         transportMode: .turn,
+                        onHangup: {}
+                    )
+                }
+                NavigationLink("InCall · Earbud sovereign (A+)") {
+                    // TrustChainCard earbud branch (gold, envelope reaches
+                    // the mic, CRACEN stat). Design-preview only: no live
+                    // iOS call site can produce earbudActive=true yet.
+                    InCallScreen(
+                        peerDisplayName: "Mario Rossi",
+                        durationSeconds: 340,
+                        confidence: 0.95,
+                        rekeyInSeconds: 120,
+                        rekeyTotalSeconds: 300,
+                        pqcActive: true,
+                        transportMode: .p2pSrtp,
+                        earbudActive: true,
+                        earbudHwVerified: true,
                         onHangup: {}
                     )
                 }

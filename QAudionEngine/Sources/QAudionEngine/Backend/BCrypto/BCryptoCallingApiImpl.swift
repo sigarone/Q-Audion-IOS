@@ -404,6 +404,24 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ])
     }
 
+    /// WIRE_SPEC §8.1 — `call_video_state` (either direction, transparent
+    /// relay). Informational signal only: tells the peer we paused/resumed
+    /// our camera so their UI can show a "peer paused their video" badge
+    /// or auto-fall-back to the audio-only call screen. Never touches the
+    /// PeerConnection/SDP — the m=video line and transceiver direction
+    /// stay exactly as negotiated.
+    public func sendVideoState(
+        callId: String,
+        recipientId: String,
+        paused: Bool
+    ) async throws {
+        ws.send(type: "call_video_state", data: [
+            "call_id":      callId,
+            "recipient_id": recipientId,
+            "paused":       paused,
+        ])
+    }
+
     public func getRelays() async throws -> [RelayServer] {
         return try await getRelaysResponse().relays
     }

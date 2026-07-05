@@ -130,6 +130,23 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
         return true
     }
 
+    /// Re-bind the receiver cryptor to a NEW `RTCRtpReceiver` after a mid-call
+    /// renegotiation legitimately moves inbound video to a different receiver
+    /// object (WIRE_SPEC §8.6 relatch — see QAudionPeerConnection's
+    /// `didAdd rtpReceiver` "RELATCH FIX"). `attachReceiver` is write-once by
+    /// design (guards phantom duplicates); this disposes the stale cryptor
+    /// FIRST so the guard doesn't silently no-op on the live receiver. The
+    /// shared `keyProvider` already holds the key — no re-key needed, mirrors
+    /// Android's dispose+recreate at PeerConnectionHolder.kt:3130-3138.
+    @discardableResult
+    public func rebindReceiver(_ receiver: RTCRtpReceiver) -> Bool {
+        lock.lock()
+        receiverCryptor?.enabled = false
+        receiverCryptor = nil
+        lock.unlock()
+        return attachReceiver(receiver)
+    }
+
     public func setEnabled(_ on: Bool) {
         lock.lock(); defer { lock.unlock() }
         senderCryptor?.enabled = on
