@@ -644,30 +644,44 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
                 transceiverIsRecvOnly: isRecvOnly,
                 establishedTransceiverStopped: false
             )
+            // REDACTION-GATE FIX (2026-07-05): ship-ios-logs.py's structured
+            // gate requires free-word-count <= structural(key=value)-token
+            // count per line (scripts/ship-ios-logs.py:_passes_structured_gate).
+            // "video phantom ign=1" / "video mid est=1" / "video relatch
+            // cryptor=1" each carry 2 bare free words ("video"+"phantom",
+            // "video"+"mid", "video"+"relatch") against only 1 structural
+            // token — they FAIL the gate and get silently replaced/dropped,
+            // which is exactly why none of them were ever visible in Loki
+            // across every device repro today, even though (confirmed by
+            // deduction: "ev=vrxatt" below DOES ship, and it is only
+            // reachable past this switch, so bindInitial/relatch above it
+            // must have run) the decision logic itself was firing correctly
+            // the whole time. All-kv, zero-bare-free-word lines below so
+            // free==0 and the gate auto-passes regardless of vocab quirks.
             switch binding {
             case .keepPhantomIgnored(let key):
                 print("[WebRTC] PHANTOM video transceiver IGNORED mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack) (established receiver=\(key ?? "nil") still live) — keeping renderer on established track")
-                print("video phantom ign=1")
+                print("ev=vphantom")
                 return
             case .bindInitial(let key):
                 establishedVideoReceiverKey = key
                 if !rawMid.isEmpty { establishedVideoReceiverMid = rawMid }
                 establishedVideoReceiverTransceiver = tx
                 print("[WebRTC] inbound VIDEO receiver established mid=\(rawMid) receiver=\(key)")
-                print("video mid est=1")
+                print("ev=vbind")
             case .relatch(let key):
                 let prevKey = establishedVideoReceiverKey ?? "nil"
                 establishedVideoReceiverKey = key
                 if !rawMid.isEmpty { establishedVideoReceiverMid = rawMid }
                 establishedVideoReceiverTransceiver = tx
                 print("[WebRTC] inbound VIDEO RE-LATCHED receiver \(prevKey) -> \(key) mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack)")
-                print("video relatch=1")
+                print("ev=vrelatch")
                 // Rebind the receiver cryptor to the NEW live receiver now, before
                 // forwarding to the delegate below — the write-once attachReceiver
                 // would otherwise no-op and leave it bound to the dead receiver.
                 if let cryptor = nativeVideoCryptor {
                     let rebound = cryptor.rebindReceiver(rtpReceiver)
-                    print("video relatch cryptor=\(rebound ? 1 : 0)")
+                    print("ev=vrelatch cryptor=\(rebound ? 1 : 0)")
                 }
             }
             delegate?.peerConnection(self, didReceiveRemoteVideoTrack: video)
