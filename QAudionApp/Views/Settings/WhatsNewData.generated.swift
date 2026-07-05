@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.738",
+              date: "2026-07-05",
+              title: "v1.0.738",
+              bullets: [
+                "fix(call): key the video relatch decision on receiverId, not mid",
+              ]),
         .init(id: "v1.0.737",
               date: "2026-07-05",
               title: "v1.0.737",
               bullets: [
+                "chore: regenerate changelog for v1.0.737",
                 "fix(call): wire the missing relatch case into the video receiver guard",
               ]),
         .init(id: "v1.0.736",
@@ -140,18 +147,6 @@ extension ReleaseNote {
                 "feat(ios): per-attachment ephemeral-timer override (pre-send picker + ex wire field)",
                 "fix(ios): W-BGUP review fixes — genuine weak reference + honest test claim",
                 "fix(ios): background-task protection for attachment uploads",
-              ]),
-        .init(id: "v1.0.718",
-              date: "2026-07-02",
-              title: "v1.0.718",
-              bullets: [
-                "feat(ios): upload progress reporting for attachment sends",
-                "fix(ios): reclaim orphaned voice-note/image cache file on send retry",
-                "feat(chat): generic file attachment bubble with save/share (iOS)",
-                "fix(ios): consolidate long-press menu on image/voice-note bubbles into BubbleActionSheet",
-                "fix(ios): clean up cached attachment blob on message delete",
-                "fix: view-once must not purge the sender's own outgoing copy",
-                "fix(ios): make reaction chips tappable to close cross-platform parity",
               ]),
     ]
 }
