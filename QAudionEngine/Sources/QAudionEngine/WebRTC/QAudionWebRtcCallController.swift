@@ -900,6 +900,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 startCameraCapture(for: source)
             }
         }
+        // Re-run the sealer pick now that a local video track exists.
+        // The audio-only call already ran ensureVideoSealerInternal via
+        // acceptPeerCapabilities (CallCapabilities.swift advertises
+        // sframe-v1 on every call, video or not) — that attempt silently
+        // failed to attach the sender cryptor because videoSender was
+        // still nil. Without this call, the peer-initiated (Android→iOS)
+        // upgrade path never retries the attach: iOS ships UNSEALED video
+        // RTP, and the peer's discardFrameWhenCryptorNotReady receiver
+        // drops every frame — bytes/packets arrive, framesDecoded stays 0
+        // (purple screen). Mirrors the same fix already applied to the
+        // fresh-PC-build upgrade path below (see the W536 comment there)
+        // and to acceptPeerCapabilities.
+        _ = ensureVideoSealerInternal()
         // 1. Remote offer (with new m=video section).
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             pc.setRemoteOffer(sdp: remoteSdp) { err in
