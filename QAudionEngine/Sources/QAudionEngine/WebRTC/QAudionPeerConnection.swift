@@ -83,12 +83,30 @@ public final class QAudionPeerConnection: NSObject {
     /// Read-public (WIRE_SPEC §8.7): the call controller ships it as the
     /// `mid` field of `call_media_ready` when the receiver cryptor is ready.
     public private(set) var establishedVideoReceiverMid: String?
-    /// The transceiver `establishedVideoReceiverMid` is currently bound to.
-    /// Tracked alongside the mid so a later `didAdd rtpReceiver` on a
-    /// DIFFERENT mid can tell a legitimate re-latch (WIRE_SPEC §8.6, e.g. an
-    /// offerer-side renegotiation replacing the transceiver — the bug fixed
-    /// 2026-07-05) from the M144 phantom duplicate the guard above already
-    /// handles. nil until the first video receiver arrives; cleared in `close()`.
+    /// MID-UNAVAILABLE-AT-FIRE-TIME FIX (2026-07-05, device-repro'd across 3
+    /// separate video upgrades on v1.0.737): `tx.mid` is reliably EMPTY at the
+    /// exact moment `didAdd rtpReceiver` fires in this environment — the SDP
+    /// `mid` is assigned once offer/answer negotiation fully completes, which
+    /// hasn't necessarily happened yet when this delegate runs. Relying on it
+    /// as the bind/relatch/phantom identity key meant `resolveSinkBinding`
+    /// ALWAYS saw an empty `incomingMid` and took the (deliberately
+    /// conservative) fail-open no-op path — never bindInitial, never relatch,
+    /// every single time, confirmed via device log (neither "video mid est=1"
+    /// nor "video relatch=1" printed even once across 3 reproductions).
+    /// `rtpReceiver.receiverId` IS reliably available immediately (it's how
+    /// `tx` gets resolved via `.first { $0.receiver.receiverId == ... }` at
+    /// all), so THIS is the identity key `resolveSinkBinding` actually
+    /// switches on. `establishedVideoReceiverMid` above still holds the best-
+    /// effort real SDP mid (for the WIRE_SPEC §8.7 `call_media_ready` field);
+    /// this field is the separate, reliable one the bind/relatch decision
+    /// itself is keyed on.
+    private var establishedVideoReceiverKey: String?
+    /// The transceiver `establishedVideoReceiverKey` is currently bound to.
+    /// Tracked alongside the key so a later `didAdd rtpReceiver` for a
+    /// DIFFERENT receiver can tell a legitimate re-latch (WIRE_SPEC §8.6, e.g.
+    /// an offerer-side renegotiation replacing the transceiver) from the M144
+    /// phantom duplicate the guard above already handles. nil until the first
+    /// video receiver arrives; cleared in `close()`.
     private var establishedVideoReceiverTransceiver: RTCRtpTransceiver?
     private let mediaConstraints = RTCMediaConstraints(
         mandatoryConstraints: nil,
@@ -501,6 +519,7 @@ public final class QAudionPeerConnection: NSObject {
         localVideoTrack = nil
         videoSender = nil
         establishedVideoReceiverMid = nil
+        establishedVideoReceiverKey = nil
         establishedVideoReceiverTransceiver = nil
     }
 
@@ -610,37 +629,38 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
             //
             // establishedTransceiverStopped is conservatively passed as false —
             // resolveSinkBinding's own fallback already relatches any different-
-            // mid track that is NOT the recv-only/no-sender phantom shape (which
-            // is exactly what a real bidirectional video m-line is), so the
-            // fix does not depend on knowing the exact stopped-state API.
-            // Fail-open: an unresolvable transceiver/empty mid must NOT get
-            // "established" as an empty string (that would corrupt every later
-            // comparison). Forward normally and leave established state untouched
-            // — same fail-open behavior the old guard had for this edge case.
-            let binding: UpgradeFlowDecisions.SinkBinding? = rawMid.isEmpty ? nil :
-                UpgradeFlowDecisions.resolveSinkBinding(
-                    establishedMid: establishedVideoReceiverMid,
-                    incomingMid: rawMid,
-                    transceiverIsRecvOnly: isRecvOnly,
-                    establishedTransceiverStopped: false
-                )
+            // receiver track that is NOT the recv-only/no-sender phantom shape
+            // (which is exactly what a real bidirectional video m-line is), so
+            // the fix does not depend on knowing the exact stopped-state API.
+            //
+            // MID-UNAVAILABLE-AT-FIRE-TIME FIX (2026-07-05): use receiverId, not
+            // mid, as the identity resolveSinkBinding switches on — see the
+            // establishedVideoReceiverKey field doc for why. rawMid stays in the
+            // logging below (best-effort) but no longer gates the decision.
+            let receiverKey = rtpReceiver.receiverId
+            let binding = UpgradeFlowDecisions.resolveSinkBinding(
+                establishedMid: establishedVideoReceiverKey,
+                incomingMid: receiverKey,
+                transceiverIsRecvOnly: isRecvOnly,
+                establishedTransceiverStopped: false
+            )
             switch binding {
-            case nil:
-                break
-            case .keepPhantomIgnored(let mid):
-                print("[WebRTC] PHANTOM video transceiver IGNORED mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack) (established mid=\(mid ?? "nil") still live) — keeping renderer on established track")
+            case .keepPhantomIgnored(let key):
+                print("[WebRTC] PHANTOM video transceiver IGNORED mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack) (established receiver=\(key ?? "nil") still live) — keeping renderer on established track")
                 print("video phantom ign=1")
                 return
-            case .bindInitial(let mid):
-                establishedVideoReceiverMid = mid
+            case .bindInitial(let key):
+                establishedVideoReceiverKey = key
+                if !rawMid.isEmpty { establishedVideoReceiverMid = rawMid }
                 establishedVideoReceiverTransceiver = tx
-                print("[WebRTC] inbound VIDEO mid established mid=\(mid)")
+                print("[WebRTC] inbound VIDEO receiver established mid=\(rawMid) receiver=\(key)")
                 print("video mid est=1")
-            case .relatch(let mid):
-                let prevMid = establishedVideoReceiverMid ?? "nil"
-                establishedVideoReceiverMid = mid
+            case .relatch(let key):
+                let prevKey = establishedVideoReceiverKey ?? "nil"
+                establishedVideoReceiverKey = key
+                if !rawMid.isEmpty { establishedVideoReceiverMid = rawMid }
                 establishedVideoReceiverTransceiver = tx
-                print("[WebRTC] inbound VIDEO RE-LATCHED mid \(prevMid) -> \(mid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack)")
+                print("[WebRTC] inbound VIDEO RE-LATCHED receiver \(prevKey) -> \(key) mid=\(rawMid) recvOnly=\(isRecvOnly) hasSender=\(hasSenderTrack)")
                 print("video relatch=1")
                 // Rebind the receiver cryptor to the NEW live receiver now, before
                 // forwarding to the delegate below — the write-once attachReceiver
