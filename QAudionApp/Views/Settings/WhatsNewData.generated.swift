@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.737",
+              date: "2026-07-05",
+              title: "v1.0.737",
+              bullets: [
+                "fix(call): wire the missing relatch case into the video receiver guard",
+              ]),
         .init(id: "v1.0.736",
               date: "2026-07-05",
               title: "v1.0.736",
               bullets: [
+                "chore: regenerate changelog for v1.0.736",
                 "diag(video): log short K_video fingerprint + phantom/mid diagnostics",
               ]),
         .init(id: "v1.0.735",
@@ -145,12 +152,6 @@ extension ReleaseNote {
                 "fix(ios): clean up cached attachment blob on message delete",
                 "fix: view-once must not purge the sender's own outgoing copy",
                 "fix(ios): make reaction chips tappable to close cross-platform parity",
-              ]),
-        .init(id: "v1.0.717",
-              date: "2026-07-02",
-              title: "v1.0.717",
-              bullets: [
-                "fix(chat): complete ChatControlEnvelope typed model for ss_* family + stamp inbound ephemeral expiresAt",
               ]),
     ]
 }
