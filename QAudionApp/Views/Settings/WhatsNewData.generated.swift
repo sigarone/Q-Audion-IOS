@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.734",
+              date: "2026-07-05",
+              title: "v1.0.734",
+              bullets: [
+                "fix(video): serialize ALL AVCaptureSession mutation on one queue — fixes SIGABRT crash mid-video-call",
+              ]),
         .init(id: "v1.0.733",
               date: "2026-07-05",
               title: "v1.0.733",
               bullets: [
+                "chore: regenerate changelog for v1.0.733",
                 "fix(telemetry): make iOS call/video diagnostic logs structured so they actually ship to Loki",
                 "feat(settings): auto-generated version-history changelog on the About/Settings screen",
                 "docs: save approved TrustChainCard mockup as permanent reference (was scratchpad-only)",
@@ -144,12 +151,6 @@ extension ReleaseNote {
               title: "v1.0.715",
               bullets: [
                 "fix(video): ignore phantom recv-only video transceiver on callee-side upgrade (iOS mirror of Android 39ea0e5f)",
-              ]),
-        .init(id: "v1.0.714",
-              date: "2026-07-01",
-              title: "v1.0.714",
-              bullets: [
-                "fix(video): call_id check on inbound relay frames + single-frame-in-flight reassembly",
               ]),
     ]
 }
