@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.742",
+              date: "2026-07-07",
+              title: "v1.0.742",
+              bullets: [
+                "fix(call): pin own upgrade-answer to the SAME DTLS role, not the complement",
+              ]),
         .init(id: "v1.0.741",
               date: "2026-07-07",
               title: "v1.0.741",
               bullets: [
+                "chore: regenerate changelog for v1.0.741",
                 "fix(call): pin DTLS role on upgrade answers + validate upgrade_response sender",
               ]),
         .init(id: "v1.0.740",
@@ -141,12 +148,6 @@ extension ReleaseNote {
               bullets: [
                 "fix(ios-call): clarify pixel-buffer bridge comment (caller video upgrade)",
                 "fix(ios-call): wire camera->WebRTC on caller-initiated mid-call video upgrade",
-              ]),
-        .init(id: "v1.0.722",
-              date: "2026-07-03",
-              title: "v1.0.722",
-              bullets: [
-                "fix(vpn): re-subscribe NEVPNStatus observer after loadFromPreferences",
               ]),
     ]
 }
