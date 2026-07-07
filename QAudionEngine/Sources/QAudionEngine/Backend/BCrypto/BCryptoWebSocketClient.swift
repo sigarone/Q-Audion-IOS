@@ -173,6 +173,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// connection as dead and tear it down so the reconnect loop picks it up.
     /// ADAPTIVE by transport: WiFi 30 s, cellular 120 s, wired/other 45 s.
     private var pongTimeoutSec: TimeInterval = 30
+    /// SOCKS5 port from the most recent explicit `connect(viaSocksPort:)` call
+    /// (nil = direct dial). Sticky across INTERNAL reconnects (forceReconnect,
+    /// the backoff retry below) so a Reality-routed session keeps routing
+    /// through Reality after a drop instead of silently falling back to a
+    /// direct dial the network may be blocking. Only an explicit external
+    /// `connect(viaSocksPort:)` call changes it.
+    private var currentSocksPort: Int?
     /// Debounce flag for `forceReconnect()`. iOS suspends URLSessionWebSocketTask
     /// silently when the app is backgrounded; the very first send() after
     /// foregrounding may discover task==nil and kick a reconnect. Without this
@@ -372,10 +379,18 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
 
     public var state: ConnectionState { lock.lock(); defer { lock.unlock() }; return _state }
 
-    public func connect() {
+    /// - Parameter viaSocksPort: when set, routes the WS connection through a
+    ///   local loopback SOCKS5 proxy on `127.0.0.1:<port>` instead of dialing
+    ///   directly — same shape `TorObfsTransport.connectViaSocks(port:)`
+    ///   already uses for Tor. Additive, second backend (RealityManager);
+    ///   default `nil` preserves today's direct-dial behavior unchanged.
+    ///   Caller is responsible for having the tunnel already up (e.g.
+    ///   `await RealityManager.shared.start(params:)`) before passing its port.
+    public func connect(viaSocksPort socksPort: Int? = nil) {
         lock.lock()
         guard _state == .disconnected else { lock.unlock(); return }
         _state = .connecting
+        currentSocksPort = socksPort
         // Bump generation so any zombie receiveLoop or handleDisconnect closure
         // that fires after this point sees a stale generation and returns early.
         connectionGeneration &+= 1
@@ -411,6 +426,19 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // and (with the voip UIBackgroundMode) keeps the socket alive longer
         // when the app is in background.
         sessionConfig.networkServiceType = .callSignaling
+
+        // Reality censorship-bypass path (additive, default off — see
+        // RealityManager.swift / bcrypto-server's CENSORSHIP_RESISTANT_
+        // TRANSPORT_DESIGN.md §4.4). The WSS handshake + cert pinning below
+        // runs UNCHANGED through this tunnel — nothing above the transport
+        // layer needs to know Reality exists, same as Tor's SOCKS5 override.
+        if let socksPort {
+            sessionConfig.connectionProxyDictionary = [
+                "SOCKSEnable": true,
+                "SOCKSProxy": "127.0.0.1",
+                "SOCKSPort": socksPort
+            ] as [String: Any]
+        }
 
         // SECURITY C-6 / H-1 / H-5 — pick the TLS-challenge mode the same
         // way BCryptoRestClient does, and route the WS-open event so the
@@ -502,9 +530,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // backoff actually throttle a runaway loop; a genuinely successful
         // reconnect still resets it to 0 in handleMessage("authenticated").
         let listeners = stateListeners
+        let socksPort = currentSocksPort
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
-        connect()
+        connect(viaSocksPort: socksPort)
 
         // Failsafe (per OpenRouter glm-5.1 review 2026-05-08 Bug 1):
         // if `connect()` opens a task that NEVER authenticates AND NEVER
@@ -1168,6 +1197,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         pingTimer?.cancel()
         pingTimer = nil
         let listeners = stateListeners
+        let socksPort = currentSocksPort
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
 
@@ -1204,7 +1234,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let jitter = baseDelay * (Double.random(in: -0.25...0.25))
         let delay = max(0.5, baseDelay + jitter)
         DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.connect()
+            self?.connect(viaSocksPort: socksPort)
         }
     }
 }

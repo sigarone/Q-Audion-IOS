@@ -54,6 +54,19 @@ let package = Package(
         // TODO: locate the correct SPM-compatible Tor XCFramework URL and re-add.
         // Candidates: https://github.com/iCepa/Tor.framework (Obj-C, needs wrapper)
         //             or a third-party SPM mirror of the Tor binary.
+        //
+        // REALITY (PENDING, same shape as the Tor entry above): RealityManager.swift
+        // compiles against the stub branch of #if canImport(Reality) — Reality.xcframework
+        // is built by scripts/build-reality-xcframework.sh / the "Build reality xcframework"
+        // CI step (../RealityCore Go module), but is NOT YET added as a binaryTarget here.
+        // Needs a macOS/CI pass to (1) confirm engine-tests.yml's `swift build`/`swift test`
+        // (macOS platform) doesn't break on an ios/arm64-only xcframework — condition the
+        // dependency on `.iOS` below if so — and (2) confirm the local-path binaryTarget
+        // actually resolves once QAudionApp/Vendor/Reality.xcframework exists on disk. Once
+        // verified, add:
+        //   .binaryTarget(name: "Reality", path: "../QAudionApp/Vendor/Reality.xcframework"),
+        // and add "Reality" (or `.target(name: "Reality", condition: .when(platforms: [.iOS]))`)
+        // to the QAudionEngine target's dependencies below.
     ],
     targets: [
         // ─────────────────────────────────────────────────────────────────────────────────────

@@ -232,6 +232,45 @@ jobs:
           bash scripts/build-quiche-xcframework.sh
 
       # ----------------------------------------------------------
+      # 3d) Build Reality.xcframework -- VLESS+REALITY-over-xray-core
+      #     censorship-bypass transport (github.com/xtls/libxray), the
+      #     PRIMARY bypass mechanism per bcrypto-server's
+      #     CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md (Tor stays, additive,
+      #     unchanged -- design doc §7). Source lives in ../RealityCore (this
+      #     repo, not an external clone); cache key is that module's own
+      #     go.sum + this build script, since there is no external ref to pin
+      #     the way QUICHE_REF pins cloudflare/quiche. Produces
+      #     QAudionApp/Vendor/Reality.xcframework (the `Reality` module).
+      #     Runs BEFORE xcodegen for consistency with the quiche step, though
+      #     Reality is consumed via QAudionEngine (SPM), not project.yml.
+      #
+      #     NOTE (2026-07-07): the artifact this step produces is NOT YET a
+      #     declared QAudionEngine/Package.swift dependency -- see the TODO
+      #     there next to CQaudionCryptoCore/WebRTC. This step only builds
+      #     the xcframework so a future macOS/CI pass can wire + verify the
+      #     SPM binaryTarget without also needing to stand up gomobile from
+      #     scratch. Building it here is a no-op for every OTHER step in this
+      #     workflow until that wiring lands (nothing references the Vendor/
+      #     path yet), so it cannot regress today's green build.
+      # ----------------------------------------------------------
+      - name: Cache reality xcframework
+        id: cache-reality
+        uses: actions/cache@v5
+        with:
+          path: QAudionApp/Vendor/Reality.xcframework
+          key: reality-xcframework-${{ runner.os }}-${{ hashFiles('RealityCore/go.sum', 'scripts/build-reality-xcframework.sh') }}
+
+      - name: Build reality xcframework
+        if: steps.cache-reality.outputs.cache-hit != 'true'
+        # continue-on-error: this step's artifact isn't consumed by anything
+        # else in this pipeline yet (not a Package.swift dependency — see the
+        # NOTE above), so a failure here must never block a real TestFlight
+        # release. Security-review flagged (2026-07-07): this is a new,
+        # CI-unverified step sitting in the production release trigger path.
+        continue-on-error: true
+        run: bash scripts/build-reality-xcframework.sh
+
+      # ----------------------------------------------------------
       # 4) Generate the Xcode project from project.yml.
       # ----------------------------------------------------------
       - name: Generate Xcode project

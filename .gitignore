@@ -21,6 +21,8 @@ graphify-out/
 
 # MASQUE: quiche QUIC/H3 backend — built in CI (or locally) by
 # scripts/build-quiche-xcframework.sh, never committed (large binary).
+# Reality (VLESS+REALITY over xray-core, scripts/build-reality-xcframework.sh)
+# also lands here (Reality.xcframework) — same rule, no separate entry needed.
 QAudionApp/Vendor/
 .quiche-build/
 
