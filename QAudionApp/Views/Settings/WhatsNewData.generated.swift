@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.743",
+              date: "2026-07-08",
+              title: "v1.0.743",
+              bullets: [
+                "fix(ci): unpin GOTOOLCHAIN for the reality xcframework build step",
+                "feat(reality): add Reality/Xray-core transport groundwork (Go side verified)",
+              ]),
         .init(id: "v1.0.742",
               date: "2026-07-07",
               title: "v1.0.742",
               bullets: [
+                "chore: regenerate changelog for v1.0.742",
                 "fix(call): pin own upgrade-answer to the SAME DTLS role, not the complement",
               ]),
         .init(id: "v1.0.741",
@@ -141,13 +149,6 @@ extension ReleaseNote {
               title: "v1.0.724",
               bullets: [
                 "fix(ios): attachment upload 401s permanently on token expiry (no refresh)",
-              ]),
-        .init(id: "v1.0.723",
-              date: "2026-07-03",
-              title: "v1.0.723",
-              bullets: [
-                "fix(ios-call): clarify pixel-buffer bridge comment (caller video upgrade)",
-                "fix(ios-call): wire camera->WebRTC on caller-initiated mid-call video upgrade",
               ]),
     ]
 }
