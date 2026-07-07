@@ -549,7 +549,7 @@ public final class QAudionPeerConnection: NSObject {
             guard let sdp = sdp else {
                 completion(.failure(WebRTCError.sdpFailed("answer returned nil"))); return
             }
-            let pinnedSdpText = preserveDtlsRoleInUpgradeAnswer(answerSdp: sdp.sdp, establishedLocalSdp: establishedLocalSdp)
+            let pinnedSdpText = pinOwnAnswerToEstablishedDtlsRole(answerSdp: sdp.sdp, establishedLocalSdp: establishedLocalSdp)
             let pinnedSdp = pinnedSdpText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: pinnedSdpText)
             self?.peerConnection?.setLocalDescription(pinnedSdp, completionHandler: { setErr in
                 if let setErr = setErr {
@@ -896,4 +896,49 @@ func preserveDtlsRoleInUpgradeAnswer(answerSdp: String, establishedLocalSdp: Str
         options: [],
         range: NSRange(location: 0, length: answerNS.length),
         withTemplate: "a=setup:\(answererRole)")
+}
+
+/// RFC 8842 §5.5 — pin OUR OWN new answer to the SAME DTLS role we already
+/// committed on this BUNDLE, when WE are the one CREATING the answer (the
+/// upgrade-request RESPONDER path, `createAnswer`). This is the opposite
+/// direction from `preserveDtlsRoleInUpgradeAnswer` above: that function
+/// patches the PEER's incoming answer to our complement (correct only when
+/// WE are the initiator applying THEIR answer, `setRemoteAnswer`). Here
+/// `establishedLocalSdp` already IS our own prior committed role — copying
+/// it verbatim keeps the DTLS association fixed. Bug found 2026-07-07 (live
+/// Desktop<->Android test, same defect ported here before it could ship):
+/// applying the COMPLEMENT to our own answer flips OUR OWN role against
+/// what our local DTLS engine actually does — manifests as dtlsState stuck
+/// at "connecting" forever (a genuine role clash, silent — the SDP text
+/// alone looks self-consistent locally, it just never completes the
+/// handshake), not an outright reject like a peer-role clash would be.
+/// Absent a committed role (first negotiation) ⇒ leave as-is.
+func pinOwnAnswerToEstablishedDtlsRole(answerSdp: String, establishedLocalSdp: String?) -> String {
+    guard let establishedLocalSdp = establishedLocalSdp,
+          let roleRegex = try? NSRegularExpression(
+            pattern: "^a=setup:(active|passive)\\b",
+            options: [.anchorsMatchLines])
+    else {
+        return answerSdp
+    }
+    let establishedNS = establishedLocalSdp as NSString
+    guard let match = roleRegex.firstMatch(
+        in: establishedLocalSdp,
+        range: NSRange(location: 0, length: establishedNS.length))
+    else {
+        return answerSdp
+    }
+    let ownRole = establishedNS.substring(with: match.range(at: 1))
+    guard let replaceRegex = try? NSRegularExpression(
+        pattern: "^a=setup:(active|passive|actpass)\\b",
+        options: [.anchorsMatchLines])
+    else {
+        return answerSdp
+    }
+    let answerNS = answerSdp as NSString
+    return replaceRegex.stringByReplacingMatches(
+        in: answerSdp,
+        options: [],
+        range: NSRange(location: 0, length: answerNS.length),
+        withTemplate: "a=setup:\(ownRole)")
 }
