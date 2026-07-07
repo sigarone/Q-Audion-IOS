@@ -2688,11 +2688,11 @@ final class AppState: ObservableObject {
         }
         // W536 — caller side: peer accepted/rejected our upgrade
         // request. Apply the answer SDP if accepted.
-        ws.onCallUpgradeResponse = { [weak self] callId, accepted, sdp in
+        ws.onCallUpgradeResponse = { [weak self] callId, senderId, accepted, sdp in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.handleUpgradeResponse(
-                    callId: callId, accepted: accepted, sdp: sdp)
+                    callId: callId, senderId: senderId, accepted: accepted, sdp: sdp)
             }
         }
 
@@ -3166,8 +3166,25 @@ final class AppState: ObservableObject {
     /// timeout: roll the camera/preview back; the call stays voice-only.
     @MainActor
     private func handleUpgradeResponse(
-        callId: String, accepted: Bool, sdp: String
+        callId: String, senderId: String, accepted: Bool, sdp: String
     ) {
+        // GAP-10 fix (2026-07-07, cross-platform matrix audit): this handler
+        // previously validated neither call_id nor sender — combined with
+        // the accepted-defaults-true wire bug (fixed in
+        // BCryptoWebSocketClient), any authenticated user who learned this
+        // call's UUID could inject a spoofed decline/accept. Mirrors the
+        // same call_id + sender guard `handleInboundKeyframeSignal` already
+        // applies to the sibling §8.7 signals. The internal 30s-timeout
+        // synthetic call below passes `callContactId` as `senderId`, so it
+        // naturally satisfies this guard with no special-case bypass.
+        guard isInCall,
+              let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let activeCallId = impl.getActiveCallId(),
+              callId.caseInsensitiveCompare(activeCallId) == .orderedSame,
+              callContactId == senderId else {
+            RTLog.warn("call", "call_upgrade_response: not for active call / wrong sender — ignored")
+            return
+        }
         upgradeResponseTimeoutTask?.cancel()
         upgradeResponseTimeoutTask = nil
         let isCameraUpgrade = pendingOutgoingUpgradeMedia == "camera"
@@ -7508,7 +7525,8 @@ final class AppState: ObservableObject {
             guard !Task.isCancelled, let self = self,
                   self.pendingOutgoingUpgradeMedia != nil else { return }
             RTLog.info("call", "upgrade response timeout — treating as decline")
-            self.handleUpgradeResponse(callId: callId, accepted: false, sdp: "")
+            self.handleUpgradeResponse(
+                callId: callId, senderId: self.callContactId ?? "", accepted: false, sdp: "")
         }
     }
 

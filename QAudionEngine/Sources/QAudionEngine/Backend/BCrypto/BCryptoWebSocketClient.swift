@@ -55,7 +55,11 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// is sharing their screen — auto-accepted, never opens our camera).
     /// Absent on the wire ⇒ "camera".
     public var onCallUpgradeRequest: ((_ callId: String, _ senderId: String, _ sdp: String, _ media: String) -> Void)?
-    public var onCallUpgradeResponse: ((_ callId: String, _ accepted: Bool, _ sdp: String) -> Void)?
+    /// `senderId` added 2026-07-07 (GAP-10, cross-platform matrix audit):
+    /// unlike `onCallUpgradeRequest`, this callback previously carried no
+    /// sender identity at all, so `handleUpgradeResponse` could not validate
+    /// who a response actually came from.
+    public var onCallUpgradeResponse: ((_ callId: String, _ senderId: String, _ accepted: Bool, _ sdp: String) -> Void)?
 
     /// WIRE_SPEC §8.7 (v1.1) — receiver→sender media readiness. The peer's
     /// receiver-side video cryptor is BOTH keyed and bound to the negotiated
@@ -303,15 +307,25 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             self.onCallUpgradeRequest?(callId, senderId, sdp, media)
         }
 
-        // W536 — call_upgrade_response (callee→caller). `accepted`
-        // defaults to true when the peer omits the field (legacy
-        // desktop builds < commit a13b that always implied accepted).
+        // W536 — call_upgrade_response (callee→caller).
+        // GAP-10 fix (2026-07-07, cross-platform matrix audit): `accepted`
+        // used to default to true when the peer omitted the field (legacy
+        // desktop builds < commit a13b that always implied accepted) — a
+        // malformed/spoofed response with no `accepted` key was silently
+        // treated as an accept. All shipping clients (Android, Desktop,
+        // iOS) now always send the field explicitly, so the no-legacy
+        // safe default flips to false. senderId extraction mirrors the
+        // call_upgrade_request handler above, feeding AppState's new
+        // sender-validation guard in handleUpgradeResponse.
         registerHandler(type: "call_upgrade_response") { [weak self] _, data in
             guard let self = self,
                   let callId = data["call_id"] as? String else { return }
+            let senderId = (data["sender_id"] as? String)
+                ?? (data["from"] as? String)
+                ?? ""
             let sdp = (data["sdp"] as? String) ?? ""
-            let accepted = (data["accepted"] as? Bool) ?? true
-            self.onCallUpgradeResponse?(callId, accepted, sdp)
+            let accepted = (data["accepted"] as? Bool) ?? false
+            self.onCallUpgradeResponse?(callId, senderId, accepted, sdp)
         }
 
         // WIRE_SPEC §8.7 (v1.1) — call_media_ready (receiver→sender).

@@ -62,6 +62,17 @@ public final class QAudionPeerConnection: NSObject {
     private let factory: RTCPeerConnectionFactory
     private var localAudioTrack: RTCAudioTrack?
     private var localVideoTrack: RTCVideoTrack?
+
+    /// GAP-3 fix (2026-07-07 cross-platform matrix audit) — the COMMITTED
+    /// local description snapshotted at the START of `createOffer`, before
+    /// `setLocalDescription` overwrites it with the new (pending) re-offer.
+    /// Feeds `preserveDtlsRoleInUpgradeAnswer` when the peer's answer comes
+    /// back via `setRemoteAnswer` — the initiator-side counterpart of the
+    /// snapshot `createAnswer` takes locally for the responder side. nil on
+    /// the very first negotiation of the call (no established role yet),
+    /// which makes the pin a no-op. Mirrors Android
+    /// `PeerConnectionHolder.preRenegotiationLocalSdp`.
+    private var establishedLocalSdpBeforeUpgrade: String?
     /// The local video RTP sender — captured when `addLocalVideoTrack` runs, so
     /// the native FrameCryptor can be attached to it (Android attaches to
     /// `videoTransceiver.sender`). nil until a video track is added.
@@ -482,6 +493,10 @@ public final class QAudionPeerConnection: NSObject {
             completion(.failure(WebRTCError.notInitialized))
             return
         }
+        // GAP-3 fix (2026-07-07): snapshot the COMMITTED local description
+        // BEFORE setLocalDescription below overwrites it with the new
+        // (pending) re-offer — see establishedLocalSdpBeforeUpgrade doc.
+        establishedLocalSdpBeforeUpgrade = pc.localDescription?.sdp
         let mandatory: [String: String] = [
             "OfferToReceiveAudio": "true",
             "OfferToReceiveVideo": audioOnly ? "false" : "true"
@@ -510,6 +525,19 @@ public final class QAudionPeerConnection: NSObject {
             completion(.failure(WebRTCError.notInitialized))
             return
         }
+        // GAP-3 fix (2026-07-07 cross-platform matrix audit): snapshot the
+        // COMMITTED local description BEFORE this createAnswer call overwrites
+        // it, so preserveDtlsRoleInUpgradeAnswer can pin the answer we're about
+        // to build to the a=setup role already established on this BUNDLE
+        // (RFC 8842 §5.5 — must not change across renegotiation). iOS had ZERO
+        // DTLS-role protection on this createAnswer path (the mid-call upgrade
+        // RESPONDER side, e.g. acceptUpgradeOffer) until now — matching the
+        // open "iOS<->Desktop video invisible" bug. Mirrors Desktop's
+        // acceptUpgradeOffer pin and Android's applyRemoteOfferAndCreateAnswer
+        // responder-side pin (added 2026-07-06). nil on the very first
+        // negotiation of the call (no established role yet) — the pin is then
+        // a no-op.
+        let establishedLocalSdp = pc.localDescription?.sdp
         let constraints = RTCMediaConstraints(
             mandatoryConstraints: ["OfferToReceiveAudio": "true",
                                      "OfferToReceiveVideo": hasVideo ? "true" : "false"],
@@ -521,11 +549,13 @@ public final class QAudionPeerConnection: NSObject {
             guard let sdp = sdp else {
                 completion(.failure(WebRTCError.sdpFailed("answer returned nil"))); return
             }
-            self?.peerConnection?.setLocalDescription(sdp, completionHandler: { setErr in
+            let pinnedSdpText = preserveDtlsRoleInUpgradeAnswer(answerSdp: sdp.sdp, establishedLocalSdp: establishedLocalSdp)
+            let pinnedSdp = pinnedSdpText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: pinnedSdpText)
+            self?.peerConnection?.setLocalDescription(pinnedSdp, completionHandler: { setErr in
                 if let setErr = setErr {
                     completion(.failure(setErr))
                 } else {
-                    completion(.success(sdp.sdp))
+                    completion(.success(pinnedSdp.sdp))
                 }
             })
         }
@@ -536,7 +566,13 @@ public final class QAudionPeerConnection: NSObject {
     }
 
     public func setRemoteAnswer(sdp: String, completion: @escaping (Error?) -> Void) {
-        applyRemoteSdp(type: .answer, sdp: sdp, completion: completion)
+        // GAP-3 fix (2026-07-07): pin the peer's answer a=setup to the
+        // complement of the role WE already committed before this
+        // renegotiation (establishedLocalSdpBeforeUpgrade, snapshotted at
+        // the start of createOffer) — RFC 8842 §5.5, must not change across
+        // renegotiation. No-op on the very first negotiation of the call.
+        let pinnedSdp = preserveDtlsRoleInUpgradeAnswer(answerSdp: sdp, establishedLocalSdp: establishedLocalSdpBeforeUpgrade)
+        applyRemoteSdp(type: .answer, sdp: pinnedSdp, completion: completion)
     }
 
     private func applyRemoteSdp(type: RTCSdpType, sdp: String, completion: @escaping (Error?) -> Void) {
@@ -805,4 +841,59 @@ enum VideoTransceiverPhantomGuard {
         if liveMid == establishedMid { return false }
         return isRecvOnly && !hasSenderTrack
     }
+}
+
+/// RFC 8842 §5.5 — preserve the DTLS role across an audio→video upgrade
+/// renegotiation by pinning the answer SDP's `a=setup` lines to the
+/// COMPLEMENT of the role already committed in the established BUNDLE
+/// association. On an existing BUNDLE transport the DTLS roles MUST NOT
+/// change; an answer that disagrees gets rejected outright, or — if the
+/// peer works around it — leaves that side's own local transport
+/// internally split from what it actually sent (dtlsState flips to
+/// "failed" shortly after signaling reaches stable).
+///
+/// GAP-3 fix (2026-07-07 cross-platform matrix audit): mirrors
+/// `preserveDtlsRoleInUpgradeAnswer` already shipped on Desktop
+/// (`PeerConnectionManager.ts`) and Android (`PeerConnectionHolder.kt`,
+/// responder-side pin added 2026-07-06) — iOS had ZERO DTLS-role
+/// protection on either the initiator-apply-answer
+/// (`applyUpgradeAnswer`) or responder-create-answer (`createAnswer`)
+/// upgrade paths until now, matching the open "iOS<->Desktop video
+/// invisible" bug.
+///
+/// `establishedLocalSdp` is the PC's committed local description at
+/// apply/create time (nil ⇒ no established role yet, e.g. the very first
+/// negotiation of the call ⇒ this is a no-op). Kept OUTSIDE the WebRTC
+/// class and free of RTC types — pure string transform, unit-testable on
+/// the macOS CI runner without the WebRTC binary, same as
+/// `VideoTransceiverPhantomGuard` above.
+func preserveDtlsRoleInUpgradeAnswer(answerSdp: String, establishedLocalSdp: String?) -> String {
+    guard let establishedLocalSdp = establishedLocalSdp,
+          let roleRegex = try? NSRegularExpression(
+            pattern: "^a=setup:(active|passive)\\b",
+            options: [.anchorsMatchLines])
+    else {
+        return answerSdp
+    }
+    let establishedNS = establishedLocalSdp as NSString
+    guard let match = roleRegex.firstMatch(
+        in: establishedLocalSdp,
+        range: NSRange(location: 0, length: establishedNS.length))
+    else {
+        return answerSdp
+    }
+    let establishedRole = establishedNS.substring(with: match.range(at: 1))
+    let answererRole = establishedRole == "active" ? "passive" : "active"
+    guard let replaceRegex = try? NSRegularExpression(
+        pattern: "^a=setup:(active|passive|actpass)\\b",
+        options: [.anchorsMatchLines])
+    else {
+        return answerSdp
+    }
+    let answerNS = answerSdp as NSString
+    return replaceRegex.stringByReplacingMatches(
+        in: answerSdp,
+        options: [],
+        range: NSRange(location: 0, length: answerNS.length),
+        withTemplate: "a=setup:\(answererRole)")
 }
