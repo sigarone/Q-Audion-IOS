@@ -172,10 +172,20 @@ jobs:
           # (rather than in Package.swift's unsafeFlags, which would make
           # this package ineligible as a remote SPM dependency for any other
           # consumer) keeps this a CI-only concession.
+          #
+          # OTHER_LDFLAGS -lresolv: Reality.xcframework embeds a gomobile-
+          # compiled Go runtime, which needs libresolv's res_9_ninit/
+          # res_9_nsearch/res_9_nclose symbols for DNS resolution. A THIRD
+          # previously-masked break, same root cause as the two above --
+          # this job never linked QAudionEngineTests against Reality until
+          # now. QAudionApp/project.yml already carries the identical
+          # `-lresolv` for the main app target (same comment, same reason);
+          # this test target just never had it.
           xcodebuild test \
             -scheme "QAudionEngine" \
             -configuration Release \
             SWIFT_ENABLE_TESTABILITY=YES \
+            OTHER_LDFLAGS="\$(inherited) -lresolv" \
             -destination "platform=iOS Simulator,name=iPhone 15,OS=latest" \
             -derivedDataPath /tmp/dd-ios-sim \
             -resultBundlePath /tmp/ios-sim-results.xcresult \
