@@ -77,14 +77,24 @@ jobs:
       # QAudionEngine/Package.swift binaryTarget wiring compiles and
       # RealityManager's real `#if canImport(Reality)` branch links, on
       # every push -- the tag-triggered TestFlight job alone would only
-      # catch a break once per release. No job-level Go pin conflict here
-      # (unlike ios-testflight.yml's WireGuard step), so a single modern Go
-      # setup is enough -- no GOTOOLCHAIN=auto workaround needed.
+      # catch a break once per release.
+      #
+      # go-version MUST track RealityCore/go.mod's own `go` directive
+      # (currently 1.26.3): actions/setup-go@v6 sets GOTOOLCHAIN=local at
+      # the job level, so an older pinned Go here can't auto-fetch a newer
+      # toolchain to satisfy go.mod. A stale pin doesn't fail cleanly with
+      # a version-mismatch error -- it breaks `gomobile bind`'s `tool`
+      # directive resolution instead ("gomobile bind requires
+      # golang.org/x/mobile in the current module, but it is not in the
+      # module dependency graph"), which is a much more confusing failure
+      # to debug than the real cause. Root-caused 2026-07-08 after
+      # RealityCore/go.mod bumped its go directive without this pin
+      # following.
       # ----------------------------------------------------------
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26.3'
           cache: false
 
       - name: Cache reality xcframework
