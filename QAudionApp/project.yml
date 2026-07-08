@@ -46,6 +46,21 @@ targets:
           # the build phase classification unambiguous (Apple requires
           # the file at the bundle root to silence ITMS-91061).
           - "PrivacyInfo.xcprivacy"
+          # Reality.xcframework (VLESS+REALITY, built by
+          # scripts/build-reality-xcframework.sh into Vendor/) is NOT YET
+          # wired as a real dependency anywhere (no `framework:` entry
+          # below, no SPM binaryTarget in QAudionEngine/Package.swift —
+          # see that file's own comment). Without this exclude, the blind
+          # recursive `sources: path: .` sweep picks it up as a loose
+          # folder resource and copies its RAW, unprocessed binary into
+          # the app bundle — never going through Xcode's real embed/link
+          # pipeline. altool then rejects the upload outright: "The
+          # executable 'Reality.framework/Reality' has type 'OBJECT' that
+          # is not valid. Only 'EXECUTE' is permitted. (90124)" — device-
+          # confirmed 2026-07-08, blocked v1.0.744 (every TestFlight
+          # release, not just Reality). Remove this exclude in the same
+          # change that adds the real `.binaryTarget`/`framework:` wiring.
+          - "Vendor/Reality.xcframework"
     settings:
       base:
         INFOPLIST_FILE: Info.plist
