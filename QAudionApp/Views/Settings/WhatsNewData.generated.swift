@@ -9,10 +9,24 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.747",
+              date: "2026-07-08",
+              title: "v1.0.747",
+              bullets: [
+                "fix(calling): gate SAS/active display on real callee consent (call_accepted)",
+                "fix(ci): link -lresolv for Reality.xcframework's Go runtime in ios-simulator-tests",
+                "fix(ci): force SWIFT_ENABLE_TESTABILITY=YES for Release iOS-simulator tests",
+                "fix(ci): bump engine-tests.yml Go pin to match RealityCore/go.mod (1.26.3)",
+                "fix(call,reality): guard orphaned zombie PeerConnection + re-enable live Reality toggle",
+                "fix(ci): run ios-simulator-tests in Release configuration, not default Debug",
+                "feat(reality): wire real Reality.xcframework binaryTarget for real (no more PENDING)",
+                "fix(crypto): fix Scrypt catastrophic slowness — Data subscript in hot loop, not a deadlock",
+              ]),
         .init(id: "v1.0.746",
               date: "2026-07-08",
               title: "v1.0.746",
               bullets: [
+                "chore: regenerate changelog for v1.0.746",
                 "fix(dormant-audit): surface Reality-fallback failure + gate dead UI toggle; add DTLS-only connection-state observer",
                 "fix(ci): add process-level watchdog to iOS Simulator test job",
               ]),
@@ -146,12 +160,6 @@ extension ReleaseNote {
               title: "v1.0.728",
               bullets: [
                 "feat(ios-call): sender-side IDR forcing on the WebRTC rail + video TX-hold until media-ready",
-              ]),
-        .init(id: "v1.0.727",
-              date: "2026-07-03",
-              title: "v1.0.727",
-              bullets: [
-                "feat(ios-call): stall-driven keyframe request, glare polite/impolite, aligned timeouts, upgrade KAT",
               ]),
     ]
 }
