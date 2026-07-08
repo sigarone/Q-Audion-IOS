@@ -140,8 +140,19 @@ jobs:
           # binary presence on the runner) — kill xcodebuild outright after
           # 15 min instead of silently burning the full 60min job ceiling on
           # every single push.
+          # -configuration Release: without it, `xcodebuild test` defaults to
+          # Debug (-Onone, no optimizer) -- confirmed 2026-07-08 by pushing a
+          # from-scratch rewrite of Scrypt.swift's hot loops (Data subscript ->
+          # [UInt8] + withUnsafe(Mutable)BufferPointer, eliminating Data's
+          # bridging/COW overhead) that made almost no difference in this job
+          # (258s vs the prior 294s for the same N=131072 derivation -- ~12%,
+          # not the 10-100x a real algorithmic fix should show). The dominant
+          # cost is the missing optimizer, not the data-structure choice; the
+          # Scrypt.swift rewrite is still a legitimate improvement, just not
+          # sufficient alone.
           xcodebuild test \
             -scheme "QAudionEngine" \
+            -configuration Release \
             -destination "platform=iOS Simulator,name=iPhone 15,OS=latest" \
             -derivedDataPath /tmp/dd-ios-sim \
             -resultBundlePath /tmp/ios-sim-results.xcresult \
