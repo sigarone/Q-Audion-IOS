@@ -1580,6 +1580,31 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         onIceConnectionState?(s)
     }
 
+    /// Aggregate ICE+DTLS state — distinct from the ICE-only handler above.
+    /// ICE can report `.connected` while DTLS fails independently (bad cert,
+    /// version mismatch, etc.), and only THIS callback observes that half.
+    /// Same asymmetric-observer gap already found + fixed this session on
+    /// Android (missing onConnectionChange). Transition to `.failed` on
+    /// `.failed` here too, independent of the ICE path, so a DTLS-only
+    /// failure is not silently unobserved.
+    public func peerConnection(_ pc: QAudionPeerConnection,
+                                 didChangeConnectionState s: RTCPeerConnectionState) {
+        let stateName: String
+        switch s {
+        case .new:          stateName = "new"
+        case .connecting:   stateName = "connecting"
+        case .connected:    stateName = "connected"
+        case .disconnected: stateName = "disconnected"
+        case .failed:       stateName = "failed"
+        case .closed:       stateName = "closed"
+        @unknown default:   stateName = "unknown(\(s.rawValue))"
+        }
+        print("[WebRTC] PeerConnection (ICE+DTLS) state → \(stateName)")
+        if s == .failed {
+            state = .failed("DTLS/connection failed")
+        }
+    }
+
     // MARK: - Video diagnostics telemetry
 
     /// Poll RTCPeerConnection statistics every 3 s and ship outbound +

@@ -35,6 +35,15 @@ public final class QAudionPeerConnection: NSObject {
         func peerConnection(_ pc: QAudionPeerConnection,
                              didChangeIceConnectionState state: RTCIceConnectionState)
 
+        /// Aggregate ICE+DTLS connection state transitions (the "combined"
+        /// `RTCPeerConnectionState`, distinct from the ICE-only state above).
+        /// Same asymmetric-observer gap already found + fixed this session on
+        /// Android (missing onConnectionChange): DTLS can fail independently
+        /// of ICE, and only this callback observes that. Default no-op below
+        /// so existing conformers need not implement it.
+        func peerConnection(_ pc: QAudionPeerConnection,
+                             didChangeConnectionState state: RTCPeerConnectionState)
+
         /// Signaling state transitions.
         func peerConnection(_ pc: QAudionPeerConnection,
                              didChangeSignalingState state: RTCSignalingState)
@@ -636,6 +645,13 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         delegate?.peerConnection(self, didChangeIceConnectionState: newState)
     }
+    /// Aggregate ICE+DTLS state (distinct from the ICE-only callback above).
+    /// DTLS can fail independently of ICE reporting "connected" — without this
+    /// observer that failure was silently unobserved on iOS (same asymmetric
+    /// gap already found + fixed on Android this session, onConnectionChange).
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
+        delegate?.peerConnection(self, didChangeConnectionState: newState)
+    }
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
     public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         delegate?.peerConnection(self,
@@ -785,6 +801,9 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
 public extension QAudionPeerConnection.Delegate {
     func peerConnection(_ pc: QAudionPeerConnection,
                         didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver) {}
+
+    func peerConnection(_ pc: QAudionPeerConnection,
+                        didChangeConnectionState state: RTCPeerConnectionState) {}
 }
 
 // MARK: - RTCDataChannelDelegate (W-DCAUDIO sealed-audio channel)

@@ -21,7 +21,18 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.744",
                 "test(tus): bound chunk-retry tests with an explicit timeout",
-                "feat(reality): wire client-side Reality transport + call_upgrade_intent receive handler",
+                // W-DORMANT-1 (2026-07-08): manually corrected — the original
+                // auto-generated bullet here ("feat(reality): wire client-side
+                // Reality transport + call_upgrade_intent receive handler")
+                // verbatim-copied the commit subject, but QAudionEngine's
+                // Package.swift never actually added Reality.xcframework as a
+                // real .binaryTarget dependency (still commented as pending),
+                // so RealityManager always compiled to the stub whose start()
+                // unconditionally throws — the feature could not activate in
+                // any real build. Corrected here since this file is normally
+                // regenerated verbatim from git log and would otherwise keep
+                // shipping a false claim.
+                "fix(reality): client-side Reality transport groundwork landed, but is NOT wired into the app build yet — the toggle in Impostazioni is disabled until Package.swift links the real binary",
               ]),
         .init(id: "v1.0.743",
               date: "2026-07-08",

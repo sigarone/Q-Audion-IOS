@@ -6191,6 +6191,17 @@ final class AppState: ObservableObject {
             print("[AppState] Reality fallback (\(reason)) ACTIVE — WSS tunneled via 127.0.0.1:\(socksPort)")
         } catch {
             print("[AppState] Reality fallback (\(reason)) FAILED to start: \(error)")
+            errorMessage = "Tunnel Reality non disponibile: \(error.localizedDescription). Connessione diretta in corso."
+            // start() threw before we ever got to disconnect()/connect(viaSocksPort:)
+            // above, so the socket is left exactly as this function found it — which,
+            // for the "auto-clearnet-block" caller, means already disconnected (every
+            // trusted clearnet node was just exhausted) with nothing left to bring it
+            // back. Without this, the client stays silently offline forever. Fall back
+            // to a plain clearnet connect — same call the manual OFF path uses in
+            // setForceRealityTransport(_:) — so at minimum normal reconnect/backoff
+            // resumes instead of the client going dark.
+            let ws = prov.getWebSocketClient()
+            ws.connect()
         }
     }
 

@@ -169,15 +169,22 @@ struct TransportSettingsScreen: View {
                         .padding(.horizontal, 14).padding(.top, 6)
 
                     SettingsSectionHeader("ANTI-CENSURA (REALITY)")
+                    // W-DORMANT-1: honest UI for the Reality toggle. QAudionEngine's
+                    // Package.swift does not yet wire Reality.xcframework as a real
+                    // .binaryTarget dependency (still commented as pending), so the
+                    // compiled RealityManager is always the #else stub whose start()
+                    // unconditionally throws. Until that dependency is wired, the
+                    // row is rendered disabled with an explicit "non disponibile"
+                    // hint — same treatment as the Tor row above — so the user
+                    // isn't misled into thinking the tunnel can actually activate.
                     SettingsToggleRow(
                         title: "Forza tunnel Reality",
                         subtitle: "Instrada il segnale nel tunnel anti-censura (test)",
-                        isOn: $forceReality
+                        isOn: .constant(false)
                     )
-                    .onChange(of: forceReality) { newValue in
-                        container.applyForceReality(newValue)
-                    }
-                    Text("Normalmente il tunnel Reality si attiva da solo SOLO quando la rete blocca del tutto voip.bcrypto.com. Questo interruttore lo forza subito, per verificarlo su una rete aperta.")
+                    .opacity(0.45)
+                    .disabled(true)
+                    Text("Non disponibile in questa versione: il modulo Reality non è ancora collegato al build dell'app. Verrà riattivato quando QAudionEngine integrerà il binario Reality.")
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.horizontal, 14).padding(.top, 6)
