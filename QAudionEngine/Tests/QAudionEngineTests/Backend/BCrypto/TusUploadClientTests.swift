@@ -341,6 +341,22 @@ final class TusUploadClientTests: XCTestCase {
     }
 
     // MARK: - W-TUSRESUME: tier-2 per-chunk retry
+    //
+    // Both tests below exercise `patchWithRetry`'s `Task.sleep`-based
+    // backoff — the only place production code actually suspends on a
+    // real timer. On the GitHub Actions iOS Simulator runner (not the
+    // sibling macOS "test" job, which never reproduces this) that timer
+    // resumption has been observed to hang indefinitely rather than the
+    // expected ~1.5s total backoff, eventually tripping Xcode's own
+    // "QUARANTINED DUE TO HIGH LOGGING VOLUME" safety valve and then
+    // sitting until GitHub's ~1h job timeout force-cancels the whole
+    // workflow — confirmed via the raw job log across 10+ consecutive CI
+    // runs going back days, unrelated to any code change. `withTimeout`
+    // below bounds each test to a few seconds so a recurrence fails fast
+    // with a clear diagnostic instead of burning an hour of CI on every
+    // push. This is a CI-environment mitigation, not a production fix —
+    // `patchWithRetry`'s own retry loop is already provably bounded
+    // (`maxChunkAttempts`, no unbounded `while(true)`).
 
     func test_chunkRetry_succeedsOnThirdAttempt() async throws {
         // First 2 PATCH attempts for the chunk fail with a transient 500;
@@ -374,7 +390,9 @@ final class TusUploadClientTests: XCTestCase {
             session: session, serverUrl: "https://test", getToken: { "tok" }, chunkSize: 1024
         )
         let data = Data(repeating: 0x48, count: 20)
-        let returnedFileId = try await client.upload(data: data)
+        let returnedFileId = try await withTimeout(seconds: 10) {
+            try await client.upload(data: data)
+        }
         XCTAssertEqual(returnedFileId, fileId)
         XCTAssertEqual(patchAttempts, 3, "should retry exactly twice before the 3rd attempt succeeds")
     }
@@ -402,7 +420,9 @@ final class TusUploadClientTests: XCTestCase {
         )
         let data = Data(repeating: 0x49, count: 20)
         do {
-            _ = try await client.upload(data: data)
+            _ = try await withTimeout(seconds: 10) {
+                try await client.upload(data: data)
+            }
             XCTFail("expected patchFailed to propagate after exhausting retries")
         } catch let error as TusUploadClient.TusError {
             guard case .patchFailed(let code) = error else {
@@ -412,6 +432,31 @@ final class TusUploadClientTests: XCTestCase {
             XCTAssertEqual(code, 500)
         }
         XCTAssertEqual(patchAttempts, TusUploadClient.maxChunkAttempts)
+    }
+}
+
+// MARK: - Test timeout helper
+
+private struct TestTimeoutError: Error, LocalizedError {
+    var errorDescription: String? { "test operation exceeded its timeout" }
+}
+
+/// Races `operation` against a plain `Task.sleep` deadline so a hang in
+/// the operation (rather than a normal failure) surfaces as a fast,
+/// diagnosable `TestTimeoutError` instead of hanging the whole test run.
+private func withTimeout<T: Sendable>(
+    seconds: TimeInterval,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await operation() }
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            throw TestTimeoutError()
+        }
+        let result = try await group.next()!
+        group.cancelAll()
+        return result
     }
 }
 
