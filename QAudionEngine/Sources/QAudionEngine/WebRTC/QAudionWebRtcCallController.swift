@@ -310,6 +310,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         return true
     }
 
+    /// Bug-C guard (async-construction race — same class of bug already
+    /// fixed on Desktop; see `test/calling/callLaunchAndUpgradeGuards.spec.ts`
+    /// "Bug C"). Set synchronously as the first line of `closeSynchronously()`
+    /// (and therefore also `hangup()` / `sendHangupAndClose()`, which both
+    /// funnel through it), so a `startOutgoingCall` / `acceptIncomingCall` /
+    /// `acceptUpgradeOfferBuildingPeerConnection` still suspended on
+    /// `fetchIceServers()` can detect the teardown on resume and abort
+    /// instead of installing an orphaned `RTCPeerConnection` — one that
+    /// keeps sending ICE candidates via a `recipientId` nobody ever clears.
+    /// NSLock-protected for the same reason as [answerLock]: the controller
+    /// is `@unchecked Sendable`, not `@MainActor`.
+    private let shutdownLock = NSLock()
+    private var _intentionalShutdown = false
+    private var intentionalShutdown: Bool {
+        get { shutdownLock.lock(); defer { shutdownLock.unlock() }; return _intentionalShutdown }
+        set { shutdownLock.lock(); _intentionalShutdown = newValue; shutdownLock.unlock() }
+    }
+
     public init(callingApi: CallingApi, relayProvider: RelayCredentialsProvider? = nil) {
         self.callingApi = callingApi
         self.relayProvider = relayProvider
@@ -343,10 +361,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             throw ControllerError.wrongState(String(describing: state))
         }
         hasAppliedRemoteAnswer = false   // W418 — fresh call, reset idempotency flag
+        intentionalShutdown = false      // Bug-C guard — fresh call, clear any prior teardown latch
         state = .outgoingOffering
         self.recipientId = recipientId
 
         let iceServers = await fetchIceServers()
+        // Bug-C guard: a hangup/closeSynchronously racing the fetchIceServers()
+        // suspension must not go on to construct a PeerConnection nobody will
+        // ever close.
+        guard !intentionalShutdown else {
+            throw ControllerError.wrongState("intentional-shutdown-raced-setup")
+        }
         let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
             // W539 — surface either SFrame or LiveKit sealer to the codec
             // decorator. The LiveKit path is the cross-platform default
@@ -363,6 +388,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)
+        // Bug-C guard: same race, closed a moment later — pc was just built
+        // synchronously (no further suspension since the check above), but a
+        // teardown could still have landed on another thread. Dispose rather
+        // than orphan it.
+        guard !intentionalShutdown else {
+            pc.close()
+            throw ControllerError.wrongState("intentional-shutdown-raced-setup")
+        }
         peerConnection = pc
         pc.addLocalAudioTrack()
         // W-DCAUDIO — wire inbound DataChannel audio to the app, then create the
@@ -463,10 +496,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             throw ControllerError.wrongState(String(describing: state))
         }
         hasAppliedRemoteAnswer = false   // W418 — fresh call, reset idempotency flag
+        intentionalShutdown = false      // Bug-C guard — fresh call, clear any prior teardown latch
         state = .incomingAnswering
         self.recipientId = callerId
 
         let iceServers = await fetchIceServers()
+        // Bug-C guard: see startOutgoingCall's identical check.
+        guard !intentionalShutdown else {
+            throw ControllerError.wrongState("intentional-shutdown-raced-setup")
+        }
         let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
             // W539 — surface either SFrame or LiveKit sealer to the codec
             // decorator. The LiveKit path is the cross-platform default
@@ -483,6 +521,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)
+        // Bug-C guard: see startOutgoingCall's identical check.
+        guard !intentionalShutdown else {
+            pc.close()
+            throw ControllerError.wrongState("intentional-shutdown-raced-setup")
+        }
         peerConnection = pc
         pc.addLocalAudioTrack()
         // W-DCAUDIO — CALLEE side: wire inbound DataChannel audio to the app. The
@@ -563,8 +606,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return try await acceptUpgradeOffer(remoteSdp: remoteSdp)
         }
         hasAppliedRemoteAnswer = false
+        intentionalShutdown = false      // Bug-C guard — fresh build, clear any prior teardown latch
         self.recipientId = callerId
         let iceServers = await fetchIceServers()
+        // Bug-C guard: this path builds a PC with NO `state == .idle` gate
+        // (see the kdoc above), so it needs the check most — see
+        // startOutgoingCall's identical check.
+        guard !intentionalShutdown else {
+            throw ControllerError.wrongState("intentional-shutdown-raced-setup")
+        }
         let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
             switch self?.videoSealer {
             case .sframe(let s):  return .sframe(s)
@@ -577,6 +627,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)
+        // Bug-C guard: see startOutgoingCall's identical check.
+        guard !intentionalShutdown else {
+            pc.close()
+            throw ControllerError.wrongState("intentional-shutdown-raced-setup")
+        }
         peerConnection = pc
         pc.addLocalAudioTrack()
         pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
@@ -973,6 +1028,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// so a double endCall can't leak the RTCPeerConnection while a
     /// fire-and-forget `hangup()` Task is still in flight.
     public func closeSynchronously() {
+        // Bug-C guard — set BEFORE the early-return so it fires even when
+        // this teardown races a start method that hasn't assigned
+        // `peerConnection` yet (the exact gap the early-return used to miss).
+        intentionalShutdown = true
         guard peerConnection != nil else {
             state = .disconnected
             return
