@@ -49,24 +49,31 @@ public enum Scrypt {
 
         // Step 1: B = PBKDF2-HMAC-SHA256(P, S, 1, p * 128 * r)
         let blockBytes = p * 128 * r
-        var b = try pbkdf2(password: password, salt: salt, iterations: 1, dkLen: blockBytes)
+        // ROMix/BlockMix operate on plain [UInt8] via unsafe buffer pointers instead
+        // of Data - Data's subscript has real per-access bridging/COW overhead that,
+        // multiplied by N (cost factor) iterations of nested byte-level loops, turned
+        // a scrypt(N=131072) derivation into minutes instead of ~1s. Algorithm/byte
+        // order below is unchanged from the Data-based version (see RFC 7914 KAT
+        // tests in ScryptTests.swift), only the storage/access pattern changed.
+        let b0 = Array(try pbkdf2(password: password, salt: salt, iterations: 1, dkLen: blockBytes))
 
         // Step 2: for i in 0..<p, B[i] = ROMix(B[i], N)
         let blockSize = 128 * r
-        var blocks = [Data]()
+        var blocks = [[UInt8]]()
         blocks.reserveCapacity(p)
         for i in 0..<p {
             let start = i * blockSize
-            blocks.append(b.subdata(in: start..<(start + blockSize)))
+            blocks.append(Array(b0[start..<(start + blockSize)]))
         }
         for i in 0..<p {
             blocks[i] = romix(block: blocks[i], n: n, r: r)
         }
-        b = Data()
-        for blk in blocks { b.append(blk) }
+        var b = [UInt8]()
+        b.reserveCapacity(blockBytes)
+        for blk in blocks { b.append(contentsOf: blk) }
 
         // Step 3: DK = PBKDF2-HMAC-SHA256(P, B, 1, dkLen)
-        return try pbkdf2(password: password, salt: b, iterations: 1, dkLen: dkLen)
+        return try pbkdf2(password: password, salt: Data(b), iterations: 1, dkLen: dkLen)
     }
 
     // MARK: - PBKDF2 (CommonCrypto wrapper)
@@ -139,52 +146,56 @@ public enum Scrypt {
 
     // MARK: - BlockMix (RFC 7914 §4)
 
-    private static func blockMix(block: Data, r: Int) -> Data {
+    private static func blockMix(block: [UInt8], r: Int) -> [UInt8] {
         // Treat block as 2r 64-byte chunks. Output: 2r 64-byte chunks rearranged.
         var x = [UInt32](repeating: 0, count: 16)
         // x = B[2r-1] (last 64-byte chunk)
         let lastStart = (2 * r - 1) * 64
-        for i in 0..<16 {
-            let off = lastStart + i * 4
-            x[i] = UInt32(block[off]) |
-                   (UInt32(block[off + 1]) << 8) |
-                   (UInt32(block[off + 2]) << 16) |
-                   (UInt32(block[off + 3]) << 24)
-        }
         var ys = [[UInt32]](repeating: [UInt32](repeating: 0, count: 16), count: 2 * r)
-        for i in 0..<(2 * r) {
-            // x ^= B[i]
-            for j in 0..<16 {
-                let off = i * 64 + j * 4
-                let bj = UInt32(block[off]) |
-                         (UInt32(block[off + 1]) << 8) |
-                         (UInt32(block[off + 2]) << 16) |
-                         (UInt32(block[off + 3]) << 24)
-                x[j] ^= bj
+        block.withUnsafeBufferPointer { blk in
+            for i in 0..<16 {
+                let off = lastStart + i * 4
+                x[i] = UInt32(blk[off]) |
+                       (UInt32(blk[off + 1]) << 8) |
+                       (UInt32(blk[off + 2]) << 16) |
+                       (UInt32(blk[off + 3]) << 24)
             }
-            // x = Salsa(x)
-            salsa208(&x)
-            ys[i] = x
+            for i in 0..<(2 * r) {
+                // x ^= B[i]
+                for j in 0..<16 {
+                    let off = i * 64 + j * 4
+                    let bj = UInt32(blk[off]) |
+                             (UInt32(blk[off + 1]) << 8) |
+                             (UInt32(blk[off + 2]) << 16) |
+                             (UInt32(blk[off + 3]) << 24)
+                    x[j] ^= bj
+                }
+                // x = Salsa(x)
+                salsa208(&x)
+                ys[i] = x
+            }
         }
         // Output: Y[0], Y[2], ..., Y[2r-2], Y[1], Y[3], ..., Y[2r-1]
-        var out = Data(count: 128 * r)
-        var outIdx = 0
-        for i in stride(from: 0, to: 2 * r, by: 2) {
-            for j in 0..<16 {
-                let v = ys[i][j]
-                out[outIdx] = UInt8(v & 0xFF); outIdx += 1
-                out[outIdx] = UInt8((v >> 8) & 0xFF); outIdx += 1
-                out[outIdx] = UInt8((v >> 16) & 0xFF); outIdx += 1
-                out[outIdx] = UInt8((v >> 24) & 0xFF); outIdx += 1
+        var out = [UInt8](repeating: 0, count: 128 * r)
+        out.withUnsafeMutableBufferPointer { outBuf in
+            var outIdx = 0
+            for i in stride(from: 0, to: 2 * r, by: 2) {
+                for j in 0..<16 {
+                    let v = ys[i][j]
+                    outBuf[outIdx] = UInt8(v & 0xFF); outIdx += 1
+                    outBuf[outIdx] = UInt8((v >> 8) & 0xFF); outIdx += 1
+                    outBuf[outIdx] = UInt8((v >> 16) & 0xFF); outIdx += 1
+                    outBuf[outIdx] = UInt8((v >> 24) & 0xFF); outIdx += 1
+                }
             }
-        }
-        for i in stride(from: 1, to: 2 * r, by: 2) {
-            for j in 0..<16 {
-                let v = ys[i][j]
-                out[outIdx] = UInt8(v & 0xFF); outIdx += 1
-                out[outIdx] = UInt8((v >> 8) & 0xFF); outIdx += 1
-                out[outIdx] = UInt8((v >> 16) & 0xFF); outIdx += 1
-                out[outIdx] = UInt8((v >> 24) & 0xFF); outIdx += 1
+            for i in stride(from: 1, to: 2 * r, by: 2) {
+                for j in 0..<16 {
+                    let v = ys[i][j]
+                    outBuf[outIdx] = UInt8(v & 0xFF); outIdx += 1
+                    outBuf[outIdx] = UInt8((v >> 8) & 0xFF); outIdx += 1
+                    outBuf[outIdx] = UInt8((v >> 16) & 0xFF); outIdx += 1
+                    outBuf[outIdx] = UInt8((v >> 24) & 0xFF); outIdx += 1
+                }
             }
         }
         return out
@@ -192,25 +203,31 @@ public enum Scrypt {
 
     // MARK: - ROMix (RFC 7914 §5)
 
-    private static func romix(block: Data, n: Int, r: Int) -> Data {
+    private static func romix(block: [UInt8], n: Int, r: Int) -> [UInt8] {
         var x = block
-        var v = [Data]()
+        var v = [[UInt8]]()
         v.reserveCapacity(n)
         for _ in 0..<n {
             v.append(x)
             x = blockMix(block: x, r: r)
         }
+        let lastStart = (2 * r - 1) * 64
         for _ in 0..<n {
             // Read 4 bytes from position (2r-1)*64 of x as little-endian U32 → integerify.
-            let lastStart = (2 * r - 1) * 64
             let intg = UInt32(x[lastStart]) |
                        (UInt32(x[lastStart + 1]) << 8) |
                        (UInt32(x[lastStart + 2]) << 16) |
                        (UInt32(x[lastStart + 3]) << 24)
             let j = Int(intg) % n
             // x = x XOR V[j]
-            var nx = Data(count: x.count)
-            for i in 0..<x.count { nx[i] = x[i] ^ v[j][i] }
+            var nx = [UInt8](repeating: 0, count: x.count)
+            nx.withUnsafeMutableBufferPointer { nxBuf in
+                x.withUnsafeBufferPointer { xBuf in
+                    v[j].withUnsafeBufferPointer { vBuf in
+                        for i in 0..<xBuf.count { nxBuf[i] = xBuf[i] ^ vBuf[i] }
+                    }
+                }
+            }
             x = blockMix(block: nx, r: r)
         }
         return x
