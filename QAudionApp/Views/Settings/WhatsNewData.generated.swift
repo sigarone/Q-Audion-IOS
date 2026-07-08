@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.746",
+              date: "2026-07-08",
+              title: "v1.0.746",
+              bullets: [
+                "fix(dormant-audit): surface Reality-fallback failure + gate dead UI toggle; add DTLS-only connection-state observer",
+                "fix(ci): add process-level watchdog to iOS Simulator test job",
+              ]),
         .init(id: "v1.0.745",
               date: "2026-07-08",
               title: "v1.0.745",
               bullets: [
+                "chore: regenerate changelog for v1.0.745",
                 "fix(ci): exclude unwired Reality.xcframework from the app-target sources sweep",
               ]),
         .init(id: "v1.0.744",
@@ -21,18 +29,7 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.744",
                 "test(tus): bound chunk-retry tests with an explicit timeout",
-                // W-DORMANT-1 (2026-07-08): manually corrected — the original
-                // auto-generated bullet here ("feat(reality): wire client-side
-                // Reality transport + call_upgrade_intent receive handler")
-                // verbatim-copied the commit subject, but QAudionEngine's
-                // Package.swift never actually added Reality.xcframework as a
-                // real .binaryTarget dependency (still commented as pending),
-                // so RealityManager always compiled to the stub whose start()
-                // unconditionally throws — the feature could not activate in
-                // any real build. Corrected here since this file is normally
-                // regenerated verbatim from git log and would otherwise keep
-                // shipping a false claim.
-                "fix(reality): client-side Reality transport groundwork landed, but is NOT wired into the app build yet — the toggle in Impostazioni is disabled until Package.swift links the real binary",
+                "feat(reality): wire client-side Reality transport + call_upgrade_intent receive handler",
               ]),
         .init(id: "v1.0.743",
               date: "2026-07-08",
@@ -155,14 +152,6 @@ extension ReleaseNote {
               title: "v1.0.727",
               bullets: [
                 "feat(ios-call): stall-driven keyframe request, glare polite/impolite, aligned timeouts, upgrade KAT",
-              ]),
-        .init(id: "v1.0.726",
-              date: "2026-07-03",
-              title: "v1.0.726",
-              bullets: [
-                "feat(ios-call): call_media_ready + video_keyframe_request wire; upward .legacy re-eval",
-                "docs(wire-spec): §8 mid-call upgrade state machine + media-readiness (mirror)",
-                "fix(ios-call): roll back WebRTC state on video-upgrade decline/timeout",
               ]),
     ]
 }
