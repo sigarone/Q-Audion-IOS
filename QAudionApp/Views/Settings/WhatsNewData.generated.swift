@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.744",
+              date: "2026-07-08",
+              title: "v1.0.744",
+              bullets: [
+                "test(tus): bound chunk-retry tests with an explicit timeout",
+                "feat(reality): wire client-side Reality transport + call_upgrade_intent receive handler",
+              ]),
         .init(id: "v1.0.743",
               date: "2026-07-08",
               title: "v1.0.743",
               bullets: [
+                "chore: regenerate changelog for v1.0.743",
                 "fix(ci): unpin GOTOOLCHAIN for the reality xcframework build step",
                 "feat(reality): add Reality/Xray-core transport groundwork (Go side verified)",
               ]),
@@ -143,12 +151,6 @@ extension ReleaseNote {
               title: "v1.0.725",
               bullets: [
                 "fix(ios): arm refresh legs on the 3 remaining bare-provider upload sites",
-              ]),
-        .init(id: "v1.0.724",
-              date: "2026-07-03",
-              title: "v1.0.724",
-              bullets: [
-                "fix(ios): attachment upload 401s permanently on token expiry (no refresh)",
               ]),
     ]
 }
