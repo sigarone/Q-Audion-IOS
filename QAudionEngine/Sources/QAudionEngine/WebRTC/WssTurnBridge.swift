@@ -48,17 +48,30 @@ public final class WssTurnBridge: @unchecked Sendable {
     private let username: String?
     private let credential: String?
     private let accessToken: String?
+    /// Local loopback SOCKS5 port to dial THIS bridge's WebSocket through
+    /// (Reality/Tor active) — same shape as
+    /// `BCryptoWebSocketClient.connect(viaSocksPort:)`'s `currentSocksPort`.
+    /// `nil` (the default) preserves today's direct-dial behavior
+    /// byte-for-byte: the signaling socket already tunnels through
+    /// Reality/Tor when active (see `BCryptoWebSocketClient`), but this
+    /// TURN-fallback bridge used to always dial clearnet regardless —
+    /// leaking the call's TURN traffic outside the tunnel. Caller resolves
+    /// the port from `RealityManager.shared.activeSocksPort` (or an
+    /// equivalent Tor port) before constructing the bridge.
+    private let socksPort: Int?
 
     public init(
         wssUrl: URL,
         username: String? = nil,
         credential: String? = nil,
-        accessToken: String? = nil
+        accessToken: String? = nil,
+        socksPort: Int? = nil
     ) {
         self.wssUrl = wssUrl
         self.username = username
         self.credential = credential
         self.accessToken = accessToken
+        self.socksPort = socksPort
     }
 
     deinit { stop() }
@@ -122,7 +135,26 @@ public final class WssTurnBridge: @unchecked Sendable {
         if let tok = accessToken {
             req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
         }
-        let task = URLSession.shared.webSocketTask(with: req)
+        // Reality/Tor censorship-bypass path (additive, default off — mirrors
+        // BCryptoWebSocketClient.connect(viaSocksPort:)). When no SOCKS port
+        // is set, `session` is `URLSession.shared` — IDENTICAL to the prior
+        // behavior. When set, route this bridge's WSS-TURN socket through
+        // the SAME local tunnel the signaling socket already uses, so a
+        // call's TURN relay traffic doesn't leak outside Reality/Tor while
+        // signaling does.
+        let session: URLSession
+        if let socksPort {
+            let sessionConfig = URLSessionConfiguration.default
+            sessionConfig.connectionProxyDictionary = [
+                "SOCKSEnable": true,
+                "SOCKSProxy": "127.0.0.1",
+                "SOCKSPort": socksPort
+            ] as [String: Any]
+            session = URLSession(configuration: sessionConfig)
+        } else {
+            session = URLSession.shared
+        }
+        let task = session.webSocketTask(with: req)
         wsTask = task
         running = true
         task.resume()

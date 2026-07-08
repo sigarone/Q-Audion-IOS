@@ -19,6 +19,12 @@ final class TransportSettingsContainer: ObservableObject {
     private let vpnService: VpnService
     private let vpnTokenProvider: () -> String
 
+    /// Manual force-Reality applier. Captures `state` as a closure (NOT a
+    /// stored AppState property — same build-landmine avoidance as
+    /// `vpnTokenProvider`) so flipping the toggle activates / reverts the
+    /// Reality tunnel live via `AppState.setForceRealityTransport(_:)`.
+    private let forceRealityApplier: (Bool) -> Void
+
     init(state: AppState) {
         let stored = SettingsStore().loadTransport()
         self.viewModel = stored
@@ -28,7 +34,11 @@ final class TransportSettingsContainer: ObservableObject {
         self.draftPreferredUrlString = stored.preferredTurnServerUrl?.absoluteString ?? ""
         self.vpnService = state.vpnService
         self.vpnTokenProvider = { state.currentAccessToken ?? "" }
+        self.forceRealityApplier = { [weak state] on in state?.setForceRealityTransport(on) }
     }
+
+    /// Apply the manual Reality force toggle. Persists + activates/reverts now.
+    func applyForceReality(_ on: Bool) { forceRealityApplier(on) }
 
     /// Fetch the live exit-node list (Helsinki, Milano, …) for the picker.
     /// Best-effort: a failure leaves the list empty (the row still shows
@@ -114,6 +124,11 @@ struct TransportSettingsScreen: View {
     /// key as the HomeView VpnToggleChip long-press picker, so both stay in sync.
     @AppStorage("vpn.preferredNodeId") private var preferredVpnNodeId: String = ""
 
+    /// Manual force-Reality toggle. SAME UserDefaults key the connect path
+    /// reads (`AppState.forceRealityEnabled`), so a flip here and the connect
+    /// decision stay in sync. Default off — clearnet-first.
+    @AppStorage(AppState.forceRealityDefaultsKey) private var forceReality: Bool = false
+
     init(state: AppState) {
         _container = StateObject(wrappedValue: TransportSettingsContainer(state: state))
     }
@@ -149,6 +164,20 @@ struct TransportSettingsScreen: View {
                     .opacity(0.45)
                     .disabled(true)
                     Text("Non disponibile su iOS in questa versione: la piattaforma non espone un proxy SOCKS di sistema. Verrà riattivato quando l'app integrerà un client Tor bundled.")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .padding(.horizontal, 14).padding(.top, 6)
+
+                    SettingsSectionHeader("ANTI-CENSURA (REALITY)")
+                    SettingsToggleRow(
+                        title: "Forza tunnel Reality",
+                        subtitle: "Instrada il segnale nel tunnel anti-censura (test)",
+                        isOn: $forceReality
+                    )
+                    .onChange(of: forceReality) { newValue in
+                        container.applyForceReality(newValue)
+                    }
+                    Text("Normalmente il tunnel Reality si attiva da solo SOLO quando la rete blocca del tutto voip.bcrypto.com. Questo interruttore lo forza subito, per verificarlo su una rete aperta.")
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.horizontal, 14).padding(.top, 6)

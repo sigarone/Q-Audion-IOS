@@ -24,6 +24,12 @@ public actor RelayCredentialsProvider {
         /// MASQUE proxy endpoint (`masque_url`) for the HTTP/3 CONNECT-UDP
         /// TURN fallback. nil when the server doesn't advertise MASQUE.
         public let masqueUrl: String?
+        /// VLESS+REALITY censorship-bypass front params (`reality` block).
+        /// nil when the server hasn't provisioned Reality. Carried here so the
+        /// transport-fallback selector can read it off the same cached bundle
+        /// it already uses for TURN/onion — no extra round-trip when a hard
+        /// clearnet failure triggers the Reality path (design doc §6).
+        public let reality: RealityRelayParams?
         /// Epoch milliseconds at which the freshest server expires.
         public let expiresAtEpochMs: Int64
 
@@ -32,12 +38,14 @@ public actor RelayCredentialsProvider {
             wssTurnUrl: String?,
             onionAddress: String?,
             masqueUrl: String? = nil,
+            reality: RealityRelayParams? = nil,
             expiresAtEpochMs: Int64
         ) {
             self.servers = servers
             self.wssTurnUrl = wssTurnUrl
             self.onionAddress = onionAddress
             self.masqueUrl = masqueUrl
+            self.reality = reality
             self.expiresAtEpochMs = expiresAtEpochMs
         }
 
@@ -119,6 +127,7 @@ public actor RelayCredentialsProvider {
             wssTurnUrl: response.wssTurnUrl,
             onionAddress: response.onionAddress,
             masqueUrl: response.masqueUrl,
+            reality: response.reality,
             expiresAtEpochMs: now + shortestTtl * 1000
         )
     }

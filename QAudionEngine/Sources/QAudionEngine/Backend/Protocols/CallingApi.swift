@@ -345,12 +345,21 @@ public struct RelayResponse: Decodable, Equatable {
     /// CONNECT-UDP TURN fallback. Optional: older servers omit it; the
     /// MASQUE path is gated and inert when this is nil. Mirrors Android.
     public let masqueUrl: String?
+    /// Top-level `reality` block — the VLESS+REALITY censorship-bypass front
+    /// parameters (design doc §4 / bcrypto-server
+    /// CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Present ONLY when the server
+    /// has provisioned a Reality front; nil on un-provisioned / older
+    /// deployments (the whole Reality path stays inert when this is nil).
+    /// Consumed by the transport-fallback selector, exactly like
+    /// `onionAddress` — never a default route.
+    public let reality: RealityRelayParams?
 
-    public init(relays: [RelayServer], wssTurnUrl: String? = nil, onionAddress: String? = nil, masqueUrl: String? = nil) {
+    public init(relays: [RelayServer], wssTurnUrl: String? = nil, onionAddress: String? = nil, masqueUrl: String? = nil, reality: RealityRelayParams? = nil) {
         self.relays = relays
         self.wssTurnUrl = wssTurnUrl
         self.onionAddress = onionAddress
         self.masqueUrl = masqueUrl
+        self.reality = reality
     }
 
     public init(from decoder: Decoder) throws {
@@ -362,6 +371,7 @@ public struct RelayResponse: Decodable, Equatable {
             ?? c.decodeIfPresent(String.self, forKey: .onion_address)
         self.masqueUrl = try c.decodeIfPresent(String.self, forKey: .masqueUrl)
             ?? c.decodeIfPresent(String.self, forKey: .masque_url)
+        self.reality = try c.decodeIfPresent(RealityRelayParams.self, forKey: .reality)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -369,5 +379,87 @@ public struct RelayResponse: Decodable, Equatable {
         case wssTurnUrl, wss_turn_url
         case onionAddress, onion_address
         case masqueUrl, masque_url
+        case reality
+    }
+}
+
+/// Server-issued VLESS+REALITY front parameters, decoded from the top-level
+/// `reality` object of `/api/v1/calling/relays` (authoritative wire contract
+/// in bcrypto-server's CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Every field
+/// is a SERVER deployment decision — the client hardcodes NONE of them (the
+/// disguise SNI, the Reality keys, and the front endpoint are all chosen
+/// server-side, design doc §4.2). The client dials `hostname:port`, presents
+/// `serverName` as the camouflage SNI, and authenticates with
+/// `publicKey` + `uuid` + `shortId` + `flow`. These feed straight into
+/// `RealityManager.Params` (see `AppState.activateRealityFallback`).
+public struct RealityRelayParams: Decodable, Equatable, Sendable {
+    /// VPS public IP / host the client dials directly (NOT voip.bcrypto.com —
+    /// a separate, un-Cloudflared Reality-front endpoint, design doc §4.3).
+    public let hostname: String
+    /// Reality-front (xray VLESS+REALITY inbound) TCP port.
+    public let port: Int
+    /// Server Reality public key (x25519, base64url).
+    public let publicKey: String
+    /// VLESS client id.
+    public let uuid: String
+    /// Reality shortId (hex). May be empty.
+    public let shortId: String
+    /// Disguise SNI presented in the camouflage TLS handshake (e.g.
+    /// `www.microsoft.com`) — to any observer the connection looks like an
+    /// ordinary TLS session to this host.
+    public let serverName: String
+    /// VLESS flow (e.g. `xtls-rprx-vision`).
+    public let flow: String
+
+    public init(
+        hostname: String,
+        port: Int = 8447,
+        publicKey: String,
+        uuid: String,
+        shortId: String = "",
+        serverName: String,
+        flow: String = "xtls-rprx-vision"
+    ) {
+        self.hostname = hostname
+        self.port = port
+        self.publicKey = publicKey
+        self.uuid = uuid
+        self.shortId = shortId
+        self.serverName = serverName
+        self.flow = flow
+    }
+
+    /// Tolerant decode: the server contract uses snake_case
+    /// (`public_key`/`short_id`/`server_name`), but accept camelCase too so a
+    /// future server rename can't silently null the fields (same defensive
+    /// shape as `RelayResponse`/`RelayServer` above). `port`/`flow` fall back
+    /// to the documented defaults when omitted.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.hostname = try c.decodeIfPresent(String.self, forKey: .hostname) ?? ""
+        self.port = try c.decodeIfPresent(Int.self, forKey: .port) ?? 8447
+        self.publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey)
+            ?? c.decodeIfPresent(String.self, forKey: .public_key) ?? ""
+        self.uuid = try c.decodeIfPresent(String.self, forKey: .uuid) ?? ""
+        self.shortId = try c.decodeIfPresent(String.self, forKey: .shortId)
+            ?? c.decodeIfPresent(String.self, forKey: .short_id) ?? ""
+        self.serverName = try c.decodeIfPresent(String.self, forKey: .serverName)
+            ?? c.decodeIfPresent(String.self, forKey: .server_name) ?? ""
+        self.flow = try c.decodeIfPresent(String.self, forKey: .flow) ?? "xtls-rprx-vision"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hostname, port, uuid, flow
+        case publicKey, public_key
+        case shortId, short_id
+        case serverName, server_name
+    }
+
+    /// True when the block carries the minimum set of fields needed to dial
+    /// the Reality front. A server that emits a partial/empty object (e.g.
+    /// mid-provisioning) is treated as "not provisioned" rather than
+    /// attempting a doomed connection.
+    public var isUsable: Bool {
+        !hostname.isEmpty && !publicKey.isEmpty && !uuid.isEmpty && !serverName.isEmpty && port > 0
     }
 }

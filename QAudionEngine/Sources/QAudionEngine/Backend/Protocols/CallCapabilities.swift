@@ -79,6 +79,15 @@ public enum CallCapabilities {
     /// Cross-platform: ALL three platforms must use the same setting simultaneously.
     public static let v4SFrameAes256Enabled: Bool = true
 
+    /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
+    /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
+    /// / Desktop `CAP_UPGRADE_INTENT_RECV_V1`. iOS handles incoming
+    /// `call_upgrade_intent` (see `BCryptoWebSocketClient.onCallUpgradeIntent`
+    /// / `AppState.handleIncomingUpgradeIntent`) — this tag lets a peer
+    /// (Desktop) know it's safe to send one instead of falling back to a
+    /// direct `call_upgrade_request` real-offer.
+    public static let upgradeIntentRecvV1: String = "upgrade-intent-recv-v1"
+
     /// Capabilities advertised by THIS build of the iOS client.
     ///
     /// NOTE: `vkeyV1` is advertised by default but may be stripped at
@@ -88,7 +97,7 @@ public enum CallCapabilities {
     /// `earbudRelayV1` is deliberately ABSENT — detection-only on iOS.
     /// `sframeAes256V1` is included only when `v4SFrameAes256Enabled` is `true`.
     public static let local: [String] = {
-        var caps: [String] = [sframeV1, ratchetV3, vkeyV1]
+        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1]
         if v4SFrameAes256Enabled { caps.append(sframeAes256V1) }
         return caps
     }()

@@ -586,9 +586,21 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
                      | awk -F'"' '/Apple Distribution|iPhone Distribution/ {print $2; exit}')
 
-          if [ -d "$FW" ]; then
-            codesign --force --sign "$IDENTITY" "$FW"
-          fi
+          # Re-sign EVERY embedded framework with the distribution cert, not
+          # just onnxruntime. Signing the .app bundle below is NOT recursive
+          # (no --deep, which Apple discourages), so any framework that was
+          # patched (onnxruntime's MinimumOSVersion) OR arrived unsigned from a
+          # gomobile-built xcframework (Reality.framework — VLESS+REALITY
+          # transport) must be signed here or altool rejects the upload with
+          # 90034 "not signed using an Apple submission certificate"
+          # (device-confirmed on v1.0.743, 2026-07-08: Reality.framework
+          # unsigned). Sign inner frameworks before the outer app so nested
+          # signatures are sealed by the app signature. Frameworks can live at
+          # the app root OR under Frameworks/ — find covers both.
+          find "Payload/QAudionApp.app" -name "*.framework" -type d | while read -r EMBED_FW; do
+            codesign --force --sign "$IDENTITY" "$EMBED_FW"
+            echo "re-signed: $EMBED_FW"
+          done
 
           ENT_FILE="$WORK/app.entitlements.plist"
           codesign -d --entitlements :- --xml "Payload/QAudionApp.app" > "$ENT_FILE" 2>/dev/null || true

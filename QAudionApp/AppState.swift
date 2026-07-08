@@ -98,6 +98,35 @@ final class AppState: ObservableObject {
     internal var liveProvider: BCryptoBackendProvider?
     /// Epoch-ms of the last node failover — damps ping-pong if both nodes flap.
     private var lastFailoverMs: Double = 0
+
+    // MARK: - Reality censorship-bypass transport (additive; clearnet-FIRST)
+    //
+    // Reality (VLESS+REALITY over xray-core, via RealityManager) is a SECOND
+    // signaling backend, activated ONLY as a fallback after clearnet is
+    // exhausted — never the default route (design doc §6, bcrypto-server
+    // CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Tor's own paths
+    // (EmbeddedTorManager / TorObfsTransport) are untouched — this is
+    // additive, not a replacement.
+
+    /// UserDefaults key for the MANUAL force toggle (TransportSettingsScreen).
+    /// When set, the persistent socket brings Reality up BEFORE trying
+    /// clearnet, so a tester can verify the tunnel on an OPEN network where the
+    /// automatic hard-failure trigger would never fire.
+    static let forceRealityDefaultsKey = "qaudion.transport.force_reality"
+    /// Read/write the persisted force-Reality preference. Static + UserDefaults
+    /// so a SwiftUI `@AppStorage` binding and the connect path share one source
+    /// of truth.
+    static var forceRealityEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: forceRealityDefaultsKey) }
+        set { UserDefaults.standard.set(newValue, forKey: forceRealityDefaultsKey) }
+    }
+    /// True while signaling is tunneled through the Reality SOCKS5 (either the
+    /// auto fallback or the manual force). Drives a quiet UI indicator and
+    /// guards against re-activating an already-active tunnel. Never persisted.
+    @Published private(set) var transportIsReality: Bool = false
+    /// Re-entrancy guard so overlapping stall signals / toggle taps can't fire
+    /// two concurrent RealityManager.start() attempts.
+    private var realityActivationInFlight: Bool = false
     /// W90: peer userId of the currently-open chat. ChatContainer.markRead
     /// sets this on .onAppear; ChatContainer deinits clear it. Used by
     /// `handleIncomingMessage` to suppress local-notification banners
@@ -365,6 +394,12 @@ final class AppState: ObservableObject {
         let callId: String
         let senderId: String
         let sdp: String
+        /// True when this prompt came from a `call_upgrade_intent` (peer
+        /// wants video but asked US to send the real offer) rather than a
+        /// normal `call_upgrade_request` with SDP attached. `sdp` is empty
+        /// in that case — accept/decline branches on this flag instead of
+        /// touching `sdp`. Mirrors Android `IncomingUpgrade.isIntentOnly`.
+        var isIntentOnly: Bool = false
     }
     @Published var pendingIncomingUpgrade: PendingIncomingUpgrade?
 
@@ -2022,7 +2057,17 @@ final class AppState: ObservableObject {
                 }
             }
         }
-        Task {
+        Task { [weak self] in
+            // Clearnet-FIRST (design doc §6): the normal direct WSS dial is the
+            // default for the 99% of users on an open network. ONLY the explicit
+            // manual force flag (tester / known-censored network) brings Reality
+            // up before trying clearnet; the automatic path instead waits for a
+            // hard clearnet failure (handleNodeStalled → no reachable node).
+            if AppState.forceRealityEnabled {
+                print("[AppState] force-Reality enabled — bringing up tunnel before clearnet dial")
+                await self?.activateRealityFallback(reason: "manual-force-at-connect")
+                return
+            }
             do {
                 try await provider.initialize()
                 print("[AppState] persistent WS opened (online presence active)")
@@ -2696,6 +2741,17 @@ final class AppState: ObservableObject {
             }
         }
 
+        // Peer (Desktop/Android) wants video but is asking US to send the
+        // real offer — see handleIncomingUpgradeIntent doc / Android
+        // WsEvent.CallUpgradeIntent kdoc for the rationale.
+        ws.onCallUpgradeIntent = { [weak self] callId, senderId, media in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.handleIncomingUpgradeIntent(
+                    callId: callId, senderId: senderId, media: media)
+            }
+        }
+
         // WIRE_SPEC §8.7 (v1.1) — media readiness + keyframe recovery.
         // Both events funnel into the same honor path: force a local
         // encoder IDR for the active call (rate-limited to 1/s inside).
@@ -2801,6 +2857,57 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// `call_upgrade_intent` — responder side of the "peer asks us to send
+    /// the real offer" flow (see `BCryptoWebSocketClient.onCallUpgradeIntent`
+    /// doc / Android `WsEvent.CallUpgradeIntent` kdoc for the cross-platform
+    /// rationale). Same consent gate as `handleIncomingUpgradeRequest` — the
+    /// difference is purely which side ends up building the SDP offer: on
+    /// accept we call `upgradeToVideo()` (self-initiate) instead of
+    /// answering a peer-supplied SDP. Mirrors Android
+    /// `CallController.kt`'s `upgradeIntentListenerJob`, which does not
+    /// special-case glare or `media == "screen"` for this path either
+    /// (Desktop only sends camera intents today; its screen-share protocol
+    /// always ships its own offer) — kept minimal on purpose rather than
+    /// inventing untested collision handling for a path the reference
+    /// implementation doesn't cover.
+    @MainActor
+    private func handleIncomingUpgradeIntent(
+        callId: String, senderId: String, media: String
+    ) {
+        guard isInCall, callContactId == senderId else {
+            RTLog.warn("call", "onCallUpgradeIntent: not in a call with \(senderId.prefix(8))… — sending reject")
+            Task {
+                try? await (liveProvider?.callingApi as? BCryptoCallingApiImpl)?
+                    .sendCallUpgradeResponse(
+                        callId: callId, recipientId: senderId, sdp: "", accepted: false)
+            }
+            return
+        }
+        if upgradeBuildInProgress {
+            RTLog.info("call", "onCallUpgradeIntent: upgrade build already in progress — ignoring retransmit")
+            return
+        }
+        if videoConsentGranted || isVideoCall {
+            RTLog.info("call", "onCallUpgradeIntent: camera consent already granted this call — self-initiating offer")
+            upgradeToVideo()
+            return
+        }
+        // First camera request this call → consent dialog. sdp is empty:
+        // accept calls upgradeToVideo() (self-initiate) instead of answering.
+        RTLog.info("call", "onCallUpgradeIntent: camera upgrade intent from \(senderId.prefix(8))… — awaiting user consent")
+        pendingIncomingUpgrade = PendingIncomingUpgrade(
+            callId: callId, senderId: senderId, sdp: "", isIntentOnly: true)
+        pendingUpgradeAutoDeclineTask?.cancel()
+        pendingUpgradeAutoDeclineTask = Task { @MainActor [weak self] in
+            // WIRE_SPEC §8.2 — 30s, aligned with the requester watchdog.
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled, let self = self,
+                  self.pendingIncomingUpgrade?.callId == callId else { return }
+            RTLog.info("call", "incoming upgrade-intent consent timed out — auto-declining")
+            self.declineIncomingUpgrade()
+        }
+    }
+
     /// WIRE_SPEC §8.3 — glare: a peer `call_upgrade_request` arrived while OUR
     /// own camera upgrade request is still in flight (`pendingOutgoingUpgradeMedia
     /// != nil`). Politeness is keyed to the ORIGINAL call role:
@@ -2870,6 +2977,16 @@ final class AppState: ObservableObject {
         pendingUpgradeAutoDeclineTask?.cancel()
         pendingUpgradeAutoDeclineTask = nil
         pendingIncomingUpgrade = nil
+        if pending.isIntentOnly {
+            // `call_upgrade_intent` accept: the peer asked US to send the
+            // real offer (see handleIncomingUpgradeIntent doc / Android
+            // WsEvent.CallUpgradeIntent kdoc) — same consent gate as a
+            // normal incoming request, but WE initiate instead of
+            // answering. upgradeToVideo() runs its own camera-permission
+            // check (mirrors the explicit check below for the SDP path).
+            upgradeToVideo()
+            return
+        }
         let camStatus = AVCaptureDevice.authorizationStatus(for: .video)
         if camStatus == .denied || camStatus == .restricted {
             errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
@@ -5993,7 +6110,113 @@ final class AppState: ObservableObject {
         lastFailoverMs = now
         let jitter = Double.random(in: 0...5_000)
         try? await Task.sleep(nanoseconds: UInt64(jitter * 1_000_000))
-        _ = await ServerSelector.shared.reselectExcluding(deadWssUrl: deadWss, provider: prov)
+        let newWss = await ServerSelector.shared.reselectExcluding(deadWssUrl: deadWss, provider: prov)
+        // CLEARNET-FIRST fallback to Reality (design doc §6). `reselectExcluding`
+        // returns nil ONLY when every trusted clearnet node it probed was
+        // unreachable — i.e. the network is silently dropping our traffic (the
+        // §1 incident shape), not one dead node. That is the hard-failure signal
+        // to bring up the Reality censorship-bypass tunnel and retry the SAME
+        // wss://voip.bcrypto.com through it. A genuine total-offline also lands
+        // here; Reality's own dial then fails harmlessly and the normal
+        // reconnect resumes when the network returns. This is only ever reached
+        // AFTER clearnet is exhausted — Reality is never the default route.
+        if newWss == nil {
+            await activateRealityFallback(reason: "auto-clearnet-block")
+        }
+    }
+
+    /// Bring up the Reality censorship-bypass tunnel and re-point the persistent
+    /// signaling WebSocket through its local SOCKS5. Mirrors
+    /// `EmbeddedTorManager`'s activation shape (start() → local SOCKS5 port →
+    /// dial the WSS through it) — but for the app's real
+    /// `wss://voip.bcrypto.com` transport, not the .onion signaling side.
+    ///
+    /// Reuses the EXISTING `RealityManager` + its xray config builder: this only
+    /// sources the server-issued params and feeds them in. The WSS TLS + cert
+    /// pinning above the socket run UNCHANGED through the tunnel (see
+    /// `BCryptoWebSocketClient.connect(viaSocksPort:)`), so nothing above the
+    /// transport layer knows Reality exists.
+    ///
+    /// Params come from the SAME `/calling/relays` bundle the TURN/onion
+    /// selectors already use: the warm in-memory cache first (populated while
+    /// clearnet was healthy — covers a mid-session block), then a best-effort
+    /// fresh fetch (works on the open network of the manual-force test path). On
+    /// a truly blocked cold start neither is available and this no-ops — a known
+    /// v1 bootstrap limit the design doc §6.3 explicitly defers, not something
+    /// this last-mile solves.
+    @MainActor
+    func activateRealityFallback(reason: String) async {
+        guard let prov = liveProvider else { return }
+        // Already tunneling, or a concurrent activation is mid-flight → no-op.
+        if transportIsReality || realityActivationInFlight { return }
+        realityActivationInFlight = true
+        defer { realityActivationInFlight = false }
+
+        guard let relayProvider = ensureRelayProvider() else { return }
+        var params = await relayProvider.cachedOrNil()?.reality
+        if params == nil {
+            params = await relayProvider.currentOrRefresh()?.reality
+        }
+        guard let reality = params, reality.isUsable else {
+            print("[AppState] Reality fallback (\(reason)): server has no usable reality params — cannot bypass")
+            return
+        }
+
+        // Map the server-issued relay block into RealityManager's config shape.
+        // The client hardcodes NOTHING — every field is server-chosen (design
+        // doc §4.2). fingerprint defaults to "chrome" inside RealityManager.
+        let managerParams = RealityManager.Params(
+            serverAddress: reality.hostname,
+            serverPort: reality.port,
+            uuid: reality.uuid,
+            publicKey: reality.publicKey,
+            shortId: reality.shortId,
+            serverName: reality.serverName,
+            flow: reality.flow
+        )
+
+        do {
+            let socksPort = try await RealityManager.shared.start(params: managerParams)
+            let ws = prov.getWebSocketClient()
+            // Tear the (blocked / direct) socket down first so
+            // connect(viaSocksPort:) — which only proceeds from `.disconnected`
+            // — takes effect, then re-dial the SAME WSS through the tunnel. The
+            // socks port is sticky across the socket's own internal reconnects
+            // (see BCryptoWebSocketClient.currentSocksPort), so a later drop
+            // keeps routing through Reality instead of silently reverting to the
+            // blocked clearnet path.
+            ws.disconnect()
+            ws.connect(viaSocksPort: Int(socksPort))
+            transportIsReality = true
+            print("[AppState] Reality fallback (\(reason)) ACTIVE — WSS tunneled via 127.0.0.1:\(socksPort)")
+        } catch {
+            print("[AppState] Reality fallback (\(reason)) FAILED to start: \(error)")
+        }
+    }
+
+    /// Manual force path (TransportSettingsScreen toggle / debug hook). Persists
+    /// the preference and applies it immediately when a live provider exists:
+    /// ON → bring Reality up now; OFF → tear the tunnel down and re-dial
+    /// clearnet directly. Lets a tester verify the Reality path on an OPEN
+    /// network, where the automatic hard-failure trigger would never fire.
+    @MainActor
+    func setForceRealityTransport(_ on: Bool) {
+        AppState.forceRealityEnabled = on
+        guard let prov = liveProvider else { return } // applied at next connect
+        let ws = prov.getWebSocketClient()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if on {
+                await self.activateRealityFallback(reason: "manual-force")
+            } else {
+                // Revert to clearnet: drop the tunnel + re-dial direct.
+                ws.disconnect()
+                await RealityManager.shared.stop()
+                self.transportIsReality = false
+                ws.connect()
+                print("[AppState] Reality force OFF — reverted to direct clearnet WSS")
+            }
+        }
     }
 
     func logout() {
@@ -6013,6 +6236,14 @@ final class AppState: ObservableObject {
         // cache re-fetches fail with the old (invalidated) auth token.
         _relayProvider = nil
         wsConnectionState = .disconnected
+        // Reality lifecycle: reset the runtime tunnel state so the next login
+        // starts clearnet-first with a correct indicator, and tear the tunnel
+        // down (idempotent, fire-and-forget). The PERSISTED force preference
+        // (`forceRealityEnabled`) is intentionally left as the tester set it.
+        if transportIsReality {
+            transportIsReality = false
+            Task { await RealityManager.shared.stop() }
+        }
         // W72: drop presence subscriptions + cached statuses so the next
         // login starts with a clean slate.
         presenceService.reset()

@@ -1440,11 +1440,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
            }),
            firstTurn.username != nil,
            firstTurn.credential != nil {
+            // Route this bridge's WSS-TURN socket through the SAME Reality/Tor
+            // tunnel the signaling socket uses when active (see
+            // WssTurnBridge.socksPort doc) — otherwise a call's TURN media
+            // traffic dials clearnet directly even while signaling is
+            // tunneled. `activeSocksPort` is `nil` when Reality isn't
+            // running, which preserves today's direct-dial behavior.
+            let socksPort = await RealityManager.shared.activeSocksPort
             let bridge = WssTurnBridge(
                 wssUrl: wssUrl,
                 username: firstTurn.username,
                 credential: firstTurn.credential,
-                accessToken: accessToken
+                accessToken: accessToken,
+                socksPort: socksPort.map(Int.init)
             )
             if let result = try? await bridge.start() {
                 wssTurnBridge?.stop()

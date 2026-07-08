@@ -61,6 +61,19 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// who a response actually came from.
     public var onCallUpgradeResponse: ((_ callId: String, _ senderId: String, _ accepted: Bool, _ sdp: String) -> Void)?
 
+    /// `call_upgrade_intent` (peer→us) — the peer wants video but is asking
+    /// US to send the real `call_upgrade_request` offer instead of sending
+    /// one itself. No SDP attached. Mirrors Android
+    /// `WsEvent.CallUpgradeIntent` / `CallController.kt`'s
+    /// `upgradeIntentListenerJob` (device-confirmed 2026-07-06: a
+    /// Desktop-sent video re-offer added mid-call doesn't reliably reach a
+    /// healthy ICE/DTLS state on some peer WebRTC stacks; the callee
+    /// sending its own offer does). We answer by generating our own real
+    /// offer (same code path as the local user tapping the video button)
+    /// after the same consent gate a normal `call_upgrade_request` shows.
+    /// media-consent v1: `media` absent on the wire ⇒ "camera".
+    public var onCallUpgradeIntent: ((_ callId: String, _ senderId: String, _ media: String) -> Void)?
+
     /// WIRE_SPEC §8.7 (v1.1) — receiver→sender media readiness. The peer's
     /// receiver-side video cryptor is BOTH keyed and bound to the negotiated
     /// mid; we (the video SENDER) must force a local encoder IDR so the
@@ -333,6 +346,21 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             let sdp = (data["sdp"] as? String) ?? ""
             let accepted = (data["accepted"] as? Bool) ?? false
             self.onCallUpgradeResponse?(callId, senderId, accepted, sdp)
+        }
+
+        // call_upgrade_intent (peer→us) — see onCallUpgradeIntent doc /
+        // Android WsEvent.CallUpgradeIntent kdoc for the full rationale.
+        // No `sdp` field on the wire; senderId/media extraction mirrors the
+        // call_upgrade_request handler above.
+        registerHandler(type: "call_upgrade_intent") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let senderId = (data["sender_id"] as? String)
+                ?? (data["from"] as? String)
+                ?? ""
+            // media-consent v1: absent ⇒ camera (consent dialog default).
+            let media = (data["media"] as? String) ?? "camera"
+            self.onCallUpgradeIntent?(callId, senderId, media)
         }
 
         // WIRE_SPEC §8.7 (v1.1) — call_media_ready (receiver→sender).
