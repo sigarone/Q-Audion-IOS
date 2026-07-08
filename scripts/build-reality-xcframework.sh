@@ -11,9 +11,9 @@
 # up to the Xcode-gated bind itself (module/tool resolution, gobind lookup)
 # WAS verified while writing this script on a non-macOS box: `go build`/`go
 # vet`/`go test` all pass against ../RealityCore, and `gomobile bind
-# -target=ios/arm64 -o Reality.xcframework .` gets all the way through module
+# -target=ios -o Reality.xcframework .` gets all the way through module
 # resolution + `gobind` lookup and fails ONLY on the expected, final
-# `-target="ios/arm64" requires Xcode` — i.e. everything below that line is
+# `-target="ios" requires Xcode` — i.e. everything below that line is
 # genuinely untested pending a real CI/macOS run.
 #
 # Unlike build-quiche-xcframework.sh (which clones an EXTERNAL repo pinned by
@@ -52,14 +52,16 @@ if ! command -v gobind >/dev/null 2>&1; then
   gomobile init
 fi
 
-# Device-only (ios/arm64), same call as build-quiche-xcframework.sh's
-# aarch64-apple-ios-only choice — this pipeline only ever archives for a
-# generic iOS device (no simulator runs), and skipping the simulator slice
-# roughly halves gomobile's build time. `-target=ios` (bare) would ALSO
-# build iossimulator/arm64+amd64 into the same xcframework (gomobile handles
-# the multi-slice stitching itself, unlike quiche's manual cargo+xcodebuild
-# dance) — add it back here if a simulator target is ever needed.
+# Universal (device + simulator slices): bare `-target=ios` makes gomobile
+# build ios/arm64 (device) AND iossimulator/arm64+amd64, stitching all three
+# into one xcframework. Needed because engine-tests.yml's ios-simulator-tests
+# job links this into a Simulator xcodebuild — device-only (ios/arm64, the
+# original choice here, mirroring build-quiche-xcframework.sh) can only ever
+# be consumed by the TestFlight archive job, leaving the wiring completely
+# CI-unverified until the next tag push. The extra simulator slices cost
+# more build time but let the fast, every-push simulator job actually prove
+# the binaryTarget links and RealityManager's real branch compiles.
 mkdir -p "$(dirname "$OUT_XC")"
-( cd "$CORE_DIR" && gomobile bind -target=ios/arm64 -o "$OUT_XC" . )
+( cd "$CORE_DIR" && gomobile bind -target=ios -o "$OUT_XC" . )
 
 echo "OK: $OUT_XC"

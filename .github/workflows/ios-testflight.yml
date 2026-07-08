@@ -244,14 +244,18 @@ jobs:
       #     Runs BEFORE xcodegen for consistency with the quiche step, though
       #     Reality is consumed via QAudionEngine (SPM), not project.yml.
       #
-      #     NOTE (2026-07-07): the artifact this step produces is NOT YET a
-      #     declared QAudionEngine/Package.swift dependency -- see the TODO
-      #     there next to CQaudionCryptoCore/WebRTC. This step only builds
-      #     the xcframework so a future macOS/CI pass can wire + verify the
-      #     SPM binaryTarget without also needing to stand up gomobile from
-      #     scratch. Building it here is a no-op for every OTHER step in this
-      #     workflow until that wiring lands (nothing references the Vendor/
-      #     path yet), so it cannot regress today's green build.
+      #     NOTE (2026-07-08): wired for real -- QAudionEngine/Package.swift's
+      #     `hasRealityXcframework` check adds this as a real binaryTarget +
+      #     `.target(name: "Reality", ...)` dependency once this step
+      #     produces the file (see Package.swift's top-of-file comment).
+      #     RealityManager.swift's real `#if canImport(Reality)` branch is
+      #     now what actually compiles for a release build. Also verified on
+      #     every push (not just tag releases) via engine-tests.yml's
+      #     ios-simulator-tests job, which builds the same universal
+      #     (device+simulator) xcframework and is REQUIRED there (no
+      #     continue-on-error) -- kept non-blocking here so a transient
+      #     Reality build hiccup (network fetch of xray-core deps, etc.)
+      #     never blocks shipping an otherwise-ready TestFlight release.
       # ----------------------------------------------------------
       - name: Cache reality xcframework
         id: cache-reality
@@ -262,11 +266,7 @@ jobs:
 
       - name: Build reality xcframework
         if: steps.cache-reality.outputs.cache-hit != 'true'
-        # continue-on-error: this step's artifact isn't consumed by anything
-        # else in this pipeline yet (not a Package.swift dependency — see the
-        # NOTE above), so a failure here must never block a real TestFlight
-        # release. Security-review flagged (2026-07-07): this is a new,
-        # CI-unverified step sitting in the production release trigger path.
+        # Kept non-blocking on the release path -- see NOTE above.
         continue-on-error: true
         env:
           # actions/setup-go@v6 sets GOTOOLCHAIN=local at the job level when

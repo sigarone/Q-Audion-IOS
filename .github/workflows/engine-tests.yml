@@ -70,6 +70,34 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # ----------------------------------------------------------
+      # Build Reality.xcframework -- VLESS+REALITY-over-xray-core transport
+      # (see ios-testflight.yml's own "Build reality xcframework" step for
+      # the full design-doc context). This job is what actually PROVES the
+      # QAudionEngine/Package.swift binaryTarget wiring compiles and
+      # RealityManager's real `#if canImport(Reality)` branch links, on
+      # every push -- the tag-triggered TestFlight job alone would only
+      # catch a break once per release. No job-level Go pin conflict here
+      # (unlike ios-testflight.yml's WireGuard step), so a single modern Go
+      # setup is enough -- no GOTOOLCHAIN=auto workaround needed.
+      # ----------------------------------------------------------
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Cache reality xcframework
+        id: cache-reality
+        uses: actions/cache@v5
+        with:
+          path: QAudionApp/Vendor/Reality.xcframework
+          key: reality-xcframework-sim-${{ runner.os }}-${{ hashFiles('RealityCore/go.sum', 'scripts/build-reality-xcframework.sh') }}
+
+      - name: Build reality xcframework
+        if: steps.cache-reality.outputs.cache-hit != 'true'
+        run: bash scripts/build-reality-xcframework.sh
+
       - name: Cache SPM (iOS Simulator)
         id: cache-spm-ios
         uses: actions/cache@v5

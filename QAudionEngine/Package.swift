@@ -1,5 +1,19 @@
 // swift-tools-version: 5.9
 import PackageDescription
+import Foundation
+
+// Reality.xcframework is built on-demand by scripts/build-reality-xcframework.sh
+// (CI: the "Build reality xcframework" step in ios-testflight.yml and
+// engine-tests.yml's ios-simulator-tests job) — it is NOT committed to git and
+// is absent on any job that doesn't run that step (e.g. the macOS-native
+// `swift test` job, which has no Xcode/gomobile step for it and would fail
+// package resolution outright on a missing local-path binaryTarget). Resolved
+// dynamically here instead of declared unconditionally so resolution never
+// hard-fails wherever the file doesn't exist — RealityManager.swift's
+// `#if canImport(Reality)` real branch compiles only where it's actually
+// present, its stub `#else` branch everywhere else, exactly like before.
+let realityXcframeworkPath = "../QAudionApp/Vendor/Reality.xcframework"
+let hasRealityXcframework = FileManager.default.fileExists(atPath: realityXcframeworkPath)
 
 let package = Package(
     name: "QAudionEngine",
@@ -55,18 +69,11 @@ let package = Package(
         // Candidates: https://github.com/iCepa/Tor.framework (Obj-C, needs wrapper)
         //             or a third-party SPM mirror of the Tor binary.
         //
-        // REALITY (PENDING, same shape as the Tor entry above): RealityManager.swift
-        // compiles against the stub branch of #if canImport(Reality) — Reality.xcframework
-        // is built by scripts/build-reality-xcframework.sh / the "Build reality xcframework"
-        // CI step (../RealityCore Go module), but is NOT YET added as a binaryTarget here.
-        // Needs a macOS/CI pass to (1) confirm engine-tests.yml's `swift build`/`swift test`
-        // (macOS platform) doesn't break on an ios/arm64-only xcframework — condition the
-        // dependency on `.iOS` below if so — and (2) confirm the local-path binaryTarget
-        // actually resolves once QAudionApp/Vendor/Reality.xcframework exists on disk. Once
-        // verified, add:
-        //   .binaryTarget(name: "Reality", path: "../QAudionApp/Vendor/Reality.xcframework"),
-        // and add "Reality" (or `.target(name: "Reality", condition: .when(platforms: [.iOS]))`)
-        // to the QAudionEngine target's dependencies below.
+        // REALITY: RealityManager.swift's real `#if canImport(Reality)` branch is wired
+        // below — see `hasRealityXcframework` at the top of this file for how the
+        // binaryTarget/dependency are added only where QAudionApp/Vendor/Reality.xcframework
+        // actually exists (built by scripts/build-reality-xcframework.sh, iOS-only,
+        // .iOS platform condition on the target dependency).
     ],
     targets: [
         // ─────────────────────────────────────────────────────────────────────────────────────
@@ -149,7 +156,7 @@ let package = Package(
                 "WebRTC",  // local binaryTarget (webrtc-sdk H265 build) — see below
                 .product(name: "GRDB", package: "GRDB.swift"),
                 // Tor.swift removed — see W610 note in dependencies above.
-            ],
+            ] + (hasRealityXcframework ? [.target(name: "Reality", condition: .when(platforms: [.iOS]))] : []),
             path: "Sources/QAudionEngine",
             resources: [
                 .copy("Resources/aasist_raw_base_maxdata_int8.onnx"),
@@ -175,5 +182,7 @@ let package = Package(
                 .copy("Integration/Resources/earbud-excl-v2-kat.json")
             ]
         )
-    ]
+    ] + (hasRealityXcframework ? [
+        Target.binaryTarget(name: "Reality", path: realityXcframeworkPath),
+    ] : [])
 )
