@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.745",
+              date: "2026-07-08",
+              title: "v1.0.745",
+              bullets: [
+                "fix(ci): exclude unwired Reality.xcframework from the app-target sources sweep",
+              ]),
         .init(id: "v1.0.744",
               date: "2026-07-08",
               title: "v1.0.744",
               bullets: [
+                "chore: regenerate changelog for v1.0.744",
                 "test(tus): bound chunk-retry tests with an explicit timeout",
                 "feat(reality): wire client-side Reality transport + call_upgrade_intent receive handler",
               ]),
@@ -145,12 +152,6 @@ extension ReleaseNote {
                 "feat(ios-call): call_media_ready + video_keyframe_request wire; upward .legacy re-eval",
                 "docs(wire-spec): §8 mid-call upgrade state machine + media-readiness (mirror)",
                 "fix(ios-call): roll back WebRTC state on video-upgrade decline/timeout",
-              ]),
-        .init(id: "v1.0.725",
-              date: "2026-07-03",
-              title: "v1.0.725",
-              bullets: [
-                "fix(ios): arm refresh legs on the 3 remaining bare-provider upload sites",
               ]),
     ]
 }
