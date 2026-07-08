@@ -97,6 +97,21 @@ jobs:
       - name: Run Tests (iOS Simulator)
         run: |
           cd QAudionEngine
+          # 2026-07-08: this job was hanging and getting force-cancelled by
+          # GitHub's 60min job timeout on EVERY push for 3+ days (confirmed
+          # across 10+ unrelated commits) — root-caused to a genuine thread-
+          # pool-starvation deadlock inside TusUploadClientTests' Task.sleep-
+          # based retry test, specific to the Simulator runner (never
+          # reproduces on the sibling macOS "test" job). An in-process Swift
+          # `withThrowingTaskGroup` timeout was tried first and did NOT help
+          # (confirmed: still hit the 60min ceiling) — a true thread deadlock
+          # starves the async timeout task's own continuation too, since it
+          # needs a free cooperative-pool thread just like the hung code
+          # does. Only a process-external watchdog can actually interrupt
+          # this. Portable pure-bash (no dependency on `timeout`/`gtimeout`
+          # binary presence on the runner) — kill xcodebuild outright after
+          # 15 min instead of silently burning the full 60min job ceiling on
+          # every single push.
           xcodebuild test \
             -scheme "QAudionEngine" \
             -destination "platform=iOS Simulator,name=iPhone 15,OS=latest" \
@@ -113,4 +128,11 @@ jobs:
             -skip-testing "QAudionEngineTests/QAudionCapabilityExchangeTests" \
             -skip-testing "QAudionEngineTests/SpeakerVerifierTests" \
             -skip-testing "QAudionEngineTests/VoiceHealthMonitorTests" \
-            -skip-testing "QAudionEngineTests/QAudionEngineTests/testProcessRoundTrip"
+            -skip-testing "QAudionEngineTests/QAudionEngineTests/testProcessRoundTrip" &
+          XCODEBUILD_PID=$!
+          ( sleep 900; echo "::error::xcodebuild test exceeded 15min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
+          WATCHDOG_PID=$!
+          wait "$XCODEBUILD_PID"
+          EXIT_CODE=$?
+          kill "$WATCHDOG_PID" 2>/dev/null || true
+          exit "$EXIT_CODE"
