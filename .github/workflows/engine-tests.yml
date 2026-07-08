@@ -160,9 +160,22 @@ jobs:
           # cost is the missing optimizer, not the data-structure choice; the
           # Scrypt.swift rewrite is still a legitimate improvement, just not
           # sufficient alone.
+          #
+          # SWIFT_ENABLE_TESTABILITY=YES: SPM only auto-adds `-enable-testing`
+          # to a library target's Debug build. Forcing -configuration Release
+          # above (this run, 2026-07-08) never got exercised until the Go
+          # version pin above was fixed the same day -- so this was a second,
+          # previously-masked break: `@testable import QAudionEngine` in the
+          # test target failed with "module 'QAudionEngine' was not compiled
+          # for testing" the first time this job ever actually reached this
+          # step under Release. Overriding the build setting directly here
+          # (rather than in Package.swift's unsafeFlags, which would make
+          # this package ineligible as a remote SPM dependency for any other
+          # consumer) keeps this a CI-only concession.
           xcodebuild test \
             -scheme "QAudionEngine" \
             -configuration Release \
+            SWIFT_ENABLE_TESTABILITY=YES \
             -destination "platform=iOS Simulator,name=iPhone 15,OS=latest" \
             -derivedDataPath /tmp/dd-ios-sim \
             -resultBundlePath /tmp/ios-sim-results.xcresult \
