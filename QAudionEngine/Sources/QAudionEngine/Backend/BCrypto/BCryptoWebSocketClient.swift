@@ -42,6 +42,12 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// The caller hung up before we picked up — stop ringing locally.
     public var onCallCancel: ((_ callId: String, _ reason: String?) -> Void)?
 
+    /// Fired when this client (caller) receives `call_accepted` from the
+    /// callee — a real user (or equivalent human-input surface) explicitly
+    /// answered, as opposed to `call_ready`'s automatic network-readiness
+    /// signal. Gates the caller's SAS/active-call display (WIRE_SPEC §3.5).
+    public var onCallAccepted: ((_ callId: String, _ senderId: String) -> Void)?
+
     /// W536 — mid-call audio↔video upgrade. The initiator side ships a
     /// fresh SDP offer (with the new video m-section); the callee
     /// applies it as a remote offer, generates an answer, and ships
@@ -307,6 +313,16 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                   let callId = data["call_id"] as? String else { return }
             let reason = data["reason"] as? String
             self.onCallCancel?(callId, reason)
+        }
+
+        // call_accepted (callee→caller) — real user accept, WIRE_SPEC §3.5.
+        // Server stamps sender_id before relaying, same envelope class as
+        // call_processing/call_ready above.
+        registerHandler(type: "call_accepted") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let senderId = (data["sender_id"] as? String) ?? (data["caller_id"] as? String) ?? ""
+            self.onCallAccepted?(callId, senderId)
         }
 
         // W536 — call_upgrade_request (caller→callee). Same wire shape

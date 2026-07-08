@@ -731,6 +731,17 @@ final class AppState: ObservableObject {
     /// Currently-active CallKit call UUID (one at a time).
     private(set) var activeCallKitId: UUID?
 
+    /// call_accepted two-flag latch (WIRE_SPEC §3.5) — set once THIS
+    /// device's local handshake-completion logic (the call_answer
+    /// state-advance) has run for a given callId. Whichever of {this,
+    /// `callAcceptedCallId`} lands first is latched; `finalizeCallActive()`
+    /// runs exactly once, on the second.
+    private var localHandshakeReadyCallId: String?
+    /// call_accepted two-flag latch (WIRE_SPEC §3.5) — set when
+    /// `onCallAccepted` fires for a given callId (the callee's real user
+    /// tapped Answer). See `localHandshakeReadyCallId`.
+    private var callAcceptedCallId: String?
+
     /// Bug A guard — the call UUID for which `onAnswerCall` has already run.
     /// On the double-dialer second call (PushKit native UI + in-app banner
     /// both up), CallKit can deliver `CXAnswerCallAction` more than once for
@@ -2718,6 +2729,16 @@ final class AppState: ObservableObject {
             }
         }
 
+        // call_accepted — callee's real user tapped Answer. Gates the
+        // caller's SAS/active-call display via the two-flag latch in
+        // finalizeCallActive()/handleCallAccepted (WIRE_SPEC §3.5).
+        ws.onCallAccepted = { [weak self] callId, _ in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.handleCallAccepted(callId: callId)
+            }
+        }
+
         // W536 — inbound mid-call upgrade. Responder side: peer
         // wants to add video; apply their SDP offer, generate an
         // answer, ship it back, flip the UI to video mode, and
@@ -4113,13 +4134,17 @@ final class AppState: ObservableObject {
                 // permanently off whenever callState wasn't .ringing at
                 // answer time (e.g. still .active from the outgoing flow).
                 self.callService.handleCallAnswered()
-                guard self.callState == .ringing else { return }
-                if self.callSasKeySource == .mlKem {
-                    self.callState = .encrypted
-                    RTLog.info("call", "call_answer: PQC already done — .ringing → .encrypted")
+                // call_accepted two-flag latch (WIRE_SPEC §3.5): this is
+                // the "local handshake done" flag. If the callee's real-user
+                // accept already landed, finalize now; otherwise stash and
+                // arm the 4s rollout-safety timeout.
+                guard self.callState == .ringing,
+                      let callId = self.activeCallKitId?.uuidString.lowercased() else { return }
+                if self.callAcceptedCallId == callId {
+                    self.finalizeCallActive()
                 } else {
-                    self.callState = .active
-                    RTLog.info("call", "call_answer: callee answered — .ringing → .active")
+                    self.localHandshakeReadyCallId = callId
+                    self.armAcceptGateTimeout(callId: callId)
                 }
             }
         }
@@ -7115,6 +7140,46 @@ final class AppState: ObservableObject {
         self.endCall()
     }
 
+    /// call_accepted two-flag latch (WIRE_SPEC §3.5) — runs the original
+    /// call_answer state-advance (W521/W528) exactly once, the moment
+    /// BOTH the local handshake and the callee's real-user accept have
+    /// landed for the active call.
+    @MainActor
+    private func finalizeCallActive() {
+        if self.callSasKeySource == .mlKem {
+            self.callState = .encrypted
+            RTLog.info("call", "call_answer: PQC already done — .ringing → .encrypted")
+        } else {
+            self.callState = .active
+            RTLog.info("call", "call_answer: callee answered — .ringing → .active")
+        }
+    }
+
+    /// call_accepted two-flag latch (WIRE_SPEC §3.5) — peer side. Fired
+    /// from `ws.onCallAccepted`. Latches `callId` unconditionally (so an
+    /// accept arriving BEFORE the local handshake finishes isn't lost),
+    /// then finalizes immediately if the local handshake already stashed
+    /// the same callId.
+    @MainActor
+    private func handleCallAccepted(callId: String) {
+        self.callAcceptedCallId = callId
+        guard self.callState == .ringing, self.localHandshakeReadyCallId == callId else { return }
+        self.finalizeCallActive()
+    }
+
+    /// call_accepted rollout-safety net (WIRE_SPEC §3.5) — bounded 4s
+    /// fallback so a caller talking to a not-yet-upgraded peer doesn't
+    /// wait forever. No-ops if `call_accepted` already finalized the call
+    /// (or the call moved on) by the time it fires.
+    @MainActor
+    private func armAcceptGateTimeout(callId: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            guard let self, self.callState == .ringing, self.localHandshakeReadyCallId == callId else { return }
+            RTLog.warn("call", "call_accepted not received within timeout, proceeding anyway callId=\(callId)")
+            self.finalizeCallActive()
+        }
+    }
+
     /// W478 — answer an incoming call from the in-app ringing banner.
     /// Uses CXCallController so the same `provider(_:perform:CXAnswerCallAction)`
     /// delegate path fires as when the user taps Answer on the system sheet.
@@ -7149,6 +7214,13 @@ final class AppState: ObservableObject {
                 callId: uuid.uuidString.lowercased(),
                 attrs: ["path": "answer-fastpath-w521"]
             )
+        }
+        // call_accepted (WIRE_SPEC §3.5) — a real user just accepted this
+        // call (CallKit answer / in-app banner / CallKit-free path all
+        // converge here). Distinct from the automatic call_answer
+        // network-readiness signal. Only send site in the app.
+        if let calling = self.liveProvider?.callingApi {
+            Task { try? await calling.sendCallAccepted(callId: uuid.uuidString.lowercased()) }
         }
         // W450 + cold-start race: boot audio + notify caller (latched/replayed
         // when the responder integration isn't ready yet).
@@ -7333,6 +7405,8 @@ final class AppState: ObservableObject {
         activeCallKitId = nil
         answeredCallKitId = nil  // Bug A — re-arm the idempotent-answer guard for the next call
         incomingAudioStarted = false  // re-arm the deferred-answer consume for the next call
+        localHandshakeReadyCallId = nil  // call_accepted latch — re-arm for the next call
+        callAcceptedCallId = nil  // call_accepted latch — re-arm for the next call
         pendingNotificationAnswer = false  // W-NOCALLKIT — drop any stale latched answer
         pendingNotificationDecline = false // W-NOCALLKIT — drop any stale latched decline
         selfManagedAudioSession = false  // W-WAKEONLY — re-arm for the next call

@@ -328,6 +328,16 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ])
     }
 
+    /// Tell the caller a real user explicitly accepted the call. Distinct
+    /// from `call_answer` (network-readiness, may be automatic) — see
+    /// WIRE_SPEC.md §3.5. Server stamps sender_id/recipient_id and relays,
+    /// same envelope class as call_processing/call_ready above.
+    public func sendCallAccepted(callId: String) async throws {
+        ws.send(type: "call_accepted", data: [
+            "call_id": callId,
+        ])
+    }
+
     /// W536 — initiator-side mid-call upgrade request. Ships the new
     /// SDP offer (with the freshly-added video m-section) so the peer
     /// can produce an answer that closes the renegotiation loop. Wire

@@ -154,11 +154,21 @@ public protocol CallingApi {
 
     /// Tell the caller we finished setup and are now ringing locally.
     func sendCallReady(callId: String, callerId: String) async throws
+
+    /// Tell the caller a real user (or equivalent human-input surface —
+    /// system Answer UI, notification action, hardware/watch button)
+    /// explicitly accepted the call. Distinct from `call_answer`, which
+    /// MAY be sent automatically ahead of any user action as a
+    /// network-readiness optimization. Gates the caller's SAS/active-call
+    /// display — see WIRE_SPEC.md §3.5. Default impl no-ops for backends
+    /// that haven't migrated yet.
+    func sendCallAccepted(callId: String) async throws
 }
 
 public extension CallingApi {
     func sendCallProcessing(callId: String, callerId: String) async throws { /* no-op default */ }
     func sendCallReady(callId: String, callerId: String) async throws { /* no-op default */ }
+    func sendCallAccepted(callId: String) async throws { /* no-op default */ }
 
     /// Default impl — wraps `getRelays()` into a `RelayResponse` with nil
     /// top-level fields. Backends that decode the full server response SHOULD
