@@ -102,24 +102,28 @@ public final class WssTurnBridge: @unchecked Sendable {
     private static let log = Logger(subsystem: "com.bcrypto.qaudion", category: "WssTurnBridge")
 
     // MARK: - STUN/TURN wire parsing (RFC 5389 §6, RFC 5766 §2/§11.4/§14.1)
+    //
+    // `internal` (module-visible, not `private`) so `MasqueTurnBridge` — the
+    // sibling HTTP/3 TURN fallback bridge, same hijack-fix shape, same
+    // module — reuses this parsing instead of duplicating it (2026-07-09).
 
-    private enum StunMessageClass {
+    enum StunMessageClass {
         case request
         case indication
         case successResponse
         case errorResponse
     }
 
-    private static let stunMagicCookie: UInt32 = 0x2112_a442
-    private static let channelBindMethod: UInt16 = 0x0009
-    private static let channelNumberAttrType: UInt16 = 0x000c
-    private static let pendingTxTTL: TimeInterval = 15
+    static let stunMagicCookie: UInt32 = 0x2112_a442
+    static let channelBindMethod: UInt16 = 0x0009
+    static let channelNumberAttrType: UInt16 = 0x000c
+    static let pendingTxTTL: TimeInterval = 15
 
     /// RFC 5389 §6 transaction-ID extraction (bytes 8-19, after the 4-byte
     /// magic cookie at bytes 4-7). `nil` for anything shorter than a STUN
     /// header or lacking the magic cookie (e.g. a ChannelData frame, which
     /// is correlated by channel number instead — see `channelDataNumber`).
-    private static func stunTransactionId(_ buf: UnsafePointer<UInt8>, _ len: Int) -> String? {
+    static func stunTransactionId(_ buf: UnsafePointer<UInt8>, _ len: Int) -> String? {
         guard len >= 20 else { return nil }
         let cookie = (UInt32(buf[4]) << 24) | (UInt32(buf[5]) << 16) | (UInt32(buf[6]) << 8) | UInt32(buf[7])
         guard cookie == stunMagicCookie else { return nil }
@@ -131,7 +135,7 @@ public final class WssTurnBridge: @unchecked Sendable {
 
     /// RFC 5389 §6 message class, decoded from the C1/C0 bits of the
     /// 16-bit message-type field (bytes 0-1).
-    private static func stunMessageClass(_ buf: UnsafePointer<UInt8>) -> StunMessageClass {
+    static func stunMessageClass(_ buf: UnsafePointer<UInt8>) -> StunMessageClass {
         let messageType = (UInt16(buf[0]) << 8) | UInt16(buf[1])
         let c1 = (messageType & 0x0100) != 0
         let c0 = (messageType & 0x0010) != 0
@@ -142,14 +146,14 @@ public final class WssTurnBridge: @unchecked Sendable {
     }
 
     /// RFC 5389 §6 method bits of the message-type field (class bits masked out).
-    private static func stunMethod(_ buf: UnsafePointer<UInt8>) -> UInt16 {
+    static func stunMethod(_ buf: UnsafePointer<UInt8>) -> UInt16 {
         let messageType = (UInt16(buf[0]) << 8) | UInt16(buf[1])
         return messageType & 0xfeef
     }
 
     /// Parses the CHANNEL-NUMBER attribute (type 0x000C, RFC 5766 §14.1)
     /// out of a ChannelBind request body, following the 20-byte STUN header.
-    private static func channelBindChannelNumber(_ buf: UnsafePointer<UInt8>, _ len: Int) -> UInt16? {
+    static func channelBindChannelNumber(_ buf: UnsafePointer<UInt8>, _ len: Int) -> UInt16? {
         var offset = 20
         while offset + 4 <= len {
             let attrType = (UInt16(buf[offset]) << 8) | UInt16(buf[offset + 1])
@@ -167,12 +171,12 @@ public final class WssTurnBridge: @unchecked Sendable {
     /// RFC 5766 §11.4: a ChannelData frame's first two bytes are the bound
     /// channel number (top two bits `01`, range 0x4000-0x7FFF) rather than
     /// a STUN magic cookie.
-    private static func channelDataNumber(_ buf: UnsafePointer<UInt8>, _ len: Int) -> UInt16? {
+    static func channelDataNumber(_ buf: UnsafePointer<UInt8>, _ len: Int) -> UInt16? {
         guard len >= 4, (buf[0] & 0xc0) == 0x40 else { return nil }
         return (UInt16(buf[0]) << 8) | UInt16(buf[1])
     }
 
-    private static func sockaddrEqual(_ a: sockaddr_in, _ b: sockaddr_in) -> Bool {
+    static func sockaddrEqual(_ a: sockaddr_in, _ b: sockaddr_in) -> Bool {
         a.sin_addr.s_addr == b.sin_addr.s_addr && a.sin_port == b.sin_port
     }
 

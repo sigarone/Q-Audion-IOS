@@ -20,11 +20,16 @@ import os
 /// **Wire format:** each loopback UDP packet → one RFC 9298 HTTP Datagram
 /// payload (`MasqueDatagramCodec`); the QUIC/H3 framing is the transport's job.
 ///
-/// **Reply routing:** libwebrtc uses a single UDP socket for all outbound TURN
-/// traffic, so we remember the source of the last packet it sent and route
-/// inbound tunnel datagrams back there.
+/// **Reply routing (2026-07-09 hijack fix):** inbound tunnel datagrams are
+/// routed by STUN/TURN transaction ID (RFC 5389 §6, shared by a request and
+/// its response) or, for TURN ChannelData media, by channel number bound via
+/// a prior ChannelBind exchange (RFC 5766 §11.4/§14.1) — never by "last UDP
+/// sender", which any co-located loopback process could spoof with a single
+/// datagram to hijack every subsequent reply (control-plane *and* media).
+/// Reuses `WssTurnBridge`'s STUN/TURN parsing (same module, same wire
+/// shapes) rather than duplicating it. See `resolveTarget(buf:len:)`.
 ///
-/// **Mirrors:** `WssTurnBridge` (this repo) and Android `CronetMasqueDriver`.
+/// **Mirrors:** `WssTurnBridge` (this repo, sibling fix) and Android `CronetMasqueDriver`.
 public final class MasqueTurnBridge: @unchecked Sendable {
 
     // MARK: - Types
@@ -62,9 +67,13 @@ public final class MasqueTurnBridge: @unchecked Sendable {
         set { stateLock.withLock { _running = newValue } }
     }
 
-    // Last UDP source from libwebrtc — reply target for inbound tunnel datagrams.
-    private var lastSrc: sockaddr_in?
-    private let lastSrcLock = NSLock()
+    // Per-STUN-transaction / per-TURN-channel reply correlation (2026-07-09
+    // hijack fix — replaces the old single "last UDP sender" scalar, see
+    // class doc). Types/parsing reused from `WssTurnBridge` (same module).
+    private var pendingByTxId: [String: (addr: sockaddr_in, ts: TimeInterval)] = [:]
+    private var pendingChannelBind: [String: (addr: sockaddr_in, channelNumber: UInt16)] = [:]
+    private var channelToAddr: [UInt16: sockaddr_in] = [:]
+    private let correlationLock = NSLock()
 
     private static let log = Logger(subsystem: "com.bcrypto.qaudion", category: "MasqueTurnBridge")
 
@@ -137,45 +146,119 @@ public final class MasqueTurnBridge: @unchecked Sendable {
     // MARK: - Relay pumps
 
     /// UDP → tunnel pump. Runs on a dedicated OS thread (`recvfrom` blocks).
-    /// Exits when the fd closes (recvfrom ≤ 0) or `running` clears.
+    /// `SO_RCVTIMEO` bounds each blocking call to 1s so the same thread can
+    /// also sweep expired `pendingByTxId` entries without a second timer
+    /// racing `correlationLock` — mirrors `WssTurnBridge.pumpUdpToWs`. Exits
+    /// when the fd closes (recvfrom returns 0) or `running` clears.
     private func pumpUdpToTunnel(fd: Int32) {
         let bufSize = 2048
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
         defer { buf.deallocate() }
         var src = sockaddr_in()
         var srcLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        var tv = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         while running {
             let n = withUnsafeMutablePointer(to: &src) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                     recvfrom(fd, buf, bufSize, 0, $0, &srcLen)
                 }
             }
-            if n <= 0 { break }
-            lastSrcLock.withLock { lastSrc = src }
-            // Pass the raw UDP packet; the transport applies the H3/QUIC
-            // datagram framing (quarter-stream-id + context-id) itself.
-            let udp = Data(bytes: buf, count: n)
-            transport.sendDatagram(udp)
+            if n < 0 {
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    sweepExpiredPendingTx()
+                    continue
+                }
+                break
+            }
+            if n == 0 { break }
+            registerPendingAndSend(buf: buf, len: n, src: src)
         }
     }
 
-    /// Route an inbound (decoded) UDP payload back to libwebrtc's last source.
-    /// Drops if no source is known yet (TURN is always client-initiated).
+    /// Registers this outbound datagram's STUN transaction ID (if any) as
+    /// pending a reply, then forwards it into the tunnel. A ChannelBind
+    /// request additionally stashes its address+channel number so the
+    /// matching success response can populate `channelToAddr`. Mirrors
+    /// `WssTurnBridge.registerPendingAndSend`.
+    private func registerPendingAndSend(buf: UnsafePointer<UInt8>, len: Int, src: sockaddr_in) {
+        if let txId = WssTurnBridge.stunTransactionId(buf, len) {
+            correlationLock.withLock {
+                if let existing = pendingByTxId[txId], !WssTurnBridge.sockaddrEqual(existing.addr, src) {
+                    Self.log.warning("txId collision from a different src — ignoring re-registration")
+                } else {
+                    pendingByTxId[txId] = (addr: src, ts: Date().timeIntervalSince1970)
+                    if WssTurnBridge.stunMessageClass(buf) == .request,
+                       WssTurnBridge.stunMethod(buf) == WssTurnBridge.channelBindMethod,
+                       let channelNumber = WssTurnBridge.channelBindChannelNumber(buf, len) {
+                        pendingChannelBind[txId] = (addr: src, channelNumber: channelNumber)
+                    }
+                }
+            }
+        }
+        // Pass the raw UDP packet; the transport applies the H3/QUIC
+        // datagram framing (quarter-stream-id + context-id) itself.
+        let udp = Data(bytes: buf, count: len)
+        transport.sendDatagram(udp)
+    }
+
+    private func sweepExpiredPendingTx() {
+        let cutoff = Date().timeIntervalSince1970 - WssTurnBridge.pendingTxTTL
+        correlationLock.withLock {
+            for (txId, entry) in pendingByTxId where entry.ts < cutoff {
+                pendingByTxId.removeValue(forKey: txId)
+                pendingChannelBind.removeValue(forKey: txId)
+            }
+        }
+    }
+
+    /// Route an inbound (decoded) tunnel datagram via `resolveTarget` — no
+    /// fallback to a "last known sender" scalar (see class doc for why).
     private func sendToLoopback(_ udp: Data) {
         guard udpFD >= 0 else { return }
-        guard let dst = lastSrcLock.withLock({ lastSrc }) else {
-            Self.log.debug("drop tunnel datagram — no known libwebrtc src")
-            return
-        }
         let fd = udpFD
-        udp.withUnsafeBytes { rawBuf in
+        udp.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            guard let dst = resolveTarget(buf: base, len: udp.count) else { return }
             var d = dst
             _ = withUnsafeMutablePointer(to: &d) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                    sendto(fd, rawBuf.baseAddress, udp.count, 0, sa,
-                           socklen_t(MemoryLayout<sockaddr_in>.size))
+                    sendto(fd, base, udp.count, 0, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
+        }
+    }
+
+    /// Resolves the UDP destination for an inbound tunnel datagram — see
+    /// `WssTurnBridge.resolveTarget` for the full correlation rationale
+    /// (ChannelData by channel number, STUN request/response by txId,
+    /// indications and anything unmatched dropped rather than guess-routed).
+    private func resolveTarget(buf: UnsafePointer<UInt8>, len: Int) -> sockaddr_in? {
+        if let channelNumber = WssTurnBridge.channelDataNumber(buf, len) {
+            let target = correlationLock.withLock { channelToAddr[channelNumber] }
+            if target == nil {
+                Self.log.debug("drop ChannelData — unknown channel \(channelNumber)")
+            }
+            return target
+        }
+        guard let txId = WssTurnBridge.stunTransactionId(buf, len) else {
+            Self.log.debug("drop tunnel datagram — not STUN-shaped and not ChannelData")
+            return nil
+        }
+        let msgClass = WssTurnBridge.stunMessageClass(buf)
+        if msgClass == .indication {
+            Self.log.debug("drop STUN indication — no channel/txId correlation available")
+            return nil
+        }
+        return correlationLock.withLock {
+            guard let pending = pendingByTxId.removeValue(forKey: txId) else {
+                Self.log.debug("drop tunnel datagram — no pending request for txId")
+                return nil
+            }
+            if msgClass == .successResponse, let bind = pendingChannelBind.removeValue(forKey: txId) {
+                channelToAddr[bind.channelNumber] = pending.addr
+            }
+            return pending.addr
         }
     }
 }
