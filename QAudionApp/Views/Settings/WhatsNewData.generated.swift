@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.748",
+              date: "2026-07-09",
+              title: "v1.0.748",
+              bullets: [
+                "fix(security): TOFU-pin SRTP directional-key capability + Reality front pubkey",
+                "fix(security): port WSS-TURN transaction-ID reply-correlation fix to MasqueTurnBridge",
+                "fix(security): correlate WSS-TURN replies by transaction ID, not last-sender",
+              ]),
         .init(id: "v1.0.747",
               date: "2026-07-08",
               title: "v1.0.747",
               bullets: [
+                "chore: regenerate changelog for v1.0.747",
                 "fix(calling): gate SAS/active display on real callee consent (call_accepted)",
                 "fix(ci): link -lresolv for Reality.xcframework's Go runtime in ios-simulator-tests",
                 "fix(ci): force SWIFT_ENABLE_TESTABILITY=YES for Release iOS-simulator tests",
@@ -154,12 +163,6 @@ extension ReleaseNote {
                 "feat(call): unified in-call UI parity — real FFT spectrum, RX voice analysis, cipher flow tube, custody card",
                 "feat(ios-call): animated formant spectrum + live crypto-engine meter (Android parity)",
                 "feat(call): unified Guardian ribbon, security sheet, two-row dock (iOS)",
-              ]),
-        .init(id: "v1.0.728",
-              date: "2026-07-03",
-              title: "v1.0.728",
-              bullets: [
-                "feat(ios-call): sender-side IDR forcing on the WebRTC rail + video TX-hold until media-ready",
               ]),
     ]
 }
