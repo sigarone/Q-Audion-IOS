@@ -115,6 +115,10 @@ private extension TransportSettingsViewModel.Mode {
 /// Replaces stock `Form` with the new design vocabulary.
 struct TransportSettingsScreen: View {
     @StateObject private var container: TransportSettingsContainer
+    // REALITY_PIN fix: observed directly (not via a closure, like `container`'s
+    // other AppState reads) so the `realityKeyChanged` advisory below updates
+    // live when `activateRealityFallback` flips it.
+    @ObservedObject private var appState: AppState
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -131,6 +135,7 @@ struct TransportSettingsScreen: View {
 
     init(state: AppState) {
         _container = StateObject(wrappedValue: TransportSettingsContainer(state: state))
+        _appState = ObservedObject(wrappedValue: state)
     }
 
     var body: some View {
@@ -187,6 +192,14 @@ struct TransportSettingsScreen: View {
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.horizontal, 14).padding(.top, 6)
+                    // REALITY_PIN fix: non-blocking advisory when the server-
+                    // issued Reality front public key changed since we last
+                    // pinned it (RealityPinStore) — the tunnel still connects
+                    // under the new key (signal-not-kill); this just surfaces it.
+                    if appState.realityKeyChanged {
+                        errorBanner("La chiave pubblica del front Reality è CAMBIATA rispetto all'ultima connessione. Il tunnel è stato ri-associato alla nuova chiave e la connessione prosegue.")
+                            .padding(.top, 6)
+                    }
 
                     SettingsSectionHeader("NODO VPN (USCITA)")
                     vpnNodeSection

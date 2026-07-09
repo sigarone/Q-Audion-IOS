@@ -475,6 +475,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// verifies, BEFORE handshake completion, never cleared — spec §4).
     public var setPeerV4Pinned: ((String) -> Void)?
 
+    /// TOFU-pin analogue for the directional-SRTP-key (`srtpDirKeyV1`)
+    /// capability (SRTP downgrade fix): has this peer ever had a SIGNED bundle
+    /// verify while advertising `srtpDirKeyV1`? Wired from a UserDefaults-backed
+    /// set in AppState, mirroring `isPeerV4Pinned`. Once true, an unauthenticated
+    /// bundle that omits/strips the capability can no longer silently downgrade
+    /// the negotiated directional-key usage back to legacy (see
+    /// `onAndroidBundleReceived`'s `peerAdvertisedSrtpDirKey` assignment).
+    public var isPeerSrtpDirKeyV1Pinned: ((String) -> Bool)?
+
+    /// Mark this peer srtpDirKeyV1-capable-pinned (set the first time a signed
+    /// bundle advertising the capability verifies, mirroring `setPeerV4Pinned`).
+    public var setPeerSrtpDirKeyV1Pinned: ((String) -> Void)?
+
     /// Is the channel to this peer trust ≥ VERIFIED_CHANNEL (spec §4 — verified
     /// contacts MUST always present a valid signature)? Wired from the existing
     /// SAS-verification state.
@@ -933,7 +946,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // W574x — capture the peer's directional-PQC-RTP-key advertisement so
         // the relay sealer can be built directional when both sides support it.
         // This runs before onRelaySessionReady fires for this bundle.
+        // SRTP downgrade fix: OR in the TOFU-pinned capability so a peer that
+        // has PROVEN (signed) srtpDirKeyV1 support before cannot be silently
+        // downgraded by a later unauthenticated bundle that omits/strips the
+        // field — additive-only (can only flip false→true), never gates on an
+        // unauthenticated claim alone.
         self.peerAdvertisedSrtpDirKey = (bundle.capabilities?.srtpDirKeyV1 ?? false)
+            || (isPeerSrtpDirKeyV1Pinned?(callerId) ?? false)
         // Phase 18 — capture the peer's v4 advertisement so the v4 bootstrap is
         // gated on the negotiated AND (`negotiatedRatchetV4`). A bundle that omits
         // the field (older peer / un-opted-in) decodes nil → false → v4 stays off
@@ -1031,8 +1050,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                        let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: bundleKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
                     }
-                case .authenticated(let tofuPinKey, let v4Capable):
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
+                case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable):
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
                     // The signed OFFER's binding the ACCEPT will carry. Rebuilt
                     // under the trusted key (= the bundle's signerIdentityKey,
                     // which the verdict already confirmed == pinned/server key).
@@ -1040,13 +1059,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                        let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: trustedKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
                     }
-                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable):
+                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable, let srtpDirKeyV1Capable):
                     // D11 trust-on-publish: bundle key ≠ pin but ∈ the server's
                     // published set AND its own signature verified. Silent additive
                     // re-pin per-(peer, device); NO banner. The binding is rebuilt
                     // under the SET-PROVEN device key (the key the policy verified).
                     print("[QAudionCallIntegration] OFFER set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
                     if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: deviceKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
                     }
@@ -1392,15 +1411,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     if code == "sig_invalid" {
                         onInvalidHandshakeSignature?(callerId)
                     }
-                case .authenticated(let tofuPinKey, let v4Capable):
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable)
-                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable):
+                case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable):
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable, let srtpDirKeyV1Capable):
                     // D11 trust-on-publish: set-proven rotation → silent additive
                     // re-pin per-(peer, device); NO banner. Proceed to init the
                     // session (the policy already verified the ACCEPT signature
                     // under this set-proven device key).
                     print("[QAudionCallIntegration] ACCEPT set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
                 case .proceedUnsignedWarn(let reason):
                     print("[QAudionCallIntegration] ACCEPT unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
                 }
@@ -1823,6 +1842,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let transcript = transcriptFor(verifyKey) ?? Data()
         let advertisedV4 = (HandshakeSigningPolicy.ratchetV >= 0x04)
             && (HandshakeSigningPolicy.suiteId == 0x01)
+        // SRTP downgrade fix: whether THIS bundle advertised the directional-
+        // SRTP-key capability — only meaningful once the signature verifies
+        // (evaluate() only threads it into the .authenticated* verdicts).
+        let advertisedSrtpDirKeyV1 = bundle.capabilities?.srtpDirKeyV1 ?? false
         return HandshakeSigningPolicy.evaluate(
             signerIdentityKeyB64: bundle.signerIdentityKey,
             signatureB64: bundle.signature,
@@ -1831,7 +1854,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             serverFetchedKey: server,
             requireSigned: requireSigned(forPeer: peerId),
             advertisedV4: advertisedV4,
-            publishedKeySet: publishedSet.isEmpty ? nil : publishedSet
+            publishedKeySet: publishedSet.isEmpty ? nil : publishedSet,
+            advertisedSrtpDirKeyV1: advertisedSrtpDirKeyV1
         )
     }
 
@@ -1857,7 +1881,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         peerId: String,
         deviceId: String?,
         tofuPinKey: Data?,
-        v4Capable: Bool
+        v4Capable: Bool,
+        srtpDirKeyV1Capable: Bool = false
     ) {
         if let pinKey = tofuPinKey {
             if let perDevice = commitTofuPinForDevice {
@@ -1868,6 +1893,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
         if v4Capable {
             setPeerV4Pinned?(peerId)
+        }
+        if srtpDirKeyV1Capable {
+            setPeerSrtpDirKeyV1Pinned?(peerId)
         }
     }
 

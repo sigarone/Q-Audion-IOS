@@ -54,7 +54,10 @@ public enum HandshakeSigningPolicy {
         /// TOFU candidate). `tofuPinKey` is set when this verification should
         /// also first-seen-pin the key (caller pins AFTER this success).
         /// `v4Capable` true when the verified bundle advertised v4+suite-1.
-        case authenticated(tofuPinKey: Data?, v4Capable: Bool)
+        /// `srtpDirKeyV1Capable` true when the verified bundle advertised the
+        /// directional-SRTP-key capability (TURN_SPOOF/SRTP downgrade fix —
+        /// TOFU-pin so a later unauthenticated bundle can't silently strip it).
+        case authenticated(tofuPinKey: Data?, v4Capable: Bool, srtpDirKeyV1Capable: Bool)
         /// D11 trust-on-publish: the bundle key DIFFERS from the per-(peer,device)
         /// pin (or there is no pin yet for this device) but IS a member of the
         /// server-published per-device set, and its OWN signature verified under
@@ -62,7 +65,7 @@ public enum HandshakeSigningPolicy {
         /// re-pins `deviceKey` per-(peer,deviceId); NO banner. This is the iOS
         /// mirror of Desktop `new_device_pin`. NEVER blind-pins an observed key:
         /// `deviceKey` was proven ∈ the published set BEFORE this is returned.
-        case authenticatedRepinFromPublished(deviceKey: Data, v4Capable: Bool)
+        case authenticatedRepinFromPublished(deviceKey: Data, v4Capable: Bool, srtpDirKeyV1Capable: Bool)
         /// No signature, and policy does NOT require one — proceed but WARN
         /// (legacy peer migration path, §4). `reason` is the user-facing hint.
         case proceedUnsignedWarn(reason: String)
@@ -125,7 +128,8 @@ public enum HandshakeSigningPolicy {
         serverFetchedKey: Data?,
         requireSigned: Bool,
         advertisedV4: Bool,
-        publishedKeySet: Set<Data>? = nil
+        publishedKeySet: Set<Data>? = nil,
+        advertisedSrtpDirKeyV1: Bool = false
     ) -> Verdict {
 
         // --- Signature ABSENT -------------------------------------------------
@@ -200,12 +204,17 @@ public enum HandshakeSigningPolicy {
         if matchesTrusted {
             return .authenticated(
                 tofuPinKey: isTofuFirstContact ? trustedKey : nil,
-                v4Capable: advertisedV4
+                v4Capable: advertisedV4,
+                srtpDirKeyV1Capable: advertisedSrtpDirKeyV1
             )
         }
         // Not matching the trusted key but ∈ published set and self-signature
         // valid → authenticated new device / rotation. Silent additive re-pin.
-        return .authenticatedRepinFromPublished(deviceKey: bundleKey, v4Capable: advertisedV4)
+        return .authenticatedRepinFromPublished(
+            deviceKey: bundleKey,
+            v4Capable: advertisedV4,
+            srtpDirKeyV1Capable: advertisedSrtpDirKeyV1
+        )
     }
 
     /// D11 helper for the call integration: given the resolved trust facts, which

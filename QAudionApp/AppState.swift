@@ -124,6 +124,14 @@ final class AppState: ObservableObject {
     /// auto fallback or the manual force). Drives a quiet UI indicator and
     /// guards against re-activating an already-active tunnel. Never persisted.
     @Published private(set) var transportIsReality: Bool = false
+    /// REALITY_PIN fix: true when `activateRealityFallback` observed the
+    /// server-issued Reality front public key CHANGE from a previously-pinned
+    /// value (`RealityPinStore.Verdict.changed`) — a compromised/coerced CDN
+    /// edge swapping the key would show up here. Non-blocking (signal-not-kill):
+    /// the tunnel still comes up under the new key; this only drives a quiet
+    /// advisory in TransportSettingsScreen. Never auto-clears — same "sticky
+    /// until surfaced" shape as `callIdentityUnauthenticatedChange`.
+    @Published var realityKeyChanged: Bool = false
     /// Re-entrancy guard so overlapping stall signals / toggle taps can't fire
     /// two concurrent RealityManager.start() attempts.
     private var realityActivationInFlight: Bool = false
@@ -164,6 +172,13 @@ final class AppState: ObservableObject {
     /// UserDefaults inside the integration closures (`wireHandshakeSigning`),
     /// which run off-main, so it is NOT wrapped in a MainActor-isolated helper.
     private static let peerV4PinnedDefaultsKey = "qaudion.hs.v4pinned.peers"
+
+    /// SRTP downgrade fix: TOFU-pin analogue of `peerV4PinnedDefaultsKey` for
+    /// the directional-SRTP-key (`srtpDirKeyV1`) capability — the set of peer
+    /// contactIds for which a SIGNED bundle has ever advertised it. Same
+    /// persistence shape (never cleared, read/written off-main inside
+    /// `wireHandshakeSigning`'s closures).
+    private static let peerSrtpDirKeyV1PinnedDefaultsKey = "qaudion.hs.srtpdirkeyv1pinned.peers"
 
     /// W75: cached PushKit VoIP token. PushKit emits this on first
     /// launch BEFORE the user is authenticated — we stash it here and
@@ -5714,6 +5729,7 @@ final class AppState: ObservableObject {
         let identityManager = sovereignIdentity         // SovereignIdentityManager
         let pinStore = peerPinStore                       // PeerIdentityPinStore
         let v4Key = Self.peerV4PinnedDefaultsKey
+        let srtpDirKeyV1Key = Self.peerSrtpDirKeyV1PinnedDefaultsKey
 
         // Local signer: sign a raw transcript with the long-term Ed25519 seed.
         // Returns nil (→ unsigned) when no identity is loaded or the sign throws.
@@ -5819,6 +5835,24 @@ final class AppState: ObservableObject {
             if !set.contains(peerId) {
                 set.append(peerId)
                 UserDefaults.standard.set(set, forKey: v4Key)
+            }
+        }
+        // SRTP downgrade fix: TOFU-pin the directional-SRTP-key capability the
+        // same additive-only way v4 is pinned above — once a SIGNED bundle from
+        // this peer has advertised it, a later unauthenticated bundle can no
+        // longer silently strip it (see QAudionCallIntegration's
+        // `peerAdvertisedSrtpDirKey` OR-in).
+        integration.isPeerSrtpDirKeyV1Pinned = { peerId in
+            guard !peerId.isEmpty else { return false }
+            let set = UserDefaults.standard.stringArray(forKey: srtpDirKeyV1Key) ?? []
+            return set.contains(peerId)
+        }
+        integration.setPeerSrtpDirKeyV1Pinned = { peerId in
+            guard !peerId.isEmpty else { return }
+            var set = UserDefaults.standard.stringArray(forKey: srtpDirKeyV1Key) ?? []
+            if !set.contains(peerId) {
+                set.append(peerId)
+                UserDefaults.standard.set(set, forKey: srtpDirKeyV1Key)
             }
         }
         // Verified-channel = the user has confirmed the SAS at least once for
@@ -6185,6 +6219,18 @@ final class AppState: ObservableObject {
         guard let reality = params, reality.isUsable else {
             print("[AppState] Reality fallback (\(reason)): server has no usable reality params — cannot bypass")
             return
+        }
+
+        // REALITY_PIN fix: TOFU-pin the front's public key by hostname. A
+        // mismatch means the server-issued key CHANGED since we last saw it —
+        // a compromised/coerced CDN edge could do this with zero other signal.
+        // Non-blocking (signal-not-kill): log loud, re-pin to the new value
+        // (already done inside checkAndPin), still connect — refusing to
+        // connect would break the user's only censorship-bypass path.
+        let pinVerdict = RealityPinStore.checkAndPin(hostname: reality.hostname, publicKey: reality.publicKey)
+        if pinVerdict == .changed {
+            RTLog.error("security", "Reality front public key CHANGED for \(reality.hostname)")
+            realityKeyChanged = true
         }
 
         // Map the server-issued relay block into RealityManager's config shape.
