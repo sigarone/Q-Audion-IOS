@@ -20,9 +20,13 @@ import os
 /// Subprotocol: `"turn"` (Sec-WebSocket-Protocol header).
 /// Auth: `Authorization: Bearer <accessToken>` (server requires JWT).
 ///
-/// **Reply routing:** libwebrtc always uses a single UDP socket for all
-/// outbound TURN traffic, so we remember the source address of the last
-/// packet libwebrtc sent us and route reply frames back there.
+/// **Reply routing (2026-07-09 hijack fix):** inbound WS frames are routed
+/// by STUN/TURN transaction ID (RFC 5389 §6, shared by a request and its
+/// response) or, for TURN ChannelData media, by channel number bound via a
+/// prior ChannelBind exchange (RFC 5766 §11.4/§14.1) — never by "last UDP
+/// sender", which any co-located loopback process could spoof with a single
+/// datagram to hijack every subsequent reply (control-plane *and* media).
+/// See `resolveTarget(buf:len:)`.
 ///
 /// **Mirrors:**
 ///  - Android: `WssTurnBridge.kt` (OkHttp + POSIX UDP)
@@ -87,11 +91,90 @@ public final class WssTurnBridge: @unchecked Sendable {
         set { stateLock.withLock { _running = newValue } }
     }
 
-    // Last UDP source address from libwebrtc — reply target for inbound WS frames.
-    private var lastSrc: sockaddr_in?
-    private let lastSrcLock = NSLock()
+    // Per-STUN-transaction / per-TURN-channel reply correlation (2026-07-09
+    // hijack fix — replaces the old single "last UDP sender" scalar, see
+    // class doc). All three maps are guarded by `correlationLock`.
+    private var pendingByTxId: [String: (addr: sockaddr_in, ts: TimeInterval)] = [:]
+    private var pendingChannelBind: [String: (addr: sockaddr_in, channelNumber: UInt16)] = [:]
+    private var channelToAddr: [UInt16: sockaddr_in] = [:]
+    private let correlationLock = NSLock()
 
     private static let log = Logger(subsystem: "com.bcrypto.qaudion", category: "WssTurnBridge")
+
+    // MARK: - STUN/TURN wire parsing (RFC 5389 §6, RFC 5766 §2/§11.4/§14.1)
+
+    private enum StunMessageClass {
+        case request
+        case indication
+        case successResponse
+        case errorResponse
+    }
+
+    private static let stunMagicCookie: UInt32 = 0x2112_a442
+    private static let channelBindMethod: UInt16 = 0x0009
+    private static let channelNumberAttrType: UInt16 = 0x000c
+    private static let pendingTxTTL: TimeInterval = 15
+
+    /// RFC 5389 §6 transaction-ID extraction (bytes 8-19, after the 4-byte
+    /// magic cookie at bytes 4-7). `nil` for anything shorter than a STUN
+    /// header or lacking the magic cookie (e.g. a ChannelData frame, which
+    /// is correlated by channel number instead — see `channelDataNumber`).
+    private static func stunTransactionId(_ buf: UnsafePointer<UInt8>, _ len: Int) -> String? {
+        guard len >= 20 else { return nil }
+        let cookie = (UInt32(buf[4]) << 24) | (UInt32(buf[5]) << 16) | (UInt32(buf[6]) << 8) | UInt32(buf[7])
+        guard cookie == stunMagicCookie else { return nil }
+        var hex = ""
+        hex.reserveCapacity(24)
+        for i in 8..<20 { hex += String(format: "%02x", buf[i]) }
+        return hex
+    }
+
+    /// RFC 5389 §6 message class, decoded from the C1/C0 bits of the
+    /// 16-bit message-type field (bytes 0-1).
+    private static func stunMessageClass(_ buf: UnsafePointer<UInt8>) -> StunMessageClass {
+        let messageType = (UInt16(buf[0]) << 8) | UInt16(buf[1])
+        let c1 = (messageType & 0x0100) != 0
+        let c0 = (messageType & 0x0010) != 0
+        if c1 && c0 { return .errorResponse }
+        if c1 { return .successResponse }
+        if c0 { return .indication }
+        return .request
+    }
+
+    /// RFC 5389 §6 method bits of the message-type field (class bits masked out).
+    private static func stunMethod(_ buf: UnsafePointer<UInt8>) -> UInt16 {
+        let messageType = (UInt16(buf[0]) << 8) | UInt16(buf[1])
+        return messageType & 0xfeef
+    }
+
+    /// Parses the CHANNEL-NUMBER attribute (type 0x000C, RFC 5766 §14.1)
+    /// out of a ChannelBind request body, following the 20-byte STUN header.
+    private static func channelBindChannelNumber(_ buf: UnsafePointer<UInt8>, _ len: Int) -> UInt16? {
+        var offset = 20
+        while offset + 4 <= len {
+            let attrType = (UInt16(buf[offset]) << 8) | UInt16(buf[offset + 1])
+            let attrLen = Int((UInt16(buf[offset + 2]) << 8) | UInt16(buf[offset + 3]))
+            let valueStart = offset + 4
+            if attrType == channelNumberAttrType, attrLen >= 2, valueStart + 2 <= len {
+                return (UInt16(buf[valueStart]) << 8) | UInt16(buf[valueStart + 1])
+            }
+            // Attributes are padded to a 4-byte boundary (RFC 5389 §15).
+            offset = valueStart + ((attrLen + 3) & ~3)
+        }
+        return nil
+    }
+
+    /// RFC 5766 §11.4: a ChannelData frame's first two bytes are the bound
+    /// channel number (top two bits `01`, range 0x4000-0x7FFF) rather than
+    /// a STUN magic cookie.
+    private static func channelDataNumber(_ buf: UnsafePointer<UInt8>, _ len: Int) -> UInt16? {
+        guard len >= 4, (buf[0] & 0xc0) == 0x40 else { return nil }
+        return (UInt16(buf[0]) << 8) | UInt16(buf[1])
+    }
+
+    private static func sockaddrEqual(_ a: sockaddr_in, _ b: sockaddr_in) -> Bool {
+        a.sin_addr.s_addr == b.sin_addr.s_addr && a.sin_port == b.sin_port
+    }
 
     // MARK: - Lifecycle
 
@@ -188,48 +271,88 @@ public final class WssTurnBridge: @unchecked Sendable {
     // MARK: - Relay pumps
 
     /// UDP → WebSocket pump. Runs on a dedicated OS thread because
-    /// `recvfrom` is a blocking syscall. Exits when the fd is closed
-    /// (recvfrom returns ≤ 0) or `running` becomes false.
+    /// `recvfrom` is a blocking syscall. `SO_RCVTIMEO` bounds each blocking
+    /// call to 1s so the same thread can also sweep expired
+    /// `pendingByTxId` entries without a second timer racing
+    /// `correlationLock` from another thread. Exits when the fd is closed
+    /// (recvfrom returns 0) or `running` becomes false.
     private func pumpUdpToWs(fd: Int32) {
         let bufSize = 2048
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
         defer { buf.deallocate() }
         var src = sockaddr_in()
         var srcLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        var tv = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         while running {
             let n = withUnsafeMutablePointer(to: &src) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                     recvfrom(fd, buf, bufSize, 0, $0, &srcLen)
                 }
             }
-            if n <= 0 { break }
-            lastSrcLock.withLock { lastSrc = src }
-            let data = Data(bytes: buf, count: n)
-            wsTask?.send(.data(data)) { err in
-                if let err { Self.log.warning("ws.send error: \(err)") }
+            if n < 0 {
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    sweepExpiredPendingTx()
+                    continue
+                }
+                break
+            }
+            if n == 0 { break }
+            registerPendingAndSend(buf: buf, len: n, src: src)
+        }
+    }
+
+    /// Registers this outbound datagram's STUN transaction ID (if any) as
+    /// pending a reply, then forwards it over the WebSocket. A ChannelBind
+    /// request additionally stashes its address+channel number so the
+    /// matching success response can populate `channelToAddr`.
+    private func registerPendingAndSend(buf: UnsafePointer<UInt8>, len: Int, src: sockaddr_in) {
+        if let txId = Self.stunTransactionId(buf, len) {
+            correlationLock.withLock {
+                if let existing = pendingByTxId[txId], !Self.sockaddrEqual(existing.addr, src) {
+                    Self.log.warning("txId collision from a different src — ignoring re-registration")
+                } else {
+                    pendingByTxId[txId] = (addr: src, ts: Date().timeIntervalSince1970)
+                    if Self.stunMessageClass(buf) == .request,
+                       Self.stunMethod(buf) == Self.channelBindMethod,
+                       let channelNumber = Self.channelBindChannelNumber(buf, len) {
+                        pendingChannelBind[txId] = (addr: src, channelNumber: channelNumber)
+                    }
+                }
+            }
+        }
+        let data = Data(bytes: buf, count: len)
+        wsTask?.send(.data(data)) { err in
+            if let err { Self.log.warning("ws.send error: \(err)") }
+        }
+    }
+
+    private func sweepExpiredPendingTx() {
+        let cutoff = Date().timeIntervalSince1970 - Self.pendingTxTTL
+        correlationLock.withLock {
+            for (txId, entry) in pendingByTxId where entry.ts < cutoff {
+                pendingByTxId.removeValue(forKey: txId)
+                pendingChannelBind.removeValue(forKey: txId)
             }
         }
     }
 
-    /// WebSocket → UDP pump. Runs on a Swift cooperative Task.
-    /// Routes inbound WS frames back to the last-known libwebrtc
-    /// UDP source address. Drops frames if no source is known yet
-    /// (harmless — TURN handshake is always client-initiated).
+    /// WebSocket → UDP pump. Runs on a Swift cooperative Task. Routes
+    /// inbound WS frames via `resolveTarget` — no fallback to a "last
+    /// known sender" scalar (see class doc for why).
     private func pumpWsToUdp(fd: Int32) async {
         while running {
             guard let task = wsTask else { return }
             do {
                 let msg = try await task.receive()
                 guard case .data(let data) = msg else { continue }
-                guard let dst = lastSrcLock.withLock({ lastSrc }) else {
-                    Self.log.debug("drop WS frame — no known libwebrtc src")
-                    continue
-                }
-                data.withUnsafeBytes { rawBuf in
+                data.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
+                    guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+                    guard let dst = resolveTarget(buf: base, len: data.count) else { return }
                     var d = dst
                     _ = withUnsafeMutablePointer(to: &d) {
                         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                            sendto(fd, rawBuf.baseAddress, data.count, 0, sa,
+                            sendto(fd, base, data.count, 0, sa,
                                    socklen_t(MemoryLayout<sockaddr_in>.size))
                         }
                     }
@@ -238,6 +361,48 @@ public final class WssTurnBridge: @unchecked Sendable {
                 if running { Self.log.warning("ws.receive error: \(error)") }
                 return
             }
+        }
+    }
+
+    /// Resolves the UDP destination for an inbound WS frame:
+    /// - ChannelData (RFC 5766 §11.4): routed by `channelToAddr[channelNumber]`.
+    /// - STUN request/response (RFC 5389 §6): routed by `pendingByTxId[txId]`,
+    ///   consumed on match. A ChannelBind success response additionally
+    ///   promotes its pending-bind entry into `channelToAddr`.
+    /// - STUN indication (e.g. legacy Data Indication, RFC 5766 §10):
+    ///   carries a server-generated txId that never matches a client
+    ///   request, so it can't be correlated here — real TURN clients
+    ///   (including libwebrtc) use ChannelBind instead whenever the server
+    ///   supports it (ours does), so this is expected to be a cold path;
+    ///   dropped with a log line to confirm that post-ship.
+    /// Anything else (unknown channel, unmatched txId, non-STUN/non-channel
+    /// bytes) is dropped — never falls back to a "last known sender" scalar.
+    private func resolveTarget(buf: UnsafePointer<UInt8>, len: Int) -> sockaddr_in? {
+        if let channelNumber = Self.channelDataNumber(buf, len) {
+            let target = correlationLock.withLock { channelToAddr[channelNumber] }
+            if target == nil {
+                Self.log.debug("drop ChannelData — unknown channel \(channelNumber)")
+            }
+            return target
+        }
+        guard let txId = Self.stunTransactionId(buf, len) else {
+            Self.log.debug("drop WS frame — not STUN-shaped and not ChannelData")
+            return nil
+        }
+        let msgClass = Self.stunMessageClass(buf)
+        if msgClass == .indication {
+            Self.log.debug("drop STUN indication — no channel/txId correlation available")
+            return nil
+        }
+        return correlationLock.withLock {
+            guard let pending = pendingByTxId.removeValue(forKey: txId) else {
+                Self.log.debug("drop WS frame — no pending request for txId")
+                return nil
+            }
+            if msgClass == .successResponse, let bind = pendingChannelBind.removeValue(forKey: txId) {
+                channelToAddr[bind.channelNumber] = pending.addr
+            }
+            return pending.addr
         }
     }
 }
