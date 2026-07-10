@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.751",
+              date: "2026-07-10",
+              title: "v1.0.751",
+              bullets: [
+                "diag(call): emit per-call audio route/sample-rate/VP-IO snapshot (call.audio.diag)",
+                "diag(call): add per-call AGC/level telemetry for suspected speaker-route pumping",
+              ]),
         .init(id: "v1.0.750",
               date: "2026-07-10",
               title: "v1.0.750",
               bullets: [
+                "chore: regenerate changelog for v1.0.750",
                 "fix(call): re-attach sender FrameCryptor on iOS-caller mid-call video upgrade",
                 "fix(call): exclude H264 from iOS video codec negotiation (H265-only fleet)",
                 "ci(ios): revert in-memory DB test change; skip 1 Simulator-only ConversationStore test",
@@ -161,12 +169,6 @@ extension ReleaseNote {
               title: "v1.0.732",
               bullets: [
                 "fix(call): recover wedged PeerConnection after a failed incoming video-upgrade accept",
-              ]),
-        .init(id: "v1.0.731",
-              date: "2026-07-04",
-              title: "v1.0.731",
-              bullets: [
-                "feat(call): VIDEODIAG self-heal watchdog + readiness-8.7 KAT conformance",
               ]),
     ]
 }
