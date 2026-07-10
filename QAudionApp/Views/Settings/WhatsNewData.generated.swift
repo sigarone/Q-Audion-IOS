@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.752",
+              date: "2026-07-10",
+              title: "v1.0.752",
+              bullets: [
+                "fix(audio): move TX encode+seal+send off the real-time capture thread",
+                "fix(crypto): tolerate dropped audio frames in the iOS ratchet path",
+                "fix(video): seed iOS ABR from real 1.5Mbps encoder start, not 800kbps default",
+              ]),
         .init(id: "v1.0.751",
               date: "2026-07-10",
               title: "v1.0.751",
               bullets: [
+                "chore: regenerate changelog for v1.0.751",
                 "diag(call): emit per-call audio route/sample-rate/VP-IO snapshot (call.audio.diag)",
                 "diag(call): add per-call AGC/level telemetry for suspected speaker-route pumping",
               ]),
@@ -163,12 +172,6 @@ extension ReleaseNote {
                 "fix(chat): capture the real server message id via msg_receive self-echo — fixes stuck red send-failed status",
                 "feat(call): call_video_state wire signal — real camera-off notice + auto-return to audio screen",
                 "fix(audio): throttle speaker-override engine restart — stop vpio flap/crackling",
-              ]),
-        .init(id: "v1.0.732",
-              date: "2026-07-04",
-              title: "v1.0.732",
-              bullets: [
-                "fix(call): recover wedged PeerConnection after a failed incoming video-upgrade accept",
               ]),
     ]
 }
