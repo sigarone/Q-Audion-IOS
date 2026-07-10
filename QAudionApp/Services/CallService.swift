@@ -56,6 +56,24 @@ final class CallService {
     private var audioCapture: AudioCapture?
     private var audioPlayback: AudioPlayback?
 
+    // XP-crackle — `AudioCapture`'s input tap runs on a dedicated real-time
+    // Core Audio thread; Apple's guidance (and every other platform's own
+    // fix for the identical symptom — Android's CallAudioBridge txChannel,
+    // Desktop's off-thread encode) is that ANY allocation, lock, or I/O on
+    // that thread risks missed render deadlines, which is exactly what
+    // audible crackling sounds like. `processAndSendEncryptedFrame` used to
+    // run synchronously right there: Opus encode, TWO AEAD seals (engine +
+    // relay), JSONSerialization, an NSLock, and a URLSessionWebSocketTask
+    // hand-off — all on the tap thread. Hand off to this dedicated SERIAL
+    // queue instead. Serial (not concurrent) matters: the ratchet chain
+    // position is assigned in ENCRYPT-call order, so frames must still be
+    // processed strictly one-at-a-time in the order they were captured —
+    // GCD serial queues execute `.async` blocks in FIFO submission order,
+    // and Core Audio only ever calls the tap callback from one thread at a
+    // time, so submission order already equals capture order.
+    private let txAudioQueue = DispatchQueue(
+        label: "com.bcrypto.qaudion.call.tx-audio-encode", qos: .userInitiated)
+
     /// W66: contatori di frame per diagnosi (esposti via Settings →
     /// Diagnostica). framesEncrypted incrementa ogni volta che un PCM
     /// dal mic completa il roundtrip processOutgoingAudio. framesPlayed
@@ -140,10 +158,11 @@ final class CallService {
     /// CLAUDE.md §16 pattern (no AppState param — closures capture only
     /// what they need, weakly).
     // Best-effort getters: read non-isolated because the TX path runs on
-    // the AVFAudio tap thread, not main. AppState only sets `liveProvider`
-    // and `callContactId` from main, but a stale read across threads is
-    // acceptable for this fallback (worst case: drops the very first
-    // frame and binds on the second). They MUST stay nullary `() -> ...`.
+    // txAudioQueue (a dedicated background queue — XP-crackle moved it off
+    // the AVFAudio tap thread, but it's still not main). AppState only sets
+    // `liveProvider` and `callContactId` from main, but a stale read across
+    // threads is acceptable for this fallback (worst case: drops the very
+    // first frame and binds on the second). They MUST stay nullary `() -> ...`.
     public typealias WsClientProvider = () -> BCryptoWebSocketClient?
     public typealias PeerIdProvider = () -> String?
     /// Returns true iff the call is in an active/encrypted state — used
@@ -425,11 +444,16 @@ final class CallService {
                 // peer riceve il frame con il delay configurato.
                 Task { [weak self] in
                     await NetworkConditionSimulator.shared.delayOutbound()
-                    self?.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
+                    self?.txAudioQueue.async {
+                        self?.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
+                    }
                 }
                 return
             }
-            self.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
+            // XP-crackle — off the real-time tap thread; see txAudioQueue kdoc.
+            self.txAudioQueue.async { [weak self] in
+                self?.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
+            }
         }
 
         // W464 — store the capture/playback refs UNCONDITIONALLY (before
@@ -631,12 +655,17 @@ final class CallService {
                 if NetworkConditionSimulator.shared.shouldDropOutbound() { return }
                 Task { [weak self] in
                     await NetworkConditionSimulator.shared.delayOutbound()
-                    self?.processAndSendEncryptedFrame(
-                        pcmFrame: pcmFrame, integration: integration)
+                    self?.txAudioQueue.async {
+                        self?.processAndSendEncryptedFrame(
+                            pcmFrame: pcmFrame, integration: integration)
+                    }
                 }
                 return
             }
-            self.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
+            // XP-crackle — off the real-time tap thread; see txAudioQueue kdoc.
+            self.txAudioQueue.async { [weak self] in
+                self?.processAndSendEncryptedFrame(pcmFrame: pcmFrame, integration: integration)
+            }
         }
 
         // W464 — INCOMING calls ARE driven by CallKit's CXProvider
