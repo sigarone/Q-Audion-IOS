@@ -338,7 +338,15 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         jitterM2 = 0
         jitterCount = 0
         // Keep lastCompletionTimeMs so the next window's first jitter
-        // sample is a real inter-arrival from this window's last frame.
+        // sample is a real inter-arrival from this window's last frame —
+        // UNLESS this window completed zero frames (video paused/stalled):
+        // then the stale timestamp would make the next real frame's gap
+        // span the whole idle period, poisoning jitterMean/M2 with one
+        // huge outlier (XP-9). Zero it so the `lastCompletionTimeMs > 0`
+        // guard in `defragment` skips that first post-idle sample instead.
+        if latencySamplesInWindow == 0 {
+            lastCompletionTimeMs = 0
+        }
         return (r, l, avgLat, jitter)
     }
 

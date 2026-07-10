@@ -78,6 +78,15 @@ public final class AbrController {
 
     public init(pipeline: VideoCallPipeline) {
         self.pipeline = pipeline
+        // XP-9: the encoder actually starts at pipeline.targetBitrateBps
+        // (1.5 Mbps, W574n) not VideoConstants.defaultVideoBitrateBps
+        // (800 kbps, the cross-platform wire default). Seeding this
+        // controller's belief from the wrong constant meant the first AIMD
+        // decrease/increase computed off a base 700 kbps below the real
+        // encoder state, and setEncoderBitrate() could silently cut the
+        // true bitrate on the very first tick even with clean network
+        // conditions.
+        self.currentBitrateBps = pipeline.targetBitrateBps
     }
 
     public func start() {
@@ -312,7 +321,9 @@ public final class AbrController {
     /// Reset to baseline values. Call when starting a new call so the
     /// previous call's bitrate decisions don't bleed into the next one.
     public func reset() {
-        currentBitrateBps = VideoConstants.defaultVideoBitrateBps
+        // XP-9: same seed fix as init() — reset to the real encoder start
+        // value, not the cross-platform wire-default constant.
+        currentBitrateBps = pipeline?.targetBitrateBps ?? VideoConstants.defaultVideoBitrateBps
         currentResolution = .hd720
         currentFps = VideoConstants.defaultVideoFps
         isVideoPaused = false
