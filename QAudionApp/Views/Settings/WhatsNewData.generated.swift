@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.749",
+              date: "2026-07-10",
+              title: "v1.0.749",
+              bullets: [
+                "ci(ios): skip TusUploadClientTests on the Simulator job (macOS still runs it)",
+                "fix(security,test): new LE cert-pin anchors + Tus test deadlock fix",
+              ]),
         .init(id: "v1.0.748",
               date: "2026-07-09",
               title: "v1.0.748",
               bullets: [
+                "chore: regenerate changelog for v1.0.748",
                 "fix(security): TOFU-pin SRTP directional-key capability + Reality front pubkey",
                 "fix(security): port WSS-TURN transaction-ID reply-correlation fix to MasqueTurnBridge",
                 "fix(security): correlate WSS-TURN replies by transaction ID, not last-sender",
@@ -155,14 +163,6 @@ extension ReleaseNote {
               title: "v1.0.730",
               bullets: [
                 "feat(call): deep in-call UI redesign (dedup, mirror Android) + video readiness sync completion",
-              ]),
-        .init(id: "v1.0.729",
-              date: "2026-07-04",
-              title: "v1.0.729",
-              bullets: [
-                "feat(call): unified in-call UI parity — real FFT spectrum, RX voice analysis, cipher flow tube, custody card",
-                "feat(ios-call): animated formant spectrum + live crypto-engine meter (Android parity)",
-                "feat(call): unified Guardian ribbon, security sheet, two-row dock (iOS)",
               ]),
     ]
 }
