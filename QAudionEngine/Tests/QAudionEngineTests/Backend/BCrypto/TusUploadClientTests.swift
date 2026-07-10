@@ -487,11 +487,31 @@ private final class TusStubProtocol: URLProtocol {
 }
 
 private extension URLRequest {
-    /// `TusUploadClient.patch` always sets `req.httpBody = bytes`
-    /// directly (never `httpBodyStream`), so `httpBody` is reliably
-    /// populated on the intercepted request — this just centralizes the
-    /// nil-coalescing so the response handlers above stay concise.
+    /// Length of the request body, robust to how URLSession delivers it.
+    ///
+    /// DEADLOCK FIX 2026-07-10: `TusUploadClient.patch` sets `req.httpBody =
+    /// bytes`, but URLSession MOVES that body onto `httpBodyStream` when the
+    /// request is handed to a `URLProtocol` (a well-known interception gotcha —
+    /// the previous "httpBody is reliably populated" assumption here was
+    /// wrong on CI). With `httpBody` nil, `httpBodyLength` returned 0, the
+    /// stub answered `Upload-Offset: 0`, the client's `while offset <
+    /// data.count` chunk loop never advanced, and every test WITHOUT a
+    /// `withTimeout` wrapper hung forever — deadlocking the whole CI run.
+    /// Read `httpBodyStream` as a fallback so the real byte count is seen.
     var httpBodyLength: Int {
-        httpBody?.count ?? 0
+        if let body = httpBody { return body.count }
+        guard let stream = httpBodyStream else { return 0 }
+        stream.open()
+        defer { stream.close() }
+        var total = 0
+        let bufSize = 4096
+        let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
+        defer { buf.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buf, maxLength: bufSize)
+            if read <= 0 { break }
+            total += read
+        }
+        return total
     }
 }

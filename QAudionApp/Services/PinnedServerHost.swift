@@ -66,6 +66,15 @@ public enum PinnedServerHost {
     public static let certChainPins: String = [
         "g2JP0zjI2bAjwYpny3qcBRnaQ9EXdbTGy9rUXD2ZfFI=",  // Let's Encrypt E8 (2027-03-13)
         "lrzsBiZJdvN0YHeazyjFp8/oo8Cq4RqP/O4FwL3fCMY=",  // ISRG Root X1 (2035-06-04)
+        // NEW LE hierarchy (added 2026-07-10): the origin (reached directly via
+        // the REALITY tunnel / DNS-only failover, bypassing the Cloudflare edge
+        // the clearnet path validates against) migrated to leaf ← YE1 ← ISRG
+        // Root YE ← ISRG Root X2. The E8/Root-X1 pins above are NOT in that
+        // chain, so REALITY + direct failover failed. These are SHA-256(cert
+        // DER), computed live 2026-07-10 from voip.bcrypto.com:443 origin.
+        // Purely additive; matches Desktop + Android (which pin the SPKI form).
+        "7l96vWmBuwJVYyzY9JKDRRtLGIRNEgQLRO4A8HuP4sY=",  // ISRG Root X2 (durable anchor)
+        "ojctBkMelxY2Xu7UfsAgNRSX0YL8wDjkV+WBaKA8rAc=",  // Let's Encrypt YE1 (intermediate)
     ].joined(separator: ",")
 
     /// Host portion of `url`. Returns `voip.bcrypto.com`.
