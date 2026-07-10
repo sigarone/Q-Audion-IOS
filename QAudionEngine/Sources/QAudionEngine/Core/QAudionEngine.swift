@@ -202,6 +202,40 @@ public final class QAudionEngine: @unchecked Sendable {
             throw QAudionEngineError.notInitialized
         }
         // W477 — RX uses the rxSessionManager only; TX has its own.
+        // XP-ratchet-loss — rxSm.ratchet() previously advanced exactly
+        // once per successfully-received frame with no reference to the
+        // wire sequence number. Audio runs over a lossy, non-retransmitted
+        // path (WS relay / DataChannel), so ANY single dropped frame left
+        // the RX chain permanently one step behind the peer's TX chain —
+        // every following frame then failed GCM auth for the rest of the
+        // call (matches telemetry: iOS↔iOS calls decrypting zero audio
+        // partway through). Use frame.sequenceNumber (already trusted for
+        // the AAD below) to detect the gap and fast-forward the missing
+        // ratchet steps — their keys are simply discarded, which is safe:
+        // this ratchet is one-way/forward-secure, those frames are gone.
+        let expectedNext = rxSm.frameCounter + 1
+        let seq64 = Int64(frame.sequenceNumber)
+        if seq64 > expectedNext {
+            let gap = seq64 - expectedNext
+            guard gap <= Self.maxRatchetCatchUpFrames else {
+                // Bigger than any real packet-loss burst (~20 s of audio at
+                // 20 ms/frame) — likely a corrupt/forged seq or a genuinely
+                // new session; don't churn the chain thousands of times,
+                // just drop this frame like before (DoS guard).
+                throw QAudionEngineError.malformedFrame(
+                    "ratchet catch-up gap too large: \(gap)")
+            }
+            for _ in 0..<gap { _ = try rxSm.ratchet() }
+        } else if seq64 <= rxSm.frameCounter {
+            // Stale, duplicate, or reordered-late frame: the ratchet
+            // already advanced past this wire position. There is no way
+            // back (forward-secure, one-way), so it is genuinely
+            // undecryptable — drop it rather than stepping the chain
+            // again, which would just reintroduce the same permanent-
+            // desync bug in the opposite direction.
+            throw QAudionEngineError.malformedFrame(
+                "stale/duplicate frame seq=\(frame.sequenceNumber)")
+        }
         let frameKey = try rxSm.ratchet()
         let cipherOutput = AeadCipher.CipherOutput(
             nonce: frame.nonce, ciphertext: frame.payload, tag: frame.tag
@@ -229,6 +263,12 @@ public final class QAudionEngine: @unchecked Sendable {
         var be = seq.bigEndian
         return withUnsafeBytes(of: &be) { Data($0) }
     }
+
+    /// XP-ratchet-loss — max forward gap the RX ratchet will fast-forward
+    /// through in one frame (~20 s of 20 ms-frame audio). Real network
+    /// blips lose a handful of frames; anything past this is treated as
+    /// unrecoverable rather than looping the chain thousands of times.
+    private static let maxRatchetCatchUpFrames: Int64 = 1000
 
     public func destroySession() {
         lock.lock(); defer { lock.unlock() }
