@@ -67,9 +67,16 @@ public final class HevcPreferredVideoEncoderFactory: NSObject, RTCVideoEncoderFa
         } else {
             print("[HevcPreferredCodecFactories] H265 already in default encoder list")
         }
-        // Push H265 to front so SDP negotiation prefers it.
+        // Push H265 to front, and EXCLUDE H264 entirely (user decision
+        // 2026-07-10: H265-only fleet — H264 is a bandwidth/quality regression
+        // and a recurring source of interop bugs, never a rescue; all mobile
+        // HW encodes/decodes H265). VP8/VP9/AV1 stay as non-H264 fallbacks for
+        // a Desktop peer only.
         let h265 = base.filter { $0.name.uppercased() == "H265" }
-        let other = base.filter { $0.name.uppercased() != "H265" }
+        let other = base.filter {
+            let n = $0.name.uppercased()
+            return n != "H265" && n != "H264"
+        }
         return h265 + other
     }
 }
@@ -102,8 +109,12 @@ public final class HevcPreferredVideoDecoderFactory: NSObject, RTCVideoDecoderFa
         if !base.contains(where: { $0.name.uppercased() == "H265" }) {
             base.append(RTCVideoCodecInfo(name: "H265"))
         }
+        // H265 first, H264 excluded entirely — mirrors the encoder factory.
         let h265 = base.filter { $0.name.uppercased() == "H265" }
-        let other = base.filter { $0.name.uppercased() != "H265" }
+        let other = base.filter {
+            let n = $0.name.uppercased()
+            return n != "H265" && n != "H264"
+        }
         return h265 + other
     }
 }
