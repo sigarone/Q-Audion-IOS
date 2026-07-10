@@ -719,6 +719,34 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // - false → opens the front camera via RTCCameraVideoCapturer.
         startCameraCapture(for: videoSource)
 
+        // SENDER-CRYPTOR MID-CALL-UPGRADE FIX (2026-07-10) — root cause of
+        // Desktop receiving 100% garbage/plaintext H265 from an iOS CALLER
+        // (this initiator/offerer path) that started AUDIO-ONLY then
+        // upgraded (device-confirmed via per-SSRC rxdiag: a single ssrc,
+        // ZERO successful FrameCryptor opens for the whole call, trailer
+        // bytes not our wire format at all = literal plaintext, not a
+        // parse bug).
+        //
+        // Exact same bug class as `acceptUpgradeOffer`'s (line ~1007) and
+        // `acceptUpgradeOfferBuildingPeerConnection`'s callee-side fixes —
+        // just never applied HERE, the offerer/initiator path. On an
+        // audio-only call, `ensureVideoSealerInternal()` runs (idempotent/
+        // latched) the moment peer caps + PQC key are ready — i.e. at call
+        // setup, before ANY video track exists — so `attachVideoSenderCryptor()`
+        // sees `videoSender == nil`, returns false, and (being latched to
+        // `.native`) never re-runs its install branch again. `addLocalVideoTrack()`
+        // above creates the sender for the FIRST time in THIS call, but
+        // nothing re-attaches the already-latched cryptor to it, so
+        // libwebrtc's Insertable-Streams sender transform is never
+        // installed and every outbound frame goes out unencrypted.
+        // `ensureVideoSealerInternal()` re-run while `videoSealer == .native`
+        // takes its top "rekey" branch, which unconditionally re-calls
+        // `setKey` + `attachVideoSenderCryptor()` — the same call used by
+        // the two already-fixed callee paths. A call-from-the-start video
+        // call is unaffected (its sender already existed when
+        // ensureVideoSealerInternal first ran, so this is a no-op there).
+        _ = ensureVideoSealerInternal()
+
         // Reset the answer-applied flag so the upgrade response isn't
         // mistaken for a duplicate call_answer (the original audio-
         // call answer already set hasAppliedRemoteAnswer=true).
