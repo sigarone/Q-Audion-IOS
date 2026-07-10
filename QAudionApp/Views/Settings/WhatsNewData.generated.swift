@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.753",
+              date: "2026-07-10",
+              title: "v1.0.753",
+              bullets: [
+                "fix(persistence): map isViewOnce/viewOnceOpened in GRDB Message record",
+                "fix(audio): move group-call TX encode+seal+send off the real-time capture thread",
+              ]),
         .init(id: "v1.0.752",
               date: "2026-07-10",
               title: "v1.0.752",
               bullets: [
+                "chore: regenerate changelog for v1.0.752",
                 "fix(audio): move TX encode+seal+send off the real-time capture thread",
                 "fix(crypto): tolerate dropped audio frames in the iOS ratchet path",
                 "fix(video): seed iOS ABR from real 1.5Mbps encoder start, not 800kbps default",
@@ -159,19 +167,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.734",
                 "fix(video): serialize ALL AVCaptureSession mutation on one queue — fixes SIGABRT crash mid-video-call",
-              ]),
-        .init(id: "v1.0.733",
-              date: "2026-07-05",
-              title: "v1.0.733",
-              bullets: [
-                "chore: regenerate changelog for v1.0.733",
-                "fix(telemetry): make iOS call/video diagnostic logs structured so they actually ship to Loki",
-                "feat(settings): auto-generated version-history changelog on the About/Settings screen",
-                "docs: save approved TrustChainCard mockup as permanent reference (was scratchpad-only)",
-                "feat(call): rich animated TrustChainCard — replace plain 3-label chain with approved mockup port",
-                "fix(chat): capture the real server message id via msg_receive self-echo — fixes stuck red send-failed status",
-                "feat(call): call_video_state wire signal — real camera-off notice + auto-return to audio screen",
-                "fix(audio): throttle speaker-override engine restart — stop vpio flap/crackling",
               ]),
     ]
 }
