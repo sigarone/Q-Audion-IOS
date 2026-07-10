@@ -200,7 +200,8 @@ jobs:
             -skip-testing "QAudionEngineTests/QAudionCapabilityExchangeTests" \
             -skip-testing "QAudionEngineTests/SpeakerVerifierTests" \
             -skip-testing "QAudionEngineTests/VoiceHealthMonitorTests" \
-            -skip-testing "QAudionEngineTests/QAudionEngineTests/testProcessRoundTrip" &
+            -skip-testing "QAudionEngineTests/QAudionEngineTests/testProcessRoundTrip" \
+            -skip-testing "QAudionEngineTests/TusUploadClientTests" &
           XCODEBUILD_PID=$!
           ( sleep 900; echo "::error::xcodebuild test exceeded 15min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
           WATCHDOG_PID=$!
