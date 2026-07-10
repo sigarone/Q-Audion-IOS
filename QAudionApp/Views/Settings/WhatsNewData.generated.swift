@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.750",
+              date: "2026-07-10",
+              title: "v1.0.750",
+              bullets: [
+                "fix(call): re-attach sender FrameCryptor on iOS-caller mid-call video upgrade",
+                "fix(call): exclude H264 from iOS video codec negotiation (H265-only fleet)",
+                "ci(ios): revert in-memory DB test change; skip 1 Simulator-only ConversationStore test",
+                "fix(test): isolate ConversationStoreTests with in-memory DB; un-skip Tus",
+              ]),
         .init(id: "v1.0.749",
               date: "2026-07-10",
               title: "v1.0.749",
               bullets: [
+                "chore: regenerate changelog for v1.0.749",
                 "ci(ios): skip TusUploadClientTests on the Simulator job (macOS still runs it)",
                 "fix(security,test): new LE cert-pin anchors + Tus test deadlock fix",
               ]),
@@ -157,12 +167,6 @@ extension ReleaseNote {
               title: "v1.0.731",
               bullets: [
                 "feat(call): VIDEODIAG self-heal watchdog + readiness-8.7 KAT conformance",
-              ]),
-        .init(id: "v1.0.730",
-              date: "2026-07-04",
-              title: "v1.0.730",
-              bullets: [
-                "feat(call): deep in-call UI redesign (dedup, mirror Android) + video readiness sync completion",
               ]),
     ]
 }
