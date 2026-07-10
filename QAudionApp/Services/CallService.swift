@@ -1040,26 +1040,36 @@ final class CallService {
                 rxDecryptErrors: rxDecryptErrorCount,
                 callId:          getCallId?()
             )
-            // AGC-DIAG (2026-07-10) — real per-call evidence for the
-            // suspected AGC-pumping/crackling report (W574c enables AGC on
-            // the speaker route on purpose to boost a far mic; suspected
-            // failure mode is the level jumping when the user gets close
-            // mid-call). MUST read before audioCapture/audioPipeline are
-            // nil'd + stopped below. peak_pct is peak/32767 rounded to 1dp;
-            // agc_ever_active / speaker_route_ever latch true if EITHER was
-            // true at any point this call, even if the user switched back.
+            // AUDIO-DIAG (2026-07-10) — real per-call evidence for two open
+            // reports, replacing guesswork:
+            //   * "scoppiettii" on EARPIECE: defaults leave VP-IO fully OFF
+            //     (aec/ns/agc all false), so the raw mic hits Opus with no
+            //     AEC/NS/AGC and no limiter — unlike Android, which ships HW
+            //     AEC+NS on. `clip_samples > 0` with `peak_pct ~100` and
+            //     `vpio_ever_active=false` confirms hard clipping.
+            //   * AirPods "voce storpiata": `bt_route_ever=true` plus a
+            //     `granted_sr` far below `preferred_sr` (48k) confirms the
+            //     A2DP→HFP narrow-band drop rather than a double-AEC theory.
+            // MUST read before audioCapture/audioPipeline are nil'd + stopped
+            // below. peak_pct is peak/32767 rounded to 1dp.
             if let capture = audioCapture, let pipeline = audioPipeline {
                 let level = capture.consumeLevelStats()
-                let agc = pipeline.consumeAgcStats()
+                let diag = pipeline.consumeAudioDiagStats()
                 let peakPct = Double(level.peak) / Double(Int16.max) * 100
-                let levelAttrs: [String: Any] = [
-                    "peak_pct":          (peakPct * 10).rounded() / 10,
-                    "clip_samples":      level.clipSamples,
-                    "agc_ever_active":   agc.agcEverActive,
-                    "speaker_route_ever": agc.speakerRouteEver
+                let diagAttrs: [String: Any] = [
+                    "peak_pct":           (peakPct * 10).rounded() / 10,
+                    "clip_samples":       level.clipSamples,
+                    "vpio_ever_active":   diag.vpioEverActive,
+                    "agc_ever_active":    diag.agcEverActive,
+                    "speaker_route_ever": diag.speakerRouteEver,
+                    "bt_route_ever":      diag.bluetoothRouteEver,
+                    "input_route":        diag.inputRoute,
+                    "output_route":       diag.outputRoute,
+                    "granted_sr":         diag.grantedSampleRate,
+                    "preferred_sr":       diag.preferredSampleRate
                 ]
                 Task { @MainActor in
-                    TelemetryService.shared.emit(kind: "call.audio.agc", callId: _callId, attrs: levelAttrs)
+                    TelemetryService.shared.emit(kind: "call.audio.diag", callId: _callId, attrs: diagAttrs)
                 }
             }
         }

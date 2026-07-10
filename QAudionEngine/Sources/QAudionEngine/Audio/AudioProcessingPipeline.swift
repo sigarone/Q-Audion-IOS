@@ -286,21 +286,89 @@ public final class AudioProcessingPipeline {
     /// read `inputNode.isVoiceProcessingEnabled`.
     private var voiceProcessingActive = false
 
-    // AGC-DIAG (2026-07-10) — per-call flags for the AGC-pumping/crackling
-    // investigation (W574c enables AGC on the speaker route on purpose, to
-    // boost the low level from a far mic; the suspected failure mode is the
-    // user moving close to the phone mid-call, so AGC calibrated for a
-    // quiet/far signal overshoots on a sudden loud/close one). Read+reset by
-    // CallService at call teardown alongside AudioAutoTuner + AudioCapture's
-    // level stats.
+    // AUDIO-DIAG (2026-07-10) — per-call audio-path snapshot. Two open
+    // investigations, both needing REAL data instead of guesses:
+    //
+    //  1. "scoppiettii" on the EARPIECE route. Defaults are aec/ns/agc=false
+    //     → `anyVoiceProcessingEnabled == false` → VP-IO fully OFF → the raw
+    //     mic goes straight to Opus with no AEC/NS/AGC and no limiter, while
+    //     Android ships HW AEC+NS on by default (AGC off on BOTH platforms,
+    //     deliberately). Suspected cause: hard clipping when the mouth is
+    //     close to the mic. `peak/clipSamples` live in AudioCapture.
+    //
+    //  2. "voce storpiata nel tono" with AirPods. Opening the mic drops BT
+    //     from A2DP to HFP (narrow-band mono) and W556 deliberately forces
+    //     HFP; the VP-IO band-mismatch artefact is documented in
+    //     configureForVoIP. Need the ACTUAL negotiated sample rate + route.
+    //
+    // Latched at each enableVoiceProcessing (route can change mid-call): a
+    // call that EVER hit speaker/BT/AGC stays flagged, and the last observed
+    // route + granted sample rate are kept. Read+reset by CallService at
+    // teardown, emitted as `call.audio.diag` telemetry. NOTE: the existing
+    // `emitSessionDiagnostics` only `print()`s locally despite its comment —
+    // none of this ever reached the server before.
     private var agcEverActiveThisCall = false
     private var speakerRouteEverThisCall = false
+    private var bluetoothRouteEverThisCall = false
+    private var vpioEverActiveThisCall = false
+    private var lastInputRoute = ""
+    private var lastOutputRoute = ""
+    private var lastGrantedSampleRate: Double = 0
 
-    /// Read the per-call AGC/route flags and reset them for the next call.
-    public func consumeAgcStats() -> (agcEverActive: Bool, speakerRouteEver: Bool) {
-        let stats = (agcEverActiveThisCall, speakerRouteEverThisCall)
+    /// True when the active input route is a Bluetooth headset (HFP/LE).
+    /// AirPods report `.bluetoothHFP` once the mic opens.
+    public static func currentRouteHasBluetoothInput() -> Bool {
+        AVAudioSession.sharedInstance().currentRoute.inputs.contains {
+            $0.portType == .bluetoothHFP || $0.portType == .bluetoothLE
+        }
+    }
+
+    /// Snapshot the live route/sample-rate/VP-IO state into the per-call
+    /// latches. Called from `enableVoiceProcessing` (which re-runs on every
+    /// engine restart, i.e. on every route change).
+    private func latchAudioDiag(vpioEnabled: Bool, agcEnabled: Bool) {
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+        lastInputRoute  = route.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+        lastOutputRoute = route.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+        lastGrantedSampleRate = session.sampleRate
+        if vpioEnabled { vpioEverActiveThisCall = true }
+        if agcEnabled  { agcEverActiveThisCall = true }
+        if Self.currentRouteHasBuiltInSpeaker() { speakerRouteEverThisCall = true }
+        if Self.currentRouteHasBluetoothInput() { bluetoothRouteEverThisCall = true }
+    }
+
+    /// Per-call audio-path snapshot. Read+reset at call teardown.
+    public struct AudioDiagStats {
+        public let agcEverActive: Bool
+        public let speakerRouteEver: Bool
+        public let bluetoothRouteEver: Bool
+        public let vpioEverActive: Bool
+        public let inputRoute: String
+        public let outputRoute: String
+        public let grantedSampleRate: Double
+        public let preferredSampleRate: Double
+    }
+
+    /// Read the per-call audio diagnostics and reset them for the next call.
+    public func consumeAudioDiagStats() -> AudioDiagStats {
+        let stats = AudioDiagStats(
+            agcEverActive:       agcEverActiveThisCall,
+            speakerRouteEver:    speakerRouteEverThisCall,
+            bluetoothRouteEver:  bluetoothRouteEverThisCall,
+            vpioEverActive:      vpioEverActiveThisCall,
+            inputRoute:          lastInputRoute,
+            outputRoute:         lastOutputRoute,
+            grantedSampleRate:   lastGrantedSampleRate,
+            preferredSampleRate: config.preferredSampleRate
+        )
         agcEverActiveThisCall = false
         speakerRouteEverThisCall = false
+        bluetoothRouteEverThisCall = false
+        vpioEverActiveThisCall = false
+        lastInputRoute = ""
+        lastOutputRoute = ""
+        lastGrantedSampleRate = 0
         return stats
     }
 
@@ -378,13 +446,6 @@ public final class AudioProcessingPipeline {
                 inputNode.isVoiceProcessingAGCEnabled = speakerRoute
                 let agcState: String = speakerRoute ? "ENABLED (speaker route)" : "disabled (W537)"
                 print("[AudioProcessingPipeline] voice-processing AGC " + agcState)
-                // AGC-DIAG — latch (never un-set mid-call): a call that ever
-                // touched the speaker route/AGC stays flagged even if the
-                // user switches back to earpiece before hangup.
-                if speakerRoute {
-                    agcEverActiveThisCall = true
-                    speakerRouteEverThisCall = true
-                }
             }
             voiceProcessingActive = true
         } else {
@@ -404,6 +465,18 @@ public final class AudioProcessingPipeline {
                 configureVoiceIsolation()
             }
         }
+
+        // AUDIO-DIAG (2026-07-10) — latch the LIVE route / granted sample
+        // rate / VP-IO+AGC state into the per-call snapshot. Runs on BOTH
+        // branches (VP-IO on and off) and re-runs on every engine restart
+        // (i.e. every route change), so a call that ever touched
+        // speaker/Bluetooth/AGC stays flagged. `agcEnabled` mirrors exactly
+        // what was written to `isVoiceProcessingAGCEnabled` above: it can
+        // only be true when VP-IO is on AND we're on the speaker route.
+        latchAudioDiag(
+            vpioEnabled: voiceProcessingActive,
+            agcEnabled: voiceProcessingActive && speakerRoute
+        )
 
         // W556 — emit session diagnostics so the maintainer can see
         // the ACTUAL sample rate / buffer / routing on every call from
