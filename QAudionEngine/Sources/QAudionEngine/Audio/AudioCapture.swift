@@ -168,7 +168,7 @@ public final class AudioCapture {
             // duration per W475). Guard on int16ChannelData first; if VP-IO delivered
             // Float32 natively, convert to Int16 so the accumulator/re-chunker always
             // receives 16-bit samples regardless of the engine's VP-IO state.
-            let raw: Data
+            var raw: Data
             if let int16Data = buffer.int16ChannelData {
                 raw = Data(bytes: int16Data[0], count: Int(buffer.frameLength) * 2)
             } else if let floatData = buffer.floatChannelData {
@@ -199,6 +199,39 @@ public final class AudioCapture {
                 }
                 self.peakAmplitude = localPeak
                 self.clipSampleCount = localClips
+            }
+            // TX-LIMITER (2026-07-11) — soft-knee peak limiter on the raw mic
+            // samples before they reach Opus. Root cause per a9ebf30/fa09c23
+            // (2026-07-10): with VP-IO fully off on the earpiece route (W556 —
+            // Apple's VP-IO noise suppressor caused a WORSE "metallica e
+            // scattosa" artefact in quiet rooms, so it can't just be turned
+            // back on — see AudioProcessingPipeline.enableVoiceProcessing),
+            // the raw mic signal reaches Opus completely unprocessed: no AEC,
+            // NS, AGC, or limiter. A loud/close mouth-to-mic distance can
+            // genuinely saturate the ADC, and repeated near-full-scale
+            // samples are heard as crackle/pop ("scoppiettio").
+            // This is a PURE peak limiter, not AGC: the soft knee only
+            // engages within the top ~10% of full scale and is the identity
+            // function everywhere else, so it cannot reintroduce the W556
+            // regression (which came from Apple's continuously-adaptive
+            // noise suppressor acting on the WHOLE signal, not from peak
+            // limiting). It cannot undo genuine hardware/ADC-level clipping
+            // (samples already flat-lined before this callback sees them),
+            // only clipping introduced downstream of the ADC.
+            raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
+                guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
+                let n = rawBuf.count / 2
+                let threshold: Float = 0.90 * Float(Int16.max)
+                let ceiling: Float = 0.98 * Float(Int16.max)
+                let range = ceiling - threshold
+                for i in 0..<n {
+                    let sample = Float(samples[i])
+                    let mag = abs(sample)
+                    guard mag > threshold else { continue }
+                    let excess = mag - threshold
+                    let compressed = threshold + range * (1 - exp(-excess / range))
+                    samples[i] = Int16(clamping: Int((sample < 0 ? -1 : 1) * compressed))
+                }
             }
             // W475 — re-chunk into EXACT bytesPerFrame frames. `installTap`'s
             // bufferSize is only a hint, and VoiceProcessing I/O ties the tap
