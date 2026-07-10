@@ -12,8 +12,14 @@ final class ConversationStoreTests: XCTestCase {
         let suite = "test.convstore.\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: suite)
         defaults = UserDefaults(suiteName: suite)!
-        store = ConversationStore(defaults: defaults)
-        store.wipeAll()  // ConversationStore.db is a shared singleton; reset between tests
+        // Inject an ISOLATED in-memory DB per test instead of the shared
+        // singleton file db. `ConversationStore(defaults:)` + `wipeAll()` was
+        // not real isolation — it shared ONE file DatabaseQueue across the
+        // whole suite, which flaked ONLY on the Simulator runner (e.g.
+        // test_markViewOnceOpened_incomingRow_armsExpiryAndOpensIt read back
+        // a stale row after ~4s: nil != Optional(true), never on macOS). A
+        // fresh in-memory db per test is deterministic on both runners.
+        store = ConversationStore(db: QAudionDatabase(inMemory: true), defaults: defaults)
     }
 
     override func tearDown() {

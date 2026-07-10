@@ -42,7 +42,31 @@ public final class QAudionDatabase {
             fatalError("Failed to initialize database: \(error)")
         }
     }
-    
+
+    /// Test-only: an ISOLATED in-memory database (never the shared file).
+    /// Each instance is a fresh, migrated, private `DatabaseQueue` so tests
+    /// don't share mutable state through the `.shared` singleton file db —
+    /// the root cause of the Simulator-only flake in ConversationStoreTests
+    /// (a single shared-file DatabaseQueue reset via `wipeAll()` between
+    /// tests is not real isolation under Xcode's Simulator test scheduling;
+    /// an in-memory instance per test is). Production never calls this — it
+    /// always resolves `db` to `.shared`. Reachable from tests via
+    /// `@testable import QAudionEngine` (internal access). 2026-07-10.
+    init(inMemory: Bool) {
+        precondition(inMemory, "this init exists only for isolated in-memory test DBs")
+        do {
+            var config = Configuration()
+            config.prepareDatabase { db in
+                try db.execute(sql: "PRAGMA secure_delete = ON")
+            }
+            // No path => private in-memory database, unique per instance.
+            self.dbQueue = try DatabaseQueue(configuration: config)
+            try migrator.migrate(dbQueue)
+        } catch {
+            fatalError("Failed to initialize in-memory database: \(error)")
+        }
+    }
+
     // MARK: - Migrations
     
     private var migrator: DatabaseMigrator {
