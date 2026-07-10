@@ -1040,6 +1040,28 @@ final class CallService {
                 rxDecryptErrors: rxDecryptErrorCount,
                 callId:          getCallId?()
             )
+            // AGC-DIAG (2026-07-10) — real per-call evidence for the
+            // suspected AGC-pumping/crackling report (W574c enables AGC on
+            // the speaker route on purpose to boost a far mic; suspected
+            // failure mode is the level jumping when the user gets close
+            // mid-call). MUST read before audioCapture/audioPipeline are
+            // nil'd + stopped below. peak_pct is peak/32767 rounded to 1dp;
+            // agc_ever_active / speaker_route_ever latch true if EITHER was
+            // true at any point this call, even if the user switched back.
+            if let capture = audioCapture, let pipeline = audioPipeline {
+                let level = capture.consumeLevelStats()
+                let agc = pipeline.consumeAgcStats()
+                let peakPct = Double(level.peak) / Double(Int16.max) * 100
+                let levelAttrs: [String: Any] = [
+                    "peak_pct":          (peakPct * 10).rounded() / 10,
+                    "clip_samples":      level.clipSamples,
+                    "agc_ever_active":   agc.agcEverActive,
+                    "speaker_route_ever": agc.speakerRouteEver
+                ]
+                Task { @MainActor in
+                    TelemetryService.shared.emit(kind: "call.audio.agc", callId: _callId, attrs: levelAttrs)
+                }
+            }
         }
         audioEnginesStarted = false
         didActivateFallbackFired = false

@@ -31,6 +31,25 @@ public final class AudioCapture {
     // an arbitrary size; the Opus encoder needs EXACTLY bytesPerFrame.
     // Touched only on the single tap-callback thread, so no lock.
     private var pcmAccumulator = Data()
+    // AGC-DIAG (2026-07-10) — cheap per-call level tracker to get real
+    // evidence on suspected AGC pumping/crackling near the mic on the
+    // speaker route (W574c enables AGC there on purpose — see
+    // AudioProcessingPipeline.enableVoiceProcessing). Int comparisons only,
+    // no allocation, on samples already decoded for the accumulator above —
+    // safe on the 50fps tap callback. `clipThreshold` is ~97% of Int16
+    // full-scale (32767); `consumeLevelStats()` reads+resets at call end.
+    private var peakAmplitude: Int16 = 0
+    private var clipSampleCount: Int64 = 0
+    private static let clipThreshold: Int16 = 31800
+    /// Read the accumulated peak/clip stats for the CURRENT call and reset
+    /// them for the next one. Call from teardown, before `stop()` clears
+    /// other per-call state.
+    public func consumeLevelStats() -> (peak: Int16, clipSamples: Int64) {
+        let stats = (peakAmplitude, clipSampleCount)
+        peakAmplitude = 0
+        clipSampleCount = 0
+        return stats
+    }
     // M-12 — AVAudioSession interruption (phone call, Siri, alarm)
     // handling. Without this the capture engine stays dead after an
     // interruption ends, silently killing call audio.
@@ -163,6 +182,23 @@ public final class AudioCapture {
                 raw = int16Buf.withUnsafeBytes { Data($0) }
             } else {
                 return
+            }
+            // AGC-DIAG — scan the samples we already have in hand (no extra
+            // decode) for peak amplitude + near-full-scale clip count. `raw`
+            // is exactly the int16 bytes about to be re-chunked below.
+            raw.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
+                guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
+                let n = raw.count / 2
+                var localPeak = self.peakAmplitude
+                var localClips = self.clipSampleCount
+                for i in 0..<n {
+                    // Int32 magnitude — avoids the abs(Int16.min) overflow trap.
+                    let mag = Int32(samples[i]).magnitude
+                    if mag > Int32(localPeak).magnitude { localPeak = Int16(clamping: mag) }
+                    if mag >= Int32(Self.clipThreshold).magnitude { localClips += 1 }
+                }
+                self.peakAmplitude = localPeak
+                self.clipSampleCount = localClips
             }
             // W475 — re-chunk into EXACT bytesPerFrame frames. `installTap`'s
             // bufferSize is only a hint, and VoiceProcessing I/O ties the tap

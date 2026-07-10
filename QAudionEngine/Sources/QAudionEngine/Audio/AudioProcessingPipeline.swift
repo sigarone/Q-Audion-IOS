@@ -286,6 +286,24 @@ public final class AudioProcessingPipeline {
     /// read `inputNode.isVoiceProcessingEnabled`.
     private var voiceProcessingActive = false
 
+    // AGC-DIAG (2026-07-10) — per-call flags for the AGC-pumping/crackling
+    // investigation (W574c enables AGC on the speaker route on purpose, to
+    // boost the low level from a far mic; the suspected failure mode is the
+    // user moving close to the phone mid-call, so AGC calibrated for a
+    // quiet/far signal overshoots on a sudden loud/close one). Read+reset by
+    // CallService at call teardown alongside AudioAutoTuner + AudioCapture's
+    // level stats.
+    private var agcEverActiveThisCall = false
+    private var speakerRouteEverThisCall = false
+
+    /// Read the per-call AGC/route flags and reset them for the next call.
+    public func consumeAgcStats() -> (agcEverActive: Bool, speakerRouteEver: Bool) {
+        let stats = (agcEverActiveThisCall, speakerRouteEverThisCall)
+        agcEverActiveThisCall = false
+        speakerRouteEverThisCall = false
+        return stats
+    }
+
     /// True once `enableVoiceProcessing` has turned VP-IO ON for the current
     /// engine. AudioCapture reads this to decide whether to run the VP-IO
     /// input-pull graph + starve watchdog (W-AEC-FIX).
@@ -360,6 +378,13 @@ public final class AudioProcessingPipeline {
                 inputNode.isVoiceProcessingAGCEnabled = speakerRoute
                 let agcState: String = speakerRoute ? "ENABLED (speaker route)" : "disabled (W537)"
                 print("[AudioProcessingPipeline] voice-processing AGC " + agcState)
+                // AGC-DIAG — latch (never un-set mid-call): a call that ever
+                // touched the speaker route/AGC stays flagged even if the
+                // user switches back to earpiece before hangup.
+                if speakerRoute {
+                    agcEverActiveThisCall = true
+                    speakerRouteEverThisCall = true
+                }
             }
             voiceProcessingActive = true
         } else {
