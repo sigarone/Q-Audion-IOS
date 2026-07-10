@@ -51,6 +51,16 @@ public final class GroupCallController: @unchecked Sendable {
     private var capture: AudioCapture?
     private var playback: AudioPlayback?
 
+    // XP-crackle — same fix as CallService's txAudioQueue: AudioCapture's
+    // input tap runs on a dedicated real-time Core Audio thread, and
+    // `sendOutgoingPcmFrame` used to run there synchronously (Opus encode +
+    // AES-GCM seal + WS forward). Hand off to this dedicated SERIAL queue
+    // instead — serial so frames are still processed in capture order
+    // (Core Audio only calls the tap from one thread at a time, and GCD
+    // serial queues execute .async blocks in FIFO submission order).
+    private let txAudioQueue = DispatchQueue(
+        label: "com.bcrypto.qaudion.groupcall.tx-audio-encode", qos: .userInitiated)
+
     public init(manager: BCryptoGroupCallManager) {
         self.manager = manager
         wireManagerCallbacks()
@@ -140,7 +150,10 @@ public final class GroupCallController: @unchecked Sendable {
         self.playback = playback
         lock.unlock()
         capture.onFrame = { [weak self] pcm in
-            self?.sendOutgoingPcmFrame(pcm)
+            // XP-crackle — off the real-time tap thread; see txAudioQueue kdoc.
+            self?.txAudioQueue.async { [weak self] in
+                self?.sendOutgoingPcmFrame(pcm)
+            }
         }
         // Default sink: dump incoming PCM into the jitter buffer.
         // Caller can replace by reassigning onIncomingPcmFrame after
