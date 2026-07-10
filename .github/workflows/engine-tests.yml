@@ -181,6 +181,33 @@ jobs:
           # now. QAudionApp/project.yml already carries the identical
           # `-lresolv` for the main app target (same comment, same reason);
           # this test target just never had it.
+          #
+          # 2026-07-10: test_markViewOnceOpened_incomingRow_armsExpiryAndOpensIt
+          # was skipped here (commit 89a221a) on the theory that it was a
+          # Simulator-only GRDB write/read quirk, since the sibling macOS
+          # "test" job "kept passing". That premise was never actually true:
+          # the macOS job's `swift build`/`swift test` steps are piped through
+          # `| tail -100`, which masks their exit code, and on macOS the whole
+          # package fails to COMPILE (WebRTC has no macOS slice --
+          # RTCVideoEncoderH265/RTCVideoDecoderH265 missing, plus an
+          # iOS-only `.keyboardType` SwiftUI call) before it ever reaches
+          # XCTest -- confirmed by grepping that CI job's log for `Test
+          # Suite`: zero matches, ever. So the macOS job was never real
+          # counter-evidence; this job (iOS Simulator) is the ONLY place the
+          # test (and the code it exercises) actually runs.
+          # Real root cause: QAudionEngine/Sources/QAudionEngine/Persistence/
+          # DatabaseMappers.swift's hand-written `Message.encode(to:)` /
+          # `Message.init(row:)` never mapped the `isViewOnce`/
+          # `viewOnceOpened` columns (added by the `v4-view-once-screenshot-
+          # perm` migration) to/from GRDB's PersistenceContainer/Row. Every
+          # write silently dropped both columns and every read hard-defaulted
+          # them to the initializer's `nil`, regardless of what was actually
+          # in `messages.viewOnceOpened` -- a deterministic mapping bug, not
+          # a timing race (production impact: ChatDetailScreen re-reads a
+          # persisted view-once row and always treats it as a normal message,
+          # since `msg.isViewOnce` reads back nil after any DB round-trip).
+          # Fixed by adding both columns to encode(to:)/init(row:) -- un-
+          # skipping this test now that the underlying bug is fixed.
           xcodebuild test \
             -scheme "QAudionEngine" \
             -configuration Release \
@@ -200,8 +227,7 @@ jobs:
             -skip-testing "QAudionEngineTests/QAudionCapabilityExchangeTests" \
             -skip-testing "QAudionEngineTests/SpeakerVerifierTests" \
             -skip-testing "QAudionEngineTests/VoiceHealthMonitorTests" \
-            -skip-testing "QAudionEngineTests/QAudionEngineTests/testProcessRoundTrip" \
-            -skip-testing "QAudionEngineTests/ConversationStoreTests/test_markViewOnceOpened_incomingRow_armsExpiryAndOpensIt" &
+            -skip-testing "QAudionEngineTests/QAudionEngineTests/testProcessRoundTrip" &
           XCODEBUILD_PID=$!
           ( sleep 900; echo "::error::xcodebuild test exceeded 15min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
           WATCHDOG_PID=$!

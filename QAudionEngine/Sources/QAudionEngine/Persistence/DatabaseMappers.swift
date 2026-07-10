@@ -31,6 +31,8 @@ extension Message: FetchableRecord, PersistableRecord {
         container["edited"] = edited
         container["deletedAt"] = deletedAt
         container["expiresAt"] = expiresAt
+        container["isViewOnce"] = isViewOnce
+        container["viewOnceOpened"] = viewOnceOpened
 
         if let reactions = reactions,
            let data = try? JSONEncoder().encode(reactions),
@@ -66,7 +68,9 @@ extension Message: FetchableRecord, PersistableRecord {
             edited: row["edited"],
             deletedAt: row["deletedAt"],
             reactions: reactions,
-            expiresAt: row["expiresAt"]
+            expiresAt: row["expiresAt"],
+            isViewOnce: row["isViewOnce"],
+            viewOnceOpened: row["viewOnceOpened"]
         )
     }
 }
