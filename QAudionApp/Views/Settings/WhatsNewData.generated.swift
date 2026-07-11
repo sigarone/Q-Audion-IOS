@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.759",
+              date: "2026-07-11",
+              title: "v1.0.759",
+              bullets: [
+                "fix(crypto): close PQC handshake key-injection + duplicate-OFFER re-key",
+              ]),
         .init(id: "v1.0.758",
               date: "2026-07-11",
               title: "v1.0.758",
               bullets: [
+                "chore: regenerate changelog for v1.0.758",
                 "fix(audio): widen M-14 replay window 64→512 frames to survive DC-churn transport swaps",
               ]),
         .init(id: "v1.0.757",
@@ -161,13 +168,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.740",
                 "fix(call): rebind receiver cryptor post-negotiation on offerer-side upgrade",
-              ]),
-        .init(id: "v1.0.739",
-              date: "2026-07-05",
-              title: "v1.0.739",
-              bullets: [
-                "chore: regenerate changelog for v1.0.739",
-                "fix(diag): make video relatch diagnostic lines survive the redaction gate",
               ]),
     ]
 }
