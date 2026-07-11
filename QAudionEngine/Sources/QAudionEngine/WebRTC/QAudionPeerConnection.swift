@@ -586,6 +586,7 @@ public final class QAudionPeerConnection: NSObject {
             guard let sdp = sdp else {
                 completion(.failure(WebRTCError.sdpFailed("offer returned nil"))); return
             }
+            logH265FmtpLines(sdp.sdp, tag: "LOCAL_OFFER")
             self?.peerConnection?.setLocalDescription(sdp, completionHandler: { setErr in
                 if let setErr = setErr {
                     completion(.failure(setErr))
@@ -628,6 +629,7 @@ public final class QAudionPeerConnection: NSObject {
             }
             let pinnedSdpText = pinOwnAnswerToEstablishedDtlsRole(answerSdp: sdp.sdp, establishedLocalSdp: establishedLocalSdp)
             let pinnedSdp = pinnedSdpText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: pinnedSdpText)
+            logH265FmtpLines(pinnedSdp.sdp, tag: "LOCAL_ANSWER")
             self?.peerConnection?.setLocalDescription(pinnedSdp, completionHandler: { setErr in
                 if let setErr = setErr {
                     completion(.failure(setErr))
@@ -654,6 +656,7 @@ public final class QAudionPeerConnection: NSObject {
 
     private func applyRemoteSdp(type: RTCSdpType, sdp: String, completion: @escaping (Error?) -> Void) {
         guard let pc = peerConnection else { completion(WebRTCError.notInitialized); return }
+        logH265FmtpLines(sdp, tag: type == .offer ? "REMOTE_OFFER" : "REMOTE_ANSWER")
         let desc = RTCSessionDescription(type: type, sdp: sdp)
         pc.setRemoteDescription(desc, completionHandler: completion)
     }
@@ -1028,4 +1031,39 @@ func pinOwnAnswerToEstablishedDtlsRole(answerSdp: String, establishedLocalSdp: S
         options: [],
         range: NSRange(location: 0, length: answerNS.length),
         withTemplate: "a=setup:\(ownRole)")
+}
+
+/// BUG3 DIAG (2026-07-11) — log the actual H265 `a=fmtp` line(s) an SDP
+/// blob carries, at every point one becomes available on this side (our own
+/// offer/answer just created, or the peer's offer/answer we're about to
+/// apply). Companion to Desktop's `[pcm][bug3-diag]`/`[pcm][bug3-fix]` logs:
+/// Desktop discovered the iOS-caller video-upgrade offer negotiates H265
+/// with `profile-id`/`tier-flag` MISSING entirely (e.g. `level-id=93;
+/// tx-mode=SRST` vs. the normal `level-id=123;profile-id=1;tier-flag=0;
+/// tx-mode=SRST`) — this makes that fact visible from iOS's OWN side of the
+/// wire (today `createOffer`/`applyRemoteSdp` discard the SDP string with
+/// zero inspection), rather than only inferred after the fact from the
+/// peer's console. Read-only — never mutates the SDP (Desktop's receive-side
+/// `normalizeH265FmtpDefaults` already compensates for the gap; this is
+/// diagnostic only, matching the "print, don't kill" project policy).
+func logH265FmtpLines(_ sdp: String, tag: String) {
+    guard let rtpmapRegex = try? NSRegularExpression(
+        pattern: "^a=rtpmap:(\\d+)\\s+H265/90000",
+        options: [.anchorsMatchLines, .caseInsensitive])
+    else { return }
+    let sdpNS = sdp as NSString
+    let rtpmapMatches = rtpmapRegex.matches(in: sdp, range: NSRange(location: 0, length: sdpNS.length))
+    guard !rtpmapMatches.isEmpty else { return }
+    let h265Pts = Set(rtpmapMatches.map { sdpNS.substring(with: $0.range(at: 1)) })
+    guard let fmtpRegex = try? NSRegularExpression(
+        pattern: "^a=fmtp:(\\d+)\\s+([^\\r\\n]+)",
+        options: [.anchorsMatchLines])
+    else { return }
+    let fmtpMatches = fmtpRegex.matches(in: sdp, range: NSRange(location: 0, length: sdpNS.length))
+    for m in fmtpMatches {
+        let pt = sdpNS.substring(with: m.range(at: 1))
+        guard h265Pts.contains(pt) else { continue }
+        let params = sdpNS.substring(with: m.range(at: 2))
+        print("[WebRTC][bug3-diag] \(tag): H265 pt=\(pt) fmtp=\(params)")
+    }
 }

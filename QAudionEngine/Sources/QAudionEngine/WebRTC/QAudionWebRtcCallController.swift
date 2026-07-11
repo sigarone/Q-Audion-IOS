@@ -1724,7 +1724,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private func pollVideoStatsOnce() {
         guard let pc = peerConnection?.peerConnection, let sink = videoTelemetry else { return }
         pc.statistics { report in
-            var outFramesEnc = -1, outBytes = -1, outW = -1
+            var outFramesEnc = -1, outBytes = -1, outW = -1, outH = -1
+            var outKeyFramesEnc = -1
+            var outEncoderImpl = "", outQualityLimit = ""
             var inFramesDec = -1, inFramesRec = -1, inBytes = -1, inW = -1, inH = -1
             var inCodecId = "", outCodecId = ""
             for (_, s) in report.statistics {
@@ -1733,6 +1735,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     outFramesEnc = (s.values["framesEncoded"] as? NSNumber)?.intValue ?? outFramesEnc
                     outBytes = (s.values["bytesSent"] as? NSNumber)?.intValue ?? outBytes
                     outW = (s.values["frameWidth"] as? NSNumber)?.intValue ?? outW
+                    // BUG3 DIAG (2026-07-11) — frameHeight was previously only
+                    // captured on the INBOUND side (asymmetric); this is the
+                    // sender-side counterpart, plus the fields that tell us
+                    // whether the H265 hardware encoder is actually running
+                    // (encoderImplementation), throttling (qualityLimitationReason),
+                    // and whether real IDRs are going out (keyFramesEncoded) —
+                    // none of which this codebase read anywhere before.
+                    outH = (s.values["frameHeight"] as? NSNumber)?.intValue ?? outH
+                    outKeyFramesEnc = (s.values["keyFramesEncoded"] as? NSNumber)?.intValue ?? outKeyFramesEnc
+                    outEncoderImpl = (s.values["encoderImplementation"] as? String) ?? outEncoderImpl
+                    outQualityLimit = (s.values["qualityLimitationReason"] as? String) ?? outQualityLimit
                     outCodecId = (s.values["codecId"] as? String) ?? outCodecId
                 } else if s.type == "inbound-rtp" {
                     inFramesDec = (s.values["framesDecoded"] as? NSNumber)?.intValue ?? inFramesDec
@@ -1743,22 +1756,36 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     inCodecId = (s.values["codecId"] as? String) ?? inCodecId
                 }
             }
-            // Resolve codec mimeType from the referenced codec stats object.
+            // Resolve codec mimeType + the ACTIVE sdpFmtpLine from the
+            // referenced codec stats object — the fmtp Chromium/libwebrtc
+            // actually negotiated (profile-id/tier-flag/level-id for H265),
+            // independent of and complementary to raw-SDP-text inspection at
+            // offer-creation time (see createOffer below).
             func mime(_ id: String) -> String {
                 guard !id.isEmpty, let c = report.statistics[id] else { return "?" }
                 return (c.values["mimeType"] as? String) ?? "?"
             }
+            func fmtp(_ id: String) -> String {
+                guard !id.isEmpty, let c = report.statistics[id] else { return "?" }
+                return (c.values["sdpFmtpLine"] as? String) ?? "?"
+            }
             sink("video.stats", [
                 "out_frames_enc": outFramesEnc,
+                "out_key_frames_enc": outKeyFramesEnc,
                 "out_bytes": outBytes,
                 "out_frame_w": outW,
+                "out_frame_h": outH,
+                "out_encoder_impl": outEncoderImpl.isEmpty ? "?" : outEncoderImpl,
+                "out_quality_limit": outQualityLimit.isEmpty ? "?" : outQualityLimit,
                 "out_codec": mime(outCodecId),
+                "out_fmtp": fmtp(outCodecId),
                 "in_frames_rec": inFramesRec,
                 "in_frames_dec": inFramesDec,
                 "in_bytes": inBytes,
                 "in_frame_w": inW,
                 "in_frame_h": inH,
                 "in_codec": mime(inCodecId),
+                "in_fmtp": fmtp(inCodecId),
             ])
             // WIRE_SPEC §8.7 (INT-4a) — receiver decode-stall detection. Runs
             // on the stats callback thread; the controller is @unchecked
