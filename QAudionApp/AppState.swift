@@ -7809,6 +7809,32 @@ final class AppState: ObservableObject {
         // above) and the initial-outgoing/-incoming video call wiring
         // (startCall / handleIncomingWebRtcOffer).
         controller.useExternalVideoSource = true
+        // W-VIDUPCALLER-CAPS (2026-07-11) — plumb the peer's capabilities into
+        // the controller BEFORE upgradeToVideo() so ensureVideoSealer() picks
+        // the native AES-256 video cryptor AND keys it. Device-verified root
+        // cause of iOS-caller→Desktop one-way black video (call b78dcc77 et al,
+        // telemetry 2026-07-11: use_sframe=false, out_bytes=0, in_frames_rec=0,
+        // no call_media_ready): on the iOS-CALLER path the peer's caps arrive
+        // only via Desktop's control-only `call_answer` (empty sdp), whose
+        // handler stashes them in `pendingPeerCapabilities` (AppState.swift
+        // :4110) but SKIPS `handleIncomingWebRtcAnswer` — the ONLY place that
+        // otherwise calls `controller.acceptPeerCapabilities` (:4132 else
+        // branch). So the live controller's `peerNegotiated()` stays empty →
+        // `useSFrame=false` → `videoSealer` latches `.legacy` → the native
+        // FrameCryptor is installed but NEVER keyed → discardFrameWhenCryptorNotReady
+        // silently drops 100% of encoded frames in BOTH directions (out_bytes=0
+        // and in_frames_rec=0) → no RTP video either way + call_media_ready
+        // never fires. The RESPONDER path already plumbs caps
+        // (acceptPendingIncomingUpgrade → acceptPeerCapabilities, :9189), which
+        // is exactly why Desktop-CALLER→iOS video works while iOS-CALLER→Desktop
+        // does not. `acceptPeerCapabilities` clears the `.legacy` latch + re-runs
+        // the sealer pick (QAudionWebRtcCallController.swift:1177-1190), so the
+        // native cryptor gets keyed once (the PQC key is already present during
+        // the live audio call). Mirrors the responder path; no-op when caps are
+        // absent (leaves the legacy fail-closed behaviour untouched).
+        if let caps = pendingPeerCapabilities, !caps.isEmpty {
+            controller.acceptPeerCapabilities(caps)
+        }
         do {
             let offerSdp = try await controller.upgradeToVideo()
             // W-VIDUPCALLER — bridge VideoCallPipeline's captured frames into
