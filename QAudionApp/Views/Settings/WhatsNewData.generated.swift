@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.757",
+              date: "2026-07-11",
+              title: "v1.0.757",
+              bullets: [
+                "fix(call): plumb peer caps on iOS-CALLER video upgrade (one-way black video)",
+                "diag(webrtc): log H265 fmtp on every SDP + missing sender encoder stats",
+              ]),
         .init(id: "v1.0.756",
               date: "2026-07-11",
               title: "v1.0.756",
               bullets: [
+                "chore: regenerate changelog for v1.0.756",
                 "fix(call): rebind SENDER video cryptor post-negotiation (BUG2)",
               ]),
         .init(id: "v1.0.755",
@@ -160,13 +168,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.738",
                 "fix(call): key the video relatch decision on receiverId, not mid",
-              ]),
-        .init(id: "v1.0.737",
-              date: "2026-07-05",
-              title: "v1.0.737",
-              bullets: [
-                "chore: regenerate changelog for v1.0.737",
-                "fix(call): wire the missing relatch case into the video receiver guard",
               ]),
     ]
 }
