@@ -5254,6 +5254,13 @@ final class AppState: ObservableObject {
     /// directly via `QAudionCallIntegration.onAndroidBundleReceived`.
     @MainActor
     private func routeInboundAndroidOffer(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
+        // Sender-identity check (2026-07-11 — same reasoning/fix as
+        // routeInboundPqcOffer above; sibling dispatch for the
+        // Android-JSON-envelope OFFER format, same missing guard.
+        guard let expected = callContactId, expected == senderId else {
+            print("[AppState] Android OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+            return
+        }
         let integration = ensureResponderIntegration(forCaller: senderId)
         // D11: the OFFER opaque carries no device id; use the one stamped on the
         // matching `call_incoming` envelope (stashed by sender_id). nil ⇒ legacy.
@@ -5315,6 +5322,13 @@ final class AppState: ObservableObject {
     /// forward-compatibility.
     @MainActor
     private func routeInboundAndroidAccept(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
+        // Sender-identity check (2026-07-11 — same reasoning/fix as
+        // routeInboundPqcAccept above; sibling dispatch for the
+        // Android-JSON ACCEPT format, same missing guard.
+        guard let expected = callContactId, expected == senderId else {
+            print("[AppState] Android ACCEPT REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+            return
+        }
         guard let integration = callService.callIntegration else {
             print("[AppState] Android ACCEPT arrived from \(senderId.prefix(8))… but callService.callIntegration is nil — call already ended or ACCEPT arrived after teardown")
             return
@@ -5514,6 +5528,26 @@ final class AppState: ObservableObject {
     /// the engine can encapsulate and ship ACCEPT.
     @MainActor
     private func routeInboundPqcOffer(blob: Data, senderId: String) {
+        // Sender-identity check (2026-07-11 — mirrors every other
+        // call-signaling handler in this file, e.g. handleIncomingUpgradeRequest
+        // at ~2843, all of which already guard on `callContactId == senderId`).
+        // `ensureResponderIntegration` caches a SINGLE instance for the whole
+        // app session and ignores `forCaller` on a cache hit, and the
+        // encapsulate path inside `case .offer` never checked its own
+        // `fromSenderId` param against anything — so without this guard, any
+        // OTHER authenticated user could send an unsolicited OFFER blob
+        // (server relays opaque_message to any RecipientID with no
+        // contact/call-relationship check) carrying THEIR OWN public key,
+        // get it encapsulated against, and have the resulting attacker-known
+        // secret installed as this device's relay-sealer key for whatever
+        // call happens to be pending — a real key-injection / call-hijack,
+        // not just a duplicate-delivery correctness bug. Reject up front,
+        // before any PQC work runs, if there's no active call or the sender
+        // isn't who this call is actually with.
+        guard let expected = callContactId, expected == senderId else {
+            print("[AppState] PQC OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+            return
+        }
         let integration = ensureResponderIntegration(forCaller: senderId)
         // Build the send-opaque closure bound to this caller. Each
         // outbound ACCEPT rides the existing CallingApi WS path.
@@ -5536,6 +5570,19 @@ final class AppState: ObservableObject {
     /// (W389) which surfaces the real ML-KEM secret to the broker.
     @MainActor
     private func routeInboundPqcAccept(blob: Data, senderId: String) {
+        // Sender-identity check (2026-07-11 — same reasoning as
+        // routeInboundPqcOffer above). Lower practical severity here since
+        // `pqc.decapsulate` is deterministic against OUR OWN private key —
+        // a spoofed ACCEPT can't hand an attacker a key they control — but
+        // an unchecked spoofed ACCEPT could still win a race against the
+        // real callee's ACCEPT and get marked as the session's one-and-only
+        // init (existing double-ACCEPT dedup), freezing the real call on a
+        // garbage key. Guard for the same reason every other handler here
+        // already does.
+        guard let expected = callContactId, expected == senderId else {
+            print("[AppState] PQC ACCEPT REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+            return
+        }
         guard let integration = callService.callIntegration,
               let provider = liveProvider else {
             print("[AppState] PQC ACCEPT arrived from \(senderId) with no caller integration")

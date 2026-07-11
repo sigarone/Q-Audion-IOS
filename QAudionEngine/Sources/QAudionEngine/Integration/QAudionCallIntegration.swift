@@ -129,6 +129,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// (so re-derivation doesn't happen and the caller decapsulates
     /// against the SAME ciphertext we already committed to).
     private var lastSentAcceptWire: String?
+    /// Same idea as `lastSentAcceptWire` but for the legacy QUAD binary
+    /// `case .offer` responder path (2026-07-11: that path had no
+    /// double-OFFER guard at all — see the fix at its call site).
+    private var lastSentLegacyAcceptWire: Data?
     /// Timestamp of the first OFFER/ACCEPT send for this call. Used to
     /// bound retries within the handshake window (default 30 s).
     private var handshakeStartedAt: Date?
@@ -829,6 +833,39 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 sendCallProcessing?(cid, from)
             }
 
+            // Double-OFFER guard (2026-07-11 — same sessionInitializedByCall
+            // set the Android JSON-OFFER responder path already uses, see
+            // ~line 1260). The caller ships BOTH a JSON OFFER and this
+            // legacy QUAD OFFER for the same call (sendOfferAsCaller: JSON
+            // first, QUAD second, for older-iOS-peer compat) — without this
+            // guard the QUAD copy unconditionally re-runs `pqc.encapsulate()`,
+            // which is RANDOMIZED, producing a second, different session key
+            // and re-firing `onRelaySessionReady` after the JSON copy already
+            // installed one. CallService's relay-sealer install has no way to
+            // tell this apart from a legitimate re-key, so it silently swaps
+            // to the new key with a fresh AES-GCM counter while the peer keeps
+            // decrypting under the old one — permanent AEAD-failure storm for
+            // the rest of the call. Whichever OFFER format lands first wins;
+            // the second is replayed from the cached ACCEPT instead of
+            // re-derived.
+            let normalizedOfferCid = (stashedCallId ?? "").lowercased()
+            let offerAlreadyInit = lock.withLock {
+                let r = !normalizedOfferCid.isEmpty && sessionInitializedByCall.contains(normalizedOfferCid)
+                if !r, !normalizedOfferCid.isEmpty {
+                    sessionInitializedByCall.insert(normalizedOfferCid)
+                }
+                return r
+            }
+            if offerAlreadyInit {
+                if let cached = lock.withLock({ lastSentLegacyAcceptWire }) {
+                    print("[QAudionCallIntegration] QUAD OFFER duplicate for callId=\(normalizedOfferCid.prefix(8))… — replaying cached ACCEPT")
+                    Task { try? await sendOpaqueMessage(cached) }
+                } else {
+                    print("[QAudionCallIntegration] QUAD OFFER duplicate for callId=\(normalizedOfferCid.prefix(8))… — session already initialised, skipping")
+                }
+                return
+            }
+
             // Note: keyPair is generated implicitly inside encapsulate via
             // the embedded PQC stack — we don't need a local copy. (Was an
             // unused init from a refactor leftover.)
@@ -837,6 +874,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try engine.initSession(sharedSecret: result.sharedSecret)
             onRelaySessionReady?(result.sharedSecret, stashedCallId ?? "")
             let accept = QAudionCapabilityExchange.createAccept(ciphertext: result.ciphertext, pskFingerprint: nil)
+            lock.withLock { lastSentLegacyAcceptWire = accept }
             Task { try? await sendOpaqueMessage(accept) }
             lock.lock(); state = .active; lock.unlock()
             // W529: handshake reached active — kill the retry loop.
@@ -862,6 +900,29 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
         case .accept(let ciphertext, _):
             guard let kp = localKeyPair else { return }
+            // Double-ACCEPT guard (2026-07-11 — same sessionInitializedByCall
+            // set the Android JSON-ACCEPT originator path already uses, see
+            // ~line 1563). Not a key-confusion bug on its own — `pqc.decapsulate`
+            // is deterministic, so a duplicate ACCEPT yields the identical
+            // sharedSecret and CallService's keyFp-equality check would no-op
+            // the relay-sealer reinstall anyway — but without this guard
+            // `engine.initSession()` and the onPqcSessionKeyEstablished /
+            // onVideoKeyEstablished callbacks still redundantly re-fire and
+            // tear down + rebuild the engine's own session state for no
+            // reason. Added for symmetry with every other handshake path in
+            // this file, all of which already guard on this set.
+            let normalizedAcceptCid = (lock.withLock { pendingOutgoingCallId } ?? "").lowercased()
+            let acceptAlreadyInit = lock.withLock {
+                let r = !normalizedAcceptCid.isEmpty && sessionInitializedByCall.contains(normalizedAcceptCid)
+                if !r, !normalizedAcceptCid.isEmpty {
+                    sessionInitializedByCall.insert(normalizedAcceptCid)
+                }
+                return r
+            }
+            if acceptAlreadyInit {
+                print("[QAudionCallIntegration] QUAD ACCEPT duplicate for callId=\(normalizedAcceptCid.prefix(8))… — session already initialised, skipping")
+                return
+            }
             let sharedSecret = try pqc.decapsulate(ciphertext: ciphertext, privateKey: kp.privateKey)
             try engine.initSession(sharedSecret: sharedSecret)
             onRelaySessionReady?(sharedSecret, (lock.withLock { pendingOutgoingCallId }) ?? "")
