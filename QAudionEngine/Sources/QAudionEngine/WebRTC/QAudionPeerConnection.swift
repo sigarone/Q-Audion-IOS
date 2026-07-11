@@ -506,9 +506,47 @@ public final class QAudionPeerConnection: NSObject {
         // BEFORE setLocalDescription below overwrites it with the new
         // (pending) re-offer — see establishedLocalSdpBeforeUpgrade doc.
         establishedLocalSdpBeforeUpgrade = pc.localDescription?.sdp
+
+        // BUG2 fix (2026-07-11) — pre-allocate a trackless sendrecv video
+        // transceiver on the AUDIO-ONLY outgoing offer, mirroring Desktop's
+        // PeerConnectionManager.ts start() (`pc.addTransceiver('video',
+        // {direction:'sendrecv'})`, gated `role === 'initiator'`). Landing
+        // video as a REAL m-section in the INITIAL offer — even with no
+        // local camera track yet — means a later video upgrade just flips
+        // that already-negotiated mid to active instead of adding a brand
+        // new m-line to an already-connected DTLS/BUNDLE transport.
+        //
+        // Root cause (device-confirmed 2026-07-11, side-by-side comparison
+        // of the SAME iOS<->Desktop pair calling each other in each
+        // direction): when Desktop calls iOS, Desktop pre-allocates video
+        // this same way → the upgrade reuses mid=0 → H265 decodes flawlessly
+        // (framesReceived≈framesDecoded climbing cleanly, zero decrypt
+        // failures, cutscan never even needed). When iOS calls Desktop, iOS
+        // had NO video m-section in the initial offer (OfferToReceiveVideo
+        // forced false for audioOnly) → the upgrade must ADD a NEW m-line
+        // (mid=2) to the live BUNDLE → ~14%+ of ALL subsequent H265 frames
+        // fail FrameCryptor.open() with garbage trailer bytes for the
+        // ENTIRE call (VIDEODIAG never recovers). Exactly Desktop's OWN
+        // documented RFC 3264 finding (see PeerConnectionManager.ts:985-1001,
+        // "INITIATOR ONLY... Skipping the pre-allocation for responders
+        // costs nothing") — this is the initiator (caller) side, so it is
+        // safe to always do (this function is only ever called to PLACE a
+        // call, never to answer one — see createAnswer for the responder
+        // path, which is deliberately left untouched here, same as
+        // Desktop's own responder skip).
+        //
+        // ONLY skip if a video transceiver already exists (idempotent — a
+        // caller-side retry/re-offer must not add a second one).
+        if audioOnly && !pc.transceivers.contains(where: { $0.mediaType == .video }) {
+            let videoInit = RTCRtpTransceiverInit()
+            videoInit.direction = .sendRecv
+            _ = pc.addTransceiver(of: .video, init: videoInit)
+            print("[WebRTC] pre-allocated sendrecv video transceiver on audio-only offer (BUG2 fix)")
+        }
+
         let mandatory: [String: String] = [
             "OfferToReceiveAudio": "true",
-            "OfferToReceiveVideo": audioOnly ? "false" : "true"
+            "OfferToReceiveVideo": "true"
         ]
         let constraints = RTCMediaConstraints(mandatoryConstraints: mandatory, optionalConstraints: nil)
         pc.offer(for: constraints) { [weak self] sdp, err in
