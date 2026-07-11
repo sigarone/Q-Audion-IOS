@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.755",
+              date: "2026-07-11",
+              title: "v1.0.755",
+              bullets: [
+                "fix(call): pre-allocate video transceiver on iOS-caller audio offer (BUG2)",
+              ]),
         .init(id: "v1.0.754",
               date: "2026-07-11",
               title: "v1.0.754",
               bullets: [
+                "chore: regenerate changelog for v1.0.754",
                 "fix(audio): soft-knee peak limiter on raw mic TX (scoppiettio)",
               ]),
         .init(id: "v1.0.753",
@@ -160,13 +167,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.736",
                 "diag(video): log short K_video fingerprint + phantom/mid diagnostics",
-              ]),
-        .init(id: "v1.0.735",
-              date: "2026-07-05",
-              title: "v1.0.735",
-              bullets: [
-                "chore: regenerate changelog for v1.0.735",
-                "fix(call): re-attach video sender cryptor on callee-accepted upgrade",
               ]),
     ]
 }
