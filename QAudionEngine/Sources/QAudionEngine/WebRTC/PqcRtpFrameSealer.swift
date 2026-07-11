@@ -90,20 +90,33 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     // AES-GCM authentication guarantees integrity: a modified or fabricated
     // frame will fail tag verification. BUT it cannot prevent a recorded
     // valid frame from being replayed — the (nonce, ciphertext, tag) tuple
-    // is still correct. Adding a 64-frame sliding window on the open()
-    // path blocks replay attacks at negligible cost: one NSLock + two UInt64s.
+    // is still correct. Adding a sliding window on the open() path blocks
+    // replay attacks at negligible cost: one NSLock + a small bitmask.
     //
     // The counter is encoded in the on-wire nonce at bytes [4..11] BE, so we
-    // extract it without a separate field. Window size 64 follows RFC 3711
-    // §3.3.2 (SRTP anti-replay), adequate for VoIP where reorder is < 1 s.
+    // extract it without a separate field.
     //
-    // This is a receiver-only change: the sender's seal() path is unchanged,
-    // no wire format differs, and Android/desktop don't need updating.
+    // WINDOW SIZE (2026-07-11, W-DCCHURN): originally 64 frames (1.28s @
+    // 20ms/frame), following RFC 3711 §3.3.2 (SRTP anti-replay, reorder < 1s).
+    // Desktop's sealed-audio DataChannel churns (closes/reopens) every
+    // ~10-15s for the whole call when flaky — a native SCTP-layer issue
+    // below both apps' source (see graphify-investigated
+    // audio-dc-churn-investigation, 2026-07-11), mitigated but not
+    // root-caused by Desktop's swapToWsRelay() in-place transport swap
+    // (d858eea). Each swap can strand already-sealed frames behind newer
+    // ones, and a 64-frame window rejected them as false-positive replays
+    // (iOS measured 27/16125 ≈0.17% RX decrypt errors on one such call).
+    // Widened to 512 frames (~10.24s @ 20ms/frame) to cover a full churn
+    // cycle. Receiver-only, non-wire-breaking (Android/Desktop unaffected).
     private let replayLock = NSLock()
     private var replayInitialized = false
     private var replayHighest: UInt64 = 0   // highest accepted counter
-    private var replayWindow:  UInt64 = 0   // bitmask: bit i → (replayHighest−i) seen
-    private static let replayWindowSize: UInt64 = 64
+    private static let replayWindowSize: UInt64 = 512
+    private static let replayWindowWordCount = Int(replayWindowSize / 64)
+    // Bitmask split across 64-bit words: bit i of the logical window lives
+    // in word i/64, offset i%64. word[0] holds bits 0..63 (most recent).
+    private var replayWindow: [UInt64] =
+        [UInt64](repeating: 0, count: PqcRtpFrameSealer.replayWindowWordCount)
 
     public enum SealerError: Error, Equatable {
         case wrongKeyLength(Int)
@@ -282,23 +295,57 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         if !replayInitialized {
             replayInitialized = true
             replayHighest = counter
-            replayWindow = 1   // bit 0 = highest = seen
+            for i in replayWindow.indices { replayWindow[i] = 0 }
+            replayWindow[0] = 1   // bit 0 = highest = seen
             return true
         }
         if counter > replayHighest {
             let shift = counter - replayHighest
-            replayWindow = shift >= Self.replayWindowSize
-                ? 1
-                : (replayWindow >> shift) | 1
+            if shift >= Self.replayWindowSize {
+                for i in replayWindow.indices { replayWindow[i] = 0 }
+            } else {
+                shiftWindowRight(by: Int(shift))
+            }
+            setWindowBit(0)
             replayHighest = counter
             return true
         }
         let gap = replayHighest - counter
         guard gap < Self.replayWindowSize else { return false }   // too old
-        let bit: UInt64 = 1 << gap
-        if (replayWindow & bit) != 0 { return false }   // already seen
-        replayWindow |= bit
+        if testWindowBit(Int(gap)) { return false }   // already seen
+        setWindowBit(Int(gap))
         return true
+    }
+
+    private func setWindowBit(_ index: Int) {
+        replayWindow[index / 64] |= (1 << UInt64(index % 64))
+    }
+
+    private func testWindowBit(_ index: Int) -> Bool {
+        (replayWindow[index / 64] & (1 << UInt64(index % 64))) != 0
+    }
+
+    /// Right-shifts the whole multi-word bitmask by `n` bits (n < window
+    /// size, guaranteed by the caller). word[0] holds the least-significant
+    /// (most recent) bits, so shifting right moves bits toward higher words
+    /// — same direction as the original single-UInt64 `>> shift`.
+    private func shiftWindowRight(by n: Int) {
+        guard n > 0 else { return }
+        let wordShift = n / 64
+        let bitShift = n % 64
+        let count = replayWindow.count
+        if bitShift == 0 {
+            for i in 0..<count {
+                replayWindow[i] = (i + wordShift < count) ? replayWindow[i + wordShift] : 0
+            }
+            return
+        }
+        for i in 0..<count {
+            let lo = (i + wordShift < count) ? (replayWindow[i + wordShift] >> UInt64(bitShift)) : 0
+            let hiIdx = i + wordShift + 1
+            let hi = (hiIdx < count) ? (replayWindow[hiIdx] << UInt64(64 - bitShift)) : 0
+            replayWindow[i] = lo | hi
+        }
     }
 
     private func nextNonce() -> Data {
