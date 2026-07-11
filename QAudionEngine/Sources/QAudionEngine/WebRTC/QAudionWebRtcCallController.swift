@@ -797,6 +797,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // it exists AFTER the answer associated the transceiver. See
             // QAudionPeerConnection.rebindVideoReceiverCryptorPostNegotiation.
             _ = pc.rebindVideoReceiverCryptorPostNegotiation()
+            // BUG2 fix (2026-07-11) — SENDER half of the exact same
+            // pre-negotiation-attach-timing bug. upgradeToVideo()'s
+            // attachVideoSenderCryptor() call ran right after
+            // addLocalVideoTrack(), before this answer ever came back —
+            // rebind it now against the sender as it exists post-
+            // negotiation, mirroring the receiver rebind above. See
+            // QAudionPeerConnection.rebindVideoSenderCryptorPostNegotiation.
+            _ = pc.rebindVideoSenderCryptorPostNegotiation()
             // WIRE_SPEC §8.7 (SHOULD) — upgrader path: we start sending
             // video now that the answer is applied. Hold TX until the
             // peer's call_media_ready (or 2s), then enable + force IDR.

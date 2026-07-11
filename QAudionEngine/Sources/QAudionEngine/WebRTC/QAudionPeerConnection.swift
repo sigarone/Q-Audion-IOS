@@ -440,6 +440,36 @@ public final class QAudionPeerConnection: NSObject {
         return ok
     }
 
+    /// BUG2 fix (2026-07-11) — sender-side mirror of
+    /// `rebindVideoReceiverCryptorPostNegotiation`, for the SENDER half of
+    /// the exact same 2026-07-05-diagnosed bug class: on the iOS-caller +
+    /// iOS-video-upgrade combo, `upgradeToVideo()`'s `attachVideoSenderCryptor()`
+    /// call (immediately after `addLocalVideoTrack`) attaches the native
+    /// cryptor to the sender BEFORE the offer/answer round-trip completes
+    /// — the same pre-negotiation-state binding that made the RECEIVER
+    /// fix necessary. Call from `applyUpgradeAnswer` (initiator side)
+    /// AFTER `setRemoteAnswer` succeeds, alongside the existing receiver
+    /// rebind, so the sender cryptor binds against the sender as it
+    /// exists once the transceiver is guaranteed associated (mid
+    /// assigned, channel live) — never against the transient pre-answer
+    /// object.
+    @discardableResult
+    public func rebindVideoSenderCryptorPostNegotiation() -> Bool {
+        guard let pc = peerConnection, let cryptor = nativeVideoCryptor else {
+            print("ev=vspostneg skip=1")
+            return false
+        }
+        guard let sender = pc.senders.first(where: { $0.track?.kind == kRTCMediaStreamTrackKindVideo }) else {
+            print("ev=vspostneg sender=0")
+            return false
+        }
+        videoSender = sender
+        let ok = cryptor.rebindSender(sender)
+        print("[WebRTC] post-negotiation video SENDER cryptor rebound ok=\(ok)")
+        print("ev=vspostneg ok=\(ok ? 1 : 0)")
+        return ok
+    }
+
     public func setVideoMuted(_ muted: Bool) {
         localVideoTrack?.isEnabled = !muted
     }

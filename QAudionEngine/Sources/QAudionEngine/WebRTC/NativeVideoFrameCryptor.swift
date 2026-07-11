@@ -147,6 +147,36 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
         return attachReceiver(receiver)
     }
 
+    /// BUG2 fix (2026-07-11) — sender-side mirror of `rebindReceiver`, for
+    /// the SAME class of bug the 2026-07-05 "OFFERER-UPGRADE DECODE FIX"
+    /// already found and fixed on the receive side (see
+    /// QAudionPeerConnection.rebindVideoReceiverCryptorPostNegotiation's
+    /// doc): on the iOS-caller + iOS-video-upgrade combo, the video
+    /// transceiver is created by a LOCAL `addTrack` on a second-round
+    /// offer — attaching the cryptor to the sender AT THAT MOMENT (as
+    /// `attachSender`/the fcdc84a fix does, immediately after
+    /// `addLocalVideoTrack` and BEFORE the answer even comes back) binds
+    /// to the sender's pre-negotiation state. The native frame transformer
+    /// then stays attached to that stale binding even after the RTP
+    /// channel goes live post-negotiation: outbound H265 either never
+    /// gets sealed correctly or seals against a transformer that isn't
+    /// wired to the ACTUAL live sender object, producing exactly the
+    /// "receiver decrypts garbage / genuinely-corrupted wire bytes"
+    /// symptom the peer observes (device-confirmed 2026-07-11 on
+    /// Desktop's receive side: packetsLost=0, cutscan proves the bytes
+    /// were never valid ciphertext for ANY NAL-boundary candidate).
+    /// `attachSender` is write-once (guards phantom duplicates); this
+    /// disposes the stale cryptor FIRST so the guard doesn't silently
+    /// no-op on the live sender.
+    @discardableResult
+    public func rebindSender(_ sender: RTCRtpSender) -> Bool {
+        lock.lock()
+        senderCryptor?.enabled = false
+        senderCryptor = nil
+        lock.unlock()
+        return attachSender(sender)
+    }
+
     public func setEnabled(_ on: Bool) {
         lock.lock(); defer { lock.unlock() }
         senderCryptor?.enabled = on
