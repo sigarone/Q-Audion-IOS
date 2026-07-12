@@ -175,8 +175,56 @@ extension MetricKitDiagnostics {
                 + " excType=" + excType + " excCode=" + excCode
                 + " term=" + term
             print(detail)
+            // Emit the crashing thread's app frames as `QAudionApp + <offset>`
+            // lines so scripts/symbolicate.py resolves them to file:line — the
+            // ONLY channel for a SIGKILL/watchdog (0x8BADF00D) stack, which the
+            // in-process CrashReporter cannot catch (no signal handler runs on a
+            // RunningBoard kill). The offset is a plain decimal < redaction
+            // threshold; binaryName is short. Bounded to keep the W417 pipe sane.
+            emitCrashStack(c)
         }
     }
+
+    /// Parse `MXCrashDiagnostic.callStackTree` (the crashing thread's frames,
+    /// present in the payload) and print each frame in the exact format the
+    /// offline symbolicator expects. Best-effort: any parse miss is silent —
+    /// the term= line above still carries the kill reason.
+    @available(iOS 14.0, *)
+    private static func emitCrashStack(_ c: MXCrashDiagnostic) {
+        let data: Data = c.callStackTree.jsonRepresentation()
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        guard let stacks = root["callStacks"] as? [[String: Any]] else { return }
+        // Prefer the crash-attributed thread; fall back to the first stack.
+        let chosen = stacks.first(where: { ($0["threadAttributed"] as? Bool) == true }) ?? stacks.first
+        guard let stack = chosen,
+              let roots = stack["callStackRootFrames"] as? [[String: Any]] else { return }
+        print("[MetricKit] crash stack:")
+        var emitted = 0
+        emitFrames(roots, depth: 0, count: &emitted)
+    }
+
+    /// Depth-first walk of the frame tree (`subFrames` chains root→leaf).
+    /// Emits at most `maxCrashFrames` lines total.
+    @available(iOS 14.0, *)
+    private static func emitFrames(_ frames: [[String: Any]], depth: Int, count: inout Int) {
+        for f in frames {
+            if count >= maxCrashFrames { return }
+            let bin: String = (f["binaryName"] as? String) ?? "?"
+            let off: Int = (f["offsetIntoBinaryTextSegment"] as? Int) ?? -1
+            let offStr: String = String(describing: off)
+            let idxStr: String = String(describing: count)
+            // Match the CrashReporter/symbolicate.py line shape: any line
+            // containing "<binaryName> + <decimalOffset>" is resolvable.
+            let line: String = "[MetricKit] " + idxStr + "  " + bin + " + " + offStr
+            print(line)
+            count += 1
+            if let sub = f["subFrames"] as? [[String: Any]], !sub.isEmpty {
+                emitFrames(sub, depth: depth + 1, count: &count)
+            }
+        }
+    }
+
+    private static let maxCrashFrames = 48
 
     @available(iOS 14.0, *)
     private static func emitHangs(_ payload: MXDiagnosticPayload) {
