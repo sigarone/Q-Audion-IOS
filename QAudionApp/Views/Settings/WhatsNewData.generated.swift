@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.773",
+              date: "2026-07-12",
+              title: "v1.0.773",
+              bullets: [
+                "fix(crash): stop off-main @Published/AppState writes in WS call handlers (heap corruption)",
+                "docs: fix stale DEFAULT-OFF v4-ratchet comment + stub-linking claim",
+              ]),
         .init(id: "v1.0.772",
               date: "2026-07-12",
               title: "v1.0.772",
               bullets: [
+                "chore: regenerate changelog for v1.0.772",
                 "fix(audio): clamp applied mic-AGC gain per-frame to peak headroom (anti-clip)",
               ]),
         .init(id: "v1.0.771",
@@ -145,14 +153,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.754",
                 "fix(audio): soft-knee peak limiter on raw mic TX (scoppiettio)",
-              ]),
-        .init(id: "v1.0.753",
-              date: "2026-07-10",
-              title: "v1.0.753",
-              bullets: [
-                "chore: regenerate changelog for v1.0.753",
-                "fix(persistence): map isViewOnce/viewOnceOpened in GRDB Message record",
-                "fix(audio): move group-call TX encode+seal+send off the real-time capture thread",
               ]),
     ]
 }
