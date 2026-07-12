@@ -163,10 +163,17 @@ extension MetricKitDiagnostics {
             let sig: String = optString(c.signal)
             let excType: String = optString(c.exceptionType)
             let excCode: String = optString(c.exceptionCode)
-            let term: String = optString(c.terminationReason)
+            // term uses a wider clip than the other fields: RBSTerminateContext
+            // explanations (why RunningBoard/watchdog killed the app -- the
+            // single most useful diagnostic token here) run well past 23 chars
+            // and were being silently guillotined mid-word. redact() still
+            // protects any embedded long base64/hex run, so widening this is
+            // safe -- worst case a substring becomes ***REDACTED***, same as
+            // every other diagnostic line in the pipe.
+            let term: String = optStringWide(c.terminationReason)
             let detail: String = "[MetricKit] crash detail signal=" + sig
                 + " excType=" + excType + " excCode=" + excCode
-                + " term=" + clip(term)
+                + " term=" + term
             print(detail)
         }
     }
@@ -239,6 +246,16 @@ extension MetricKitDiagnostics {
         return clip(v)
     }
 
+    /// Same as `optString` but keeps up to `wideClipMaxLen` chars instead of
+    /// the default 23 -- for the one field (`terminationReason`) where the
+    /// diagnostic payload lives past the redaction-safety cutoff.
+    private static func optStringWide(_ s: String?) -> String {
+        guard let v = s, !v.isEmpty else { return "?" }
+        return clip(v, maxLen: wideClipMaxLen)
+    }
+
+    private static let wideClipMaxLen = 240
+
     private static func optString(_ n: NSNumber?) -> String {
         guard let v = n else { return "?" }
         return String(describing: v.intValue)
@@ -248,13 +265,13 @@ extension MetricKitDiagnostics {
     /// `[A-Za-z0-9+/=_-]{24,}` redaction threshold so the secret
     /// scrubber never mangles a summary line. Collapses whitespace and
     /// hard-caps length at 23 chars.
-    private static func clip(_ s: String) -> String {
+    private static func clip(_ s: String, maxLen: Int = 23) -> String {
         let flat0: String = s.replacingOccurrences(of: "\n", with: " ")
         let flat: String = flat0.replacingOccurrences(of: "\r", with: " ")
-        if flat.count <= 23 {
+        if flat.count <= maxLen {
             return flat
         }
-        let cut: String = String(flat.prefix(23))
+        let cut: String = String(flat.prefix(maxLen))
         return cut
     }
 }
