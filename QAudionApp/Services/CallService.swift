@@ -93,6 +93,14 @@ final class CallService {
     private var framesReceivedRx: Int64 = 0   // audio_frame envelopes off the WS, pre-decrypt
     private var txEncryptErrorCount: Int64 = 0
     private var rxDecryptErrorCount: Int64 = 0
+    // AUDIO-DIAG (2026-07-12) — decoded RX audio level accumulators, mirror of
+    // Android MediaPathDiag.recordRxLevel (rx_peak_pct/rx_rms_pct). Touched only
+    // on the RX decode branch (same lock-free discipline as framesDecryptedRx),
+    // read+reset in teardownAudioStack. peak = max |sample|, rms = sqrt(Σs²/n),
+    // both reported as % of 16-bit full scale in the call.audio.diag summary.
+    private var rxLevelPeak: Float = 0        // running max |sample|, normalized [0,1]
+    private var rxLevelSumSq: Double = 0      // Σ(sample²) over the whole call
+    private var rxLevelSampleCount: Int64 = 0 // n, for the RMS denominator
     // Bug B diagnostics — did the playback/capture AVAudioEngines actually
     // start (true only after startAudioIOIfReady ran with an active session),
     // and did the didActivate-fallback have to fire (CallKit skipped its own
@@ -1012,6 +1020,16 @@ final class CallService {
                 }
                 let rxSamples = self.updateWaveformSamples(from: pcm)
                 self.onRxWaveformUpdate?(rxSamples)
+                // AUDIO-DIAG (2026-07-12) — accumulate decoded RX level from the
+                // samples already in hand (no extra decode). rxSamples are the
+                // Int16 PCM normalized to [-1,1]; peak/rms roll up into
+                // call.audio.diag as rx_peak_pct/rx_rms_pct (mirror of Android).
+                for s in rxSamples {
+                    let a = abs(s)
+                    if a > self.rxLevelPeak { self.rxLevelPeak = a }
+                    self.rxLevelSumSq += Double(s) * Double(s)
+                }
+                self.rxLevelSampleCount &+= Int64(rxSamples.count)
             } catch {
                 self.rxDecryptErrorCount &+= 1
                 if self.rxDecryptErrorCount == 1 || self.rxDecryptErrorCount % 250 == 0 {
@@ -1085,8 +1103,18 @@ final class CallService {
                 let level = capture.consumeLevelStats()
                 let diag = pipeline.consumeAudioDiagStats()
                 let peakPct = Double(level.peak) / Double(Int16.max) * 100
+                // TX mic RMS (% of full scale) alongside the existing TX peak.
+                let txRmsPct = Double(level.rms) / Double(Int16.max) * 100
+                // Decoded RX level (% of full scale) — peak/rms mirror of Android.
+                let rxPeakPct = Double(rxLevelPeak) * 100
+                let rxRmsPct = rxLevelSampleCount > 0
+                    ? (rxLevelSumSq / Double(rxLevelSampleCount)).squareRoot() * 100
+                    : 0
                 let diagAttrs: [String: Any] = [
                     "peak_pct":           (peakPct * 10).rounded() / 10,
+                    "rms_pct":            (txRmsPct * 10).rounded() / 10,
+                    "rx_peak_pct":        (rxPeakPct * 10).rounded() / 10,
+                    "rx_rms_pct":         (rxRmsPct * 10).rounded() / 10,
                     "clip_samples":       level.clipSamples,
                     "vpio_ever_active":   diag.vpioEverActive,
                     "agc_ever_active":    diag.agcEverActive,
@@ -1119,6 +1147,9 @@ final class CallService {
         framesReceivedRx = 0
         txEncryptErrorCount = 0
         rxDecryptErrorCount = 0
+        rxLevelPeak = 0        // AUDIO-DIAG (2026-07-12) — reset RX level accumulators
+        rxLevelSumSq = 0
+        rxLevelSampleCount = 0
         loggedFirstTxCapture = false
         loggedFirstTxEncrypt = false
         loggedTxNoTransport = false

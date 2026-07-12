@@ -1728,6 +1728,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             var outKeyFramesEnc = -1
             var outEncoderImpl = "", outQualityLimit = ""
             var inFramesDec = -1, inFramesRec = -1, inBytes = -1, inW = -1, inH = -1
+            // VIDEO-DIAG (2026-07-12) — receiver freeze/render/drop counters from
+            // the same inbound-rtp stats object (WebRTC-Stats §RTCInboundRtpStreamStats):
+            // real evidence of playback stutter distinct from decode/receive counts.
+            var inFreezeCount = -1, inFramesRendered = -1, inFramesDropped = -1
+            var inTotalFreezesDur = -1.0
             var inCodecId = "", outCodecId = ""
             for (_, s) in report.statistics {
                 guard let kind = s.values["kind"] as? String, kind == "video" else { continue }
@@ -1753,6 +1758,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     inBytes = (s.values["bytesReceived"] as? NSNumber)?.intValue ?? inBytes
                     inW = (s.values["frameWidth"] as? NSNumber)?.intValue ?? inW
                     inH = (s.values["frameHeight"] as? NSNumber)?.intValue ?? inH
+                    inFreezeCount = (s.values["freezeCount"] as? NSNumber)?.intValue ?? inFreezeCount
+                    inTotalFreezesDur = (s.values["totalFreezesDuration"] as? NSNumber)?.doubleValue ?? inTotalFreezesDur
+                    inFramesRendered = (s.values["framesRendered"] as? NSNumber)?.intValue ?? inFramesRendered
+                    inFramesDropped = (s.values["framesDropped"] as? NSNumber)?.intValue ?? inFramesDropped
                     inCodecId = (s.values["codecId"] as? String) ?? inCodecId
                 }
             }
@@ -1784,6 +1793,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 "in_bytes": inBytes,
                 "in_frame_w": inW,
                 "in_frame_h": inH,
+                "in_freeze_count": inFreezeCount,
+                "in_total_freezes_dur": inTotalFreezesDur,
+                "in_frames_rendered": inFramesRendered,
+                "in_frames_dropped": inFramesDropped,
                 "in_codec": mime(inCodecId),
                 "in_fmtp": fmtp(inCodecId),
             ])

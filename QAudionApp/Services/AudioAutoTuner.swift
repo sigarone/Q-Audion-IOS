@@ -115,7 +115,11 @@ public final class AudioAutoTuner {
             "loss_rate_pct":     Double(lossRate * 100).rounded(),
             "bitrate_kbps":      newBr,
             "plp":               newPlp,
-            "changed":           (newBr != curBr || newPlp != curPlp)
+            "changed":           (newBr != curBr || newPlp != curPlp),
+            // Explicit codec + FEC so the server timeline records the fixed
+            // transport (Opus with in-band FEC), not just the tuned bitrate/PLP.
+            "codec":             "opus",
+            "fec":               true
         ])
     }
 

@@ -41,13 +41,22 @@ public final class AudioCapture {
     private var peakAmplitude: Int16 = 0
     private var clipSampleCount: Int64 = 0
     private static let clipThreshold: Int16 = 31800
-    /// Read the accumulated peak/clip stats for the CURRENT call and reset
+    // TX-RMS (2026-07-12) — sum of squares + sample count for the mic RMS,
+    // accumulated on the same 50fps tap callback as peakAmplitude (no lock,
+    // no extra decode). `consumeLevelStats()` folds these into `rms` (in Int16
+    // sample units) and resets them; CallService reports it as tx `rms_pct`.
+    private var sumSqAmplitude: Double = 0
+    private var rmsSampleCount: Int64 = 0
+    /// Read the accumulated peak/clip/rms stats for the CURRENT call and reset
     /// them for the next one. Call from teardown, before `stop()` clears
-    /// other per-call state.
-    public func consumeLevelStats() -> (peak: Int16, clipSamples: Int64) {
-        let stats = (peakAmplitude, clipSampleCount)
+    /// other per-call state. `rms` is in Int16 sample units (0…32767).
+    public func consumeLevelStats() -> (peak: Int16, clipSamples: Int64, rms: Double) {
+        let rms = rmsSampleCount > 0 ? (sumSqAmplitude / Double(rmsSampleCount)).squareRoot() : 0
+        let stats = (peakAmplitude, clipSampleCount, rms)
         peakAmplitude = 0
         clipSampleCount = 0
+        sumSqAmplitude = 0
+        rmsSampleCount = 0
         return stats
     }
     // M-12 — AVAudioSession interruption (phone call, Siri, alarm)
@@ -191,14 +200,21 @@ public final class AudioCapture {
                 let n = raw.count / 2
                 var localPeak = self.peakAmplitude
                 var localClips = self.clipSampleCount
+                var localSumSq = self.sumSqAmplitude
                 for i in 0..<n {
                     // Int32 magnitude — avoids the abs(Int16.min) overflow trap.
                     let mag = Int32(samples[i]).magnitude
                     if mag > Int32(localPeak).magnitude { localPeak = Int16(clamping: mag) }
                     if mag >= Int32(Self.clipThreshold).magnitude { localClips += 1 }
+                    // TX-RMS — sum of squares of the same samples (Double avoids
+                    // Int overflow over a full call); RMS is derived at consume time.
+                    let sq = Double(samples[i])
+                    localSumSq += sq * sq
                 }
                 self.peakAmplitude = localPeak
                 self.clipSampleCount = localClips
+                self.sumSqAmplitude = localSumSq
+                self.rmsSampleCount &+= Int64(n)
             }
             // TX-LIMITER (2026-07-11) — soft-knee peak limiter on the raw mic
             // samples before they reach Opus. Root cause per a9ebf30/fa09c23
