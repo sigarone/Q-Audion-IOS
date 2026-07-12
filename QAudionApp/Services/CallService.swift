@@ -273,6 +273,20 @@ final class CallService: @unchecked Sendable {
     /// two peers' seal keys be compared across devices.
     private var relaySealerKeyFp: String?
 
+    /// W-SLOTLOCK (2026-07-12) — serialises the mutable reference-typed relay
+    /// slots that are touched from MULTIPLE threads: the TX audio tap
+    /// (txAudioQueue) reads `wsClient`/`peerUserId`/`relaySealerSend` per frame;
+    /// the RX decode path reads `relaySealerRecv`; `installRelaySealers` (fires
+    /// from several handshake sites), `wireTransport`, `answer()` and
+    /// `teardownAudioStack()` write them from the call-lifecycle thread. Without
+    /// a barrier the release-old/retain-new ARC write of a reference slot races
+    /// a concurrent read → torn refcount → use-after-free that detonates later
+    /// (EXC_CRASH/SIGTRAP) at an innocent site. CallService is @unchecked
+    /// Sendable precisely so it can own this synchronisation. Contract: hold the
+    /// lock ONLY to copy the reference in/out — never across seal/open/network or
+    /// any call that might re-enter (NSLock is non-recursive).
+    private let relaySlotLock = NSLock()
+
     /// One-way 8-hex fingerprint of a key — safe to log (does NOT reveal key
     /// bytes). Used only to compare seal keys across the two peers' logs.
     private static func sealKeyFingerprint(_ key: Data) -> String {
@@ -331,8 +345,12 @@ final class CallService: @unchecked Sendable {
         // means a brand-new sealer with counter 0, which is safe (the key,
         // and therefore the whole nonce space, is new).
         let kfp: String = Self.sealKeyFingerprint(sessionKey)
-        if relaySealerSend != nil, relaySealerCallId == cid, relaySealerKeyFp == kfp { return }
-        let hadSealer: Bool = (relaySealerSend != nil)
+        // W-SLOTLOCK — read the dedup slots under the lock (they are written from
+        // the audio threads' lazy paths). Copy out; the crypto below runs unlocked.
+        let (dedupSend, dedupCallId, dedupKeyFp): (PqcRtpFrameSealer?, String?, String?) =
+            relaySlotLock.withLock { (relaySealerSend, relaySealerCallId, relaySealerKeyFp) }
+        if dedupSend != nil, dedupCallId == cid, dedupKeyFp == kfp { return }
+        let hadSealer: Bool = (dedupSend != nil)
         do {
             // W574x — directional per-direction keys when both peers negotiated
             // srtpDirKeyV1 (fixes bidirectional AES-GCM nonce reuse). Role A =
@@ -349,10 +367,12 @@ final class CallService: @unchecked Sendable {
                 send = try PqcRtpFrameSealer(pqcSessionKey: sessionKey, callId: cid)
                 recv = send.makeSibling()
             }
-            relaySealerSend = send
-            relaySealerRecv = recv
-            relaySealerCallId = cid
-            relaySealerKeyFp = kfp
+            relaySlotLock.withLock {
+                relaySealerSend = send
+                relaySealerRecv = recv
+                relaySealerCallId = cid
+                relaySealerKeyFp = kfp
+            }
             let verb: String = hadSealer ? "re-keyed" : "installed"
             let p: String = String(cid.prefix(8))
             // W574x diag — mirror Android's "PQC_DIAG W574x ... dirKeys=.. roleA=.."
@@ -644,10 +664,12 @@ final class CallService: @unchecked Sendable {
         // The CALLER never hit this because it installs its sealers AFTER its
         // own startCall() teardown. Save the sealers, run the teardown, then
         // restore them iff they still belong to the call being answered.
-        let _savedSealerSend = relaySealerSend
-        let _savedSealerRecv = relaySealerRecv
-        let _savedSealerCallId = relaySealerCallId
-        let _savedSealerKeyFp = relaySealerKeyFp
+        // W-SLOTLOCK — snapshot the sealers atomically before teardown nils them.
+        let (_savedSealerSend, _savedSealerRecv, _savedSealerCallId, _savedSealerKeyFp):
+            (PqcRtpFrameSealer?, PqcRtpFrameSealer?, String?, String?) =
+            relaySlotLock.withLock {
+                (relaySealerSend, relaySealerRecv, relaySealerCallId, relaySealerKeyFp)
+            }
         // Defensive cleanup: stop any leftover capture from a previous call.
         teardownAudioStack()
         if let cid = _savedSealerCallId, _savedSealerSend != nil {
@@ -656,10 +678,12 @@ final class CallService: @unchecked Sendable {
             // active id is unknown (the sealer was installed by W574h only for
             // the active call, so it cannot belong to a superseded one here).
             if active.isEmpty || active == cid {
-                relaySealerSend = _savedSealerSend
-                relaySealerRecv = _savedSealerRecv
-                relaySealerCallId = cid
-                relaySealerKeyFp = _savedSealerKeyFp
+                relaySlotLock.withLock {
+                    relaySealerSend = _savedSealerSend
+                    relaySealerRecv = _savedSealerRecv
+                    relaySealerCallId = cid
+                    relaySealerKeyFp = _savedSealerKeyFp
+                }
                 let p: String = String(cid.prefix(8))
                 let line: String = "[CallService] W574i: preserved M-15 relay sealers across answer teardown (callId=" + p + "…)"
                 print(line)
@@ -881,7 +905,9 @@ final class CallService: @unchecked Sendable {
     /// passes through unchanged — the pre-handshake window where neither
     /// side seals yet.
     private func unsealRelayFrame(_ data: Data) -> Data? {
-        guard let sealer = relaySealerRecv else { return data }
+        // W-SLOTLOCK — copy the recv sealer under the lock (installRelaySealers /
+        // teardown write it from other threads); open() runs unlocked.
+        guard let sealer = relaySlotLock.withLock({ relaySealerRecv }) else { return data }
         do {
             return try sealer.open(data)
         } catch {
@@ -1196,16 +1222,21 @@ final class CallService: @unchecked Sendable {
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
         peerAnswered = false  // W574b — re-arm the pre-answer mic gate for the next call
-        relaySealerSend = nil  // W574e — fresh M-15 sealers per call (new key)
-        relaySealerRecv = nil
-        relaySealerCallId = nil  // W574h — unbind so the next call re-keys cleanly
-        relaySealerKeyFp = nil   // W574l
-        // W67: reset transport binding. Nota: NON disconnect-iamo il
-        // wsClient (può restare connesso per signaling / chat / contacts).
-        // Solo facciamo nil-out i riferimenti così future audio frames
-        // non triggherano send/playback.
-        wsClient = nil
-        peerUserId = nil
+        // W-SLOTLOCK — nil the cross-thread reference slots under the lock so an
+        // in-flight tap (TX) or decode (RX) frame can't race the release-old ARC
+        // write of these reference-typed slots (torn refcount → use-after-free).
+        relaySlotLock.withLock {
+            relaySealerSend = nil  // W574e — fresh M-15 sealers per call (new key)
+            relaySealerRecv = nil
+            relaySealerCallId = nil  // W574h — unbind so the next call re-keys cleanly
+            relaySealerKeyFp = nil   // W574l
+            // W67: reset transport binding. Nota: NON disconnect-iamo il
+            // wsClient (può restare connesso per signaling / chat / contacts).
+            // Solo facciamo nil-out i riferimenti così future audio frames
+            // non triggherano send/playback.
+            wsClient = nil
+            peerUserId = nil
+        }
     }
 
     // MARK: - W464 — CallKit audio-session lifecycle
@@ -1374,8 +1405,12 @@ final class CallService: @unchecked Sendable {
             // server relayed=1, while RX kept flowing on the NEW instance.
             // `getWsClient` always resolves the current live instance; the
             // cache remains as fallback for transient liveProvider==nil.
-            let effectiveWs = getWsClient?() ?? wsClient
-            let effectivePeer = peerUserId ?? getPeerId?()
+            // W-SLOTLOCK — snapshot the cached transport refs under the lock; the
+            // getWsClient/getPeerId provider closures run OUTSIDE the lock.
+            let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
+                relaySlotLock.withLock { (wsClient, peerUserId) }
+            let effectiveWs = getWsClient?() ?? cachedWs
+            let effectivePeer = cachedPeer ?? getPeerId?()
             if let ws = effectiveWs, let peer = effectivePeer {
                 // W522 — when the W476 lazy fallback rescues TX (wireTransport
                 // was never called because liveProvider was nil at startCall),
@@ -1385,9 +1420,14 @@ final class CallService: @unchecked Sendable {
                 // remote side hears us but we hear silence (confirmed in
                 // session bbe9a2ff, 1.0.520 — TX heartbeat reaches 3000 frames
                 // while RX heartbeat is never emitted).
-                let needsRxRegistration: Bool = (wsClient == nil)
-                if wsClient == nil { wsClient = ws }
-                if peerUserId == nil { peerUserId = peer }
+                let needsRxRegistration: Bool = (cachedWs == nil)
+                if cachedWs == nil {
+                    // W-SLOTLOCK — lazy-populate the transport cache under the lock.
+                    relaySlotLock.withLock {
+                        if wsClient == nil { wsClient = ws }
+                        if peerUserId == nil { peerUserId = peer }
+                    }
+                }
                 if needsRxRegistration {
                     ws.registerHandler(type: "audio_frame") { [weak self] _, data in
                         guard let self,
@@ -1413,7 +1453,8 @@ final class CallService: @unchecked Sendable {
                 // `pqcSend?.seal(payload) ?: payload`. iOS↔iOS (both new)
                 // seal↔open; iOS↔Android now interops.
                 let sealedFrame: Data
-                if let sealer = relaySealerSend {
+                // W-SLOTLOCK — copy the send sealer under the lock; seal() runs unlocked.
+                if let sealer = relaySlotLock.withLock({ relaySealerSend }) {
                     sealedFrame = (try? sealer.seal(wireFrame)) ?? wireFrame
                 } else {
                     sealedFrame = wireFrame
@@ -1522,8 +1563,12 @@ final class CallService: @unchecked Sendable {
     ///   3. handleIncomingEncryptedFrame → decrypt → AudioPlayback
     public func wireTransport(wsClient: BCryptoWebSocketClient,
                               peerUserId: String) {
-        self.wsClient = wsClient
-        self.peerUserId = peerUserId
+        // W-SLOTLOCK — write the transport refs under the lock (the TX tap on
+        // txAudioQueue reads them per frame).
+        relaySlotLock.withLock {
+            self.wsClient = wsClient
+            self.peerUserId = peerUserId
+        }
 
         // Register handler. BCryptoWebSocketClient.registerHandler
         // sostituisce qualsiasi precedente handler per lo stesso type,
