@@ -151,7 +151,7 @@ let package = Package(
             dependencies: [
                 "CLiboqs",
                 "COpus",
-                "CQaudionCryptoCore",  // Phase 3: v4 PQ ratchet C ABI (default-OFF; see above)
+                "CQaudionCryptoCore",  // Phase 3: v4 PQ ratchet C ABI (default-ON since 2026-06-27; see above)
                 .product(name: "onnxruntime", package: "onnxruntime-spm"),
                 "WebRTC",  // local binaryTarget (webrtc-sdk H265 build) — see below
                 .product(name: "GRDB", package: "GRDB.swift"),

@@ -11,17 +11,17 @@ import CQaudionCryptoCore
 /// header (`qaudion_crypto_core.h`), imported as the `CQaudionCryptoCore` C module.
 ///
 /// The Apple-silicon `QaudionCryptoCore.xcframework` (device + simulator static libs) is built in
-/// that repo's CI (`.github/workflows/ios.yml`, Stage A). Until that XCFramework is published to a
-/// pinned SwiftPM `binaryTarget`, the `CQaudionCryptoCore` target links a **fail-closed placeholder
-/// stub** (`qaudion_crypto_core_stub.c`): this file still compiles + type-checks against the real
-/// ABI, and [available] reports `false` (so every call no-ops to its fail-closed value), exactly
-/// like Android's `RatchetNative.available` is `false` when the `.so` is absent.
+/// that repo's CI (`.github/workflows/ios.yml`, Stage A) and published as a pinned SwiftPM
+/// `binaryTarget` release (see `Package.swift`, `qaudion-crypto-core-spm` releases). The
+/// fail-closed placeholder stub (`qaudion_crypto_core_stub.c`) only backs local builds that
+/// haven't resolved that release; once resolved, [available] reports `true` exactly like Android's
+/// `RatchetNative.available` does once the `.so` is present.
 ///
-/// ## Status — DEFAULT OFF
-/// This is wired but **inert** until ``MessageRatchet/v4NativeRatchetEnabled`` is flipped on AND
-/// the real core is linked. Nothing in the production path calls these functions while the flag is
-/// off, so the live messaging path stays the v3.1 engine (``MessageRatchet``) bit-for-bit. The v4
-/// ratchet is not exercised until a device-test runs with the flag ON.
+/// ## Status — DEFAULT ON (Pavel sign-off 2026-06-27)
+/// ``MessageRatchet/v4NativeRatchetEnabled`` defaults to `true`; these functions are live on the
+/// production path whenever the real core is linked ([available]) and the peer negotiates v4.
+/// When either side lacks v4, that pair falls back to the v3.1 engine (``MessageRatchet``)
+/// bit-for-bit — reversible per-pair, not a global kill switch.
 ///
 /// ## Contract (mirrors the C ABI / `src/android_jni.rs` / `RatchetNative.kt`)
 /// - The opaque native session is a `UInt` handle (the boxed `QaSession*` as an integer). `0` is
