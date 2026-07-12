@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.763",
+              date: "2026-07-12",
+              title: "v1.0.763",
+              bullets: [
+                "fix(crypto): stop sending legacy QUAD OFFER, closes dual-path key-derivation race",
+              ]),
         .init(id: "v1.0.762",
               date: "2026-07-12",
               title: "v1.0.762",
               bullets: [
+                "chore: regenerate changelog for v1.0.762",
                 "fix(calling): buffer-and-replay the pre-callContactId OFFER instead of relaxing the guard",
                 "revert(security): restore strict callContactId guard — d3b304f was a regression",
                 "fix(tools): symbolicate.py crashes on Windows console for inlined-frame arrow",
@@ -162,14 +169,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.744",
                 "test(tus): bound chunk-retry tests with an explicit timeout",
                 "feat(reality): wire client-side Reality transport + call_upgrade_intent receive handler",
-              ]),
-        .init(id: "v1.0.743",
-              date: "2026-07-08",
-              title: "v1.0.743",
-              bullets: [
-                "chore: regenerate changelog for v1.0.743",
-                "fix(ci): unpin GOTOOLCHAIN for the reality xcframework build step",
-                "feat(reality): add Reality/Xray-core transport groundwork (Go side verified)",
               ]),
     ]
 }
