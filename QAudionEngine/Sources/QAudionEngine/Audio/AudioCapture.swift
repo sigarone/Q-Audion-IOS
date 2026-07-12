@@ -173,15 +173,6 @@ public final class AudioCapture {
         // 2. Create the audio engine
         let engine = AVAudioEngine()
 
-        // 3. Enable Voice Processing I/O on the input node BEFORE installing the tap.
-        //    This activates Apple's full VoIP DSP chain:
-        //    - Echo cancellation (AEC)
-        //    - Noise suppression (NS)
-        //    - Automatic gain control (AGC)
-        try audioPipeline.enableVoiceProcessing(on: engine)
-
-        // 4. Install the input tap to capture PCM frames
-        let inputNode = engine.inputNode
         let format = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
             sampleRate: Double(AudioConstants.sampleRate),
@@ -192,9 +183,32 @@ public final class AudioCapture {
         // SINGLE-ENGINE FIX — attach + connect the PLAYBACK player node on the
         // SAME engine that owns the capture tap, BEFORE engine.start(), so the
         // one RemoteIO/VPIO unit drives both mic-in and speaker-out.
+        // W-CANONICAL (2026-07-12) — moved BEFORE setVoiceProcessingEnabled:
+        // Apple's documented silent-failure mode is enabling VP-IO on an engine
+        // whose output side has no render chain yet (AEC gets no reference →
+        // echo / severely quiet output, a plausible W574f contributor). The
+        // player→mainMixer connection gives VP-IO its AEC reference from the
+        // moment it is enabled. (The mixer resamples; the canonical Int16/48k
+        // connection format stays valid whatever VP-IO negotiates underneath.)
         let player = AVAudioPlayerNode()
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
+
+        // 3. Enable Voice Processing I/O on the input node BEFORE installing the tap.
+        //    This activates Apple's full VoIP DSP chain:
+        //    - Echo cancellation (AEC)
+        //    - Noise suppression (NS)
+        //    - Automatic gain control (AGC)
+        try audioPipeline.enableVoiceProcessing(on: engine)
+        // W-CANONICAL — latch the per-ENGINE-INSTANCE VP decision. The tap and
+        // the custom-DSP bypass below key off THIS captured value, never off
+        // live session/global state, so a mid-call watchdog flip can't desync
+        // the "who owns AGC" decision (double-AGC risk) for buffers already in
+        // flight on the old engine (each rebuild captures its own fresh value).
+        let vpioActiveThisEngine = audioPipeline.voiceProcessingIsActive
+
+        // 4. Install the input tap to capture PCM frames
+        let inputNode = engine.inputNode
 
         // W574k — the tap format MUST match the input node's REAL output bus
         // format. Voice Processing I/O runs the input node as Float32 (and on
@@ -211,6 +225,34 @@ public final class AudioCapture {
         let tapFormat: AVAudioFormat = (nodeFormat.channelCount > 0 && nodeFormat.sampleRate > 0)
             ? nodeFormat
             : format
+        // W-CANONICAL — report the REAL post-enable tap format to telemetry
+        // (call.audio.diag tap_sr/tap_ch): a tap_sr ≠ 48000 is exactly the
+        // route/rate class behind the W556 "metallica e scattosa" artifact,
+        // now handled by the converter below but kept visible per call.
+        audioPipeline.noteTapFormat(sampleRate: tapFormat.sampleRate,
+                                    channels: Int(tapFormat.channelCount))
+
+        // W-CANONICAL — the missing resampler. The TX chain assumed 48 kHz all
+        // the way to Opus (the W475 re-chunker slices by BYTE COUNT and
+        // OpusCodec is pinned at 48 kHz), but nothing ever converted the tap's
+        // real rate: any route granting ≠48 kHz (Bluetooth HFP 16 k, some
+        // headsets 24/44.1 k) fed wrong-rate samples into a 48 k encoder →
+        // pitch/tempo warp + aliasing ("metallica") and buffer-size mismatch
+        // ("scattosa"). This AVAudioConverter — rebuilt on EVERY engine
+        // (re)start from the freshly-read post-enable tap format — makes that
+        // whole failure class structurally impossible: the accumulator only
+        // ever sees canonical 48 kHz / mono / Int16. nil on the (typical)
+        // built-in-mic path where the tap is already at the canonical rate —
+        // the fast paths below stay allocation-identical to before.
+        let needsConversion = tapFormat.sampleRate != Double(AudioConstants.sampleRate)
+            || tapFormat.channelCount != AVAudioChannelCount(AudioConstants.channels)
+        let rateConverter: AVAudioConverter? = needsConversion
+            ? AVAudioConverter(from: tapFormat, to: format)
+            : nil
+        if needsConversion {
+            let msg = "[AudioCapture] W-CANONICAL: tap format \(Int(tapFormat.sampleRate)) Hz/\(tapFormat.channelCount)ch ≠ canonical 48000/1 — AVAudioConverter engaged"
+            print(msg)
+        }
 
         // W-AEC-FIX — VP-IO input-pull. When Voice-Processing I/O is active the
         // inputNode tap STARVES on iPad + builtInSpeaker (the duplex VP-IO unit
@@ -230,7 +272,6 @@ public final class AudioCapture {
             self.inputSink = sink
         }
 
-        let pipeline = self.audioPipeline
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
             self.firstFrameReceived = true  // W-AEC-FIX — VP-IO tap is delivering
@@ -239,8 +280,30 @@ public final class AudioCapture {
             // duration per W475). Guard on int16ChannelData first; if VP-IO delivered
             // Float32 natively, convert to Int16 so the accumulator/re-chunker always
             // receives 16-bit samples regardless of the engine's VP-IO state.
+            // W-CANONICAL — when the tap's rate/channel layout differs from the
+            // canonical 48 kHz/mono (BT HFP 16 k, headsets 24/44.1 k), run the
+            // AVAudioConverter built at start(): proper polyphase resampling into
+            // canonical Int16, instead of letting wrong-rate samples reach the
+            // byte-count re-chunker (the W556 "metallica e scattosa" warp class).
             var raw: Data
-            if let int16Data = buffer.int16ChannelData {
+            if let converter = rateConverter {
+                let ratio = Double(AudioConstants.sampleRate) / max(buffer.format.sampleRate, 1)
+                let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up) + 64)
+                guard let outBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+                var fed = false
+                var convErr: NSError?
+                let status = converter.convert(to: outBuf, error: &convErr) { _, outStatus in
+                    if fed {
+                        outStatus.pointee = .noDataNow
+                        return nil
+                    }
+                    fed = true
+                    outStatus.pointee = .haveData
+                    return buffer
+                }
+                guard status != .error, let int16Data = outBuf.int16ChannelData, outBuf.frameLength > 0 else { return }
+                raw = Data(bytes: int16Data[0], count: Int(outBuf.frameLength) * 2)
+            } else if let int16Data = buffer.int16ChannelData {
                 raw = Data(bytes: int16Data[0], count: Int(buffer.frameLength) * 2)
             } else if let floatData = buffer.floatChannelData {
                 let count = Int(buffer.frameLength)
@@ -254,14 +317,19 @@ public final class AudioCapture {
             } else {
                 return
             }
-            // W-MICAGC — gentle make-up AGC (see field docs). Runs in BOTH modes:
-            // VP-IO off (we own leveling) and VP-IO on (rides on top of Apple's
-            // AGC with a lower ceiling, since the iOS mic is intrinsically quiet
-            // even after Apple's normalisation). Applied BEFORE the level scan so
-            // telemetry reflects the TRANSMITTED level, and before the limiter
-            // which backstops any overshoot.
-            if Self.micAgcEnabled {
-                let maxGain = pipeline.voiceProcessingIsActive ? Self.agcMaxGainVpio : Self.agcMaxGain
+            // W-MICAGC — gentle make-up AGC. W-CANONICAL (2026-07-12): VP-IO is
+            // now the single owner of AGC (Apple's, per-device tuned, enabled on
+            // all routes inside enableVoiceProcessing) — the software make-up
+            // AGC is HARD-BYPASSED whenever this engine instance was built with
+            // VP-IO active (gain pinned at 1.0; two AGCs adapting on the same
+            // signal is the classic pumping/double-boost pattern). It remains
+            // ONLY as the leveling fallback for the raw-mic path: user
+            // killswitch (CallsGate all-off) or the W-AEC-FIX starve-watchdog
+            // rebuild, where no Apple AGC runs. `vpioActiveThisEngine` is the
+            // per-engine-instance latch captured right after
+            // setVoiceProcessingEnabled — never live global state.
+            if Self.micAgcEnabled && !vpioActiveThisEngine {
+                let maxGain = Self.agcMaxGain
                 raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
                     guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
                     let n = rawBuf.count / 2
@@ -357,36 +425,28 @@ public final class AudioCapture {
                 self.rmsSampleCount &+= Int64(n)
             }
             // TX-LIMITER (2026-07-11) — soft-knee peak limiter on the raw mic
-            // samples before they reach Opus. Root cause per a9ebf30/fa09c23
-            // (2026-07-10): with VP-IO fully off on the earpiece route (W556 —
-            // Apple's VP-IO noise suppressor caused a WORSE "metallica e
-            // scattosa" artefact in quiet rooms, so it can't just be turned
-            // back on — see AudioProcessingPipeline.enableVoiceProcessing),
-            // the raw mic signal reaches Opus completely unprocessed: no AEC,
-            // NS, AGC, or limiter. A loud/close mouth-to-mic distance can
-            // genuinely saturate the ADC, and repeated near-full-scale
-            // samples are heard as crackle/pop ("scoppiettio").
-            // This is a PURE peak limiter, not AGC: the soft knee only
-            // engages within the top ~10% of full scale and is the identity
-            // function everywhere else, so it cannot reintroduce the W556
-            // regression (which came from Apple's continuously-adaptive
-            // noise suppressor acting on the WHOLE signal, not from peak
-            // limiting). It cannot undo genuine hardware/ADC-level clipping
-            // (samples already flat-lined before this callback sees them),
-            // only clipping introduced downstream of the ADC.
-            raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
-                guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
-                let n = rawBuf.count / 2
-                let threshold: Float = 0.90 * Float(Int16.max)
-                let ceiling: Float = 0.98 * Float(Int16.max)
-                let range = ceiling - threshold
-                for i in 0..<n {
-                    let sample = Float(samples[i])
-                    let mag = abs(sample)
-                    guard mag > threshold else { continue }
-                    let excess = mag - threshold
-                    let compressed = threshold + range * (1 - exp(-excess / range))
-                    samples[i] = Int16(clamping: Int((sample < 0 ? -1 : 1) * compressed))
+            // samples before they reach Opus. W-CANONICAL (2026-07-12): runs
+            // ONLY on the raw-mic fallback path (VP-IO off). With VP-IO active
+            // the output is already level-managed by Apple's AGC — a second
+            // nonlinear stage on an already-managed signal is pure added
+            // distortion. On the fallback path it stays: no AEC/NS/AGC runs
+            // there, and a loud/close mouth-to-mic can saturate downstream of
+            // the ADC ("scoppiettio").
+            if !vpioActiveThisEngine {
+                raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
+                    guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
+                    let n = rawBuf.count / 2
+                    let threshold: Float = 0.90 * Float(Int16.max)
+                    let ceiling: Float = 0.98 * Float(Int16.max)
+                    let range = ceiling - threshold
+                    for i in 0..<n {
+                        let sample = Float(samples[i])
+                        let mag = abs(sample)
+                        guard mag > threshold else { continue }
+                        let excess = mag - threshold
+                        let compressed = threshold + range * (1 - exp(-excess / range))
+                        samples[i] = Int16(clamping: Int((sample < 0 ? -1 : 1) * compressed))
+                    }
                 }
             }
             // W475 — re-chunk into EXACT bytesPerFrame frames. `installTap`'s
@@ -408,9 +468,9 @@ public final class AudioCapture {
             while self.pcmAccumulator.count - consumed >= frameBytes {
                 let chunk = self.pcmAccumulator.subdata(in: consumed ..< consumed + frameBytes)
                 consumed += frameBytes
-                // Supplemental software noise reduction on top of HW DSP.
-                let processed = pipeline.applyNoiseReduction(pcmFrame: chunk)
-                self.onFrame?(processed)
+                // W-CANONICAL — software NR retired (double-NS over VP-IO's);
+                // chunks go straight to Opus.
+                self.onFrame?(chunk)
             }
             if consumed > 0 {
                 self.pcmAccumulator = consumed < self.pcmAccumulator.count
@@ -635,6 +695,7 @@ public final class AudioCapture {
     /// itself provokes is ignored (breaks the self-induced thrash loop).
     private func restartEngineForRoute() {
         guard isRunning else { return }
+        audioPipeline.noteEngineRestart()  // W-CANONICAL — engine_restarts telemetry
         lastEngineRestart = Date()
         restartSuppressUntil = Date().addingTimeInterval(0.6)
         engine?.inputNode.removeTap(onBus: 0)

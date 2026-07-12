@@ -314,6 +314,28 @@ public final class AudioProcessingPipeline {
     private var lastInputRoute = ""
     private var lastOutputRoute = ""
     private var lastGrantedSampleRate: Double = 0
+    // W-CANONICAL (2026-07-12) — proof instruments for the VP-IO-everywhere
+    // migration. tap_sr/tap_ch = the input node's REAL post-VP-enable tap
+    // format (distinct from the session's granted_sr — a mismatch here is the
+    // W556 metallic-warp class, now fixed by the AVAudioConverter but kept
+    // visible). engine_restarts = route-bounce count. vpio_bypassed_ever = the
+    // starve watchdog fired and forced VP-IO off mid-call (degraded mode).
+    private var lastTapSampleRate: Double = 0
+    private var lastTapChannels: Int = 0
+    private var engineRestartsThisCall: Int = 0
+    private var vpioBypassedEverThisCall = false
+
+    /// W-CANONICAL — AudioCapture reports the freshly-read post-enable tap
+    /// format here at every engine (re)start.
+    public func noteTapFormat(sampleRate: Double, channels: Int) {
+        lastTapSampleRate = sampleRate
+        lastTapChannels = channels
+    }
+
+    /// W-CANONICAL — AudioCapture counts mid-call engine rebuilds (route flips).
+    public func noteEngineRestart() {
+        engineRestartsThisCall += 1
+    }
 
     /// True when the active input route is a Bluetooth headset (HFP/LE).
     /// AirPods report `.bluetoothHFP` once the mic opens.
@@ -348,6 +370,11 @@ public final class AudioProcessingPipeline {
         public let outputRoute: String
         public let grantedSampleRate: Double
         public let preferredSampleRate: Double
+        // W-CANONICAL — see the latch fields' doc above.
+        public let tapSampleRate: Double
+        public let tapChannels: Int
+        public let engineRestarts: Int
+        public let vpioBypassedEver: Bool
     }
 
     /// Read the per-call audio diagnostics and reset them for the next call.
@@ -360,7 +387,11 @@ public final class AudioProcessingPipeline {
             inputRoute:          lastInputRoute,
             outputRoute:         lastOutputRoute,
             grantedSampleRate:   lastGrantedSampleRate,
-            preferredSampleRate: config.preferredSampleRate
+            preferredSampleRate: config.preferredSampleRate,
+            tapSampleRate:       lastTapSampleRate,
+            tapChannels:         lastTapChannels,
+            engineRestarts:      engineRestartsThisCall,
+            vpioBypassedEver:    vpioBypassedEverThisCall
         )
         agcEverActiveThisCall = false
         speakerRouteEverThisCall = false
@@ -369,6 +400,10 @@ public final class AudioProcessingPipeline {
         lastInputRoute = ""
         lastOutputRoute = ""
         lastGrantedSampleRate = 0
+        lastTapSampleRate = 0
+        lastTapChannels = 0
+        engineRestartsThisCall = 0
+        vpioBypassedEverThisCall = false
         return stats
     }
 
@@ -388,64 +423,58 @@ public final class AudioProcessingPipeline {
     public func enableVoiceProcessing(on engine: AVAudioEngine) throws {
         let inputNode = engine.inputNode
 
-        // W574c — evaluated at engine-(re)start time. AudioCapture restarts
-        // the engine on route changes (including the speaker override), so
-        // toggling the in-call speaker button re-runs this decision.
-        // W574f — EXCLUDE iPad: VP-IO kills the iPad tap (tx_enc=0). iPad
-        // keeps no-VP-IO on speaker (echo, but working TX). iPhone only.
-        // W574c — speaker route forces AEC. W-AEC-FIX (2026-06-25): iPad is NO
-        // LONGER excluded. The VP-IO input-pull graph + starve watchdog in
-        // AudioCapture make the input tap survive VP-IO on the iPad speaker
-        // route (and fall back safely to no-VP-IO if it still starves), so we
-        // can finally cancel the iPad speakerphone echo instead of disabling AEC.
-        let speakerRoute = enableAecOnSpeakerRoute
-            && Self.currentRouteHasBuiltInSpeaker()
-
+        // W-CANONICAL (2026-07-12) — VP-IO ON EVERYWHERE by default.
+        //
+        // Best-practice review (Apple WWDC23 10235 + libwebrtc AudioDeviceIOS +
+        // Signal/Telegram): every production VoIP app runs Apple's Voice
+        // Processing I/O (AEC+NS+AGC as one bundle) on ALL routes, with Apple's
+        // AGC left ON — libwebrtc even force-re-enables it. The W556 "metallica
+        // e scattosa" verdict that turned VP-IO off was CONFOUNDED: commit
+        // a6c971e changed two variables at once (VP-IO off + .allowBluetoothA2DP
+        // removed) and its own message attributes the artifact to the A2DP/SCO
+        // 16k-vs-48k bandwidth mismatch — which the AVAudioConverter in
+        // AudioCapture now makes structurally impossible regardless of route.
+        // The single-variable isolation test (VP-IO on, built-in mic, 48k, no
+        // BT) was never run before this migration.
+        //
+        // Ladder (evaluated at every engine (re)start — route flips re-run it):
+        //   1. forceDisableVoiceProcessing — the W-AEC-FIX starve watchdog's
+        //      per-call escape hatch (iPad W574f class). Overrides everything.
+        //   2. voiceProcessingOverride — CallsGate user toggles (Settings →
+        //      Chiamate). All-off = user killswitch back to the raw-mic stack.
+        //   3. Default TRUE — the canonical stack.
+        // The old speaker-route special case collapsed: VP-IO is no longer a
+        // per-route decision, so the route stops being a processing-mode switch
+        // (route flips still rebuild the engine — formats are renegotiated by
+        // a full stop→rebuild bounce, never in place).
         let shouldEnable: Bool
         if forceDisableVoiceProcessing {
             // Watchdog fallback: a prior start in this call starved the input tap
             // with VP-IO on — keep VP-IO OFF this session so the mic transmits
             // (echo returns, but a working call beats a dead mic).
             shouldEnable = false
-        } else if speakerRoute {
-            shouldEnable = true
+            vpioBypassedEverThisCall = true  // W-CANONICAL — degraded-mode counter
         } else if let override = voiceProcessingOverride {
             shouldEnable = override
         } else {
-            shouldEnable = config.echoCancellationEnabled || config.noiseCancellationEnabled
+            shouldEnable = true
         }
 
         if shouldEnable {
             // iOS 13+: setVoiceProcessingEnabled enables Apple's full VoIP DSP
             if #available(iOS 13.0, *) {
                 try inputNode.setVoiceProcessingEnabled(true)
-                // W537: disable the Voice-Processing AGC component.
-                // User-reported "qualità scarsa nella codifica da iPad
-                // ad Android" was traced to Apple's AGC compressing/
-                // expanding the speech envelope inside the VP I/O unit
-                // BEFORE Opus saw it. Opus's own rate-distortion and
-                // SILK pitch tracking work BEST with a clean, un-AGC-
-                // mangled signal — and Android's reference build sets
-                // `OpusConfig(agcEnabled = false)` (no system AGC, no
-                // pre-Opus AGC). Matching that wire-shape on iOS removes
-                // the dynamic-range pumping artefact the receiver hears.
-                // AEC + NS are preserved (they're separate VP knobs).
-                //
-                // The setter is a non-throwing property (per Apple's
-                // AVAudioInputNode docs); writing it before voice
-                // processing has finalised setup is silently ignored
-                // by AVAudioEngine on some iOS versions. We wrap the
-                // assignment in a try? on its KVC form to absorb
-                // that case without crashing.
-                // W574c — AGC follows the route. On SPEAKERPHONE the mic
-                // is far from the mouth and the captured level is low
-                // ("audio molto basso" report from the iPad side): Apple's
-                // VP AGC is exactly the right tool there. On earpiece /
-                // headset routes keep W537 behaviour (AGC off — Opus gets
-                // the raw mic, no envelope pumping).
-                inputNode.isVoiceProcessingAGCEnabled = speakerRoute
-                let agcState: String = speakerRoute ? "ENABLED (speaker route)" : "disabled (W537)"
-                print("[AudioProcessingPipeline] voice-processing AGC " + agcState)
+                // W-CANONICAL — Apple AGC ON on ALL routes (supersedes W537/
+                // W574c which disabled it off-speaker). The W537 "envelope
+                // pumping" report predates the discovery that the iPhone
+                // earpiece mic is intrinsically quiet (~0.5-1.1% RMS raw —
+                // telemetry calls c591a0b2/28398a12/7b03662a): without AGC the
+                // peer hears it faint, and the software make-up AGC bolted on
+                // to compensate caused the clip/zipper regressions. Apple's
+                // AGC is per-device tuned and runs where it belongs (inside
+                // VP-IO, before Opus); libwebrtc ships it force-enabled.
+                inputNode.isVoiceProcessingAGCEnabled = true
+                print("[AudioProcessingPipeline] voice-processing AGC ENABLED (canonical, all routes)")
             }
             voiceProcessingActive = true
         } else {
@@ -471,11 +500,11 @@ public final class AudioProcessingPipeline {
         // branches (VP-IO on and off) and re-runs on every engine restart
         // (i.e. every route change), so a call that ever touched
         // speaker/Bluetooth/AGC stays flagged. `agcEnabled` mirrors exactly
-        // what was written to `isVoiceProcessingAGCEnabled` above: it can
-        // only be true when VP-IO is on AND we're on the speaker route.
+        // what was written to `isVoiceProcessingAGCEnabled` above — with
+        // W-CANONICAL that is simply "VP-IO on" (Apple AGC on all routes).
         latchAudioDiag(
             vpioEnabled: voiceProcessingActive,
-            agcEnabled: voiceProcessingActive && speakerRoute
+            agcEnabled: voiceProcessingActive
         )
 
         // W556 — emit session diagnostics so the maintainer can see
@@ -509,54 +538,19 @@ public final class AudioProcessingPipeline {
         try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
     }
 
-    // MARK: - Software noise reduction (supplemental)
+    // MARK: - Software noise reduction (RETIRED — W-CANONICAL 2026-07-12)
 
-    /// Apply spectral subtraction noise reduction to a PCM frame.
-    ///
-    /// This provides a supplemental layer on top of Apple's hardware noise suppression.
-    /// Estimates the noise floor from low-energy frames and subtracts it from the signal.
+    /// RETIRED: hard pass-through. This home-grown spectral-subtraction gate
+    /// could only ever run ON TOP of Apple's VP-IO noise suppressor —
+    /// double-NS is the classic "musical noise"/pumping artifact (the original
+    /// W555 report). With VP-IO now the single owner of AEC+AGC+NS on all
+    /// routes (see enableVoiceProcessing), software NS must never be
+    /// reachable. Kept as a symbol so call sites stay source-compatible; the
+    /// body is identity regardless of config.
     public func applyNoiseReduction(pcmFrame: Data) -> Data {
-        guard config.noiseCancellationEnabled else { return pcmFrame }
-
-        framesProcessed += 1
-
-        var output = Data(count: pcmFrame.count)
-        pcmFrame.withUnsafeBytes { src in
-            output.withUnsafeMutableBytes { dst in
-                let srcPtr = src.bindMemory(to: Int16.self)
-                let dstPtr = dst.bindMemory(to: Int16.self)
-                let sampleCount = min(srcPtr.count, dstPtr.count)
-
-                // Compute frame energy (RMS)
-                var energy: Float = 0
-                for i in 0..<sampleCount {
-                    let sample = Float(srcPtr[i])
-                    energy += sample * sample
-                }
-                energy = sqrtf(energy / Float(max(sampleCount, 1)))
-
-                // Adaptive noise floor estimation (slow attack, fast release)
-                let alpha: Float = energy < noiseFloorEstimate ? 0.05 : 0.002
-                noiseFloorEstimate = noiseFloorEstimate * (1.0 - alpha) + energy * alpha
-
-                // Spectral subtraction: attenuate samples near the noise floor
-                let threshold = noiseFloorEstimate * 2.0
-                for i in 0..<sampleCount {
-                    let sample = Float(srcPtr[i])
-                    let magnitude = abs(sample)
-                    if magnitude < threshold {
-                        // Soft gating: reduce instead of zeroing to avoid artifacts
-                        let gain = max(0.0, (magnitude - noiseFloorEstimate) / max(threshold - noiseFloorEstimate, 1.0))
-                        dstPtr[i] = Int16(clamping: Int32(sample * gain))
-                    } else {
-                        dstPtr[i] = srcPtr[i]
-                    }
-                }
-            }
-        }
-
-        return output
+        return pcmFrame
     }
+
 
     /// Generate comfort noise at a given level for silence periods.
     /// Delegates to the same algorithm used by `JitterBuffer` for consistency.

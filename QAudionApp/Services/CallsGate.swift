@@ -21,47 +21,30 @@ public enum CallsGate {
 
     // MARK: - Audio DSP keys
 
-    public static let keyAec = "qaudion.calls.aec_enabled"
-    public static let keyNs  = "qaudion.calls.ns_enabled"
-    public static let keyAgc = "qaudion.calls.agc_enabled"
+    // W-CANONICAL (2026-07-12) — key BUMP (.v2) + defaults flipped to TRUE.
+    //
+    // VP-IO (Apple's AEC+NS+AGC bundle) is back ON by default — the canonical
+    // stack every production VoIP app ships (libwebrtc runs VP-IO always and
+    // force-enables Apple's AGC; Signal/Telegram same). The W556 conviction
+    // ("metallica e scattosa" → VP-IO NS blamed, defaults flipped false) was
+    // CONFOUNDED: commit a6c971e changed two variables at once, and the
+    // artifact matches the A2DP/SCO 16k-vs-48k rate mismatch its own message
+    // describes — a class now made impossible by the AVAudioConverter in
+    // AudioCapture (the TX chain previously had NO resampler at all). The
+    // W574b iPad "1 frame then TX dead" starve is handled by the W-AEC-FIX
+    // input-pull sink + starve watchdog (auto-fallback to raw-mic, per call).
+    //
+    // Key bump rationale: the old keys may hold stale user/dev values from the
+    // W556 era; in dev (no-legacy) everyone restarts from the new default.
+    // Toggling ALL THREE off in Settings → Chiamate remains the user
+    // killswitch (next call runs the raw-mic fallback stack).
+    public static let keyAec = "qaudion.calls.aec_enabled.v2"
+    public static let keyNs  = "qaudion.calls.ns_enabled.v2"
+    public static let keyAgc = "qaudion.calls.agc_enabled.v2"
 
-    // W556: AEC default flipped to `false`.
-    //
-    // Background — Apple's VP-IO unit is all-or-nothing: one call to
-    // `setVoiceProcessingEnabled(true)` enables AEC + NS + AGC as a
-    // bundle (AGC was already disabled post-W537 via the property knob,
-    // but NS has no equivalent per-component knob in the public API).
-    //
-    // The NS component is a Wiener-filter spectral suppressor tuned
-    // for phone calls in noisy environments. In quiet indoor rooms
-    // (the typical Q-Audion use case) it over-suppresses speech
-    // formants and generates "musical noise" artefacts — exactly the
-    // "metallica" quality the user reported on 2026-05-27.
-    //
-    // Apple's audio CODEC (not VP-IO) provides hardware-level AEC at
-    // the HAL layer even when `setVoiceProcessingEnabled(false)`.
-    // That HW AEC is sufficient for earpiece and most headphone use.
-    // For speakerphone at high volume, the SW AEC in VP-IO is a
-    // bonus — but the Q-Audion call path is relay-only (no direct
-    // peer path), so AEC is less critical than audio fidelity.
-    //
-    // New defaults: AEC=false, NS=false, AGC=false → anyVoiceProcessingEnabled
-    // = false → `setVoiceProcessingEnabled(false)` → VP-IO fully bypassed.
-    // HW AEC remains active at the codec level.
-    //
-    // Users who are in loud environments / on speakerphone can still
-    // enable AEC in Settings → Chiamate → Echo Cancellation.
-    // W574b — REVERTED the v1.0.618 iPad default-true experiment. Field
-    // evidence (call 655de1d9, server relay counters): with VP-IO enabled
-    // the iPad transmitted exactly 1 audio frame post-answer, then TX died
-    // — the W556/W591 "VP-IO silently breaks tx capture" regression is NOT
-    // fixed by the Float32 tap fallback alone. Until VP-IO capture is
-    // debugged ON-DEVICE, AEC stays opt-in everywhere (Settings → Chiamate).
-    // The iPad speakerphone echo issue remains OPEN and needs a different
-    // fix (likely tap-after-VPIO or a dedicated render-callback capture).
-    public static var aecEnabled: Bool { readBool(keyAec, default: false) }
-    public static var nsEnabled: Bool  { readBool(keyNs,  default: false) }
-    public static var agcEnabled: Bool { readBool(keyAgc, default: false) }
+    public static var aecEnabled: Bool { readBool(keyAec, default: true) }
+    public static var nsEnabled: Bool  { readBool(keyNs,  default: true) }
+    public static var agcEnabled: Bool { readBool(keyAgc, default: true) }
 
     /// Apple's `AVAudioInputNode.setVoiceProcessingEnabled(true)` is
     /// the single switch for AEC + NS + AGC bundled. We expose the
@@ -69,8 +52,8 @@ public enum CallsGate {
     /// `WebRtcAudioConfig.kt`, but at the iOS HW layer it's all-or-
     /// nothing. This computed flag matches that reality.
     ///
-    /// W556: defaults now all-false → VP-IO off by default.
-    /// The hardware AEC at the codec level is always active.
+    /// W-CANONICAL: defaults all-true → VP-IO on by default; all three
+    /// toggled off = the raw-mic fallback stack (user killswitch).
     public static var anyVoiceProcessingEnabled: Bool {
         return aecEnabled || nsEnabled || agcEnabled
     }

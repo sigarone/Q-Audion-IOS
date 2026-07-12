@@ -1179,7 +1179,16 @@ final class CallService: @unchecked Sendable {
                     "input_route":        diag.inputRoute,
                     "output_route":       diag.outputRoute,
                     "granted_sr":         diag.grantedSampleRate,
-                    "preferred_sr":       diag.preferredSampleRate
+                    "preferred_sr":       diag.preferredSampleRate,
+                    // W-CANONICAL — proof instruments for the VP-IO migration:
+                    // tap_sr/tap_ch = real post-enable tap format (≠48000 was
+                    // the W556 warp class, now converted); engine_restarts =
+                    // mid-call route bounces; vpio_bypassed_ever = the starve
+                    // watchdog forced the raw-mic fallback this call.
+                    "tap_sr":             diag.tapSampleRate,
+                    "tap_ch":             diag.tapChannels,
+                    "engine_restarts":    diag.engineRestarts,
+                    "vpio_bypassed_ever": diag.vpioBypassedEver
                 ]
                 Task { @MainActor in
                     TelemetryService.shared.emit(kind: "call.audio.diag", callId: _callId, attrs: diagAttrs)
