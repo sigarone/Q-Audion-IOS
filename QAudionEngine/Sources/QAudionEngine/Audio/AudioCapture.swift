@@ -87,6 +87,25 @@ public final class AudioCapture {
     private var restartSuppressUntil: Date = .distantPast
     private let routeRestartThrottle: TimeInterval = 1.0
 
+    // W-SPKFIX (2026-07-12) — in-call speaker toggle. `AppState.setSpeaker`
+    // flips the OUTPUT route by adding `.defaultToSpeaker` to setCategory AND
+    // calling overrideOutputAudioPort. On iOS 26 the *category* change fires a
+    // route notification with reason `.categoryChange` (the override is then a
+    // no-op → no `.override`), and handleRouteChange only rebuilt the engine on
+    // `.override`/device cases — so `.categoryChange` fell through and the
+    // engine was NEVER rebuilt for the new route. The single VP-IO/RemoteIO
+    // graph's input tap silently dies when the underlying output route flips
+    // out from under it: TX (mic) stopped the instant speaker was pressed and
+    // never recovered (confirmed call 92dab394, v1.0.767 — RX kept flowing, TX
+    // heartbeat froze at 250). Fix: detect the speaker<->earpiece flip
+    // REASON-AGNOSTICALLY (compare the live route against the route the engine
+    // was built for) and debounce-rebuild. A mid-call restart preserves the
+    // route because pipeline.isConfigured stays true (only deactivateSession at
+    // call end clears it) so start() skips configureForVoIP and does NOT reset
+    // the speaker category.
+    private var engineBuiltForSpeaker = false
+    private var pendingRouteRestart: DispatchWorkItem?
+
     /// Initialize with an optional audio processing pipeline.
     /// When provided, the pipeline configures AVAudioSession for VoIP and
     /// enables Apple's Voice Processing I/O (hardware AEC, NS, AGC) on the
@@ -287,6 +306,10 @@ public final class AudioCapture {
         self.playerNode = player
         self.playFormat = format
         isRunning = true
+        // W-SPKFIX — record which output route (speaker vs earpiece) this engine
+        // instance was built on, so handleRouteChange can detect a later
+        // speaker<->earpiece flip reason-agnostically and rebuild.
+        engineBuiltForSpeaker = AudioProcessingPipeline.currentRouteHasBuiltInSpeaker()
 
         // 6. M-12 — observe AVAudioSession interruptions so we can
         //    pause on .began and resume on .ended (.shouldResume).
@@ -398,6 +421,25 @@ public final class AudioCapture {
         guard let info = note.userInfo,
               let rawReason = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) else { return }
+        // W-SPKFIX — FIRST, reason-agnostically catch the in-call speaker toggle.
+        // The output route flipping speaker<->earpiece (however it was triggered:
+        // .categoryChange from setCategory .defaultToSpeaker, .override from
+        // overrideOutputAudioPort, or an OS-driven proximity change) requires the
+        // engine to rebuild on the new route or the mic input tap dies. Compare
+        // the LIVE route against the one the engine was built for; if it flipped
+        // and this isn't the echo of our own just-completed restart, debounce a
+        // rebuild so the toggle's notification storm coalesces into ONE restart on
+        // the settled route.
+        if isRunning {
+            let nowSpeaker = AudioProcessingPipeline.currentRouteHasBuiltInSpeaker()
+            if nowSpeaker != engineBuiltForSpeaker && Date() >= restartSuppressUntil {
+                print("[AudioCapture] W-SPKFIX: output route flipped to " +
+                      (nowSpeaker ? "speaker" : "earpiece") +
+                      " (reason=\(reason.rawValue)) — rebuilding engine on new route")
+                scheduleDebouncedRouteRestart()
+                return
+            }
+        }
         switch reason {
         case .oldDeviceUnavailable:
             // A device that was in use (Bluetooth HFP, wired headset) was removed.
@@ -438,6 +480,22 @@ public final class AudioCapture {
         default:
             break
         }
+    }
+
+    /// W-SPKFIX — coalesce a burst of route-change notifications (a single
+    /// speaker toggle posts several within ~100 ms, and each restart's own
+    /// setActive posts more) into ONE engine rebuild ~0.35 s after the LAST one,
+    /// when the route has settled. restartEngineForRoute arms restartSuppressUntil
+    /// (~0.6 s) so the rebuild's own echoes are ignored by the guard above,
+    /// breaking the self-induced loop.
+    private func scheduleDebouncedRouteRestart() {
+        pendingRouteRestart?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isRunning else { return }
+            self.restartEngineForRoute()
+        }
+        pendingRouteRestart = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     /// W574o — skip a route-driven engine restart if we just restarted (the route
@@ -515,6 +573,10 @@ public final class AudioCapture {
     }
 
     public func stop() {
+        // W-SPKFIX — cancel any pending debounced route restart so it cannot
+        // fire after the call has torn down the engine.
+        pendingRouteRestart?.cancel()
+        pendingRouteRestart = nil
         if let obs = interruptionObserver {
             NotificationCenter.default.removeObserver(obs)
             interruptionObserver = nil
