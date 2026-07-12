@@ -679,7 +679,7 @@ def main():
             if m:
                 short_file = m.group(1)
             prefix = (f"#{f['idx']:<2} 0x{static_addr:012x} (+{off})"
-                      if j == 0 else "        ↳ inlined")
+                      if j == 0 else "        -> inlined")
             loc = f"{short_file}:{line}" if line else short_file
             print(f"{prefix}  {func}")
             print(f"                                   at {loc}")
