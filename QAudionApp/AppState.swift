@@ -2467,6 +2467,26 @@ final class AppState: ObservableObject {
     ///     the caller bailed before the peer answered (legacy alias).
     private func wireIncomingCallHandlers(on ws: BCryptoWebSocketClient) {
         ws.registerHandler(type: "call_incoming") { [weak self] _, data in
+            // ROOT-CAUSE FIX (2026-07-12, MetricKit-confirmed heap corruption):
+            // this handler is invoked on the URLSession delegate BACKGROUND thread
+            // (BCryptoWebSocketClient builds its session with delegateQueue:nil and
+            // calls handler?() with no dispatch). AppState is a @MainActor
+            // ObservableObject, and the body below writes @Published properties
+            // (callIdentityUnauthenticatedChange / remoteVideoPaused /
+            // localVideoPaused / pendingPeerCapabilities) and the
+            // senderDeviceIdByPeer dictionary. Doing that off-main synchronously
+            // fired the synthesized ObservableObjectPublisher.objectWillChange into
+            // a live main-thread SwiftUI subscription → unsynchronised mutation of
+            // Combine's internal subscriber list from two threads → over-release /
+            // use-after-free of subscription objects. The corrupted publisher then
+            // detonated at whatever ran next (EXC_CRASH/SIGTRAP at innocent sites —
+            // e.g. a SwiftUI/CoreAnimation render, or the drainPendingOfferReplays
+            // CoW-dictionary read). Hop the ENTIRE handler onto the main queue so
+            // every AppState access is correctly main-isolated. FIFO
+            // (DispatchQueue.main.async) preserves the incoming-call ordering the
+            // dedup guards below rely on; the inner main hop further down is now a
+            // harmless redundant hop.
+            DispatchQueue.main.async {
             guard let self = self else { return }
             let callIdStr = data["call_id"] as? String ?? ""
             let senderId = data["sender_id"] as? String ?? "Sconosciuto"
@@ -2780,6 +2800,7 @@ final class AppState: ObservableObject {
                     }
                 }
             }
+            } // end DispatchQueue.main.async — root-cause main hop (see top of handler)
         }
         ws.registerHandler(type: "call_hangup") { [weak self] _, data in
             guard let self = self else { return }
@@ -4213,12 +4234,22 @@ final class AppState: ObservableObject {
             } else {
                 offerHasVideo = (data["call_type"] as? String) == "video"
             }
-            self.handleIncomingWebRtcOffer(
-                callerId: callerId,
-                sdp: sdp,
-                peerCapabilities: peerCaps,
-                hasVideo: offerHasVideo
-            )
+            // ROOT-CAUSE FIX (2026-07-12): this handler runs on the WS delegate
+            // BACKGROUND thread. handleIncomingWebRtcOffer touches @MainActor
+            // AppState state and reads the senderDeviceIdByPeer dictionary that
+            // the (now main-isolated) call_incoming handler writes — an off-main
+            // read racing a main write is a Swift Dictionary CoW use-after-free.
+            // The other caller (drainPendingOfferReplays) already invokes this on
+            // the main actor, so hopping here makes the method consistently
+            // main-isolated.
+            DispatchQueue.main.async {
+                self.handleIncomingWebRtcOffer(
+                    callerId: callerId,
+                    sdp: sdp,
+                    peerCapabilities: peerCaps,
+                    hasVideo: offerHasVideo
+                )
+            }
         }
         ws.registerHandler(type: "call_answer") { [weak self] _, data in
             guard let self = self else { return }
@@ -4233,7 +4264,16 @@ final class AppState: ObservableObject {
             // .legacy → no K_video cryptor → one-way black video. Storing them
             // here makes the on-demand upgrade responder negotiate sframe/vkey/
             // aes256 correctly in BOTH call directions.
-            if let pc = peerCaps, !pc.isEmpty { self.pendingPeerCapabilities = pc }
+            // ROOT-CAUSE FIX (2026-07-12): this handler runs on the WS delegate
+            // BACKGROUND thread; pendingPeerCapabilities is @MainActor @Published
+            // AppState. Writing it off-main fired objectWillChange into a live
+            // main-thread SwiftUI subscription → Combine subscriber-list corruption
+            // (same class as the call_incoming crash). Hop the write to main. It is
+            // persisted state read later at video-upgrade time, so deferring it one
+            // main tick is correct (nothing in this handler reads it synchronously).
+            if let pc = peerCaps, !pc.isEmpty {
+                DispatchQueue.main.async { [weak self] in self?.pendingPeerCapabilities = pc }
+            }
             // earbud-relay-v1 (caller side) — the callee answered from a
             // phone whose bonded earbud owns the audio key. The SW PQC
             // OFFER we already shipped will never be ACCEPTed; run the
@@ -4254,7 +4294,13 @@ final class AppState: ObservableObject {
                 }
             }
             if let sdp = data["sdp"] as? String, !sdp.isEmpty {
-                self.handleIncomingWebRtcAnswer(sdp: sdp, peerCapabilities: peerCaps)
+                // ROOT-CAUSE FIX (2026-07-12): off the WS delegate BACKGROUND
+                // thread, this reads webRtcController (@MainActor stored state)
+                // and mutates the controller. Hop to main for consistent
+                // main-isolation (mirrors the call_offer fix above).
+                DispatchQueue.main.async {
+                    self.handleIncomingWebRtcAnswer(sdp: sdp, peerCapabilities: peerCaps)
+                }
             } else {
                 // Bare call_answer (no/empty SDP) — the WS-relay path (iOS↔iOS)
                 // signals "answered" without a WebRTC SDP. Skip WebRTC and let
