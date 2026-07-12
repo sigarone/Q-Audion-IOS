@@ -5257,8 +5257,17 @@ final class AppState: ObservableObject {
         // Sender-identity check (2026-07-11 — same reasoning/fix as
         // routeInboundPqcOffer above; sibling dispatch for the
         // Android-JSON-envelope OFFER format, same missing guard.
-        guard let expected = callContactId, expected == senderId else {
-            print("[AppState] Android OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+        // 2026-07-12 fix: only reject when a call context ALREADY exists and
+        // mismatches — an OFFER establishing a BRAND NEW call legitimately
+        // arrives with `callContactId` still nil (Desktop's own send order
+        // ships this opaque OFFER BEFORE the `call_offer` envelope that sets
+        // callContactId via call_incoming), so treating nil as a reject
+        // silently dropped every first-ever Desktop→iOS outgoing call's
+        // OFFER — iOS never sent its ACCEPT back, Desktop's 30s outgoing
+        // timeout fired. The hijack this guards against needs an EXISTING
+        // callContactId to spoof; there is nothing to hijack yet on a nil.
+        if let expected = callContactId, expected != senderId {
+            print("[AppState] Android OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match established callContactId=\(expected.prefix(8))…")
             return
         }
         let integration = ensureResponderIntegration(forCaller: senderId)
@@ -5325,8 +5334,11 @@ final class AppState: ObservableObject {
         // Sender-identity check (2026-07-11 — same reasoning/fix as
         // routeInboundPqcAccept above; sibling dispatch for the
         // Android-JSON ACCEPT format, same missing guard.
-        guard let expected = callContactId, expected == senderId else {
-            print("[AppState] Android ACCEPT REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+        // 2026-07-12 fix: reject only on an EXISTING mismatched callContactId
+        // (see routeInboundAndroidOffer's identical fix above for why nil
+        // must pass through).
+        if let expected = callContactId, expected != senderId {
+            print("[AppState] Android ACCEPT REJECTED — senderId=\(senderId.prefix(8))… does not match established callContactId=\(expected.prefix(8))…")
             return
         }
         guard let integration = callService.callIntegration else {
@@ -5544,8 +5556,17 @@ final class AppState: ObservableObject {
         // not just a duplicate-delivery correctness bug. Reject up front,
         // before any PQC work runs, if there's no active call or the sender
         // isn't who this call is actually with.
-        guard let expected = callContactId, expected == senderId else {
-            print("[AppState] PQC OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+        // 2026-07-12 fix: reject only on an EXISTING mismatched callContactId.
+        // A nil callContactId means no call is in progress yet — this OFFER
+        // IS what establishes one (Desktop/Android ship the opaque OFFER
+        // BEFORE the call_offer envelope that sets callContactId via
+        // call_incoming), so treating nil as a reject silently dropped
+        // every first-ever incoming call's OFFER, leaving the caller's
+        // outgoing call to die on its own 30s timeout with no ACCEPT ever
+        // sent back. The hijack this guards against needs an EXISTING
+        // callContactId to spoof; nothing to hijack yet on a nil.
+        if let expected = callContactId, expected != senderId {
+            print("[AppState] PQC OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match established callContactId=\(expected.prefix(8))…")
             return
         }
         let integration = ensureResponderIntegration(forCaller: senderId)
@@ -5579,8 +5600,11 @@ final class AppState: ObservableObject {
         // init (existing double-ACCEPT dedup), freezing the real call on a
         // garbage key. Guard for the same reason every other handler here
         // already does.
-        guard let expected = callContactId, expected == senderId else {
-            print("[AppState] PQC ACCEPT REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+        // 2026-07-12 fix: reject only on an EXISTING mismatched callContactId
+        // (see routeInboundPqcOffer's identical fix above for why nil must
+        // pass through).
+        if let expected = callContactId, expected != senderId {
+            print("[AppState] PQC ACCEPT REJECTED — senderId=\(senderId.prefix(8))… does not match established callContactId=\(expected.prefix(8))…")
             return
         }
         guard let integration = callService.callIntegration,
