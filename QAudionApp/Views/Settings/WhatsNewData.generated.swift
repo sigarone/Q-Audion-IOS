@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.762",
+              date: "2026-07-12",
+              title: "v1.0.762",
+              bullets: [
+                "fix(calling): buffer-and-replay the pre-callContactId OFFER instead of relaxing the guard",
+                "revert(security): restore strict callContactId guard — d3b304f was a regression",
+                "fix(tools): symbolicate.py crashes on Windows console for inlined-frame arrow",
+              ]),
         .init(id: "v1.0.761",
               date: "2026-07-12",
               title: "v1.0.761",
               bullets: [
+                "chore: regenerate changelog for v1.0.761",
                 "fix(ws): capture and surface the real WS disconnect reason",
               ]),
         .init(id: "v1.0.760",
@@ -161,13 +170,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.743",
                 "fix(ci): unpin GOTOOLCHAIN for the reality xcframework build step",
                 "feat(reality): add Reality/Xray-core transport groundwork (Go side verified)",
-              ]),
-        .init(id: "v1.0.742",
-              date: "2026-07-07",
-              title: "v1.0.742",
-              bullets: [
-                "chore: regenerate changelog for v1.0.742",
-                "fix(call): pin own upgrade-answer to the SAME DTLS role, not the complement",
               ]),
     ]
 }
