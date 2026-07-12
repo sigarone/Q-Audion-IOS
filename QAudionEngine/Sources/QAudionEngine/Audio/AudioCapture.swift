@@ -282,7 +282,20 @@ public final class AudioCapture {
                     if self.micAgcGain < 1 { self.micAgcGain = 1 }
                     if self.micAgcGain > maxGain { self.micAgcGain = maxGain }
                     if self.micAgcGain > self.micAgcMaxGainThisCall { self.micAgcMaxGainThisCall = self.micAgcGain }
-                    let g = self.micAgcGain
+                    // Bound the APPLIED per-frame gain by THIS frame's peak
+                    // headroom — not just the smoothed target. micAgcGain rises
+                    // slowly on quiet speech and ducks slowly (fall alpha 0.05),
+                    // so a loud onset frame arriving while the gain is still high
+                    // would multiply past full scale and hard-clip a flat-top
+                    // (Int16 clamp) BEFORE the downstream soft-knee limiter can
+                    // shape it. Clamping the multiply to agcPeakHeadroom/peak acts
+                    // as a transparent fast-attack peak guard riding on the slow
+                    // make-up: the smoothed state is preserved for sustained level
+                    // but no single frame is ever driven past 90% FS. (Also closes
+                    // the pre-existing VP-IO-off variant of this at the 6.0
+                    // ceiling — the applied gain was previously the lagged
+                    // micAgcGain regardless of the frame's own peak.)
+                    let g = peak > 0 ? min(self.micAgcGain, Self.agcPeakHeadroom / peak) : self.micAgcGain
                     if g > 1.001 {
                         for i in 0..<n {
                             let v = (Float(samples[i]) * g).rounded()
