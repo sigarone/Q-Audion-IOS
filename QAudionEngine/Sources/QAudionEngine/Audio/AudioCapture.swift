@@ -55,6 +55,12 @@ public final class AudioCapture {
     public static var micAgcEnabled = true
     private var micAgcGain: Float = 1.0
     private var micAgcMaxGainThisCall: Float = 1.0   // for telemetry
+    // W-DEZIPPER (2026-07-12) — the gain actually applied to the LAST sample of
+    // the previous frame. The make-up gain is ramped per-sample from this to the
+    // current frame's target so the gain is continuous across the 20 ms frame
+    // boundary; a constant-per-frame gain that changes frame-to-frame steps the
+    // waveform at each boundary → an audible click every frame ("scoppiettante").
+    private var micAgcRampFrom: Float = 1.0
     private static let agcTargetRms: Float = 0.12    // 12% of full scale
     private static let agcNoiseGate: Float = 0.02    // below this = silence → hold gain
     private static let agcMaxGain: Float = 6.0
@@ -150,6 +156,7 @@ public final class AudioCapture {
         firstFrameReceived = false  // W-AEC-FIX — re-arm the VP-IO starve watchdog
         micAgcGain = 1.0            // W-MICAGC — start each call at unity gain
         micAgcMaxGainThisCall = 1.0
+        micAgcRampFrom = 1.0        // W-DEZIPPER — reset the per-sample gain-ramp state
 
         // 1. Configure AVAudioSession for VoIP (hardware AEC, AGC, NS)
         if !audioPipeline.isActive {
@@ -282,26 +289,40 @@ public final class AudioCapture {
                     if self.micAgcGain < 1 { self.micAgcGain = 1 }
                     if self.micAgcGain > maxGain { self.micAgcGain = maxGain }
                     if self.micAgcGain > self.micAgcMaxGainThisCall { self.micAgcMaxGainThisCall = self.micAgcGain }
-                    // Bound the APPLIED per-frame gain by THIS frame's peak
-                    // headroom — not just the smoothed target. micAgcGain rises
-                    // slowly on quiet speech and ducks slowly (fall alpha 0.05),
-                    // so a loud onset frame arriving while the gain is still high
-                    // would multiply past full scale and hard-clip a flat-top
-                    // (Int16 clamp) BEFORE the downstream soft-knee limiter can
-                    // shape it. Clamping the multiply to agcPeakHeadroom/peak acts
-                    // as a transparent fast-attack peak guard riding on the slow
-                    // make-up: the smoothed state is preserved for sustained level
-                    // but no single frame is ever driven past 90% FS. (Also closes
-                    // the pre-existing VP-IO-off variant of this at the 6.0
-                    // ceiling — the applied gain was previously the lagged
-                    // micAgcGain regardless of the frame's own peak.)
-                    let g = peak > 0 ? min(self.micAgcGain, Self.agcPeakHeadroom / peak) : self.micAgcGain
-                    if g > 1.001 {
+                    // W-DEZIPPER — apply the smooth make-up gain with PER-SAMPLE
+                    // ramping from the previous frame's end gain to this frame's
+                    // target, so the gain is CONTINUOUS across the 20 ms frame
+                    // boundary. A constant per-frame gain that changed frame-to-
+                    // frame stepped the waveform at each boundary → an audible click
+                    // every frame (the "scoppiettante" crackle the user reported);
+                    // the earlier per-frame peak clamp made it worse by dropping the
+                    // gain hard on loud frames (it bound whenever micAgcGain*peak >
+                    // 90% FS, i.e. on the loudest ~20 ms chunks). Peak safety is now
+                    // a per-sample SOFT-KNEE (the same curve as the standalone
+                    // TX-LIMITER below) applied INLINE right after the gain, so no
+                    // sample is ever hard-flat-topped by the Int16 clamp before the
+                    // limiter can shape it — de-zippered make-up + smooth limiting
+                    // in one pass, no discontinuities.
+                    let gStart = self.micAgcRampFrom
+                    let gTarget = self.micAgcGain
+                    if gTarget > 1.001 || gStart > 1.001 {
+                        let inv: Float = 1 / Float(n)
+                        let limThresh: Float = 0.90 * fs
+                        let limCeil: Float = 0.98 * fs
+                        let limRange: Float = limCeil - limThresh
                         for i in 0..<n {
-                            let v = (Float(samples[i]) * g).rounded()
-                            samples[i] = Int16(clamping: Int(v))
+                            let gi = gStart + (gTarget - gStart) * (Float(i) * inv)
+                            var v = Float(samples[i]) * gi
+                            let mag = abs(v)
+                            if mag > limThresh {
+                                let excess = mag - limThresh
+                                let comp = limThresh + limRange * (1 - exp(-excess / limRange))
+                                v = (v < 0 ? -1 : 1) * comp
+                            }
+                            samples[i] = Int16(clamping: Int(v.rounded()))
                         }
                     }
+                    self.micAgcRampFrom = gTarget
                 }
             }
             // AGC-DIAG — scan the samples we already have in hand (no extra
