@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.768",
+              date: "2026-07-12",
+              title: "v1.0.768",
+              bullets: [
+                "feat(audio): gentle software make-up AGC for the quiet iOS mic",
+                "fix(audio): rebuild capture engine on in-call speaker toggle (mic died)",
+              ]),
         .init(id: "v1.0.767",
               date: "2026-07-12",
               title: "v1.0.767",
               bullets: [
+                "chore: regenerate changelog for v1.0.767",
                 "fix(telemetry): stop counting expected pre-handshake mic frames as tx_enc_err",
               ]),
         .init(id: "v1.0.766",
@@ -152,15 +160,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.749",
                 "ci(ios): skip TusUploadClientTests on the Simulator job (macOS still runs it)",
                 "fix(security,test): new LE cert-pin anchors + Tus test deadlock fix",
-              ]),
-        .init(id: "v1.0.748",
-              date: "2026-07-09",
-              title: "v1.0.748",
-              bullets: [
-                "chore: regenerate changelog for v1.0.748",
-                "fix(security): TOFU-pin SRTP directional-key capability + Reality front pubkey",
-                "fix(security): port WSS-TURN transaction-ID reply-correlation fix to MasqueTurnBridge",
-                "fix(security): correlate WSS-TURN replies by transaction ID, not last-sender",
               ]),
     ]
 }
