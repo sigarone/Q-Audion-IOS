@@ -241,6 +241,62 @@ final class AppState: ObservableObject {
     @Published var isVideoCall: Bool = false
     @Published var callState: CallState = .idle
     @Published var callContactId: String?
+    /// W-OFFERBUFFER (2026-07-12) — OFFER messages (PQC or Android-JSON)
+    /// that arrived while `callContactId` was still nil. Desktop/Android
+    /// ship the opaque OFFER BEFORE the `call_offer` envelope that sets
+    /// `callContactId` via `call_incoming`, so on every first-ever
+    /// incoming call the OFFER legitimately arrives ahead of it. The
+    /// strict `callContactId == senderId` guard (567e953) must stay
+    /// strict — reverting d3b304f, which relaxed it, restored a real
+    /// key-injection/call-hijack hole and caused a session-key mismatch
+    /// between two live devices. Buffering here gets the same outcome
+    /// (the legitimate first OFFER is not dropped) without weakening the
+    /// check: a buffered entry only ever replays if callContactId is
+    /// LATER set to that exact senderId by the real call_incoming/
+    /// prepareIncomingPushCall path; an attacker's OFFER sent while
+    /// callContactId is nil just expires unprocessed, identical to a
+    /// drop. TTL-based (not tied to callContactId reset call sites) so
+    /// it self-cleans even if a future call-end path misses clearing it.
+    private struct PendingOfferReplay {
+        let senderId: String
+        let enqueuedAt: Date
+        let replay: () -> Void
+    }
+    private var pendingOfferReplays: [PendingOfferReplay] = []
+    private static let pendingOfferReplayCap = 4
+    private static let pendingOfferReplayTTL: TimeInterval = 5.0
+
+    /// Buffer an OFFER dispatch for replay once `callContactId` becomes
+    /// exactly `senderId`. Bounded + TTL-pruned on every call (append and
+    /// drain) so a burst of unsolicited OFFERs from different senders
+    /// can't grow this unbounded, and a stale entry can't outlive the
+    /// handshake window it exists for.
+    @MainActor
+    private func bufferOfferReplay(senderId: String, replay: @escaping () -> Void) {
+        let now = Date()
+        pendingOfferReplays.removeAll { now.timeIntervalSince($0.enqueuedAt) > Self.pendingOfferReplayTTL }
+        if pendingOfferReplays.count >= Self.pendingOfferReplayCap {
+            pendingOfferReplays.removeFirst()
+        }
+        pendingOfferReplays.append(PendingOfferReplay(senderId: senderId, enqueuedAt: now, replay: replay))
+    }
+
+    /// Call right after every `callContactId = <non-nil>` assignment
+    /// (mirrors `drainRxPreBuffer()`'s placement right after
+    /// `callIntegration` binds in CallService.swift). Replays only the
+    /// entries whose senderId matches what callContactId was just set
+    /// to; everything else — expired or from a different sender — is
+    /// discarded, never processed.
+    @MainActor
+    private func drainPendingOfferReplays(for senderId: String) {
+        guard !pendingOfferReplays.isEmpty else { return }
+        let now = Date()
+        let matches = pendingOfferReplays.filter {
+            $0.senderId == senderId && now.timeIntervalSince($0.enqueuedAt) <= Self.pendingOfferReplayTTL
+        }
+        pendingOfferReplays.removeAll { $0.senderId == senderId }
+        for m in matches { m.replay() }
+    }
     /// WIRE_SPEC §8.1 — true when the remote peer has signalled
     /// `call_video_state(paused: true)` (they turned their camera off).
     /// Purely informational UI state: it never touches the PeerConnection
@@ -2612,6 +2668,7 @@ final class AppState: ObservableObject {
                     await MainActor.run {
                         if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
                         self.callContactId = senderId
+                        self.drainPendingOfferReplays(for: senderId)  // W-OFFERBUFFER
                         // WIRE_SPEC §8.3 — we answered → polite on any later glare.
                         self.originalCallRole = .callee
                         self.incomingCallerName = resolvedCallerName
@@ -5263,8 +5320,19 @@ final class AppState: ObservableObject {
         // Sender-identity check (2026-07-11 — same reasoning/fix as
         // routeInboundPqcOffer above; sibling dispatch for the
         // Android-JSON-envelope OFFER format, same missing guard.
-        guard let expected = callContactId, expected == senderId else {
-            print("[AppState] Android OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+        if let expected = callContactId {
+            guard expected == senderId else {
+                print("[AppState] Android OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match established callContactId=\(expected.prefix(8))…")
+                return
+            }
+        } else {
+            // W-OFFERBUFFER — callContactId not set yet (this OFFER arrived
+            // before call_incoming). Buffer; replayed only if callContactId
+            // is later set to this exact senderId, never otherwise.
+            print("[AppState] Android OFFER buffered — callContactId not yet set, waiting for call_incoming from \(senderId.prefix(8))…")
+            bufferOfferReplay(senderId: senderId) { [weak self] in
+                self?.routeInboundAndroidOffer(parsed: parsed, senderId: senderId)
+            }
             return
         }
         let integration = ensureResponderIntegration(forCaller: senderId)
@@ -5550,8 +5618,19 @@ final class AppState: ObservableObject {
         // not just a duplicate-delivery correctness bug. Reject up front,
         // before any PQC work runs, if there's no active call or the sender
         // isn't who this call is actually with.
-        guard let expected = callContactId, expected == senderId else {
-            print("[AppState] PQC OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match callContactId=\(callContactId?.prefix(8) ?? "nil")")
+        if let expected = callContactId {
+            guard expected == senderId else {
+                print("[AppState] PQC OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match established callContactId=\(expected.prefix(8))…")
+                return
+            }
+        } else {
+            // W-OFFERBUFFER — callContactId not set yet (this OFFER arrived
+            // before call_incoming). Buffer; replayed only if callContactId
+            // is later set to this exact senderId, never otherwise.
+            print("[AppState] PQC OFFER buffered — callContactId not yet set, waiting for call_incoming from \(senderId.prefix(8))…")
+            bufferOfferReplay(senderId: senderId) { [weak self] in
+                self?.routeInboundPqcOffer(blob: blob, senderId: senderId)
+            }
             return
         }
         let integration = ensureResponderIntegration(forCaller: senderId)
@@ -6099,6 +6178,7 @@ final class AppState: ObservableObject {
     private func prepareIncomingPushCall(callId: UUID, callerId: String, hasVideo: Bool, fallbackName: String) -> String {
         activeCallKitId = callId
         callContactId = callerId
+        drainPendingOfferReplays(for: callerId)  // W-OFFERBUFFER
         // WIRE_SPEC §8.3 — PushKit-woken incoming call: we answered → polite.
         originalCallRole = .callee
         isVideoCall = hasVideo
@@ -6582,6 +6662,7 @@ final class AppState: ObservableObject {
             return
         }
         callContactId = contactId
+        drainPendingOfferReplays(for: contactId)  // W-OFFERBUFFER (defensive; caller path)
         callState = .connecting
         isInCall = true
         isVideoCall = video
