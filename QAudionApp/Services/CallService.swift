@@ -1132,6 +1132,10 @@ final class CallService {
                 let diagAttrs: [String: Any] = [
                     "peak_pct":           (peakPct * 10).rounded() / 10,
                     "rms_pct":            (txRmsPct * 10).rounded() / 10,
+                    // W-MICAGC — max software make-up gain the mic AGC reached this
+                    // call (1.0 = never engaged / VP-IO on; higher = raw mic was
+                    // quiet and got lifted). Hitting the 6.0 cap ⇒ target unreachable.
+                    "agc_gain":           (Double(level.agcGain) * 100).rounded() / 100,
                     "rx_peak_pct":        (rxPeakPct * 10).rounded() / 10,
                     "rx_rms_pct":         (rxRmsPct * 10).rounded() / 10,
                     "clip_samples":       level.clipSamples,

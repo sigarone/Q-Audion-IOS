@@ -41,6 +41,24 @@ public final class AudioCapture {
     private var peakAmplitude: Int16 = 0
     private var clipSampleCount: Int64 = 0
     private static let clipThreshold: Int16 = 31800
+    // W-MICAGC (2026-07-12) — gentle software make-up AGC. Server telemetry
+    // showed the iOS mic ships systematically quiet (tx peak median ~5%, RMS ~1%
+    // of full scale) because VP-IO/AGC is OFF on the earpiece route (W556) and
+    // the TX-LIMITER below only CAPS peaks, never lifts level. This is the
+    // middle ground between "raw = too quiet" and "Apple VP-IO AGC = spara
+    // troppo / pumping": a SLOW, BOOST-ONLY make-up gain toward a target RMS,
+    // gated on voice (never amplifies silence/background hiss) and capped so an
+    // already-loud frame is never over-driven (the limiter still backstops
+    // peaks). ONLY runs when VP-IO is inactive — when VP-IO is on, Apple's own
+    // AGC is already normalising, so stacking ours would double-boost. Lock-free
+    // single-thread state (the 50 fps tap callback). Killswitch if it regresses.
+    public static var micAgcEnabled = true
+    private var micAgcGain: Float = 1.0
+    private var micAgcMaxGainThisCall: Float = 1.0   // for telemetry
+    private static let agcTargetRms: Float = 0.12    // 12% of full scale
+    private static let agcNoiseGate: Float = 0.02    // below this = silence → hold gain
+    private static let agcMaxGain: Float = 6.0
+    private static let agcPeakHeadroom: Float = 0.90 // never boost a frame's peak past 90%
     // TX-RMS (2026-07-12) — sum of squares + sample count for the mic RMS,
     // accumulated on the same 50fps tap callback as peakAmplitude (no lock,
     // no extra decode). `consumeLevelStats()` folds these into `rms` (in Int16
@@ -50,13 +68,14 @@ public final class AudioCapture {
     /// Read the accumulated peak/clip/rms stats for the CURRENT call and reset
     /// them for the next one. Call from teardown, before `stop()` clears
     /// other per-call state. `rms` is in Int16 sample units (0…32767).
-    public func consumeLevelStats() -> (peak: Int16, clipSamples: Int64, rms: Double) {
+    public func consumeLevelStats() -> (peak: Int16, clipSamples: Int64, rms: Double, agcGain: Float) {
         let rms = rmsSampleCount > 0 ? (sumSqAmplitude / Double(rmsSampleCount)).squareRoot() : 0
-        let stats = (peakAmplitude, clipSampleCount, rms)
+        let stats = (peakAmplitude, clipSampleCount, rms, micAgcMaxGainThisCall)
         peakAmplitude = 0
         clipSampleCount = 0
         sumSqAmplitude = 0
         rmsSampleCount = 0
+        micAgcMaxGainThisCall = 1.0
         return stats
     }
     // M-12 — AVAudioSession interruption (phone call, Siri, alarm)
@@ -121,6 +140,8 @@ public final class AudioCapture {
         // pre-interruption session can't desync the frame boundaries.
         pcmAccumulator = Data()
         firstFrameReceived = false  // W-AEC-FIX — re-arm the VP-IO starve watchdog
+        micAgcGain = 1.0            // W-MICAGC — start each call at unity gain
+        micAgcMaxGainThisCall = 1.0
 
         // 1. Configure AVAudioSession for VoIP (hardware AEC, AGC, NS)
         if !audioPipeline.isActive {
@@ -210,6 +231,54 @@ public final class AudioCapture {
                 raw = int16Buf.withUnsafeBytes { Data($0) }
             } else {
                 return
+            }
+            // W-MICAGC — gentle make-up AGC (see field docs). ONLY when VP-IO is
+            // off (else Apple's AGC already normalises → double-boost). Applied
+            // BEFORE the level scan so telemetry reflects the TRANSMITTED level,
+            // and before the limiter which backstops any overshoot.
+            if Self.micAgcEnabled && !pipeline.voiceProcessingIsActive {
+                raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
+                    guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
+                    let n = rawBuf.count / 2
+                    guard n > 0 else { return }
+                    let fs = Float(Int16.max)
+                    var sumSq: Double = 0
+                    var peak: Float = 0
+                    for i in 0..<n {
+                        let s = Float(samples[i]) / fs
+                        sumSq += Double(s * s)
+                        let a = abs(s)
+                        if a > peak { peak = a }
+                    }
+                    let rms = Float((sumSq / Double(n)).squareRoot())
+                    // Only adapt when real voice is present (above the gate); on
+                    // silence/background HOLD the gain so hiss is never pumped up.
+                    if rms > Self.agcNoiseGate {
+                        var desired = Self.agcTargetRms / rms
+                        if desired < 1 { desired = 1 }                       // boost-only
+                        if desired > Self.agcMaxGain { desired = Self.agcMaxGain }
+                        if peak > 0 {                                        // never over-drive a loud frame
+                            let peakCap = Self.agcPeakHeadroom / peak
+                            if peakCap < desired { desired = peakCap }
+                            if desired < 1 { desired = 1 }
+                        }
+                        // slow one-pole: rise slowly (lift quiet voice gently),
+                        // fall a touch faster (duck loud); both slow enough that
+                        // the ear does not perceive pumping.
+                        let alpha: Float = desired > self.micAgcGain ? 0.02 : 0.05
+                        self.micAgcGain += (desired - self.micAgcGain) * alpha
+                    }
+                    if self.micAgcGain < 1 { self.micAgcGain = 1 }
+                    if self.micAgcGain > Self.agcMaxGain { self.micAgcGain = Self.agcMaxGain }
+                    if self.micAgcGain > self.micAgcMaxGainThisCall { self.micAgcMaxGainThisCall = self.micAgcGain }
+                    let g = self.micAgcGain
+                    if g > 1.001 {
+                        for i in 0..<n {
+                            let v = (Float(samples[i]) * g).rounded()
+                            samples[i] = Int16(clamping: Int(v))
+                        }
+                    }
+                }
             }
             // AGC-DIAG — scan the samples we already have in hand (no extra
             // decode) for peak amplitude + near-full-scale clip count. `raw`
