@@ -93,6 +93,17 @@ final class CallService {
     private var framesReceivedRx: Int64 = 0   // audio_frame envelopes off the WS, pre-decrypt
     private var txEncryptErrorCount: Int64 = 0
     private var rxDecryptErrorCount: Int64 = 0
+    // W-TXGATE (2026-07-12) — the mic starts capturing the instant the call UI
+    // appears, but the PQC session key isn't derived until the handshake
+    // completes (~0.8 s later). Every mic frame in that window used to hit
+    // `processOutgoingAudio` and throw QAudionEngineError.error3 (no session),
+    // inflating tx_enc_err with EXPECTED pre-handshake drops that are
+    // indistinguishable from a real post-handshake crypto failure (the
+    // tune-report card flagged 40 such "errors" on a healthy call). Gate the
+    // encrypt on session-ready: pre-handshake frames are dropped cleanly into a
+    // SEPARATE counter, so tx_enc_err counts ONLY real failures.
+    private var txSessionReady = false
+    private var txPreHandshakeDropped: Int64 = 0
     // AUDIO-DIAG (2026-07-12) — decoded RX audio level accumulators, mirror of
     // Android MediaPathDiag.recordRxLevel (rx_peak_pct/rx_rms_pct). Touched only
     // on the RX decode branch (same lock-free discipline as framesDecryptedRx),
@@ -480,6 +491,10 @@ final class CallService {
             switch state {
             case .active:
                 print("[CallService] PQC handshake complete — session active")
+                // W-TXGATE — session key is live; open the TX encrypt gate. From
+                // here processOutgoingAudio can succeed, so any failure past this
+                // point is a REAL crypto error (counted in tx_enc_err).
+                self.txSessionReady = true
                 // Engine is now initialized — apply tuner-persisted codec params.
                 self.callIntegration?.reconfigureAudioCodec(
                     bitrateKbps: AudioCodecPrefs.bitrateKbps,
@@ -1071,6 +1086,10 @@ final class CallService {
                 "rx_dec":          framesDecryptedRx,
                 "rx_dec_err":      rxDecryptErrorCount,
                 "tx_enc_err":      txEncryptErrorCount,
+                // W-TXGATE — expected mic frames dropped before the session key
+                // existed (~0.8 s handshake window); NOT a fault. Kept separate
+                // so tx_enc_err stays a clean real-failure signal.
+                "tx_pre_hs":       txPreHandshakeDropped,
                 "engines_started": audioEnginesStarted,
                 "fallback_fired":  didActivateFallbackFired,
                 "session_active":  audioSessionActive
@@ -1147,6 +1166,8 @@ final class CallService {
         framesReceivedRx = 0
         txEncryptErrorCount = 0
         rxDecryptErrorCount = 0
+        txSessionReady = false            // W-TXGATE — re-arm for the next call
+        txPreHandshakeDropped = 0
         rxLevelPeak = 0        // AUDIO-DIAG (2026-07-12) — reset RX level accumulators
         rxLevelSumSq = 0
         rxLevelSampleCount = 0
@@ -1427,11 +1448,20 @@ final class CallService {
                 print("[CallService] TX: encrypted frames NOT sent — WS transport not bound (wsClient/peerUserId nil)")
             }
         } catch {
-            // W466 — previously a SILENT catch that hid every Opus/AEAD
-            // failure. Pre-handshake errors ARE expected for the first
-            // ~second (session key not derived yet); log the first one
-            // and then every 250th so the telemetry shows whether they
-            // stop (handshake completed) or continue (real crypto bug).
+            // W-TXGATE — separate the EXPECTED pre-handshake window from a REAL
+            // crypto failure. Before the session key exists (txSessionReady
+            // still false), processOutgoingAudio necessarily throws
+            // QAudionEngineError.error3 on every mic frame — ~40 frames over the
+            // ~0.8 s handshake. Counting those in tx_enc_err made a healthy call
+            // look like it had 40 crypto errors (surfaced by tune-report). Route
+            // them to txPreHandshakeDropped instead; tx_enc_err now counts ONLY
+            // failures AFTER the session went active — a genuine bug signal.
+            if !txSessionReady {
+                txPreHandshakeDropped &+= 1
+                return
+            }
+            // W466 — a real post-handshake encrypt failure. Log the first one and
+            // every 250th so the telemetry shows whether they persist.
             txEncryptErrorCount &+= 1
             if txEncryptErrorCount == 1 || txEncryptErrorCount % 250 == 0 {
                 let desc: String = error.localizedDescription
