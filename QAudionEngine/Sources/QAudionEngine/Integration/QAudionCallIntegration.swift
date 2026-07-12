@@ -777,18 +777,28 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // session-key install (success) or call end (handshake.reset).
         armOfferRetryTimer()
 
-        // 2. Ship the legacy QUAD binary OFFER for older iOS peers.
-        //    Failure here is non-fatal for Android interop (the JSON
-        //    already went out), so log and continue.
-        let quadOffer = QAudionCapabilityExchange.createOffer(
-            publicKey: pqcRawPub,
-            pskFingerprints: []
-        )
-        do {
-            try await sendOpaqueBinary(quadOffer)
-        } catch {
-            print("[QAudionCallIntegration] QUAD OFFER send failed (non-fatal — JSON OFFER already shipped): \(error)")
-        }
+        // 2. Legacy QUAD binary OFFER — REMOVED (2026-07-12, dual-path
+        //    key-derivation race). Sending both a JSON OFFER and a QUAD
+        //    OFFER for the same call let the responder answer either one
+        //    (whichever `sessionInitializedByCall` saw first), and the
+        //    caller independently race its own JSON vs QUAD ACCEPT
+        //    processing. The two paths derive the session key
+        //    DIFFERENTLY — JSON/`deriveHybridSessionKey`(V4) mixes
+        //    PQC+X25519+ciphertext-binding via HKDF; QUAD uses the raw
+        //    `pqc.encapsulate().sharedSecret` with no mixing at all — so
+        //    if one side's OFFER-race winner differs from the other
+        //    side's ACCEPT-race winner, the two ends install different
+        //    keyfp and every AEAD frame (audio) and SFrame (video) fails
+        //    to open for the whole call. Root-caused on call 5f56a6ab
+        //    (2026-07-12): a double `startCall`/`call_incoming` (UI
+        //    double-fire) triggered exactly this cross-path split —
+        //    iPad installed keyfp=da41a653 (JSON/hybrid), iPhone
+        //    installed keyfp=f8d5aadc (QUAD/raw) for the SAME call_id.
+        //    No pre-v4 iOS peers remain in the fleet (confirmed), so the
+        //    QUAD OFFER send is dead weight that only creates this race
+        //    — removed rather than re-patching the guard timing.
+        //    `.offer`/`.accept` QUAD receive handlers are left in place
+        //    (harmless, unreachable without a QUAD OFFER on the wire).
 
         // Pre-handshake fallback timeout — if no ACCEPT lands in 30s
         // (session not initialised) flip to .fallback. CallService used to
