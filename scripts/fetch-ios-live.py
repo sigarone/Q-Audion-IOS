@@ -122,8 +122,13 @@ def _maybe_symbolicate(dump_path, skip):
         text = dump_path.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return
-    has_crash = ("[CrashReporter]" in text and "QAudionApp + " in text) \
-        or bool(re.search(r"signal\s*5|SIGTRAP|SIGSEGV|SIGABRT", text))
+    # [CrashReporter] = W472 in-process signal backtrace.
+    # [MetricKit]     = W-MK watchdog/SIGKILL crash frames (0x8BADF00D etc.),
+    #   the ONLY stack source for a RunningBoard kill (no signal handler runs).
+    #   Both emit stripped 'QAudionApp + <offset>' frames symbolicate.py resolves.
+    has_crash = (("[CrashReporter]" in text or "[MetricKit] crash stack" in text)
+                 and "QAudionApp + " in text) \
+        or bool(re.search(r"signal\s*5|SIGTRAP|SIGSEGV|SIGABRT|0x8BADF00D", text))
     if not has_crash:
         return
     sym = Path(__file__).resolve().parent / "symbolicate.py"

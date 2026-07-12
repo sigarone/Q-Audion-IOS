@@ -185,7 +185,23 @@ def parse_crash(text):
                     "msg": mf.group("msg").strip(),
                 }
 
-    # Bare offsets (stdin / pasted) if no full frames matched.
+    # MetricKit watchdog/SIGKILL stack frames ([MetricKit] ... QAudionApp +
+    # <offset>) carry NO runtime hex so they never match _FRAME_RE. Collect
+    # them ALWAYS — even when a CrashReporter strict-frame dump from an
+    # unrelated earlier SIGTRAP is also present in the same pull — otherwise a
+    # 0x8BADF00D watchdog stack (the one that actually explains "app freezes /
+    # won't ring") would be silently masked by the strict frames.
+    for raw in text.splitlines():
+        if "[MetricKit]" in raw and "QAudionApp + " in raw:
+            m = _BARE_OFFSET_RE.search(raw)
+            if m:
+                frames.append({
+                    "idx": len(frames),
+                    "runtime": None,
+                    "offset": int(m.group("offset")),
+                })
+
+    # Bare offsets (stdin / pasted) if no full frames matched at all.
     if not frames:
         for raw in text.splitlines():
             m = _BARE_OFFSET_RE.search(raw)
