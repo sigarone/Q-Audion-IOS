@@ -29,8 +29,11 @@ public struct CryptoComplianceInfo {
     /// Classical key exchange: X25519 (RFC 7748) + P-256 (FIPS 186-4) via Secure Enclave.
     public static let classicalKex = "X25519 (RFC 7748) + P-256 (FIPS 186-4)"
 
-    /// Hybrid key exchange combining PQC + classical + hardware.
-    public static let hybridKex = "ML-KEM-1024 + X25519 + P-256/SEP (NIST Hybrid)"
+    /// Hybrid key exchange as actually derived into the shipped audio session key:
+    /// only the ML-KEM-1024 + X25519 legs enter the frozen cross-platform KDF. The
+    /// Secure-Enclave P-256 leg is NOT folded into the shipped key (its wiring lives
+    /// on a worktree branch, not main) — do not re-add "+ P-256/SEP" until it is.
+    public static let hybridKex = "ML-KEM-1024 + X25519 (NIST Hybrid)"
 
     /// Overall security level: NIST Level 5 provides 256-bit quantum security.
     public static let securityLevel = "NIST Level 5 (256-bit quantum security)"

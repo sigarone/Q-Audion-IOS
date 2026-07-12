@@ -1369,10 +1369,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
             // AES-256 kill-switch gate (v4SFrameAes256Enabled). When this build
             // requires AES-256 but the peer didn't advertise sframe-aes256-v1,
-            // disable video fail-closed rather than emit a cipher the peer
-            // can't decrypt.
+            // peer can't do our frame cipher: fall back to the .legacy sealer,
+            // i.e. transport-only DTLS-SRTP (video still flows, without
+            // frame-level E2EE). This is a DEGRADE, not a hard block — unlike
+            // Android, which disables the video track outright. Reached only
+            // against a legacy peer (all current clients advertise the tag).
             if CallCapabilities.v4SFrameAes256Enabled && !negotiated.useSFrameAes256 {
-                print("[WebRtcCallController] AES-256 FAIL-CLOSED — peer does not advertise sframe-aes256-v1 (agreed=\(negotiated.agreedTags)); video DISABLED")
+                print("[WebRtcCallController] sframe-aes256-v1 not advertised by peer (agreed=\(negotiated.agreedTags)); video DEGRADED to DTLS-SRTP only (no frame-level E2EE)")
                 videoSealer = .legacy
                 return videoSealer
             }
