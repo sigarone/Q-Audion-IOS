@@ -1067,15 +1067,25 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         Task { [weak self] in
             guard let self = self else { return }
             let ok = await recover()
-            self.lock.lock()
-            self.authRecoveryInFlight = false
+            // Swift 6 — NSLock.lock()/unlock() are unavailable from async
+            // contexts (they can block the cooperative pool). Mutate the shared
+            // state under a scoped `withLock` (synchronous, no await inside),
+            // then act on the decision OUTSIDE the lock.
+            self.lock.withLock {
+                self.authRecoveryInFlight = false
+                if ok {
+                    // Fresh token applied (updateConfig already broadcast by the
+                    // provider). Reset backoff and reconnect immediately with the
+                    // new credentials.
+                    self.authPermanentlyRejected = false
+                    self.reconnectAttempt = 0
+                } else {
+                    // Genuine revocation — park the reconnect loop until the app
+                    // layer re-onboards and calls connect() again. No QR forced.
+                    self.authPermanentlyRejected = true
+                }
+            }
             if ok {
-                // Fresh token applied (updateConfig already broadcast by the
-                // provider). Reset backoff and reconnect immediately with the
-                // new credentials.
-                self.authPermanentlyRejected = false
-                self.reconnectAttempt = 0
-                self.lock.unlock()
                 let okLine: String = "[BCryptoWS] auth_failed → silent recovery OK, reconnecting"
                 print(okLine)
                 // forceReconnect() (not connect()) so the fresh token is used
@@ -1085,10 +1095,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                 // any lingering task first and is debounced against storms.
                 self.forceReconnect()
             } else {
-                // Genuine revocation — park the reconnect loop until the app
-                // layer re-onboards and calls connect() again. No QR forced.
-                self.authPermanentlyRejected = true
-                self.lock.unlock()
                 let failLine: String = "[BCryptoWS] auth_failed → silent recovery REJECTED (revoked); pausing reconnect"
                 print(failLine)
             }

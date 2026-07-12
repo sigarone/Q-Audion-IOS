@@ -3,7 +3,14 @@ import AVFoundation  // AVAudioSession for speaker override
 import CryptoKit     // W574l — one-way key fingerprint for seal-key diagnostics
 import QAudionEngine
 
-final class CallService {
+// Swift 6 — CallService coordinates its OWN concurrency (it is not @MainActor):
+// the TX audio pipeline is serialised on the private `txAudioQueue`, decoded-RX
+// diagnostic counters are touched on the capture/decode threads, and every
+// UI-facing callback hops to the main actor via `Task { @MainActor in … }`.
+// That manual, queue-based serialisation is exactly the contract `@unchecked
+// Sendable` documents, and it lets the TX @Sendable dispatch closures capture
+// `self` without the compiler flagging a false data race. No behaviour change.
+final class CallService: @unchecked Sendable {
     var callIntegration: QAudionCallIntegration?
     var onDeepfakeAlert: ((Bool) -> Void)?
     var onDeepfakeScore: ((ConfidenceIndex.Level, Float) -> Void)?

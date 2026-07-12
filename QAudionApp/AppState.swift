@@ -878,7 +878,11 @@ final class AppState: ObservableObject {
     /// through `runProactiveRefresh()` so the second caller awaits the
     /// in-flight task instead of issuing a duplicate refresh.
     private var proactiveRefreshTask: Task<Void, Never>?
-    private static let accessTokenExpiryEpochKey = "com.qaudion.auth.access_expiry_epoch"
+    // Swift 6 — nonisolated so the `@Sendable` device-renew fallback closure
+    // (and persistAccessTokenTtl / the token-persist paths) can reference this
+    // constant key without crossing main-actor isolation. It is an immutable
+    // String literal, so nonisolated is safe.
+    nonisolated private static let accessTokenExpiryEpochKey = "com.qaudion.auth.access_expiry_epoch"
 
     /// UUID string of the PersistentCallRecord for the current call.
     /// Set in startCall (outgoing) and wireIncomingCallHandlers (incoming).

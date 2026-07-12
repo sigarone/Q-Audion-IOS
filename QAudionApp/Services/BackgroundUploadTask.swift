@@ -79,9 +79,15 @@ enum BackgroundUploadTask {
     /// throws on that account.
     static func run<T>(
         name: String,
-        application: BackgroundTaskProviding = UIApplication.shared,
+        application injectedApplication: BackgroundTaskProviding? = nil,
         operation: () async throws -> T
     ) async rethrows -> T {
+        // Swift 6 — `UIApplication.shared` is main-actor-isolated, so it can't
+        // be a default value in this nonisolated function. Resolve it here on
+        // the main actor when the caller injected nothing (the test seam still
+        // works by passing a fake). No behaviour change for real callers.
+        let application: BackgroundTaskProviding = injectedApplication
+            ?? (await MainActor.run { UIApplication.shared })
         // Guards double-ending: the expiration handler and the normal
         // completion path both race to call `endOnce()`, and exactly one
         // of them must actually call `endBackgroundTask`. `NSLock` keeps
@@ -95,7 +101,7 @@ enum BackgroundUploadTask {
         // `beginBackgroundTask` returns, before any `await` — so by the
         // time the expiration handler could possibly fire, `state`
         // already has the real id (never reads a stale `.invalid`).
-        let state = EndOnceGuard()
+        let state = EndOnceGuard(application: application)
 
         let taskId = application.beginBackgroundTask(withName: name) {
             // Expiration handler: the OS is telling us the grace period
@@ -106,7 +112,7 @@ enum BackgroundUploadTask {
             // path already covers this. Best-effort: log + end exactly
             // once.
             print("[BackgroundUploadTask] '\(name)' expired — grace period ran out before completion")
-            state.endOnce(application)
+            state.endOnce()
         }
         state.assign(taskId)
 
@@ -120,7 +126,7 @@ enum BackgroundUploadTask {
             // Normal exit path (success or thrown error). If the
             // expiration handler already fired and ended the task, this
             // is a no-op (EndOnceGuard enforces exactly-once).
-            state.endOnce(application)
+            state.endOnce()
         }
 
         return try await operation()
@@ -133,6 +139,12 @@ enum BackgroundUploadTask {
         private let lock = NSLock()
         private var taskId: UIBackgroundTaskIdentifier = .invalid
         private var ended = false
+        // Swift 6 — hold the (non-Sendable) application here rather than
+        // capturing it in the @Sendable expiration handler. The guard is
+        // `@unchecked Sendable` (its own NSLock serialises access), so it can
+        // legally own the reference; the handler then captures only this guard.
+        private let application: BackgroundTaskProviding
+        init(application: BackgroundTaskProviding) { self.application = application }
 
         func assign(_ id: UIBackgroundTaskIdentifier) {
             lock.lock()
@@ -140,7 +152,7 @@ enum BackgroundUploadTask {
             taskId = id
         }
 
-        func endOnce(_ application: BackgroundTaskProviding) {
+        func endOnce() {
             lock.lock()
             let id = taskId
             let alreadyEnded = ended
@@ -162,7 +174,10 @@ enum BackgroundUploadTask {
 /// today, so nothing currently exercises the fake — the seam is real,
 /// the "tested" claim would not be.
 protocol BackgroundTaskProviding {
-    func beginBackgroundTask(withName taskName: String?, expirationHandler handler: (() -> Void)?) -> UIBackgroundTaskIdentifier
+    // Swift 6 — the iOS 18 SDK declares UIApplication's expirationHandler as
+    // `(@Sendable () -> Void)?`; the requirement must match or the conformance
+    // (extension UIApplication) is flagged as a sendability mismatch.
+    func beginBackgroundTask(withName taskName: String?, expirationHandler handler: (@Sendable () -> Void)?) -> UIBackgroundTaskIdentifier
     func endBackgroundTask(_ identifier: UIBackgroundTaskIdentifier)
 }
 
