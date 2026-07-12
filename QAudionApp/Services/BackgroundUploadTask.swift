@@ -86,8 +86,14 @@ enum BackgroundUploadTask {
         // be a default value in this nonisolated function. Resolve it here on
         // the main actor when the caller injected nothing (the test seam still
         // works by passing a fake). No behaviour change for real callers.
-        let application: BackgroundTaskProviding = injectedApplication
-            ?? (await MainActor.run { UIApplication.shared })
+        let application: BackgroundTaskProviding
+        if let injectedApplication {
+            application = injectedApplication
+        } else {
+            // `??` can't wrap an `await` (its RHS autoclosure isn't async), so
+            // resolve the main-actor singleton in an explicit else.
+            application = await MainActor.run { UIApplication.shared }
+        }
         // Guards double-ending: the expiration handler and the normal
         // completion path both race to call `endOnce()`, and exactly one
         // of them must actually call `endBackgroundTask`. `NSLock` keeps

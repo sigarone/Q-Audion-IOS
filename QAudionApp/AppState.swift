@@ -3768,12 +3768,16 @@ final class AppState: ObservableObject {
                     String(describing: recoverMs) + "ms (backoff + ladder reset)"
                 RTLog.info("VIDEODIAG", line)
                 videoStallLadder.noteRecovered()
+                emitVideoStallTelemetry(event: "recovered", snap: snap, now: now,
+                                        recoverMs: recoverMs, how: how)
             }
         } else if VideoStallSelfHeal.isBlackVideoStall(
             msSinceLastArrivedIncrease: now - videoDiagLastArrivedIncreaseMs,
             msSinceLastRenderedIncrease: now - videoDiagLastRenderedIncreaseMs) {
             videoStallLadder.noteStalled(nowMs: now)
             RTLog.warn("VIDEODIAG", "stall ev=stall state=active")
+            emitVideoStallTelemetry(event: "detected", snap: snap, now: now,
+                                    recoverMs: nil, how: nil)
         }
         guard videoStallLadder.isStalled else { return }
         // Fire every due rung IN ORDER (pure engine decides; SIGNAL-NOT-
@@ -3830,6 +3834,61 @@ final class AppState: ObservableObject {
         parts.append("lastKfrAgeMs=" + String(describing: kfrAge))
         parts.append("peerReadyAgeMs=" + String(describing: readyAge))
         RTLog.warn("VIDEODIAG", parts.joined(separator: " "))
+    }
+
+    /// VIDEO-STALL TELEMETRY (2026-07-12) — the §8.7 watchdog already DETECTS
+    /// purple/black video (frames arriving but not reaching the renderer) and
+    /// logs it to the VIDEODIAG tag, but that only lands in Loki, not the
+    /// structured telemetry the tuning card reads. Emit a queryable `video.stall`
+    /// event at detection + recovery so "when did purple/black happen (and was it
+    /// during the video upgrade)" is a per-call fact, joinable across both legs.
+    /// Derives `stall_kind` from the hop counters + cryptor-keyed state:
+    ///   purple_unkeyed         — cryptor not keyed ⇒ decoder emits garbage (purple/green)
+    ///   black_no_decode        — frames arrive but the decoder produces nothing
+    ///   black_detached_renderer— frames decode but never reach the UI renderer
+    /// Additive; rides the existing TelemetryService (call_id auto-added).
+    @MainActor
+    private func emitVideoStallTelemetry(event: String, snap: VideoPathDiag.Snapshot,
+                                         now: Int64, recoverMs: Int64?, how: String?) {
+        var cryptorReady = false
+        var trackAttached = false
+        #if canImport(WebRTC)
+        if let controller = webRtcController as? QAudionWebRtcCallController {
+            cryptorReady = controller.inboundVideoCryptorReady
+        }
+        trackAttached = (remoteWebRtcVideoTrack as? RTCVideoTrack) != nil
+        #endif
+        let stallKind: String
+        if !cryptorReady {
+            stallKind = "purple_unkeyed"
+        } else if snap.rxVideoFramesArrived > 0 && snap.rxFramesDecoded == 0 {
+            stallKind = "black_no_decode"
+        } else if snap.rxFramesDecoded > snap.rxFramesRendered {
+            stallKind = "black_detached_renderer"
+        } else {
+            stallKind = "black_unknown"
+        }
+        // "during the video upgrade" — a call_media_ready landed recently (the
+        // upgrade handshake completes ~then), so a stall within ~8 s of it is
+        // the upgrade-to-video window the user asked about.
+        let readyAge: Int64 = snap.lastPeerMediaReadyAtMs > 0 ? (now - snap.lastPeerMediaReadyAtMs) : -1
+        let inUpgradeWindow = readyAge >= 0 && readyAge < 8000
+        var attrs: [String: Any] = [
+            "event":            event,               // "detected" | "recovered"
+            "stall_kind":       stallKind,
+            "in_upgrade":       inUpgradeWindow,
+            "arrived":          snap.rxVideoFramesArrived,
+            "decoded":          snap.rxFramesDecoded,
+            "rendered":         snap.rxFramesRendered,
+            "tx_idr_forced":    snap.txKeyframesForced,
+            "cryptor_ready":    cryptorReady,
+            "track_attached":   trackAttached,
+            "gate_open":        inboundVideoReadyThisCall,
+            "peer_ready_age_ms": readyAge,
+        ]
+        if let recoverMs { attrs["recover_ms"] = recoverMs }
+        if let how { attrs["recover_how"] = how }
+        TelemetryService.shared.emit(kind: "video.stall", attrs: attrs)
     }
 
     /// Rung 2 — re-attach the renderer to the remote track: un-publish,
