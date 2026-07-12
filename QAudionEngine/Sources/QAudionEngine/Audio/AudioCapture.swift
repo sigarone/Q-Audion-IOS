@@ -62,7 +62,14 @@ public final class AudioCapture {
     // waveform at each boundary → an audible click every frame ("scoppiettante").
     private var micAgcRampFrom: Float = 1.0
     private static let agcTargetRms: Float = 0.12    // 12% of full scale
-    private static let agcNoiseGate: Float = 0.02    // below this = silence → hold gain
+    // W-QUIETMIC (2026-07-12) — the iPhone earpiece mic sits very low on normal
+    // speech: telemetry across calls c591a0b2/28398a12/7b03662a shows raw RMS
+    // ~0.5–1.1% even at normal volume, so the old 2% gate held the AGC OFF for
+    // most real speech → faint + inconsistent level ("non lineare"). Dropped to
+    // 0.8%: engages on normal-quiet speech but still sits above the measured
+    // room-noise floor (<0.8%), so silence/hiss is never pumped up (VP-IO NS is
+    // off — W556). Above-gate speech is boosted toward agcTargetRms as intended.
+    private static let agcNoiseGate: Float = 0.008   // below this = silence → hold gain
     private static let agcMaxGain: Float = 6.0
     // When VP-IO is active Apple's own AGC already contributes some make-up
     // gain, so our software make-up runs ON TOP of it with a lower ceiling to
