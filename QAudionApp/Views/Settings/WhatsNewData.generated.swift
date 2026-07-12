@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.771",
+              date: "2026-07-12",
+              title: "v1.0.771",
+              bullets: [
+                "fix(audio): run mic make-up AGC under VP-IO too (iOS TX too faint)",
+              ]),
         .init(id: "v1.0.770",
               date: "2026-07-12",
               title: "v1.0.770",
               bullets: [
+                "chore: regenerate changelog for v1.0.770",
                 "fix(swift6)+feat(diag): fix v769 compile error; add structured video.stall telemetry",
               ]),
         .init(id: "v1.0.769",
@@ -148,14 +155,6 @@ extension ReleaseNote {
                 "fix(audio): move TX encode+seal+send off the real-time capture thread",
                 "fix(crypto): tolerate dropped audio frames in the iOS ratchet path",
                 "fix(video): seed iOS ABR from real 1.5Mbps encoder start, not 800kbps default",
-              ]),
-        .init(id: "v1.0.751",
-              date: "2026-07-10",
-              title: "v1.0.751",
-              bullets: [
-                "chore: regenerate changelog for v1.0.751",
-                "diag(call): emit per-call audio route/sample-rate/VP-IO snapshot (call.audio.diag)",
-                "diag(call): add per-call AGC/level telemetry for suspected speaker-route pumping",
               ]),
     ]
 }
