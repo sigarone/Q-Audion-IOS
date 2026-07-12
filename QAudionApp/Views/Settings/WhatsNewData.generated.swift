@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.772",
+              date: "2026-07-12",
+              title: "v1.0.772",
+              bullets: [
+                "fix(audio): clamp applied mic-AGC gain per-frame to peak headroom (anti-clip)",
+              ]),
         .init(id: "v1.0.771",
               date: "2026-07-12",
               title: "v1.0.771",
               bullets: [
+                "chore: regenerate changelog for v1.0.771",
                 "fix(audio): run mic make-up AGC under VP-IO too (iOS TX too faint)",
               ]),
         .init(id: "v1.0.770",
@@ -146,15 +153,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.753",
                 "fix(persistence): map isViewOnce/viewOnceOpened in GRDB Message record",
                 "fix(audio): move group-call TX encode+seal+send off the real-time capture thread",
-              ]),
-        .init(id: "v1.0.752",
-              date: "2026-07-10",
-              title: "v1.0.752",
-              bullets: [
-                "chore: regenerate changelog for v1.0.752",
-                "fix(audio): move TX encode+seal+send off the real-time capture thread",
-                "fix(crypto): tolerate dropped audio frames in the iOS ratchet path",
-                "fix(video): seed iOS ABR from real 1.5Mbps encoder start, not 800kbps default",
               ]),
     ]
 }
