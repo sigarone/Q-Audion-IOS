@@ -42,19 +42,30 @@ public final class IOSEarbudGattProxy: NSObject {
     // MARK: - State
 
     private var central: CBCentralManager!
-    private(set) var peripheral: CBPeripheral?
+    // nonisolated(unsafe): read by the `nonisolated` isConnected getter and the
+    // nonisolated CB delegate witnesses below. Every access happens on the main
+    // thread (CBCentralManager is created with queue: nil, and all @MainActor
+    // ops run on main), so this is single-threaded at runtime — the same house
+    // pattern already shipping in VideoCallPipeline / ScreenShareController.
+    private(set) nonisolated(unsafe) var peripheral: CBPeripheral?
 
     // Characteristics (set after service/char discovery)
-    private var attestPopChar: CBCharacteristic?   // c1
-    private var keyImportChar: CBCharacteristic?   // c3
-    private var pairBeginChar: CBCharacteristic?   // c5
-    private var pairRespChar:  CBCharacteristic?   // c6
-    private var pairFinChar:   CBCharacteristic?   // c7
-    private var fpAdvChar:     CBCharacteristic?   // c8 (Phase B)
+    // nonisolated(unsafe): assigned in the nonisolated didDiscoverCharacteristicsFor
+    // / clearCharacteristics witnesses, read from the @MainActor async ops — all
+    // on the main thread (queue: nil delegate delivery).
+    private nonisolated(unsafe) var attestPopChar: CBCharacteristic?   // c1
+    private nonisolated(unsafe) var keyImportChar: CBCharacteristic?   // c3
+    private nonisolated(unsafe) var pairBeginChar: CBCharacteristic?   // c5
+    private nonisolated(unsafe) var pairRespChar:  CBCharacteristic?   // c6
+    private nonisolated(unsafe) var pairFinChar:   CBCharacteristic?   // c7
+    private nonisolated(unsafe) var fpAdvChar:     CBCharacteristic?   // c8 (Phase B)
 
     // Active continuations — at most one write and one read outstanding at a time
-    private var writeCont: CheckedContinuation<Void, Error>?
-    private var readCont:  CheckedContinuation<Data, Error>?
+    // nonisolated(unsafe): set on the main actor in writeChar/readChar, resumed in
+    // the nonisolated didWrite/didUpdate witnesses + failPendingOps — all on the
+    // main thread, so ordering is byte-identical to the @MainActor original.
+    private nonisolated(unsafe) var writeCont: CheckedContinuation<Void, Error>?
+    private nonisolated(unsafe) var readCont:  CheckedContinuation<Data, Error>?
 
     // MARK: - Init
 
@@ -80,7 +91,16 @@ public final class IOSEarbudGattProxy: NSObject {
 
     // MARK: - EarbudKeyGattProxy
 
-    public var isConnected: Bool { peripheral?.state == .connected }
+    // nonisolated: `isConnected` is the ONLY synchronous requirement of
+    // EarbudKeyGattProxy/EarbudPairingGattProxy — a @MainActor sync witness of a
+    // nonisolated sync requirement is exactly what fired the "conformance
+    // crosses into main actor-isolated code" warning on the conformance line;
+    // the async requirements are witnessed by @MainActor async methods, which
+    // hop safely and do NOT cross. Reads `peripheral` (nonisolated(unsafe));
+    // `.state` returns a Sendable enum. Keeping this nonisolated (instead of
+    // @MainActor-ing the protocols) leaves the non-@MainActor relay callers
+    // (EarbudAckPopRelay/EarbudPairingRelay `guard gatt.isConnected`) intact.
+    public nonisolated var isConnected: Bool { peripheral?.state == .connected }
 
     public func readAttestPop() async throws -> Data {
         let c = try require(attestPopChar, uuid: EarbudGattConstants.ATTEST_POP_UUID)
@@ -221,7 +241,10 @@ public final class IOSEarbudGattProxy: NSObject {
         }
     }
 
-    private func clearCharacteristics() {
+    // nonisolated: called synchronously from the nonisolated CB delegate
+    // witnesses (didDisconnect / didUpdateState); touches only the
+    // nonisolated(unsafe) characteristic slots — always on the main thread.
+    private nonisolated func clearCharacteristics() {
         attestPopChar = nil
         keyImportChar = nil
         pairBeginChar = nil
@@ -230,7 +253,10 @@ public final class IOSEarbudGattProxy: NSObject {
         fpAdvChar     = nil
     }
 
-    private func failPendingOps(with error: Error) {
+    // nonisolated: called synchronously from every nonisolated delegate witness
+    // on error/teardown; resumes the nonisolated(unsafe) continuations inline
+    // (no reordering) — always on the main thread.
+    private nonisolated func failPendingOps(with error: Error) {
         writeCont?.resume(throwing: error); writeCont = nil
         readCont?.resume(throwing: error);  readCont  = nil
     }
@@ -240,26 +266,26 @@ public final class IOSEarbudGattProxy: NSObject {
 
 extension IOSEarbudGattProxy: CBCentralManagerDelegate {
 
-    public func centralManagerDidUpdateState(_ central: CBCentralManager) {
+    public nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state != .poweredOn {
             clearCharacteristics()
             failPendingOps(with: GattError.gattError("bluetooth_off"))
         }
     }
 
-    public func centralManager(_ central: CBCentralManager,
+    public nonisolated func centralManager(_ central: CBCentralManager,
                                didConnect peripheral: CBPeripheral) {
         peripheral.delegate = self
         let svcUUID = CBUUID(string: EarbudGattConstants.SERVICE_UUID)
         peripheral.discoverServices([svcUUID])
     }
 
-    public func centralManager(_ central: CBCentralManager,
+    public nonisolated func centralManager(_ central: CBCentralManager,
                                didFailToConnect peripheral: CBPeripheral, error: Error?) {
         failPendingOps(with: error ?? GattError.gattError("connect_failed"))
     }
 
-    public func centralManager(_ central: CBCentralManager,
+    public nonisolated func centralManager(_ central: CBCentralManager,
                                didDisconnectPeripheral peripheral: CBPeripheral,
                                error: Error?) {
         clearCharacteristics()
@@ -272,7 +298,7 @@ extension IOSEarbudGattProxy: CBCentralManagerDelegate {
 
 extension IOSEarbudGattProxy: CBPeripheralDelegate {
 
-    public func peripheral(_ peripheral: CBPeripheral,
+    public nonisolated func peripheral(_ peripheral: CBPeripheral,
                            didDiscoverServices error: Error?) {
         if let err = error {
             failPendingOps(with: err)
@@ -295,7 +321,7 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
         peripheral.discoverCharacteristics(uuids, for: svc)
     }
 
-    public func peripheral(_ peripheral: CBPeripheral,
+    public nonisolated func peripheral(_ peripheral: CBPeripheral,
                            didDiscoverCharacteristicsFor service: CBService,
                            error: Error?) {
         if let err = error {
@@ -315,7 +341,7 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
         }
     }
 
-    public func peripheral(_ peripheral: CBPeripheral,
+    public nonisolated func peripheral(_ peripheral: CBPeripheral,
                            didWriteValueFor characteristic: CBCharacteristic,
                            error: Error?) {
         if let err = error {
@@ -326,7 +352,7 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
         writeCont = nil
     }
 
-    public func peripheral(_ peripheral: CBPeripheral,
+    public nonisolated func peripheral(_ peripheral: CBPeripheral,
                            didUpdateValueFor characteristic: CBCharacteristic,
                            error: Error?) {
         if let err = error {
@@ -338,11 +364,16 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
     }
 }
 
-// NOTE: `@preconcurrency` on the conformance clause (`extension X: @preconcurrency P`)
-// is rejected by the iOS-simulator build's compiler ("attribute can only be applied
-// to declarations, not types") — it broke every ios-simulator-tests run. Under the
-// Swift 5 language mode (swift-tools 5.9) the main-actor-vs-nonisolated-protocol
-// crossing it suppressed is only a warning, not an error, so plain conformance
-// builds. CoreBluetooth conformances above rely on the `@preconcurrency import
-// CoreBluetooth` at the top of this file instead.
+// Swift 6 conformance fix (2026-07-12): the three "conformance crosses into main
+// actor-isolated code" warnings are resolved by making every protocol witness
+// that a nonisolated protocol requires SYNCHRONOUSLY — the CB delegate methods
+// and `isConnected` — `nonisolated`, with the state they touch declared
+// `nonisolated(unsafe)` (safe because CBCentralManager is created with
+// queue: nil → all delegate callbacks land on the main thread, the same thread
+// every @MainActor member runs on; single-threaded at runtime). The async
+// EarbudKeyGattProxy/EarbudPairingGattProxy requirements are witnessed by
+// @MainActor async methods, which satisfy nonisolated async requirements via a
+// safe hop and never "cross". (History: `extension X: @preconcurrency P` was
+// rejected by the ios-simulator build; MainActor.assumeIsolated needs iOS 17,
+// target is 16 — this witness-level approach needs neither.)
 extension IOSEarbudGattProxy: EarbudPairingGattProxy { }
