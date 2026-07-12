@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.764",
+              date: "2026-07-12",
+              title: "v1.0.764",
+              bullets: [
+                "fix(diag): stop truncating MetricKit crash termination reason at 23 chars",
+              ]),
         .init(id: "v1.0.763",
               date: "2026-07-12",
               title: "v1.0.763",
               bullets: [
+                "chore: regenerate changelog for v1.0.763",
                 "fix(crypto): stop sending legacy QUAD OFFER, closes dual-path key-derivation race",
               ]),
         .init(id: "v1.0.762",
@@ -161,14 +168,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.745",
                 "fix(ci): exclude unwired Reality.xcframework from the app-target sources sweep",
-              ]),
-        .init(id: "v1.0.744",
-              date: "2026-07-08",
-              title: "v1.0.744",
-              bullets: [
-                "chore: regenerate changelog for v1.0.744",
-                "test(tus): bound chunk-retry tests with an explicit timeout",
-                "feat(reality): wire client-side Reality transport + call_upgrade_intent receive handler",
               ]),
     ]
 }
