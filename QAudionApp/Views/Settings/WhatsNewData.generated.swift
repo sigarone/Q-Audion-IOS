@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.761",
+              date: "2026-07-12",
+              title: "v1.0.761",
+              bullets: [
+                "fix(ws): capture and surface the real WS disconnect reason",
+              ]),
         .init(id: "v1.0.760",
               date: "2026-07-12",
               title: "v1.0.760",
               bullets: [
+                "chore: regenerate changelog for v1.0.760",
                 "fix(calling): sender-identity guard must not reject a brand-new call's first OFFER",
               ]),
         .init(id: "v1.0.759",
@@ -161,13 +168,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.742",
                 "fix(call): pin own upgrade-answer to the SAME DTLS role, not the complement",
-              ]),
-        .init(id: "v1.0.741",
-              date: "2026-07-07",
-              title: "v1.0.741",
-              bullets: [
-                "chore: regenerate changelog for v1.0.741",
-                "fix(call): pin DTLS role on upgrade answers + validate upgrade_response sender",
               ]),
     ]
 }
