@@ -4,6 +4,11 @@ public enum ConnectionState: String { case disconnected; case connecting; case c
 
 public protocol PersistentConnection: AnyObject {
     var state: ConnectionState { get }
+    /// Diagnostic only — the reason for the most recent transition into
+    /// `.disconnected` (underlying network error description, or a
+    /// synthetic label for an explicit local teardown). Nil before the
+    /// first disconnect this instance has seen.
+    var lastDisconnectReason: String? { get }
     func connect() async throws
     func disconnect()
     func addStateListener(_ listener: @escaping (ConnectionState) -> Void)

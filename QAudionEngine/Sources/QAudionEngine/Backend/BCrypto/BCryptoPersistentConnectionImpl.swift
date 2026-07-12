@@ -3,6 +3,7 @@ import Foundation
 public final class BCryptoPersistentConnectionImpl: PersistentConnection {
     private let ws: BCryptoWebSocketClient
     public var state: ConnectionState { ws.state }
+    public var lastDisconnectReason: String? { ws.lastDisconnectReason }
 
     init(ws: BCryptoWebSocketClient) { self.ws = ws }
 

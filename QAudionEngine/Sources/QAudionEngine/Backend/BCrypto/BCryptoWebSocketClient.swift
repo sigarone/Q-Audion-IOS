@@ -118,6 +118,16 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     private var config: BackendConfig
     private var messageHandlers: [String: MessageHandler] = [:]
     private var stateListeners: [(ConnectionState) -> Void] = []
+    /// Diagnostic only — the underlying `URLSessionWebSocketTask.receive()`
+    /// error that produced the most recent `handleDisconnect()`, or a
+    /// synthetic string for the explicit-cancel paths (`disconnect()` /
+    /// `forceReconnect()`). Was previously discarded entirely (bare `case
+    /// .failure:` in receiveLoop), so every "why did the socket drop" signal
+    /// — timeout, TLS failure, DNS failure, connection reset — was
+    /// unrecoverable even in a live debugger, let alone in telemetry. Read
+    /// by `BCryptoPersistentConnectionImpl.lastDisconnectReason` right after
+    /// a `.disconnected` state-listener callback.
+    private var _lastDisconnectReason: String?
     private var reconnectAttempt = 0
     /// Always-reachable Phase 2: the persistent WS is a FOREGROUND latency
     /// optimization layered on top of the OS push channel (PushKit-VoIP),
@@ -423,6 +433,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
 
     public var state: ConnectionState { lock.lock(); defer { lock.unlock() }; return _state }
 
+    /// Diagnostic only. See `_lastDisconnectReason` for why this exists.
+    public var lastDisconnectReason: String? { lock.lock(); defer { lock.unlock() }; return _lastDisconnectReason }
+
     /// - Parameter viaSocksPort: when set, routes the WS connection through a
     ///   local loopback SOCKS5 proxy on `127.0.0.1:<port>` instead of dialing
     ///   directly — same shape `TorObfsTransport.connectViaSocks(port:)`
@@ -537,6 +550,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // Release the session delegate — a fresh one is built per connect().
         sessionDelegate = nil
         _state = .disconnected
+        _lastDisconnectReason = "explicit disconnect()"
         reconnectAttempt = 0
         pingTimer?.cancel()
         pingTimer = nil
@@ -563,6 +577,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         _state = .disconnected
+        _lastDisconnectReason = "forceReconnect()"
         pingTimer?.cancel()
         pingTimer = nil
         // NOTE: deliberately do NOT reset reconnectAttempt here. Resetting it
@@ -878,8 +893,8 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                 @unknown default: break
                 }
                 self.receiveLoop(generation: generation)
-            case .failure:
-                self.handleDisconnect(generation: generation)
+            case .failure(let error):
+                self.handleDisconnect(generation: generation, reason: (error as NSError).description)
             }
         }
     }
@@ -1207,7 +1222,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         }
     }
 
-    private func handleDisconnect(generation: Int? = nil) {
+    private func handleDisconnect(generation: Int? = nil, reason: String? = nil) {
         lock.lock()
         // Drop stale disconnect callbacks from zombie connections. This fires when
         // a cancelled task's receive closure delivers its .failure result AFTER a
@@ -1220,6 +1235,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             return
         }
         _state = .disconnected
+        _lastDisconnectReason = reason ?? "unknown"
         reconnectAttempt += 1
         let attempt = reconnectAttempt
         // FAILOVER trigger: after enough consecutive reconnects the node is likely

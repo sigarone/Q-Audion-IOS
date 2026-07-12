@@ -2041,13 +2041,19 @@ final class AppState: ObservableObject {
                 // by cf_ip + timestamp to identify reconnect loops.
                 let prev = self?.wsConnectionState
                 if prev != state {
-                    TelemetryService.shared.emit(
-                        kind: "ws.state",
-                        attrs: [
-                            "state": String(describing: state),
-                            "prev":  String(describing: prev ?? .disconnected)
-                        ]
-                    )
+                    var attrs: [String: Any] = [
+                        "state": String(describing: state),
+                        "prev":  String(describing: prev ?? .disconnected)
+                    ]
+                    // W-WSREASON: the previous "why did it drop" signal was
+                    // discarded at the lowest level (bare `case .failure:`
+                    // in BCryptoWebSocketClient.receiveLoop) — ws.state
+                    // telemetry could show THAT it flapped but never WHY.
+                    if state == .disconnected,
+                       let reason = provider.persistentConnection.lastDisconnectReason {
+                        attrs["reason"] = reason
+                    }
+                    TelemetryService.shared.emit(kind: "ws.state", attrs: attrs)
                 }
                 self?.wsConnectionState = state
                 if state == .connected || state == .authenticated {
