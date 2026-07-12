@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.769",
+              date: "2026-07-12",
+              title: "v1.0.769",
+              bullets: [
+                "fix(swift6): clear 8 Swift 6 concurrency warnings (locks, sendability, isolation)",
+              ]),
         .init(id: "v1.0.768",
               date: "2026-07-12",
               title: "v1.0.768",
               bullets: [
+                "chore: regenerate changelog for v1.0.768",
                 "feat(audio): gentle software make-up AGC for the quiet iOS mic",
                 "fix(audio): rebuild capture engine on in-call speaker toggle (mic died)",
               ]),
@@ -152,14 +159,6 @@ extension ReleaseNote {
                 "fix(call): exclude H264 from iOS video codec negotiation (H265-only fleet)",
                 "ci(ios): revert in-memory DB test change; skip 1 Simulator-only ConversationStore test",
                 "fix(test): isolate ConversationStoreTests with in-memory DB; un-skip Tus",
-              ]),
-        .init(id: "v1.0.749",
-              date: "2026-07-10",
-              title: "v1.0.749",
-              bullets: [
-                "chore: regenerate changelog for v1.0.749",
-                "ci(ios): skip TusUploadClientTests on the Simulator job (macOS still runs it)",
-                "fix(security,test): new LE cert-pin anchors + Tus test deadlock fix",
               ]),
     ]
 }
