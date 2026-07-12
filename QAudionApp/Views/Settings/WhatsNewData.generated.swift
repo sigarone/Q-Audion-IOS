@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.770",
+              date: "2026-07-12",
+              title: "v1.0.770",
+              bullets: [
+                "fix(swift6)+feat(diag): fix v769 compile error; add structured video.stall telemetry",
+              ]),
         .init(id: "v1.0.769",
               date: "2026-07-12",
               title: "v1.0.769",
               bullets: [
+                "chore: regenerate changelog for v1.0.769",
                 "fix(swift6): clear 8 Swift 6 concurrency warnings (locks, sendability, isolation)",
               ]),
         .init(id: "v1.0.768",
@@ -149,16 +156,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.751",
                 "diag(call): emit per-call audio route/sample-rate/VP-IO snapshot (call.audio.diag)",
                 "diag(call): add per-call AGC/level telemetry for suspected speaker-route pumping",
-              ]),
-        .init(id: "v1.0.750",
-              date: "2026-07-10",
-              title: "v1.0.750",
-              bullets: [
-                "chore: regenerate changelog for v1.0.750",
-                "fix(call): re-attach sender FrameCryptor on iOS-caller mid-call video upgrade",
-                "fix(call): exclude H264 from iOS video codec negotiation (H265-only fleet)",
-                "ci(ios): revert in-memory DB test change; skip 1 Simulator-only ConversationStore test",
-                "fix(test): isolate ConversationStoreTests with in-memory DB; un-skip Tus",
               ]),
     ]
 }
