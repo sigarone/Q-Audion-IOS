@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.774",
+              date: "2026-07-12",
+              title: "v1.0.774",
+              bullets: [
+                "fix(crash): lock CallService cross-thread relay slots (ARC data race)",
+              ]),
         .init(id: "v1.0.773",
               date: "2026-07-12",
               title: "v1.0.773",
               bullets: [
+                "chore: regenerate changelog for v1.0.773",
                 "fix(crash): stop off-main @Published/AppState writes in WS call handlers (heap corruption)",
                 "docs: fix stale DEFAULT-OFF v4-ratchet comment + stub-linking claim",
               ]),
@@ -146,13 +153,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.755",
                 "fix(call): pre-allocate video transceiver on iOS-caller audio offer (BUG2)",
-              ]),
-        .init(id: "v1.0.754",
-              date: "2026-07-11",
-              title: "v1.0.754",
-              bullets: [
-                "chore: regenerate changelog for v1.0.754",
-                "fix(audio): soft-knee peak limiter on raw mic TX (scoppiettio)",
               ]),
     ]
 }
