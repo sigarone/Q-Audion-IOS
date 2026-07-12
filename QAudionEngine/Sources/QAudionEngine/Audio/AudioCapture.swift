@@ -58,6 +58,14 @@ public final class AudioCapture {
     private static let agcTargetRms: Float = 0.12    // 12% of full scale
     private static let agcNoiseGate: Float = 0.02    // below this = silence → hold gain
     private static let agcMaxGain: Float = 6.0
+    // When VP-IO is active Apple's own AGC already contributes some make-up
+    // gain, so our software make-up runs ON TOP of it with a lower ceiling to
+    // bound any double-AGC interaction (still boost-only + noise-gated + slow,
+    // so it can't pump). Evidence (call c4185402): iOS mic is intrinsically
+    // quiet — ~5% peak raw, ~11% with VP-IO's AGC — vs Android ~71%; gating our
+    // AGC to VP-IO-off left the transmitted level faint. Lifting under VP-IO too
+    // closes that gap.
+    private static let agcMaxGainVpio: Float = 3.0
     private static let agcPeakHeadroom: Float = 0.90 // never boost a frame's peak past 90%
     // TX-RMS (2026-07-12) — sum of squares + sample count for the mic RMS,
     // accumulated on the same 50fps tap callback as peakAmplitude (no lock,
@@ -232,11 +240,14 @@ public final class AudioCapture {
             } else {
                 return
             }
-            // W-MICAGC — gentle make-up AGC (see field docs). ONLY when VP-IO is
-            // off (else Apple's AGC already normalises → double-boost). Applied
-            // BEFORE the level scan so telemetry reflects the TRANSMITTED level,
-            // and before the limiter which backstops any overshoot.
-            if Self.micAgcEnabled && !pipeline.voiceProcessingIsActive {
+            // W-MICAGC — gentle make-up AGC (see field docs). Runs in BOTH modes:
+            // VP-IO off (we own leveling) and VP-IO on (rides on top of Apple's
+            // AGC with a lower ceiling, since the iOS mic is intrinsically quiet
+            // even after Apple's normalisation). Applied BEFORE the level scan so
+            // telemetry reflects the TRANSMITTED level, and before the limiter
+            // which backstops any overshoot.
+            if Self.micAgcEnabled {
+                let maxGain = pipeline.voiceProcessingIsActive ? Self.agcMaxGainVpio : Self.agcMaxGain
                 raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
                     guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
                     let n = rawBuf.count / 2
@@ -256,7 +267,7 @@ public final class AudioCapture {
                     if rms > Self.agcNoiseGate {
                         var desired = Self.agcTargetRms / rms
                         if desired < 1 { desired = 1 }                       // boost-only
-                        if desired > Self.agcMaxGain { desired = Self.agcMaxGain }
+                        if desired > maxGain { desired = maxGain }
                         if peak > 0 {                                        // never over-drive a loud frame
                             let peakCap = Self.agcPeakHeadroom / peak
                             if peakCap < desired { desired = peakCap }
@@ -269,7 +280,7 @@ public final class AudioCapture {
                         self.micAgcGain += (desired - self.micAgcGain) * alpha
                     }
                     if self.micAgcGain < 1 { self.micAgcGain = 1 }
-                    if self.micAgcGain > Self.agcMaxGain { self.micAgcGain = Self.agcMaxGain }
+                    if self.micAgcGain > maxGain { self.micAgcGain = maxGain }
                     if self.micAgcGain > self.micAgcMaxGainThisCall { self.micAgcMaxGainThisCall = self.micAgcGain }
                     let g = self.micAgcGain
                     if g > 1.001 {
