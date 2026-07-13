@@ -2110,20 +2110,68 @@ final class AppState: ObservableObject {
         if let selfId = currentUserId {
             let groupManager = BCryptoGroupCallManager(ws: ws, selfUserId: selfId)
             let groupController = ensureGroupCallController(groupManager)
-            groupController.onSendControlEnvelope = { [weak groupController] peer, senderId, envelopeJson in
-                guard let sealed = groupController?.sealControlEnvelope(
-                    peer: peer, selfId: senderId, envelopeJson: envelopeJson) else {
-                    return false
+            // W-GRPSENDERKEY / regression-risk fix (2026-07-13): seal via
+            // AppState's OWN shared `Self.ratchet`/`Self.sharedV4Ratchet`
+            // instances — the SAME ones chat uses — rather than a separate
+            // MessageRatchet instance. A prior version had GroupCallController
+            // own a second instance pointed at the same Keychain-backed
+            // session storage; two independent instances driven from
+            // different threads could silently clobber each other's chain
+            // advance for the same peer. See GroupCallController.swift's
+            // "Control-envelope transport" comment.
+            //
+            // This closure is invoked from GroupCallController's manager
+            // callbacks, which fire on the WS client's own background
+            // delegate queue (BCryptoWebSocketClient uses `delegateQueue:
+            // nil`, i.e. its own serial queue), NOT MainActor — while
+            // `dispatchInboundOpaque`'s Path C (the receive side of this
+            // same shared ratchet) runs on MainActor, same as chat's own
+            // send/receive. Merely pointing both sides at the SAME
+            // MessageRatchet instance removes the multi-instance clobber
+            // hazard, but a genuinely different, un-actor-isolated caller
+            // thread touching that instance concurrently with MainActor
+            // would still be a real cross-thread race (the class's own doc
+            // says the v3.1 path has no internal lock and "relies on
+            // callers serializing"). `DispatchQueue.main.sync` forces this
+            // send onto the SAME serial executor as every other caller of
+            // `Self.ratchet`/`Self.sharedV4Ratchet`, closing that gap
+            // without changing the closure's synchronous Bool-returning
+            // signature (which `sendSenderKeyEnvelope` needs to gate
+            // `initSentTo`). Safe: this closure is never invoked from
+            // MainActor itself (confirmed via the WS delegate-queue
+            // wiring), so `.sync` here cannot deadlock.
+            groupController.onSendControlEnvelope = { peer, senderId, envelopeJson in
+                DispatchQueue.main.sync {
+                    let msgId = UUID().uuidString
+                    let plaintext = Data(envelopeJson.utf8)
+                    let wire: Data
+                    if AppState.sharedV4Ratchet.hasV4Session(peer) {
+                        guard let frame = AppState.sharedV4Ratchet.encryptV4Routed(peerId: peer, plaintext: plaintext),
+                              let first = frame.first, first == MessageRatchet.magicV4 else {
+                            return false
+                        }
+                        wire = frame
+                    } else {
+                        guard let psk = AppState.resolveGroupCtrlPsk(peer: peer) else { return false }
+                        do {
+                            let session = try AppState.ratchet.ensureSession(
+                                epochId: "v1", selfId: senderId, peerId: peer, pskRoot: psk)
+                            let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: peer, clientMsgId: msgId)
+                            wire = try AppState.ratchet.encrypt(session: session, plaintext: plaintext, aad: aad, clientMsgId: msgId)
+                        } catch {
+                            return false
+                        }
+                    }
+                    let wrapper: [String: Any] = [
+                        "qa_grpcall_ctrl": 1,
+                        "cmid": msgId,
+                        "blob": wire.base64EncodedString()
+                    ]
+                    guard let data = try? JSONSerialization.data(withJSONObject: wrapper),
+                          let wrapperJson = String(data: data, encoding: .utf8) else { return false }
+                    ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapperJson.utf8))
+                    return true
                 }
-                let wrapper: [String: Any] = [
-                    "qa_grpcall_ctrl": 1,
-                    "cmid": sealed.clientMsgId,
-                    "blob": sealed.wire.base64EncodedString()
-                ]
-                guard let data = try? JSONSerialization.data(withJSONObject: wrapper),
-                      let wrapperJson = String(data: data, encoding: .utf8) else { return false }
-                ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapperJson.utf8))
-                return true
             }
             groupManager.onIncomingInvite = { [weak self] callId, creatorId in
                 DispatchQueue.main.async {
@@ -5429,16 +5477,30 @@ final class AppState: ObservableObject {
         // wire>"}` — a distinct top-level key from every other opaque_message
         // consumer above AND from chat's own `qa_grp:1` (which rides the
         // regular msg_send channel via `handleIncomingMessage`, not
-        // opaque_message). See GroupCallController.sealControlEnvelope /
-        // openControlEnvelope for the crypto side.
+        // opaque_message). Decrypted inline via the SAME shared
+        // `Self.sharedV4Ratchet`/`Self.ratchet` instances chat uses (not a
+        // separate MessageRatchet — see GroupCallController.swift's
+        // "Control-envelope transport" comment for why that was a bug).
         if let obj = try? JSONSerialization.jsonObject(with: Data(blobStr.utf8)) as? [String: Any],
            (obj["qa_grpcall_ctrl"] as? NSNumber)?.intValue == 1,
            let cmid = obj["cmid"] as? String,
            let blobB64 = obj["blob"] as? String,
            let wire = Data(base64Encoded: blobB64) {
             let selfId = currentUserId ?? ""
-            if let json = GroupCallController.openControlEnvelope(
-                wire: wire, senderId: senderId, selfId: selfId, clientMsgId: cmid) {
+            let json: String?
+            if MessageWireFormat.detect(wire) == .v4 {
+                json = Self.sharedV4Ratchet.decryptV4Routed(peerId: senderId, frame: wire)
+                    .flatMap { String(data: $0, encoding: .utf8) }
+            } else if let psk = Self.resolveGroupCtrlPsk(peer: senderId),
+                      let session = try? Self.ratchet.ensureSession(
+                          epochId: "v1", selfId: selfId, peerId: senderId, pskRoot: psk) {
+                let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: selfId, clientMsgId: cmid)
+                json = Self.ratchet.decrypt(session: session, wire: wire, aad: aad)
+                    .flatMap { String(data: $0, encoding: .utf8) }
+            } else {
+                json = nil
+            }
+            if let json = json {
                 groupCallController?.onGroupCallControlEnvelope(json: json, fromUserId: senderId)
             }
             return
@@ -9380,6 +9442,25 @@ extension AppState {
     /// `v4RoutingLock` then serializes both directions). Same Keychain-backed
     /// vault as ``ratchet`` so v3.1 and v4 share the device trust boundary.
     static let sharedV4Ratchet: MessageRatchet = MessageRatchet(vault: KeychainRatchetVault())
+
+    /// W-GRPSENDERKEY (2026-07-13): PSK lookup ladder for the group-call
+    /// `qa_grpcall_ctrl` control channel — same `auto:<prefix>:<peerId>`
+    /// then bare-`peerId` convention already duplicated inline in
+    /// `handleIncomingMessage`/`ChatMessageSendService`. Factored out here
+    /// (not touching those existing call sites) so the group-call path
+    /// shares the identical resolution without a 3rd/4th inline copy.
+    static func resolveGroupCtrlPsk(peer: String) -> Data? {
+        let vault = SovereignKeyVault()
+        let prefix = peer.count > 8 ? String(peer.prefix(8)) : peer
+        let autoName = "auto:\(prefix):\(peer)"
+        if let stored = (try? vault.loadPsk(name: autoName)) ?? nil, !stored.isEmpty {
+            return stored
+        }
+        if let stored = (try? vault.loadPsk(name: peer)) ?? nil, !stored.isEmpty {
+            return stored
+        }
+        return nil
+    }
 
     /// Decrypt a v3.1 wire blob. Bootstraps the per-peer session from
     /// `psk` if the vault has no snapshot yet. Throws on AEAD failure /

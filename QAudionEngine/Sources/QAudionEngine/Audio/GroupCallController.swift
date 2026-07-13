@@ -32,7 +32,16 @@ public final class GroupCallController: @unchecked Sendable {
         case failed(reason: String)
     }
 
-    public private(set) var state: State = .idle
+    /// Locked computed property — a review of today's work found ONE bare
+    /// unlocked read of the old stored `state` property racing concurrent
+    /// writers (`wireManagerCallbacks`'s `.creating` case, fired from the
+    /// manager's own callback thread, vs `setState` from other threads).
+    /// `_state` is the lock-protected backing field; every internal site
+    /// that already holds `lock` reads/writes `_state` directly (reading
+    /// the public property here would self-deadlock, NSLock is
+    /// non-reentrant), every other site goes through this getter.
+    private var _state: State = .idle
+    public var state: State { lock.lock(); defer { lock.unlock() }; return _state }
     public var onStateChange: ((State) -> Void)?
 
     private let manager: BCryptoGroupCallManager
@@ -48,28 +57,33 @@ public final class GroupCallController: @unchecked Sendable {
     private let groupSession = GroupSession()
     private var groupState: GroupState?
     private var activeCallId: String?
-    private var senderKeysCapable: Set<String> = []
-    /// Peers we've already sent our `sender_key_init` to this call — gates
-    /// [sealForTransmit] so we never seal audio for a roster we haven't
-    /// distributed keys to yet (mirrors Android's `initSentTo`).
+    /// Peers we've successfully delivered our `sender_key_init` to this
+    /// call. Drives the W-GRPSENDERKEY-RETRY loop in `onUpdate` (re-sends
+    /// to any capable peer not yet in this set on every roster update) —
+    /// mirrors Android's `initSentTo`. No longer gates `sealForTransmit`
+    /// (see that method's kdoc): a peer missing from this set just can't
+    /// decrypt our audio yet, it doesn't block sending to everyone else.
     private var initSentTo: Set<String> = []
 
-    // ─── Control-envelope transport: the SAME pairwise 1:1 crypto used for
-    // chat (own Keychain-backed instances — `KeychainRatchetVault`/
-    // `SovereignKeyVault` have no per-Swift-instance state, they read/write
-    // the SAME physical Keychain items AppState's `sharedV4Ratchet` and
-    // chat's send/receive paths use, so a v4/v3 session bootstrapped by a
-    // prior 1:1 call or chat interaction with this peer is visible here
-    // too). No v1/v2 legacy fallback: this is a brand-new wire shape
-    // (`qa_grpcall_ctrl`) that only ever ships between clients that both
-    // already run this code, so there is no old peer to interoperate with.
-    // Matches FIX H1 (chat's own PSK-missing refusal): never falls back to
-    // a server-derivable key — a peer with no real pairwise session/PSK
-    // simply doesn't receive the control envelope (best-effort, logged).
-
-    private static let ctrlRatchetVault: RatchetVault = KeychainRatchetVault()
-    private static let ctrlRatchet = MessageRatchet(vault: ctrlRatchetVault)
-    private static let ctrlPskVault = SovereignKeyVault()
+    // ─── Control-envelope transport ───────────────────────────────────
+    // Deliberately NOT owned here. An earlier version of this file kept its
+    // OWN `MessageRatchet`/`SovereignKeyVault` static instances for the
+    // pairwise 1:1 crypto used to seal `qa_grpcall_ctrl` envelopes — but
+    // those instances read/write the SAME physical Keychain-backed ratchet
+    // session as AppState's single shared `sharedV4Ratchet`/`ratchet`
+    // instances (used for chat + every other opaque_message consumer).
+    // TWO independent `MessageRatchet` objects driven concurrently (this
+    // controller's callbacks fire off the WS client's own background queue,
+    // chat fires on MainActor) can each load the same persisted session
+    // before either saves its advance — the second save silently clobbers
+    // the first's chain-index advance, risking an AEAD (key,nonce) reuse or
+    // a legitimate peer message getting rejected as a replay. This is
+    // exactly the multi-instance clobber hazard AppState's own doc comment
+    // says was already fixed for v4 by unifying send+receive into ONE
+    // shared instance — a second, separate instance here reintroduced it.
+    // Fix: `onSendControlEnvelope` (below) and the receive-side decrypt in
+    // `AppState.dispatchInboundOpaque` Path C both route through AppState's
+    // SAME shared `Self.ratchet`/`Self.sharedV4Ratchet` instances instead.
 
     // W358: optional audio I/O pipeline. When set via
     // `attachAudioPipeline()`, the controller takes ownership of the
@@ -175,12 +189,18 @@ public final class GroupCallController: @unchecked Sendable {
     }
 
     /// Manually start the audio pipeline. Called from the state
-    /// transition into .active; safe to invoke multiple times.
+    /// transition into .active; safe to invoke multiple times. Holds
+    /// `lock` across the ENTIRE start (not just the field reads) — a
+    /// review found that releasing the lock before calling
+    /// `.start()`/`.stop()` on the escaped `capture`/`playback` references
+    /// let a concurrent `stopAudioPipeline()` (e.g. from `.ended`/`leave()`
+    /// racing the `.active` transition) invoke `.stop()` on the SAME
+    /// instance with no mutual exclusion between the two calls. Calls into
+    /// this pair are rare (call start/end), so serializing them fully is a
+    /// clean fix with no meaningful throughput cost.
     public func startAudioPipeline() throws {
         lock.lock()
-        let capture = self.capture
-        let playback = self.playback
-        lock.unlock()
+        defer { lock.unlock() }
         if let playback = playback {
             try? playback.start()
         }
@@ -189,12 +209,11 @@ public final class GroupCallController: @unchecked Sendable {
         }
     }
 
-    /// Stop the audio pipeline. Idempotent.
+    /// Stop the audio pipeline. Idempotent. See `startAudioPipeline` for
+    /// why this holds `lock` across the calls, not just the field reads.
     public func stopAudioPipeline() {
         lock.lock()
-        let capture = self.capture
-        let playback = self.playback
-        lock.unlock()
+        defer { lock.unlock() }
         capture?.stop()
         playback?.stop()
     }
@@ -237,57 +256,6 @@ public final class GroupCallController: @unchecked Sendable {
         default:
             break // not ours
         }
-    }
-
-    /// Send-side hook the app layer calls to actually ship a control
-    /// envelope (it owns `BCryptoWebSocketClient.sendOpaqueMessage`). We
-    /// build the plaintext JSON + seal it via the shared pairwise ratchet;
-    /// the app layer wraps the result in `{qa_grpcall_ctrl:1,cmid,blob}` and
-    /// sends it. Kept as a pure function (no WS dependency) so this engine
-    /// target never needs to import the App-layer WS client.
-    public func sealControlEnvelope(peer: String, selfId: String, envelopeJson: String) -> (clientMsgId: String, wire: Data)? {
-        let msgId = UUID().uuidString
-        let plaintext = Data(envelopeJson.utf8)
-        if Self.ctrlRatchet.hasV4Session(peer) {
-            guard let frame = Self.ctrlRatchet.encryptV4Routed(peerId: peer, plaintext: plaintext),
-                  let first = frame.first, first == MessageRatchet.magicV4 else {
-                print("[GroupCallController] control envelope v4 encrypt failed peer=\(peer)")
-                return nil
-            }
-            return (msgId, frame)
-        }
-        guard let psk = Self.resolvePsk(peer: peer) else {
-            print("[GroupCallController] no pairwise session/PSK for \(peer) — control envelope dropped")
-            return nil
-        }
-        do {
-            let session = try Self.ctrlRatchet.ensureSession(
-                epochId: "v1", selfId: selfId, peerId: peer, pskRoot: psk)
-            let aad = MessageRatchet.buildMessageAD(senderId: selfId, recipientId: peer, clientMsgId: msgId)
-            let wire = try Self.ctrlRatchet.encrypt(session: session, plaintext: plaintext, aad: aad, clientMsgId: msgId)
-            return (msgId, wire)
-        } catch {
-            print("[GroupCallController] control envelope v3 encrypt failed peer=\(peer): \(error)")
-            return nil
-        }
-    }
-
-    /// Receive-side counterpart of `sealControlEnvelope`: unwraps the
-    /// pairwise ciphertext into the plaintext `qa_grp:1` JSON string. The
-    /// app layer (which already parsed the `qa_grpcall_ctrl` wrapper and
-    /// base64-decoded `blob`) calls this, then forwards the result to
-    /// `onGroupCallControlEnvelope`.
-    public static func openControlEnvelope(wire: Data, senderId: String, selfId: String, clientMsgId: String) -> String? {
-        if MessageWireFormat.detect(wire) == .v4 {
-            guard let plain = ctrlRatchet.decryptV4Routed(peerId: senderId, frame: wire) else { return nil }
-            return String(data: plain, encoding: .utf8)
-        }
-        guard let psk = resolvePsk(peer: senderId) else { return nil }
-        guard let session = try? ctrlRatchet.ensureSession(
-            epochId: "v1", selfId: selfId, peerId: senderId, pskRoot: psk) else { return nil }
-        let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: selfId, clientMsgId: clientMsgId)
-        guard let plain = ctrlRatchet.decrypt(session: session, wire: wire, aad: aad) else { return nil }
-        return String(data: plain, encoding: .utf8)
     }
 
     // MARK: - Internals
@@ -360,12 +328,31 @@ public final class GroupCallController: @unchecked Sendable {
 
         lock.lock()
         if callId == activeCallId {
-            self.senderKeysCapable = senderKeysCapable
             if let gs = groupState {
                 for peer in senderKeysCapable where peer != selfId {
-                    if !gs.members.contains(peer),
-                       let pkg = try? groupSession.handleMemberAdded(state: gs, newMember: peer) {
-                        initsToSend.append((peer, pkg.initForNewMember))
+                    if !gs.members.contains(peer) {
+                        if let pkg = try? groupSession.handleMemberAdded(state: gs, newMember: peer) {
+                            initsToSend.append((peer, pkg.initForNewMember))
+                        }
+                    } else if !initSentTo.contains(peer) {
+                        // W-GRPSENDERKEY-RETRY: peer was added to the roster on
+                        // a PREVIOUS onUpdate (so `handleMemberAdded` would now
+                        // throw .alreadyMember), but our sender_key_init to
+                        // them never landed — e.g. no pairwise PSK/v4 session
+                        // existed at the time. Re-derive the SAME envelope
+                        // handleMemberAdded would have returned (current send
+                        // chain's seed/idx) and retry the send. Without this,
+                        // a single peer with a persistently-failing control
+                        // channel would never receive init, and — before this
+                        // fix — that also permanently blocked ALL outgoing
+                        // audio (see sealForTransmit).
+                        let retryEnv = SenderKeyInitEnvelope(
+                            g: GroupSenderKey.toHex(gs.groupIdBytes),
+                            e: gs.groupEpoch,
+                            seed: gs.sendChain.ck.base64EncodedString(),
+                            idx: gs.sendChain.nextIdx
+                        )
+                        initsToSend.append((peer, retryEnv))
                     }
                 }
                 // See bcrypto-server `GroupCall.SenderKeyEpoch` kdoc + Android's
@@ -378,12 +365,23 @@ public final class GroupCallController: @unchecked Sendable {
                 // `handleMemberRemoved` bump forces every survivor to converge
                 // on the SAME server-canonical value regardless of
                 // detection-order jitter.
-                let departed = Set(gs.members).subtracting(participants).subtracting([selfId])
+                //
+                // W-GRPREKEY-PARITY: mirrors Android's explicit bailout for a
+                // legacy/pre-W-GRPREKEY server that never sends a positive
+                // epoch — Android skips rekey-on-leave entirely rather than
+                // guessing, since computing a "target" from a stale local
+                // epoch would resurrect the very independent-per-client-
+                // increment race this mechanism exists to prevent. The
+                // deployed server always sends epoch>=1 today, so this branch
+                // is not currently reachable — it exists so a future
+                // divergent decode path degrades safely instead of silently.
+                let departed = senderKeyEpoch > 0
+                    ? Set(gs.members).subtracting(participants).subtracting([selfId])
+                    : Set<String>()
                 if !departed.isEmpty {
                     var lastPkg: GroupRotatePackage?
                     for removed in departed where gs.members.contains(removed) {
-                        let target = senderKeyEpoch > 0
-                            ? UInt32(truncatingIfNeeded: senderKeyEpoch - 1) : gs.groupEpoch
+                        let target = UInt32(truncatingIfNeeded: senderKeyEpoch - 1)
                         gs.groupEpoch = target
                         if let pkg = try? groupSession.handleMemberRemoved(state: gs, removed: removed) {
                             lastPkg = pkg
@@ -455,18 +453,28 @@ public final class GroupCallController: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Seal `plaintext` (an Opus frame) under our own send chain. Refuses
-    /// (returns nil) until we've distributed our `sender_key_init` to every
-    /// currently-capable peer — mirrors Android's TX gate so we never ship
-    /// audio a fresh peer can't yet decrypt.
+    /// Seal `plaintext` (an Opus frame) under our own send chain.
+    ///
+    /// A review of today's work found the PREVIOUS version of this method
+    /// blocked ALL outgoing audio (not just to one peer — to EVERYONE) until
+    /// `sender_key_init` had been successfully delivered to EVERY currently-
+    /// capable peer, with no retry: if delivery to even one peer permanently
+    /// failed (no pairwise PSK/v4 session with them yet), the call's audio
+    /// was silently dead for its entire duration. There is no actual crypto
+    /// reason to withhold from PEERS WHO ARE READY just because one other
+    /// peer isn't — the scheme is per-sender broadcast, so a peer without
+    /// our init simply can't decrypt yet (drops our frames, same as any
+    /// unknown-sender frame) until their init/retry lands (see the
+    /// W-GRPSENDERKEY-RETRY loop in `onUpdate`). So this method now only
+    /// requires OUR OWN send chain to exist — external security review
+    /// (2026-07-13) confirmed this removes an availability bug without any
+    /// confidentiality regression, and does NOT reintroduce Android's
+    /// legacy-shared-key fallback (this project's stance is no silent
+    /// weak-crypto fallback, ever).
     private func sealForTransmit(plaintext: Data) -> Data? {
         lock.lock()
         defer { lock.unlock() }
-        guard case .active = state, let gs = groupState else { return nil }
-        let pending = senderKeysCapable.subtracting(initSentTo).subtracting([manager.selfUserId])
-        guard pending.isEmpty else {
-            return nil
-        }
+        guard case .active = _state, let gs = groupState else { return nil }
         return try? groupSession.encryptForGroup(state: gs, plaintext: plaintext).wire
     }
 
@@ -485,11 +493,14 @@ public final class GroupCallController: @unchecked Sendable {
     }
 
     /// App-layer hook: given (peer, selfId, plaintext envelope JSON), seal
-    /// via `sealControlEnvelope` + ship as an `opaque_message`, returning
-    /// whether the send actually went out. Injected rather than hard-wired
-    /// so this engine target never depends on `BCryptoWebSocketClient`
-    /// directly — the app layer (which owns the live WS connection) sets
-    /// this once at construction time (see `AppState.ensureGroupCallController`).
+    /// via the shared pairwise 1:1 ratchet + ship as an `opaque_message`,
+    /// returning whether the send actually went out. Injected rather than
+    /// hard-wired so this engine target never depends on
+    /// `BCryptoWebSocketClient` directly, AND so the seal happens through
+    /// AppState's single shared `MessageRatchet` instance rather than a
+    /// second one owned here (see the control-envelope-transport comment
+    /// near the top of this file). Set once at construction time in
+    /// `AppState.connectPersistentSocket()`.
     public var onSendControlEnvelope: ((_ peer: String, _ selfId: String, _ envelopeJson: String) -> Bool)?
 
     private func teardown() {
@@ -498,14 +509,13 @@ public final class GroupCallController: @unchecked Sendable {
         muted = false
         groupState = nil
         activeCallId = nil
-        senderKeysCapable.removeAll()
         initSentTo.removeAll()
         lock.unlock()
         setState(.idle)
     }
 
     private func setState(_ newState: State) {
-        lock.lock(); state = newState; lock.unlock()
+        lock.lock(); _state = newState; lock.unlock()
         onStateChange?(newState)
     }
 
@@ -530,17 +540,5 @@ public final class GroupCallController: @unchecked Sendable {
     private static func jsonString(_ obj: [String: Any]) throws -> String {
         let data = try JSONSerialization.data(withJSONObject: obj)
         return String(data: data, encoding: .utf8) ?? "{}"
-    }
-
-    private static func resolvePsk(peer: String) -> Data? {
-        let prefix = peer.count > 8 ? String(peer.prefix(8)) : peer
-        let autoName = "auto:\(prefix):\(peer)"
-        if let stored = (try? ctrlPskVault.loadPsk(name: autoName)) ?? nil, !stored.isEmpty {
-            return stored
-        }
-        if let stored = (try? ctrlPskVault.loadPsk(name: peer)) ?? nil, !stored.isEmpty {
-            return stored
-        }
-        return nil
     }
 }
