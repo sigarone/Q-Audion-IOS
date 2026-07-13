@@ -1014,6 +1014,22 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         eligiblePsks: [String: Data] = [:],
         sendOpaqueRaw: @escaping (String) async throws -> Void
     ) async throws {
+        // W-PQCENTRY (2026-07-13) — unconditional entry breadcrumb, BEFORE any
+        // guard/switch below can early-return or throw. Added after a muted
+        // call (server-confirmed c74487d2, 2026-07-13: callee's WS bounced at
+        // setup → W-PUSHWAKE buffered-offer redelivery fired → callee's PQC
+        // responder eventually completed 10s late → but the CALLER's
+        // initiator-side PQC_DIAG_V4 print further below in the `.accept` case
+        // never fired at all, and NO Loki-tagged line for this call_id ever
+        // appeared from the caller device, in either attribute-filter or raw
+        // line-grep mode) where it was impossible to tell, after the fact,
+        // whether this function was ever entered for that call — i.e. whether
+        // the peer's ACCEPT bundle was lost in transit/never relayed, or
+        // arrived and was silently dropped by a guard before this dispatcher
+        // even ran. This line is pure diagnostics (print only, no behaviour
+        // change) so the NEXT occurrence is diagnosable with certainty instead
+        // of inferred from its absence.
+        print("[PQC_DIAG_V4] onAndroidBundleReceived ENTRY kind=\(bundle.kind) callId=\(callId.prefix(8))… callerId=\(callerId.isEmpty ? "?" : String(callerId.prefix(8)))")
         // W574x — capture the peer's directional-PQC-RTP-key advertisement so
         // the relay sealer can be built directional when both sides support it.
         // This runs before onRelaySessionReady fires for this bundle.
