@@ -41,6 +41,15 @@ struct ContactDetailScreen: View {
     /// Internal extension number extracted from displayName (#NNN pattern),
     /// or nil when absent.
     @State private var peerExtension: String? = nil
+    /// Real persistent safety-number + TOFU trust-state evaluation (W36
+    /// wiring). nil while the initial server fetch + HKDF derivation is
+    /// still in flight — the card renders `.unverified` ("Calcolo del
+    /// trust in corso…") in that window, same as a genuine no-pin state.
+    @State private var trustEval: PeerTrustEvaluator.Evaluation? = nil
+    /// The peer's raw Ed25519 identity key resolved by the last
+    /// `loadTrustEvaluation()` call. Needed by `onAcceptNewFingerprint` to
+    /// re-pin without re-fetching.
+    @State private var lastPeerIkEdPub: Data? = nil
 
     @Environment(\.qaudionSnackbar) private var snackbar
 
@@ -68,6 +77,9 @@ struct ContactDetailScreen: View {
             isBlocked = BlockedContactsStore.isBlocked(item.userId)
             peerExtension = Self.extractExtension(from: item.displayName)
         }
+        .task(id: item.userId) {
+            await loadTrustEvaluation()
+        }
         .alert("Eliminare il contatto?", isPresented: $showingDeleteConfirm) {
             Button("Annulla", role: .cancel) {}
             Button("Elimina", role: .destructive) {
@@ -92,28 +104,18 @@ struct ContactDetailScreen: View {
             Text("\(item.displayName) sarà rimosso dalla rubrica locale.")
         }
         .sheet(isPresented: $showingSasSheet) {
-            // W72: pass the verify callback so we can persist
-            // `isVerified=true` on the local ContactsStore once the user
-            // confirms the spoken-aloud SAS matches. Engine-side
-            // `Fingerprint.verifyWords` (PGP word comparison vs the live
-            // session-key fingerprint) is wired from inside the sheet —
-            // for now the closure persists the local trust flag and the
-            // server-side `markVerified` RPC is engine WT.
-            SasVerifySheet(peerName: item.displayName, onVerified: {
-                let store = ContactsStore()
-                let stored = store.load().first(where: { $0.userId == item.userId })
-                let updated = ContactsStore.StoredContact(
-                    userId: item.userId,
-                    displayName: item.displayName,
-                    phoneHash: stored?.phoneHash ?? "",
-                    avatarUrl: stored?.avatarUrl,
-                    lastSeen: stored?.lastSeen,
-                    isVerified: true,
-                    pubkey: stored?.pubkey
-                )
-                store.upsert(updated)
+            // W36 — real wiring: the safety-number fingerprint just
+            // rendered by `trustEval` is what gets pinned as "verified"
+            // (mirrors Android `PeerTrustRepository.markVerified`, which
+            // always verifies the CURRENT fingerprint, never a stale one).
+            // Disabled while trustEval hasn't resolved a real fingerprint
+            // yet (peer never published / offline) — nothing to attest to.
+            SasVerifySheet(peerName: item.displayName, onVerified: { method in
+                guard let fp = trustEval?.safetyNumber.fingerprintHex, !fp.isEmpty else { return }
+                PeerTrustEvaluator.markVerified(peerUserId: item.userId, method: method, fingerprintHex: fp)
+                Task { await loadTrustEvaluation() }
                 snackbar?.show(.init(
-                    text: "\(item.displayName) verificato.",
+                    text: "\(item.displayName) verificato via \(method.localized).",
                     severity: .info
                 ))
             })
@@ -385,33 +387,35 @@ struct ContactDetailScreen: View {
     // MARK: - Trust verification card
 
     private var trustVerificationCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let verified = trustEval?.state == .userVerified
+        let changed = trustEval?.state == .identityChanged
+        return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("VERIFICA TRUST")
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.2)
                     .foregroundStyle(scheme.onSurfaceVariant)
                 Spacer()
-                TrustChip(item.isVerified ? "SAS VERIFIED" : "PENDING",
-                          accent: item.isVerified ? extras.success : extras.warning)
+                TrustChip(changed ? "IDENTITÀ CAMBIATA" : (verified ? "SAS VERIFIED" : "PENDING"),
+                          accent: changed ? extras.riskHigh : (verified ? extras.success : extras.warning))
             }
             .padding(.bottom, 12)
 
             trustFactorRow(label: "Identità pubblicata",
-                           description: "IK pubblicata sulla directory bcrypto",
-                           done: true)
+                           description: trustEval == nil ? "Verifica in corso…" : "IK pubblicata sulla directory bcrypto",
+                           done: trustEval != nil)
             divider
             trustFactorRow(label: "Voce verificata",
-                           description: item.isVerified
+                           description: verified
                                ? "Match con il voiceprint del contatto"
                                : "Effettua una chiamata per registrare il match",
-                           done: item.isVerified)
+                           done: verified)
             divider
             trustFactorRow(label: "SAS verificato",
-                           description: item.isVerified
+                           description: verified
                                ? "Cerimonia SAS completata"
                                : "Avvia cerimonia NFC o SAS via voce",
-                           done: item.isVerified)
+                           done: verified)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -445,11 +449,11 @@ struct ContactDetailScreen: View {
 
     // MARK: - Safety number section (W36)
 
-    /// Sezione "NUMERO DI SICUREZZA" con la nuova `TrustVerificationCard`
-    /// (1:1 port di Android core-ui). Source of truth per la verifica
-    /// fingerprint cross-platform. Per ora i 60 digit + lo stato sono
-    /// stub derivati da `item.isVerified`; il vero `TrustSafetyNumber`
-    /// arriverà quando l'engine espone la deriv. HKDF-SHA256 lato iOS.
+    /// Sezione "NUMERO DI SICUREZZA" con la `TrustVerificationCard` (1:1
+    /// port di Android core-ui), ora alimentata dal vero
+    /// `PeerTrustEvaluator` — HKDF-SHA256+CBOR `SafetyNumber` derivato
+    /// dall'identità Ed25519 di entrambe le parti (WIRE_SPEC.md §5.1.2),
+    /// stesso stato TOFU/verified/changed di Android `PeerTrustRepository`.
     private var safetyNumberSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("NUMERO DI SICUREZZA")
@@ -457,19 +461,23 @@ struct ContactDetailScreen: View {
                 .tracking(1.2)
                 .foregroundStyle(scheme.onSurfaceVariant)
             TrustVerificationCard(
-                state: item.isVerified ? .userVerified : .identityPinnedTofu,
-                safetyNumber: stubSafetyNumber,
-                verifiedAt: item.isVerified ? Date().addingTimeInterval(-3600) : nil,
-                verificationMethod: item.isVerified ? .voice : nil,
+                state: trustEval?.state ?? .unverified,
+                safetyNumber: trustEval?.safetyNumber ?? TrustSafetyNumber(groups: [], fingerprintHex: ""),
+                verifiedAt: trustEval?.verifiedAt,
+                verificationMethod: trustEval?.verificationMethod,
                 onMarkVerified: { method in
-                    print("[ContactDetail] mark verified via \(method.localized)")
+                    guard let fp = trustEval?.safetyNumber.fingerprintHex, !fp.isEmpty else { return }
+                    PeerTrustEvaluator.markVerified(peerUserId: item.userId, method: method, fingerprintHex: fp)
+                    Task { await loadTrustEvaluation() }
                     snackbar?.show(.init(
                         text: "Identità di \(item.displayName) marcata verificata via \(method.localized).",
                         severity: .info
                     ))
                 },
                 onAcceptNewFingerprint: {
-                    print("[ContactDetail] accepted new fingerprint")
+                    guard let newKey = lastPeerIkEdPub else { return }
+                    PeerTrustEvaluator.acceptNewFingerprint(peerUserId: item.userId, newPeerIkEdPub: newKey)
+                    Task { await loadTrustEvaluation() }
                     snackbar?.show(.init(
                         text: "Nuova identità accettata.",
                         severity: .warning
@@ -479,28 +487,14 @@ struct ContactDetailScreen: View {
         }
     }
 
-    /// Stub deterministico: deriviamo 12 gruppi numerici dal `userId`
-    /// così che lo stesso contatto mostri sempre lo stesso safety number
-    /// nelle preview, anche se il vero HKDF non è ancora wired iOS-side.
-    private var stubSafetyNumber: TrustSafetyNumber {
-        let seed = item.userId
-        var groups: [String] = []
-        // Use the cross-platform constant (W36 component) so this stub
-        // tracks future changes to the canonical group count without
-        // a manual update here.
-        for offset in 0..<TrustSafetyNumber.groupCount {
-            // SDBM-style 32-bit hash sul prefisso seed+offset → 5-digit
-            // deterministic numero. Stesso seed → sempre stessi gruppi.
-            var h: UInt32 = 5381
-            for byte in (seed + String(offset)).utf8 {
-                h = (h &* 33) &+ UInt32(byte)
-            }
-            groups.append(String(format: "%05d", h % 100_000))
-        }
-        return TrustSafetyNumber(
-            groups: groups,
-            fingerprintHex: String(item.phoneHash.prefix(60))
-        )
+    /// Resolve the peer's published Ed25519 identity + compute the
+    /// persistent safety number, then re-render. Called on-appear and
+    /// after any mark-verified / accept-new-identity action.
+    @MainActor
+    private func loadTrustEvaluation() async {
+        let eval = await PeerTrustEvaluator.evaluate(peerUserId: item.userId, provider: appState.liveProvider)
+        trustEval = eval
+        lastPeerIkEdPub = eval.peerIkEdPub
     }
 
     // MARK: - Metadata card
@@ -521,7 +515,7 @@ struct ContactDetailScreen: View {
             metaDivider
             metaRow("PRIMA VISTA", value: "—")
             metaDivider
-            metaRow("ULTIMA VERIFICA", value: item.isVerified ? "Recente" : "Mai")
+            metaRow("ULTIMA VERIFICA", value: lastVerificationLabel)
             metaDivider
             metaRow("PSK FINGERPRINT", value: "—")
         }
@@ -551,6 +545,21 @@ struct ContactDetailScreen: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
+        }
+    }
+
+    private var lastVerificationLabel: String {
+        guard let eval = trustEval else { return "…" }
+        switch eval.state {
+        case .userVerified:
+            guard let date = eval.verifiedAt else { return "Verificato" }
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "it_IT")
+            f.dateStyle = .medium
+            return f.string(from: date)
+        case .identityChanged: return "🚨 Identità cambiata"
+        case .identityPinnedTofu: return "Mai (pinned TOFU)"
+        case .unverified: return "Mai"
         }
     }
 
@@ -653,8 +662,17 @@ struct ContactDetailScreen: View {
     }
 }
 
-// MARK: - SAS verify sheet (placeholder)
+// MARK: - SAS verify sheet
 
+/// Self-attest chooser for the persistent safety number (W36). Mirrors
+/// Android `TrustVerificationCard.markAsVerifiedMenu` exactly: there is no
+/// live cryptographic check here (Android's own reference Menu doesn't run
+/// one either — `PeerTrustRepository.markVerified` just records which
+/// out-of-band method the user says they used). The real anti-replay
+/// crypto check is `LiveInCallScreen`'s in-call SAS ceremony
+/// (`ComputeSasUseCase` + `SasVerificationStore`), which persists
+/// separately and also feeds `TrustSafetyNumberState.userVerified` (see
+/// `PeerTrustEvaluator`).
 private struct SasVerifySheet: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -662,48 +680,42 @@ private struct SasVerifySheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let peerName: String
-    /// Fired when the user taps "Verifica" with non-empty input. The
-    /// caller persists `isVerified=true` on the contact.
-    let onVerified: () -> Void
-    @State private var input: String = ""
+    /// Fired with the method the user attests they used to compare the
+    /// safety number out-of-band.
+    let onVerified: (TrustVerificationMethod) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("VERIFICA SAS")
+            Text("VERIFICA IDENTITÀ")
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.5)
                 .foregroundStyle(extras.warning)
-            Text("Inserisci le 6 parole PGP lette a voce durante la chiamata con \(peerName).")
+            Text("Conferma di aver confrontato il numero di sicurezza a 60 cifre con \(peerName) fuori da questa app, e come.")
                 .qaudionStyle(type.bodyMedium)
                 .foregroundStyle(scheme.onSurface)
-            TextField("", text: $input,
-                      prompt: Text("es. TYPHOON · BALLAD · SLIPSTREAM · …")
-                          .foregroundColor(scheme.onSurfaceVariant),
-                      axis: .vertical)
-                .lineLimit(2...4)
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 8)
-                    .fill(scheme.surfaceVariant.opacity(0.45)))
-                .overlay(RoundedRectangle(cornerRadius: 8)
-                    .stroke(extras.warning.opacity(0.5), lineWidth: 1))
-            Text("Separatori ammessi: spazio, trattino, virgola o ·")
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-            HStack {
-                Button("Annulla") { dismiss() }
-                    .buttonStyle(.bordered)
-                Spacer()
-                Button("Verifica") {
-                    let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        onVerified()
+            VStack(spacing: 8) {
+                ForEach(TrustVerificationMethod.allCases, id: \.self) { method in
+                    Button {
+                        onVerified(method)
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text(method.localized)
+                                .qaudionStyle(type.bodyMedium)
+                                .foregroundStyle(scheme.onSurface)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(scheme.surfaceVariant.opacity(0.45)))
                     }
-                    dismiss()
+                    .buttonStyle(.plain)
                 }
-                    .buttonStyle(.borderedProminent)
-                    .tint(extras.warning)
-                    .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            Button("Annulla") { dismiss() }
+                .buttonStyle(.bordered)
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

@@ -21,10 +21,32 @@ public final class ContactsStore {
         /// this field was added — old JSON decodes with pubkey=nil because
         /// Optional fields are absent-tolerant in Codable synthesis.
         public let pubkey: Data?
+        /// Persistent-safety-number fingerprint (SafetyNumber.Result.fingerprintHex,
+        /// 60 lowercase hex chars) at the moment the user last marked this
+        /// peer verified. nil when never manually verified. Compared against
+        /// the FRESHLY computed fingerprint on every ContactDetailScreen open —
+        /// a mismatch means the peer's `ikEdPub` rotated since the user last
+        /// verified, and the UI must downgrade to `.identityChanged` rather
+        /// than keep showing a stale green checkmark. Mirrors Android
+        /// `PeerTrustEntity.lastSeenFingerprintHex` semantics (the "verified
+        /// pin", not just a boolean).
+        public let verifiedFingerprintHex: String?
+        /// Wall-clock ms when `verifiedFingerprintHex` was last set. Mirrors
+        /// Android `PeerTrustEntity.verifiedAtMs`.
+        public let verifiedAtMs: Int64?
+        /// `TrustVerificationMethod.rawValue` used for the last manual verify
+        /// ("in-person" / "qr" / "nfc" / "anti-replay" / "voice"). Stored as a
+        /// plain String (not the app-target enum) to keep this engine-module
+        /// type decoupled from QAudionApp's UI layer, mirroring Android
+        /// `PeerTrustEntity.verificationMethod`.
+        public let verificationMethod: String?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
-                    pubkey: Data? = nil) {
+                    pubkey: Data? = nil,
+                    verifiedFingerprintHex: String? = nil,
+                    verifiedAtMs: Int64? = nil,
+                    verificationMethod: String? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -32,6 +54,9 @@ public final class ContactsStore {
             self.lastSeen = lastSeen
             self.isVerified = isVerified
             self.pubkey = pubkey
+            self.verifiedFingerprintHex = verifiedFingerprintHex
+            self.verifiedAtMs = verifiedAtMs
+            self.verificationMethod = verificationMethod
         }
     }
 
