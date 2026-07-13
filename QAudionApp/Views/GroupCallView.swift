@@ -141,19 +141,29 @@ class GroupCallViewModel: ObservableObject {
         self.manager = manager
         self.controller = controller
 
-        manager.onStateChanged = { [weak self] state in
+        let onState: (BCryptoGroupCallManager.State) -> Void = { [weak self] state in
             DispatchQueue.main.async { self?.callState = state }
             if state == .active { self?.startTimer() }
             if state == .ended { self?.timer?.invalidate() }
         }
-
-        manager.onParticipantsChanged = { [weak self] list in
+        let onParticipants: ([BCryptoGroupCallManager.Participant]) -> Void = { [weak self] list in
             DispatchQueue.main.async {
                 self?.participants = list.map {
                     ParticipantUI(id: $0.id, displayName: $0.displayName,
                                   isMuted: $0.isMuted, isSpeaking: $0.isSpeaking)
                 }
             }
+        }
+        if let controller = controller {
+            // W-GRPUI: `manager.onStateChanged`/`onParticipantsChanged` are
+            // single-slot closures already owned by `controller` (it needs
+            // them for the audio-pipeline lifecycle) — observe its
+            // passthrough instead of overwriting them directly.
+            controller.onManagerStateChanged = onState
+            controller.onParticipantsChanged = onParticipants
+        } else {
+            manager.onStateChanged = onState
+            manager.onParticipantsChanged = onParticipants
         }
     }
 

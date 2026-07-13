@@ -433,6 +433,29 @@ final class AppState: ObservableObject {
     /// Lazy-init via `ensureGroupCallController(_:)` — one controller
     /// per AppState, reused across calls.
     var groupCallController: GroupCallController?
+    /// W-GRPUI: the manager backing `groupCallController`, built once in
+    /// `connectPersistentSocket()`. Stored so the root view can hand both
+    /// to `GroupCallViewModel` without the engine layer exposing its
+    /// private `manager` reference.
+    var groupCallManager: BCryptoGroupCallManager?
+    /// W-GRPUI: the single `GroupCallViewModel` instance wrapping
+    /// `groupCallManager`/`groupCallController`. Built once alongside them
+    /// so its `onStateChanged`/`onParticipantsChanged` bindings survive
+    /// across `GroupCallView` presentations (a fresh ViewModel per
+    /// presentation would silently re-subscribe every time SwiftUI
+    /// re-evaluates the cover's content closure).
+    var groupCallViewModel: GroupCallViewModel?
+    /// W-GRPUI: mirrors `GroupCallController.onStateChange` so the root
+    /// view can drive `GroupCallView`'s presentation off a directly-
+    /// observed `@Published` (a nested ObservableObject's own `@Published`
+    /// changes don't propagate through `appState.groupCallViewModel?.x`
+    /// unless the view separately observes that nested object).
+    @Published var groupCallControllerState: GroupCallController.State = .idle
+    /// W-GRPUI: set on an inbound `group_call_invite`, BEFORE the manager's
+    /// auto-join fires (mirrors Android MainActivity's `GroupCallInvite` →
+    /// `navController.navigate` — same MVP semantics, no accept/reject
+    /// sheet yet). The root view observes this to push `GroupCallScreen`.
+    @Published var incomingGroupCallInvite: (callId: String, creatorId: String)?
     /// W391: live video pipeline for the active 1:1 video call.
     /// Created in startCall(video:true), stopped in endCall. Held by
     /// AppState (not by the View) so SwiftUI re-creation doesn't tear
@@ -2076,6 +2099,49 @@ final class AppState: ObservableObject {
         }
         self.contactKeyExchange = cke
         wireOpaqueMessageHandler(on: ws, cke: cke)
+        // W-GRPSENDERKEY / W-GRPREKEY — build the group-call manager against
+        // THIS session's live ws (this function runs exactly once per
+        // AppState lifetime, guarded above, so the manager stays bound to
+        // the same transport for as long as `ensureGroupCallController`'s
+        // controller lives — see that method's kdoc). Wires the control-
+        // envelope send hook (seal via the shared 1:1 ratchet, wrap in
+        // `qa_grpcall_ctrl`, ship as an opaque_message) so
+        // GroupCallController never needs to import BCryptoWebSocketClient.
+        if let selfId = currentUserId {
+            let groupManager = BCryptoGroupCallManager(ws: ws, selfUserId: selfId)
+            let groupController = ensureGroupCallController(groupManager)
+            groupController.onSendControlEnvelope = { [weak groupController] peer, senderId, envelopeJson in
+                guard let sealed = groupController?.sealControlEnvelope(
+                    peer: peer, selfId: senderId, envelopeJson: envelopeJson) else {
+                    return false
+                }
+                let wrapper: [String: Any] = [
+                    "qa_grpcall_ctrl": 1,
+                    "cmid": sealed.clientMsgId,
+                    "blob": sealed.wire.base64EncodedString()
+                ]
+                guard let data = try? JSONSerialization.data(withJSONObject: wrapper),
+                      let wrapperJson = String(data: data, encoding: .utf8) else { return false }
+                ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapperJson.utf8))
+                return true
+            }
+            groupManager.onIncomingInvite = { [weak self] callId, creatorId in
+                DispatchQueue.main.async {
+                    self?.incomingGroupCallInvite = (callId, creatorId)
+                    // Single source of truth for both the WS join AND the
+                    // GroupSession crypto bootstrap — see the removed
+                    // auto-join note in BCryptoGroupCallManager. MVP:
+                    // auto-accept, same as Android's MainActivity (no
+                    // accept/reject sheet yet).
+                    self?.groupCallController?.join(callId: callId)
+                }
+            }
+            groupController.onStateChange = { [weak self] s in
+                DispatchQueue.main.async { self?.groupCallControllerState = s }
+            }
+            self.groupCallManager = groupManager
+            self.groupCallViewModel = GroupCallViewModel(manager: groupManager, controller: groupController)
+        }
         // W530: register the audio_frame RX handler EAGERLY at login.
         // Previously this was wired only inside startCall (caller) or
         // startIncomingCallAudioOnAnswer (callee), both gated on
@@ -5354,6 +5420,26 @@ final class AppState: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.routeInboundAndroidAccept(parsed: parsed, senderId: senderId)
                 }
+            }
+            return
+        }
+
+        // Path C — W-GRPSENDERKEY group-call control envelope. Wire shape
+        // `{"qa_grpcall_ctrl":1,"cmid":"...","blob":"<base64 1:1-ratchet
+        // wire>"}` — a distinct top-level key from every other opaque_message
+        // consumer above AND from chat's own `qa_grp:1` (which rides the
+        // regular msg_send channel via `handleIncomingMessage`, not
+        // opaque_message). See GroupCallController.sealControlEnvelope /
+        // openControlEnvelope for the crypto side.
+        if let obj = try? JSONSerialization.jsonObject(with: Data(blobStr.utf8)) as? [String: Any],
+           (obj["qa_grpcall_ctrl"] as? NSNumber)?.intValue == 1,
+           let cmid = obj["cmid"] as? String,
+           let blobB64 = obj["blob"] as? String,
+           let wire = Data(base64Encoded: blobB64) {
+            let selfId = currentUserId ?? ""
+            if let json = GroupCallController.openControlEnvelope(
+                wire: wire, senderId: senderId, selfId: selfId, clientMsgId: cmid) {
+                groupCallController?.onGroupCallControlEnvelope(json: json, fromUserId: senderId)
             }
             return
         }

@@ -117,6 +117,22 @@ struct ContentView: View {
                 fromAdmin: invite.fromAdmin)
                 .environmentObject(appState)
         }
+        // W-GRPUI: present the group-call surface whenever
+        // GroupCallController leaves `.idle` — covers BOTH the creator
+        // (createCall → .connecting) and an invitee (auto-accept →
+        // GroupCallController.join → .connecting), matching Android's
+        // MVP auto-navigate-on-invite behaviour (MainActivity.kt). Uses
+        // the SAME persistent `groupCallViewModel` built once in
+        // `connectPersistentSocket()` rather than a fresh one per
+        // presentation.
+        .fullScreenCover(isPresented: Binding(
+            get: { appState.groupCallControllerState != .idle },
+            set: { _ in }
+        )) {
+            if let vm = appState.groupCallViewModel {
+                GroupCallView(viewModel: vm)
+            }
+        }
         // W403: cross-platform auto-join — when a Desktop or Android
         // peer adds us to a group via `member_added` (without a
         // preceding iOS `group_invite` envelope), surface a snackbar

@@ -25,10 +25,22 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     private var _state: State = .idle
     private var _callId: String?
     private var _participants: [Participant] = []
+    /// W-GRPSENDERKEY — subset of `_participants` that advertised
+    /// `supports_group_sender_keys` on create/join. Mirrors the server's
+    /// `GroupCall.SenderKeysCapable` map (main.go).
+    private var _senderKeysCapable: Set<String> = []
+    /// W-GRPREKEY — server-canonical epoch counter (`GroupCall.SenderKeyEpoch`),
+    /// relayed on every `group_call_update`. Bumped by the server on a real
+    /// membership departure; clients pre-set their local epoch to
+    /// `senderKeyEpoch - 1` before rekeying so all survivors converge on the
+    /// same value regardless of detection-order jitter (see GroupCallController).
+    private var _senderKeyEpoch: Int64 = 1
 
     public var state: State { lock.lock(); defer { lock.unlock() }; return _state }
     public var callId: String? { lock.lock(); defer { lock.unlock() }; return _callId }
     public var participants: [Participant] { lock.lock(); defer { lock.unlock() }; return _participants }
+    public var senderKeysCapable: Set<String> { lock.lock(); defer { lock.unlock() }; return _senderKeysCapable }
+    public var senderKeyEpoch: Int64 { lock.lock(); defer { lock.unlock() }; return _senderKeyEpoch }
 
     /// Callback for state changes
     public var onStateChanged: ((State) -> Void)?
@@ -36,10 +48,24 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     public var onParticipantsChanged: (([Participant]) -> Void)?
     /// Callback for incoming audio frames
     public var onAudioFrame: ((String, Data) -> Void)?  // (senderId, frameData)
+    /// W-GRPSENDERKEY / W-GRPREKEY — fires on every `group_call_update` with
+    /// the full server-canonical tuple GroupCallController needs to bootstrap
+    /// and rekey the per-sender ratchet. `onParticipantsChanged` above only
+    /// carries the plain id list (kept for UI call sites); this callback is
+    /// the crypto-facing one.
+    public var onGroupUpdate: ((_ callId: String, _ participants: [String], _ senderKeysCapable: Set<String>, _ senderKeyEpoch: Int64) -> Void)?
 
     // MARK: - Dependencies
 
     private let ws: BCryptoWebSocketClient
+
+    /// Own userId — needed by GroupCallController to build the per-sender
+    /// ratchet roster and the control-envelope AAD. Group calls have no
+    /// separate "self" concept server-side (unlike the old fictional
+    /// `Participant(id: "self", …)` placeholder this manager used to seed
+    /// locally — removed below since the live server never echoes a "self"
+    /// entry in `participants`).
+    public let selfUserId: String
 
     /// Client-side caller-id resolver for group-call participants.
     /// The server only sends UUIDs in `GroupCallStateData.participants`
@@ -54,9 +80,11 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
 
     public init(
         ws: BCryptoWebSocketClient,
+        selfUserId: String,
         nameResolver: ((String) -> String)? = nil
     ) {
         self.ws = ws
+        self.selfUserId = selfUserId
         if let r = nameResolver {
             self.nameResolver = r
         } else {
@@ -80,36 +108,47 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
 
     /// Create a new group call and invite recipients.
     ///
-    /// Server contract — see bcrypto-server internal/signaling/messages.go
-    /// `GroupCallCreateData { title, invite_user_ids, max_participants? }`.
-    /// `title` is shown in the invite payload; `maxParticipants` is optional
-    /// (server caps to 8 when omitted).
+    /// Server contract — VERIFIED against the LIVE `cmd/bcrypto-lite/main.go`
+    /// handler (2026-07-13), not the dead `internal/signaling/messages.go`
+    /// island. Wire: `{call_id, recipients, supports_group_sender_keys}`.
+    /// The server does NOT read a `title` or `max_participants` field on
+    /// this message (it caps every room at 8 unconditionally) — `title` is
+    /// therefore local-display-only for the creator, never relayed to
+    /// invitees (their `group_call_invite` carries only `call_id`+`creator_id`).
+    /// - Returns: the freshly-minted call id, so the caller (GroupCallController)
+    ///   bootstraps its `GroupSession` under the SAME id actually sent to the
+    ///   server — the previous version of this method generated its own id
+    ///   internally while the controller generated a SEPARATE one for its
+    ///   room-key derivation, silently diverging (never caught: zero UI
+    ///   reachability meant this path never ran for real).
+    @discardableResult
     public func createGroupCall(
         recipients: [String],
-        title: String = "",
-        maxParticipants: Int? = nil
-    ) {
-        guard state == .idle else { return }
+        title: String = ""
+    ) -> String? {
+        guard state == .idle else { return nil }
         let newCallId = UUID().uuidString
         lock.lock()
         _state = .creating
         _callId = newCallId
-        _participants = [Participant(id: "self", displayName: "Tu")]
+        // Real userId, not a "self" placeholder — matches what the server
+        // will echo back in the first `group_call_update` once anyone joins.
+        _participants = [Participant(id: selfUserId, displayName: "Tu")]
+        _senderKeysCapable = [selfUserId]
+        _senderKeyEpoch = 1  // matches server's GroupCall.SenderKeyEpoch default
         lock.unlock()
         onStateChanged?(.creating)
 
-        var payload: [String: Any] = [
+        ws.send(type: "group_call_create", data: [
             "call_id": newCallId,
-            "title": title,
-            "invite_user_ids": recipients
-        ]
-        if let maxP = maxParticipants {
-            payload["max_participants"] = maxP
-        }
-        ws.send(type: "group_call_create", data: payload)
+            "recipients": recipients,
+            "supports_group_sender_keys": true
+        ])
+        return newCallId
     }
 
-    /// Join an existing group call
+    /// Join an existing group call. Always advertises sender-key support —
+    /// every live client on this codebase now ships GroupSession.
     public func joinGroupCall(callId: String) {
         lock.lock()
         _state = .creating
@@ -117,7 +156,10 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.unlock()
         onStateChanged?(.creating)
 
-        ws.send(type: "group_call_join", data: ["call_id": callId])
+        ws.send(type: "group_call_join", data: [
+            "call_id": callId,
+            "supports_group_sender_keys": true
+        ])
     }
 
     /// Leave the current group call
@@ -134,40 +176,26 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         endLocally()
     }
 
-    /// Forward an encrypted audio frame to a specific participant via server SFU.
-    ///
-    /// Server contract — see bcrypto-server `GroupCallForwardData
-    /// { call_id, target_id, data }`. Pairwise PQC means one envelope per
-    /// recipient — the caller is expected to encrypt the frame separately for
-    /// each peer and call this method once per peer.
-    public func forwardAudioFrame(_ frameData: Data, to targetId: String) {
+    /// Forward one encrypted audio frame — the server SFU relays it,
+    /// broadcast-once, to every OTHER participant of `callId`. There is no
+    /// per-recipient targeting on the wire (verified against the live
+    /// `case "group_call_forward"` handler in `cmd/bcrypto-lite/main.go`:
+    /// `{call_id, frame}` in, single relay to all non-sender participants
+    /// out) — encryption must therefore be per-SENDER (one ciphertext every
+    /// recipient can open), never per-recipient. `GroupCallController` seals
+    /// with the caller's own `GroupSenderKey` chain before calling this.
+    public func forwardAudioFrame(_ frameData: Data) {
         guard let cid = callId, state == .active else { return }
         ws.send(type: "group_call_forward", data: [
             "call_id": cid,
-            "target_id": targetId,
-            "data": frameData.base64EncodedString()
+            "frame": frameData.base64EncodedString()
         ])
-    }
-
-    /// Convenience fan-out: forward the same frame blob to every non-self
-    /// participant. NOTE: pairwise PQC requires per-peer ciphertexts; this
-    /// helper is only valid when the caller has already produced a single
-    /// session-keyed frame. Prefer the per-target overload above.
-    public func forwardAudioFrame(_ frameData: Data) {
-        guard state == .active else { return }
-        let peers: [String] = {
-            lock.lock(); defer { lock.unlock() }
-            return _participants.map(\.id).filter { $0 != "self" }
-        }()
-        for pid in peers {
-            forwardAudioFrame(frameData, to: pid)
-        }
     }
 
     /// Toggle local mute state
     public func toggleMute() -> Bool {
         lock.lock()
-        if let idx = _participants.firstIndex(where: { $0.id == "self" }) {
+        if let idx = _participants.firstIndex(where: { $0.id == selfUserId }) {
             _participants[idx].isMuted.toggle()
             let muted = _participants[idx].isMuted
             let list = _participants
@@ -180,97 +208,98 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     }
 
     // MARK: - WebSocket Handlers
-    // Message names mirror bcrypto-server internal/signaling/messages.go:
-    //   group_call_invite  → InviteUserIDs notified
-    //   group_call_state   → room state update with event = created|joined|left|ended
-    //   group_call_receive → SFU-forwarded opaque PQC frame
-    // Old iOS names (group_call_update, group_call_frame, group_call_ended) are
-    // kept as backward-compat aliases until the legacy server bake completes.
+    // Message names + shapes VERIFIED against the LIVE
+    // `cmd/bcrypto-lite/main.go` handlers (2026-07-13) — NOT the dead
+    // `internal/signaling/messages.go` island (zero importers, unreachable
+    // from main.go). The previous version of this file was built against
+    // that dead protocol (`group_call_state`, `group_call_receive`,
+    // `invite_user_ids`, per-target `forward{target_id,data}`) and its
+    // "current vs legacy-alias" framing was backwards: the real server only
+    // ever speaks `group_call_invite` / `group_call_update` / `group_call_frame`
+    // / `group_call_ended`, so those are now the ONLY handlers registered.
 
     private func registerHandlers() {
+        // GroupCallInviteData wire: {call_id, creator_id}. Auto-join, same
+        // MVP behaviour as Android's MainActivity (no accept/reject sheet
+        // yet — the invite silently navigates straight to the call).
         ws.registerHandler(type: "group_call_invite") { [weak self] _, data in
             guard let self = self,
-                  let callId = data["call_id"] as? String else { return }
-            // Server schema: GroupCallInviteData { call_id, inviter_id, title }.
-            // Older builds emitted `creator_id` — accept either, but only as a
-            // sanity check; the value isn't used downstream yet.
-            guard ((data["inviter_id"] as? String) ?? (data["creator_id"] as? String)) != nil else { return }
-            // Auto-join for now (UI can show accept/reject later)
+                  let callId = data["call_id"] as? String,
+                  let creatorId = data["creator_id"] as? String else { return }
             self.lock.lock()
             self._callId = callId
             self._state = .creating
             self.lock.unlock()
             self.onStateChanged?(.creating)
-            self.joinGroupCall(callId: callId)
+            // NOTE: does NOT call joinGroupCall itself (unlike the previous
+            // version of this file) — GroupCallController.join(callId:) is
+            // the single source of truth for both the WS join AND the
+            // GroupSession crypto bootstrap (mirrors Android's
+            // `GroupCallController.join`, which ALSO owns both). Calling
+            // joinGroupCall here directly would send `group_call_join` while
+            // leaving groupState/activeCallId unset, silently disabling E2E
+            // decryption for every frame this device receives in the call.
+            self.onIncomingInvite?(callId, creatorId)
         }
 
-        // Server emits `group_call_state` for created/joined/left/ended events.
-        // GroupCallStateData = { call_id, participants, event, user_id, title? }.
-        ws.registerHandler(type: "group_call_state") { [weak self] _, data in
-            self?.handleGroupCallState(data: data)
-        }
-
-        // Backward-compat alias — older server builds emitted `group_call_update`
-        // for the same payload as `group_call_state{event:"joined"}`.
+        // Sent on both join and leave. Wire:
+        // {call_id, participants, sender_keys_capable, sender_key_epoch}.
         ws.registerHandler(type: "group_call_update") { [weak self] _, data in
-            self?.handleGroupCallState(data: data)
+            self?.handleGroupCallUpdate(data: data)
         }
 
-        // Server emits `group_call_receive` for SFU-forwarded opaque frames.
-        // GroupCallReceiveData = { call_id, sender_id, data }.
-        ws.registerHandler(type: "group_call_receive") { [weak self] _, data in
-            self?.handleGroupCallReceive(data: data)
-        }
-
-        // Backward-compat alias — `group_call_frame` was the older name.
+        // Sent by the SFU relay for every forwarded frame. Wire:
+        // {call_id, frame, sender}.
         ws.registerHandler(type: "group_call_frame") { [weak self] _, data in
-            self?.handleGroupCallReceive(data: data)
+            self?.handleGroupCallFrame(data: data)
         }
 
-        // Backward-compat alias — server now sends ended via
-        // `group_call_state{event:"ended"}`. Keep the old handler as a fallback
-        // in case a legacy server build is on the wire.
+        // Wire: {call_id}.
         ws.registerHandler(type: "group_call_ended") { [weak self] _, _ in
             self?.endLocally()
         }
     }
 
-    /// Apply a `group_call_state` payload to the local participant list and
-    /// state machine. Dispatches on `event` (created / joined / left / ended).
-    private func handleGroupCallState(data: [String: Any]) {
-        let event = (data["event"] as? String) ?? "joined"
-        if event == "ended" {
-            endLocally()
-            return
-        }
-
-        guard let participantIds = data["participants"] as? [String] else { return }
+    /// W-GRPSENDERKEY / W-GRPREKEY — fires the crypto-facing
+    /// [onGroupUpdate] callback in addition to the plain-id
+    /// [onParticipantsChanged] one so GroupCallController can bootstrap new
+    /// members into the sender-key roster and rekey on departure using the
+    /// server-canonical epoch.
+    private func handleGroupCallUpdate(data: [String: Any]) {
+        guard let cid = data["call_id"] as? String,
+              let participantIds = data["participants"] as? [String] else { return }
+        let capableIds = data["sender_keys_capable"] as? [String] ?? []
+        let epoch = (data["sender_key_epoch"] as? NSNumber)?.int64Value ?? 1
         lock.lock()
         _participants = participantIds.map { uid in
             if let existing = _participants.first(where: { $0.id == uid }) {
                 return existing
             }
-            // Server only ships UUIDs for group-call participants —
-            // resolve them client-side via the local rubrica
-            // (`nameResolver`, defaulting to ContactsStore lookup).
-            // Falls back to the bare UUID if not in the address book.
+            // Server only ships UUIDs — resolve to a human name client-side
+            // via the local rubrica, falling back to the bare UUID.
             return Participant(id: uid, displayName: nameResolver(uid))
         }
-        // created/joined/left all imply the room is active for us.
+        _senderKeysCapable = Set(capableIds)
+        _senderKeyEpoch = epoch
         _state = .active
         let list = _participants
+        let capableSnapshot = _senderKeysCapable
         lock.unlock()
         onStateChanged?(.active)
         onParticipantsChanged?(list)
+        onGroupUpdate?(cid, participantIds, capableSnapshot, epoch)
     }
 
+    /// Callback fired on an inbound `group_call_invite`, BEFORE the
+    /// auto-join fires — lets the app layer navigate to the call screen
+    /// (mirroring Android MainActivity's `GroupCallInvite` → `navigate`).
+    public var onIncomingInvite: ((_ callId: String, _ creatorId: String) -> Void)?
+
     /// Apply an inbound SFU frame to participant speaking state and surface
-    /// the encrypted audio bytes to the engine. Accepts both `sender_id`
-    /// (current server) and the legacy `sender` key. Frame bytes live under
-    /// `data` (current) or `frame` (legacy).
-    private func handleGroupCallReceive(data: [String: Any]) {
-        guard let senderId = (data["sender_id"] as? String) ?? (data["sender"] as? String),
-              let frameB64 = (data["data"] as? String) ?? (data["frame"] as? String),
+    /// the encrypted audio bytes to the engine. Wire: {call_id, frame, sender}.
+    private func handleGroupCallFrame(data: [String: Any]) {
+        guard let senderId = data["sender"] as? String,
+              let frameB64 = data["frame"] as? String,
               let frameData = Data(base64Encoded: frameB64)
         else { return }
         // Mark sender as speaking
@@ -299,6 +328,8 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.lock()
         _state = .ended
         _participants.removeAll()
+        _senderKeysCapable.removeAll()
+        _senderKeyEpoch = 1
         _callId = nil
         lock.unlock()
         onStateChanged?(.ended)

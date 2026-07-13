@@ -180,6 +180,7 @@ struct ContactsListView: View {
     @State private var showingNfcPair: Bool = false
     @State private var showingPhonebookImport: Bool = false
     @State private var lastScanResult: ScanResultBanner?
+    @State private var showingGroupCallPicker: Bool = false
     @Environment(\.dismiss) private var dismiss
 
     init() {
@@ -210,6 +211,18 @@ struct ContactsListView: View {
         }
         .navigationTitle("Contatti")
         .toolbar {
+            // W-GRPUI: real entry point to start a group call — mirrors
+            // Android's HomeShell `onStartGroupCall` (contacts tab →
+            // multi-select → GroupCallController.createCall). Previously
+            // GroupCallController had zero UI reachability on iOS.
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingGroupCallPicker = true
+                } label: {
+                    Image(systemName: "person.2.fill")
+                }
+                .disabled(container.viewModel.items.isEmpty)
+            }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button("Scansiona QR", systemImage: "qrcode.viewfinder") {
@@ -228,6 +241,15 @@ struct ContactsListView: View {
                     Image(systemName: "plus")
                 }
             }
+        }
+        .sheet(isPresented: $showingGroupCallPicker) {
+            GroupCallContactPickerSheet(
+                contacts: container.viewModel.items,
+                onStart: { selectedIds in
+                    showingGroupCallPicker = false
+                    appState.groupCallController?.createCall(invitees: selectedIds)
+                }
+            )
         }
         .refreshable { container.refresh() }
         .onAppear {
