@@ -1362,8 +1362,28 @@ final class CallService: @unchecked Sendable {
     /// extracted from `capture.onFrame` per essere call-able sia dal
     /// fast path (NetworkSim Off) che dal task-isolated delay path
     /// (NetworkSim HighLatency/Satellite).
+    ///
+    /// W-STALEPIPE (2026-07-13) — same class of bug fixed for video
+    /// (onOutboundFragment identity guard): `capture.onFrame` snapshots
+    /// `integration` once and hands it to `txAudioQueue.async` (or, on the
+    /// NetworkSim delay path, to a Task that can sleep arbitrarily long
+    /// first). CallService itself is a process-wide singleton
+    /// (`AppState.callService = CallService()`), so a queued/delayed frame
+    /// that outlives `endCall()` (which sets `self.callIntegration = nil`
+    /// and stops audioCapture) still finds `self` alive and — for the
+    /// incoming-call capture.onFrame — has NO freshness check at all before
+    /// this call, encrypting and sending audio for a call that already
+    /// ended. Mirrors the fleet-wide "video relay rejected: not an
+    /// established call party" finding (~6662/week) at smaller volume
+    /// (~705/week server-side "audio relay rejected"). Fixed at this single
+    /// shared chokepoint (both capture.onFrame sites funnel through here)
+    /// rather than duplicating the guard at each closure.
     private func processAndSendEncryptedFrame(pcmFrame: Data,
                                                integration: QAudionCallIntegration) {
+        guard callIntegration === integration else {
+            RTLog.error("call", "W-STALEPIPE processAndSendEncryptedFrame called with an integration that is no longer self.callIntegration — dropping frame (would have been rejected server-side anyway)")
+            return
+        }
         // W517 — honour mute / hold flags.
         // Hold: suppress TX entirely so the peer hears silence without
         // the ratchet advancing out-of-step.
