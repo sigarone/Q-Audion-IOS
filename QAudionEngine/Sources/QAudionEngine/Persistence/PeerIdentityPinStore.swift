@@ -220,6 +220,26 @@ public final class PeerIdentityPinStore {
         #endif
     }
 
+    /// Forget ONLY the legacy bare-`contactId` pin, leaving every real
+    /// per-(peer,device) pin untouched.
+    ///
+    /// Used by the PASSIVE contact-screen "accept new identity" flow
+    /// (`PeerTrustEvaluator.acceptNewFingerprint`), which only ever
+    /// evaluates the legacy bare account (it has no device-id context).
+    /// `wipe(contactId:deviceId: nil)` is a full per-peer reset and would
+    /// ALSO discard per-device pins established by real, cryptographically
+    /// verified call handshakes (`AppState.commitTofuPinForDevice`) — pins
+    /// the passive screen never showed as changed and the user never
+    /// consented to reset. Adversarial-review finding, confirmed: accepting
+    /// a rotation the user was warned about for "this identity" must not
+    /// have a blast radius of "every device pin this peer ever had."
+    public func wipeLegacyOnly(contactId: String) {
+        #if canImport(Security)
+        guard !contactId.isEmpty else { return }
+        deleteAccount(contactId)
+        #endif
+    }
+
     /// Delete one Keychain account in this service. No-op if absent.
     private func deleteAccount(_ account: String) {
         #if canImport(Security)

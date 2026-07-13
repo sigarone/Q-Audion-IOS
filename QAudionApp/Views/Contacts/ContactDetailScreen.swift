@@ -110,8 +110,18 @@ struct ContactDetailScreen: View {
             // always verifies the CURRENT fingerprint, never a stale one).
             // Disabled while trustEval hasn't resolved a real fingerprint
             // yet (peer never published / offline) — nothing to attest to.
+            // Also disabled in `.identityChanged`: this quick-action button
+            // is independent of TrustVerificationCard's own footer (which
+            // already correctly hides its mark-as-verified menu in that
+            // state) — without this guard a rotated/unaccepted identity
+            // could be self-attested "verified" via this shortcut alone,
+            // producing a contacts-list/badge that says low-risk while the
+            // card right below still shows the 🚨 alarm (adversarial-review
+            // finding, confirmed).
             SasVerifySheet(peerName: item.displayName, onVerified: { method in
-                guard let fp = trustEval?.safetyNumber.fingerprintHex, !fp.isEmpty else { return }
+                guard let eval = trustEval, eval.state != .identityChanged,
+                      !eval.safetyNumber.fingerprintHex.isEmpty else { return }
+                let fp = eval.safetyNumber.fingerprintHex
                 PeerTrustEvaluator.markVerified(peerUserId: item.userId, method: method, fingerprintHex: fp)
                 Task { await loadTrustEvaluation() }
                 snackbar?.show(.init(

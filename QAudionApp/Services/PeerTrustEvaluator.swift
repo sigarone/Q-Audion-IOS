@@ -125,9 +125,16 @@ public enum PeerTrustEvaluator {
     /// prior manual-verify record — the peer must re-verify the new safety
     /// number, mirroring Android `acceptNewFingerprint` resetting
     /// `verifiedAtMs` to null.
+    ///
+    /// Uses `wipeLegacyOnly` (NOT the full-peer `wipe`): `evaluate()` only
+    /// ever checks the legacy bare-contactId account (this screen has no
+    /// device-id context), so accepting a rotation here must only reset
+    /// THAT account — a full-peer wipe would also silently discard any
+    /// real per-device pins established by call-handshake verification
+    /// (adversarial-review finding, confirmed).
     public static func acceptNewFingerprint(peerUserId: String, newPeerIkEdPub: Data) {
         let pinStore = PeerIdentityPinStore()
-        pinStore.wipe(contactId: peerUserId)
+        pinStore.wipeLegacyOnly(contactId: peerUserId)
         pinStore.pinOrMatch(contactId: peerUserId, ed25519Pub: newPeerIkEdPub)
 
         let store = ContactsStore()
