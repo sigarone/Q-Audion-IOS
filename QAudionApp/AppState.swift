@@ -9080,7 +9080,29 @@ extension AppState {
             // to shipping the raw fragment unsealed. `pipeline == nil` (the
             // pipeline itself deallocated) is treated the same way: no
             // sealed bytes, no send — never fall back to `fragment`.
-            guard let sealed = pipeline?.sealOutboundFragment(fragment) else { return }
+            guard let pipeline, let sealed = pipeline.sealOutboundFragment(fragment) else { return }
+            // W-STALEPIPE (2026-07-13) — confirmed server-side (call
+            // a92d7e90-b4a9-469c-8cc8-2665428e3607, 2026-07-10): a real call's
+            // sender kept shipping video_frame WS messages for 19+ seconds
+            // AFTER its own call.media.summary(end_reason=user_hangup)
+            // telemetry fired, all correctly rejected server-side as
+            // "not an established call party" (fleet-wide: ~5300 rejections/
+            // week across 4 accounts, every affected call's rejections start
+            // at the logged call-end timestamp). `endCall()` calls
+            // `videoPipeline?.stop()` synchronously and `onCapturedPixelBuffer
+            // = nil` inside `stop()` should cut this closure off immediately —
+            // if frames keep arriving after that, `pipeline` here is a STALE
+            // instance no longer referenced by `self.videoPipeline` (e.g. a
+            // lingering AVCaptureSession delegate reference outliving
+            // `stop()`), not the current call's pipeline. This guard is
+            // unconditionally correct regardless of the retain mechanism —
+            // a stale pipeline's frames must never reach the wire — and the
+            // log proves/refutes the theory on the next occurrence instead
+            // of guessing further.
+            guard let activePipeline = self?.videoPipeline, activePipeline === pipeline else {
+                RTLog.error("call", "W-STALEPIPE onOutboundFragment fired for a pipeline that is no longer self.videoPipeline — dropping frame (would have been rejected server-side anyway)")
+                return
+            }
             let parsed = AndroidVideoWireAdapter.parseIosFragment(fragment)
             let cid = callingImpl?.getActiveCallId()
             let effectiveWs = self?.liveProvider?.getWebSocketClient() ?? ws
