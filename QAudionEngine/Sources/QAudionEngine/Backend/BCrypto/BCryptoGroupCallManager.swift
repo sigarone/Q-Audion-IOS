@@ -19,6 +19,38 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         public var isSpeaking: Bool = false
     }
 
+    /// W-GRPRING — decoded `group_call_invite` (server commit 9619df4). The
+    /// wire carries {call_id, creator_id, call_type, group_id, group_name};
+    /// `creatorName` is resolved locally from the rubrica (the server only
+    /// ships UUIDs on this frame — the human name is only present on the
+    /// APNs/FCM push payload, which the app layer decodes separately).
+    ///
+    /// `Sendable` is explicit (public struct ⇒ no implicit conformance across
+    /// the module boundary): the app layer captures this value in the
+    /// `DispatchQueue.main.async` (@Sendable) hop of `onIncomingInvite`, which
+    /// fires on the WS client's own delegate queue. All members are `String`.
+    public struct IncomingGroupInvite: Equatable, Sendable {
+        public let callId: String
+        public let creatorId: String
+        public let creatorName: String
+        /// "audio" | "video" (server defaults an empty create to "audio").
+        public let callType: String
+        /// Empty for an ad-hoc group call started from the contact picker
+        /// (no persisted group behind it).
+        public let groupId: String
+        public let groupName: String
+
+        public init(callId: String, creatorId: String, creatorName: String,
+                    callType: String, groupId: String, groupName: String) {
+            self.callId = callId
+            self.creatorId = creatorId
+            self.creatorName = creatorName
+            self.callType = callType
+            self.groupId = groupId
+            self.groupName = groupName
+        }
+    }
+
     // MARK: - Published State
 
     private let lock = NSLock()
@@ -117,12 +149,19 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// Create a new group call and invite recipients.
     ///
     /// Server contract — VERIFIED against the LIVE `cmd/bcrypto-lite/main.go`
-    /// handler (2026-07-13), not the dead `internal/signaling/messages.go`
-    /// island. Wire: `{call_id, recipients, supports_group_sender_keys}`.
-    /// The server does NOT read a `title` or `max_participants` field on
-    /// this message (it caps every room at 8 unconditionally) — `title` is
-    /// therefore local-display-only for the creator, never relayed to
-    /// invitees (their `group_call_invite` carries only `call_id`+`creator_id`).
+    /// handler (`case "group_call_create"`, commit 9619df4, 2026-07-14). Wire:
+    /// `{call_id, recipients, supports_group_sender_keys, call_type, group_id,
+    /// group_name}`. The server does NOT read a `title` or `max_participants`
+    /// field on this message (it caps every room at 8 unconditionally) —
+    /// `title` is therefore local-display-only for the creator.
+    ///
+    /// W-GRPRING (audit gap E): `call_type` / `group_id` / `group_name` are
+    /// relayed VERBATIM by the server onto every invitee's `group_call_invite`
+    /// AND onto the APNs/FCM push that wakes an app-closed invitee. The fields
+    /// are additive server-side (an omitting client yields empty strings), but
+    /// omitting them leaves the receiver unable to render the right incoming
+    /// screen — so every create site MUST populate the group context when one
+    /// exists (GroupChatScreen), and `call_type` always.
     /// - Returns: the freshly-minted call id, so the caller (GroupCallController)
     ///   bootstraps its `GroupSession` under the SAME id actually sent to the
     ///   server — the previous version of this method generated its own id
@@ -132,7 +171,10 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     @discardableResult
     public func createGroupCall(
         recipients: [String],
-        title: String = ""
+        title: String = "",
+        callType: String = "audio",
+        groupId: String = "",
+        groupName: String = ""
     ) -> String? {
         guard state == .idle else { return nil }
         let newCallId = UUID().uuidString
@@ -150,7 +192,10 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         ws.send(type: "group_call_create", data: [
             "call_id": newCallId,
             "recipients": recipients,
-            "supports_group_sender_keys": true
+            "supports_group_sender_keys": true,
+            "call_type": callType,
+            "group_id": groupId,
+            "group_name": groupName
         ])
         return newCallId
     }
@@ -236,27 +281,40 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     // / `group_call_ended`, so those are now the ONLY handlers registered.
 
     private func registerHandlers() {
-        // GroupCallInviteData wire: {call_id, creator_id}. Auto-join, same
-        // MVP behaviour as Android's MainActivity (no accept/reject sheet
-        // yet — the invite silently navigates straight to the call).
+        // W-GRPRING — `group_call_invite` wire (server commit 9619df4):
+        // {call_id, creator_id, call_type, group_id, group_name}. The last
+        // three are additive: a create sent by an older client leaves them
+        // empty strings.
+        //
+        // This handler NO LONGER touches `_state`/`_callId`. The invite is a
+        // RING, not a join: the app layer surfaces an incoming-group-call
+        // screen and only `GroupCallController.join(callId:)` (on accept)
+        // moves us into the call. Setting `_state = .creating` here was a
+        // leftover of the silent auto-join: with a real accept/reject it
+        // would leave the manager stuck in `.creating` forever whenever the
+        // user rejects (nothing resets it), and the `state == .idle` guard in
+        // `createGroupCall` would then refuse EVERY future group call.
         ws.registerHandler(type: "group_call_invite") { [weak self] _, data in
             guard let self = self,
                   let callId = data["call_id"] as? String,
                   let creatorId = data["creator_id"] as? String else { return }
-            self.lock.lock()
-            self._callId = callId
-            self._state = .creating
-            self.lock.unlock()
-            self.onStateChanged?(.creating)
-            // NOTE: does NOT call joinGroupCall itself (unlike the previous
-            // version of this file) — GroupCallController.join(callId:) is
-            // the single source of truth for both the WS join AND the
-            // GroupSession crypto bootstrap (mirrors Android's
+            // NOTE: does NOT call joinGroupCall itself — GroupCallController
+            // .join(callId:) is the single source of truth for both the WS
+            // join AND the GroupSession crypto bootstrap (mirrors Android's
             // `GroupCallController.join`, which ALSO owns both). Calling
             // joinGroupCall here directly would send `group_call_join` while
             // leaving groupState/activeCallId unset, silently disabling E2E
             // decryption for every frame this device receives in the call.
-            self.onIncomingInvite?(callId, creatorId)
+            self.onIncomingInvite?(IncomingGroupInvite(
+                callId: callId,
+                creatorId: creatorId,
+                // The server ships only UUIDs — resolve the creator to a human
+                // name via the local rubrica, same as the participant list.
+                creatorName: self.nameResolver(creatorId),
+                callType: (data["call_type"] as? String) ?? "audio",
+                groupId: (data["group_id"] as? String) ?? "",
+                groupName: (data["group_name"] as? String) ?? ""
+            ))
         }
 
         // Sent on both join and leave. Wire:
@@ -323,10 +381,11 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         onGroupUpdate?(cid, participantIds, capableSnapshot, epoch)
     }
 
-    /// Callback fired on an inbound `group_call_invite`, BEFORE the
-    /// auto-join fires — lets the app layer navigate to the call screen
-    /// (mirroring Android MainActivity's `GroupCallInvite` → `navigate`).
-    public var onIncomingInvite: ((_ callId: String, _ creatorId: String) -> Void)?
+    /// W-GRPRING — fired on an inbound `group_call_invite`. The app layer
+    /// RINGS (accept/reject surface); it must NOT join here. Accept →
+    /// `GroupCallController.join(callId:)`; reject → do nothing (there is no
+    /// `group_call_decline` wire type: the room stays open for the others).
+    public var onIncomingInvite: ((IncomingGroupInvite) -> Void)?
 
     /// Apply an inbound SFU frame to participant speaking state and surface
     /// the encrypted audio bytes to the engine. Wire: {call_id, frame, sender}.

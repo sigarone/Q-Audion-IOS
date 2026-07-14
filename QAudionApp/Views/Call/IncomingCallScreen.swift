@@ -29,6 +29,12 @@ struct IncomingCallScreen: View {
     /// Numero interno PBX del chiamante (es. "103").
     /// Priorità assoluta nel cerchietto dell'avatar.
     let peerShortNumber: String?
+    /// W-GRPRING — override della riga "Chiamata audio sicura" (es.
+    /// "Chiamata di gruppo · Mario Rossi" per una group call). nil = default.
+    let subtitle: String?
+    /// W-GRPRING — nasconde il bottone centrale "Rispondi" (quick reply) su
+    /// superfici dove non esiste una chat 1:1 a cui rispondere (group call).
+    let showReplyAction: Bool
     let onAccept: () -> Void
     let onReject: () -> Void
     let onReplyWithMessage: () -> Void
@@ -38,6 +44,8 @@ struct IncomingCallScreen: View {
          callType: CallType = .audio,
          confidence: Double = 0.94,
          peerShortNumber: String? = nil,
+         subtitle: String? = nil,
+         showReplyAction: Bool = true,
          onAccept: @escaping () -> Void,
          onReject: @escaping () -> Void,
          onReplyWithMessage: @escaping () -> Void = {}) {
@@ -46,6 +54,8 @@ struct IncomingCallScreen: View {
         self.callType = callType
         self.confidence = confidence
         self.peerShortNumber = peerShortNumber
+        self.subtitle = subtitle
+        self.showReplyAction = showReplyAction
         self.onAccept = onAccept
         self.onReject = onReject
         self.onReplyWithMessage = onReplyWithMessage
@@ -81,7 +91,7 @@ struct IncomingCallScreen: View {
                     .multilineTextAlignment(.center)
                     .padding(.bottom, 4)
 
-                Text(callType == .video ? "Videochiamata sicura" : "Chiamata audio sicura")
+                Text(subtitle ?? (callType == .video ? "Videochiamata sicura" : "Chiamata audio sicura"))
                     .qaudionStyle(type.titleMedium)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .padding(.bottom, 24)
@@ -110,15 +120,17 @@ struct IncomingCallScreen: View {
                         caption: "Rifiuta",
                         captionColor: extras.riskHigh
                     )
-                    CircularAction(
-                        icon: "message.fill",
-                        action: onReplyWithMessage,
-                        diameter: 56,
-                        background: scheme.surfaceVariant,
-                        iconColor: scheme.onSurface,
-                        caption: "Rispondi",
-                        captionColor: scheme.onSurfaceVariant
-                    )
+                    if showReplyAction {
+                        CircularAction(
+                            icon: "message.fill",
+                            action: onReplyWithMessage,
+                            diameter: 56,
+                            background: scheme.surfaceVariant,
+                            iconColor: scheme.onSurface,
+                            caption: "Rispondi",
+                            captionColor: scheme.onSurfaceVariant
+                        )
+                    }
                     CircularAction(
                         icon: "phone.fill",
                         action: onAccept,

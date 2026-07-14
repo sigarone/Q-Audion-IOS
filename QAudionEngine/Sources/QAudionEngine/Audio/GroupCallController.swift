@@ -138,9 +138,27 @@ public final class GroupCallController: @unchecked Sendable {
     /// Create a new group call and invite the listed peers.
     /// Returns the freshly-minted call id (also held internally), or nil if
     /// the manager refused (already in a call).
+    ///
+    /// W-GRPRING — `callType` / `groupId` / `groupName` are relayed by the
+    /// server onto every invitee's `group_call_invite` AND the wake-up push
+    /// (see `BCryptoGroupCallManager.createGroupCall`). Pass the real group
+    /// context whenever the call is started from a persisted group; the
+    /// contact-picker (ad-hoc) path leaves them empty.
     @discardableResult
-    public func createCall(invitees: [String], title: String = "") -> String? {
-        guard let callId = manager.createGroupCall(recipients: invitees, title: title) else {
+    public func createCall(
+        invitees: [String],
+        title: String = "",
+        callType: String = "audio",
+        groupId: String = "",
+        groupName: String = ""
+    ) -> String? {
+        guard let callId = manager.createGroupCall(
+            recipients: invitees,
+            title: title,
+            callType: callType,
+            groupId: groupId,
+            groupName: groupName
+        ) else {
             return nil
         }
         bootstrapGroupSession(callId: callId, initialPeers: invitees)

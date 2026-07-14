@@ -451,11 +451,63 @@ final class AppState: ObservableObject {
     /// changes don't propagate through `appState.groupCallViewModel?.x`
     /// unless the view separately observes that nested object).
     @Published var groupCallControllerState: GroupCallController.State = .idle
-    /// W-GRPUI: set on an inbound `group_call_invite`, BEFORE the manager's
-    /// auto-join fires (mirrors Android MainActivity's `GroupCallInvite` →
-    /// `navController.navigate` — same MVP semantics, no accept/reject
-    /// sheet yet). The root view observes this to push `GroupCallScreen`.
-    @Published var incomingGroupCallInvite: (callId: String, creatorId: String)?
+
+    /// W-GRPRING — one pending INCOMING group call (ring state).
+    struct IncomingGroupCallInvite: Equatable {
+        let callId: String
+        let creatorId: String
+        let creatorName: String
+        /// "audio" | "video" — server contract (`group_call_invite` /
+        /// `incoming_group_call` push both carry it).
+        let callType: String
+        /// Empty for an ad-hoc group call started from the contact picker.
+        let groupId: String
+        let groupName: String
+
+        var hasVideo: Bool { callType == "video" }
+        /// What the ring screen shows: the group when the call was started
+        /// from a real group, otherwise whoever started it.
+        var displayTitle: String {
+            let g = groupName.trimmingCharacters(in: .whitespaces)
+            if !g.isEmpty { return g }
+            let c = creatorName.trimmingCharacters(in: .whitespaces)
+            if !c.isEmpty { return c }
+            return creatorId.count > 12
+                ? String(creatorId.prefix(8)) + "…"
+                : creatorId
+        }
+    }
+
+    /// W-GRPRING: the pending incoming group call — set by BOTH the live WS
+    /// `group_call_invite` AND the `incoming_group_call` push (deduped by
+    /// `call_id`), and cleared on accept / reject / call-ended. Non-nil ==
+    /// the ring surface is up and we have NOT joined. Accept →
+    /// `groupCallController.join(callId:)` (the existing join path); reject
+    /// → we simply never join (there is no `group_call_decline` wire type —
+    /// the server keeps the room open for the other invitees).
+    ///
+    /// This REPLACES the previous silent auto-join (the invite used to call
+    /// `join()` immediately: no ring, no accept/reject — audit gap).
+    @Published var incomingGroupCallInvite: IncomingGroupCallInvite?
+
+    /// W-GRPRING — the CallKit UUID we reported for the pending/active group
+    /// call, so `onAnswerCall` / `onEndCall` can tell a GROUP call apart from
+    /// a 1:1 one and route to the group accept/leave path instead of the 1:1
+    /// `performAcceptIncoming` / `endCall`. nil == no CallKit call is up for a
+    /// group call.
+    var groupCallKitId: UUID?
+
+    /// W-GRPRING — call_ids already accepted or rejected. Guards against a
+    /// re-ring when the push and the WS invite race (deliberately NO
+    /// server-side `armCallPushAck` delay for groups: one call_id has N
+    /// invitees), and against a re-ring on WS reconnect. Bounded.
+    var handledGroupCallIds: [String] = []
+
+    /// W-GRPRING — accept latched during a cold start: the user answered the
+    /// push-woken group call before `connectPersistentSocket()` built the
+    /// GroupCallController, so `join(callId:)` had nowhere to go. Consumed the
+    /// moment the controller exists (mirrors `pendingNotificationAnswer`).
+    var pendingGroupCallJoinId: String?
     /// W391: live video pipeline for the active 1:1 video call.
     /// Created in startCall(video:true), stopped in endCall. Held by
     /// AppState (not by the View) so SwiftUI re-creation doesn't tear
@@ -1376,6 +1428,24 @@ final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 let callId = info["call_id"]
+                // W-GRPRING — the INCOMING_CALL category is SHARED with group
+                // calls in CallKit-free mode (W-NOCALLKIT): the local
+                // notification we post on a WS invite, and the server's APNs
+                // ALERT push (`type == "incoming_group_call"`,
+                // internal/push/apns.go SendAlertGroupCallInvite) for an
+                // app-KILLED invitee. Route both to the group path.
+                //
+                // The `type` check is load-bearing on a COLD start: the app was
+                // killed, so no WS `group_call_invite` was ever seen and
+                // `incomingGroupCallInvite` is nil — matching on it alone would
+                // fall through to the 1:1 branch below, which (activeCallKitId
+                // == nil) would arm `pendingNotificationAnswer` and then
+                // auto-answer the NEXT unrelated 1:1 call, while the group call
+                // was never joined at all.
+                if let cid = callId, self.isGroupCallNotification(callId: cid, info: info) {
+                    self.handleGroupCallNotificationAction(action, callId: cid, info: info)
+                    return
+                }
                 switch action {
                 case .decline:
                     self.pendingNotificationAnswer = false
@@ -1602,6 +1672,14 @@ final class AppState: ObservableObject {
             provider.onAnswerCall = { [weak self] uuid in
                 guard let self = self else { return }
                 await MainActor.run {
+                    // W-GRPRING — a GROUP call reported to CallKit (push-woken /
+                    // background invite) must NOT enter the 1:1 accept path:
+                    // that would build a responder integration for a peer that
+                    // doesn't exist. Route to the group join instead.
+                    if self.groupCallKitId == uuid {
+                        self.performAcceptIncomingGroupCall()
+                        return
+                    }
                     // CallKit answered → run the shared accept path + dismiss the
                     // native CallKit UI. The same accept body is reused by the
                     // CallKit-FREE path (answerIncomingCall when callKitFreeMode).
@@ -1611,6 +1689,12 @@ final class AppState: ObservableObject {
             provider.onEndCall = { [weak self] uuid in
                 guard let self = self else { return }
                 await MainActor.run {
+                    // W-GRPRING — same fork as onAnswerCall: "End" on a group
+                    // call is a reject (still ringing) or a leave (joined).
+                    if self.groupCallKitId == uuid {
+                        self.endGroupCallFromSystemUI()
+                        return
+                    }
                     self.endCall()
                 }
             }
@@ -1730,6 +1814,48 @@ final class AppState: ObservableObject {
                 // reviveSignalingSocket). Kicked in a detached Task so PushKit's
                 // completion() — already satisfied by the reportIncomingCall above —
                 // fires promptly; the revive runs while the native UI rings.
+                Task { @MainActor [weak self] in
+                    await self?.reviveSignalingSocket()
+                }
+            },
+            onIncomingGroupCall: { [weak self] payload in
+                guard let self = self else { return }
+                // W-GRPRING — incoming GROUP call while the app is closed /
+                // suspended (server commit 9619df4 now fans a VoIP push out to
+                // every invitee not on a fresh socket). Byte-for-byte the same
+                // shape as the 1:1 branch above: report to CallKit FIRST (the
+                // PushKit mandate — a VoIP push that does not report an incoming
+                // call gets the app killed and future VoIP pushes throttled),
+                // then revive the WS so the `group_call_join` on accept has a
+                // live socket. Deduped against the WS `group_call_invite` by
+                // call_id inside `presentIncomingGroupCall`.
+                let prepared: (uuid: UUID, display: String, presented: Bool) = await MainActor.run {
+                    self.prepareIncomingPushGroupCall(payload)
+                }
+                // Pre-bound single-segment locals — SWIFT6_PATTERNS rule 1 (no
+                // multi-segment interpolation inside a closure).
+                let grpUuid: String = String(describing: prepared.uuid)
+                let grpPresented: String = String(describing: prepared.presented)
+                let grpDiag: String = "[AppState] W-GRPRING PushKit→report group uuid=" + grpUuid + " presented=" + grpPresented
+                print(grpDiag)
+                await self.callKit?.reportIncomingCall(
+                    uuid: prepared.uuid,
+                    callerName: prepared.display,
+                    hasVideo: payload.hasVideo
+                )
+                guard prepared.presented else {
+                    // The PushKit contract is satisfied (we reported), but there
+                    // is nothing to ring for — already accepted/rejected, or we
+                    // are busy in another call. End it right away rather than
+                    // leaving a dead call in the system UI. Same shape as
+                    // `onMalformedPush`.
+                    await self.callKit?.reportCallEnded(
+                        uuid: prepared.uuid, reason: .failed("group-call-not-presentable"))
+                    return
+                }
+                // CRITICAL (same as the 1:1 branch): bring the signalling WS up
+                // NOW so the `group_call_join` fired on accept — and the
+                // sender-key control envelopes — have a live socket.
                 Task { @MainActor [weak self] in
                     await self?.reviveSignalingSocket()
                 }
@@ -2182,22 +2308,47 @@ final class AppState: ObservableObject {
                     return true
                 }
             }
-            groupManager.onIncomingInvite = { [weak self] callId, creatorId in
+            groupManager.onIncomingInvite = { [weak self] invite in
                 DispatchQueue.main.async {
-                    self?.incomingGroupCallInvite = (callId, creatorId)
-                    // Single source of truth for both the WS join AND the
-                    // GroupSession crypto bootstrap — see the removed
-                    // auto-join note in BCryptoGroupCallManager. MVP:
-                    // auto-accept, same as Android's MainActivity (no
-                    // accept/reject sheet yet).
-                    self?.groupCallController?.join(callId: callId)
+                    // W-GRPRING — RING, do not join. The previous code called
+                    // `groupCallController.join(callId:)` right here: the callee
+                    // was silently dropped into the call with no ringtone and no
+                    // accept/reject. Accept now goes through
+                    // `answerIncomingGroupCall()` → the SAME `join(callId:)`
+                    // (still the single source of truth for the WS join + the
+                    // GroupSession crypto bootstrap).
+                    self?.presentIncomingGroupCall(
+                        AppState.IncomingGroupCallInvite(
+                            callId: invite.callId,
+                            creatorId: invite.creatorId,
+                            creatorName: invite.creatorName,
+                            callType: invite.callType,
+                            groupId: invite.groupId,
+                            groupName: invite.groupName),
+                        source: .webSocket)
                 }
             }
             groupController.onStateChange = { [weak self] s in
-                DispatchQueue.main.async { self?.groupCallControllerState = s }
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.groupCallControllerState = s
+                    // W-GRPRING — the group call is over (left / ended / never
+                    // started): clear the CallKit call we reported for it, else
+                    // the system call UI would stay up forever.
+                    if s == .idle { self.clearGroupCallKitCall(reason: .remoteEnded) }
+                }
             }
             self.groupCallManager = groupManager
             self.groupCallViewModel = GroupCallViewModel(manager: groupManager, controller: groupController)
+            // W-GRPRING cold start: the user accepted a push-woken group call
+            // before this socket (and therefore the controller) existed. The
+            // accept was latched — consume it now that `join(callId:)` can
+            // actually reach a live WS. Mirrors `pendingNotificationAnswer`.
+            if let pendingJoin = self.pendingGroupCallJoinId {
+                self.pendingGroupCallJoinId = nil
+                print("[AppState] W-GRPRING consuming latched group-call join \(pendingJoin.prefix(8))…")
+                groupController.join(callId: pendingJoin)
+            }
         }
         // W530: register the audio_frame RX handler EAGERLY at login.
         // Previously this was wired only inside startCall (caller) or
@@ -4582,6 +4733,24 @@ final class AppState: ObservableObject {
                 for entry in batch {
                     self.handleIncomingGroupMessage(entry, live: false)
                 }
+            }
+        }
+
+        // W-GRPMEMBER: server-authoritative membership fan-out
+        // (`cmd/bcrypto-lite/groups_membership.go` fanOutMembershipChanged —
+        // add / remove / leave, federated cross-node, plus a `replay`-flagged
+        // catch-up burst at server start). iOS NEVER consumed this event:
+        // added/removed members and epoch bumps silently never landed, so the
+        // roster went stale and inbound frames from a member we didn't know
+        // about failed to decrypt. Android (QAudionApplication.kt) and Desktop
+        // (GroupMembershipService) both consume it — this closes the gap.
+        //
+        // PERSISTENT handler, registered alongside the group TEXT handlers: a
+        // membership change can land while the group UI was never opened.
+        ws.registerHandler(type: "group_membership_changed") { [weak self] _, data in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.handleGroupMembershipChanged(data)
             }
         }
     }
@@ -9423,6 +9592,542 @@ extension AppState {
             name: AppState.groupRegistryChangedNotification,
             object: nil,
             userInfo: ["groupId": groupId])
+    }
+}
+
+// MARK: - W-GRPMEMBER: server `group_membership_changed` consumer
+
+extension AppState {
+
+    /// Apply one server-authoritative `group_membership_changed` event.
+    ///
+    /// Wire (verified against `bcrypto-server/cmd/bcrypto-lite/groups_membership.go`
+    /// `fanOutMembershipChanged`, 2026-07-14):
+    /// ```
+    /// {group_id, group_epoch, members[], admins[], admins_empty,
+    ///  operation: "add"|"remove"|"leave"|"snapshot"|<log op>,
+    ///  subject_user_id, actor_user_id,
+    ///  envelope_canonical_b64, envelope_signature_b64, server_ts,
+    ///  replay?: true}
+    /// ```
+    /// The event is fanned out to the CURRENT members only — a removed /
+    /// leaving user is already out of `members` and therefore does NOT receive
+    /// their own removal (they get the REST reply). We still handle
+    /// `subject == self` defensively (federation replay / catch-up).
+    ///
+    /// `members` / `admins` are SERVER-AUTHORITATIVE: we overwrite the local
+    /// roster with them rather than incrementally patching (the incremental
+    /// `qa_grp:1 member_added/removed` P2P envelopes keep their own path in
+    /// `applyMemberAdded` / `applyMemberRemoved` — this is the parallel
+    /// server-side channel Android/Desktop already consume).
+    @MainActor
+    fileprivate func handleGroupMembershipChanged(_ data: [String: Any]) {
+        guard let rawGroupId = data["group_id"] as? String, !rawGroupId.isEmpty,
+              let members = data["members"] as? [String] else {
+            print("[AppState] group_membership_changed missing required fields: \(data.keys)")
+            return
+        }
+        // dashed UUID (server wire) → hex (GroupChatService / registry key),
+        // same normalization as `handleIncomingGroupMessage`.
+        let groupHex = rawGroupId.replacingOccurrences(of: "-", with: "").lowercased()
+        let admins = data["admins"] as? [String] ?? []
+        let operation = (data["operation"] as? String) ?? ""
+        let subject = (data["subject_user_id"] as? String) ?? ""
+        let actor = (data["actor_user_id"] as? String) ?? ""
+        let replay = (data["replay"] as? Bool) ?? false
+        let selfId = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
+        guard !selfId.isEmpty else { return }
+
+        let isRemoval = Self.isMembershipRemoval(operation)
+        let existing = GroupRegistry.shared.entry(for: groupHex)
+
+        // We are OUT of this group. Two ways to learn it:
+        //   • the event names us as the subject of a remove/leave (defensive:
+        //     the live fan-out excludes the subject, but a federated replay or
+        //     a cross-node delivery can still reach us), or
+        //   • the SERVER-AUTHORITATIVE roster simply no longer lists us — the
+        //     shape a `snapshot`/catch-up replay takes for a removal that
+        //     happened while we were offline (the live event went only to the
+        //     then-current members, so this is the ONLY way we ever hear of it).
+        // Either way tear the group down locally, so a half-dead group (registry
+        // entry with a live GroupState we can no longer use) can never linger.
+        if (isRemoval && subject == selfId) || !members.contains(selfId) {
+            guard existing != nil else { return }
+            GroupRegistry.shared.remove(groupId: groupHex)
+            GroupChatService.shared.invalidate(groupId: groupHex)
+            NotificationCenter.default.post(
+                name: AppState.groupRegistryChangedNotification,
+                object: nil,
+                userInfo: ["groupId": groupHex])
+            print("[AppState] group_membership_changed: removed from \(groupHex) (op=\(operation))")
+            return
+        }
+
+        guard let entry = existing else {
+            // Unknown group. If the server says we ARE a member, this is the
+            // add that onboards us (no preceding iOS `group_invite` envelope —
+            // e.g. an Android/Desktop admin added us). Bootstrap exactly like
+            // `applyMemberAdded`'s auto-bootstrap branch.
+            guard members.contains(selfId) else { return }
+            bootstrapGroupFromServer(
+                groupHex: groupHex, members: members, admins: admins,
+                actor: actor, selfId: selfId, replay: replay)
+            return
+        }
+
+        // Server-authoritative roster.
+        var updated = entry
+        updated.members = members
+        updated.admins = admins
+        GroupRegistry.shared.upsert(updated)
+
+        // Crypto side-effects.
+        if isRemoval, !subject.isEmpty, subject != selfId {
+            // Drop the cached GroupState (+ shippedInits + buffered ctl) so the
+            // next send/receive rebuilds against the new roster and re-ships our
+            // sender_key_init to the REMAINING members. Same call
+            // `applyMemberRemoved`/`leaveGroup` already make.
+            GroupChatService.shared.invalidate(groupId: groupHex)
+        } else if !isRemoval, !subject.isEmpty, subject != selfId {
+            // A member was ADDED: ship OUR sender_key_init to them over the 1:1
+            // ratchet so they can decrypt our group frames. Identical fan-out to
+            // `createGroup` (groupSenderKeyCtlNotification → ChatMessageSendService).
+            // `pendingInitsAfterBootstrap` is idempotent — it returns only the
+            // members we have not shipped to yet (i.e. the new one).
+            shipSenderKeyInits(groupHex: groupHex, members: members, selfId: selfId)
+        }
+
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": groupHex])
+        // Pre-bound locals — SWIFT6_PATTERNS rule 1/2 (no multi-segment
+        // interpolation, no `+` inside `print`).
+        let gShort: String = String(groupHex.prefix(8))
+        let memberCount: String = String(describing: members.count)
+        let applied: String = "[AppState] group_membership_changed g=" + gShort + " op=" + operation + " members=" + memberCount
+        print(applied)
+    }
+
+    /// Onboard a group we have no local state for, from a server membership
+    /// event that lists us as a member. Mirrors the auto-bootstrap branch of
+    /// `applyMemberAdded` (registry entry → GroupChatService session →
+    /// markBootstrapped → drain buffered group frames → snackbar).
+    @MainActor
+    fileprivate func bootstrapGroupFromServer(
+        groupHex: String, members: [String], admins: [String],
+        actor: String, selfId: String, replay: Bool
+    ) {
+        let adminForName = admins.first ?? actor
+        let entry = GroupRegistry.Entry(
+            id: groupHex,
+            name: String(groupHex.prefix(8)) + "…",  // placeholder; renameable
+            members: members,
+            admins: admins.isEmpty ? [actor] : admins,
+            joinedAt: Date(),
+            bootstrapped: false)
+        GroupRegistry.shared.upsert(entry)
+        _ = GroupChatService.shared.session(
+            groupId: groupHex, members: members, selfId: selfId)
+        GroupRegistry.shared.markBootstrapped(groupId: groupHex)
+        // Recv chains just became available — drain the group TEXT frames that
+        // were buffered (and already server-marked-delivered) before we joined.
+        retryBufferedGroupMessages()
+        // Ship our own send chain to everyone else in the roster.
+        shipSenderKeyInits(groupHex: groupHex, members: members, selfId: selfId)
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": groupHex])
+        // `replay` == server catch-up burst → suppress the UI side-effect
+        // (toast spam on every reconnect), exactly as the server intends.
+        if !replay {
+            NotificationCenter.default.post(
+                name: AppState.groupAutoJoinedNotification,
+                object: nil,
+                userInfo: [
+                    "groupId": groupHex,
+                    "fromAdmin": adminForName,
+                ])
+        }
+        print("[AppState] group_membership_changed: auto-joined \(groupHex.prefix(8))… (\(members.count) members)")
+    }
+
+    /// Ship our `sender_key_init` to every member of `groupHex` that has not
+    /// received it yet, over the 1:1 ratchet. Same emission path as
+    /// `createGroup` (the notification is consumed by `wireGroupChatFanOut`).
+    @MainActor
+    fileprivate func shipSenderKeyInits(groupHex: String, members: [String], selfId: String) {
+        let pending = GroupChatService.shared.pendingInitsAfterBootstrap(
+            groupId: groupHex, members: members, selfId: selfId)
+        for init_ in pending {
+            NotificationCenter.default.post(
+                name: AppState.groupSenderKeyCtlNotification,
+                object: nil,
+                userInfo: [
+                    "recipient": init_.recipientId,
+                    "envelopeJson": init_.envelopeJson,
+                ])
+        }
+    }
+
+    /// The server's `operation` token is the REST verb ("add" / "remove" /
+    /// "leave") on a live mutation, but the membership-LOG token
+    /// ("member_added" / "member_removed" / "member_left") on the start-up
+    /// catch-up replay — and "snapshot" when no log entry exists. Treat both
+    /// vocabularies, default to "not a removal" (a snapshot only re-states the
+    /// roster, which we apply either way).
+    fileprivate static func isMembershipRemoval(_ operation: String) -> Bool {
+        switch operation {
+        case "remove", "leave", "member_removed", "member_left":
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+// MARK: - W-GRPRING: incoming GROUP call (ring + accept/reject)
+
+extension AppState {
+
+    /// Where an incoming group call reached us. The two sources are deduped by
+    /// `call_id`: the server fans BOTH out (WS `group_call_invite` to everyone,
+    /// plus an APNs VoIP push to every invitee not on a fresh socket) and
+    /// deliberately omits the 1:1 `armCallPushAck` delay — one group `call_id`
+    /// has N invitees, so the ack cannot disambiguate them.
+    enum IncomingGroupCallSource {
+        case webSocket
+        case push
+    }
+
+    /// CallKit UUID for a group call. The room id is a UUID string today
+    /// (`uuid.New()` server-side / `UUID().uuidString` client-side) — if it
+    /// ever isn't, we still MUST report SOMETHING to CallKit for a VoIP push,
+    /// so fall back to a fresh UUID (routing is done via `groupCallKitId`, not
+    /// by parsing the uuid back).
+    static func callKitUUID(forGroupCallId callId: String) -> UUID {
+        return UUID(uuidString: callId) ?? UUID()
+    }
+
+    /// Ring for an incoming group call. Returns true when a ring is live for
+    /// `invite.callId` after this call (either newly presented, or already up
+    /// from the other source) — the PushKit path uses that to decide whether
+    /// the CallKit call it MUST report can stay up or has to be ended at once.
+    @discardableResult
+    @MainActor
+    func presentIncomingGroupCall(
+        _ invite: IncomingGroupCallInvite,
+        source: IncomingGroupCallSource
+    ) -> Bool {
+        // Already accepted or rejected (push ⇄ WS race, or a WS reconnect
+        // replaying the invite) — never ring twice for the same room.
+        if handledGroupCallIds.contains(invite.callId) {
+            let dupId: String = String(invite.callId.prefix(8))
+            let dupMsg: String = "[AppState] W-GRPRING dup dropped (already handled) call=" + dupId
+            print(dupMsg)
+            return false
+        }
+        // Already ringing for THIS call from the other source: adopt the richer
+        // payload (the WS invite and the push carry the same fields, but an
+        // older peer may omit the group context on one of them).
+        if let current = incomingGroupCallInvite, current.callId == invite.callId {
+            if current.groupName.isEmpty && !invite.groupName.isEmpty {
+                incomingGroupCallInvite = invite
+            }
+            if source == .push {
+                // CallKit is now ringing natively — silence the in-app ringtone
+                // so the user doesn't get two dialers (single-dialer rule,
+                // W450/W520).
+                stopInAppRingtone()
+            }
+            return true
+        }
+        // Busy: in a 1:1 call, ringing for one, or already in a group call.
+        // We simply do not join — there is no `group_call_decline` wire type
+        // and the room stays open for the other invitees.
+        if isInCall || callState != .idle || groupCallControllerState != .idle {
+            let shortId: String = String(invite.callId.prefix(8))
+            let busyMsg: String = "[AppState] W-GRPRING busy — ignoring group call " + shortId
+            print(busyMsg)
+            return false
+        }
+
+        incomingGroupCallInvite = invite
+        let shortId: String = String(invite.callId.prefix(8))
+        let ringMsg: String = "[AppState] W-GRPRING ring " + shortId + " type=" + invite.callType
+        print(ringMsg)
+
+        switch source {
+        case .push:
+            // The PushKit handler reports the call to CallKit itself (iOS
+            // mandate) — the system UI IS the ring. No in-app ringtone.
+            break
+        case .webSocket:
+            presentGroupCallRingSurface(invite)
+        }
+        armGroupCallRingTimeout(callId: invite.callId)
+        return true
+    }
+
+    /// A ringing invitee who never joins is NOT in `GroupCall.Participants`, so
+    /// the server's `group_call_ended` fan-out (participants only — verified in
+    /// `cmd/bcrypto-lite/main.go`, case "group_call_end") never reaches them:
+    /// nothing on the wire would ever take this ring down if the creator hangs
+    /// up first. Bounded client-side timeout → treat as a MISSED group call.
+    /// Same `asyncAfter` idiom as `armAcceptGateTimeout`.
+    @MainActor
+    private func armGroupCallRingTimeout(callId: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 45.0) { [weak self] in
+            guard let self = self,
+                  self.incomingGroupCallInvite?.callId == callId else { return }
+            print("[AppState] W-GRPRING ring timed out (unanswered) call=\(callId.prefix(8))…")
+            self.stopInAppRingtone()
+            self.markGroupCallHandled(callId)
+            self.incomingGroupCallInvite = nil
+            NotificationCenterService.shared.clearIncomingCall(callId: callId)
+            self.clearGroupCallKitCall(reason: .unanswered)
+        }
+    }
+
+    /// Ring surface for a group call that arrived over the LIVE WS. Mirrors the
+    /// 1:1 `call_incoming` fork exactly:
+    ///   foreground        → in-app full-screen ring + in-app ringtone
+    ///   background + CallKit  → native CallKit incoming call
+    ///   background + CallKit-free (W-NOCALLKIT) → local INCOMING_CALL notification
+    @MainActor
+    private func presentGroupCallRingSurface(_ invite: IncomingGroupCallInvite) {
+        let foreground = UIApplication.shared.applicationState == .active
+        if foreground {
+            startInAppRingtone()
+            return
+        }
+        if CallsGate.callKitFreeMode {
+            let callId = invite.callId
+            let peer = invite.creatorId
+            let name = invite.displayTitle
+            let video = invite.hasVideo
+            let creator = invite.creatorName
+            let gid = invite.groupId
+            let gname = invite.groupName
+            // `groupCall: true` stamps type=incoming_group_call + the group
+            // context into userInfo, so an Answer tap AFTER the app has been
+            // killed (the notification outlives the process) still routes to the
+            // GROUP accept path instead of the 1:1 one.
+            Task {
+                await NotificationCenterService.shared.postIncomingCall(
+                    callId: callId, peerId: peer, callerName: name, hasVideo: video,
+                    groupCall: true, creatorName: creator, groupId: gid, groupName: gname)
+            }
+            return
+        }
+        let uuid = Self.callKitUUID(forGroupCallId: invite.callId)
+        groupCallKitId = uuid
+        let name = invite.displayTitle
+        let video = invite.hasVideo
+        Task { [weak self] in
+            await self?.callKit?.reportIncomingCall(
+                uuid: uuid, callerName: name, hasVideo: video)
+        }
+    }
+
+    /// PushKit VoIP entry point for a group call: build the invite, ring, and
+    /// hand the caller what it needs for the MANDATORY `reportNewIncomingCall`
+    /// (a VoIP push that does not report an incoming call gets the app killed
+    /// and future VoIP pushes throttled — so the caller reports the returned
+    /// uuid unconditionally, and ends it at once when `presented == false`).
+    /// The CallKit uuid is DERIVED from the call_id, so a WS invite and a push
+    /// for the same room resolve to the same uuid (idempotent report).
+    /// Body extracted from the closure per CLAUDE.md §13/§14 (keep nested
+    /// MainActor.run closures to one call).
+    @MainActor
+    func prepareIncomingPushGroupCall(
+        _ payload: PushKitProvider.ParsedGroupPayload
+    ) -> (uuid: UUID, display: String, presented: Bool) {
+        // Prefer the LOCAL rubrica for the creator's name (the push carries a
+        // server-supplied one) — same 3-tier resolution as the 1:1 push path.
+        let creatorName = callKitDisplayName(
+            callerId: payload.creatorId, fallback: payload.creatorName)
+        let invite = IncomingGroupCallInvite(
+            callId: payload.callId,
+            creatorId: payload.creatorId,
+            creatorName: creatorName,
+            callType: payload.callType,
+            groupId: payload.groupId,
+            groupName: payload.groupName)
+        let uuid = Self.callKitUUID(forGroupCallId: payload.callId)
+        // Do NOT latch `groupCallKitId` before we know the invite is
+        // presentable. When we are ALREADY in a group call that property holds
+        // the CallKit id of the LIVE call: overwriting it (and then nil-ing it
+        // on the not-presentable path) ORPHANS that call — `onEndCall` would
+        // stop matching it and fall through to the 1:1 `endCall()`, so "End" on
+        // the system UI would tear down the wrong call and leave the group call
+        // running with a dead CallKit entry. Everything here runs on the
+        // MainActor, so a racing WS `group_call_invite` cannot interleave
+        // between the present and the latch — it dedups on
+        // `incomingGroupCallInvite`/`handledGroupCallIds`, not on this uuid.
+        let presented = presentIncomingGroupCall(invite, source: .push)
+        if presented {
+            groupCallKitId = uuid
+        }
+        // Not presented (busy / already handled): the caller STILL reports to
+        // CallKit — the PushKit contract is non-negotiable — and then ends that
+        // uuid immediately, without touching the live call's id.
+        return (uuid, invite.displayTitle, presented)
+    }
+
+    /// Accept from the in-app ring surface. When CallKit owns the ring, route
+    /// through CXAnswerCallAction so the system UI resolves; the provider's
+    /// `onAnswerCall` then lands back on `performAcceptIncomingGroupCall()`.
+    /// Mirrors `answerIncomingCall()`.
+    @MainActor
+    func answerIncomingGroupCall() {
+        if let uuid = groupCallKitId, !CallsGate.callKitFreeMode {
+            Task { [weak self] in try? await self?.callKit?.answerCall(uuid: uuid) }
+            return
+        }
+        performAcceptIncomingGroupCall()
+    }
+
+    /// Shared accept path — run by the in-app ring button, the CallKit answer
+    /// (`onAnswerCall`), and the notification "Rispondi" action. Idempotent
+    /// (the invite is nil after the first pass).
+    @MainActor
+    func performAcceptIncomingGroupCall() {
+        guard let invite = incomingGroupCallInvite else { return }
+        stopInAppRingtone()
+        markGroupCallHandled(invite.callId)
+        incomingGroupCallInvite = nil
+        NotificationCenterService.shared.clearIncomingCall(callId: invite.callId)
+        // The CallKit call (if any) stays UP for the duration of the group call
+        // — `onEndCall` on it routes to `endGroupCallFromSystemUI()`.
+        guard let controller = groupCallController else {
+            // Cold start: the WS (and the controller) do not exist yet — the
+            // push woke us. Latch; `connectPersistentSocket()` consumes it.
+            pendingGroupCallJoinId = invite.callId
+            print("[AppState] W-GRPRING accept latched (no controller yet) call=\(invite.callId.prefix(8))…")
+            return
+        }
+        // Flip the surface state SYNCHRONOUSLY: the group-call cover in
+        // ContentView is presented while (invite != nil || state != .idle), and
+        // the controller re-publishes `.connecting` only on a LATER main-queue
+        // hop (its onStateChange bounces through DispatchQueue.main.async). Not
+        // setting it here would leave one runloop turn where both are false →
+        // the cover dismisses and immediately re-presents (flicker / dropped
+        // presentation). The controller's own emission moments later carries the
+        // identical value, so this is a no-op then.
+        groupCallControllerState = .connecting(callId: invite.callId)
+        // The SAME join path as before: single source of truth for the WS
+        // `group_call_join` AND the GroupSession crypto bootstrap.
+        controller.join(callId: invite.callId)
+    }
+
+    /// Reject the incoming group call. There is deliberately NO wire message:
+    /// the server has no `group_call_decline` type and the room must stay open
+    /// for the other invitees — rejecting just means we never send
+    /// `group_call_join`. (If a "X ha rifiutato" indicator is ever wanted, it
+    /// needs a NEW server type — flagged, not invented here.)
+    @MainActor
+    func declineIncomingGroupCall() {
+        guard let invite = incomingGroupCallInvite else { return }
+        stopInAppRingtone()
+        markGroupCallHandled(invite.callId)
+        incomingGroupCallInvite = nil
+        NotificationCenterService.shared.clearIncomingCall(callId: invite.callId)
+        clearGroupCallKitCall(reason: .declined)
+        print("[AppState] W-GRPRING rejected group call \(invite.callId.prefix(8))… (no wire decline — room stays open)")
+    }
+
+    /// True when an INCOMING_CALL notification belongs to a GROUP call. Two
+    /// ways to know:
+    ///   • a ring is already up for that call_id (WS invite → local
+    ///     notification, app alive but backgrounded), or
+    ///   • the payload IS the server's group ALERT push — `type ==
+    ///     "incoming_group_call"` (internal/push/apns.go
+    ///     SendAlertGroupCallInvite). This is the ONLY signal available on a
+    ///     cold start (app killed ⇒ no WS invite was ever seen).
+    /// `didReceive` stringifies every userInfo value, so `type` arrives as a
+    /// plain String here.
+    @MainActor
+    func isGroupCallNotification(callId: String, info: [String: String]) -> Bool {
+        if incomingGroupCallInvite?.callId == callId { return true }
+        return info["type"] == "incoming_group_call"
+    }
+
+    /// Answer / decline / open for a GROUP call arriving through the
+    /// CallKit-FREE notification surface (W-NOCALLKIT). On a cold start the ring
+    /// state does not exist yet — rebuild it from the push userInfo (the ALERT
+    /// payload carries the SAME fields as the VoIP one) before acting, so the
+    /// accept reaches `performAcceptIncomingGroupCall()` (which latches the join
+    /// until `connectPersistentSocket()` builds the controller).
+    @MainActor
+    func handleGroupCallNotificationAction(
+        _ action: NotificationCenterService.CallAction,
+        callId: String,
+        info: [String: String]
+    ) {
+        if incomingGroupCallInvite?.callId != callId {
+            let creatorId = info["creator_id"] ?? ""
+            let invite = IncomingGroupCallInvite(
+                callId: callId,
+                creatorId: creatorId,
+                creatorName: callKitDisplayName(
+                    callerId: creatorId, fallback: info["creator_name"]),
+                callType: info["call_type"] ?? "audio",
+                groupId: info["group_id"] ?? "",
+                groupName: info["group_name"] ?? "")
+            guard presentIncomingGroupCall(invite, source: .push) else {
+                // Busy, or this room was already accepted/rejected — there is
+                // nothing left to answer. Drop the stale notification.
+                NotificationCenterService.shared.clearIncomingCall(callId: callId)
+                return
+            }
+        }
+        switch action {
+        case .answer:
+            performAcceptIncomingGroupCall()
+        case .decline:
+            declineIncomingGroupCall()
+        case .open:
+            // Plain tap: bring the ring surface forward (the cover is driven by
+            // `incomingGroupCallInvite`, now non-nil) and ring audibly. Does NOT
+            // answer — same semantics as the 1:1 `.open` branch.
+            startInAppRingtone()
+        }
+    }
+
+    /// "End" pressed on the SYSTEM (CallKit) UI of a group call: a reject while
+    /// still ringing, a leave once joined.
+    @MainActor
+    func endGroupCallFromSystemUI() {
+        if incomingGroupCallInvite != nil {
+            declineIncomingGroupCall()
+            return
+        }
+        groupCallController?.leave()   // → onStateChange(.idle) → clears CallKit
+        clearGroupCallKitCall(reason: .userEnded)
+    }
+
+    /// Tear down the CallKit call we reported for a group call (if any). Safe
+    /// to call repeatedly — nil-guarded.
+    @MainActor
+    func clearGroupCallKitCall(reason: CallEndReason) {
+        guard let uuid = groupCallKitId else { return }
+        groupCallKitId = nil
+        Task { [weak self] in
+            await self?.callKit?.reportCallEnded(uuid: uuid, reason: reason)
+        }
+    }
+
+    /// Remember an accepted/rejected room so neither source re-rings it.
+    /// Bounded at 32 (a hostile peer must not be able to grow this forever).
+    @MainActor
+    private func markGroupCallHandled(_ callId: String) {
+        guard !handledGroupCallIds.contains(callId) else { return }
+        handledGroupCallIds.append(callId)
+        if handledGroupCallIds.count > 32 {
+            handledGroupCallIds.removeFirst(handledGroupCallIds.count - 32)
+        }
     }
 }
 

@@ -117,19 +117,31 @@ struct ContentView: View {
                 fromAdmin: invite.fromAdmin)
                 .environmentObject(appState)
         }
-        // W-GRPUI: present the group-call surface whenever
-        // GroupCallController leaves `.idle` — covers BOTH the creator
-        // (createCall → .connecting) and an invitee (auto-accept →
-        // GroupCallController.join → .connecting), matching Android's
-        // MVP auto-navigate-on-invite behaviour (MainActivity.kt). Uses
-        // the SAME persistent `groupCallViewModel` built once in
-        // `connectPersistentSocket()` rather than a fresh one per
-        // presentation.
+        // W-GRPUI / W-GRPRING: the single group-call surface.
+        //
+        //   • `incomingGroupCallInvite != nil`  → RING (accept/reject). Fed by
+        //     BOTH the live WS `group_call_invite` and the `incoming_group_call`
+        //     push, deduped by call_id in AppState. Previously an invite
+        //     auto-joined the callee silently — no ring, no accept, no reject.
+        //   • `groupCallControllerState != .idle` → the LIVE call. Covers the
+        //     creator (createCall → .connecting) and the invitee once they
+        //     ACCEPT (→ GroupCallController.join → .connecting).
+        //
+        // One cover, two contents: the ring is up only while the controller is
+        // still `.idle`, so the two states never overlap — accepting swaps the
+        // content in place (ring → live call) with no second presentation.
+        // Uses the SAME persistent `groupCallViewModel` built once in
+        // `connectPersistentSocket()` rather than a fresh one per presentation.
         .fullScreenCover(isPresented: Binding(
-            get: { appState.groupCallControllerState != .idle },
+            get: {
+                appState.incomingGroupCallInvite != nil
+                    || appState.groupCallControllerState != .idle
+            },
             set: { _ in }
         )) {
-            if let vm = appState.groupCallViewModel {
+            if let invite = appState.incomingGroupCallInvite {
+                incomingGroupCallScreen(invite)
+            } else if let vm = appState.groupCallViewModel {
                 GroupCallView(viewModel: vm)
             }
         }
@@ -192,6 +204,39 @@ struct ContentView: View {
                 durationSeconds: 6
             ))
         }
+    }
+
+    /// W-GRPRING — the incoming-GROUP-call ring. Reuses the 1:1
+    /// `IncomingCallScreen` (same ringing design: dual halo + avatar + identity
+    /// + accept/reject), with the quick-reply button hidden (no 1:1 chat to
+    /// reply into) and a group-specific subtitle. The ringtone is driven by
+    /// AppState (`startInAppRingtone`), exactly as for a 1:1 call.
+    ///
+    /// Reject deliberately sends NOTHING on the wire: the server has no
+    /// `group_call_decline` type and the room must stay open for the other
+    /// invitees — we simply never send `group_call_join`.
+    private func incomingGroupCallScreen(
+        _ invite: AppState.IncomingGroupCallInvite
+    ) -> some View {
+        IncomingCallScreen(
+            peerDisplayName: invite.displayTitle,
+            callType: invite.hasVideo ? .video : .audio,
+            subtitle: Self.groupCallSubtitle(invite),
+            showReplyAction: false,
+            onAccept: { appState.answerIncomingGroupCall() },
+            onReject: { appState.declineIncomingGroupCall() }
+        )
+    }
+
+    /// "Chiamata di gruppo · <chi ha chiamato>" (video variant included).
+    /// Static so it has its own clean type-check scope (CLAUDE.md §13).
+    private static func groupCallSubtitle(
+        _ invite: AppState.IncomingGroupCallInvite
+    ) -> String {
+        let kind = invite.hasVideo ? "Videochiamata di gruppo" : "Chiamata di gruppo"
+        let creator = invite.creatorName.trimmingCharacters(in: .whitespaces)
+        if creator.isEmpty || creator == invite.displayTitle { return kind }
+        return kind + " · " + creator
     }
 
     @ViewBuilder

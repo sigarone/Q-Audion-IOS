@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import Combine
+import QAudionEngine   // W-GRPRING: GroupCallController (group-call entry point)
 
 /// Group chat detail. 1:1 port di Android
 /// `qaudion-android-new/feature/feature-chat/.../group/GroupChatScreen.kt`.
@@ -122,6 +123,22 @@ struct GroupChatScreen: View {
                     .onEnded { _ in handleCopyGroupId() }
             )
             Spacer(minLength: 8)
+
+            // W-GRPRING — start a GROUP CALL with this group's members.
+            // Audit gap: there was no way to call the group you are in (the
+            // only entry point was the contacts multi-select picker, which has
+            // no group context). Mirrors Android's group-chat top-bar call
+            // button (commit 5f87bc67): audio-only for now, invitees = the
+            // group roster minus self.
+            Button(action: handleStartGroupCall) {
+                Image(systemName: "phone.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(canStartGroupCall ? scheme.primary : scheme.onSurfaceVariant)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canStartGroupCall)
+            .accessibilityLabel("Chiama il gruppo")
         }
         .padding(.horizontal, 8)
         .frame(height: 56)
@@ -254,6 +271,45 @@ struct GroupChatScreen: View {
     /// type-check scope and no `@ViewBuilder` constraints.
     private static func formatGroupIdCopiedMessage(prefix: String) -> String {
         return "ID gruppo copiato (" + prefix + "…)"
+    }
+
+    // MARK: - W-GRPRING: start a group call from the group chat
+
+    /// The real roster (registry), never the stub fallback of
+    /// `makeInfoState()` — inviting the placeholder `u-1`/`u-2` ids would
+    /// create a call nobody can join.
+    private var groupCallInvitees: [String] {
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return [] }
+        let selfId = AppState.currentUserIdSnapshot ?? ""
+        return entry.members.filter { $0 != selfId && !$0.isEmpty }
+    }
+
+    private var canStartGroupCall: Bool {
+        !groupCallInvitees.isEmpty && appState.groupCallController != nil
+    }
+
+    /// Create the group call and let `ContentView`'s group-call cover present
+    /// the live screen (it is driven off `groupCallControllerState`, which
+    /// `createCall` moves to `.connecting`). Populates `call_type` + the group
+    /// context on the `group_call_create` envelope — the server relays those
+    /// verbatim to every invitee's `group_call_invite` AND to the wake-up push,
+    /// which is what lets the callee render a correct incoming-group-call ring.
+    private func handleStartGroupCall() {
+        let invitees = groupCallInvitees
+        guard !invitees.isEmpty else {
+            snackbar?.show(.init(text: "Nessun altro membro nel gruppo", severity: .info))
+            return
+        }
+        let name = state.name
+        let created = appState.groupCallController?.createCall(
+            invitees: invitees,
+            title: name,
+            callType: "audio",              // video group call: follow-up (parity with Android)
+            groupId: groupId.uuidString.lowercased(),  // dashed UUID == server wire id
+            groupName: name)
+        if created == nil {
+            snackbar?.show(.init(text: "Chiamata di gruppo non disponibile ora", severity: .error))
+        }
     }
 
     /// W-GRPMSG — reload the visible bubbles from the persistent

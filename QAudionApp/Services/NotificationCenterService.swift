@@ -210,10 +210,24 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
     /// posts the SAME-shaped APNs ALERT for the app-killed case, so the
     /// onIncomingCallAction handler treats both identically. userInfo carries the
     /// routing ids the answer path needs.
-    func postIncomingCall(callId: String, peerId: String, callerName: String, hasVideo: Bool) async {
+    ///
+    /// W-GRPRING — `groupCall` stamps the SAME `type` marker the server puts on
+    /// its group ALERT push (`"incoming_group_call"`, internal/push/apns.go
+    /// SendAlertGroupCallInvite) plus the group context. Without it, a user who
+    /// answers this notification AFTER the app was killed (the notification
+    /// outlives the process) lands in AppState's 1:1 answer branch — the group
+    /// call would never be joined and a stale 1:1 auto-answer would be armed.
+    /// Additive: the 1:1 call site passes nothing and its userInfo is unchanged.
+    func postIncomingCall(callId: String, peerId: String, callerName: String, hasVideo: Bool,
+                          groupCall: Bool = false, creatorName: String = "",
+                          groupId: String = "", groupName: String = "") async {
         let content = UNMutableNotificationContent()
         content.title = callerName.isEmpty ? "Chiamata in arrivo" : callerName
-        content.body = hasVideo ? "Videochiamata Q-Audion" : "Chiamata Q-Audion"
+        if groupCall {
+            content.body = hasVideo ? "Videochiamata di gruppo Q-Audion" : "Chiamata di gruppo Q-Audion"
+        } else {
+            content.body = hasVideo ? "Videochiamata Q-Audion" : "Chiamata Q-Audion"
+        }
         // Ring sound. defaultRingtone (iOS 15.2+) loops like a call; else default.
         if #available(iOS 15.2, *) {
             content.sound = .defaultRingtone
@@ -221,12 +235,23 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
             content.sound = .default
         }
         content.categoryIdentifier = Category.incomingCall.rawValue
-        content.userInfo = [
+        var info: [String: String] = [
             "call_id": callId,
             "peer_id": peerId,
             "caller_name": callerName,
             "has_video": hasVideo ? "1" : "0",
         ]
+        if groupCall {
+            // Same key set the server's group push carries, so AppState's
+            // rebuild path is identical for a local notification and an APNs one.
+            info["type"] = "incoming_group_call"
+            info["creator_id"] = peerId
+            info["creator_name"] = creatorName.isEmpty ? callerName : creatorName
+            info["call_type"] = hasVideo ? "video" : "audio"
+            info["group_id"] = groupId
+            info["group_name"] = groupName
+        }
+        content.userInfo = info as [AnyHashable: Any]
         content.threadIdentifier = Category.incomingCall.rawValue
         // Break through Focus/DnD (no special entitlement needed for time-sensitive).
         if #available(iOS 15.0, *) {
