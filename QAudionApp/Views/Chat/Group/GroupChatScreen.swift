@@ -60,6 +60,14 @@ struct GroupChatScreen: View {
             NavigationStack {
                 GroupInfoScreen(
                     state: makeInfoState(),
+                    isSelfAdmin: selfIsAdmin,
+                    addableContacts: addableContactRows,
+                    onAddMembers: { ids in
+                        appState.addGroupMembers(groupId: groupHex, newMembers: ids)
+                    },
+                    onRemoveMember: { uid in
+                        appState.removeGroupMember(groupId: groupHex, member: uid)
+                    },
                     onLeft: {
                         // W409: actually leave the group via AppState.
                         // Ships qa_grp:1 t:"member_left" envelope to all
@@ -427,6 +435,26 @@ struct GroupChatScreen: View {
         )
     }
 
+    /// Fase 1A — is the local user an admin of THIS group? Drives the
+    /// add/remove affordances in GroupInfoScreen.
+    private var selfIsAdmin: Bool {
+        let selfId = AppState.currentUserIdSnapshot ?? ""
+        guard !selfId.isEmpty,
+              let entry = GroupRegistry.shared.entry(for: groupHex) else { return false }
+        return entry.admins.contains(selfId)
+    }
+
+    /// Fase 1A — contacts eligible to add (whole address book; the sheet
+    /// filters out those already in the roster). Same source as
+    /// CreateGroupScreen.
+    private var addableContactRows: [ContactPickerRowUi] {
+        appState.cachedContacts.map {
+            ContactPickerRowUi(userId: $0.userId,
+                               displayName: $0.displayName,
+                               avatarUrl: $0.avatarUrl)
+        }
+    }
+
     private func makeInfoState() -> GroupInfoUiState {
         // W399 — read real membership from GroupRegistry. Falls back
         // to the legacy stub layout only if the group hasn't been
@@ -442,8 +470,9 @@ struct GroupChatScreen: View {
                     isSelf: uid == selfId)
             }
             return GroupInfoUiState(
+                groupId: groupId,
                 name: entry.name,
-                epoch: 1,
+                epoch: Int(entry.epoch),
                 members: rows)
         }
         // Stub fallback — kept so a fresh group view doesn't crash

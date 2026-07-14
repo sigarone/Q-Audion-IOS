@@ -93,11 +93,48 @@ public final class GroupChatService {
     private func loadExistingSession(groupId: String, selfId: String) -> GroupState? {
         if let cached = sessions[groupId] { return cached }
         guard let gid = bytes(for: groupId), !selfId.isEmpty else { return nil }
-        if let existing = Self.vault.load(groupIdBytes: gid, groupEpoch: 1, selfId: selfId) {
+        if let existing = loadFromVault(groupIdBytes: gid, groupIdHex: groupId, selfId: selfId) {
             sessions[groupId] = existing
             return existing
         }
         return nil
+    }
+
+    /// Fase 1A — the server-canonical membership epoch persisted for this
+    /// group (drives the vault probe window). 1 when we have no registry
+    /// entry yet (a brand-new local group).
+    private func registryEpoch(for groupIdHex: String) -> UInt32 {
+        return GroupRegistry.shared.entry(for: groupIdHex)?.epoch ?? 1
+    }
+
+    /// Probe the GroupSessionVault for the group's live CRYPTO snapshot.
+    ///
+    /// The crypto epoch (embedded in the snapshot AND the vault account
+    /// key) diverges DOWNWARD from the server-canonical registry epoch:
+    /// the server bumps its `group_epoch` on every membership op, but the
+    /// crypto sender-key epoch bumps ONLY on remove/leave (§7.1 — add does
+    /// not re-key). So `crypto_epoch ≤ server_epoch`, and the live snapshot
+    /// is the HIGHEST-epoch snapshot ≤ the registry epoch. We try the
+    /// registry epoch, then descend to 1 (first hit wins → the live
+    /// snapshot, never a stale lower-epoch leftover), then try one above
+    /// (glare window where a remove already bumped the crypto epoch but our
+    /// local registry epoch hasn't caught up to the server yet).
+    ///
+    /// This REPLACES the pre-Fase-1A hardcoded `groupEpoch: 1` load, which
+    /// silently lost every remove-member epoch bump on the next launch →
+    /// cross-platform decrypt break. Mirrors Android
+    /// SendGroupMessageUseCase's `[1, 0, e-1, e+1]` probe.
+    private func loadFromVault(groupIdBytes gid: Data, groupIdHex: String, selfId: String) -> GroupState? {
+        let top = registryEpoch(for: groupIdHex)
+        var epoch = top
+        while epoch >= 1 {
+            if let s = Self.vault.load(groupIdBytes: gid, groupEpoch: epoch, selfId: selfId) {
+                return s
+            }
+            if epoch == 1 { break }
+            epoch -= 1
+        }
+        return Self.vault.load(groupIdBytes: gid, groupEpoch: top &+ 1, selfId: selfId)
     }
 
     /// Lazy-init or recover a `GroupState` for the given group + self
@@ -110,7 +147,7 @@ public final class GroupChatService {
         guard let gid = bytes(for: groupId), !members.contains(where: { $0.isEmpty }), !selfId.isEmpty else {
             return nil
         }
-        if let existing = Self.vault.load(groupIdBytes: gid, groupEpoch: 1, selfId: selfId) {
+        if let existing = loadFromVault(groupIdBytes: gid, groupIdHex: groupId, selfId: selfId) {
             sessions[groupId] = existing
             // W395 — replay any buffered ctl envelopes that arrived
             // before this session was bootstrapped.
@@ -210,6 +247,80 @@ public final class GroupChatService {
         sessions.removeValue(forKey: groupId)
         shippedInits.removeValue(forKey: groupId)
         bufferedInits.removeValue(forKey: groupId)
+    }
+
+    // MARK: - Fase 1A membership ops (admin + remaining-member crypto)
+
+    /// Admin-side ADD. Install `newMember` into our roster (engine
+    /// `handleMemberAdded`) and return the `sender_key_init` envelope to
+    /// ship to THEM over the 1:1 ratchet so they can decrypt our future
+    /// group frames. Does NOT bump the crypto epoch (§7.1 — add never
+    /// re-keys). Returns nil if the session can't be loaded or the engine
+    /// rejects (e.g. already a member). The returned recipient is marked
+    /// shipped so `pendingInitsAfterBootstrap` won't re-emit to them.
+    public func addMemberLocally(groupId: String, members: [String], selfId: String, newMember: String) -> PendingSenderKeyInit? {
+        guard let state = session(groupId: groupId, members: members, selfId: selfId) else {
+            return nil
+        }
+        let pkg: GroupMemberAddedPackage
+        do {
+            pkg = try engine.handleMemberAdded(state: state, newMember: newMember)
+        } catch {
+            print("[GroupChatService] addMemberLocally failed (\(newMember)): \(error)")
+            return nil
+        }
+        guard let jsonData = try? JSONEncoder().encode(pkg.initForNewMember),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            return nil
+        }
+        var already = shippedInits[groupId] ?? Set<String>()
+        already.insert(newMember)
+        shippedInits[groupId] = already
+        return PendingSenderKeyInit(recipientId: newMember, envelopeJson: jsonString)
+    }
+
+    /// Remove `removed` and re-key — the FORWARD-SECRECY path (§7.2).
+    /// Engine `handleMemberRemoved` bumps the crypto epoch, rotates our
+    /// own send chain to a fresh random SK_0 the removed member never
+    /// learned, drops ALL recv chains, and persists at the NEW epoch.
+    /// Returns a `sender_key_rotate` envelope for EACH remaining member
+    /// (self and `removed` excluded) plus the new crypto epoch.
+    ///
+    /// Called by BOTH the admin performing the remove AND every remaining
+    /// member reacting to `group_membership_changed`, so all peers
+    /// converge on the same new crypto epoch and re-install each other's
+    /// chains via the returned rotates.
+    ///
+    /// **Idempotent** — if `removed` is already gone from the cached/vault
+    /// state (the server broadcast and the P2P `member_removed` envelope
+    /// can both drive us here), the engine throws `notMember` and we
+    /// return nil WITHOUT a second bump, so the crypto epoch advances
+    /// exactly once per removal.
+    public func removeMemberLocally(groupId: String, members: [String], selfId: String, removed: String) -> (rotates: [PendingSenderKeyInit], newCryptoEpoch: UInt32)? {
+        guard let state = session(groupId: groupId, members: members, selfId: selfId) else {
+            return nil
+        }
+        let pkg: GroupRotatePackage
+        do {
+            pkg = try engine.handleMemberRemoved(state: state, removed: removed)
+        } catch {
+            // notMember == already processed on the other channel: an
+            // idempotent no-op, not an error.
+            print("[GroupChatService] removeMemberLocally skipped (\(removed)): \(error)")
+            return nil
+        }
+        // Fresh epoch — everyone re-keys via rotate, so reset the init-ship
+        // tracker to the surviving roster (no stale-epoch init re-emission).
+        let remaining = state.members.filter { $0 != selfId }
+        shippedInits[groupId] = Set(remaining)
+        guard let jsonData = try? JSONEncoder().encode(pkg.rotateEnvelope),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            return (rotates: [], newCryptoEpoch: state.groupEpoch)
+        }
+        let rotates = remaining.map {
+            PendingSenderKeyInit(recipientId: $0, envelopeJson: jsonString)
+        }
+        return (rotates: rotates, newCryptoEpoch: state.groupEpoch)
     }
 
     // MARK: - W390 sender_key_init distribution

@@ -9559,7 +9559,19 @@ extension AppState {
             GroupRegistry.shared.remove(groupId: groupId)
             GroupChatService.shared.invalidate(groupId: groupId)
         } else {
+            let preMembers = entry.members
             GroupRegistry.shared.removeMember(groupId: groupId, userId: member)
+            // Fase 1A — mirror the server-consumer forward-secrecy rekey on
+            // the P2P channel too, so a P2P-only group (created iOS-side and
+            // never registered server-side) still re-keys on removal. Bumps
+            // our crypto epoch, rotates our own send chain, drops recv
+            // chains, redistributes `sender_key_rotate`. Idempotent with the
+            // parallel `group_membership_changed` server path (engine
+            // `notMember` guard → the epoch advances exactly once).
+            if let selfId = currentUserId, !selfId.isEmpty, member != selfId {
+                applyRemovalRekey(groupHex: groupId, members: preMembers,
+                                  selfId: selfId, removed: member)
+            }
         }
         NotificationCenter.default.post(
             name: AppState.groupRegistryChangedNotification,
@@ -9592,6 +9604,193 @@ extension AppState {
             name: AppState.groupRegistryChangedNotification,
             object: nil,
             userInfo: ["groupId": groupId])
+    }
+
+    // MARK: - Fase 1A — admin add / remove member
+
+    /// Admin adds one or more members to `groupHex` (dash-stripped hex id).
+    /// Fires THREE channels, mirroring `createGroup`:
+    ///   1. CRYPTO — install each new member into our roster and ship them
+    ///      our `sender_key_init` over the 1:1 ratchet (does NOT bump the
+    ///      crypto epoch, §7.1).
+    ///   2. P2P — ship the iOS `group_invite` (full state) to each new
+    ///      member so their client auto-bootstraps, plus a `member_added`
+    ///      delta to the existing members. Keeps iOS↔iOS working even for a
+    ///      P2P-only group the server has no record of.
+    ///   3. SERVER — best-effort signed `POST …/members` so the server fans
+    ///      `group_membership_changed` to Android/Desktop peers. A 404
+    ///      (P2P-only group) / network error never rolls back 1 or 2.
+    @MainActor
+    public func addGroupMembers(groupId groupHex: String, newMembers rawNew: [String]) {
+        guard let selfId = currentUserId, !selfId.isEmpty else { return }
+        guard var entry = GroupRegistry.shared.entry(for: groupHex) else {
+            print("[AppState] addGroupMembers: unknown group \(groupHex)")
+            return
+        }
+        guard entry.admins.contains(selfId) else {
+            print("[AppState] addGroupMembers: self not admin of \(groupHex)")
+            return
+        }
+        let newMembers = rawNew.filter {
+            !$0.isEmpty && $0 != selfId && !entry.members.contains($0)
+        }
+        guard !newMembers.isEmpty else { return }
+
+        let now = Int64(Date().timeIntervalSince1970)
+        // Add does NOT bump the CRYPTO epoch; the server `e_proposed` base is
+        // the current persisted server epoch (server bumps it on its side).
+        let eProposed = entry.epoch
+
+        for newMember in newMembers {
+            // 1) CRYPTO — install + ship sender_key_init to the new member.
+            if let pending = GroupChatService.shared.addMemberLocally(
+                groupId: groupHex, members: entry.members,
+                selfId: selfId, newMember: newMember) {
+                NotificationCenter.default.post(
+                    name: AppState.groupSenderKeyCtlNotification, object: nil,
+                    userInfo: ["recipient": pending.recipientId,
+                               "envelopeJson": pending.envelopeJson])
+            }
+            // 2) local registry.
+            GroupRegistry.shared.addMember(groupId: groupHex, userId: newMember)
+            entry = GroupRegistry.shared.entry(for: groupHex) ?? entry
+        }
+
+        // 2b) P2P fan-out (hex `g`). group_invite → new members;
+        //     member_added → the pre-existing members.
+        let fullMembers = entry.members
+        let fullAdmins = entry.admins
+        let inviteJson = GroupInviteEnvelope.encodeInvite(
+            GroupInviteEnvelope.Invite(
+                g: groupHex, name: entry.name, members: fullMembers,
+                admins: fullAdmins, from: selfId, e: eProposed, ts: now))
+        for newMember in newMembers {
+            if let json = inviteJson {
+                NotificationCenter.default.post(
+                    name: AppState.groupSenderKeyCtlNotification, object: nil,
+                    userInfo: ["recipient": newMember, "envelopeJson": json])
+            }
+            if let addedJson = GroupInviteEnvelope.encodeMemberAdded(
+                GroupInviteEnvelope.MemberAdded(
+                    g: groupHex, e: eProposed, member: newMember,
+                    from: selfId, ts: now)) {
+                for recipient in fullMembers
+                where recipient != selfId && !newMembers.contains(recipient) {
+                    NotificationCenter.default.post(
+                        name: AppState.groupSenderKeyCtlNotification, object: nil,
+                        userInfo: ["recipient": recipient, "envelopeJson": addedJson])
+                }
+            }
+        }
+
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil, userInfo: ["groupId": groupHex])
+
+        // 3) SERVER REST (best-effort, one signed envelope per new member).
+        guard let groupIdWire = Self.hexToDashedUUID(groupHex),
+              let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken),
+              let identity = sovereignIdentity.loadIdentity() else { return }
+        for newMember in newMembers {
+            let envelope = GroupMembershipEnvelope.build(
+                actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
+                operation: GroupMembershipEnvelope.opAdd,
+                tsUnixSeconds: now, subjectUserId: newMember)
+            guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else { continue }
+            let envB64 = envelope.base64EncodedString()
+            let sigB64 = sig.base64EncodedString()
+            Task { @MainActor in
+                guard let res = await api.addMember(
+                    groupIdWire: groupIdWire, userId: newMember,
+                    signedEnvelopeB64: envB64, adminSignatureB64: sigB64),
+                    res.isSuccess else { return }
+                GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: res.groupEpoch)
+                NotificationCenter.default.post(
+                    name: AppState.groupRegistryChangedNotification,
+                    object: nil, userInfo: ["groupId": groupHex])
+            }
+        }
+    }
+
+    /// Admin removes `removed` from `groupHex`. Fires the same three
+    /// channels, but the CRYPTO side is the FORWARD-SECRECY rekey (§7.2):
+    /// bump the crypto epoch, rotate our own send chain, drop recv chains,
+    /// redistribute `sender_key_rotate` to the remaining members. Use
+    /// `leaveGroup` to remove yourself — this path refuses `removed == self`.
+    @MainActor
+    public func removeGroupMember(groupId groupHex: String, member removed: String) {
+        guard let selfId = currentUserId, !selfId.isEmpty else { return }
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
+        guard entry.admins.contains(selfId) else {
+            print("[AppState] removeGroupMember: self not admin of \(groupHex)")
+            return
+        }
+        guard removed != selfId else {
+            print("[AppState] removeGroupMember: use leaveGroup to remove self")
+            return
+        }
+        guard entry.members.contains(removed) else { return }
+
+        let now = Int64(Date().timeIntervalSince1970)
+        let preMembers = entry.members
+        // Remove DOES bump: the server `e_proposed` is current + 1.
+        let eProposed = entry.epoch &+ 1
+
+        // 1) CRYPTO — rekey + ship sender_key_rotate to remaining members.
+        applyRemovalRekey(groupHex: groupHex, members: preMembers,
+                          selfId: selfId, removed: removed)
+
+        // 2) local registry + P2P member_removed to remaining members.
+        GroupRegistry.shared.removeMember(groupId: groupHex, userId: removed)
+        let remaining = GroupRegistry.shared.entry(for: groupHex)?.members ?? []
+        if let removedJson = GroupInviteEnvelope.encodeMemberRemoved(
+            GroupInviteEnvelope.MemberRemoved(
+                g: groupHex, e: eProposed, member: removed, from: selfId, ts: now)) {
+            for recipient in remaining where recipient != selfId {
+                NotificationCenter.default.post(
+                    name: AppState.groupSenderKeyCtlNotification, object: nil,
+                    userInfo: ["recipient": recipient, "envelopeJson": removedJson])
+            }
+        }
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil, userInfo: ["groupId": groupHex])
+
+        // 3) SERVER REST (best-effort).
+        guard let groupIdWire = Self.hexToDashedUUID(groupHex),
+              let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken),
+              let identity = sovereignIdentity.loadIdentity() else { return }
+        let envelope = GroupMembershipEnvelope.build(
+            actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
+            operation: GroupMembershipEnvelope.opRemove,
+            tsUnixSeconds: now, subjectUserId: removed)
+        guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else { return }
+        let envB64 = envelope.base64EncodedString()
+        let sigB64 = sig.base64EncodedString()
+        Task { @MainActor in
+            guard let res = await api.removeMember(
+                groupIdWire: groupIdWire, userId: removed,
+                signedEnvelopeB64: envB64, adminSignatureB64: sigB64),
+                res.isSuccess else { return }
+            GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: res.groupEpoch)
+            NotificationCenter.default.post(
+                name: AppState.groupRegistryChangedNotification,
+                object: nil, userInfo: ["groupId": groupHex])
+        }
+    }
+
+    /// Reconstruct the dashed-UUID server wire id from the dash-stripped
+    /// 32-char hex the local `GroupRegistry` keys on. Returns nil if the
+    /// input isn't a 32-char hex string (a non-UUID / malformed id).
+    fileprivate static func hexToDashedUUID(_ hex: String) -> String? {
+        let clean = hex.lowercased()
+        guard clean.count == 32,
+              clean.allSatisfy({ $0.isHexDigit }) else { return nil }
+        let c = Array(clean)
+        let p1 = String(c[0..<8]); let p2 = String(c[8..<12])
+        let p3 = String(c[12..<16]); let p4 = String(c[16..<20])
+        let p5 = String(c[20..<32])
+        return "\(p1)-\(p2)-\(p3)-\(p4)-\(p5)"
     }
 }
 
@@ -9635,6 +9834,7 @@ extension AppState {
         let subject = (data["subject_user_id"] as? String) ?? ""
         let actor = (data["actor_user_id"] as? String) ?? ""
         let replay = (data["replay"] as? Bool) ?? false
+        let serverEpoch = Self.uint32Field(data["group_epoch"])
         let selfId = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
         guard !selfId.isEmpty else { return }
 
@@ -9671,7 +9871,7 @@ extension AppState {
             guard members.contains(selfId) else { return }
             bootstrapGroupFromServer(
                 groupHex: groupHex, members: members, admins: admins,
-                actor: actor, selfId: selfId, replay: replay)
+                actor: actor, selfId: selfId, replay: replay, serverEpoch: serverEpoch)
             return
         }
 
@@ -9680,14 +9880,24 @@ extension AppState {
         updated.members = members
         updated.admins = admins
         GroupRegistry.shared.upsert(updated)
+        // Fase 1A — persist the server-canonical membership epoch so the
+        // GroupChatService vault probe stays anchored across launches.
+        if serverEpoch > 0 {
+            GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: serverEpoch)
+        }
 
         // Crypto side-effects.
         if isRemoval, !subject.isEmpty, subject != selfId {
-            // Drop the cached GroupState (+ shippedInits + buffered ctl) so the
-            // next send/receive rebuilds against the new roster and re-ships our
-            // sender_key_init to the REMAINING members. Same call
-            // `applyMemberRemoved`/`leaveGroup` already make.
-            GroupChatService.shared.invalidate(groupId: groupHex)
+            // Fase 1A — the FORWARD-SECRECY path (§7.2). A remaining member
+            // bumps the crypto epoch, rotates its own send chain to a fresh
+            // SK_0 the removed member never learned, drops all recv chains,
+            // and redistributes `sender_key_rotate` to the OTHER remaining
+            // members. Idempotent (engine `notMember` guard) — safe even when
+            // the parallel P2P `member_removed` envelope also drives us here.
+            // This REPLACES the pre-Fase-1A `invalidate`, which (with the old
+            // hardcoded epoch-1 load) silently reverted the group to a stale
+            // key state on the next send/receive.
+            applyRemovalRekey(groupHex: groupHex, members: members, selfId: selfId, removed: subject)
         } else if !isRemoval, !subject.isEmpty, subject != selfId {
             // A member was ADDED: ship OUR sender_key_init to them over the 1:1
             // ratchet so they can decrypt our group frames. Identical fan-out to
@@ -9716,7 +9926,7 @@ extension AppState {
     @MainActor
     fileprivate func bootstrapGroupFromServer(
         groupHex: String, members: [String], admins: [String],
-        actor: String, selfId: String, replay: Bool
+        actor: String, selfId: String, replay: Bool, serverEpoch: UInt32
     ) {
         let adminForName = admins.first ?? actor
         let entry = GroupRegistry.Entry(
@@ -9725,7 +9935,8 @@ extension AppState {
             members: members,
             admins: admins.isEmpty ? [actor] : admins,
             joinedAt: Date(),
-            bootstrapped: false)
+            bootstrapped: false,
+            epoch: max(serverEpoch, 1))
         GroupRegistry.shared.upsert(entry)
         _ = GroupChatService.shared.session(
             groupId: groupHex, members: members, selfId: selfId)
@@ -9769,6 +9980,54 @@ extension AppState {
                     "envelopeJson": init_.envelopeJson,
                 ])
         }
+    }
+
+    /// Fase 1A — run the remaining-member forward-secrecy rekey (§7.2) and
+    /// ship the resulting `sender_key_rotate` envelopes over the 1:1
+    /// ratchet. `members` MUST still include `removed` (the engine drops
+    /// them); a fresh-bootstrap fallback re-adds `removed` defensively.
+    /// Idempotent — the engine's `notMember` guard makes a second call
+    /// (server + P2P both firing) a no-op, so the crypto epoch advances
+    /// exactly once.
+    @MainActor
+    fileprivate func applyRemovalRekey(groupHex: String, members: [String],
+                                       selfId: String, removed: String) {
+        let cryptoMembers = members.contains(removed) ? members : members + [removed]
+        guard let rekey = GroupChatService.shared.removeMemberLocally(
+            groupId: groupHex, members: cryptoMembers,
+            selfId: selfId, removed: removed) else { return }
+        // Fase 1A KEYSTONE — persist the just-bumped CRYPTO epoch into the
+        // local registry so the GroupChatService vault probe anchors at (or
+        // above) it on the NEXT launch. Without this, a P2P-only group (REST
+        // 404 → server epoch never set) keeps registry epoch < crypto epoch,
+        // and `loadFromVault`'s descending probe returns the STALE pre-removal
+        // snapshot (KeychainGroupSessionVault NEVER deletes old-epoch items)
+        // BEFORE it ever reaches the live post-removal snapshot → the removal
+        // is silently reverted on relaunch, forward secrecy is lost (the
+        // removed member's send chain still decrypts) and cross-platform
+        // decrypt breaks. `setEpoch` is monotonic, so on a server-tracked
+        // group (where serverEpoch ≥ cryptoEpoch was already persisted) this
+        // is a safe no-op. This is the single sink for all three remove paths
+        // (admin `removeGroupMember`, P2P `applyMemberRemoved`, server
+        // `handleGroupMembershipChanged`), so every path is covered once.
+        GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: rekey.newCryptoEpoch)
+        for rot in rekey.rotates {
+            NotificationCenter.default.post(
+                name: AppState.groupSenderKeyCtlNotification,
+                object: nil,
+                userInfo: [
+                    "recipient": rot.recipientId,
+                    "envelopeJson": rot.envelopeJson,
+                ])
+        }
+    }
+
+    /// Robustly read a UInt32 field from a WS JSON payload (values arrive
+    /// as `NSNumber` under JSONSerialization; be lenient about String too).
+    fileprivate static func uint32Field(_ value: Any?) -> UInt32 {
+        if let n = value as? NSNumber { return UInt32(truncatingIfNeeded: n.int64Value) }
+        if let s = value as? String, let v = UInt32(s) { return v }
+        return 0
     }
 
     /// The server's `operation` token is the REST verb ("add" / "remove" /

@@ -27,16 +27,49 @@ public final class GroupRegistry: ObservableObject {
         public var admins: [String]          // subset of members
         public let joinedAt: Date
         public var bootstrapped: Bool        // true once GroupChatService.session was created
+        /// Fase 1A keystone — the SERVER-canonical membership epoch
+        /// (`group_epoch` from `group_membership_changed` / the REST
+        /// `membershipResponse`). This is the version counter the server
+        /// bumps on EVERY membership op (add included) — distinct from the
+        /// crypto sender-key epoch (which bumps only on remove/leave, §7.2).
+        /// Used for the "epoch N" UI subtitle and as the `e_proposed` base
+        /// for the signed membership envelope. The crypto epoch lives in
+        /// the GroupSession vault snapshot (which GroupChatService probe-
+        /// loads because the two counters diverge after any add). Persisted
+        /// here so a real remove-member epoch bump survives an app restart
+        /// (before Fase 1A, GroupChatService hardcoded epoch 1 → the bump
+        /// was silently lost → cross-platform decrypt broke on remove).
+        public var epoch: UInt32
 
         public init(id: String, name: String, members: [String],
                     admins: [String], joinedAt: Date = Date(),
-                    bootstrapped: Bool = false) {
+                    bootstrapped: Bool = false, epoch: UInt32 = 1) {
             self.id = id
             self.name = name
             self.members = members
             self.admins = admins
             self.joinedAt = joinedAt
             self.bootstrapped = bootstrapped
+            self.epoch = epoch
+        }
+
+        // Custom Decodable so pre-Fase-1A persisted entries (no `epoch`
+        // key) decode cleanly to the default epoch 1 instead of throwing.
+        // (Swift's synthesized init(from:) ignores property default values
+        // for absent keys, so we must decode-if-present explicitly.)
+        enum CodingKeys: String, CodingKey {
+            case id, name, members, admins, joinedAt, bootstrapped, epoch
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.id = try c.decode(String.self, forKey: .id)
+            self.name = try c.decode(String.self, forKey: .name)
+            self.members = try c.decode([String].self, forKey: .members)
+            self.admins = try c.decode([String].self, forKey: .admins)
+            self.joinedAt = try c.decode(Date.self, forKey: .joinedAt)
+            self.bootstrapped = try c.decodeIfPresent(Bool.self, forKey: .bootstrapped) ?? false
+            self.epoch = try c.decodeIfPresent(UInt32.self, forKey: .epoch) ?? 1
         }
     }
 
@@ -118,6 +151,16 @@ public final class GroupRegistry: ObservableObject {
     public func renameGroup(groupId: String, newName: String) {
         guard let idx = entries.firstIndex(where: { $0.id == groupId }) else { return }
         entries[idx].name = newName
+        persist()
+    }
+
+    /// Fase 1A — record the server-canonical membership epoch. Monotonic:
+    /// a stale event (lower epoch) never rolls the persisted value back
+    /// (replay/downgrade defense; the server epoch only ever increases).
+    public func setEpoch(groupId: String, epoch: UInt32) {
+        guard let idx = entries.firstIndex(where: { $0.id == groupId }) else { return }
+        guard epoch > entries[idx].epoch else { return }
+        entries[idx].epoch = epoch
         persist()
     }
 }

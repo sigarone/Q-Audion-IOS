@@ -33,10 +33,31 @@ struct GroupInfoScreen: View {
     /// aggiorna). Surfaced in UI come "Aggiornato N min fa" così il
     /// tester sa quanto è fresca la lista membri.
     @State private var lastRefreshAt: Date = Date()
+    /// Fase 1A — add-member picker (admin-only) + per-row remove confirm.
+    @State private var showingAddMembers = false
+    @State private var selectedToAdd: Set<String> = []
+    @State private var pendingRemoveMember: GroupMemberRowUi?
     let onLeft: () -> Void
 
-    init(state: GroupInfoUiState, onLeft: @escaping () -> Void = {}) {
+    // Fase 1A — admin membership affordances. Defaulted so pre-existing
+    // call sites (and the #Preview) keep compiling; GroupChatScreen wires
+    // the real values.
+    private let isSelfAdmin: Bool
+    private let addableContacts: [ContactPickerRowUi]
+    private let onAddMembers: ([String]) -> Void
+    private let onRemoveMember: (String) -> Void
+
+    init(state: GroupInfoUiState,
+         isSelfAdmin: Bool = false,
+         addableContacts: [ContactPickerRowUi] = [],
+         onAddMembers: @escaping ([String]) -> Void = { _ in },
+         onRemoveMember: @escaping (String) -> Void = { _ in },
+         onLeft: @escaping () -> Void = {}) {
         _state = State(initialValue: state)
+        self.isSelfAdmin = isSelfAdmin
+        self.addableContacts = addableContacts
+        self.onAddMembers = onAddMembers
+        self.onRemoveMember = onRemoveMember
         self.onLeft = onLeft
     }
 
@@ -56,6 +77,12 @@ struct GroupInfoScreen: View {
                             .foregroundStyle(scheme.onSurfaceVariant)
                             .padding(.horizontal, 16)
                             .padding(.bottom, 6)
+                        // Fase 1A — admin-only "Aggiungi membri" affordance.
+                        if isSelfAdmin {
+                            addMembersRow
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 8)
+                        }
                         VStack(spacing: 8) {
                             ForEach(state.members) { member in
                                 memberRow(member)
@@ -94,6 +121,45 @@ struct GroupInfoScreen: View {
                                groupName: state.name)
                 .presentationDetents([.medium, .large])
         }
+        // Fase 1A — add-member multi-select picker (admin).
+        .sheet(isPresented: $showingAddMembers) {
+            AddGroupMembersSheet(
+                candidates: addableRows,
+                selected: $selectedToAdd,
+                onConfirm: {
+                    let ids = Array(selectedToAdd)
+                    showingAddMembers = false
+                    guard !ids.isEmpty else { return }
+                    onAddMembers(ids)
+                    snackbar?.show(.init(
+                        text: ids.count == 1 ? "Membro aggiunto." : "\(ids.count) membri aggiunti.",
+                        severity: .info))
+                },
+                onCancel: { showingAddMembers = false })
+                .presentationDetents([.medium, .large])
+        }
+        // Fase 1A — remove-member confirmation (admin, destructive).
+        .alert("Rimuovere \(pendingRemoveMember?.displayName ?? "")?",
+               isPresented: Binding(
+                get: { pendingRemoveMember != nil },
+                set: { if !$0 { pendingRemoveMember = nil } })) {
+            Button("Annulla", role: .cancel) { pendingRemoveMember = nil }
+            Button("Rimuovi", role: .destructive) {
+                if let m = pendingRemoveMember {
+                    onRemoveMember(m.userId)
+                    snackbar?.show(.init(text: "Membro rimosso.", severity: .info))
+                }
+                pendingRemoveMember = nil
+            }
+        } message: {
+            Text("Non riceverà più i messaggi del gruppo. Le chiavi vengono rigenerate per gli altri membri.")
+        }
+    }
+
+    /// Contacts eligible to add: those not already in the group roster.
+    private var addableRows: [ContactPickerRowUi] {
+        let present = Set(state.members.map { $0.userId })
+        return addableContacts.filter { !present.contains($0.userId) }
     }
 
     // MARK: - Top bar
@@ -163,12 +229,53 @@ struct GroupInfoScreen: View {
                 }
             }
             Spacer(minLength: 8)
+            // Fase 1A — admin can remove any OTHER member. Tapping arms a
+            // confirmation alert (destructive, forward-secrecy rekey).
+            if isSelfAdmin && !member.isSelf {
+                Button(action: { pendingRemoveMember = member }) {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(extras.riskHigh)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Rimuovi \(member.displayName)")
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(scheme.surfaceVariant.opacity(0.4))
         )
+    }
+
+    // MARK: - Add members row (admin)
+
+    private var addMembersRow: some View {
+        Button(action: {
+            selectedToAdd = []
+            showingAddMembers = true
+        }) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(scheme.primary.opacity(0.15))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "person.badge.plus")
+                        .foregroundStyle(scheme.primary)
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                Text("Aggiungi membri")
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(scheme.primary)
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(scheme.surfaceVariant.opacity(0.4))
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Leave row
@@ -245,6 +352,123 @@ struct GroupInfoScreen: View {
 private struct MonoCaption: ViewModifier {
     func body(content: Content) -> some View {
         content.font(.system(.caption, design: .monospaced))
+    }
+}
+
+/// Fase 1A — multi-select sheet for adding members to an existing group.
+/// Reuses `ContactPickerRowUi` (same rows as `CreateGroupScreen`). Purely
+/// presentational: the confirm handler hands the selected userIds back to
+/// `GroupInfoScreen`, which drives `AppState.addGroupMembers`.
+private struct AddGroupMembersSheet: View {
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionType) private var type
+
+    let candidates: [ContactPickerRowUi]
+    @Binding var selected: Set<String>
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    @State private var query: String = ""
+
+    private var filtered: [ContactPickerRowUi] {
+        guard !query.isEmpty else { return candidates }
+        let q = query.lowercased()
+        return candidates.filter { $0.displayName.lowercased().contains(q) }
+    }
+
+    var body: some View {
+        ZStack {
+            scheme.background.ignoresSafeArea()
+            VStack(spacing: 0) {
+                header
+                if candidates.isEmpty {
+                    emptyState
+                } else {
+                    searchField
+                    list
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Button("Annulla") { onCancel() }
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Spacer()
+            Text("Aggiungi membri")
+                .qaudionStyle(type.titleSmall)
+                .foregroundStyle(scheme.onSurface)
+            Spacer()
+            Button("Aggiungi") { onConfirm() }
+                .foregroundStyle(selected.isEmpty ? scheme.onSurfaceVariant : scheme.primary)
+                .disabled(selected.isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 52)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(scheme.onSurfaceVariant)
+            TextField("Cerca contatti", text: $query)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(scheme.surfaceVariant.opacity(0.5)))
+        .padding(.horizontal, 16).padding(.bottom, 8)
+    }
+
+    private var list: some View {
+        ScrollView {
+            VStack(spacing: 6) {
+                ForEach(filtered) { row in
+                    Button(action: { toggle(row.userId) }) {
+                        HStack(spacing: 12) {
+                            QAudionAvatar(displayName: row.displayName,
+                                          imageURL: row.avatarUrl, size: 40)
+                            Text(row.displayName)
+                                .qaudionStyle(type.titleSmall)
+                                .foregroundStyle(scheme.onSurface)
+                                .lineLimit(1)
+                            Spacer()
+                            Image(systemName: selected.contains(row.userId)
+                                  ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selected.contains(row.userId)
+                                                 ? scheme.primary : scheme.onSurfaceVariant)
+                                .font(.system(size: 20))
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(RoundedRectangle(cornerRadius: 12)
+                            .fill(scheme.surfaceVariant.opacity(0.4)))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Image(systemName: "person.crop.circle.badge.questionmark")
+                .font(.system(size: 40))
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Text("Nessun contatto da aggiungere")
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func toggle(_ userId: String) {
+        if selected.contains(userId) { selected.remove(userId) }
+        else { selected.insert(userId) }
     }
 }
 
