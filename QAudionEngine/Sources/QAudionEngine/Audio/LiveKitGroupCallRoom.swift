@@ -86,14 +86,18 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
             sharedKey: false,
             ratchetSalt: Data("LKFrameEncryptionKey".utf8),
             ratchetWindowSize: 0,
-            keyRingSize: 16,
-            // CROSS-PLATFORM CONTRACT: pin PBKDF2 EXPLICITLY. It is the Swift
-            // SDK's current default AND the algorithm the JS SDK's string-key
-            // path always uses ("recommended for maximum compatibility across
-            // SDKs"); the `.hkdf` alternative would silently break interop with
-            // Desktop/web. Never rely on the default here — a future SDK bump
-            // flipping it would produce a different frame key with no error.
-            keyDerivationAlgorithm: .pbkdf2
+            keyRingSize: 16
+            // NOTE: LiveKit 2.13.0 (the Xcode-15.4-compatible pin — see
+            // Package.swift) has NO `keyDerivationAlgorithm` option: it derives
+            // the frame key with **PBKDF2 unconditionally** (the `.pbkdf2`/`.hkdf`
+            // toggle arrived in 2.14+). PBKDF2 is exactly the cross-platform
+            // contract (matches the JS SDK's string-key path + Desktop/Android),
+            // so this stays interoperable without the toggle. If this dep is ever
+            // bumped to >= 2.14, re-add `keyDerivationAlgorithm: .pbkdf2`
+            // EXPLICITLY to guard against a future default flip to `.hkdf`.
+            // 2.13.0's KeyProviderOptions defaults happen to already match this
+            // contract (defaultRatchetSalt="LKFrameEncryptionKey",
+            // defaultRatchetWindowSize=0, defaultKeyRingSize=16) — set anyway.
         )
         let keyProvider = BaseKeyProvider(options: keyProviderOptions)
         // `EncryptionOptions` (not the deprecated `E2EEOptions`) — same

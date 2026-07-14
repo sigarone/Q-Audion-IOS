@@ -63,12 +63,20 @@ let package = Package(
         // later) with native per-participant E2EE (RTCFrameCryptor). Pinned to
         // an EXACT tag (not `from:`) — same discipline as onnxruntime-spm above.
         //
-        // Version pin rationale: `main`/2.15.x require swift-tools-version
-        // 6.1 (Xcode 16.3+); this repo's CI is pinned to Xcode 16.2 (same
-        // class of gotcha already hit with GRDB 7.x above). 2.14.1 is the
-        // newest tag whose manifest declares swift-tools-version 6.0, which
-        // Xcode 16.2 resolves fine (6.0 shipped with Xcode 16.0). Bump this
-        // pin only together with (or after) bumping CI's Xcode version.
+        // Version pin rationale (CORRECTED 2026-07-14 after a CI resolution
+        // failure): this repo builds with **swift-tools-version 5.9** (line 1)
+        // and CI runs **Xcode 15.4 / Swift 5.10** (see kat-cross-platform.yml
+        // `xcode-select .../Xcode_15.4.app`). LiveKit >= 2.14.0 declares
+        // swift-tools-version 6.0, which a Swift-5.10 toolchain CANNOT resolve
+        // ("incompatible tools version (6.0.0)"), so 2.14.1 broke the build.
+        // **2.13.0 is the newest tag whose manifest declares swift-tools-version
+        // 5.9** — resolvable by Xcode 15.4. Its E2EE API is identical to 2.14.x
+        // for everything used here (verified against the tagged source), EXCEPT
+        // it has no `keyDerivationAlgorithm` option: 2.13.0 derives the frame
+        // key with PBKDF2 UNCONDITIONALLY (the `.pbkdf2`/`.hkdf` toggle is 2.14+),
+        // which is exactly the cross-platform contract. Bump this pin to >= 2.14
+        // only together with (or after) bumping CI's Xcode to >= 16.0, and
+        // re-add `keyDerivationAlgorithm: .pbkdf2` explicitly when you do.
         //
         // Dual-WebRTC safety (verified against the actual sources before
         // adding this, not assumed): `client-sdk-swift` depends on its OWN
@@ -81,8 +89,8 @@ let package = Package(
         // SPECIFICALLY so it can coexist in the same binary as any other
         // WebRTC-based library. So this app's own custom-patched `WebRTC`
         // binaryTarget below (webrtc-aes256-build, also M144.7559.x
-        // upstream) and LiveKit's `LiveKitWebRTC` (2.14.1 pins
-        // webrtc-xcframework 144.7559.06) can link into the same app
+        // upstream) and LiveKit's `LiveKitWebRTC` (2.13.0 pins
+        // webrtc-xcframework 144.7559.03) can link into the same app
         // without file- or symbol-level collisions: two independent WebRTC
         // engines, one per call type (1:1 calls keep using this app's own
         // `WebRTC`/`QAudionPeerConnection`; group-call SFU media uses
@@ -94,7 +102,7 @@ let package = Package(
         // group calls are mutually exclusive call states, but a future
         // call-waiting/concurrent-call scenario would need explicit
         // handoff between the two.
-        .package(url: "https://github.com/livekit/client-sdk-swift.git", exact: "2.14.1"),
+        .package(url: "https://github.com/livekit/client-sdk-swift.git", exact: "2.13.0"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
