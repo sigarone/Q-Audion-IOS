@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.780",
+              date: "2026-07-14",
+              title: "v1.0.780",
+              bullets: [
+                "feat(group-chat): adopt server group_msg transport (Android/Desktop parity)",
+                "feat(call): handle call_busy + call_missed wire events",
+              ]),
         .init(id: "v1.0.779",
               date: "2026-07-14",
               title: "v1.0.779",
               bullets: [
+                "chore: regenerate changelog for v1.0.779",
                 "feat(group-call): iOS LiveKit SFU group calls with E2EE per-participant keys (#27)",
                 "fix(group-call): close critical audio-availability bug + 3 concurrency findings",
                 "feat(group-call): per-sender E2E audio + real UI reachability (W-GRPSENDERKEY/W-GRPUI)",
@@ -151,13 +159,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.761",
                 "fix(ws): capture and surface the real WS disconnect reason",
-              ]),
-        .init(id: "v1.0.760",
-              date: "2026-07-12",
-              title: "v1.0.760",
-              bullets: [
-                "chore: regenerate changelog for v1.0.760",
-                "fix(calling): sender-identity guard must not reject a brand-new call's first OFFER",
               ]),
     ]
 }
