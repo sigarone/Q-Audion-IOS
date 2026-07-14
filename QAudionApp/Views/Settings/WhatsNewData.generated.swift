@@ -9,6 +9,33 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.779",
+              date: "2026-07-14",
+              title: "v1.0.779",
+              bullets: [
+                "feat(group-call): iOS LiveKit SFU group calls with E2EE per-participant keys (#27)",
+                "fix(group-call): close critical audio-availability bug + 3 concurrency findings",
+                "feat(group-call): per-sender E2E audio + real UI reachability (W-GRPSENDERKEY/W-GRPUI)",
+                "fix(audio): drop stale-integration frames sent after call teardown",
+                "fix(video): drop stale-pipeline frames sent after call teardown",
+                "fix(trust): close 2 confirmed bugs in persistent safety-number wiring",
+                "feat(trust): wire real persistent safety-number to ContactDetailScreen",
+              ]),
+        .init(id: "v1.0.778",
+              date: "2026-07-13",
+              title: "v1.0.778",
+              bullets: [
+                "diag(pqc): unconditional entry breadcrumb in onAndroidBundleReceived",
+                "docs: correct overstated crypto label + misleading video-degrade log",
+              ]),
+        .init(id: "v1.0.777",
+              date: "2026-07-12",
+              title: "v1.0.777",
+              bullets: [
+                "fix(swift6): resolve the 3 earbud GATT proxy actor-conformance warnings",
+                "feat(audio): canonical iOS VoIP stack — VP-IO on everywhere, custom DSP retired to fallback",
+                "chore: regenerate changelog for v1.0.776",
+              ]),
         .init(id: "v1.0.776",
               date: "2026-07-12",
               title: "v1.0.776",
@@ -131,28 +158,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.760",
                 "fix(calling): sender-identity guard must not reject a brand-new call's first OFFER",
-              ]),
-        .init(id: "v1.0.759",
-              date: "2026-07-11",
-              title: "v1.0.759",
-              bullets: [
-                "chore: regenerate changelog for v1.0.759",
-                "fix(crypto): close PQC handshake key-injection + duplicate-OFFER re-key",
-              ]),
-        .init(id: "v1.0.758",
-              date: "2026-07-11",
-              title: "v1.0.758",
-              bullets: [
-                "chore: regenerate changelog for v1.0.758",
-                "fix(audio): widen M-14 replay window 64→512 frames to survive DC-churn transport swaps",
-              ]),
-        .init(id: "v1.0.757",
-              date: "2026-07-11",
-              title: "v1.0.757",
-              bullets: [
-                "chore: regenerate changelog for v1.0.757",
-                "fix(call): plumb peer caps on iOS-CALLER video upgrade (one-way black video)",
-                "diag(webrtc): log H265 fmtp on every SDP + missing sender encoder stats",
               ]),
     ]
 }
