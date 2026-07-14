@@ -627,6 +627,15 @@ final class AppState: ObservableObject {
     /// W372: NotificationCenter observer guard — only register the
     /// group-chat fan-out listener once per AppState lifetime.
     private var groupFanOutWired: Bool = false
+    /// W-GRPMSG: bounded retry buffer for inbound group TEXT messages
+    /// whose recv chain isn't installed yet (the sender's
+    /// `sender_key_init` is still in flight, or arrived out of order).
+    /// Each entry is the raw `group_msg_receive`-shaped dict plus the
+    /// live flag; retried after the next sender_key_init/rotate install.
+    /// Mirrors GroupChatService's W395 ctl-envelope buffering idea.
+    /// Capped so a flood of undecryptable frames can't grow unbounded.
+    private var bufferedGroupWires: [(data: [String: Any], live: Bool)] = []
+    private static let maxBufferedGroupWires = 128
     /// W348: shared TURN credentials cache. Lazy-initialised the first
     /// time a WebRTC call needs ICE servers, then reused across calls
     /// (the RelayCredentialsProvider actor coalesces concurrent
@@ -4550,6 +4559,31 @@ final class AppState: ObservableObject {
                 }
             }
         }
+
+        // W-GRPMSG: group TEXT message transport (server-side fan-out).
+        // Persistent handlers — a recipient may receive group messages
+        // without ever opening the group UI this session, so these are
+        // registered alongside the always-on 1:1 chat handlers (not
+        // lazily when GroupChatScreen appears).
+        ws.registerHandler(type: "group_msg_receive") { [weak self] _, data in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.handleIncomingGroupMessage(data, live: true)
+            }
+        }
+        ws.registerHandler(type: "group_msg_pending_sync") { [weak self] _, data in
+            guard let self = self else { return }
+            guard let batch = data["messages"] as? [[String: Any]] else {
+                print("[AppState] group_msg_pending_sync: missing 'messages' array")
+                return
+            }
+            // Oldest-first, same as 1:1 msg_pending_sync.
+            DispatchQueue.main.async {
+                for entry in batch {
+                    self.handleIncomingGroupMessage(entry, live: false)
+                }
+            }
+        }
     }
 
     /// W328: replay one entry from a `msg_pending_sync` batch as if it
@@ -4587,6 +4621,133 @@ final class AppState: ObservableObject {
             cipher: cipher,
             clientMsgId: entry["client_msg_id"] as? String
         )
+    }
+
+    // MARK: - W-GRPMSG: group TEXT message receive
+
+    /// Decrypt one `group_msg_receive`-shaped dict and land the
+    /// plaintext in `GroupMessageStore` so the group chat UI shows it
+    /// live (if open) and on next open (persisted). Mirrors Android's
+    /// `ReceiveGroupMessageUseCase.decryptAndPersist`.
+    ///
+    /// - `live`: true for a live `group_msg_receive`, false for a
+    ///   `group_msg_pending_sync` backlog entry. ACKs only fire on the
+    ///   live path (the server clears the pending queue on its own after
+    ///   the sync flush write — same rule as Android).
+    private func handleIncomingGroupMessage(_ data: [String: Any], live: Bool) {
+        guard let groupIdUuid = data["group_id"] as? String, !groupIdUuid.isEmpty,
+              let senderId = data["sender_id"] as? String, !senderId.isEmpty,
+              let serverMsgId = data["server_message_id"] as? String, !serverMsgId.isEmpty,
+              let payloadB64 = data["encrypted_payload"] as? String else {
+            print("[AppState] group_msg_receive missing required fields: \(data.keys)")
+            return
+        }
+        let clientMsgId = data["client_msg_id"] as? String
+        let serverTs = data["server_ts"] as? String
+        // dashed UUID (server wire) → hex (GroupChatService / registry key).
+        let groupHex = groupIdUuid.replacingOccurrences(of: "-", with: "").lowercased()
+        let selfId = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
+
+        // Sender self-echo: the server echoes our own send back to us so
+        // we learn the server id. The optimistic row already exists — bind
+        // the server id + ACK, don't re-append. Dedup by senderId (NOT
+        // clientMsgId), exactly like Android.
+        if senderId == selfId {
+            if let cmid = clientMsgId, !cmid.isEmpty {
+                GroupMessageStore.shared.bindServerId(
+                    groupHex: groupHex, clientMsgId: cmid, serverMessageId: serverMsgId)
+            }
+            if live { sendGroupDelivered(serverMsgId) }
+            return
+        }
+
+        // Already persisted (server re-delivered an already-consumed
+        // message) — ACK (live) and skip; never buffer a duplicate.
+        if GroupMessageStore.shared.contains(groupHex: groupHex, serverMessageId: serverMsgId) {
+            if live { sendGroupDelivered(serverMsgId) }
+            return
+        }
+
+        // Resolve membership (needed to bootstrap our own GroupState on
+        // first contact). No registry entry → we haven't joined yet; the
+        // sender_key_init that joins us is still in flight. Buffer + no
+        // ACK (server keeps it pending until we catch up).
+        guard let entry = GroupRegistry.shared.entry(for: groupHex), !selfId.isEmpty else {
+            bufferGroupWire(data, live: live)
+            return
+        }
+        guard let wire = Data(base64Encoded: payloadB64) else {
+            print("[AppState] group_msg_receive bad base64 msg=\(serverMsgId.prefix(8))")
+            return
+        }
+        // Decrypt via the shared GroupSenderKey engine. nil == recv chain
+        // not installed yet (init in flight / out of order) OR replay /
+        // AEAD failure — indistinguishable, so buffer (bounded) and DON'T
+        // ACK; the retry after the next sender_key_init install, plus the
+        // server's pending re-delivery, both recover the in-flight case.
+        guard let plaintext = GroupChatService.shared.decrypt(
+            wire: wire, senderId: senderId, groupId: groupHex,
+            members: entry.members, selfId: selfId) else {
+            bufferGroupWire(data, live: live)
+            return
+        }
+
+        let ts = Self.parseGroupServerTs(serverTs)
+        // Store posts didChangeNotification → an open GroupChatScreen
+        // reloads live; persisted so it also shows on next open.
+        GroupMessageStore.shared.append(
+            groupHex: groupHex,
+            GroupMessageStore.Stored(
+                id: clientMsgId ?? serverMsgId,
+                serverMessageId: serverMsgId,
+                senderId: senderId,
+                mine: false,
+                text: plaintext,
+                ts: ts))
+        if live { sendGroupDelivered(serverMsgId) }
+    }
+
+    /// ACK a delivered group message so the server can drop it from the
+    /// pending queue. Uses the ordinary 1:1 `msg_delivered` receipt frame
+    /// (`{message_ids:[id]}`) to mirror Android's `WsCommand.MsgDelivered`.
+    private func sendGroupDelivered(_ serverMsgId: String) {
+        liveProvider?.getWebSocketClient()?.send(
+            type: "msg_delivered", data: ["message_ids": [serverMsgId]])
+    }
+
+    /// Append an undecryptable inbound group frame to the bounded retry
+    /// buffer (drop oldest on overflow).
+    private func bufferGroupWire(_ data: [String: Any], live: Bool) {
+        bufferedGroupWires.append((data: data, live: live))
+        if bufferedGroupWires.count > Self.maxBufferedGroupWires {
+            bufferedGroupWires.removeFirst(bufferedGroupWires.count - Self.maxBufferedGroupWires)
+        }
+    }
+
+    /// Re-run every buffered group frame through the receive path (e.g.
+    /// after a sender_key_init install unblocked a recv chain). Frames
+    /// still undecryptable re-buffer via `handleIncomingGroupMessage`;
+    /// the bound keeps that from growing without limit.
+    private func retryBufferedGroupMessages() {
+        guard !bufferedGroupWires.isEmpty else { return }
+        let pending = bufferedGroupWires
+        bufferedGroupWires = []
+        for e in pending {
+            handleIncomingGroupMessage(e.data, live: e.live)
+        }
+    }
+
+    /// Parse the server RFC3339 `server_ts`; fall back to now (mirrors
+    /// Android's `Instant.parse` with a `toLongOrNull` fallback).
+    private static func parseGroupServerTs(_ ts: String?) -> Date {
+        guard let ts = ts, !ts.isEmpty else { return Date() }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: ts) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: ts) { return d }
+        if let ms = Double(ts) { return Date(timeIntervalSince1970: ms / 1000.0) }
+        return Date()
     }
 
     /// Persist an incoming peer message to the local store + post a
@@ -4771,6 +4932,12 @@ final class AppState: ObservableObject {
                     // W403: dropped "group_invite_decline" (was dead code:
                     // a declined invite is just an ignored sender_key_init).
                     print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId)")
+                }
+                // W-GRPMSG: a freshly-installed recv chain may unblock
+                // group TEXT frames we buffered because they arrived
+                // before this sender's sender_key_init. Retry them now.
+                if groupCtlType == "sender_key_init" || groupCtlType == "sender_key_rotate" {
+                    retryBufferedGroupMessages()
                 }
                 return
             }
@@ -5311,10 +5478,16 @@ final class AppState: ObservableObject {
     /// subscribes in `attach(appState:)` and unsubscribes on dealloc.
     static let chatRefreshNotification = Notification.Name("qaudion.chat.refresh")
     static let chatTypingNotification = Notification.Name("qaudion.chat.typing")
-    /// W372: fan-out request from GroupChatScreen.handleSend.
-    /// userInfo = ["groupId": String, "recipient": String, "wire": Data]
-    /// AppState observes this and ships an opaque_message per recipient.
-    static let groupChatFanOutNotification = Notification.Name("qaudion.group.fanout")
+    /// W-GRPMSG: single-frame group TEXT send request from
+    /// GroupChatScreen.sendGroupOverWire. userInfo:
+    ///   - "groupId": String (dashed lowercase UUID — the server wire id)
+    ///   - "wire": Data (raw 0xE4 group envelope)
+    ///   - "clientMsgId": String
+    ///   - "groupEpoch": Int
+    /// AppState observes this and ships ONE `group_msg_send` frame
+    /// (the server fans out to every member + echoes back to us).
+    /// Replaces the retired per-member opaque_message fan-out (W372).
+    static let groupMsgSendNotification = Notification.Name("qaudion.group.msgSend")
     /// W399 — non-isolated read of the persisted current userId.
     /// Used by SwiftUI Views (GroupChatScreen.makeInfoState) that
     /// need the userId without taking an EnvironmentObject ref.
@@ -8803,33 +8976,46 @@ extension AppState {
 // MARK: - W372: group chat fan-out
 
 extension AppState {
-    /// Subscribe once at AppState init to the group fan-out
-    /// notification. Each emission ships a single opaque_message to
-    /// the named recipient with the encrypted wire bytes as payload.
-    /// Server-side store-and-forward via msg_pending_sync covers
-    /// offline peers — same path 1:1 chat already uses.
+    /// Subscribe once at AppState init to the group message-send +
+    /// sender_key_init fan-out notifications.
+    ///
+    /// W-GRPMSG: the group TEXT payload now ships as a SINGLE
+    /// `group_msg_send` frame (server-side fan-out + self-echo),
+    /// replacing the retired per-member `opaque_message` fan-out (W372).
+    /// The `qa_grp:1` control envelopes (sender_key_init / rotate /
+    /// member deltas) STILL ride the 1:1 ratchet on the opaque path —
+    /// only the TEXT transport moved.
     func wireGroupChatFanOut() {
         NotificationCenter.default.addObserver(
-            forName: AppState.groupChatFanOutNotification,
+            forName: AppState.groupMsgSendNotification,
             object: nil,
             queue: .main
         ) { [weak self] note in
-            guard let recipient = note.userInfo?["recipient"] as? String,
-                  let wire = note.userInfo?["wire"] as? Data else {
+            guard let groupId = note.userInfo?["groupId"] as? String,
+                  let wire = note.userInfo?["wire"] as? Data,
+                  let clientMsgId = note.userInfo?["clientMsgId"] as? String,
+                  let groupEpoch = note.userInfo?["groupEpoch"] as? Int else {
                 return
             }
-            // W388: `liveProvider` is main-actor-isolated; resolve it
-            // inside a `@MainActor` Task so Swift 6 strict concurrency
-            // doesn't complain about cross-actor capture in the
-            // (otherwise main-queue) NotificationCenter closure.
+            // `liveProvider` is main-actor-isolated; resolve it inside a
+            // `@MainActor` Task so Swift 6 strict concurrency doesn't
+            // complain about cross-actor capture in the (main-queue)
+            // NotificationCenter closure.
             Task { @MainActor [weak self] in
-                guard let provider = self?.liveProvider else { return }
-                do {
-                    try await provider.callingApi.sendOpaqueMessage(
-                        recipientId: recipient, data: wire)
-                } catch {
-                    print("[AppState] groupChat fan-out to \(recipient) failed: \(error)")
+                guard let ws = self?.liveProvider?.getWebSocketClient() else {
+                    print("[AppState] group_msg_send dropped — no live WS")
+                    return
                 }
+                // Byte-exact mirror of Android WsCommand.GroupMsgSend:
+                // standard base64 (no wrap) of the raw 0xE4 wire, int
+                // msg_type=0 (TYPE_TEXT), dashed-UUID group_id.
+                ws.send(type: "group_msg_send", data: [
+                    "group_id": groupId,
+                    "encrypted_payload": wire.base64EncodedString(),
+                    "msg_type": 0,
+                    "client_msg_id": clientMsgId,
+                    "group_epoch": groupEpoch,
+                ])
             }
         }
         // W390: also subscribe to the sender_key_init / rotate fan-out
@@ -8925,6 +9111,17 @@ extension AppState {
         _ = GroupChatService.shared.session(
             groupId: groupId, members: members, selfId: selfId)
         GroupRegistry.shared.markBootstrapped(groupId: groupId)
+        // W-GRPMSG: the bootstrap above drained the W395 buffered ctl
+        // envelopes (installing this group's recv chains). Group TEXT
+        // frames that arrived via `group_msg_pending_sync` BEFORE the
+        // registry entry existed were buffered in `bufferedGroupWires`
+        // with no ACK — and the server has already MarkGroupDelivered'd
+        // them after the pending-sync write, so they will NOT be
+        // re-delivered on the next reconnect. Retrying only on inbound
+        // sender_key_init/rotate (the other retry trigger) misses this
+        // path because those inits were themselves buffered under W395
+        // and replayed internally without an AppState signal. Drain now.
+        retryBufferedGroupMessages()
         NotificationCenter.default.post(
             name: AppState.groupRegistryChangedNotification,
             object: nil,
@@ -9151,6 +9348,11 @@ extension AppState {
                 groupId: groupId, members: [adminUserId, member],
                 selfId: member)
             GroupRegistry.shared.markBootstrapped(groupId: groupId)
+            // W-GRPMSG: same rationale as acceptGroupInvite — recv chains
+            // just became available, so drain any group TEXT frames that
+            // were buffered (and already server-marked-delivered via
+            // pending_sync) before this auto-join bootstrapped the session.
+            retryBufferedGroupMessages()
             // Surface a snackbar via NotificationCenter (the chat list
             // UI subscribes and shows "Aggiunto al gruppo X da Y").
             NotificationCenter.default.post(

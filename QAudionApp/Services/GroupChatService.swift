@@ -169,19 +169,20 @@ public final class GroupChatService {
         }
     }
 
-    /// Encrypt a UTF-8 plaintext for the group. Returns the wire
-    /// bytes (magic 0xE4 envelope) ready to be base64'd into an
-    /// `opaque_message` fan-out.
-    public func encrypt(plaintext: String, groupId: String, members: [String], selfId: String) -> Data? {
+    /// Byte-exact inputs for a `group_msg_send` frame: the raw 0xE4
+    /// wire bytes PLUS the epoch to stamp on the frame (mirrors
+    /// Android's `state.groupEpoch.toInt()` in SendGroupMessageUseCase).
+    /// Returns nil if the group session can't be loaded/bootstrapped or
+    /// the engine encrypt fails.
+    public func encryptForWire(plaintext: String, groupId: String, members: [String], selfId: String) -> (wire: Data, groupEpoch: UInt32)? {
         guard let state = session(groupId: groupId, members: members, selfId: selfId) else {
             return nil
         }
-        let pt = Data(plaintext.utf8)
         do {
-            let result = try engine.encryptForGroup(state: state, plaintext: pt)
-            return result.wire
+            let result = try engine.encryptForGroup(state: state, plaintext: Data(plaintext.utf8))
+            return (result.wire, state.groupEpoch)
         } catch {
-            print("[GroupChatService] encrypt failed: \(error)")
+            print("[GroupChatService] encryptForWire failed: \(error)")
             return nil
         }
     }

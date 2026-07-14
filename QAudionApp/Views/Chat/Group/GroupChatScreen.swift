@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 
 /// Group chat detail. 1:1 port di Android
 /// `qaudion-android-new/feature/feature-chat/.../group/GroupChatScreen.kt`.
@@ -17,7 +18,6 @@ import UIKit
 /// gli stessi GroupMessageRowUi via `GroupChatRepository.observe(...)`.
 struct GroupChatScreen: View {
     @Environment(\.qaudionScheme) private var scheme
-    @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.dismiss) private var dismiss
     @Environment(\.qaudionSnackbar) private var snackbar
@@ -39,13 +39,22 @@ struct GroupChatScreen: View {
             scheme.background.ignoresSafeArea()
             VStack(spacing: 0) {
                 topBar
-                betaBanner
                 messageList
                 composer
             }
         }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        // W-GRPMSG: load persisted history on open and refresh live when
+        // AppState's group receive path lands a new message for THIS
+        // group. Replaces the ephemeral-@State "Beta" behaviour.
+        .onAppear { reloadMessagesFromStore() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: GroupMessageStore.didChangeNotification)) { note in
+            if (note.userInfo?["groupHex"] as? String) == groupHex {
+                reloadMessagesFromStore()
+            }
+        }
         .sheet(isPresented: $showingInfo) {
             NavigationStack {
                 GroupInfoScreen(
@@ -150,25 +159,12 @@ struct GroupChatScreen: View {
         }
     }
 
-    /// W110: explicit beta banner so users don't think their group
-    /// messages are being delivered. The 1:1 send pipeline is fully
-    /// wired (W71+W76+W77 + voice/image stack); group send is still
-    /// local-state-only because GroupChatRepository / server group
-    /// fanout aren't wired on iOS yet.
-    private var betaBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "info.circle")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(extras.warning)
-            Text("Beta — i messaggi del gruppo restano sul tuo dispositivo. La consegna ai membri sarà attiva nelle prossime versioni.")
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .multilineTextAlignment(.leading)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(extras.warning.opacity(0.10))
+    /// W-GRPMSG: group id in the hex form GroupChatService /
+    /// GroupMessageStore / GroupRegistry key on (dashes stripped,
+    /// lowercase). The dashed lowercase UUID (`groupId.uuidString
+    /// .lowercased()`) is the server wire id.
+    private var groupHex: String {
+        groupId.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     }
 
     private var emptyState: some View {
@@ -179,7 +175,7 @@ struct GroupChatScreen: View {
             Text("Nessun messaggio")
                 .qaudionStyle(type.titleSmall)
                 .foregroundStyle(scheme.onSurface)
-            Text("I messaggi del gruppo saranno disponibili appena la consegna è attiva.")
+            Text("Scrivi il primo messaggio cifrato del gruppo.")
                 .qaudionStyle(type.bodySmall)
                 .italic()
                 .foregroundStyle(scheme.onSurfaceVariant)
@@ -260,67 +256,87 @@ struct GroupChatScreen: View {
         return "ID gruppo copiato (" + prefix + "…)"
     }
 
-    private func handleSend() {
-        let trimmed = state.composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+    /// W-GRPMSG — reload the visible bubbles from the persistent
+    /// GroupMessageStore. The store holds BOTH the sender's optimistic
+    /// rows and decrypted inbound text, so this is the single source of
+    /// truth (no more ephemeral @State appends).
+    private func reloadMessagesFromStore() {
+        let stored = GroupMessageStore.shared.messages(forGroupHex: groupHex)
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
-        let new = GroupMessageRowUi(
-            id: UUID().uuidString,
-            text: trimmed,
-            senderLabel: "Tu",
-            timestamp: f.string(from: Date()),
-            mine: true
-        )
-        state.messages.append(new)
-        state.composerText = ""
-
-        // W372: encrypt via GroupChatService (W345 + W364) and ship
-        // through the BCrypto opaque_message fan-out (one envelope per
-        // remaining group member, sealed under the per-pair PSK on
-        // the 1:1 layer). The fan-out fire-and-forgets — server
-        // store-and-forward via msg_pending_sync handles offline peers.
-        let groupIdHex = groupId.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        let memberRows = makeInfoState().members
-        let memberIds = memberRows.map { $0.userId }
-        let selfId = memberRows.first(where: { $0.isSelf })?.userId ?? "u-self"
-        Task {
-            await sendGroupOverWire(
-                plaintext: trimmed,
-                groupIdHex: groupIdHex,
-                memberIds: memberIds,
-                selfId: selfId
-            )
+        state.messages = stored.map { m in
+            GroupMessageRowUi(
+                id: m.id,
+                text: m.text,
+                senderLabel: m.mine ? "Tu" : Self.shortLabel(m.senderId),
+                timestamp: f.string(from: m.ts),
+                mine: m.mine)
         }
     }
 
-    /// W372 — encrypt via GroupChatService + fan out to each non-self
-    /// member as an opaque_message. Stays an async best-effort path:
-    /// any failure is logged and surfaced via the snackbar but does
-    /// NOT roll back the local-state append (the user already saw
-    /// their bubble; rolling back would be a worse UX than the message
-    /// landing late on the peer side).
+    private static func shortLabel(_ userId: String) -> String {
+        if userId.count > 12 { return String(userId.prefix(8)) + "…" }
+        return userId
+    }
+
+    private func handleSend() {
+        let trimmed = state.composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        state.composerText = ""
+
+        let memberRows = makeInfoState().members
+        let memberIds = memberRows.map { $0.userId }
+        let selfId = memberRows.first(where: { $0.isSelf })?.userId
+            ?? (AppState.currentUserIdSnapshot ?? "u-self")
+
+        // Optimistic, PERSISTENT local row (mirrors Android's PENDING
+        // MessageEntity written before the network handoff). Keyed by
+        // clientMsgId so the server self-echo binds to it instead of
+        // duplicating. The store posts didChange → reloadMessagesFromStore.
+        let clientMsgId = UUID().uuidString
+        GroupMessageStore.shared.append(
+            groupHex: groupHex,
+            GroupMessageStore.Stored(
+                id: clientMsgId,
+                serverMessageId: nil,
+                senderId: selfId,
+                mine: true,
+                text: trimmed,
+                ts: Date()))
+
+        Task {
+            await sendGroupOverWire(
+                plaintext: trimmed,
+                memberIds: memberIds,
+                selfId: selfId,
+                clientMsgId: clientMsgId)
+        }
+    }
+
+    /// W-GRPMSG — ship ONE `group_msg_send` frame for the group TEXT
+    /// payload (server fans out to every member + echoes back to us),
+    /// replacing the retired per-member `opaque_message` fan-out.
+    ///
+    /// The `qa_grp:1` sender_key_init distribution over the 1:1 ratchet
+    /// is UNCHANGED and still runs first (shared with Android) so recv
+    /// chains are installed before the ciphertext arrives.
+    ///
+    /// Best-effort: a failure is logged but does NOT roll back the
+    /// optimistic store row (the user already saw their bubble).
     @MainActor
     private func sendGroupOverWire(
         plaintext: String,
-        groupIdHex: String,
         memberIds: [String],
-        selfId: String
+        selfId: String,
+        clientMsgId: String
     ) async {
-        // W390 — REAL sender_key_init distribution. Before encrypting
-        // the first group message, ship a `qa_grp:1 sender_key_init`
-        // envelope to every member that hasn't yet received our send
-        // chain. Each envelope is wrapped in the 1:1 ratchet via
-        // `groupSenderKeyCtlNotification` (fan-out wire) — AppState's
-        // existing chat send path encrypts it under the per-pair PSK
-        // and ships as opaque_message. The recipient detects qa_grp:1
-        // in the decrypted plaintext and routes to
-        // GroupChatService.handleInboundSenderKeyInit before we drop
-        // any user-visible bubble. After this fan-out completes, the
-        // group ciphertext is sent — store-and-forward order keeps
-        // the init landing first in normal cases.
+        // KEEP — REAL sender_key_init distribution over the 1:1 ratchet.
+        // Each envelope rides `groupSenderKeyCtlNotification` → AppState
+        // wraps it under the per-pair PSK / v3 ratchet and ships as an
+        // opaque_message; the recipient detects qa_grp:1 and installs our
+        // send chain BEFORE the group ciphertext lands.
         let pendingInits = GroupChatService.shared.pendingInitsAfterBootstrap(
-            groupId: groupIdHex, members: memberIds, selfId: selfId)
+            groupId: groupHex, members: memberIds, selfId: selfId)
         for init_ in pendingInits {
             NotificationCenter.default.post(
                 name: AppState.groupSenderKeyCtlNotification,
@@ -331,28 +347,28 @@ struct GroupChatScreen: View {
                 ]
             )
         }
-        guard let wire = GroupChatService.shared.encrypt(
+        // Encrypt the 0xE4 group wire ONCE and hand it to AppState, which
+        // holds the live WS. `groupEpoch` is stamped from the live
+        // GroupState (mirrors Android's state.groupEpoch.toInt()).
+        guard let sealed = GroupChatService.shared.encryptForWire(
             plaintext: plaintext,
-            groupId: groupIdHex,
+            groupId: groupHex,
             members: memberIds,
             selfId: selfId
         ) else {
-            print("[GroupChatScreen] encrypt failed for group \(groupIdHex)")
+            print("[GroupChatScreen] encrypt failed for group \(groupHex)")
             return
         }
-        // Hand off to AppState which holds the live BCryptoMessageApi.
-        let peers = memberIds.filter { $0 != selfId }
-        for peer in peers {
-            NotificationCenter.default.post(
-                name: AppState.groupChatFanOutNotification,
-                object: nil,
-                userInfo: [
-                    "groupId": groupIdHex,
-                    "recipient": peer,
-                    "wire": wire,
-                ]
-            )
-        }
+        NotificationCenter.default.post(
+            name: AppState.groupMsgSendNotification,
+            object: nil,
+            userInfo: [
+                "groupId": groupId.uuidString.lowercased(),  // dashed UUID (server wire)
+                "wire": sealed.wire,
+                "clientMsgId": clientMsgId,
+                "groupEpoch": Int(sealed.groupEpoch),
+            ]
+        )
     }
 
     private func makeInfoState() -> GroupInfoUiState {
