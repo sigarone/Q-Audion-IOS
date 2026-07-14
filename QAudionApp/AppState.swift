@@ -2946,6 +2946,76 @@ final class AppState: ObservableObject {
             }
         }
 
+        // call_missed (recipient side) — the server sends this to a device that
+        // was ALREADY in an answered call when a NEW caller dialled it. Because
+        // this device is busy, no `call_incoming` is delivered for that new call
+        // at all, so nothing rings and no history record is created. Surface a
+        // "missed call" reminder WITHOUT touching the currently-active call:
+        // record a `.missed` entry in the call history and post a passive
+        // local `missedCall` notification. Wire payload (server-authoritative):
+        // {call_id, caller_id, caller_display, call_type, ts_ms}. The
+        // display-name resolution mirrors the `call_incoming` handler above
+        // (sanitise the attacker-controlled wire display, numeric ⇒ "Int. N",
+        // else rubrica match, else truncated caller_id — never a raw UUID).
+        ws.registerHandler(type: "call_missed") { [weak self] _, data in
+            guard let self = self else { return }
+            let callIdStr = (data["call_id"] as? String) ?? UUID().uuidString
+            let callerId = (data["caller_id"] as? String) ?? ""
+            let isVid: Bool = ((data["call_type"] as? String) ?? "audio") == "video"
+            // H-15 parity: caller_display is peer-controlled — sanitise it the
+            // same way the call_incoming path does before it reaches any UI.
+            let rawWireDisplay = (data["caller_display"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let sanitisedWireDisplay = StringSanitiser.displayName(rawWireDisplay, fallback: "")
+            // Hop to main: PersistentCallRecordStore is @MainActor, and
+            // cachedContacts is main-isolated AppState state (this handler is
+            // invoked on the WS delegate background thread — see call_incoming).
+            DispatchQueue.main.async {
+                let resolvedName: String = {
+                    if !sanitisedWireDisplay.isEmpty {
+                        if sanitisedWireDisplay.allSatisfy({ $0.isNumber }) {
+                            return "Int. \(sanitisedWireDisplay)"
+                        }
+                        return sanitisedWireDisplay
+                    }
+                    if let match = self.cachedContacts.first(where: { $0.userId == callerId }),
+                       !match.displayName.isEmpty {
+                        return match.displayName
+                    }
+                    if callerId.count > 12 {
+                        return String(callerId.prefix(8)) + "…" + String(callerId.suffix(4))
+                    }
+                    return callerId.isEmpty ? "Sconosciuto" : callerId
+                }()
+                // Record the missed call directly (dedup by call_id). A `.missed`
+                // insert — NOT markMissed — because this device never registered
+                // an in-progress record for this call (it was busy, no ring).
+                PersistentCallRecordStore.shared.beginCall(
+                    id: callIdStr,
+                    peerUserId: callerId,
+                    peerDisplayName: resolvedName,
+                    direction: .missed,
+                    isVideo: isVid
+                )
+                // Passive reminder only. The `.missedCall` category posts a plain
+                // banner (no ringtone, no audio-session seizure — unlike the
+                // INCOMING_CALL category), so it cannot disturb the call the user
+                // is currently in.
+                Task { @MainActor in
+                    await NotificationCenterService.shared.scheduleLocal(
+                        category: .missedCall,
+                        title: "Chiamata persa",
+                        body: "Chiamata persa da \(resolvedName)",
+                        userInfo: [
+                            "call_id": callIdStr,
+                            "peer_id": callerId,
+                        ],
+                        delay: 0.1
+                    )
+                }
+            }
+        }
+
         // call_accepted — callee's real user tapped Answer. Gates the
         // caller's SAS/active-call display via the two-flag latch in
         // finalizeCallActive()/handleCallAccepted (WIRE_SPEC §3.5).
@@ -7062,6 +7132,26 @@ final class AppState: ObservableObject {
                         self.callService.endCall()
                         let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
                         CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "peer_offline")
+                        self.callState = .ended
+                        self.isInCall = false
+                        self.callContactId = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                            self?.callState = .idle
+                        }
+                    }
+                }
+                // call_busy — recipient is already in another answered call.
+                // Sibling of onCallPeerOffline: today the outgoing call would
+                // ring forever (server never sends call_ready/hangup for a busy
+                // peer). Stop ringing immediately, briefly show "Occupato", and
+                // tear down cleanly — identical teardown to the peer-offline path.
+                ws.onCallBusy = { [weak self] _, _ in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        self.errorMessage = "Occupato"
+                        self.callService.endCall()
+                        let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+                        CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "busy")
                         self.callState = .ended
                         self.isInCall = false
                         self.callContactId = nil

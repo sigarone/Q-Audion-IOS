@@ -38,6 +38,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// The recipient has no live device — terminate with a "peer offline" error.
     public var onCallPeerOffline: ((_ callId: String, _ recipientId: String) -> Void)?
 
+    /// Fired when this client (caller) receives `call_busy` from the server.
+    /// The recipient IS online but is already in another answered call — our
+    /// outgoing call was rejected. Sibling of `onCallPeerOffline`: the caller
+    /// must stop ringing immediately, briefly show a "busy" state, and tear the
+    /// outgoing call down cleanly. Wire payload: {call_id, recipient_id}.
+    public var onCallBusy: ((_ callId: String, _ recipientId: String) -> Void)?
+
     /// Fired when this client (responder) receives `call_cancel` from the server.
     /// The caller hung up before we picked up — stop ringing locally.
     public var onCallCancel: ((_ callId: String, _ reason: String?) -> Void)?
@@ -316,6 +323,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                   let callId = data["call_id"] as? String else { return }
             let recipientId = (data["recipient_id"] as? String) ?? ""
             self.onCallPeerOffline?(callId, recipientId)
+        }
+
+        // call_busy (caller side) — recipient is already in an answered call.
+        // Same envelope shape as call_peer_offline: {call_id, recipient_id}.
+        registerHandler(type: "call_busy") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String else { return }
+            let recipientId = (data["recipient_id"] as? String) ?? ""
+            self.onCallBusy?(callId, recipientId)
         }
 
         registerHandler(type: "call_cancel") { [weak self] _, data in
