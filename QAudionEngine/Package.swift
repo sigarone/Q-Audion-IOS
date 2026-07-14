@@ -59,6 +59,42 @@ let package = Package(
         // Xcode 16.2 (Swift tools 6.0) which is incompatible. Pin to 6.x until CI
         // upgrades to Xcode 16.3+.
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
+        // W-GRPLIVEKIT: self-hosted LiveKit SFU for group calls (audio, +video
+        // later) with native per-participant E2EE (RTCFrameCryptor). Pinned to
+        // an EXACT tag (not `from:`) — same discipline as onnxruntime-spm above.
+        //
+        // Version pin rationale: `main`/2.15.x require swift-tools-version
+        // 6.1 (Xcode 16.3+); this repo's CI is pinned to Xcode 16.2 (same
+        // class of gotcha already hit with GRDB 7.x above). 2.14.1 is the
+        // newest tag whose manifest declares swift-tools-version 6.0, which
+        // Xcode 16.2 resolves fine (6.0 shipped with Xcode 16.0). Bump this
+        // pin only together with (or after) bumping CI's Xcode version.
+        //
+        // Dual-WebRTC safety (verified against the actual sources before
+        // adding this, not assumed): `client-sdk-swift` depends on its OWN
+        // WebRTC build via `livekit/webrtc-xcframework` — module name
+        // `LiveKitWebRTC` (product `LiveKitWebRTC`), NOT `WebRTC`. That
+        // fork renames the framework bundle `WebRTC.framework` ->
+        // `LiveKitWebRTC.framework` AND prefixes every Objective-C symbol
+        // with `LK` (RTCPeerConnection -> LKRTCPeerConnection, etc. — see
+        // livekit/webrtc-xcframework's "Symbol Namespace Isolation" docs)
+        // SPECIFICALLY so it can coexist in the same binary as any other
+        // WebRTC-based library. So this app's own custom-patched `WebRTC`
+        // binaryTarget below (webrtc-aes256-build, also M144.7559.x
+        // upstream) and LiveKit's `LiveKitWebRTC` (2.14.1 pins
+        // webrtc-xcframework 144.7559.06) can link into the same app
+        // without file- or symbol-level collisions: two independent WebRTC
+        // engines, one per call type (1:1 calls keep using this app's own
+        // `WebRTC`/`QAudionPeerConnection`; group-call SFU media uses
+        // LiveKit's `LiveKitWebRTC` end-to-end, entirely inside
+        // `LiveKitGroupCallRoom`). Residual (non-blocking) risk: both
+        // engines each own an independent AVAudioSession wrapper
+        // (`RTCAudioSession` vs `LKRTCAudioSession`) around the SAME
+        // system-singleton `AVAudioSession` — fine today since 1:1 and
+        // group calls are mutually exclusive call states, but a future
+        // call-waiting/concurrent-call scenario would need explicit
+        // handoff between the two.
+        .package(url: "https://github.com/livekit/client-sdk-swift.git", exact: "2.14.1"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
@@ -155,6 +191,10 @@ let package = Package(
                 .product(name: "onnxruntime", package: "onnxruntime-spm"),
                 "WebRTC",  // local binaryTarget (webrtc-sdk H265 build) — see below
                 .product(name: "GRDB", package: "GRDB.swift"),
+                // W-GRPLIVEKIT: group-call SFU media transport — see the
+                // dependency comment above for the dual-WebRTC coexistence
+                // rationale (LK-prefixed symbols, renamed framework bundle).
+                .product(name: "LiveKit", package: "client-sdk-swift"),
                 // Tor.swift removed — see W610 note in dependencies above.
             ] + (hasRealityXcframework ? [.target(name: "Reality", condition: .when(platforms: [.iOS]))] : []),
             path: "Sources/QAudionEngine",

@@ -469,6 +469,37 @@ public final class GroupSession {
         )
     }
 
+    // MARK: - LiveKit SFU media-key sink (non-mutating reads)
+
+    /// NON-MUTATING read of our OWN current send-chain key (a COPY). Used as
+    /// the LiveKit SFU media key sink: under the SFU, `encryptForGroup` is
+    /// NOT called for media, so `sendChain.ck` never advances per-frame and
+    /// equals `SK_0` for the current epoch. Feeding `base64(SK_0)` to the
+    /// LiveKit key provider (keyed under our own userId) makes every
+    /// receiver derive the identical per-participant AES-128-GCM frame key.
+    /// Returns `nil` if the send chain is empty (should never happen for a
+    /// bootstrapped state). Does NOT step the ratchet — callers get a
+    /// defensive copy. Mirrors Desktop `GroupSession.currentSendKey`
+    /// (`src/main/crypto/GroupSession.ts`) — must stay behaviourally
+    /// identical cross-platform.
+    public func currentSendKey(state: GroupState) -> Data? {
+        let ck = state.sendChain.ck
+        guard !ck.isEmpty else { return nil }
+        return Data(ck)
+    }
+
+    /// NON-MUTATING read of a remote sender's current recv-chain key (a
+    /// COPY), i.e. the `SK_0` we installed from their `sender_key_init` /
+    /// `_rotate`. The LiveKit media key for that participant's frames is
+    /// `base64(SK_0)` keyed under THAT sender's userId. Returns `nil` when
+    /// we have not yet installed a chain for `senderId` (their bootstrap
+    /// envelope has not arrived). Does NOT step the ratchet. Mirrors
+    /// Desktop `GroupSession.currentRecvKey`.
+    public func currentRecvKey(state: GroupState, senderId: String) -> Data? {
+        guard let chain = state.recvChain(for: senderId), !chain.ck.isEmpty else { return nil }
+        return Data(chain.ck)
+    }
+
     public func gc(state: GroupState, nowMs: Int64? = nil) {
         let now = nowMs ?? Int64(Date().timeIntervalSince1970 * 1000)
         var dirty = false
