@@ -4711,7 +4711,7 @@ final class AppState: ObservableObject {
     /// pending queue. Uses the ordinary 1:1 `msg_delivered` receipt frame
     /// (`{message_ids:[id]}`) to mirror Android's `WsCommand.MsgDelivered`.
     private func sendGroupDelivered(_ serverMsgId: String) {
-        liveProvider?.getWebSocketClient()?.send(
+        liveProvider?.getWebSocketClient().send(
             type: "msg_delivered", data: ["message_ids": [serverMsgId]])
     }
 
