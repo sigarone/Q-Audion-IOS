@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.781",
+              date: "2026-07-14",
+              title: "v1.0.781",
+              bullets: [
+                "fix(group-chat): sendGroupDelivered — getWebSocketClient() is non-optional",
+              ]),
         .init(id: "v1.0.780",
               date: "2026-07-14",
               title: "v1.0.780",
               bullets: [
+                "chore: regenerate changelog for v1.0.780",
                 "feat(group-chat): adopt server group_msg transport (Android/Desktop parity)",
                 "feat(call): handle call_busy + call_missed wire events",
               ]),
@@ -152,13 +159,6 @@ extension ReleaseNote {
                 "fix(calling): buffer-and-replay the pre-callContactId OFFER instead of relaxing the guard",
                 "revert(security): restore strict callContactId guard — d3b304f was a regression",
                 "fix(tools): symbolicate.py crashes on Windows console for inlined-frame arrow",
-              ]),
-        .init(id: "v1.0.761",
-              date: "2026-07-12",
-              title: "v1.0.761",
-              bullets: [
-                "chore: regenerate changelog for v1.0.761",
-                "fix(ws): capture and surface the real WS disconnect reason",
               ]),
     ]
 }
