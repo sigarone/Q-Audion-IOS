@@ -54,6 +54,14 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// carries the plain id list (kept for UI call sites); this callback is
     /// the crypto-facing one.
     public var onGroupUpdate: ((_ callId: String, _ participants: [String], _ senderKeysCapable: Set<String>, _ senderKeyEpoch: Int64) -> Void)?
+    /// W-GRPLIVEKIT — fires on `group_call_sfu_token_recv`: the server
+    /// minted a LiveKit access token for `callId`. Wire:
+    /// {call_id, node_id, url, token}.
+    public var onSfuTokenReceived: ((_ callId: String, _ nodeId: String, _ url: String, _ token: String) -> Void)?
+    /// W-GRPLIVEKIT — fires on `group_call_sfu_unavailable`: the caller
+    /// MUST soft-fall-back to the existing WS-relay group-call mesh path
+    /// (never hard-fail). Wire: {call_id, reason}.
+    public var onSfuUnavailable: ((_ callId: String, _ reason: String) -> Void)?
 
     // MARK: - Dependencies
 
@@ -192,6 +200,15 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         ])
     }
 
+    /// W-GRPLIVEKIT: request a LiveKit SFU access token for `callId`. Reply
+    /// arrives asynchronously as either `group_call_sfu_token_recv`
+    /// ([onSfuTokenReceived]) or `group_call_sfu_unavailable`
+    /// ([onSfuUnavailable]) — correlated by `call_id` since the wire has no
+    /// request/response id for this pair. Wire: {call_id}.
+    public func requestSfuToken(callId: String) {
+        ws.send(type: "group_call_sfu_token", data: ["call_id": callId])
+    }
+
     /// Toggle local mute state
     public func toggleMute() -> Bool {
         lock.lock()
@@ -257,6 +274,22 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         // Wire: {call_id}.
         ws.registerHandler(type: "group_call_ended") { [weak self] _, _ in
             self?.endLocally()
+        }
+
+        // W-GRPLIVEKIT — SFU token round-trip. Wire: {call_id, node_id, url, token}.
+        ws.registerHandler(type: "group_call_sfu_token_recv") { [weak self] _, data in
+            guard let self = self,
+                  let cid = data["call_id"] as? String,
+                  let nodeId = data["node_id"] as? String,
+                  let url = data["url"] as? String,
+                  let token = data["token"] as? String else { return }
+            self.onSfuTokenReceived?(cid, nodeId, url, token)
+        }
+        // Wire: {call_id, reason}. MUST soft-fall-back, never hard-fail.
+        ws.registerHandler(type: "group_call_sfu_unavailable") { [weak self] _, data in
+            guard let self = self, let cid = data["call_id"] as? String else { return }
+            let reason = data["reason"] as? String ?? "unknown"
+            self.onSfuUnavailable?(cid, reason)
         }
     }
 

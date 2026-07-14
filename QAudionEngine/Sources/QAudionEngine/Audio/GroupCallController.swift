@@ -65,6 +65,33 @@ public final class GroupCallController: @unchecked Sendable {
     /// decrypt our audio yet, it doesn't block sending to everyone else.
     private var initSentTo: Set<String> = []
 
+    // ─── W-GRPLIVEKIT: LiveKit SFU media transport (capability-gated) ──
+    // When `usingSfu` (default true), an active call first requests a
+    // LiveKit access token; media rides the SFU with native per-participant
+    // E2EE keyed from `groupSession`'s `currentSendKey`/`currentRecvKey`
+    // (SK_0, pinned — the send chain is never advanced by `encryptForGroup`
+    // while under the SFU). On `group_call_sfu_unavailable`, or if the
+    // token round-trip / room connect fails, this flips to false and the
+    // call falls back to the pre-existing WS-relay mesh path below
+    // (`sealForTransmit`/`handleIncomingFrame`) — soft fallback, never a
+    // hard failure. Mirrors Desktop's `GroupCallController` (main process)
+    // `usingSfu`/`groupState`/`emitSelfMediaKey`/`emitRemoteMediaKey`.
+    private var usingSfu = true
+    private var sfuRoom: LiveKitGroupCallRoom?
+    private static let livekitKeyringSize: UInt32 = 16
+
+    /// A remote participant's SFU audio/video track was subscribed
+    /// (type-erased `RemoteAudioTrack`/`RemoteVideoTrack` — see
+    /// `LiveKitGroupCallRoom`'s doc comment for why). App layer attaches
+    /// these to `VideoView`/audio rendering. Only fires when the call is
+    /// actually running over the SFU.
+    public var onRemoteAudioTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
+    public var onRemoteVideoTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
+    /// SFU-specific participant presence (independent of `onParticipantsChanged`,
+    /// which reflects the WS roster regardless of media transport).
+    public var onSfuParticipant: ((_ identity: String, _ present: Bool) -> Void)?
+    public var onSfuError: ((Error) -> Void)?
+
     // ─── Control-envelope transport ───────────────────────────────────
     // Deliberately NOT owned here. An earlier version of this file kept its
     // OWN `MessageRatchet`/`SovereignKeyVault` static instances for the
@@ -229,32 +256,42 @@ public final class GroupCallController: @unchecked Sendable {
         guard let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { return }
         guard (obj["qa_grp"] as? NSNumber)?.intValue == 1 else { return }
         lock.lock()
-        defer { lock.unlock() }
-        guard let gs = groupState, let callId = activeCallId else { return }
+        guard let gs = groupState, let callId = activeCallId else { lock.unlock(); return }
         let expectedG = GroupSenderKey.toHex(Data(callId.utf8))
-        guard obj["g"] as? String == expectedG else { return }
+        guard obj["g"] as? String == expectedG else { lock.unlock(); return }
+        // W-GRPLIVEKIT: set on a successful install so we can push the fresh
+        // SK_0 into the SFU key provider AFTER releasing `lock` below —
+        // `applySfuRemoteKey` takes the lock itself (NSLock is non-reentrant,
+        // see the kdoc on `_state`/`lock` near the top of this file).
+        var installedSenderId: String?
         switch obj["t"] as? String {
         case "sender_key_init":
             guard let e = (obj["e"] as? NSNumber)?.uint32Value,
                   let seed = obj["seed"] as? String,
-                  let idx = (obj["idx"] as? NSNumber)?.uint64Value else { return }
+                  let idx = (obj["idx"] as? NSNumber)?.uint64Value else { lock.unlock(); return }
             let env = SenderKeyInitEnvelope(g: expectedG, e: e, seed: seed, idx: idx)
             do {
                 try groupSession.handleSenderKeyInit(state: gs, env: env, fromUserId: fromUserId)
+                installedSenderId = fromUserId
             } catch {
                 print("[GroupCallController] handleSenderKeyInit failed sender=\(fromUserId): \(error)")
             }
         case "sender_key_rotate":
             guard let e = (obj["e"] as? NSNumber)?.uint32Value,
-                  let seed = obj["seed"] as? String else { return }
+                  let seed = obj["seed"] as? String else { lock.unlock(); return }
             let env = SenderKeyRotateEnvelope(g: expectedG, e: e, seed: seed)
             do {
                 try groupSession.handleSenderKeyRotate(state: gs, env: env, fromUserId: fromUserId)
+                installedSenderId = fromUserId
             } catch {
                 print("[GroupCallController] handleSenderKeyRotate failed sender=\(fromUserId): \(error)")
             }
         default:
             break // not ours
+        }
+        lock.unlock()
+        if let senderId = installedSenderId {
+            applySfuRemoteKey(senderId: senderId)
         }
     }
 
@@ -290,8 +327,23 @@ public final class GroupCallController: @unchecked Sendable {
                 if let cid = self.manager.callId {
                     let parts = self.manager.participants.map(\.id)
                     self.setState(.active(callId: cid, participants: parts))
-                    do { try self.startAudioPipeline() }
-                    catch { print("[GroupCallController] startAudioPipeline failed: \(error)") }
+                    self.lock.lock()
+                    let attemptSfu = self.usingSfu && self.sfuRoom == nil
+                    self.lock.unlock()
+                    if attemptSfu {
+                        // Hold off on the WS-relay mic/speaker pipeline until
+                        // the SFU round-trip resolves — starting BOTH would
+                        // briefly double-capture the mic (see
+                        // LiveKitGroupCallRoom's dependency-comment on the
+                        // separate AVAudioSession wrapper each WebRTC engine
+                        // owns). `handleSfuToken`/`handleSfuUnavailable`
+                        // start the mesh pipeline themselves if SFU doesn't
+                        // pan out.
+                        self.manager.requestSfuToken(callId: cid)
+                    } else {
+                        do { try self.startAudioPipeline() }
+                        catch { print("[GroupCallController] startAudioPipeline failed: \(error)") }
+                    }
                 }
             case .ended:
                 self.stopAudioPipeline()
@@ -309,6 +361,110 @@ public final class GroupCallController: @unchecked Sendable {
         manager.onAudioFrame = { [weak self] senderId, frame in
             self?.handleIncomingFrame(senderId: senderId, sealed: frame)
         }
+        manager.onSfuTokenReceived = { [weak self] callId, _, url, token in
+            self?.handleSfuToken(callId: callId, url: url, token: token)
+        }
+        manager.onSfuUnavailable = { [weak self] callId, reason in
+            self?.handleSfuUnavailable(callId: callId, reason: reason)
+        }
+    }
+
+    // MARK: - W-GRPLIVEKIT: SFU lifecycle (capability-gated, soft fallback)
+
+    /// The server minted a LiveKit token for `callId` — try to connect the
+    /// SFU room. On success: push every currently-known media key
+    /// (self + installed remotes) and skip the WS-relay mic pipeline
+    /// entirely. On failure: flip `usingSfu` off and fall back to the
+    /// pre-existing mesh pipeline, exactly as `handleSfuUnavailable` does.
+    private func handleSfuToken(callId: String, url: String, token: String) {
+        lock.lock()
+        let stillCurrent = (callId == activeCallId) && usingSfu && sfuRoom == nil
+        lock.unlock()
+        guard stillCurrent else { return }
+
+        let room = LiveKitGroupCallRoom(video: false)
+        room.onRemoteAudioTrack = { [weak self] id, track in self?.onRemoteAudioTrack?(id, track) }
+        room.onRemoteVideoTrack = { [weak self] id, track in self?.onRemoteVideoTrack?(id, track) }
+        room.onParticipant = { [weak self] id, present in self?.onSfuParticipant?(id, present) }
+        room.onError = { [weak self] err in self?.onSfuError?(err) }
+
+        lock.lock()
+        sfuRoom = room
+        lock.unlock()
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            do {
+                try await room.connect(url: url, token: token)
+                self.resendMediaKeysToSfu()
+            } catch {
+                print("[GroupCallController] LiveKit connect failed, falling back to WS-relay mesh: \(error)")
+                self.lock.lock()
+                self.usingSfu = false
+                self.sfuRoom = nil
+                self.lock.unlock()
+                await room.disconnect()
+                do { try self.startAudioPipeline() }
+                catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
+            }
+        }
+    }
+
+    /// Server declined the SFU for `callId` (`group_call_sfu_unavailable`) —
+    /// soft-fall-back to the WS-relay mesh path. Never a hard failure: the
+    /// call proceeds exactly as it did before this feature existed.
+    private func handleSfuUnavailable(callId: String, reason: String) {
+        lock.lock()
+        guard callId == activeCallId else { lock.unlock(); return }
+        usingSfu = false
+        lock.unlock()
+        print("[GroupCallController] SFU unavailable (\(reason)) — using WS-relay mesh")
+        do { try startAudioPipeline() }
+        catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
+    }
+
+    /// Push our own key (a fresh COPY of the current send-chain SK_0) into
+    /// the SFU key provider at `groupEpoch % 16`. `graceMs`, when set, is
+    /// ONLY used right after a member-leave rekey (see `onUpdate`) so
+    /// in-flight frames keyed under the OLD slot still decrypt during the
+    /// ~3s hand-off window.
+    private func applySfuSelfKey(graceMs: Double? = nil) {
+        lock.lock()
+        guard usingSfu, let gs = groupState, let ck = groupSession.currentSendKey(state: gs) else {
+            lock.unlock(); return
+        }
+        let selfId = manager.selfUserId
+        let keyIndex = Int32(gs.groupEpoch % Self.livekitKeyringSize)
+        let keyB64 = ck.base64EncodedString()
+        let room = sfuRoom
+        lock.unlock()
+        room?.applyKey(GroupMediaKey(identity: selfId, keyIndex: keyIndex, keyB64: keyB64, graceMs: graceMs))
+    }
+
+    /// Push `senderId`'s installed recv-chain key (SK_0 from their init/
+    /// rotate) into the SFU key provider. No-op until the SFU is connected
+    /// AND that sender's bootstrap envelope has been installed.
+    private func applySfuRemoteKey(senderId: String) {
+        lock.lock()
+        guard usingSfu, let gs = groupState, let ck = groupSession.currentRecvKey(state: gs, senderId: senderId) else {
+            lock.unlock(); return
+        }
+        let keyIndex = Int32(gs.groupEpoch % Self.livekitKeyringSize)
+        let keyB64 = ck.base64EncodedString()
+        let room = sfuRoom
+        lock.unlock()
+        room?.applyKey(GroupMediaKey(identity: senderId, keyIndex: keyIndex, keyB64: keyB64))
+    }
+
+    /// Re-push every currently-known media key (self + each installed
+    /// remote) once the SFU room just connected — covers keys that were
+    /// already installed into `groupState` before the room existed.
+    private func resendMediaKeysToSfu() {
+        lock.lock()
+        let senders = groupState?.recvChains.map { $0.0 } ?? []
+        lock.unlock()
+        applySfuSelfKey()
+        for senderId in senders { applySfuRemoteKey(senderId: senderId) }
     }
 
     /// W-GRPSENDERKEY: bootstrap any newly-seen capable member into our
@@ -402,6 +558,14 @@ public final class GroupCallController: @unchecked Sendable {
         }
         for item in rotatesToSend {
             sendSenderKeyRotateEnvelope(peer: item.peer, selfId: selfId, env: item.env)
+        }
+        // W-GRPLIVEKIT: a non-empty `rotatesToSend` means `handleMemberRemoved`
+        // just reseeded OUR send chain (departure rekey) — push the fresh
+        // self key into the SFU with a ~3s grace so in-flight frames keyed
+        // under the OLD slot still decrypt during the hand-off window.
+        // Mirrors Desktop's `rekeyOnLeave` -> `emitSelfMediaKey(3000)`.
+        if !rotatesToSend.isEmpty {
+            applySfuSelfKey(graceMs: 3000)
         }
     }
 
@@ -510,7 +674,13 @@ public final class GroupCallController: @unchecked Sendable {
         groupState = nil
         activeCallId = nil
         initSentTo.removeAll()
+        let room = sfuRoom
+        sfuRoom = nil
+        usingSfu = true // reset the capability flag for the NEXT call
         lock.unlock()
+        if let room = room {
+            Task { await room.disconnect() }
+        }
         setState(.idle)
     }
 

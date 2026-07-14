@@ -59,6 +59,50 @@ let package = Package(
         // Xcode 16.2 (Swift tools 6.0) which is incompatible. Pin to 6.x until CI
         // upgrades to Xcode 16.3+.
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
+        // W-GRPLIVEKIT: self-hosted LiveKit SFU for group calls (audio, +video
+        // later) with native per-participant E2EE (RTCFrameCryptor). Pinned to
+        // an EXACT tag (not `from:`) — same discipline as onnxruntime-spm above.
+        //
+        // Version pin rationale (CORRECTED 2026-07-14 after a CI resolution
+        // failure): this repo builds with **swift-tools-version 5.9** (line 1)
+        // and CI runs **Xcode 15.4 / Swift 5.10** (see kat-cross-platform.yml
+        // `xcode-select .../Xcode_15.4.app`). LiveKit >= 2.14.0 declares
+        // swift-tools-version 6.0, which a Swift-5.10 toolchain CANNOT resolve
+        // ("incompatible tools version (6.0.0)"), so 2.14.1 broke the build.
+        // **2.13.0 is the newest tag whose manifest declares swift-tools-version
+        // 5.9** — resolvable by Xcode 15.4. Its E2EE API is identical to 2.14.x
+        // for everything used here (verified against the tagged source), EXCEPT
+        // it has no `keyDerivationAlgorithm` option: 2.13.0 derives the frame
+        // key with PBKDF2 UNCONDITIONALLY (the `.pbkdf2`/`.hkdf` toggle is 2.14+),
+        // which is exactly the cross-platform contract. Bump this pin to >= 2.14
+        // only together with (or after) bumping CI's Xcode to >= 16.0, and
+        // re-add `keyDerivationAlgorithm: .pbkdf2` explicitly when you do.
+        //
+        // Dual-WebRTC safety (verified against the actual sources before
+        // adding this, not assumed): `client-sdk-swift` depends on its OWN
+        // WebRTC build via `livekit/webrtc-xcframework` — module name
+        // `LiveKitWebRTC` (product `LiveKitWebRTC`), NOT `WebRTC`. That
+        // fork renames the framework bundle `WebRTC.framework` ->
+        // `LiveKitWebRTC.framework` AND prefixes every Objective-C symbol
+        // with `LK` (RTCPeerConnection -> LKRTCPeerConnection, etc. — see
+        // livekit/webrtc-xcframework's "Symbol Namespace Isolation" docs)
+        // SPECIFICALLY so it can coexist in the same binary as any other
+        // WebRTC-based library. So this app's own custom-patched `WebRTC`
+        // binaryTarget below (webrtc-aes256-build, also M144.7559.x
+        // upstream) and LiveKit's `LiveKitWebRTC` (2.13.0 pins
+        // webrtc-xcframework 144.7559.03) can link into the same app
+        // without file- or symbol-level collisions: two independent WebRTC
+        // engines, one per call type (1:1 calls keep using this app's own
+        // `WebRTC`/`QAudionPeerConnection`; group-call SFU media uses
+        // LiveKit's `LiveKitWebRTC` end-to-end, entirely inside
+        // `LiveKitGroupCallRoom`). Residual (non-blocking) risk: both
+        // engines each own an independent AVAudioSession wrapper
+        // (`RTCAudioSession` vs `LKRTCAudioSession`) around the SAME
+        // system-singleton `AVAudioSession` — fine today since 1:1 and
+        // group calls are mutually exclusive call states, but a future
+        // call-waiting/concurrent-call scenario would need explicit
+        // handoff between the two.
+        .package(url: "https://github.com/livekit/client-sdk-swift.git", exact: "2.13.0"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
@@ -155,6 +199,10 @@ let package = Package(
                 .product(name: "onnxruntime", package: "onnxruntime-spm"),
                 "WebRTC",  // local binaryTarget (webrtc-sdk H265 build) — see below
                 .product(name: "GRDB", package: "GRDB.swift"),
+                // W-GRPLIVEKIT: group-call SFU media transport — see the
+                // dependency comment above for the dual-WebRTC coexistence
+                // rationale (LK-prefixed symbols, renamed framework bundle).
+                .product(name: "LiveKit", package: "client-sdk-swift"),
                 // Tor.swift removed — see W610 note in dependencies above.
             ] + (hasRealityXcframework ? [.target(name: "Reality", condition: .when(platforms: [.iOS]))] : []),
             path: "Sources/QAudionEngine",
