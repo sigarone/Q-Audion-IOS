@@ -9,9 +9,11 @@ import QAudionEngine
 ///                        `extras.warning @ 0.18α`, leading shield-icon,
 ///                        single-line title + multi-line message + optional
 ///                        "Apri" CTA. Dismissible (chevron `xmark.circle`).
-///   2. "Gruppi"       — group conversations (`ConversationKind.group`).
-///                        Visual = 56pt card with group avatar + member-count
-///                        chip; horizontal scroll of cards.
+///   2. "Gruppi"       — joined groups from `GroupRegistry`, rendered as
+///                        1:1-style rows (avatar + name + last-activity time +
+///                        last-message preview / member·epoch subtitle + unread
+///                        badge). Preview/unread/time derive from
+///                        `GroupMessageStore`; tapping pushes `GroupChatScreen`.
 ///   3. "Fissate"      — pinned 1-to-1 conversations (`pinned == true`).
 ///   4. "Conversazioni" — everything else, sorted by lastActivity desc.
 ///
@@ -51,6 +53,16 @@ struct ChatListScreen: View {
     /// transcript, which `UIActivityViewController` ships out via
     /// AirDrop / Files / Mail / Messages.
     @State private var exportTarget: ExportTarget? = nil
+    /// Fase 1B — real joined groups for the "Gruppi" section. The chat-list
+    /// group rows were previously sourced from `ConversationStore`
+    /// (`kind == .group`), which no production path ever writes, so the
+    /// section was effectively dead. Source them from the live GroupRegistry
+    /// instead and derive preview/unread/time from GroupMessageStore.
+    @ObservedObject private var groupRegistry = GroupRegistry.shared
+    /// Bumped on any GroupMessageStore change so `groupRows` recomputes its
+    /// preview / unread / last-activity (GroupMessageStore posts a
+    /// NotificationCenter event rather than an @Published property).
+    @State private var groupRefreshToken: Int = 0
 
     /// Sentinel Identifiable per `.fullScreenCover(item:)` con il
     /// groupId + name appena creati.
@@ -156,23 +168,11 @@ struct ChatListScreen: View {
                         }
                     }
 
-                    if !groups.isEmpty {
+                    if !groupRows.isEmpty {
                         Section {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 12) {
-                                    ForEach(groups, id: \.conversationId) { item in
-                                        NavigationLink(destination: chatDestination(for: item)) {
-                                            groupCard(item)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 4)
+                            ForEach(groupRows) { row in
+                                groupRow(row)
                             }
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets())
                         } header: {
                             sectionHeader("Gruppi")
                         }
@@ -261,6 +261,13 @@ struct ChatListScreen: View {
             container.setSearchQuery(newValue)
         }
         .refreshable { container.loadFromStore() }
+        // Fase 1B — recompute the group rows' preview / unread / time when a
+        // group message lands or is marked read (GroupMessageStore signals
+        // via NotificationCenter, not an @Published property).
+        .onReceive(NotificationCenter.default.publisher(
+            for: GroupMessageStore.didChangeNotification)) { _ in
+            groupRefreshToken &+= 1
+        }
         // W94: navigationDestination triggered by the deep-link state.
         // When a notification tap publishes appState.pendingDeepLinkConversationId,
         // the onChange below captures the matching item and flips the
@@ -339,8 +346,52 @@ struct ChatListScreen: View {
 
     // MARK: - Section partitioning
 
-    private var groups: [ConversationListViewModel.Item] {
-        container.viewModel.filteredItems.filter { $0.kind == .group }
+    /// Fase 1B — chat-list model for a group row. Derived from the joined
+    /// GroupRegistry entry + its GroupMessageStore history.
+    private struct GroupRowUi: Identifiable {
+        let id: UUID          // dashed-UUID form == GroupChatScreen `groupId`
+        let hex: String       // dash-stripped == GroupMessageStore / registry key
+        let name: String
+        let memberCount: Int
+        let epoch: Int
+        let preview: String?  // last message text (nil ⇒ show member/epoch subtitle)
+        let lastActivity: Date
+        let unread: Int
+    }
+
+    /// Fase 1B — build the group rows from the live registry, sorted by
+    /// last activity (newest first) to match the 1:1 ordering. Filtered by
+    /// the same search field (name match). `groupRefreshToken` is read so
+    /// the rows recompute when GroupMessageStore posts a change.
+    private var groupRows: [GroupRowUi] {
+        _ = groupRefreshToken   // dependency: recompute on message change
+        let q = searchText.lowercased()
+        return groupRegistry.entries.compactMap { e -> GroupRowUi? in
+            guard let uuid = Self.hexToUUID(e.id) else { return nil }
+            if !q.isEmpty && !e.name.lowercased().contains(q) { return nil }
+            let last = GroupMessageStore.shared.lastMessage(forGroupHex: e.id)
+            return GroupRowUi(
+                id: uuid,
+                hex: e.id,
+                name: e.name,
+                memberCount: e.members.count,
+                epoch: Int(e.epoch),
+                preview: (last?.text.isEmpty == false) ? last?.text : nil,
+                lastActivity: last?.ts ?? e.joinedAt,
+                unread: GroupMessageStore.shared.unreadCount(forGroupHex: e.id))
+        }
+        .sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    /// Reconstruct a dashed UUID from the 32-char dash-stripped hex the
+    /// GroupRegistry keys on (same logic as AppState.hexToDashedUUID, which
+    /// is fileprivate to that file). Returns nil for a malformed id.
+    private static func hexToUUID(_ hex: String) -> UUID? {
+        let clean = hex.lowercased()
+        guard clean.count == 32, clean.allSatisfy({ $0.isHexDigit }) else { return nil }
+        let c = Array(clean)
+        let dashed = "\(String(c[0..<8]))-\(String(c[8..<12]))-\(String(c[12..<16]))-\(String(c[16..<20]))-\(String(c[20..<32]))"
+        return UUID(uuidString: dashed)
     }
 
     private var pinned: [ConversationListViewModel.Item] {
@@ -413,20 +464,64 @@ struct ChatListScreen: View {
         )
     }
 
-    // MARK: - Group card
+    // MARK: - Group row (Fase 1B)
 
-    private func groupCard(_ item: ConversationListViewModel.Item) -> some View {
-        VStack(spacing: 6) {
-            QAudionAvatar(displayName: item.peerDisplayName,
-                          kind: .group,
-                          size: 56)
-            Text(item.peerDisplayName)
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurface)
-                .lineLimit(1)
-                .frame(maxWidth: 80)
+    /// Group chat-list row — mirrors the 1:1 `conversationRow`: avatar +
+    /// name + last-activity time + preview/subtitle + unread badge. Tapping
+    /// pushes GroupChatScreen (the old horizontal card routed to the 1:1
+    /// ChatDetailScreen, which was wrong for a group).
+    private func groupRow(_ row: GroupRowUi) -> some View {
+        NavigationLink {
+            GroupChatScreen(
+                groupId: row.id,
+                initial: GroupChatUiState(
+                    name: row.name,
+                    memberCount: row.memberCount,
+                    messages: []))
+        } label: {
+            HStack(spacing: 12) {
+                QAudionAvatar(displayName: row.name, kind: .group, size: 44)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Text(row.name)
+                            .qaudionStyle(type.titleSmall)
+                            .foregroundStyle(scheme.onSurface)
+                            .lineLimit(1)
+                        Spacer(minLength: 6)
+                        Text(formatTime(row.lastActivity))
+                            .qaudionStyle(type.labelSmall)
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                    }
+                    HStack {
+                        Text(groupPreviewText(row))
+                            .qaudionStyle(type.bodySmall)
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .lineLimit(2)
+                        Spacer(minLength: 6)
+                        if row.unread > 0 {
+                            // Same badge component + style as the 1:1 row.
+                            Text("\(row.unread)")
+                                .qaudionStyle(type.labelSmall)
+                                .foregroundStyle(scheme.onPrimary)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Capsule().fill(scheme.primary))
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 4)
         }
-        .padding(.horizontal, 4)
+        .listRowBackground(scheme.background)
+    }
+
+    /// Preview line for a group row: the last message (truncated like the
+    /// 1:1 preview) when present, else the member-count/epoch subtitle the
+    /// group previously showed as its only signal.
+    private func groupPreviewText(_ row: GroupRowUi) -> String {
+        if let preview = row.preview, !preview.isEmpty {
+            return preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
+        }
+        return "\(row.memberCount) membri · epoch \(row.epoch)"
     }
 
     // MARK: - Conversation row (1-to-1)

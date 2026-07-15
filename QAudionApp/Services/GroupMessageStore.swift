@@ -52,18 +52,30 @@ public final class GroupMessageStore: ObservableObject {
 
     /// groupHex → chronological messages (oldest first).
     private var byGroup: [String: [Stored]] = [:]
+    /// Fase 1B — groupHex → wall-clock of the newest message the user has
+    /// seen (set when a `GroupChatScreen` for that group is open). Mirrors
+    /// the 1:1 `Conversation.unreadCount` read-marker, but derived rather
+    /// than a stored counter (the group message list is the source of truth).
+    private var lastRead: [String: Date] = [:]
     private static let storageKey = "qaudion.groups.messages.v1"
+    private static let readStorageKey = "qaudion.groups.messages.lastread.v1"
     private static let maxPerGroup = 500
 
     private init() { load() }
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: Self.storageKey),
-              let decoded = try? JSONDecoder().decode([String: [Stored]].self, from: data) else {
+        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+           let decoded = try? JSONDecoder().decode([String: [Stored]].self, from: data) {
+            byGroup = decoded
+        } else {
             byGroup = [:]
-            return
         }
-        byGroup = decoded
+        if let data = UserDefaults.standard.data(forKey: Self.readStorageKey),
+           let decoded = try? JSONDecoder().decode([String: Date].self, from: data) {
+            lastRead = decoded
+        } else {
+            lastRead = [:]
+        }
     }
 
     private func persist() {
@@ -71,10 +83,32 @@ public final class GroupMessageStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: Self.storageKey)
     }
 
+    private func persistReadMarkers() {
+        guard let data = try? JSONEncoder().encode(lastRead) else { return }
+        UserDefaults.standard.set(data, forKey: Self.readStorageKey)
+    }
+
     // MARK: - Reads
 
     public func messages(forGroupHex groupHex: String) -> [Stored] {
         return byGroup[groupHex] ?? []
+    }
+
+    /// Fase 1B — newest message for the chat-list row preview/timestamp.
+    public func lastMessage(forGroupHex groupHex: String) -> Stored? {
+        return byGroup[groupHex]?.last
+    }
+
+    /// Fase 1B — number of inbound (non-mine) messages newer than the last
+    /// time the user opened this group. Mirrors the 1:1 unread badge, but
+    /// derived from the message list + a read-marker instead of a stored
+    /// counter (the server does not push a per-group unread count to iOS).
+    public func unreadCount(forGroupHex groupHex: String) -> Int {
+        guard let arr = byGroup[groupHex] else { return 0 }
+        let since = lastRead[groupHex] ?? .distantPast
+        return arr.reduce(0) { acc, m in
+            (!m.mine && m.ts > since) ? acc + 1 : acc
+        }
     }
 
     /// True if a message with this server id is already persisted — used
@@ -129,9 +163,29 @@ public final class GroupMessageStore: ObservableObject {
         postDidChange(groupHex)
     }
 
+    /// Fase 1B — mark this group as read up to its newest message (called
+    /// when a `GroupChatScreen` for the group is open / receives). Idempotent:
+    /// a no-op (no persist / no didChange) when already current, so the
+    /// reload → markRead → didChange → reload cycle terminates immediately.
+    public func markRead(groupHex: String) {
+        // No messages ⇒ nothing to read; return WITHOUT setting a marker.
+        // A `?? Date()` fallback here would advance `newest` on every call
+        // (wall-clock keeps moving), so `cur >= newest` never holds and each
+        // markRead posts didChange → an open GroupChatScreen reloads → calls
+        // markRead again → infinite loop (hit on the common path of opening a
+        // freshly-created, still-empty group). Guarding on a real message ts
+        // makes the marker a fixed value, so the cycle terminates in one hop.
+        guard let newest = byGroup[groupHex]?.last?.ts else { return }
+        if let cur = lastRead[groupHex], cur >= newest { return }
+        lastRead[groupHex] = newest
+        persistReadMarkers()
+        postDidChange(groupHex)
+    }
+
     public func clear(groupHex: String) {
         guard byGroup[groupHex] != nil else { return }
         byGroup.removeValue(forKey: groupHex)
+        if lastRead.removeValue(forKey: groupHex) != nil { persistReadMarkers() }
         persist()
         postDidChange(groupHex)
     }

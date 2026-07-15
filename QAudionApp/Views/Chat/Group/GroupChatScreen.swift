@@ -49,7 +49,16 @@ struct GroupChatScreen: View {
         // W-GRPMSG: load persisted history on open and refresh live when
         // AppState's group receive path lands a new message for THIS
         // group. Replaces the ephemeral-@State "Beta" behaviour.
-        .onAppear { reloadMessagesFromStore() }
+        // Fase 1B — mark this group the "active" one so AppState suppresses
+        // the inbound-group banner while it's on screen (mirrors the 1:1
+        // `activePeerUserId` gate), and clear its unread badge on open.
+        .onAppear {
+            appState.activeGroupHex = groupHex
+            reloadMessagesFromStore()
+        }
+        .onDisappear {
+            if appState.activeGroupHex == groupHex { appState.activeGroupHex = nil }
+        }
         .onReceive(NotificationCenter.default.publisher(
             for: GroupMessageStore.didChangeNotification)) { note in
             if (note.userInfo?["groupHex"] as? String) == groupHex {
@@ -332,10 +341,27 @@ struct GroupChatScreen: View {
             GroupMessageRowUi(
                 id: m.id,
                 text: m.text,
-                senderLabel: m.mine ? "Tu" : Self.shortLabel(m.senderId),
+                // Fase 1B — resolve the raw sender UUID to a contact name so
+                // group bubbles never label a peer with a bare UUID (mirrors
+                // the 1:1 inbound path, AppState.persistIncomingPeerMessage).
+                senderLabel: m.mine ? "Tu" : resolveMemberName(m.senderId),
                 timestamp: f.string(from: m.ts),
                 mine: m.mine)
         }
+        // Viewing the group == reading it: clear the unread badge shown in
+        // the chat list (mirrors ChatContainer.markRead for 1:1).
+        GroupMessageStore.shared.markRead(groupHex: groupHex)
+    }
+
+    /// Fase 1B — resolve a group member/sender `userId` to a human label.
+    /// Fallback chain mirrors the 1:1 inbound path: cached contact display
+    /// name → abbreviated id. NEVER returns a raw UUID.
+    private func resolveMemberName(_ userId: String) -> String {
+        if let name = appState.cachedContacts.first(where: { $0.userId == userId })?.displayName,
+           !name.isEmpty {
+            return name
+        }
+        return Self.shortLabel(userId)
     }
 
     private static func shortLabel(_ userId: String) -> String {
@@ -465,7 +491,8 @@ struct GroupChatScreen: View {
             let rows = entry.members.map { uid in
                 GroupMemberRowUi(
                     userId: uid,
-                    displayName: uid == selfId ? "Tu" : uid,
+                    // Fase 1B — resolve UUID → contact name (was raw `uid`).
+                    displayName: uid == selfId ? "Tu" : resolveMemberName(uid),
                     isAdmin: entry.admins.contains(uid),
                     isSelf: uid == selfId)
             }

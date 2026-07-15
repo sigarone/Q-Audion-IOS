@@ -141,6 +141,11 @@ final class AppState: ObservableObject {
     /// for the conversation the user is actively viewing — avoids the
     /// "banner pops up while I'm reading the message" UX gaffe.
     internal var activePeerUserId: String?
+    /// Fase 1B — groupHex of the currently-open group chat. GroupChatScreen
+    /// sets this on `.onAppear` and clears it on `.onDisappear`; used by
+    /// `handleIncomingGroupMessage` to suppress the inbound-group banner for
+    /// the group the user is actively viewing (mirrors `activePeerUserId`).
+    internal var activeGroupHex: String?
     /// W94: pending chat deep link. Set by the notification-tap
     /// handler (NotificationCenterService.onNotificationTap) when the
     /// user taps a `.messageDelivered` banner. ChatListScreen observes
@@ -4864,7 +4869,7 @@ final class AppState: ObservableObject {
         let ts = Self.parseGroupServerTs(serverTs)
         // Store posts didChangeNotification → an open GroupChatScreen
         // reloads live; persisted so it also shows on next open.
-        GroupMessageStore.shared.append(
+        let inserted = GroupMessageStore.shared.append(
             groupHex: groupHex,
             GroupMessageStore.Stored(
                 id: clientMsgId ?? serverMsgId,
@@ -4873,7 +4878,59 @@ final class AppState: ObservableObject {
                 mine: false,
                 text: plaintext,
                 ts: ts))
+        // Fase 1B — fire the same local banner the 1:1 inbound path fires,
+        // but only for a genuinely NEW inbound row (never on a re-delivery
+        // that merged into an existing message).
+        if inserted {
+            presentGroupMessageBanner(groupHex: groupHex, senderId: senderId, plaintext: plaintext)
+        }
         if live { sendGroupDelivered(serverMsgId) }
+    }
+
+    /// Fase 1B — post a local notification for an inbound GROUP message,
+    /// mirroring the 1:1 banner in `persistIncomingPeerMessage`:
+    ///   - honours the global banner toggle (`qaudion.notifications.banners_enabled`);
+    ///   - suppressed while the user is viewing THIS group (`activeGroupHex`);
+    ///   - two-axis privacy gate (`hide_notification_content` AND
+    ///     `PrivacyGate.messagePreviewInNotifications`) — either off ⇒ generic body;
+    ///   - quiet-hours / in-app-sound are handled inside `scheduleLocal`.
+    /// Title = group name; body = "sender: preview" or a generic fallback.
+    /// No per-group mute exists in the current group model, so none is applied.
+    private func presentGroupMessageBanner(groupHex: String, senderId: String, plaintext: String) {
+        let bannersGlobalEnabled = (UserDefaults.standard.object(
+            forKey: "qaudion.notifications.banners_enabled") as? Bool) ?? true
+        guard bannersGlobalEnabled, activeGroupHex != groupHex else { return }
+
+        let title = GroupRegistry.shared.entry(for: groupHex)?.name ?? "Gruppo"
+        // Sender label — same fallback chain the group bubbles use.
+        let senderName: String = {
+            if let n = self.cachedContacts.first(where: { $0.userId == senderId })?.displayName,
+               !n.isEmpty { return n }
+            if senderId.count > 12 { return String(senderId.prefix(8)) + "…" }
+            return senderId
+        }()
+
+        let hideContent = (UserDefaults.standard.object(
+            forKey: "qaudion.privacy.hide_notification_content") as? Bool) ?? false
+        let previewAllowed = PrivacyGate.messagePreviewInNotifications
+        let body: String
+        if hideContent || !previewAllowed {
+            body = "Nuovo messaggio di gruppo"
+        } else {
+            let snippet = plaintext.count > 120 ? String(plaintext.prefix(120)) + "…" : plaintext
+            body = "\(senderName): \(snippet)"
+        }
+        Task { @MainActor in
+            await NotificationCenterService.shared.scheduleLocal(
+                category: .messageDelivered,
+                title: title,
+                body: body,
+                userInfo: [
+                    "groupId":    groupHex,
+                    "peerUserId": senderId,
+                ],
+                delay: 0.1)
+        }
     }
 
     /// ACK a delivered group message so the server can drop it from the
