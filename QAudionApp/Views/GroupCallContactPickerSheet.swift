@@ -10,40 +10,52 @@ import QAudionEngine
 /// than navigating with a pre-known callId.
 struct GroupCallContactPickerSheet: View {
     let contacts: [ContactsListViewModel.Item]
-    let onStart: (_ selectedUserIds: [String]) -> Void
+    /// W-GRPVIDEO: `video` reflects the toggle below — threaded down to
+    /// `GroupCallController.createCall(callType:)` so an ad-hoc group call
+    /// can start as video, not just audio.
+    let onStart: (_ selectedUserIds: [String], _ video: Bool) -> Void
 
     @State private var selected: Set<String> = []
+    /// W-GRPVIDEO: audio/video choice for the call about to be created.
+    @State private var wantsVideo = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             List {
-                if contacts.isEmpty {
-                    Text("Nessun contatto disponibile")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(contacts, id: \.userId) { contact in
-                        Button {
-                            toggle(contact.userId)
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(contact.displayName).font(.body)
-                                    Text(contact.userId.prefix(12) + "…")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if selected.contains(contact.userId) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.blue)
-                                } else {
-                                    Image(systemName: "circle")
-                                        .foregroundStyle(.secondary)
+                Section {
+                    Toggle(isOn: $wantsVideo) {
+                        Label("Videochiamata", systemImage: wantsVideo ? "video.fill" : "video.slash")
+                    }
+                }
+                Section {
+                    if contacts.isEmpty {
+                        Text("Nessun contatto disponibile")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(contacts, id: \.userId) { contact in
+                            Button {
+                                toggle(contact.userId)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(contact.displayName).font(.body)
+                                        Text(contact.userId.prefix(12) + "…")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if selected.contains(contact.userId) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.blue)
+                                    } else {
+                                        Image(systemName: "circle")
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -55,7 +67,7 @@ struct GroupCallContactPickerSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Avvia (\(selected.count))") {
-                        onStart(Array(selected))
+                        onStart(Array(selected), wantsVideo)
                     }
                     .disabled(selected.isEmpty)
                 }
@@ -78,6 +90,6 @@ struct GroupCallContactPickerSheet: View {
             .init(userId: "user-mario-1234", displayName: "Mario Rossi", phoneHash: "", avatarUrl: nil, isOnline: true, unreadMessageCount: 0, isVerified: true),
             .init(userId: "user-anna-5678", displayName: "Anna Bianchi", phoneHash: "", avatarUrl: nil, isOnline: false, unreadMessageCount: 0, isVerified: false)
         ],
-        onStart: { _ in }
+        onStart: { _, _ in }
     )
 }

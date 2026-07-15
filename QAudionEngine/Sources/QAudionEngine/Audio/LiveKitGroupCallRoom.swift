@@ -27,9 +27,12 @@ public struct GroupMediaKey {
 
 #if canImport(LiveKit)
 import LiveKit
+import AVFoundation
 
-/// LiveKit SFU media transport for Q-Audion group calls (audio today;
-/// `video: true` publishes camera too, for a future video-group-call PR).
+/// LiveKit SFU media transport for Q-Audion group calls. `video: true`
+/// (or a later `setCameraEnabled(true)`) publishes camera alongside mic —
+/// see `GroupCallController.wantsVideo`/`setVideoEnabled` (W-GRPVIDEO) for
+/// how the call's `callType` and the mid-call toggle drive this.
 /// Direct Swift port of Desktop's `renderer/lib/GroupCallRoom.ts` — see that
 /// file's header for the full cross-platform E2EE contract this MUST stay
 /// byte-identical to:
@@ -56,6 +59,13 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// class doc comment for why).
     public var onRemoteAudioTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
     public var onRemoteVideoTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
+    /// W-GRPVIDEO: fires with OUR OWN camera track (`LocalVideoTrack`,
+    /// type-erased) whenever it starts/stops publishing — right after the
+    /// initial `connect()` publish (when `video: true`) and on every
+    /// `setCameraEnabled` toggle. `nil` means the camera is off (drop the
+    /// self-preview tile). See the class doc comment for why this is
+    /// type-erased to `AnyObject` rather than exposing `LocalVideoTrack`.
+    public var onLocalVideoTrack: ((_ track: AnyObject?) -> Void)?
     public var onParticipant: ((_ identity: String, _ present: Bool) -> Void)?
     public var onError: ((Error) -> Void)?
 
@@ -70,6 +80,36 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     // needs an actively-pumped RunLoop; a plain GCD queue doesn't run one).
     private var graceWorkItems: [DispatchWorkItem] = []
 
+    /// W-GRPVIDEO-PERM (review fix): the SDK never requests camera
+    /// authorization itself (verified against client-sdk-swift 2.13.0 —
+    /// `CameraCapturer.startCapture()`/`LiveKit+DeviceHelpers.swift`'s
+    /// `ensureDeviceAccess` is a public opt-in helper the SDK does not call
+    /// internally). Without an explicit check here, a `.notDetermined`
+    /// status (the user's very first camera-touching action in the app)
+    /// would silently skip the OS permission prompt entirely — the camera
+    /// session just never produces frames, no error, no crash, but also no
+    /// prompt ever shown — and a `.denied` status would still "succeed"
+    /// from `setCamera`'s point of view (SDK doesn't gate on authorization),
+    /// publishing an empty/frozen video track instead of falling back to
+    /// audio-only. Mirrors the existing explicit
+    /// `AVCaptureDevice.authorizationStatus`/`requestAccess` gate already
+    /// used for 1:1 video (`VideoCallPipeline.ensurePermission`) and QR
+    /// scanning (`QrScannerView`).
+    public enum CameraPermissionError: Error { case denied }
+
+    private func ensureCameraAuthorized() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .video)
+        case .restricted, .denied:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
     public init(video: Bool) {
         self.wantsVideo = video
         super.init()
@@ -78,6 +118,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// Build the E2EE room, connect, and publish local mic (+camera if
     /// `video`). Throws on failure so the caller (`GroupCallController`)
     /// falls back to the existing WS-relay mesh path.
+    ///
+    /// W-GRPVIDEO-PERM: a camera-permission denial does NOT throw here —
+    /// unlike a room-connect failure, losing the camera must degrade to an
+    /// audio-only SFU call (mic still published), never abort the whole
+    /// call. See `ensureCameraAuthorized`'s kdoc for why this check exists.
     public func connect(url: String, token: String) async throws {
         // Options set EXPLICITLY — SDK defaults diverge across platforms
         // (the JS SDK defaults `sharedKey: true`; we need per-participant
@@ -113,8 +158,45 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         try await room.connect(url: url, token: token)
         _ = try await room.localParticipant.setMicrophone(enabled: true)
         if wantsVideo {
-            _ = try await room.localParticipant.setCamera(enabled: true)
+            if await ensureCameraAuthorized() {
+                _ = try await room.localParticipant.setCamera(enabled: true)
+                onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
+            } else {
+                // Graceful audio-only fallback: mic is already published
+                // above, we simply never publish a camera track. No throw —
+                // a camera-permission denial must not tear down the whole
+                // SFU connection.
+                onError?(CameraPermissionError.denied)
+            }
         }
+    }
+
+    /// W-GRPVIDEO: mid-call camera on/off. Publishing a NEW video track
+    /// through an already-connected room rides the SAME room-level
+    /// `EncryptionOptions` configured above — `E2EEManager` hooks
+    /// `Room`'s `didPublishTrack` delegate callback generically for
+    /// whatever `Track.Kind` is published (verified against
+    /// client-sdk-swift 2.13.0's `LocalParticipant._publish`, which sets
+    /// `encryption: room.e2eeManager?.frameEncryptionType` on EVERY track
+    /// add-request regardless of audio/video, and `E2EEManager.
+    /// addRtpSender`, gated only on `publication.encryptionType != .none`)
+    /// — so no separate key-application call is needed here, unlike
+    /// `applyKey` above which feeds the actual SK_0 material.
+    ///
+    /// W-GRPVIDEO-PERM: turning video ON checks camera authorization first
+    /// and THROWS `CameraPermissionError.denied` if not granted — unlike
+    /// `connect()`, a toggle-on failure has a clean, existing revert path
+    /// (`GroupCallController.setVideoEnabled` returns false ->
+    /// `GroupCallViewModel.toggleVideo()` flips its optimistic UI back),
+    /// so throwing here (rather than silently no-op'ing) is the correct,
+    /// already-wired way to surface the denial.
+    public func setCameraEnabled(_ enabled: Bool) async throws {
+        guard let room = room else { return }
+        if enabled {
+            guard await ensureCameraAuthorized() else { throw CameraPermissionError.denied }
+        }
+        _ = try await room.localParticipant.setCamera(enabled: enabled)
+        onLocalVideoTrack?(enabled ? room.localParticipant.firstCameraVideoTrack : nil)
     }
 
     /// Apply a media-key update. `graceMs` (only ever set for our own key
@@ -193,6 +275,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
 
     public var onRemoteAudioTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
     public var onRemoteVideoTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
+    public var onLocalVideoTrack: ((_ track: AnyObject?) -> Void)?
     public var onParticipant: ((_ identity: String, _ present: Bool) -> Void)?
     public var onError: ((Error) -> Void)?
 
@@ -203,6 +286,10 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     }
 
     public func applyKey(_ key: GroupMediaKey) { /* no-op */ }
+
+    public func setCameraEnabled(_ enabled: Bool) async throws {
+        throw LiveKitUnavailableError.notAvailable
+    }
 
     public func disconnect() async { /* no-op */ }
 }

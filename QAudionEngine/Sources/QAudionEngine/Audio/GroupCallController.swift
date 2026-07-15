@@ -79,6 +79,13 @@ public final class GroupCallController: @unchecked Sendable {
     private var usingSfu = true
     private var sfuRoom: LiveKitGroupCallRoom?
     private static let livekitKeyringSize: UInt32 = 16
+    /// W-GRPVIDEO: true when THIS call was created/joined as a video call
+    /// (the creator's `callType` on `createCall`, or the invite's
+    /// `call_type` threaded into `join`). Read by `handleSfuToken` to decide
+    /// whether the LiveKit room publishes a camera track from the start —
+    /// independent of `usingSfu`/`groupState`, set alongside them in
+    /// `bootstrapGroupSession` and reset in `teardown`.
+    private var wantsVideo = false
 
     /// A remote participant's SFU audio/video track was subscribed
     /// (type-erased `RemoteAudioTrack`/`RemoteVideoTrack` — see
@@ -87,10 +94,22 @@ public final class GroupCallController: @unchecked Sendable {
     /// actually running over the SFU.
     public var onRemoteAudioTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
     public var onRemoteVideoTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
+    /// W-GRPVIDEO: fires with OUR OWN camera track (type-erased, nil ==
+    /// camera off) — see `LiveKitGroupCallRoom.onLocalVideoTrack`.
+    public var onLocalVideoTrack: ((_ track: AnyObject?) -> Void)?
     /// SFU-specific participant presence (independent of `onParticipantsChanged`,
     /// which reflects the WS roster regardless of media transport).
     public var onSfuParticipant: ((_ identity: String, _ present: Bool) -> Void)?
     public var onSfuError: ((Error) -> Void)?
+
+    /// W-GRPVIDEO: whether the call is actually riding the LiveKit SFU right
+    /// now. The WS-relay mesh fallback path has no video pipeline, so the UI
+    /// gates the camera toggle on this.
+    public var isUsingSfu: Bool { lock.lock(); defer { lock.unlock() }; return usingSfu }
+    /// W-GRPVIDEO: whether THIS call was created/joined as a video call —
+    /// read by the UI once on the `.active` transition to seed its own
+    /// camera-on/off toggle state.
+    public var callWantsVideo: Bool { lock.lock(); defer { lock.unlock() }; return wantsVideo }
 
     // ─── Control-envelope transport ───────────────────────────────────
     // Deliberately NOT owned here. An earlier version of this file kept its
@@ -161,13 +180,17 @@ public final class GroupCallController: @unchecked Sendable {
         ) else {
             return nil
         }
-        bootstrapGroupSession(callId: callId, initialPeers: invitees)
+        bootstrapGroupSession(callId: callId, initialPeers: invitees, video: callType == "video")
         setState(.connecting(callId: callId))
         return callId
     }
 
-    public func join(callId: String) {
-        bootstrapGroupSession(callId: callId, initialPeers: [])
+    /// - Parameter video: whether the incoming invite this joins was a
+    ///   video call (`IncomingGroupCallInvite.hasVideo`) — determines
+    ///   whether the LiveKit room publishes our camera from the start once
+    ///   the SFU token round-trip resolves (`handleSfuToken`).
+    public func join(callId: String, video: Bool = false) {
+        bootstrapGroupSession(callId: callId, initialPeers: [], video: video)
         manager.joinGroupCall(callId: callId)
         setState(.connecting(callId: callId))
     }
@@ -397,12 +420,14 @@ public final class GroupCallController: @unchecked Sendable {
     private func handleSfuToken(callId: String, url: String, token: String) {
         lock.lock()
         let stillCurrent = (callId == activeCallId) && usingSfu && sfuRoom == nil
+        let video = wantsVideo
         lock.unlock()
         guard stillCurrent else { return }
 
-        let room = LiveKitGroupCallRoom(video: false)
+        let room = LiveKitGroupCallRoom(video: video)
         room.onRemoteAudioTrack = { [weak self] id, track in self?.onRemoteAudioTrack?(id, track) }
         room.onRemoteVideoTrack = { [weak self] id, track in self?.onRemoteVideoTrack?(id, track) }
+        room.onLocalVideoTrack = { [weak self] track in self?.onLocalVideoTrack?(track) }
         room.onParticipant = { [weak self] id, present in self?.onSfuParticipant?(id, present) }
         room.onError = { [weak self] err in self?.onSfuError?(err) }
 
@@ -439,6 +464,27 @@ public final class GroupCallController: @unchecked Sendable {
         print("[GroupCallController] SFU unavailable (\(reason)) — using WS-relay mesh")
         do { try startAudioPipeline() }
         catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
+    }
+
+    /// W-GRPVIDEO: mid-call camera on/off. No-op unless the call is
+    /// actually riding the LiveKit SFU (`isUsingSfu`) — the WS-relay mesh
+    /// fallback path has no video pipeline. Publishing a NEW video track
+    /// here goes through `LiveKitGroupCallRoom.setCameraEnabled`, which
+    /// rides the SAME room-level E2EE already covering the mic track — see
+    /// that method's kdoc for the SDK-source verification.
+    @discardableResult
+    public func setVideoEnabled(_ enabled: Bool) async -> Bool {
+        lock.lock()
+        let room = sfuRoom
+        lock.unlock()
+        guard let room = room else { return false }
+        do {
+            try await room.setCameraEnabled(enabled)
+            return true
+        } catch {
+            print("[GroupCallController] setVideoEnabled(\(enabled)) failed: \(error)")
+            return false
+        }
     }
 
     /// Push our own key (a fresh COPY of the current send-chain SK_0) into
@@ -613,7 +659,7 @@ public final class GroupCallController: @unchecked Sendable {
     /// secret — never derivable by the server. `groupIdBytes` is the
     /// callId's raw UTF-8 bytes, matching Android/Desktop's convention for
     /// CALLS specifically (ephemeral, not bound to any chat-group identity).
-    private func bootstrapGroupSession(callId: String, initialPeers: [String]) {
+    private func bootstrapGroupSession(callId: String, initialPeers: [String], video: Bool = false) {
         let selfId = manager.selfUserId
         let members = (initialPeers + [selfId]).reduce(into: [String]()) { acc, id in
             if !acc.contains(id) { acc.append(id) }
@@ -632,6 +678,7 @@ public final class GroupCallController: @unchecked Sendable {
         lock.lock()
         activeCallId = callId
         groupState = newState
+        wantsVideo = video
         lock.unlock()
     }
 
@@ -692,6 +739,7 @@ public final class GroupCallController: @unchecked Sendable {
         groupState = nil
         activeCallId = nil
         initSentTo.removeAll()
+        wantsVideo = false
         let room = sfuRoom
         sfuRoom = nil
         usingSfu = true // reset the capability flag for the NEXT call

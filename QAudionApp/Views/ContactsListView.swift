@@ -245,9 +245,11 @@ struct ContactsListView: View {
         .sheet(isPresented: $showingGroupCallPicker) {
             GroupCallContactPickerSheet(
                 contacts: container.viewModel.items,
-                onStart: { selectedIds in
+                onStart: { selectedIds, video in
                     showingGroupCallPicker = false
-                    appState.groupCallController?.createCall(invitees: selectedIds)
+                    appState.groupCallController?.createCall(
+                        invitees: selectedIds,
+                        callType: video ? "video" : "audio")
                 }
             )
         }

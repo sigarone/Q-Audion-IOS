@@ -513,6 +513,11 @@ final class AppState: ObservableObject {
     /// GroupCallController, so `join(callId:)` had nowhere to go. Consumed the
     /// moment the controller exists (mirrors `pendingNotificationAnswer`).
     var pendingGroupCallJoinId: String?
+    /// W-GRPVIDEO: the latched invite's `hasVideo`, set alongside
+    /// `pendingGroupCallJoinId` — without this the cold-start join would
+    /// always fall back to `join(callId:)`'s `video: false` default even
+    /// when the invite was a video call.
+    var pendingGroupCallJoinVideo: Bool = false
     /// W391: live video pipeline for the active 1:1 video call.
     /// Created in startCall(video:true), stopped in endCall. Held by
     /// AppState (not by the View) so SwiftUI re-creation doesn't tear
@@ -2358,8 +2363,10 @@ final class AppState: ObservableObject {
             // actually reach a live WS. Mirrors `pendingNotificationAnswer`.
             if let pendingJoin = self.pendingGroupCallJoinId {
                 self.pendingGroupCallJoinId = nil
+                let pendingVideo = self.pendingGroupCallJoinVideo
+                self.pendingGroupCallJoinVideo = false
                 print("[AppState] W-GRPRING consuming latched group-call join \(pendingJoin.prefix(8))…")
-                groupController.join(callId: pendingJoin)
+                groupController.join(callId: pendingJoin, video: pendingVideo)
             }
         }
         // W530: register the audio_frame RX handler EAGERLY at login.
@@ -11012,6 +11019,7 @@ extension AppState {
             // Cold start: the WS (and the controller) do not exist yet — the
             // push woke us. Latch; `connectPersistentSocket()` consumes it.
             pendingGroupCallJoinId = invite.callId
+            pendingGroupCallJoinVideo = invite.hasVideo
             print("[AppState] W-GRPRING accept latched (no controller yet) call=\(invite.callId.prefix(8))…")
             return
         }
@@ -11026,7 +11034,7 @@ extension AppState {
         groupCallControllerState = .connecting(callId: invite.callId)
         // The SAME join path as before: single source of truth for the WS
         // `group_call_join` AND the GroupSession crypto bootstrap.
-        controller.join(callId: invite.callId)
+        controller.join(callId: invite.callId, video: invite.hasVideo)
     }
 
     /// Reject the incoming group call. There is deliberately NO wire message:

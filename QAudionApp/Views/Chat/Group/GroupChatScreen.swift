@@ -256,9 +256,11 @@ struct GroupChatScreen: View {
             // Audit gap: there was no way to call the group you are in (the
             // only entry point was the contacts multi-select picker, which has
             // no group context). Mirrors Android's group-chat top-bar call
-            // button (commit 5f87bc67): audio-only for now, invitees = the
-            // group roster minus self.
-            Button(action: handleStartGroupCall) {
+            // button (commit 5f87bc67), now split audio/video (W-GRPVIDEO) —
+            // same two-button pattern as the 1:1 ChatDetailScreen's
+            // startAudioCall/startVideoCall pair. Invitees = the group
+            // roster minus self.
+            Button(action: { handleStartGroupCall(video: false) }) {
                 Image(systemName: "phone.fill")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(canStartGroupCall ? scheme.primary : scheme.onSurfaceVariant)
@@ -266,7 +268,17 @@ struct GroupChatScreen: View {
             }
             .buttonStyle(.plain)
             .disabled(!canStartGroupCall)
-            .accessibilityLabel("Chiama il gruppo")
+            .accessibilityLabel("Chiama il gruppo (audio)")
+
+            Button(action: { handleStartGroupCall(video: true) }) {
+                Image(systemName: "video.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(canStartGroupCall ? scheme.primary : scheme.onSurfaceVariant)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canStartGroupCall)
+            .accessibilityLabel("Videochiama il gruppo")
         }
         .padding(.horizontal, 8)
         .frame(height: 56)
@@ -491,7 +503,12 @@ struct GroupChatScreen: View {
     /// context on the `group_call_create` envelope — the server relays those
     /// verbatim to every invitee's `group_call_invite` AND to the wake-up push,
     /// which is what lets the callee render a correct incoming-group-call ring.
-    private func handleStartGroupCall() {
+    ///
+    /// W-GRPVIDEO: `video` threads all the way to `GroupCallController.
+    /// createCall(callType:)` -> `LiveKitGroupCallRoom(video:)`, so a video
+    /// group call actually publishes the camera once the SFU token resolves
+    /// (this was audio-only, unconditionally, until this change).
+    private func handleStartGroupCall(video: Bool) {
         let invitees = groupCallInvitees
         guard !invitees.isEmpty else {
             snackbar?.show(.init(text: "Nessun altro membro nel gruppo", severity: .info))
@@ -501,7 +518,7 @@ struct GroupChatScreen: View {
         let created = appState.groupCallController?.createCall(
             invitees: invitees,
             title: name,
-            callType: "audio",              // video group call: follow-up (parity with Android)
+            callType: video ? "video" : "audio",
             groupId: groupId.uuidString.lowercased(),  // dashed UUID == server wire id
             groupName: name)
         if created == nil {
