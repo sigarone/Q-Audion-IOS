@@ -376,11 +376,27 @@ struct ChatListScreen: View {
                 name: e.name,
                 memberCount: e.members.count,
                 epoch: Int(e.epoch),
-                preview: (last?.text.isEmpty == false) ? last?.text : nil,
+                preview: Self.groupPreviewText(for: last),
                 lastActivity: last?.ts ?? e.joinedAt,
                 unread: GroupMessageStore.shared.unreadCount(forGroupHex: e.id))
         }
         .sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    /// Fase 1B — chat-list row preview text for a group's newest message.
+    /// A caption (or plain-text body) wins; an un-captioned attachment row
+    /// (whose `text` is empty) falls back to a localized "[Foto]" / "[File]"
+    /// placeholder so a media message never renders as a blank preview —
+    /// mirroring the 1:1 list, which shows "📷 Foto" / "📎 Allegato" for the
+    /// same case. Returns nil only for a group with no messages, so the row
+    /// shows its member-count/epoch subtitle instead.
+    private static func groupPreviewText(for last: GroupMessageStore.Stored?) -> String? {
+        guard let last = last else { return nil }
+        if !last.text.isEmpty { return last.text }
+        if let kind = last.attachmentKind {
+            return kind == GroupAttachmentEnvelope.kindImage ? "[Foto]" : "[File]"
+        }
+        return nil
     }
 
     /// Reconstruct a dashed UUID from the 32-char dash-stripped hex the

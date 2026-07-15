@@ -61,11 +61,27 @@ public struct GroupMessageRowUi: Identifiable, Equatable {
     public let senderLabel: String   // displayName breve, "Tu" se mine
     public let timestamp: String      // pre-formattato HH:mm
     public let mine: Bool
+    // Fase 1B — attachment rendering. `attachmentKind` nil ⇒ plain text
+    // row (unchanged behaviour). "image" ⇒ ImageBubbleContent, "file" ⇒
+    // FileBubbleContent; `text` then carries the optional caption.
+    public let attachmentKind: String?
+    public let mediaMime: String?
+    public let mediaLocalPath: String?
+    public let fileName: String?
+    public let byteLength: Int64?
 
     public init(id: String, text: String, senderLabel: String,
-                timestamp: String, mine: Bool) {
+                timestamp: String, mine: Bool,
+                attachmentKind: String? = nil, mediaMime: String? = nil,
+                mediaLocalPath: String? = nil, fileName: String? = nil,
+                byteLength: Int64? = nil) {
         self.id = id; self.text = text; self.senderLabel = senderLabel
         self.timestamp = timestamp; self.mine = mine
+        self.attachmentKind = attachmentKind
+        self.mediaMime = mediaMime
+        self.mediaLocalPath = mediaLocalPath
+        self.fileName = fileName
+        self.byteLength = byteLength
     }
 }
 

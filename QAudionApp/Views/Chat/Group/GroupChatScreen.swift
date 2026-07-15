@@ -1,6 +1,8 @@
 import SwiftUI
 import UIKit
 import Combine
+import PhotosUI                    // Fase 1B: group attachment picker
+import UniformTypeIdentifiers      // Fase 1B: file mime resolution
 import QAudionEngine   // W-GRPRING: GroupCallController (group-call entry point)
 
 /// Group chat detail. 1:1 port di Android
@@ -29,6 +31,13 @@ struct GroupChatScreen: View {
     let groupId: UUID
     @State private var state: GroupChatUiState
     @State private var showingInfo = false
+    // Fase 1B — attachment composer. `showingAttachChoice` gates the
+    // photo-vs-file confirmation dialog; the two pickers below drive the
+    // GroupAttachmentSender send path.
+    @State private var showingAttachChoice = false
+    @State private var showingPhotoPicker = false
+    @State private var photoPickerItems: [PhotosPickerItem] = []
+    @State private var showingFileImporter = false
 
     init(groupId: UUID, initial: GroupChatUiState) {
         self.groupId = groupId
@@ -55,9 +64,42 @@ struct GroupChatScreen: View {
         .onAppear {
             appState.activeGroupHex = groupHex
             reloadMessagesFromStore()
+            // Fase 1B — re-kick the download for any inbound attachment row
+            // whose descriptor is retained but whose blob never landed (a
+            // prior download failed or the app was killed mid-download).
+            // Mirrors the 1:1 path's re-attempt of un-downloaded media on open.
+            appState.retryPendingGroupAttachmentDownloads(groupHex: groupHex)
         }
         .onDisappear {
             if appState.activeGroupHex == groupHex { appState.activeGroupHex = nil }
+        }
+        // Fase 1B — attachment pickers (parity with the 1:1 composer).
+        .confirmationDialog("Aggiungi allegato",
+                            isPresented: $showingAttachChoice,
+                            titleVisibility: .visible) {
+            Button {
+                showingPhotoPicker = true
+            } label: {
+                Label("Galleria", systemImage: "photo.on.rectangle")
+            }
+            Button {
+                showingFileImporter = true
+            } label: {
+                Label("File", systemImage: "doc")
+            }
+            Button("Annulla", role: .cancel) { }
+        }
+        .photosPicker(isPresented: $showingPhotoPicker,
+                      selection: $photoPickerItems,
+                      maxSelectionCount: 10,
+                      matching: .images)
+        .onChange(of: photoPickerItems) { newItems in
+            handlePickedPhotos(newItems)
+        }
+        .fileImporter(isPresented: $showingFileImporter,
+                      allowedContentTypes: [.item],
+                      allowsMultipleSelection: false) { result in
+            handlePickedFile(result)
         }
         .onReceive(NotificationCenter.default.publisher(
             for: GroupMessageStore.didChangeNotification)) { note in
@@ -224,6 +266,17 @@ struct GroupChatScreen: View {
 
     private var composer: some View {
         HStack(spacing: 10) {
+            // Fase 1B — attach button (parity with the 1:1 composer
+            // paperclip). Opens the photo/file choice dialog.
+            Button(action: { showingAttachChoice = true }) {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Aggiungi allegato")
+
             TextField("",
                       text: composerBinding,
                       prompt: Text("Messaggio cifrato…")
@@ -346,7 +399,13 @@ struct GroupChatScreen: View {
                 // the 1:1 inbound path, AppState.persistIncomingPeerMessage).
                 senderLabel: m.mine ? "Tu" : resolveMemberName(m.senderId),
                 timestamp: f.string(from: m.ts),
-                mine: m.mine)
+                mine: m.mine,
+                // Fase 1B — attachment fields (nil for a plain text row).
+                attachmentKind: m.attachmentKind,
+                mediaMime: m.mediaMime,
+                mediaLocalPath: m.mediaLocalPath,
+                fileName: m.fileName,
+                byteLength: m.byteLength)
         }
         // Viewing the group == reading it: clear the unread badge shown in
         // the chat list (mirrors ChatContainer.markRead for 1:1).
@@ -461,6 +520,128 @@ struct GroupChatScreen: View {
         )
     }
 
+    // MARK: - Fase 1B: attachment send
+
+    /// Load each picked photo as JPEG bytes and ship it as a group image
+    /// attachment. Multi-select fans out one frame per image (mirrors the
+    /// 1:1 composer). The picker selection is cleared so re-picking the
+    /// same asset fires `onChange` again.
+    private func handlePickedPhotos(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        photoPickerItems = []
+        for item in items {
+            Task { @MainActor in
+                guard let raw = try? await item.loadTransferable(type: Data.self),
+                      let img = UIImage(data: raw),
+                      let jpeg = img.jpegData(compressionQuality: 0.85) else {
+                    snackbar?.show(.init(text: "Immagine non leggibile", severity: .warning))
+                    return
+                }
+                await sendAttachmentOverWire(
+                    data: jpeg, mime: "image/jpeg", kind: GroupAttachmentEnvelope.kindImage,
+                    filename: "IMG-\(Int(Date().timeIntervalSince1970)).jpg",
+                    width: Int(img.size.width), height: Int(img.size.height))
+            }
+        }
+    }
+
+    /// Read the picked file (security-scoped) and ship it as a group file
+    /// attachment with its resolved mime.
+    private func handlePickedFile(_ result: Result<[URL], Swift.Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+        Task { @MainActor in
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else {
+                snackbar?.show(.init(text: "File non leggibile", severity: .warning))
+                return
+            }
+            let ext = url.pathExtension
+            let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
+            await sendAttachmentOverWire(
+                data: data, mime: mime, kind: GroupAttachmentEnvelope.kindFile,
+                filename: url.lastPathComponent, width: nil, height: nil)
+        }
+    }
+
+    /// Encrypt+upload the blob, mint per-member capability tokens, seal the
+    /// descriptor into the 0xE4 group payload, and ship ONE `group_msg_send`
+    /// frame with `msg_type == 1`. The sender_key_init distribution runs
+    /// first, exactly like the text path.
+    @MainActor
+    private func sendAttachmentOverWire(
+        data: Data, mime: String, kind: String, filename: String,
+        width: Int?, height: Int?, caption: String? = nil
+    ) async {
+        let memberRows = makeInfoState().members
+        let memberIds = memberRows.map { $0.userId }
+        let selfId = memberRows.first(where: { $0.isSelf })?.userId
+            ?? (AppState.currentUserIdSnapshot ?? "u-self")
+
+        let prepared: GroupAttachmentSender.Prepared
+        do {
+            prepared = try await GroupAttachmentSender(appState: appState).prepare(
+                data: data, mime: mime, kind: kind, filename: filename,
+                caption: caption, width: width, height: height,
+                members: memberIds, selfId: selfId)
+        } catch {
+            snackbar?.show(.init(text: "Allegato non inviato — \(error.localizedDescription)",
+                                 severity: .error, durationSeconds: 5))
+            return
+        }
+
+        // Optimistic PERSISTENT row (the sender already has the plaintext on
+        // disk, so the bubble renders immediately). Keyed by clientMsgId so
+        // the server self-echo binds instead of duplicating.
+        let clientMsgId = UUID().uuidString
+        GroupMessageStore.shared.append(
+            groupHex: groupHex,
+            GroupMessageStore.Stored(
+                id: clientMsgId,
+                serverMessageId: nil,
+                senderId: selfId,
+                mine: true,
+                text: prepared.caption ?? "",
+                ts: Date(),
+                attachmentKind: prepared.kind,
+                mediaMime: prepared.mime,
+                fileName: prepared.filename,
+                byteLength: prepared.byteLength,
+                mediaLocalPath: prepared.localPath,
+                descriptorJson: prepared.descriptorJson))
+
+        // sender_key_init distribution first (recv chains before ciphertext).
+        let pendingInits = GroupChatService.shared.pendingInitsAfterBootstrap(
+            groupId: groupHex, members: memberIds, selfId: selfId)
+        for init_ in pendingInits {
+            NotificationCenter.default.post(
+                name: AppState.groupSenderKeyCtlNotification,
+                object: nil,
+                userInfo: ["recipient": init_.recipientId,
+                           "envelopeJson": init_.envelopeJson])
+        }
+
+        // Seal the descriptor JSON into the 0xE4 group wire and ship it with
+        // msg_type == 1.
+        guard let sealed = GroupChatService.shared.encryptForWire(
+            plaintext: prepared.descriptorJson,
+            groupId: groupHex, members: memberIds, selfId: selfId
+        ) else {
+            print("[GroupChatScreen] attachment encrypt failed for group \(groupHex)")
+            return
+        }
+        NotificationCenter.default.post(
+            name: AppState.groupMsgSendNotification,
+            object: nil,
+            userInfo: [
+                "groupId": groupId.uuidString.lowercased(),
+                "wire": sealed.wire,
+                "clientMsgId": clientMsgId,
+                "groupEpoch": Int(sealed.groupEpoch),
+                "msgType": GroupAttachmentEnvelope.msgTypeAttachment,
+            ])
+    }
+
     /// Fase 1A — is the local user an admin of THIS group? Drives the
     /// add/remove affordances in GroupInfoScreen.
     private var selfIsAdmin: Bool {
@@ -545,9 +726,7 @@ private struct GroupMessageBubble: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(message.text)
-                        .qaudionStyle(type.bodyMedium)
-                        .foregroundStyle(scheme.onSurface)
+                    messageBody
                     Text(message.timestamp)
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
@@ -564,6 +743,38 @@ private struct GroupMessageBubble: View {
         }
         .frame(maxWidth: .infinity,
                alignment: message.mine ? .trailing : .leading)
+    }
+
+    /// Fase 1B — bubble body: an image/file attachment (reusing the exact
+    /// 1:1 ``ImageBubbleContent`` / ``FileBubbleContent`` views) with an
+    /// optional caption, or plain text when this row is not an attachment.
+    @ViewBuilder
+    private var messageBody: some View {
+        switch message.attachmentKind {
+        case GroupAttachmentEnvelope.kindImage?:
+            ImageBubbleContent(
+                messageId: UUID(uuidString: message.id) ?? UUID(),
+                mediaLocalPath: message.mediaLocalPath)
+            if !message.text.isEmpty {
+                Text(message.text)
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(scheme.onSurface)
+            }
+        case GroupAttachmentEnvelope.kindFile?:
+            FileBubbleContent(
+                messageId: UUID(uuidString: message.id) ?? UUID(),
+                mediaLocalPath: message.mediaLocalPath,
+                fileSizeBytes: message.byteLength)
+            if !message.text.isEmpty {
+                Text(message.text)
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(scheme.onSurface)
+            }
+        default:
+            Text(message.text)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+        }
     }
 
     @ViewBuilder

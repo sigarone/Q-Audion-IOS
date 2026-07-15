@@ -36,17 +36,43 @@ public final class GroupMessageStore: ObservableObject {
         public var serverMessageId: String?
         public let senderId: String
         public let mine: Bool
+        /// For an attachment row this holds the (optional) caption — an
+        /// empty string when the attachment has no caption. For a plain
+        /// text message it is the message body, exactly as before.
         public let text: String
         public let ts: Date
+        // Fase 1B — group attachment fields. All nil for a plain text row,
+        // so old persisted JSON (which lacks these keys) decodes unchanged
+        // via Swift's synthesized `decodeIfPresent` for optionals.
+        /// "image" | "file" when this row is an attachment; nil = text.
+        public let attachmentKind: String?
+        public let mediaMime: String?
+        public let fileName: String?
+        public let byteLength: Int64?
+        /// Decrypted local blob path once downloaded (sender stamps it up
+        /// front; receiver stamps it after the async download completes).
+        public var mediaLocalPath: String?
+        /// The raw 0xE4 descriptor JSON, retained so a failed download can
+        /// be retried without re-fetching the group frame.
+        public let descriptorJson: String?
 
         public init(id: String, serverMessageId: String?, senderId: String,
-                    mine: Bool, text: String, ts: Date) {
+                    mine: Bool, text: String, ts: Date,
+                    attachmentKind: String? = nil, mediaMime: String? = nil,
+                    fileName: String? = nil, byteLength: Int64? = nil,
+                    mediaLocalPath: String? = nil, descriptorJson: String? = nil) {
             self.id = id
             self.serverMessageId = serverMessageId
             self.senderId = senderId
             self.mine = mine
             self.text = text
             self.ts = ts
+            self.attachmentKind = attachmentKind
+            self.mediaMime = mediaMime
+            self.fileName = fileName
+            self.byteLength = byteLength
+            self.mediaLocalPath = mediaLocalPath
+            self.descriptorJson = descriptorJson
         }
     }
 
@@ -158,6 +184,19 @@ public final class GroupMessageStore: ObservableObject {
               let idx = arr.firstIndex(where: { $0.id == clientMsgId }),
               arr[idx].serverMessageId != serverMessageId else { return }
         arr[idx].serverMessageId = serverMessageId
+        byGroup[groupHex] = arr
+        persist()
+        postDidChange(groupHex)
+    }
+
+    /// Fase 1B — stamp the decrypted local blob path onto an attachment
+    /// row once the async download completes. Matched by `id` (clientMsgId)
+    /// first, then `serverMessageId`. No-op if unknown or already set.
+    public func setMediaPath(groupHex: String, id: String, path: String) {
+        guard var arr = byGroup[groupHex],
+              let idx = arr.firstIndex(where: { $0.id == id || $0.serverMessageId == id }),
+              arr[idx].mediaLocalPath != path else { return }
+        arr[idx].mediaLocalPath = path
         byGroup[groupHex] = arr
         persist()
         postDidChange(groupHex)

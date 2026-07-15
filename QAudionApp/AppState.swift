@@ -693,6 +693,13 @@ final class AppState: ObservableObject {
     /// Capped so a flood of undecryptable frames can't grow unbounded.
     private var bufferedGroupWires: [(data: [String: Any], live: Bool)] = []
     private static let maxBufferedGroupWires = 128
+    /// Fase 1B: rowIds (clientMsgId/serverMsgId) of inbound group-attachment
+    /// blobs whose download+decrypt is in flight. Shared by the initial
+    /// land path and the on-open retry so re-opening a group while a
+    /// download is still running never starts a duplicate concurrent GET
+    /// on the same blob. An entry is added before the Task starts and
+    /// removed in its `defer`.
+    private var groupAttachmentDownloadsInFlight: Set<String> = []
     /// W348: shared TURN credentials cache. Lazy-initialised the first
     /// time a WebRTC call needs ICE servers, then reused across calls
     /// (the RelayCredentialsProvider actor coalesces concurrent
@@ -4818,6 +4825,9 @@ final class AppState: ObservableObject {
         }
         let clientMsgId = data["client_msg_id"] as? String
         let serverTs = data["server_ts"] as? String
+        // Fase 1B — transport msg_type: 0 = raw-UTF-8 text (unchanged),
+        // 1 = a 0xE4-sealed attachment descriptor (GroupAttachmentEnvelope).
+        let msgType = data["msg_type"] as? Int ?? 0
         // dashed UUID (server wire) → hex (GroupChatService / registry key).
         let groupHex = groupIdUuid.replacingOccurrences(of: "-", with: "").lowercased()
         let selfId = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
@@ -4867,6 +4877,18 @@ final class AppState: ObservableObject {
         }
 
         let ts = Self.parseGroupServerTs(serverTs)
+
+        // Fase 1B — attachment frame: the decrypted 0xE4 plaintext is a
+        // GroupAttachmentEnvelope JSON, NOT text. Branch on the transport
+        // msg_type (never on speculative JSON-sniffing of a text body).
+        if msgType == GroupAttachmentEnvelope.msgTypeAttachment {
+            landIncomingGroupAttachment(
+                plaintext: plaintext, groupHex: groupHex, senderId: senderId,
+                selfId: selfId, serverMsgId: serverMsgId, clientMsgId: clientMsgId,
+                ts: ts, live: live)
+            return
+        }
+
         // Store posts didChangeNotification → an open GroupChatScreen
         // reloads live; persisted so it also shows on next open.
         let inserted = GroupMessageStore.shared.append(
@@ -4885,6 +4907,108 @@ final class AppState: ObservableObject {
             presentGroupMessageBanner(groupHex: groupHex, senderId: senderId, plaintext: plaintext)
         }
         if live { sendGroupDelivered(serverMsgId) }
+    }
+
+    /// Fase 1B — persist an inbound GROUP attachment row and kick off the
+    /// async download+decrypt (capability token from `dl[selfId]`), then
+    /// stamp the local blob path so the group bubble swaps its spinner for
+    /// the image/file. A malformed descriptor is dropped + ACK'd (rendering
+    /// it as text would be wrong); a download failure leaves the row in its
+    /// "downloading" state to be retried on the next open.
+    private func landIncomingGroupAttachment(
+        plaintext: String, groupHex: String, senderId: String, selfId: String,
+        serverMsgId: String, clientMsgId: String?, ts: Date, live: Bool
+    ) {
+        let envelope: GroupAttachmentEnvelope
+        do {
+            envelope = try GroupAttachmentEnvelope.parse(plaintext)
+        } catch {
+            print("[AppState] group attachment descriptor malformed msg=\(serverMsgId.prefix(8)): \(error)")
+            if live { sendGroupDelivered(serverMsgId) }
+            return
+        }
+        let att = envelope.attachment
+        let rowId = clientMsgId ?? serverMsgId
+        let inserted = GroupMessageStore.shared.append(
+            groupHex: groupHex,
+            GroupMessageStore.Stored(
+                id: rowId,
+                serverMessageId: serverMsgId,
+                senderId: senderId,
+                mine: false,
+                text: envelope.caption ?? "",
+                ts: ts,
+                attachmentKind: envelope.kind,
+                mediaMime: att.mime,
+                fileName: att.filename,
+                byteLength: att.byteLength,
+                mediaLocalPath: nil,
+                descriptorJson: plaintext))
+        if inserted {
+            let previewName = att.filename
+            presentGroupMessageBanner(
+                groupHex: groupHex, senderId: senderId,
+                plaintext: (envelope.caption?.isEmpty == false) ? envelope.caption! : previewName)
+            // Download + decrypt off the critical path; stamp the row when done.
+            // Register the row as in-flight so an on-open retry can't kick a
+            // duplicate concurrent download for the same blob.
+            groupAttachmentDownloadsInFlight.insert(rowId)
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                defer { self.groupAttachmentDownloadsInFlight.remove(rowId) }
+                let receiver = GroupAttachmentReceiver(appState: self)
+                do {
+                    let url = try await receiver.downloadAndDecrypt(
+                        envelope: envelope, senderId: senderId, selfId: selfId)
+                    GroupMessageStore.shared.setMediaPath(
+                        groupHex: groupHex, id: rowId, path: url.path)
+                } catch {
+                    print("[AppState] group attachment download failed msg=\(serverMsgId.prefix(8)): \(error)")
+                }
+            }
+        }
+        if live { sendGroupDelivered(serverMsgId) }
+    }
+
+    /// Fase 1B — on group-chat open, re-kick the download+decrypt for any
+    /// inbound attachment row whose descriptor was retained but whose blob
+    /// never landed (a prior download failed, or the app was killed before
+    /// it finished). `landIncomingGroupAttachment` persists `descriptorJson`
+    /// for exactly this retry, but nothing else re-triggers it — so without
+    /// this an attachment received while the download failed stays a
+    /// permanent spinner. Mirrors the 1:1 path's re-attempt of an
+    /// un-downloaded attachment on chat open.
+    ///
+    /// Idempotent: rows already downloaded (`mediaLocalPath != nil`) and our
+    /// own outbound rows are skipped, a malformed/unparseable descriptor is
+    /// skipped, and the shared `groupAttachmentDownloadsInFlight` guard
+    /// prevents a duplicate concurrent fetch for the same row across the
+    /// initial land and repeated opens.
+    func retryPendingGroupAttachmentDownloads(groupHex: String) {
+        let selfId = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
+        guard !selfId.isEmpty else { return }
+        for row in GroupMessageStore.shared.messages(forGroupHex: groupHex)
+        where row.mediaLocalPath == nil && !row.mine {
+            guard let json = row.descriptorJson,
+                  let envelope = try? GroupAttachmentEnvelope.parse(json) else { continue }
+            let rowId = row.id
+            let senderId = row.senderId
+            if groupAttachmentDownloadsInFlight.contains(rowId) { continue }
+            groupAttachmentDownloadsInFlight.insert(rowId)
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                defer { self.groupAttachmentDownloadsInFlight.remove(rowId) }
+                let receiver = GroupAttachmentReceiver(appState: self)
+                do {
+                    let url = try await receiver.downloadAndDecrypt(
+                        envelope: envelope, senderId: senderId, selfId: selfId)
+                    GroupMessageStore.shared.setMediaPath(
+                        groupHex: groupHex, id: rowId, path: url.path)
+                } catch {
+                    print("[AppState] group attachment retry failed row=\(rowId.prefix(8)): \(error)")
+                }
+            }
+        }
     }
 
     /// Fase 1B — post a local notification for an inbound GROUP message,
@@ -9223,6 +9347,9 @@ extension AppState {
                   let groupEpoch = note.userInfo?["groupEpoch"] as? Int else {
                 return
             }
+            // Fase 1B — msg_type distinguishes text (0) from an attachment
+            // descriptor (1). Absent ⇒ 0, so the text path is unchanged.
+            let msgType = note.userInfo?["msgType"] as? Int ?? 0
             // `liveProvider` is main-actor-isolated; resolve it inside a
             // `@MainActor` Task so Swift 6 strict concurrency doesn't
             // complain about cross-actor capture in the (main-queue)
@@ -9234,11 +9361,11 @@ extension AppState {
                 }
                 // Byte-exact mirror of Android WsCommand.GroupMsgSend:
                 // standard base64 (no wrap) of the raw 0xE4 wire, int
-                // msg_type=0 (TYPE_TEXT), dashed-UUID group_id.
+                // msg_type (0=TYPE_TEXT, 1=attachment), dashed-UUID group_id.
                 ws.send(type: "group_msg_send", data: [
                     "group_id": groupId,
                     "encrypted_payload": wire.base64EncodedString(),
-                    "msg_type": 0,
+                    "msg_type": msgType,
                     "client_msg_id": clientMsgId,
                     "group_epoch": groupEpoch,
                 ])

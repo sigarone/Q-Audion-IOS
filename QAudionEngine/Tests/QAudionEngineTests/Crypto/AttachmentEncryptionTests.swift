@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 @testable import QAudionEngine
 
 final class AttachmentEncryptionTests: XCTestCase {
@@ -125,5 +126,60 @@ final class AttachmentEncryptionTests: XCTestCase {
             meta: meta,
             expectedSha256Plain: enc.sha256Plain)
         XCTAssertEqual(dec, pt)
+    }
+
+    /// Shared cross-platform Known-Answer-Test vector — byte-identical with
+    /// Android `AttachmentEncryptionKatTest.kt` and the Desktop reference
+    /// `AttachmentEncryption.spec.ts`. This is the DURABLE proof that iOS
+    /// seals/opens group + 1:1 attachment blobs byte-for-byte the same as the
+    /// other two platforms (same HKDF-SHA256 labels, same canonical-CBOR AAD,
+    /// same XChaCha20-Poly1305 construction, same ct||tag wire layout).
+    ///
+    /// The vector was independently recomputed from the WIRE_SPEC §5.1.3
+    /// construction. If either assertion fails, one platform drifted — fix
+    /// the drifted side, do NOT edit this vector on one platform only.
+    func testCrossPlatformKAT() throws {
+        let chainKey = Data(repeating: 0xAA, count: 32)
+        let attId = Data(repeating: 0x11, count: 16)
+        let sender = Data(repeating: 0xA1, count: 16)
+        let plaintext = Data("voice note bytes go here".utf8)
+        let meta = try AttachmentEncryption.Meta(
+            attachmentId: attId, senderUuid: sender, mime: "audio/opus",
+            byteLength: plaintext.count)
+
+        let expectedCt =
+            "36c9e852ab519ceedea88a24349219f277315a8f68a40ef3c01ae20fc6ac101d1485e26ffe0d3fb3"
+        let expectedSha =
+            "5141ddddddcd70cbb76bf1d3bc1ff76a8c6717b2bcfd16e95b11baa9dbb2815c"
+
+        // Encrypt → must reproduce the frozen ciphertext + sha bit-for-bit.
+        let enc = try AttachmentEncryption.encryptAttachment(
+            messageChainKey: chainKey, plaintext: plaintext, meta: meta)
+        XCTAssertEqual(Self.hex(enc.ciphertext), expectedCt,
+                       "iOS ciphertext drifted from the shared cross-platform KAT")
+        XCTAssertEqual(Self.hex(enc.sha256Plain), expectedSha)
+
+        // Decrypt the Android/Desktop-emitted frozen ciphertext with the iOS impl.
+        let recovered = try AttachmentEncryption.decryptAttachment(
+            messageChainKey: chainKey,
+            ciphertext: Self.unhex(expectedCt),
+            meta: meta,
+            expectedSha256Plain: Self.unhex(expectedSha))
+        XCTAssertEqual(recovered, plaintext)
+    }
+
+    private static func hex(_ d: Data) -> String {
+        d.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func unhex(_ s: String) -> Data {
+        var out = Data(capacity: s.count / 2)
+        var idx = s.startIndex
+        while idx < s.endIndex {
+            let next = s.index(idx, offsetBy: 2)
+            out.append(UInt8(s[idx..<next], radix: 16)!)
+            idx = next
+        }
+        return out
     }
 }
