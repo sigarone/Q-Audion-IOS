@@ -115,6 +115,21 @@ let package = Package(
         // safety analysis above still applies unchanged (package/symbol
         // relocation is baked into the xcframework itself, independent of
         // which URL serves it).
+        //
+        // Build-history note (2026-07-15/16): the FIRST xcframework this fork
+        // pointed at was built from webrtc_ref=m144_release (a rolling
+        // branch), whose tip had drifted ~2.5 months past
+        // livekit/webrtc-xcframework's real 144.7559.03 cut and broke THIS
+        // package's own compile (LKRTCAudioDeviceModule missing
+        // isVoiceProcessingEnabled — client-sdk-swift's AudioManager.swift
+        // calls it directly). Fixed at the source: sigarone/webrtc-aes256-build's
+        // build-livekit-ios.yml now pins an exact commit (via a tag on a
+        // sigarone/webrtc fork, since GitHub won't shallow-fetch an
+        // arbitrary SHA) and the xcframework was rebuilt+republished under
+        // the SAME release asset URL. No change needed here — this comment
+        // exists only to force a fresh SPM resolution in CI so the new
+        // checksum gets picked up (Package.resolved caching could otherwise
+        // mask a stale binary).
         .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.13.0-aes256-livekit"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
