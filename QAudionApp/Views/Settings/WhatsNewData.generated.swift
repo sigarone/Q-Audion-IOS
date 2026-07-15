@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.787",
+              date: "2026-07-15",
+              title: "v1.0.787",
+              bullets: [
+                "feat(groups): group typing indicator + delivery/read receipts",
+              ]),
         .init(id: "v1.0.786",
               date: "2026-07-15",
               title: "v1.0.786",
               bullets: [
+                "chore: regenerate changelog for v1.0.786",
                 "feat(groups): group avatar render (chat-list + call ring) + metadata GET-recovery",
               ]),
         .init(id: "v1.0.785",
@@ -150,13 +157,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.768",
                 "feat(audio): gentle software make-up AGC for the quiet iOS mic",
                 "fix(audio): rebuild capture engine on in-call speaker toggle (mic died)",
-              ]),
-        .init(id: "v1.0.767",
-              date: "2026-07-12",
-              title: "v1.0.767",
-              bullets: [
-                "chore: regenerate changelog for v1.0.767",
-                "fix(telemetry): stop counting expected pre-handshake mic frames as tx_enc_err",
               ]),
     ]
 }
