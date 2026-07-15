@@ -128,6 +128,39 @@ final class GroupMembershipApi {
         return GroupMembershipApi(serverUrl: serverUrl, accessToken: token)
     }
 
+    /// POST /api/v1/groups — register the group server-side (Fase 1A).
+    ///
+    /// Body is byte-identical to the Android/Desktop `createGroupRequest`
+    /// (`bcrypto-server/cmd/bcrypto-lite/groups.go` — `{group_id, members,
+    /// admins}`); the server assigns `group_epoch = 1` and requires the
+    /// caller to be present in BOTH `members` and `admins`. Reply is
+    /// `groupResponse {group_id, created_at, group_epoch, members, admins}`
+    /// — the same `group_epoch`/`members`/`admins` fields `fire` parses.
+    ///
+    /// Idempotent by contract of the CALLER: an already-existing group
+    /// (Android/Desktop created it first, iOS re-creates) surfaces as a
+    /// non-2xx `GroupMembershipResult` (the caller keeps its local crypto
+    /// state and does not hard-fail). `groupIdWire` is the DASHED-UUID wire
+    /// form the server + Android key on (`AppState.hexToDashedUUID`).
+    func createGroup(
+        groupIdWire: String,
+        members: [String],
+        admins: [String]
+    ) async -> GroupMembershipResult? {
+        guard let url = endpoint("/api/v1/groups") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        addAuth(&req)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "group_id": groupIdWire,
+            "members": members,
+            "admins": admins,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return await fire(req, label: "groups.create[\(groupIdWire)]")
+    }
+
     /// POST /api/v1/groups/{gid}/members — admin adds `userId`.
     func addMember(
         groupIdWire: String,

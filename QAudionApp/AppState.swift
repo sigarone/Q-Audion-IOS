@@ -9346,6 +9346,36 @@ extension AppState {
             groupId: gidBytes, members: fullMembers, selfId: selfId)
         GroupRegistry.shared.markBootstrapped(groupId: gidBytes)
 
+        // SERVER REGISTRATION (Fase 1A, best-effort) — POST /api/v1/groups
+        // BEFORE/alongside the P2P fan-out below. Android + Desktop both
+        // register the group server-side on create; iOS previously skipped
+        // this, so an iOS-CREATED group had NO server record → the group
+        // TEXT transport (`group_msg_send`) returned NOT_A_MEMBER and the
+        // add/remove REST endpoints 404'd for it. Reuses the same
+        // authenticated, cert-pinned client the add/remove path uses. The
+        // wire `group_id` is the dashed-UUID form the server + Android key
+        // on (NOT the dash-stripped hex `GroupRegistry` keys on). Idempotent:
+        // if Android already created this group, the duplicate is rejected
+        // (non-2xx) and we keep our local crypto state — never a hard-fail.
+        if let groupIdWire = Self.hexToDashedUUID(gidBytes),
+           let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken) {
+            let regMembers = fullMembers
+            let regAdmins = fullAdmins
+            Task { @MainActor in
+                guard let res = await api.createGroup(
+                    groupIdWire: groupIdWire, members: regMembers, admins: regAdmins) else { return }
+                if res.isSuccess {
+                    GroupRegistry.shared.setEpoch(groupId: gidBytes, epoch: res.groupEpoch)
+                    NotificationCenter.default.post(
+                        name: AppState.groupRegistryChangedNotification,
+                        object: nil, userInfo: ["groupId": gidBytes])
+                } else {
+                    // Already-exists / other server error — local state stays.
+                    print("[AppState] createGroup: server registration HTTP \(res.statusCode) for \(groupIdWire) (kept local state)")
+                }
+            }
+        }
+
         // W403 Outbound: emit BOTH the legacy iOS `group_invite`
         // envelope (better UX for iOS↔iOS — modal sheet with full
         // state up-front) AND the Desktop-aligned `member_added`
