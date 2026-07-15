@@ -10404,12 +10404,37 @@ extension AppState {
     }
 
     /// Fase 1C — `GET /api/v1/groups/{gid}` best-effort fetch + decrypt,
-    /// used only at fresh-device bootstrap (see call site above). Not
-    /// wired into the ordinary app-launch path — that path relies on the
-    /// vault-persisted `GroupRegistry.Entry.name` already set by a prior
-    /// live rename or this same recovery.
+    /// used at fresh-device bootstrap (see call site above). Thin wrapper
+    /// over `fetchAndApplyGroupMetadata` — kept as its own name so the
+    /// bootstrap call site above reads self-documenting.
     @MainActor
     fileprivate func recoverGroupMetadataOnBootstrap(groupHex: String, selfId: String) {
+        fetchAndApplyGroupMetadata(groupHex: groupHex, selfId: selfId)
+    }
+
+    /// GAP FIX (avatar pipeline + GET-recovery) — the SAME `GET
+    /// /api/v1/groups/{gid}` fetch+decrypt+version-gated-apply as
+    /// `recoverGroupMetadataOnBootstrap`, but callable from ANY ordinary
+    /// call site that already has a local roster for `groupHex` — opening
+    /// a group chat, the chat-list's app-launch refresh, etc. — not just
+    /// fresh-device bootstrap. `applyGroupMetadataPayload` is itself
+    /// version-gated (a stale/equal `metadata_version` is a no-op), so
+    /// calling this redundantly (e.g. every time a group chat is opened)
+    /// is cheap and safe — it only ever moves the local name/avatar
+    /// forward to what the server currently has.
+    @MainActor
+    public func refreshGroupMetadataFromServer(groupHex: String) {
+        guard let selfId = currentUserId ?? AppState.currentUserIdSnapshot, !selfId.isEmpty,
+              GroupRegistry.shared.entry(for: groupHex) != nil else { return }
+        fetchAndApplyGroupMetadata(groupHex: groupHex, selfId: selfId)
+    }
+
+    /// Shared core of `recoverGroupMetadataOnBootstrap` /
+    /// `refreshGroupMetadataFromServer` — GET the group, decrypt its
+    /// current `metadata_blob_b64` with the embedded sender's recv chain,
+    /// and apply it (version-gated) via `applyGroupMetadataPayload`.
+    @MainActor
+    private func fetchAndApplyGroupMetadata(groupHex: String, selfId: String) {
         guard let groupIdWire = Self.hexToDashedUUID(groupHex),
               let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken) else { return }
         Task { @MainActor in
@@ -10421,13 +10446,13 @@ extension AppState {
             // wire header itself embeds `sender_id` (`GroupSenderKey`
             // wire layout, spec §2) — unpack it instead of guessing.
             guard let parsed = try? GroupSenderKey.unpackGroupWire(wire) else {
-                print("[AppState] recoverGroupMetadataOnBootstrap: malformed wire g=\(groupHex.prefix(8))")
+                print("[AppState] fetchAndApplyGroupMetadata: malformed wire g=\(groupHex.prefix(8))")
                 return
             }
             guard let plaintext = GroupChatService.shared.decrypt(
                 wire: wire, senderId: parsed.senderId, groupId: groupHex,
                 members: entry.members, selfId: selfId) else {
-                print("[AppState] recoverGroupMetadataOnBootstrap: decrypt failed g=\(groupHex.prefix(8)) sender=\(parsed.senderId.prefix(8))")
+                print("[AppState] fetchAndApplyGroupMetadata: decrypt failed g=\(groupHex.prefix(8)) sender=\(parsed.senderId.prefix(8))")
                 return
             }
             self.applyGroupMetadataPayload(groupHex: groupHex, json: plaintext, version: res.metadataVersion)

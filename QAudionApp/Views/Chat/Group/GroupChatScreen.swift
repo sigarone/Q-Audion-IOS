@@ -69,6 +69,13 @@ struct GroupChatScreen: View {
             // prior download failed or the app was killed mid-download).
             // Mirrors the 1:1 path's re-attempt of un-downloaded media on open.
             appState.retryPendingGroupAttachmentDownloads(groupHex: groupHex)
+            // GAP FIX — cold-recovery was previously wired ONLY into
+            // fresh-device bootstrap. Opening a group chat you already
+            // have locally now also GETs the current metadata_version and
+            // applies it if newer (cheap no-op otherwise), so a rename/
+            // avatar change made while this device was offline (missed
+            // the live group_metadata_changed WS event) still lands.
+            appState.refreshGroupMetadataFromServer(groupHex: groupHex)
         }
         .onDisappear {
             if appState.activeGroupHex == groupHex { appState.activeGroupHex = nil }

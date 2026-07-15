@@ -220,12 +220,27 @@ struct ContentView: View {
     ) -> some View {
         IncomingCallScreen(
             peerDisplayName: invite.displayTitle,
+            avatarUrl: groupAvatarUrl(forGroupId: invite.groupId),
             callType: invite.hasVideo ? .video : .audio,
             subtitle: Self.groupCallSubtitle(invite),
             showReplyAction: false,
             onAccept: { appState.answerIncomingGroupCall() },
             onReject: { appState.declineIncomingGroupCall() }
         )
+    }
+
+    /// GAP FIX — group-call "room identity" avatar. `invite.groupId` is
+    /// the server's dashed-UUID wire form; `GroupRegistry` keys on the
+    /// dash-stripped hex (same conversion as `AppState.hexToDashedUUID`'s
+    /// inverse, used elsewhere e.g. `ChatListScreen.hexToUUID`). Empty
+    /// `groupId` (ad-hoc call, no real group) or no avatar set both
+    /// resolve to nil → `IncomingCallScreen` falls back to its initials
+    /// placeholder, same as before this fix.
+    private func groupAvatarUrl(forGroupId groupId: String) -> URL? {
+        guard !groupId.isEmpty else { return nil }
+        let hex = groupId.replacingOccurrences(of: "-", with: "").lowercased()
+        guard let avatarRef = GroupRegistry.shared.entry(for: hex)?.avatarRef else { return nil }
+        return URL(string: "\(appState.serverUrl)/api/v1/files/\(avatarRef)")
     }
 
     /// "Chiamata di gruppo · <chi ha chiamato>" (video variant included).

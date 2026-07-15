@@ -261,6 +261,19 @@ struct ChatListScreen: View {
             container.setSearchQuery(newValue)
         }
         .refreshable { container.loadFromStore() }
+        // GAP FIX — app-launch group-list metadata refresh. The chat list
+        // is the first screen shown after login/launch; on each appear,
+        // best-effort GET the current metadata_version for every locally
+        // joined group and apply it if newer (same version-gated no-op
+        // otherwise). Closes the gap where GET-based cold-recovery ran
+        // ONLY at fresh-device bootstrap — a rename/avatar change made
+        // while this device was offline now lands without waiting for the
+        // group to be opened or for the next live WS event.
+        .task {
+            for entry in groupRegistry.entries {
+                appState.refreshGroupMetadataFromServer(groupHex: entry.id)
+            }
+        }
         // Fase 1B — recompute the group rows' preview / unread / time when a
         // group message lands or is marked read (GroupMessageStore signals
         // via NotificationCenter, not an @Published property).
@@ -357,6 +370,11 @@ struct ChatListScreen: View {
         let preview: String?  // last message text (nil ⇒ show member/epoch subtitle)
         let lastActivity: Date
         let unread: Int
+        // GAP FIX — the group avatar, derived from `avatarRef` the SAME
+        // "serverUrl + /api/v1/files/{fileId}" convention GroupInfoScreen's
+        // hero uses (GroupChatScreen.makeInfoState). nil ⇒ no avatar set,
+        // QAudionAvatar falls back to the generic group placeholder.
+        let avatarUrl: URL?
     }
 
     /// Fase 1B — build the group rows from the live registry, sorted by
@@ -378,7 +396,10 @@ struct ChatListScreen: View {
                 epoch: Int(e.epoch),
                 preview: Self.groupPreviewText(for: last),
                 lastActivity: last?.ts ?? e.joinedAt,
-                unread: GroupMessageStore.shared.unreadCount(forGroupHex: e.id))
+                unread: GroupMessageStore.shared.unreadCount(forGroupHex: e.id),
+                avatarUrl: e.avatarRef.flatMap {
+                    URL(string: "\(appState.serverUrl)/api/v1/files/\($0)")
+                })
         }
         .sorted { $0.lastActivity > $1.lastActivity }
     }
@@ -496,7 +517,8 @@ struct ChatListScreen: View {
                     messages: []))
         } label: {
             HStack(spacing: 12) {
-                QAudionAvatar(displayName: row.name, kind: .group, size: 44)
+                QAudionAvatar(displayName: row.name, imageURL: row.avatarUrl,
+                              kind: .group, size: 44)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
                         Text(row.name)
