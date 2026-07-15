@@ -9,6 +9,14 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.784",
+              date: "2026-07-15",
+              title: "v1.0.784",
+              bullets: [
+                "feat(groups): Fase-1B — image/file attachments in group chat (send + receive)",
+                "feat(groups): Fase-1B UX — sender-name, group unread/preview, group banner + empty-group loop fix",
+                "chore: regenerate changelog for v1.0.783",
+              ]),
         .init(id: "v1.0.783",
               date: "2026-07-15",
               title: "v1.0.783",
@@ -150,13 +158,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.765",
                 "diag(crash): emit MetricKit crashing-thread frames for watchdog SIGKILLs",
-              ]),
-        .init(id: "v1.0.764",
-              date: "2026-07-12",
-              title: "v1.0.764",
-              bullets: [
-                "chore: regenerate changelog for v1.0.764",
-                "fix(diag): stop truncating MetricKit crash termination reason at 23 chars",
               ]),
     ]
 }
