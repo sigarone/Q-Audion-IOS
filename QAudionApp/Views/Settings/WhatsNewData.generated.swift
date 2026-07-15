@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.791",
+              date: "2026-07-15",
+              title: "v1.0.791",
+              bullets: [
+                "fix(calls): widen VIDEODIAG arrived-idle threshold to 20s (parity with Android)",
+              ]),
         .init(id: "v1.0.790",
               date: "2026-07-15",
               title: "v1.0.790",
               bullets: [
+                "chore: regenerate changelog for v1.0.790",
                 "feat(groups): group-call E2EE/media telemetry + LiveKit E2EE-state callback",
               ]),
         .init(id: "v1.0.789",
@@ -149,13 +156,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.772",
                 "fix(audio): clamp applied mic-AGC gain per-frame to peak headroom (anti-clip)",
-              ]),
-        .init(id: "v1.0.771",
-              date: "2026-07-12",
-              title: "v1.0.771",
-              bullets: [
-                "chore: regenerate changelog for v1.0.771",
-                "fix(audio): run mic make-up AGC under VP-IO too (iOS TX too faint)",
               ]),
     ]
 }
