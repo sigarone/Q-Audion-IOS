@@ -102,7 +102,20 @@ let package = Package(
         // group calls are mutually exclusive call states, but a future
         // call-waiting/concurrent-call scenario would need explicit
         // handoff between the two.
-        .package(url: "https://github.com/livekit/client-sdk-swift.git", exact: "2.13.0"),
+        // AES-256 fork (sigarone/client-sdk-swift, tag 2.13.0-aes256-livekit):
+        // redirects ONLY the transitive webrtc-xcframework dependency to
+        // sigarone/webrtc-xcframework's own aes256-livekit fork, which
+        // carries the same aes256-framecryptor.patch as this app's own
+        // WebRTC binaryTarget below — group-call media now gets AES-256-GCM
+        // instead of the fixed AES-128 FrameCryptor once a 32-byte shared
+        // key is supplied (matches the Android wiring, feature-call's
+        // configurations.all { resolutionStrategy.dependencySubstitution }).
+        // Every other file/line in client-sdk-swift 2.13.0 is untouched —
+        // this is a same-tag-shape fork, not a rewrite. All the Dual-WebRTC
+        // safety analysis above still applies unchanged (package/symbol
+        // relocation is baked into the xcframework itself, independent of
+        // which URL serves it).
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.13.0-aes256-livekit"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
