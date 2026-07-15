@@ -227,6 +227,12 @@ let package = Package(
                 // + the D3-WIRE signed hs-bundle-v1 canon (Ed25519 OFFER/ACCEPT).
                 .copy("Resources/kat/session-key-v3-kat.json"),
                 .copy("Resources/kat/hs-bundle-v1-kat.json"),
+                // gap A2 / ADR-014a — vendored byte-copy of
+                // apps/qaudion-android-new/qaudion-engine/src/test/resources/kms-prebootstrap-kat.json.
+                // Structural/ad_bytes fidelity fence for KmsPreBootstrapCbor +
+                // KmsPreBootstrap (random per-run key material, see the
+                // vector's own "notes" field — NOT bit-reproduced by encode()).
+                .copy("Resources/kat/kms-prebootstrap-kat.json"),
                 .copy("Integration/Resources/earbud-excl-v2-kat.json")
             ]
         )

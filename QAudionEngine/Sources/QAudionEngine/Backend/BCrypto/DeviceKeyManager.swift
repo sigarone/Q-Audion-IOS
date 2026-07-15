@@ -207,4 +207,18 @@ public final class DeviceKeyManager: @unchecked Sendable {
         guard let pub, pub.count == 32 else { return nil }
         return pub
     }
+
+    /// gap A2 / ADR-014a — public-only counterpart of the device's own
+    /// X25519 identity public key. `currentKeys()` only surfaces
+    /// `x25519Priv` (needed for the classical KMS PSK-decrypt hot path);
+    /// the KMS-prebootstrap receive path (`AppState.decodeKmsPreBootstrapEnvelope`)
+    /// additionally needs the PUBLIC half so it can rebuild the same
+    /// `receiverIkX25519PubOrZeros` transcript field the sender hashed in
+    /// (which must match whatever this device's identity bundle publishes
+    /// as its X25519 leg). Mirrors the `currentEd25519Pub` accessor above.
+    public func currentX25519Pub() throws -> Data? {
+        let pub = try vault.loadPsk(name: Self.LABEL_X25519_PUB)
+        guard let pub, pub.count == 32 else { return nil }
+        return pub
+    }
 }

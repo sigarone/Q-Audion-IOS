@@ -768,18 +768,34 @@ public final class GroupCallController: @unchecked Sendable {
         return try? groupSession.encryptForGroup(state: gs, plaintext: plaintext).wire
     }
 
+    /// gap A2 / ADR-014a (W-GRPKMSPB) — `onSendControlEnvelope` became
+    /// `async` (see its doc below) because the KMS-prebootstrap fallback
+    /// needs real network round-trips (bundle + prekey fetch) before it
+    /// can produce a wire envelope. `sendSenderKeyEnvelope`/
+    /// `sendSenderKeyRotateEnvelope` themselves stay SYNCHRONOUS (their
+    /// callers — `onUpdate`'s post-unlock send loop — are synchronous,
+    /// non-actor-isolated code, not a place we want to introduce a new
+    /// `async` propagation chain) by firing the actual call inside a
+    /// fire-and-forget `Task`. This makes a KMS-prebootstrap send
+    /// inherently best-effort/delayed relative to the old synchronous
+    /// `Bool` return — accepted explicitly, see the TODO this closes
+    /// (`AppState.attemptGroupCtrlKmsPreBootstrap` step 8).
     private func sendSenderKeyEnvelope(peer: String, selfId: String, env: SenderKeyInitEnvelope) {
         guard let json = Self.encodeInitEnvelope(env),
               let onSend = onSendControlEnvelope else { return }
-        if onSend(peer, selfId, json) {
-            lock.lock(); initSentTo.insert(peer); lock.unlock()
+        Task {
+            if await onSend(peer, selfId, json) {
+                lock.lock(); initSentTo.insert(peer); lock.unlock()
+            }
         }
     }
 
     private func sendSenderKeyRotateEnvelope(peer: String, selfId: String, env: SenderKeyRotateEnvelope) {
         guard let json = Self.encodeRotateEnvelope(env),
               let onSend = onSendControlEnvelope else { return }
-        _ = onSend(peer, selfId, json)
+        Task {
+            _ = await onSend(peer, selfId, json)
+        }
     }
 
     /// App-layer hook: given (peer, selfId, plaintext envelope JSON), seal
@@ -791,7 +807,15 @@ public final class GroupCallController: @unchecked Sendable {
     /// second one owned here (see the control-envelope-transport comment
     /// near the top of this file). Set once at construction time in
     /// `AppState.connectPersistentSocket()`.
-    public var onSendControlEnvelope: ((_ peer: String, _ selfId: String, _ envelopeJson: String) -> Bool)?
+    ///
+    /// gap A2 / ADR-014a (W-GRPKMSPB, 2026-07-15) — made `async`: when no
+    /// pairwise v4/v1 session exists yet, the closure now falls through to
+    /// a real KMS-prebootstrap attempt (`AppState.attemptGroupCtrlKmsPreBootstrap`),
+    /// which needs to `await` two network fetches (peer bundle + one-time
+    /// prekey) before it can produce a self-authenticating envelope. The
+    /// previous synchronous `Bool`-returning signature had no way to do
+    /// that; see the TODO this change closes for the full rationale.
+    public var onSendControlEnvelope: ((_ peer: String, _ selfId: String, _ envelopeJson: String) async -> Bool)?
 
     private func teardown() {
         lock.lock()

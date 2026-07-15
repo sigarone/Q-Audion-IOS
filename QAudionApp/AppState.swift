@@ -2293,59 +2293,68 @@ final class AppState: ObservableObject {
             // MainActor itself (confirmed via the WS delegate-queue
             // wiring), so `.sync` here cannot deadlock.
             groupController.onSendControlEnvelope = { peer, senderId, envelopeJson in
-                DispatchQueue.main.sync {
-                    // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): every
-                    // `return false` below used to be completely silent —
-                    // this is the app-layer transport for sender_key_init/
-                    // rotate, and a failure here means the recipient NEVER
-                    // even sees the envelope (as opposed to seeing it and
-                    // rejecting it, which `onGroupCallControlEnvelope`'s own
-                    // new logging now covers). Root-causing whether S26<->iOS
-                    // failed here specifically (no pairwise 1:1 session yet)
-                    // was explicitly left as an unresolved residual by the
-                    // 2026-07-15 recon precisely because this call site had
-                    // no observability — this closes that gap.
-                    let envType = (try? JSONSerialization.jsonObject(with: Data(envelopeJson.utf8)) as? [String: Any])?["t"] as? String ?? "?"
-                    let msgId = UUID().uuidString
-                    let plaintext = Data(envelopeJson.utf8)
-                    let wire: Data
+                // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): every
+                // `return false` below used to be completely silent —
+                // this is the app-layer transport for sender_key_init/
+                // rotate, and a failure here means the recipient NEVER
+                // even sees the envelope (as opposed to seeing it and
+                // rejecting it, which `onGroupCallControlEnvelope`'s own
+                // new logging now covers). Root-causing whether S26<->iOS
+                // failed here specifically (no pairwise 1:1 session yet)
+                // was explicitly left as an unresolved residual by the
+                // 2026-07-15 recon precisely because this call site had
+                // no observability — this closes that gap.
+                //
+                // gap A2 / ADR-014a (W-GRPKMSPB) — this closure is now
+                // `async` (`GroupCallController.onSendControlEnvelope`'s
+                // type changed accordingly) so the KMS-prebootstrap
+                // fallback below can `await` real network fetches. The
+                // fast v4/v1 ratchet path is CPU-only + Keychain reads
+                // (no network), so it stays wrapped in `await
+                // MainActor.run` to preserve the original `.sync`
+                // invariant: serialize with every OTHER MainActor caller
+                // of `Self.ratchet`/`Self.sharedV4Ratchet` (this closure
+                // itself is never invoked ON MainActor — confirmed via
+                // the WS delegate-queue wiring — so hopping IN here
+                // cannot deadlock the way `.sync` onto your own queue
+                // would).
+                enum FastPathOutcome {
+                    case sealed(wire: Data, transport: String)
+                    case failed
+                    case noPsk
+                }
+                let envType = (try? JSONSerialization.jsonObject(with: Data(envelopeJson.utf8)) as? [String: Any])?["t"] as? String ?? "?"
+                let msgId = UUID().uuidString
+                let plaintext = Data(envelopeJson.utf8)
+
+                let outcome: FastPathOutcome = await MainActor.run {
                     if AppState.sharedV4Ratchet.hasV4Session(peer) {
                         guard let frame = AppState.sharedV4Ratchet.encryptV4Routed(peerId: peer, plaintext: plaintext),
                               let first = frame.first, first == MessageRatchet.magicV4 else {
                             print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v4_encrypt_failed (hasV4Session=true)")
-                            return false
+                            return .failed
                         }
-                        wire = frame
-                    } else {
-                        guard let psk = AppState.resolveGroupCtrlPsk(peer: peer) else {
-                            // GAP A2 — before failing outright, offer the KMS-
-                            // prebootstrap fallback a chance to produce a
-                            // self-authenticating envelope (mirrors Android's
-                            // ADR-014a bootstrap-off-published-bundle path).
-                            // Returns nil unconditionally today (NOT yet
-                            // ported to iOS — see the exhaustive TODO on
-                            // `attemptGroupCtrlKmsPreBootstrap` above), so
-                            // this branch is presently a documented no-op:
-                            // behavior is byte-identical to before this hook
-                            // was added.
-                            if let wrapped = AppState.attemptGroupCtrlKmsPreBootstrap(peer: peer, selfId: senderId, envelopeJson: envelopeJson) {
-                                ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapped.utf8))
-                                print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) transport=kms_prebootstrap")
-                                return true
-                            }
-                            print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=no_v4_session_and_no_psk (pairwise 1:1 relationship never established)")
-                            return false
-                        }
+                        return .sealed(wire: frame, transport: "v4")
+                    } else if let psk = AppState.resolveGroupCtrlPsk(peer: peer) {
                         do {
                             let session = try AppState.ratchet.ensureSession(
                                 epochId: "v1", selfId: senderId, peerId: peer, pskRoot: psk)
                             let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: peer, clientMsgId: msgId)
-                            wire = try AppState.ratchet.encrypt(session: session, plaintext: plaintext, aad: aad, clientMsgId: msgId)
+                            let wire = try AppState.ratchet.encrypt(session: session, plaintext: plaintext, aad: aad, clientMsgId: msgId)
+                            return .sealed(wire: wire, transport: "v1")
                         } catch {
                             print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v1_session_or_encrypt_failed: \(error)")
-                            return false
+                            return .failed
                         }
+                    } else {
+                        return .noPsk
                     }
+                }
+
+                switch outcome {
+                case .failed:
+                    return false
+                case .sealed(let wire, let transport):
                     let wrapper: [String: Any] = [
                         "qa_grpcall_ctrl": 1,
                         "cmid": msgId,
@@ -2357,8 +2366,24 @@ final class AppState: ObservableObject {
                         return false
                     }
                     ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapperJson.utf8))
-                    print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) cmid=\(msgId.prefix(8)) transport=\(AppState.sharedV4Ratchet.hasV4Session(peer) ? "v4" : "v1")")
+                    print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) cmid=\(msgId.prefix(8)) transport=\(transport)")
                     return true
+                case .noPsk:
+                    // GAP A2 — no pairwise v4/v1 session yet: attempt the
+                    // KMS-prebootstrap fallback (REAL now, not a documented
+                    // no-op — mirrors Android's ADR-014a bootstrap-off-
+                    // published-bundle path). Real network round-trip
+                    // (bundle + prekey fetch), which is exactly why this
+                    // whole closure had to become `async`.
+                    if let wrapped = await AppState.attemptGroupCtrlKmsPreBootstrap(
+                        peer: peer, selfId: senderId, envelopeJson: envelopeJson, kmsClient: provider.kmsClient
+                    ) {
+                        ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapped.utf8))
+                        print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) transport=kms_prebootstrap")
+                        return true
+                    }
+                    print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=no_v4_session_and_no_psk_and_prebootstrap_failed (pairwise 1:1 relationship never established)")
+                    return false
                 }
             }
             groupManager.onIncomingInvite = { [weak self] invite in
@@ -6276,6 +6301,39 @@ final class AppState: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.routeInboundAndroidAccept(parsed: parsed, senderId: senderId)
                 }
+            }
+            return
+        }
+
+        // Path D — W-GRPKMSPB / gap A2: `qa_kms_prebootstrap:1` envelope
+        // wrapper. Wire shape `{"qa_kms":1,"env_b64":"<base64 CBOR
+        // envelope>"}` — checked BEFORE Path C's `qa_grpcall_ctrl` because
+        // this envelope travels UNWRAPPED: no further 1:1-ratchet
+        // encryption, the envelope is already self-authenticating via its
+        // own Ed25519 transcript signature. Mirrors Android's
+        // `GroupCallController.onOpaqueMessage`'s `qa_kms` branch, which is
+        // also checked before `qa_grpcall_ctrl` there. On success this
+        // feeds the SAME `onGroupCallControlEnvelope(json:fromUserId:)`
+        // terminal call Path C makes below.
+        if let obj = try? JSONSerialization.jsonObject(with: Data(blobStr.utf8)) as? [String: Any],
+           (obj["qa_kms"] as? NSNumber)?.intValue == 1,
+           let envB64 = obj["env_b64"] as? String,
+           let envelopeBytes = Data(base64Encoded: envB64) {
+            let selfId = currentUserId ?? ""
+            guard let kmsClient = liveProvider?.kmsClient, !selfId.isEmpty else {
+                print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) reason=kms_prebootstrap_no_provider")
+                return
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard let decoded = await AppState.decodeKmsPreBootstrapEnvelope(
+                    envelopeBytes: envelopeBytes, senderId: senderId, selfId: selfId, kmsClient: kmsClient
+                ) else {
+                    print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) reason=kms_prebootstrap_consume_failed")
+                    return
+                }
+                print("[GroupCallController][telemetry] ctrl envelope RECEIVED+decrypted(prebootstrap) sender=\(senderId.prefix(8)), forwarding to GroupCallController")
+                self.groupCallController?.onGroupCallControlEnvelope(json: decoded, fromUserId: senderId)
             }
             return
         }
@@ -11513,85 +11571,273 @@ extension AppState {
     /// vault as ``ratchet`` so v3.1 and v4 share the device trust boundary.
     static let sharedV4Ratchet: MessageRatchet = MessageRatchet(vault: KeychainRatchetVault())
 
-    /// GAP A2 (2026-07-15 group-video-call incident recon) — splice point for
-    /// a group-call KMS-prebootstrap fallback, mirroring Android's
-    /// ADR-014a `KmsPreBootstrapSender` (`feature-chat/.../KmsPreBootstrapSender.kt`,
-    /// wired from `GroupCallController.kt::sendControlEnvelope` L852+ /
-    /// commit tag W-GRPKMSPB). Android ALREADY closes this gap: when a
-    /// group-call peer has no contact-bound 1:1 PSK at all (never called/
-    /// messaged before this call), it asynchronously bootstraps one from the
-    /// peer's published identity-key bundle + a one-time prekey (X3DH-style,
-    /// no prior interaction required) instead of silently failing to deliver
+    /// GAP A2 (2026-07-15 group-video-call incident recon) — group-call
+    /// KMS-prebootstrap fallback, mirroring Android's ADR-014a
+    /// `KmsPreBootstrapSender` (`core-data/.../kms/KmsPreBootstrapSender.kt`,
+    /// wired from `GroupCallController.kt::sendControlEnvelope` L865+ /
+    /// commit tag W-GRPKMSPB). When a group-call peer has no contact-bound
+    /// 1:1 PSK at all (never called/messaged before this call), this
+    /// asynchronously bootstraps one from the peer's published
+    /// identity-key bundle + a one-time prekey (X3DH-style, no prior
+    /// interaction required) instead of silently failing to deliver
     /// `sender_key_init`/`sender_key_rotate`.
     ///
-    /// **iOS status: NOT implemented — returns `nil` unconditionally today,
-    /// so this call is a no-op and behavior is UNCHANGED from before this
-    /// hook existed.** Every raw crypto primitive ADR-014a needs is already
-    /// present on iOS (ML-KEM-1024 via `PqcKeyExchange.swift`, X25519/
-    /// Ed25519/HKDF/ChaCha20Poly1305 via CryptoKit, CBOR via
-    /// `CanonicalCbor.swift`), and the two purely-additive networking calls
-    /// this needs are already wired (`BCryptoKmsClient.fetchUserIdentityBundleV2`,
-    /// `.fetchNextPrekey`) — but the ADR-014a envelope ASSEMBLY itself
-    /// (binary frame layout, canonical-CBOR AD-bytes, HKDF-Extract →
-    /// `RK_0`, Ed25519 transcript sign/verify, one-time-prekey sig
-    /// verification, a replay-window cache) does not exist anywhere on iOS
-    /// (confirmed by repo-wide grep for `KmsPreBootstrap`/`qa_kms` — zero
-    /// hits outside this comment). Writing that by hand here, without a
-    /// Swift toolchain available to validate the encode/decode round-trip
-    /// against the SAME cross-platform KAT fixture Android/Desktop already
-    /// share (`qaudion-android-new/qaudion-engine/src/test/resources/
-    /// kms-prebootstrap-kat.json`), risks shipping a subtly-wrong AEAD/CBOR
-    /// implementation that LOOKS like it works — exactly the class of bug
-    /// Android's own `KmsPreBootstrapSender.kt` comment (L512-524) warns
-    /// about ("legacy shared CanonicalCbor encoder produced byte-different
-    /// output... on at least one edge case"). That risk is why this is
-    /// scoped as a documented follow-up rather than a same-pass port.
+    /// **iOS status: REAL, not a stub** (2026-07-15, closes gap A2's iOS
+    /// half). Ports `KmsPreBootstrap.encode`/`.decode`
+    /// (`KmsPreBootstrap.swift`, byte-for-byte mirror of Android's
+    /// `crypto/KmsPreBootstrap.kt`) + the canonical-CBOR envelope codec
+    /// (`KmsPreBootstrapCbor.swift`, mirrors `KmsPreBootstrapCbor.kt`) +
+    /// the bundle self-sig preimage (`IdentityKeyV2Preimage.swift`, mirrors
+    /// `core-data/.../security/IdentityKeyV2Preimage.kt`). Verified against
+    /// the shared cross-platform KAT fixture
+    /// (`kms-prebootstrap-kat.json`, structural/ad_bytes fidelity — see
+    /// `KmsPreBootstrapKatTests.swift`) plus a self-consistency
+    /// encode-then-decode round-trip test, both CI-gated (no Swift
+    /// toolchain on this dev box — see that test file's header).
     ///
-    /// To complete this (see the Android reference file:line for each step):
-    ///  1. Port `KmsPreBootstrap.encode`/`.decode`
-    ///     (`qaudion-engine/.../crypto/KmsPreBootstrap.kt` L150-313 / L327-496)
-    ///     into a new `KmsPreBootstrap.swift`, validated against the shared
-    ///     KAT fixture BEFORE wiring it into any live call path.
-    ///  2. Port the sig preimage `IdentityKeyV2Preimage.build` used to verify
-    ///     a peer's self-signed bundle (referenced but not yet located in
-    ///     this recon — read it before porting).
-    ///  3. Add a small time-windowed `(sender_uuid, nonce)` replay cache
-    ///     (mirrors Android's `ReplayCache`, `KmsPreBootstrap.kt` decode
-    ///     parameter).
-    ///  4. Call `provider.kmsClient.fetchUserIdentityBundleV2(userId: peer)`
-    ///     then `.fetchNextPrekey(userId: peer)` (both already implemented,
-    ///     `BCryptoKmsClient.swift`), verify the bundle self-sig + prekey
-    ///     sig, then `KmsPreBootstrap.encode(...)`.
+    /// Flow (mirrors `KmsPreBootstrapSender.build` step-for-step):
+    ///  1. Fetch the peer's v2 identity bundle
+    ///     (`kmsClient.fetchUserIdentityBundleV2`) — bails (`nil`) on 404 /
+    ///     no PQ leg (pre-v2 peer).
+    ///  2. Verify the bundle's self-sig via `IdentityKeyV2Preimage.buildV2`
+    ///     + Ed25519 verify against the bundle's OWN `ed25519Pub` — TOFU
+    ///     accept when `selfSig` is absent (pre-Day-4c-server compat path,
+    ///     kept intentionally, mirrors Android).
+    ///  3. Fetch one peer one-time prekey (`kmsClient.fetchNextPrekey`) and
+    ///     verify its per-prekey sig (Ed25519 over
+    ///     `sha256(pq_pub‖x25519_pub‖be64(createdAtMs))`) against the
+    ///     bundle's pinned Ed25519 key — falls through to the bundle's
+    ///     long-term keys on ANY failure (204/404/sig-mismatch), per
+    ///     ADR-014a §3.4.
+    ///  4. `KmsPreBootstrap.encode(...)`, signing with THIS device's
+    ///     sovereign Ed25519 identity (`SovereignIdentityManager`,
+    ///     `.signingPrivate`) — the SAME key published via
+    ///     `publishUserIdentityKey` (see `runKmsSweep`'s 2026-06-23
+    ///     root-cause-fix comment for why it must be the sovereign key,
+    ///     not `DeviceKeyManager`'s device key).
     ///  5. Install the resulting `RK_0` as a contact-bound PSK via
-    ///     `SovereignKeyVault` (same `auto:<prefix>:<peerId>` naming
-    ///     `resolveGroupCtrlPsk` below reads) so THIS device's own next send
-    ///     to `peer` routes through the now-shared ratchet.
-    ///  6. Ship the resulting `{"qa_kms":1,"env_b64":...}` wrapper directly
-    ///     as the `opaque_message` body (it is already self-authenticating —
-    ///     do NOT additionally wrap it in `qa_grpcall_ctrl`/`ratchet.encrypt`,
-    ///     see Android's `sendControlEnvelope` L890-903 for why).
-    ///  7. Receive side: `GroupCallController`'s inbound-opaque dispatch
-    ///     needs a matching `qa_kms` branch (peek the marker, decode via the
-    ///     new `KmsPreBootstrap.decode`, then feed the recovered
-    ///     `sender_key_init`/`sender_key_rotate` payload into the SAME
-    ///     `sender_key_init`/`_rotate` handling the plaintext branch already
-    ///     uses) — mirrors Android's `onOpaqueMessage`'s `qa_kms` branch +
-    ///     `handleGroupControlPayload` split.
-    ///  8. Note step 1 above is ALSO required doing this makes the enclosing
-    ///     `onSendControlEnvelope` closure need to become async (the bundle/
-    ///     prekey fetch are network calls) — `sendSenderKeyEnvelope`/
-    ///     `sendSenderKeyRotateEnvelope` in `GroupCallController.swift`
-    ///     (L771-783) currently call it synchronously; that call chain needs
-    ///     an async-friendly redesign too (e.g. fire off a `Task` here and
-    ///     accept that a prebootstrap send is inherently best-effort/delayed
-    ///     relative to today's synchronous `Bool` return).
+    ///     `SovereignKeyVault` under the exact `auto:<prefix8>:<peerId>`
+    ///     name `resolveGroupCtrlPsk` reads, so THIS device's own next send
+    ///     to `peer` (and its receive of the peer's first reply) routes
+    ///     through the now-shared v1 ratchet.
+    ///  6. Return the `{"qa_kms":1,"env_b64":...}` wrapper for the caller
+    ///     to ship AS the `opaque_message` body verbatim — it is already
+    ///     self-authenticating, so the caller must NOT additionally wrap it
+    ///     in `qa_grpcall_ctrl`/`ratchet.encrypt` (mirrors Android's
+    ///     `sendControlEnvelope` — see the `.noPsk` case in
+    ///     `connectPersistentSocket`'s `onSendControlEnvelope` wiring).
     ///
-    /// Do NOT flip this from a documented no-op to a partial/guessed
-    /// implementation — an unverified crypto envelope that a peer silently
-    /// fails to decrypt is worse than today's clean, observable
-    /// `no_v4_session_and_no_psk` failure (which at least logs distinctly).
-    static func attemptGroupCtrlKmsPreBootstrap(peer: String, selfId: String, envelopeJson: String) -> String? {
-        return nil
+    /// Known gap (NOT fixed here, out of this TODO's scope): iOS has no
+    /// code path that PUBLISHES its own v2 identity bundle (`ik_pq_pub_b64`/
+    /// `ik_x25519_pub_b64`/`self_sig_b64` via the dedicated v2 POST route —
+    /// only Android does that today). Practically this means a REMOTE
+    /// sender (Android/Desktop) trying to KMS-prebootstrap TO an iOS
+    /// receiver will see "no PQ leg" and skip prebootstrap — the RECEIVE
+    /// side below (`decodeKmsPreBootstrapEnvelope`) is implemented correctly
+    /// and forward-compatible, but won't see real traffic until iOS also
+    /// publishes a v2 bundle (separate follow-up, not requested here).
+    /// iOS also has no local one-time-prekey pool of its own (mirrors
+    /// Android's `OneTimePrekeyDao`) — `oneTimePrekeyLookup` on the decode
+    /// side is therefore always-miss by construction, which is the
+    /// correct fail-closed behaviour given iOS never published any OTPs.
+    static func attemptGroupCtrlKmsPreBootstrap(
+        peer: String, selfId: String, envelopeJson: String, kmsClient: BCryptoKmsClient
+    ) async -> String? {
+        guard let selfUuidRaw = try? KmsPreBootstrapCbor.uuidStringToRaw(selfId) else {
+            print("[AppState] KmsPreBootstrap encode: selfId not a UUID (\(selfId.prefix(8))…)")
+            return nil
+        }
+        guard let sovereign = SovereignIdentityManager().loadIdentity(),
+              sovereign.signingPrivate.count == 32 else {
+            print("[AppState] KmsPreBootstrap encode: no sovereign identity loaded yet")
+            return nil
+        }
+
+        guard let bundle = await kmsClient.fetchUserIdentityBundleV2(userId: peer),
+              bundle.pqPub.count == 1568, bundle.ed25519Pub.count == 32 else {
+            // 404 / pre-v2 peer (no PQ leg) — caller falls back to the
+            // existing default flow, exactly like Android's fallback.
+            return nil
+        }
+        guard verifyPeerBundleSelfSig(bundle) else {
+            print("[AppState] KmsPreBootstrap encode: peer bundle self-sig FAILED peer=\(peer.prefix(8))…")
+            return nil
+        }
+
+        let otp = await fetchAndVerifyPrekey(peer: peer, peerEdPub: bundle.ed25519Pub, kmsClient: kmsClient)
+
+        let receiverView = KmsPreBootstrap.ReceiverBundleView(
+            uuidRaw: bundle.uuidRaw, ikEdPub: bundle.ed25519Pub,
+            ikPqPub: bundle.pqPub, ikX25519Pub: bundle.x25519Pub
+        )
+        let otpView = otp.map {
+            KmsPreBootstrap.ReceiverOneTimePrekeyView(prekeyId: $0.prekeyId, pqPub: $0.pqPub, x25519Pub: $0.x25519Pub)
+        }
+        let senderIdentity = KmsPreBootstrap.IdentityKeys(
+            uuidRaw: selfUuidRaw, ikEdPub: sovereign.signingPublic, ikEdPriv: sovereign.signingPrivate,
+            ikPqPub: Data(), ikPqPriv: nil, ikX25519Pub: nil, ikX25519Priv: nil
+        )
+
+        let result: KmsPreBootstrap.EncodeResult
+        do {
+            result = try KmsPreBootstrap.encode(
+                sender: senderIdentity, receiverBundle: receiverView, oneTimePrekey: otpView,
+                senderKeyInitPayload: Data(envelopeJson.utf8),
+                nowMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
+            )
+        } catch {
+            print("[AppState] KmsPreBootstrap.encode failed peer=\(peer.prefix(8))…: \(error)")
+            return nil
+        }
+
+        // Phase 14a Day 4c parity — install our own outgoing PSK seeded by
+        // the SAME RK_0 the receiver will derive, so the peer's first reply
+        // (which will use this now-shared PSK) is decryptable on our side.
+        installKmsPreBootstrapPsk(rk0: result.rk0, peer: peer)
+
+        let wrapper: [String: Any] = [
+            "qa_kms": 1,
+            "env_b64": result.envelopeBytes.base64EncodedString(),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: wrapper),
+              let json = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return json
+    }
+
+    /// Receive-side counterpart of `attemptGroupCtrlKmsPreBootstrap` — mirrors
+    /// Android's `KmsPreBootstrapReceiver.consume` + `GroupCallController.
+    /// onOpaqueMessage`'s `qa_kms` branch. Called from `dispatchInboundOpaque`'s
+    /// Path D (checked BEFORE Path C's `qa_grpcall_ctrl`, since a
+    /// KMS-prebootstrap envelope travels UNWRAPPED — no further 1:1-ratchet
+    /// encryption, the envelope is already self-authenticating).
+    ///
+    /// Fetches the SENDER's (not receiver's) pinned Ed25519 key to verify the
+    /// envelope's transcript signature — the receiver's own long-term
+    /// ML-KEM/X25519 identity keys come from `DeviceKeyManager` (the only
+    /// long-term PQ/X25519 keypair iOS has today; see the "known gap" note
+    /// on the send-side sibling above for why this device's OWN v2 bundle
+    /// currently has no real long-term ML-KEM/X25519 publish path).
+    static func decodeKmsPreBootstrapEnvelope(
+        envelopeBytes: Data, senderId: String, selfId: String, kmsClient: BCryptoKmsClient
+    ) async -> String? {
+        guard let senderEdPub = await kmsClient.fetchUserIdentityKey(userId: senderId),
+              senderEdPub.count == 32 else {
+            return nil
+        }
+        guard let selfUuidRaw = try? KmsPreBootstrapCbor.uuidStringToRaw(selfId) else { return nil }
+        guard let sovereign = SovereignIdentityManager().loadIdentity() else { return nil }
+
+        let vault = SovereignKeyVault()
+        let deviceKeyManager = DeviceKeyManager(vault: vault, kmsClient: kmsClient)
+        guard let deviceKeys = try? deviceKeyManager.currentKeys(),
+              let mlkemPub = deviceKeys.mlkemPub, let mlkemPriv = deviceKeys.mlkemPriv,
+              mlkemPub.count == 1568, mlkemPriv.count == 3168 else {
+            print("[AppState] KmsPreBootstrap decode: device ML-KEM identity keys not provisioned yet")
+            return nil
+        }
+        let x25519Pub = try? deviceKeyManager.currentX25519Pub()
+
+        let receiverIdentity = KmsPreBootstrap.IdentityKeys(
+            uuidRaw: selfUuidRaw, ikEdPub: sovereign.signingPublic, ikEdPriv: nil,
+            ikPqPub: mlkemPub, ikPqPriv: mlkemPriv,
+            ikX25519Pub: x25519Pub, ikX25519Priv: deviceKeys.x25519Priv
+        )
+
+        do {
+            let (payload, rk0) = try KmsPreBootstrap.decode(
+                envelopeBytes: envelopeBytes,
+                receiver: receiverIdentity,
+                // iOS has no local one-time-prekey pool yet (see the "known
+                // gap" note above) — always miss, which correctly fails
+                // closed if a sender ever did reference an OTP id we can't
+                // possibly have.
+                oneTimePrekeyLookup: { _ in nil },
+                senderIkEdPub: senderEdPub,
+                replayCache: Self.kmsPreBootstrapReplayCache,
+                nowMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
+            )
+            installKmsPreBootstrapPsk(rk0: rk0, peer: senderId)
+            return String(data: payload, encoding: .utf8)
+        } catch {
+            print("[AppState] KmsPreBootstrap.decode failed sender=\(senderId.prefix(8))…: \(error)")
+            return nil
+        }
+    }
+
+    /// Shared replay-window cache for the receive side — one process-wide
+    /// instance (mirrors Android's `@Singleton KmsPreBootstrapReceiver`
+    /// owning one `ReplayCache`), so a resend of the same envelope (e.g. a
+    /// server redelivery) is caught regardless of which call/thread
+    /// decodes it.
+    private static let kmsPreBootstrapReplayCache = KmsPreBootstrapReplayCache()
+
+    /// ADR-014a §2.5 step "bundle self-sig" — TOFU-accept when `selfSig` is
+    /// absent (pre-Day-4c-server compat path, mirrors Android's
+    /// `KmsPreBootstrapSender.parseAndVerifyIdentityKey`). When present, a
+    /// bundle with no X25519 leg is a contradiction (only a v2 publish
+    /// computes a self-sig, and v2 always carries the X25519 leg) — treated
+    /// as verify-failure rather than guessed at.
+    private static func verifyPeerBundleSelfSig(_ bundle: BCryptoKmsClient.IdentityBundleV2) -> Bool {
+        guard let sig = bundle.selfSig, !sig.isEmpty else { return true }
+        guard sig.count == 64, let xPub = bundle.x25519Pub, xPub.count == 32 else { return false }
+        guard let preimage = try? IdentityKeyV2Preimage.buildV2(
+            uuidRaw: bundle.uuidRaw, ed25519Pub: bundle.ed25519Pub,
+            ikPqPub: bundle.pqPub, ikX25519Pub: xPub, createdAtMs: bundle.createdAtMs
+        ) else { return false }
+        guard let verifier = try? Curve25519.Signing.PublicKey(rawRepresentation: bundle.ed25519Pub) else {
+            return false
+        }
+        return verifier.isValidSignature(sig, for: preimage)
+    }
+
+    /// ADR-014a §4.1 — verify a fetched one-time prekey's per-prekey sig
+    /// (`Ed25519(peerEdPub, sha256(pq_pub‖x25519_pub‖be64(createdAtMs)))`)
+    /// against the peer's PINNED bundle key. Falls through to `nil` (long-
+    /// term keys) on 204/404/transport error/sig-mismatch, mirrors
+    /// Android's `KmsPreBootstrapSender.fetchAndVerifyPrekey`.
+    private static func fetchAndVerifyPrekey(
+        peer: String, peerEdPub: Data, kmsClient: BCryptoKmsClient
+    ) async -> BCryptoKmsClient.OneTimePrekeyDTO? {
+        guard let dto = await kmsClient.fetchNextPrekey(userId: peer),
+              dto.pqPub.count == 1568, dto.x25519Pub.count == 32, dto.sig.count == 64 else {
+            return nil
+        }
+        var tsBe = dto.createdAtMs.bigEndian
+        var digestInput = Data()
+        digestInput.append(dto.pqPub)
+        digestInput.append(dto.x25519Pub)
+        digestInput.append(withUnsafeBytes(of: &tsBe) { Data($0) })
+        let digest = Data(SHA256.hash(data: digestInput))
+        guard let verifier = try? Curve25519.Signing.PublicKey(rawRepresentation: peerEdPub),
+              verifier.isValidSignature(dto.sig, for: digest) else {
+            print("[AppState] KmsPreBootstrap: prekey sig FAIL peer=\(peer.prefix(8))… prekeyId=\(dto.prekeyId)")
+            return nil
+        }
+        return dto
+    }
+
+    /// Phase 14a Day 4c parity — install the freshly-derived `RK_0` as a
+    /// contact-bound PSK under the EXACT `auto:<prefix8>:<peerId>` name
+    /// `resolveGroupCtrlPsk` reads (see that function below), on BOTH the
+    /// sender side (so our own next send routes through it) and the
+    /// receiver side (so subsequent control envelopes from this peer use
+    /// the now-shared v1 ratchet instead of re-bootstrapping every time).
+    /// iOS's `SovereignKeyVault` has no ratchet-version field to set
+    /// (confirmed this session — unlike Android's `setRatchetVersion`),
+    /// so storing the raw 32-byte key is the whole job here.
+    private static func installKmsPreBootstrapPsk(rk0: Data, peer: String) {
+        let vault = SovereignKeyVault()
+        let prefix = peer.count > 8 ? String(peer.prefix(8)) : peer
+        let name = "auto:\(prefix):\(peer)"
+        let fingerprint = String(Data(SHA256.hash(data: rk0)).map { String(format: "%02x", $0) }.joined().prefix(16))
+        do {
+            try vault.storePsk(name: name, key: rk0, fingerprint: fingerprint)
+            print("[AppState] KmsPreBootstrap: installed RK_0 PSK peer=\(peer.prefix(8))… name=\(name)")
+        } catch {
+            print("[AppState] KmsPreBootstrap: installRatchetSeed failed peer=\(peer.prefix(8))…: \(error)")
+        }
     }
 
     /// W-GRPSENDERKEY (2026-07-13): PSK lookup ladder for the group-call
