@@ -45,6 +45,29 @@ public enum VideoStallSelfHeal {
             && msSinceLastRenderedIncrease >= stallWindowMs
     }
 
+    /// §8.7 RECOVERY RULE — arrivals idle this long means "the peer stopped
+    /// sending, no media is NOT a black-video stall".
+    ///
+    /// XP-viola-2026-07-10 (ported from Android `STALL_ARRIVED_IDLE_MS`,
+    /// `VideoSelfHeal.kt`) — widened from `2 * stallWindowMs` (6 s). Local
+    /// counters (`framesArrived` from getStats(), `framesRendered` from the
+    /// renderer) cannot distinguish "peer genuinely stopped sending" from
+    /// "peer is sending but our own receiver never bound to accept it" —
+    /// both look identical as permanent zero-arrival-increase from this
+    /// device. Since `isBlackVideoStall` fires on that second, WORSE case
+    /// too, the OLD 6 s recovery threshold undid the very detection it was
+    /// supposed to enable: `msSinceLastArrivedIncrease` blew past 6 s within
+    /// a couple of ticks, so recovery fired almost immediately after
+    /// detection, resetting the ladder back to stage 0 in a loop that never
+    /// reached rung 2 (sinkReattach, due at 6 s) or rung 3
+    /// (mediaReadyReannounce, due at 12 s). Set safely past the LAST rung's
+    /// backoff (12 s) plus the `stallWindowMs` head start baked into when
+    /// the arrived-increase clock is first stamped, so a real stall gets the
+    /// full ladder before this rule can even apply. This constant was
+    /// widened on Android (2026-07-10) but the port to iOS was missed until
+    /// now — the AppState watchdog was still running the pre-fix 6 s value.
+    public static let stallArrivedIdleMs: Int64 = 20_000
+
     // MARK: - TX inverse rule (peer keyframe-request storm)
 
     /// The peer requesting this many keyframes…

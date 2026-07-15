@@ -4154,11 +4154,16 @@ final class AppState: ObservableObject {
         guard videoDiagLastArrivedIncreaseMs > 0 else { return }  // no RTP yet
         let renderedFresh =
             now - videoDiagLastRenderedIncreaseMs < VideoStallSelfHeal.stallWindowMs
-        // Arrivals idle for 2× the window (comfortably above the 3s
-        // stats-poll granularity, so it can't flap between polls): the
-        // peer stopped sending — "no media" is NOT a black-video stall.
+        // Arrivals idle for stallArrivedIdleMs (20s, ported from Android's
+        // STALL_ARRIVED_IDLE_MS 2026-07-10 fix — see VideoStallSelfHeal.swift
+        // kdoc): the peer stopped sending — "no media" is NOT a black-video
+        // stall. Previously used 2× the window (6s), which — per the SAME
+        // failure mode Android hit and fixed — cannot distinguish "peer
+        // stopped sending" from "peer sending but our receiver never bound",
+        // causing false-recovery flapping that starved rungs 2/3 of the
+        // escalation ladder.
         let arrivedIdle =
-            now - videoDiagLastArrivedIncreaseMs >= 2 * VideoStallSelfHeal.stallWindowMs
+            now - videoDiagLastArrivedIncreaseMs >= VideoStallSelfHeal.stallArrivedIdleMs
         if videoStallLadder.isStalled {
             // Recovery is RENDERED-based (frames actually reaching the
             // renderer again) or true idleness. A mere arrivals hiccup must
