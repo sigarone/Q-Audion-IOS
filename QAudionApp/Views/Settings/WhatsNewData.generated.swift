@@ -9,10 +9,24 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.783",
+              date: "2026-07-15",
+              title: "v1.0.783",
+              bullets: [
+                "fix(groups): register iOS-created groups server-side (POST /api/v1/groups)",
+                "feat(groups): Fase-1A — add/remove member UI + epoch persistence (the keystone)",
+              ]),
+        .init(id: "v1.0.782",
+              date: "2026-07-15",
+              title: "v1.0.782",
+              bullets: [
+                "feat(groups): Fase-0 client — group_membership_changed, group-call push + ring screen",
+              ]),
         .init(id: "v1.0.781",
               date: "2026-07-14",
               title: "v1.0.781",
               bullets: [
+                "chore: regenerate changelog for v1.0.781",
                 "fix(group-chat): sendGroupDelivered — getWebSocketClient() is non-optional",
               ]),
         .init(id: "v1.0.780",
@@ -143,22 +157,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.764",
                 "fix(diag): stop truncating MetricKit crash termination reason at 23 chars",
-              ]),
-        .init(id: "v1.0.763",
-              date: "2026-07-12",
-              title: "v1.0.763",
-              bullets: [
-                "chore: regenerate changelog for v1.0.763",
-                "fix(crypto): stop sending legacy QUAD OFFER, closes dual-path key-derivation race",
-              ]),
-        .init(id: "v1.0.762",
-              date: "2026-07-12",
-              title: "v1.0.762",
-              bullets: [
-                "chore: regenerate changelog for v1.0.762",
-                "fix(calling): buffer-and-replay the pre-callContactId OFFER instead of relaxing the guard",
-                "revert(security): restore strict callContactId guard — d3b304f was a regression",
-                "fix(tools): symbolicate.py crashes on Windows console for inlined-frame arrow",
               ]),
     ]
 }
