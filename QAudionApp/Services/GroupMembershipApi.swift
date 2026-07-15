@@ -40,6 +40,16 @@ enum GroupMembershipEnvelope {
     static let opAdd = "member_added"
     static let opRemove = "member_removed"
     static let opLeave = "member_left"
+    /// Fase 1C — envelope `t` for `PUT …/metadata` (rename/avatar). `uid`
+    /// carries the lowercase-hex SHA-256 of the RAW pre-base64 encrypted
+    /// blob bytes, not a user id (server contract, verbatim).
+    static let opMetadataUpdated = "metadata_updated"
+    /// Fase 1C — envelope `t` for `POST/DELETE …/admins/{uid}`. `uid` is
+    /// the TARGET user id being promoted/demoted. NOTE: distinct from the
+    /// inbound `group_membership_changed` WS `operation` values, which are
+    /// `"admin_add"`/`"admin_remove"` (server contract, verbatim).
+    static let opAdminAdd = "admin_added"
+    static let opAdminRemove = "admin_removed"
 
     /// Render the canonical envelope bytes.
     /// - Parameters:
@@ -96,6 +106,22 @@ enum GroupMembershipEnvelope {
     }
 }
 
+// MARK: - Fase 1C — metadata payload (packed BEFORE encryption)
+
+/// The plaintext JSON packed into the 0xE4 group wire, per the server
+/// contract (verbatim): `{name, avatar_ref}` — `avatar_ref` omitted
+/// (nil) for "no avatar". Never sent over HTTP directly; only its
+/// ENCRYPTED wire bytes (`metadata_blob_b64`) are.
+struct GroupMetadataPayload: Codable, Equatable {
+    let name: String
+    let avatarRef: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case avatarRef = "avatar_ref"
+    }
+}
+
 // MARK: - REST client
 
 struct GroupMembershipResult {
@@ -105,6 +131,27 @@ struct GroupMembershipResult {
     /// The HTTP status the server returned (201/200 on success; 401 not
     /// admin, 404 group/member not found, 409 already member, 410
     /// dissolved / last admin, 422 envelope mismatch).
+    let statusCode: Int
+    var isSuccess: Bool { (200..<300).contains(statusCode) }
+}
+
+/// Fase 1C — reply of `PUT …/metadata`: `{group_id, metadata_version,
+/// server_ts}`.
+struct GroupMetadataResult {
+    let metadataVersion: UInt32
+    let statusCode: Int
+    var isSuccess: Bool { (200..<300).contains(statusCode) }
+}
+
+/// Fase 1C — reply of `GET /api/v1/groups/{gid}` (group load/join
+/// recovery). `metadataBlobB64`/`metadataVersion` are omitted server-side
+/// when unset — nil / 0 here means "this group has no metadata yet".
+struct GroupFetchResult {
+    let groupEpoch: UInt32
+    let members: [String]
+    let admins: [String]
+    let metadataBlobB64: String?
+    let metadataVersion: UInt32
     let statusCode: Int
     var isSuccess: Bool { (200..<300).contains(statusCode) }
 }
@@ -202,6 +249,120 @@ final class GroupMembershipApi {
         return await fire(req, label: "groups.removeMember[\(userId)]")
     }
 
+    /// POST /api/v1/groups/{gid}/admins/{uid} — admin promotes `userId`.
+    func promoteAdmin(
+        groupIdWire: String,
+        userId: String,
+        signedEnvelopeB64: String,
+        adminSignatureB64: String
+    ) async -> GroupMembershipResult? {
+        guard let url = endpoint("/api/v1/groups/\(groupIdWire)/admins/\(userId)") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        addAuth(&req)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "signed_envelope_b64": signedEnvelopeB64,
+            "admin_signature_b64": adminSignatureB64,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return await fire(req, label: "groups.promoteAdmin[\(userId)]")
+    }
+
+    /// DELETE /api/v1/groups/{gid}/admins/{uid} — admin demotes `userId`.
+    /// Server replies 409 if `userId` is the last remaining admin.
+    func demoteAdmin(
+        groupIdWire: String,
+        userId: String,
+        signedEnvelopeB64: String,
+        adminSignatureB64: String
+    ) async -> GroupMembershipResult? {
+        guard let url = endpoint("/api/v1/groups/\(groupIdWire)/admins/\(userId)") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        addAuth(&req)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "signed_envelope_b64": signedEnvelopeB64,
+            "admin_signature_b64": adminSignatureB64,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return await fire(req, label: "groups.demoteAdmin[\(userId)]")
+    }
+
+    /// PUT /api/v1/groups/{gid}/metadata — admin renames / sets the avatar.
+    /// `metadataBlobB64` is the base64 of the ENCRYPTED (0xE4 wire) blob,
+    /// NOT the plaintext JSON.
+    func updateMetadata(
+        groupIdWire: String,
+        metadataBlobB64: String,
+        signedEnvelopeB64: String,
+        adminSignatureB64: String
+    ) async -> GroupMetadataResult? {
+        guard let url = endpoint("/api/v1/groups/\(groupIdWire)/metadata") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        addAuth(&req)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "metadata_blob_b64": metadataBlobB64,
+            "signed_envelope_b64": signedEnvelopeB64,
+            "admin_signature_b64": adminSignatureB64,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let (data, status) = await fireRaw(req, label: "groups.updateMetadata") else { return nil }
+        guard (200..<300).contains(status) else {
+            return GroupMetadataResult(metadataVersion: 0, statusCode: status)
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let version: UInt32
+        if let n = json?["metadata_version"] as? NSNumber {
+            version = UInt32(truncatingIfNeeded: n.int64Value)
+        } else {
+            version = 0
+        }
+        return GroupMetadataResult(metadataVersion: version, statusCode: status)
+    }
+
+    /// GET /api/v1/groups/{gid} — group load/join recovery (Fase 1C: a
+    /// fresh device that only has the roster from `group_membership_changed`
+    /// pulls the current `metadata_blob_b64`/`metadata_version` here so it
+    /// can decrypt+apply the group name/avatar without waiting for the
+    /// next live rename).
+    func fetchGroup(groupIdWire: String) async -> GroupFetchResult? {
+        guard let url = endpoint("/api/v1/groups/\(groupIdWire)") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        addAuth(&req)
+        guard let (data, status) = await fireRaw(req, label: "groups.fetch[\(groupIdWire)]") else { return nil }
+        guard (200..<300).contains(status) else {
+            return GroupFetchResult(groupEpoch: 0, members: [], admins: [],
+                                     metadataBlobB64: nil, metadataVersion: 0, statusCode: status)
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let epochAny = json?["group_epoch"]
+        let epoch: UInt32
+        if let n = epochAny as? NSNumber {
+            epoch = UInt32(truncatingIfNeeded: n.int64Value)
+        } else {
+            epoch = 0
+        }
+        let versionAny = json?["metadata_version"]
+        let version: UInt32
+        if let n = versionAny as? NSNumber {
+            version = UInt32(truncatingIfNeeded: n.int64Value)
+        } else {
+            version = 0
+        }
+        return GroupFetchResult(
+            groupEpoch: epoch,
+            members: json?["members"] as? [String] ?? [],
+            admins: json?["admins"] as? [String] ?? [],
+            metadataBlobB64: json?["metadata_blob_b64"] as? String,
+            metadataVersion: version,
+            statusCode: status)
+    }
+
     // MARK: - Internals
 
     private func endpoint(_ path: String) -> URL? {
@@ -216,26 +377,38 @@ final class GroupMembershipApi {
     }
 
     private func fire(_ req: URLRequest, label: String) async -> GroupMembershipResult? {
+        guard let (data, status) = await fireRaw(req, label: label) else { return nil }
+        guard (200..<300).contains(status) else {
+            return GroupMembershipResult(groupEpoch: 0, members: [], admins: [], statusCode: status)
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let epochAny = json?["group_epoch"]
+        let epoch: UInt32
+        if let n = epochAny as? NSNumber {
+            epoch = UInt32(truncatingIfNeeded: n.int64Value)
+        } else {
+            epoch = 0
+        }
+        let members = json?["members"] as? [String] ?? []
+        let admins = json?["admins"] as? [String] ?? []
+        return GroupMembershipResult(
+            groupEpoch: epoch, members: members, admins: admins, statusCode: status)
+    }
+
+    /// Fase 1C — raw fetch shared by `fire` (membershipResponse shape) and
+    /// the new metadata/GET endpoints (different reply shapes). Returns nil
+    /// only on a transport-level failure (no HTTP response at all); any
+    /// HTTP status — including 4xx/5xx — is returned so the caller can
+    /// surface it via its own result struct's `statusCode`.
+    private func fireRaw(_ req: URLRequest, label: String) async -> (data: Data, status: Int)? {
         do {
             let (data, resp) = try await session.data(for: req)
             guard let http = resp as? HTTPURLResponse else { return nil }
             let status = http.statusCode
-            guard (200..<300).contains(status) else {
+            if !(200..<300).contains(status) {
                 print("[GroupMembershipApi] \(label) HTTP \(status)")
-                return GroupMembershipResult(groupEpoch: 0, members: [], admins: [], statusCode: status)
             }
-            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let epochAny = json?["group_epoch"]
-            let epoch: UInt32
-            if let n = epochAny as? NSNumber {
-                epoch = UInt32(truncatingIfNeeded: n.int64Value)
-            } else {
-                epoch = 0
-            }
-            let members = json?["members"] as? [String] ?? []
-            let admins = json?["admins"] as? [String] ?? []
-            return GroupMembershipResult(
-                groupEpoch: epoch, members: members, admins: admins, statusCode: status)
+            return (data, status)
         } catch {
             print("[GroupMembershipApi] \(label) error: \(error.localizedDescription)")
             return nil

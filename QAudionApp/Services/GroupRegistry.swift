@@ -40,10 +40,24 @@ public final class GroupRegistry: ObservableObject {
         /// (before Fase 1A, GroupChatService hardcoded epoch 1 → the bump
         /// was silently lost → cross-platform decrypt broke on remove).
         public var epoch: UInt32
+        /// Fase 1C — the raw tus `avatar_ref` (file id) from the last
+        /// applied `group_metadata_changed` / `metadata_blob_b64`, or nil
+        /// if the group has no avatar. The DISPLAY url is derived on
+        /// demand (`serverUrl + "/api/v1/files/" + avatarRef`, same
+        /// convention as `AvatarUploader`), never persisted as a URL —
+        /// so a `serverUrl` change (e.g. dev/prod switch) never strands
+        /// a stale host in a cached entry.
+        public var avatarRef: String?
+        /// Fase 1C — the server-canonical `metadata_version` (from the
+        /// PUT reply / `group_metadata_changed` / GET `groupResponse`).
+        /// Monotonic guard so a stale/replayed event never reverts a
+        /// newer rename/avatar (mirrors `epoch`'s role for membership).
+        public var metadataVersion: UInt32
 
         public init(id: String, name: String, members: [String],
                     admins: [String], joinedAt: Date = Date(),
-                    bootstrapped: Bool = false, epoch: UInt32 = 1) {
+                    bootstrapped: Bool = false, epoch: UInt32 = 1,
+                    avatarRef: String? = nil, metadataVersion: UInt32 = 0) {
             self.id = id
             self.name = name
             self.members = members
@@ -51,14 +65,18 @@ public final class GroupRegistry: ObservableObject {
             self.joinedAt = joinedAt
             self.bootstrapped = bootstrapped
             self.epoch = epoch
+            self.avatarRef = avatarRef
+            self.metadataVersion = metadataVersion
         }
 
-        // Custom Decodable so pre-Fase-1A persisted entries (no `epoch`
-        // key) decode cleanly to the default epoch 1 instead of throwing.
-        // (Swift's synthesized init(from:) ignores property default values
-        // for absent keys, so we must decode-if-present explicitly.)
+        // Custom Decodable so pre-Fase-1A/1C persisted entries (missing
+        // `epoch`/`avatarRef`/`metadataVersion` keys) decode cleanly to
+        // their defaults instead of throwing. (Swift's synthesized
+        // init(from:) ignores property default values for absent keys,
+        // so we must decode-if-present explicitly.)
         enum CodingKeys: String, CodingKey {
             case id, name, members, admins, joinedAt, bootstrapped, epoch
+            case avatarRef, metadataVersion
         }
 
         public init(from decoder: Decoder) throws {
@@ -70,6 +88,8 @@ public final class GroupRegistry: ObservableObject {
             self.joinedAt = try c.decode(Date.self, forKey: .joinedAt)
             self.bootstrapped = try c.decodeIfPresent(Bool.self, forKey: .bootstrapped) ?? false
             self.epoch = try c.decodeIfPresent(UInt32.self, forKey: .epoch) ?? 1
+            self.avatarRef = try c.decodeIfPresent(String.self, forKey: .avatarRef)
+            self.metadataVersion = try c.decodeIfPresent(UInt32.self, forKey: .metadataVersion) ?? 0
         }
     }
 
@@ -161,6 +181,25 @@ public final class GroupRegistry: ObservableObject {
         guard let idx = entries.firstIndex(where: { $0.id == groupId }) else { return }
         guard epoch > entries[idx].epoch else { return }
         entries[idx].epoch = epoch
+        persist()
+    }
+
+    /// Fase 1C — set the group's `avatar_ref` (nil clears the avatar).
+    /// Unlike `setEpoch` this is NOT monotonic-guarded by itself — callers
+    /// pair it with `setMetadataVersion`, whose monotonic check is the
+    /// actual replay/downgrade defense for the (name, avatar) pair.
+    public func setAvatarRef(groupId: String, avatarRef: String?) {
+        guard let idx = entries.firstIndex(where: { $0.id == groupId }) else { return }
+        entries[idx].avatarRef = avatarRef
+        persist()
+    }
+
+    /// Fase 1C — record the server-canonical `metadata_version`. Monotonic,
+    /// same replay/downgrade defense as `setEpoch`.
+    public func setMetadataVersion(groupId: String, version: UInt32) {
+        guard let idx = entries.firstIndex(where: { $0.id == groupId }) else { return }
+        guard version > entries[idx].metadataVersion else { return }
+        entries[idx].metadataVersion = version
         persist()
     }
 }

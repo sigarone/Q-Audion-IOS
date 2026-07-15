@@ -119,6 +119,18 @@ struct GroupChatScreen: View {
                     onRemoveMember: { uid in
                         appState.removeGroupMember(groupId: groupHex, member: uid)
                     },
+                    onRename: { newName in
+                        appState.updateGroupMetadata(groupId: groupHex, newName: newName, avatarData: nil)
+                    },
+                    onSetAvatar: { jpegData in
+                        appState.updateGroupMetadata(groupId: groupHex, newName: nil, avatarData: jpegData)
+                    },
+                    onPromoteAdmin: { uid in
+                        appState.promoteGroupAdmin(groupId: groupHex, member: uid)
+                    },
+                    onDemoteAdmin: { uid in
+                        appState.demoteGroupAdmin(groupId: groupHex, member: uid)
+                    },
                     onLeft: {
                         // W409: actually leave the group via AppState.
                         // Ships qa_grp:1 t:"member_left" envelope to all
@@ -681,7 +693,12 @@ struct GroupChatScreen: View {
                 groupId: groupId,
                 name: entry.name,
                 epoch: Int(entry.epoch),
-                members: rows)
+                members: rows,
+                // Fase 1C — same "serverUrl + /api/v1/files/{fileId}"
+                // convention `AvatarUploader` uses for the profile avatar.
+                avatarUrl: entry.avatarRef.flatMap {
+                    URL(string: "\(appState.serverUrl)/api/v1/files/\($0)")
+                })
         }
         // Stub fallback — kept so a fresh group view doesn't crash
         // before the user accepts the invite (or AppState bootstrap

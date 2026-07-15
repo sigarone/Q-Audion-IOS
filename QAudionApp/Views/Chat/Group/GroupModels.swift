@@ -129,12 +129,18 @@ public struct GroupInfoUiState: Equatable {
     public var epoch: Int
     public var members: [GroupMemberRowUi]
     public var error: String?
+    /// Fase 1C — the group avatar, derived from the local `avatarRef`
+    /// (`serverUrl + "/api/v1/files/" + avatarRef`). nil ⇒ no avatar set
+    /// (falls back to the person.3.fill placeholder, same as before 1C).
+    public var avatarUrl: URL?
 
     public init(groupId: UUID = UUID(),
                 name: String = "", epoch: Int = 0,
-                members: [GroupMemberRowUi] = [], error: String? = nil) {
+                members: [GroupMemberRowUi] = [], error: String? = nil,
+                avatarUrl: URL? = nil) {
         self.groupId = groupId
         self.name = name; self.epoch = epoch
         self.members = members; self.error = error
+        self.avatarUrl = avatarUrl
     }
 }

@@ -4765,6 +4765,18 @@ final class AppState: ObservableObject {
                 self.handleGroupMembershipChanged(data)
             }
         }
+
+        // Fase 1C — server-authoritative group rename/avatar fan-out
+        // (`groups_metadata.go` — PUT …/metadata replies to the actor
+        // synchronously; every OTHER current member learns it here).
+        // PERSISTENT handler, same reasoning as group_membership_changed
+        // above: a rename can land while the group UI was never opened.
+        ws.registerHandler(type: "group_metadata_changed") { [weak self] _, data in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.handleGroupMetadataChanged(data)
+            }
+        }
     }
 
     /// W328: replay one entry from a `msg_pending_sync` batch as if it
@@ -9993,6 +10005,202 @@ extension AppState {
         }
     }
 
+    // MARK: - Fase 1C — admin promote / demote
+
+    /// Admin promotes `uid` (an existing member) to admin. Does NOT touch
+    /// membership or the crypto epoch (server contract, verbatim) — only
+    /// the local admin set + the server-canonical epoch (defensive, same
+    /// monotonic guard as add/remove) are updated on success.
+    @MainActor
+    public func promoteGroupAdmin(groupId groupHex: String, member uid: String) {
+        guard let selfId = currentUserId, !selfId.isEmpty else { return }
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
+        guard entry.admins.contains(selfId) else {
+            print("[AppState] promoteGroupAdmin: self not admin of \(groupHex)")
+            return
+        }
+        guard entry.members.contains(uid), !entry.admins.contains(uid) else { return }
+        let now = Int64(Date().timeIntervalSince1970)
+        // Neither add nor remove — the server `e_proposed` base is the
+        // CURRENT persisted epoch (unchanged by admin promote/demote).
+        let eProposed = entry.epoch
+
+        guard let groupIdWire = Self.hexToDashedUUID(groupHex),
+              let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken),
+              let identity = sovereignIdentity.loadIdentity() else { return }
+        let envelope = GroupMembershipEnvelope.build(
+            actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
+            operation: GroupMembershipEnvelope.opAdminAdd,
+            tsUnixSeconds: now, subjectUserId: uid)
+        guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else { return }
+        let envB64 = envelope.base64EncodedString()
+        let sigB64 = sig.base64EncodedString()
+        Task { @MainActor in
+            guard let res = await api.promoteAdmin(
+                groupIdWire: groupIdWire, userId: uid,
+                signedEnvelopeB64: envB64, adminSignatureB64: sigB64),
+                res.isSuccess else { return }
+            GroupRegistry.shared.setAdmin(groupId: groupHex, userId: uid, isAdmin: true)
+            if res.groupEpoch > 0 {
+                GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: res.groupEpoch)
+            }
+            NotificationCenter.default.post(
+                name: AppState.groupRegistryChangedNotification,
+                object: nil, userInfo: ["groupId": groupHex])
+        }
+    }
+
+    /// Admin demotes `uid` from admin. Server replies 409 if `uid` is the
+    /// last remaining admin — left untouched locally on any non-2xx reply.
+    @MainActor
+    public func demoteGroupAdmin(groupId groupHex: String, member uid: String) {
+        guard let selfId = currentUserId, !selfId.isEmpty else { return }
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
+        guard entry.admins.contains(selfId) else {
+            print("[AppState] demoteGroupAdmin: self not admin of \(groupHex)")
+            return
+        }
+        guard entry.admins.contains(uid) else { return }
+        let now = Int64(Date().timeIntervalSince1970)
+        let eProposed = entry.epoch
+
+        guard let groupIdWire = Self.hexToDashedUUID(groupHex),
+              let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken),
+              let identity = sovereignIdentity.loadIdentity() else { return }
+        let envelope = GroupMembershipEnvelope.build(
+            actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
+            operation: GroupMembershipEnvelope.opAdminRemove,
+            tsUnixSeconds: now, subjectUserId: uid)
+        guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else { return }
+        let envB64 = envelope.base64EncodedString()
+        let sigB64 = sig.base64EncodedString()
+        Task { @MainActor in
+            guard let res = await api.demoteAdmin(
+                groupIdWire: groupIdWire, userId: uid,
+                signedEnvelopeB64: envB64, adminSignatureB64: sigB64),
+                res.isSuccess else {
+                print("[AppState] demoteGroupAdmin: server rejected (last admin?) for \(uid)")
+                return
+            }
+            GroupRegistry.shared.setAdmin(groupId: groupHex, userId: uid, isAdmin: false)
+            if res.groupEpoch > 0 {
+                GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: res.groupEpoch)
+            }
+            NotificationCenter.default.post(
+                name: AppState.groupRegistryChangedNotification,
+                object: nil, userInfo: ["groupId": groupHex])
+        }
+    }
+
+    // MARK: - Fase 1C — group rename / avatar (admin-gated)
+
+    /// Admin renames the group and/or sets its avatar. Packs `{name,
+    /// avatar_ref}` as JSON and encrypts it with the group's own 0xE4
+    /// GroupSenderKey engine — the SAME primitive `sendGroupOverWire` uses
+    /// for group TEXT (the CURRENT sender's send-chain via
+    /// `GroupChatService.encryptForWire`), so no new key is introduced.
+    ///
+    /// `newName` nil/blank keeps the current name (the packed JSON always
+    /// carries a name — the contract's "omit" clause is for `avatar_ref`
+    /// only). `avatarData` nil keeps the current avatar; pass already
+    /// resized+JPEG-encoded bytes (the caller does that, mirroring
+    /// `GroupAttachmentSender`'s plain `Data` contract instead of a
+    /// `UIImage` one, so this file needs no UIKit import). Avatar upload
+    /// reuses the SAME tus primitive as `AvatarUploader`/
+    /// `GroupAttachmentSender` (`storageApi.uploadFile` → file_id) and the
+    /// SAME plain `GET /api/v1/files/{file_id}` convention `AvatarUploader`
+    /// uses for the profile avatar (no per-member capability token — the
+    /// server contract's `{name, avatar_ref}` shape has no room for a `dl`
+    /// map like group attachments carry).
+    @MainActor
+    public func updateGroupMetadata(groupId groupHex: String, newName: String?, avatarData: Data?) {
+        guard let selfId = currentUserId, !selfId.isEmpty else { return }
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
+        guard entry.admins.contains(selfId) else {
+            print("[AppState] updateGroupMetadata: self not admin of \(groupHex)")
+            return
+        }
+        let trimmed = newName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = (trimmed?.isEmpty == false) ? trimmed! : entry.name
+        guard !resolvedName.isEmpty else { return }
+
+        guard let groupIdWire = Self.hexToDashedUUID(groupHex),
+              let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken),
+              let identity = sovereignIdentity.loadIdentity() else { return }
+        // Pre-captured (not `self`) so the Task below closes over values,
+        // not the AppState instance — same lifetime discipline as
+        // addGroupMembers/removeGroupMember.
+        let identityMgr = sovereignIdentity
+        let uploadProvider = makeUploadProvider()
+        let members = entry.members
+        let priorAvatarRef = entry.avatarRef
+        let eProposed = entry.epoch
+
+        Task { @MainActor in
+            // 1) Avatar upload (best-effort tus upload — same primitive as
+            //    AvatarUploader/GroupAttachmentSender: POST /files/upload →
+            //    file_id). A failure here aborts the WHOLE update (rather
+            //    than silently shipping a rename that drops the avatar the
+            //    admin thought they were setting).
+            var avatarRef = priorAvatarRef
+            if let data = avatarData {
+                do {
+                    avatarRef = try await uploadProvider.storageApi.uploadFile(
+                        data: data, filename: "grpavatar-\(groupHex.prefix(8)).jpg")
+                } catch {
+                    print("[AppState] updateGroupMetadata: avatar upload failed: \(error)")
+                    return
+                }
+            }
+
+            let payload = GroupMetadataPayload(name: resolvedName, avatarRef: avatarRef)
+            guard let payloadData = try? JSONEncoder().encode(payload),
+                  let payloadJson = String(data: payloadData, encoding: .utf8) else {
+                print("[AppState] updateGroupMetadata: payload encode failed")
+                return
+            }
+
+            // 2) Encrypt with the CURRENT sender's 0xE4 send-chain.
+            guard let sealed = GroupChatService.shared.encryptForWire(
+                plaintext: payloadJson, groupId: groupHex,
+                members: members, selfId: selfId) else {
+                print("[AppState] updateGroupMetadata: encrypt failed for \(groupHex)")
+                return
+            }
+            let blobB64 = sealed.wire.base64EncodedString()
+            // Server contract: envelope `uid` = lowercase-hex SHA-256 of
+            // the RAW pre-base64 encrypted blob bytes (NOT a user id).
+            let blobHashHex = SHA256.hash(data: sealed.wire)
+                .map { String(format: "%02x", $0) }.joined()
+            let now = Int64(Date().timeIntervalSince1970)
+            let envelope = GroupMembershipEnvelope.build(
+                actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
+                operation: GroupMembershipEnvelope.opMetadataUpdated,
+                tsUnixSeconds: now, subjectUserId: blobHashHex)
+            guard let sig = try? identityMgr.signChallenge(envelope, identity: identity) else { return }
+
+            guard let res = await api.updateMetadata(
+                groupIdWire: groupIdWire, metadataBlobB64: blobB64,
+                signedEnvelopeB64: envelope.base64EncodedString(),
+                adminSignatureB64: sig.base64EncodedString()),
+                res.isSuccess else {
+                print("[AppState] updateGroupMetadata: server rejected for \(groupHex)")
+                return
+            }
+            // 3) Apply locally — same treatment the actor gets synchronously
+            //    that OTHER members get asynchronously from
+            //    `group_metadata_changed`.
+            GroupRegistry.shared.renameGroup(groupId: groupHex, newName: resolvedName)
+            GroupRegistry.shared.setAvatarRef(groupId: groupHex, avatarRef: avatarRef)
+            if res.metadataVersion > 0 {
+                GroupRegistry.shared.setMetadataVersion(groupId: groupHex, version: res.metadataVersion)
+            }
+            NotificationCenter.default.post(
+                name: AppState.groupRegistryChangedNotification,
+                object: nil, userInfo: ["groupId": groupHex])
+        }
+    }
+
     /// Reconstruct the dashed-UUID server wire id from the dash-stripped
     /// 32-char hex the local `GroupRegistry` keys on. Returns nil if the
     /// input isn't a 32-char hex string (a non-UUID / malformed id).
@@ -10100,8 +10308,17 @@ extension AppState {
             GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: serverEpoch)
         }
 
-        // Crypto side-effects.
-        if isRemoval, !subject.isEmpty, subject != selfId {
+        // Crypto side-effects. Fase 1C — admin promote/demote ("admin_add" /
+        // "admin_remove") reuse this SAME event but never touch membership
+        // or the crypto epoch (server contract, verbatim) — `admins` is
+        // already applied above via the server-authoritative roster write,
+        // so there is nothing further to do for those two operations: no
+        // rekey (nobody was removed), no sender_key_init ship (nobody was
+        // added).
+        let isAdminOp = Self.isAdminMembershipOp(operation)
+        if isAdminOp {
+            // no-op — admin set already applied above.
+        } else if isRemoval, !subject.isEmpty, subject != selfId {
             // Fase 1A — the FORWARD-SECRECY path (§7.2). A remaining member
             // bumps the crypto epoch, rotates its own send chain to a fresh
             // SK_0 the removed member never learned, drops all recv chains,
@@ -10176,6 +10393,45 @@ extension AppState {
                 ])
         }
         print("[AppState] group_membership_changed: auto-joined \(groupHex.prefix(8))… (\(members.count) members)")
+
+        // Fase 1C — a fresh device only learns members/admins from this
+        // event (no name/avatar travels on `group_membership_changed`).
+        // Best-effort GET recovers the current `metadata_blob_b64` so the
+        // placeholder "xxxxxxxx…" name above doesn't linger until the next
+        // LIVE rename. Failure (offline / 404 / no metadata set yet) just
+        // keeps the placeholder — never blocks the bootstrap above.
+        recoverGroupMetadataOnBootstrap(groupHex: groupHex, selfId: selfId)
+    }
+
+    /// Fase 1C — `GET /api/v1/groups/{gid}` best-effort fetch + decrypt,
+    /// used only at fresh-device bootstrap (see call site above). Not
+    /// wired into the ordinary app-launch path — that path relies on the
+    /// vault-persisted `GroupRegistry.Entry.name` already set by a prior
+    /// live rename or this same recovery.
+    @MainActor
+    fileprivate func recoverGroupMetadataOnBootstrap(groupHex: String, selfId: String) {
+        guard let groupIdWire = Self.hexToDashedUUID(groupHex),
+              let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken) else { return }
+        Task { @MainActor in
+            guard let res = await api.fetchGroup(groupIdWire: groupIdWire), res.isSuccess,
+                  let blobB64 = res.metadataBlobB64, !blobB64.isEmpty,
+                  let wire = Data(base64Encoded: blobB64) else { return }
+            guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
+            // The GET reply doesn't carry `actor_user_id`, but the 0xE4
+            // wire header itself embeds `sender_id` (`GroupSenderKey`
+            // wire layout, spec §2) — unpack it instead of guessing.
+            guard let parsed = try? GroupSenderKey.unpackGroupWire(wire) else {
+                print("[AppState] recoverGroupMetadataOnBootstrap: malformed wire g=\(groupHex.prefix(8))")
+                return
+            }
+            guard let plaintext = GroupChatService.shared.decrypt(
+                wire: wire, senderId: parsed.senderId, groupId: groupHex,
+                members: entry.members, selfId: selfId) else {
+                print("[AppState] recoverGroupMetadataOnBootstrap: decrypt failed g=\(groupHex.prefix(8)) sender=\(parsed.senderId.prefix(8))")
+                return
+            }
+            self.applyGroupMetadataPayload(groupHex: groupHex, json: plaintext, version: res.metadataVersion)
+        }
     }
 
     /// Ship our `sender_key_init` to every member of `groupHex` that has not
@@ -10257,6 +10513,104 @@ extension AppState {
         default:
             return false
         }
+    }
+
+    /// Fase 1C — the `group_membership_changed` `operation` values for
+    /// admin promote/demote (server contract, verbatim: `"admin_add"` /
+    /// `"admin_remove"` — NOT the envelope `t`, which is
+    /// `"admin_added"`/`"admin_removed"`). Neither membership nor the
+    /// crypto epoch changes for these two.
+    fileprivate static func isAdminMembershipOp(_ operation: String) -> Bool {
+        switch operation {
+        case "admin_add", "admin_remove":
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+// MARK: - Fase 1C: server `group_metadata_changed` consumer
+
+extension AppState {
+
+    /// Apply one server-authoritative `group_metadata_changed` event —
+    /// decrypt the 0xE4 blob with the ACTOR's recv chain (same engine as
+    /// group TEXT) and update the local name/avatar.
+    ///
+    /// Wire: `{group_id, metadata_blob_b64, metadata_version, actor_user_id,
+    /// envelope_canonical_b64, envelope_signature_b64, server_ts, replay?}`
+    /// (server contract, verbatim). No `members`/`admins` array travels on
+    /// this event — the roster is unaffected (`group_epoch` is unchanged).
+    ///
+    /// Signature verification: NOT performed client-side, matching the
+    /// EXISTING precedent set by `handleGroupMembershipChanged` (which also
+    /// trusts the server-authoritative payload over the bearer-authed,
+    /// cert-pinned WS session rather than re-verifying `envelope_*_b64`).
+    /// The AEAD decrypt below is itself an authentication check: only a
+    /// client with a valid recv chain for `actor_user_id` can produce a
+    /// plaintext at all — a forged/corrupted blob fails here and is dropped.
+    @MainActor
+    fileprivate func handleGroupMetadataChanged(_ data: [String: Any]) {
+        guard let rawGroupId = data["group_id"] as? String, !rawGroupId.isEmpty,
+              let blobB64 = data["metadata_blob_b64"] as? String, !blobB64.isEmpty,
+              let wire = Data(base64Encoded: blobB64) else {
+            print("[AppState] group_metadata_changed missing required fields: \(data.keys)")
+            return
+        }
+        let groupHex = rawGroupId.replacingOccurrences(of: "-", with: "").lowercased()
+        let actor = (data["actor_user_id"] as? String) ?? ""
+        let version = Self.uint32Field(data["metadata_version"])
+        let selfId = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
+        guard !selfId.isEmpty, !actor.isEmpty else { return }
+
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else {
+            // Unknown group locally (no roster ⇒ no recv chain to decrypt
+            // against). The next `group_membership_changed` bootstrap (or a
+            // future GET-on-open) re-anchors us; nothing to apply yet.
+            print("[AppState] group_metadata_changed: unknown group \(groupHex.prefix(8))")
+            return
+        }
+        guard let plaintext = GroupChatService.shared.decrypt(
+            wire: wire, senderId: actor, groupId: groupHex,
+            members: entry.members, selfId: selfId) else {
+            print("[AppState] group_metadata_changed: decrypt failed g=\(groupHex.prefix(8)) actor=\(actor.prefix(8))")
+            return
+        }
+        applyGroupMetadataPayload(groupHex: groupHex, json: plaintext, version: version)
+    }
+
+    /// Parse+apply a decrypted `{name, avatar_ref}` payload (shared by the
+    /// live WS consumer above and the GET-on-bootstrap recovery path).
+    @MainActor
+    fileprivate func applyGroupMetadataPayload(groupHex: String, json: String, version: UInt32) {
+        guard let jsonData = json.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(GroupMetadataPayload.self, from: jsonData) else {
+            print("[AppState] group_metadata_changed: undecodable payload for \(groupHex.prefix(8))")
+            return
+        }
+        // Replay/downgrade defense — `setMetadataVersion` alone is monotonic,
+        // but that guard is useless unless the name/avatar WRITE below is
+        // gated by the SAME check: a stale/replayed event (e.g. a federated
+        // catch-up burst delivered out of order) must not overwrite a
+        // NEWER local rename with older data.
+        if version > 0,
+           let entry = GroupRegistry.shared.entry(for: groupHex),
+           version <= entry.metadataVersion {
+            print("[AppState] group_metadata_changed: stale version \(version) <= \(entry.metadataVersion) for \(groupHex.prefix(8)), ignored")
+            return
+        }
+        if !payload.name.isEmpty {
+            GroupRegistry.shared.renameGroup(groupId: groupHex, newName: payload.name)
+        }
+        GroupRegistry.shared.setAvatarRef(groupId: groupHex, avatarRef: payload.avatarRef)
+        if version > 0 {
+            GroupRegistry.shared.setMetadataVersion(groupId: groupHex, version: version)
+        }
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": groupHex])
     }
 }
 

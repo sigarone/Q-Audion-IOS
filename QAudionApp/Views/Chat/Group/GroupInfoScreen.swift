@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit      // Fase 1C: UIImage resize/JPEG-encode for the avatar picker
+import PhotosUI   // Fase 1C: group avatar picker (admin-only)
 
 /// Pannello di gruppo — nome, epoch, membri (con badge ADMIN), button
 /// "Esci dal gruppo". 1:1 port di Android
@@ -37,6 +39,12 @@ struct GroupInfoScreen: View {
     @State private var showingAddMembers = false
     @State private var selectedToAdd: Set<String> = []
     @State private var pendingRemoveMember: GroupMemberRowUi?
+    /// Fase 1C — rename sheet + avatar picker (admin-only) + per-row
+    /// promote/demote confirm.
+    @State private var showingRename = false
+    @State private var renameDraft = ""
+    @State private var avatarPickerItem: PhotosPickerItem?
+    @State private var pendingAdminToggle: GroupMemberRowUi?
     let onLeft: () -> Void
 
     // Fase 1A — admin membership affordances. Defaulted so pre-existing
@@ -46,18 +54,32 @@ struct GroupInfoScreen: View {
     private let addableContacts: [ContactPickerRowUi]
     private let onAddMembers: ([String]) -> Void
     private let onRemoveMember: (String) -> Void
+    // Fase 1C — rename/avatar + admin promote/demote. Same defaulting
+    // discipline as the Fase 1A callbacks above.
+    private let onRename: (String) -> Void
+    private let onSetAvatar: (Data) -> Void
+    private let onPromoteAdmin: (String) -> Void
+    private let onDemoteAdmin: (String) -> Void
 
     init(state: GroupInfoUiState,
          isSelfAdmin: Bool = false,
          addableContacts: [ContactPickerRowUi] = [],
          onAddMembers: @escaping ([String]) -> Void = { _ in },
          onRemoveMember: @escaping (String) -> Void = { _ in },
+         onRename: @escaping (String) -> Void = { _ in },
+         onSetAvatar: @escaping (Data) -> Void = { _ in },
+         onPromoteAdmin: @escaping (String) -> Void = { _ in },
+         onDemoteAdmin: @escaping (String) -> Void = { _ in },
          onLeft: @escaping () -> Void = {}) {
         _state = State(initialValue: state)
         self.isSelfAdmin = isSelfAdmin
         self.addableContacts = addableContacts
         self.onAddMembers = onAddMembers
         self.onRemoveMember = onRemoveMember
+        self.onRename = onRename
+        self.onSetAvatar = onSetAvatar
+        self.onPromoteAdmin = onPromoteAdmin
+        self.onDemoteAdmin = onDemoteAdmin
         self.onLeft = onLeft
     }
 
@@ -154,6 +176,81 @@ struct GroupInfoScreen: View {
         } message: {
             Text("Non riceverà più i messaggi del gruppo. Le chiavi vengono rigenerate per gli altri membri.")
         }
+        // Fase 1C — rename (admin).
+        .alert("Rinomina gruppo", isPresented: $showingRename) {
+            TextField("Nome gruppo", text: $renameDraft)
+            Button("Annulla", role: .cancel) { showingRename = false }
+            Button("Salva") {
+                let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                showingRename = false
+                guard !trimmed.isEmpty, trimmed != state.name else { return }
+                onRename(trimmed)
+                state.name = trimmed
+                snackbar?.show(.init(text: "Gruppo rinominato.", severity: .info))
+            }
+        }
+        // Fase 1C — admin promote/demote confirmation.
+        .alert(pendingAdminToggle.map {
+                $0.isAdmin ? "Rimuovere \($0.displayName) da admin?"
+                           : "Rendere \($0.displayName) admin?"
+               } ?? "",
+               isPresented: Binding(
+                get: { pendingAdminToggle != nil },
+                set: { if !$0 { pendingAdminToggle = nil } })) {
+            Button("Annulla", role: .cancel) { pendingAdminToggle = nil }
+            Button(pendingAdminToggle?.isAdmin == true ? "Rimuovi" : "Rendi admin") {
+                if let m = pendingAdminToggle {
+                    if m.isAdmin {
+                        onDemoteAdmin(m.userId)
+                        snackbar?.show(.init(text: "\(m.displayName) non è più admin.", severity: .info))
+                    } else {
+                        onPromoteAdmin(m.userId)
+                        snackbar?.show(.init(text: "\(m.displayName) è ora admin.", severity: .info))
+                    }
+                }
+                pendingAdminToggle = nil
+            }
+        }
+    }
+
+    /// Fase 1C — resize + JPEG-encode the picked avatar and hand the raw
+    /// bytes to `onSetAvatar` (the caller does the tus upload — mirrors
+    /// `GroupChatScreen.handlePickedPhotos`' load→encode→hand-off shape).
+    private func handlePickedAvatar(_ item: PhotosPickerItem?) {
+        guard let item else { return }
+        avatarPickerItem = nil
+        Task { @MainActor in
+            guard let raw = try? await item.loadTransferable(type: Data.self),
+                  let img = UIImage(data: raw) else {
+                snackbar?.show(.init(text: "Immagine non leggibile", severity: .warning))
+                return
+            }
+            let resized = Self.resizeAvatar(img, to: CGSize(width: 512, height: 512))
+            guard let jpeg = resized.jpegData(compressionQuality: 0.85) else {
+                snackbar?.show(.init(text: "Immagine non leggibile", severity: .warning))
+                return
+            }
+            onSetAvatar(jpeg)
+            snackbar?.show(.init(text: "Immagine del gruppo aggiornata.", severity: .info))
+        }
+    }
+
+    /// Mirrors `AvatarUploader.resize` (512x512 max, aspect-preserving) —
+    /// duplicated locally rather than made public API surface JUST for
+    /// this call site, matching the file's existing static-helper idiom.
+    private static func resizeAvatar(_ image: UIImage, to maxSize: CGSize) -> UIImage {
+        let aspectRatio = image.size.width / image.size.height
+        var newSize = maxSize
+        if aspectRatio > 1 {
+            newSize.height = maxSize.width / aspectRatio
+        } else {
+            newSize.width = maxSize.height * aspectRatio
+        }
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 
     /// Contacts eligible to add: those not already in the group roster.
@@ -174,11 +271,45 @@ struct GroupInfoScreen: View {
             }
             .accessibilityLabel("Indietro")
 
+            // Fase 1C — group avatar. Admin-only tap opens the photo
+            // picker; non-admins just see the current avatar/placeholder.
+            Group {
+                if isSelfAdmin {
+                    PhotosPicker(selection: $avatarPickerItem, matching: .images) {
+                        QAudionAvatar(displayName: state.name, imageURL: state.avatarUrl,
+                                      kind: .group, size: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cambia immagine del gruppo")
+                } else {
+                    QAudionAvatar(displayName: state.name, imageURL: state.avatarUrl,
+                                  kind: .group, size: 36)
+                }
+            }
+            .onChange(of: avatarPickerItem) { newItem in
+                handlePickedAvatar(newItem)
+            }
+
             VStack(alignment: .leading, spacing: 1) {
-                Text(state.name)
-                    .qaudionStyle(type.titleMedium)
-                    .foregroundStyle(scheme.onSurface)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(state.name)
+                        .qaudionStyle(type.titleMedium)
+                        .foregroundStyle(scheme.onSurface)
+                        .lineLimit(1)
+                    // Fase 1C — admin-only rename affordance.
+                    if isSelfAdmin {
+                        Button(action: {
+                            renameDraft = state.name
+                            showingRename = true
+                        }) {
+                            Image(systemName: "pencil.circle.fill")
+                                .font(.system(size: 15))
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Rinomina gruppo")
+                    }
+                }
                 Text("epoch \(state.epoch) · \(state.members.count) membri")
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
@@ -229,6 +360,21 @@ struct GroupInfoScreen: View {
                 }
             }
             Spacer(minLength: 8)
+            // Fase 1C — admin can promote/demote any OTHER member. Tapping
+            // arms a confirmation alert (no rekey — membership/epoch are
+            // unaffected, unlike remove).
+            if isSelfAdmin && !member.isSelf {
+                Button(action: { pendingAdminToggle = member }) {
+                    Image(systemName: member.isAdmin ? "person.crop.circle.badge.minus"
+                                                      : "person.crop.circle.badge.checkmark")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(scheme.primary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(member.isAdmin
+                    ? "Rimuovi \(member.displayName) da admin"
+                    : "Rendi \(member.displayName) admin")
+            }
             // Fase 1A — admin can remove any OTHER member. Tapping arms a
             // confirmation alert (destructive, forward-secrecy rekey).
             if isSelfAdmin && !member.isSelf {
