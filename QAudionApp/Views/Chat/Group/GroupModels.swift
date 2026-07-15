@@ -69,12 +69,19 @@ public struct GroupMessageRowUi: Identifiable, Equatable {
     public let mediaLocalPath: String?
     public let fileName: String?
     public let byteLength: Int64?
+    /// Fase 2 — delivery/read state for a `mine` row, derived from
+    /// `GroupMessageStore.Stored.deliveredBy`/`readBy` against the current
+    /// roster (WhatsApp-style ALL-members threshold — see
+    /// `GroupChatScreen.deliveryStatus(for:)`). Always nil for an inbound
+    /// (non-mine) row, mirroring the 1:1 `MessageBubble` contract where
+    /// only outgoing bubbles show a delivery icon.
+    public let delivery: MessageDelivery?
 
     public init(id: String, text: String, senderLabel: String,
                 timestamp: String, mine: Bool,
                 attachmentKind: String? = nil, mediaMime: String? = nil,
                 mediaLocalPath: String? = nil, fileName: String? = nil,
-                byteLength: Int64? = nil) {
+                byteLength: Int64? = nil, delivery: MessageDelivery? = nil) {
         self.id = id; self.text = text; self.senderLabel = senderLabel
         self.timestamp = timestamp; self.mine = mine
         self.attachmentKind = attachmentKind
@@ -82,6 +89,7 @@ public struct GroupMessageRowUi: Identifiable, Equatable {
         self.mediaLocalPath = mediaLocalPath
         self.fileName = fileName
         self.byteLength = byteLength
+        self.delivery = delivery
     }
 }
 

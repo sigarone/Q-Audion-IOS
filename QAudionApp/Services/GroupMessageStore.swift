@@ -55,12 +55,23 @@ public final class GroupMessageStore: ObservableObject {
         /// The raw 0xE4 descriptor JSON, retained so a failed download can
         /// be retried without re-fetching the group frame.
         public let descriptorJson: String?
+        // Fase 2 — per-member receipt tracking, meaningful ONLY on our own
+        // (`mine == true`) outbound rows: the userIds of OTHER members who
+        // have ACKed `group_msg_delivered` / `group_msg_read` for this
+        // message (via the server's targeted `group_msg_receipt`, see
+        // groups_receipts.go). nil/empty on inbound rows and on old
+        // persisted JSON predating this field — decodes to nil via Swift's
+        // synthesized Decodable (missing key ⇒ nil for an Optional
+        // property), same trade-off as the Fase 1B attachment fields above.
+        public var deliveredBy: [String]?
+        public var readBy: [String]?
 
         public init(id: String, serverMessageId: String?, senderId: String,
                     mine: Bool, text: String, ts: Date,
                     attachmentKind: String? = nil, mediaMime: String? = nil,
                     fileName: String? = nil, byteLength: Int64? = nil,
-                    mediaLocalPath: String? = nil, descriptorJson: String? = nil) {
+                    mediaLocalPath: String? = nil, descriptorJson: String? = nil,
+                    deliveredBy: [String]? = nil, readBy: [String]? = nil) {
             self.id = id
             self.serverMessageId = serverMessageId
             self.senderId = senderId
@@ -73,6 +84,8 @@ public final class GroupMessageStore: ObservableObject {
             self.byteLength = byteLength
             self.mediaLocalPath = mediaLocalPath
             self.descriptorJson = descriptorJson
+            self.deliveredBy = deliveredBy
+            self.readBy = readBy
         }
     }
 
@@ -184,6 +197,37 @@ public final class GroupMessageStore: ObservableObject {
               let idx = arr.firstIndex(where: { $0.id == clientMsgId }),
               arr[idx].serverMessageId != serverMessageId else { return }
         arr[idx].serverMessageId = serverMessageId
+        byGroup[groupHex] = arr
+        persist()
+        postDidChange(groupHex)
+    }
+
+    /// Fase 2 — record one member's `delivered`/`read` receipt against our
+    /// own outbound row (matched by `serverMessageId`, since the receipt
+    /// only ever carries the server id, never our local `clientMsgId`).
+    /// No-op if the message is unknown locally, is not one of OUR rows
+    /// (a receipt should never land on somebody else's message — the
+    /// server itself only ever targets the original sender, but stay
+    /// defensive), or the member is already recorded for this status
+    /// (idempotent — a duplicate/replayed receipt is a silent no-op).
+    public func recordReceipt(groupHex: String, serverMessageId: String, memberUserId: String, status: String) {
+        guard var arr = byGroup[groupHex],
+              let idx = arr.firstIndex(where: { $0.serverMessageId == serverMessageId }),
+              arr[idx].mine else { return }
+        switch status {
+        case "read":
+            var readers = Set(arr[idx].readBy ?? [])
+            guard !readers.contains(memberUserId) else { return }
+            readers.insert(memberUserId)
+            arr[idx].readBy = Array(readers)
+        case "delivered":
+            var deliverers = Set(arr[idx].deliveredBy ?? [])
+            guard !deliverers.contains(memberUserId) else { return }
+            deliverers.insert(memberUserId)
+            arr[idx].deliveredBy = Array(deliverers)
+        default:
+            return
+        }
         byGroup[groupHex] = arr
         persist()
         postDidChange(groupHex)

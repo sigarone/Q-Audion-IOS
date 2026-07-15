@@ -4777,6 +4777,47 @@ final class AppState: ObservableObject {
                 self.handleGroupMetadataChanged(data)
             }
         }
+
+        // Fase 2 — group typing indicator (ephemeral opaque relay, mirrors
+        // 1:1 msg_typing — see groups_receipts.go handleGroupTyping).
+        // PERSISTENT handler, same reasoning as the group text/membership
+        // handlers above: a typing event can arrive for a group whose
+        // GroupChatScreen isn't the one currently on screen (harmless —
+        // the receiving screen filters by groupHex before updating UI).
+        ws.registerHandler(type: "group_typing") { [weak self] _, data in
+            guard let self = self else { return }
+            guard let rawGroupId = data["group_id"] as? String, !rawGroupId.isEmpty,
+                  let senderId = data["sender_id"] as? String, !senderId.isEmpty,
+                  let isTyping = data["is_typing"] as? Bool else { return }
+            let groupHex = rawGroupId.replacingOccurrences(of: "-", with: "").lowercased()
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: AppState.groupTypingNotification,
+                    object: nil,
+                    userInfo: ["groupHex": groupHex, "senderId": senderId, "isTyping": isTyping]
+                )
+            }
+        }
+
+        // Fase 2 — targeted delivery/read receipt for one of OUR OWN group
+        // messages (server resolves the original sender and relays this to
+        // THEM ONLY — see groups_receipts.go handleGroupMsgReceipt). Land
+        // it straight into GroupMessageStore, which posts its own
+        // didChangeNotification so an open GroupChatScreen refreshes its
+        // per-message tick exactly like a new inbound message would.
+        ws.registerHandler(type: "group_msg_receipt") { [weak self] _, data in
+            guard self != nil else { return }
+            guard let rawGroupId = data["group_id"] as? String, !rawGroupId.isEmpty,
+                  let serverMsgId = data["server_message_id"] as? String, !serverMsgId.isEmpty,
+                  let memberUserId = data["member_user_id"] as? String, !memberUserId.isEmpty,
+                  let status = data["status"] as? String else { return }
+            let groupHex = rawGroupId.replacingOccurrences(of: "-", with: "").lowercased()
+            DispatchQueue.main.async {
+                GroupMessageStore.shared.recordReceipt(
+                    groupHex: groupHex, serverMessageId: serverMsgId,
+                    memberUserId: memberUserId, status: status)
+            }
+        }
     }
 
     /// W328: replay one entry from a `msg_pending_sync` batch as if it
@@ -4895,9 +4936,9 @@ final class AppState: ObservableObject {
         // msg_type (never on speculative JSON-sniffing of a text body).
         if msgType == GroupAttachmentEnvelope.msgTypeAttachment {
             landIncomingGroupAttachment(
-                plaintext: plaintext, groupHex: groupHex, senderId: senderId,
-                selfId: selfId, serverMsgId: serverMsgId, clientMsgId: clientMsgId,
-                ts: ts, live: live)
+                plaintext: plaintext, groupIdUuid: groupIdUuid, groupHex: groupHex,
+                senderId: senderId, selfId: selfId, serverMsgId: serverMsgId,
+                clientMsgId: clientMsgId, ts: ts, live: live)
             return
         }
 
@@ -4917,6 +4958,15 @@ final class AppState: ObservableObject {
         // that merged into an existing message).
         if inserted {
             presentGroupMessageBanner(groupHex: groupHex, senderId: senderId, plaintext: plaintext)
+            // Fase 2 — notify the ORIGINAL SENDER this device received
+            // their message (targeted group_msg_receipt, best-effort, not
+            // persisted). Distinct from `sendGroupDelivered` below, which
+            // reuses the unrelated 1:1 pending-queue ack. Fires on BOTH
+            // the live and pending-sync path (a pending-sync catch-up is
+            // still a genuine delivery to this device), but never for a
+            // re-delivery of an already-persisted row (`inserted == true`
+            // guards that).
+            sendGroupMsgDelivered(groupId: groupIdUuid, serverMsgId: serverMsgId)
         }
         if live { sendGroupDelivered(serverMsgId) }
     }
@@ -4928,7 +4978,7 @@ final class AppState: ObservableObject {
     /// it as text would be wrong); a download failure leaves the row in its
     /// "downloading" state to be retried on the next open.
     private func landIncomingGroupAttachment(
-        plaintext: String, groupHex: String, senderId: String, selfId: String,
+        plaintext: String, groupIdUuid: String, groupHex: String, senderId: String, selfId: String,
         serverMsgId: String, clientMsgId: String?, ts: Date, live: Bool
     ) {
         let envelope: GroupAttachmentEnvelope
@@ -4936,6 +4986,11 @@ final class AppState: ObservableObject {
             envelope = try GroupAttachmentEnvelope.parse(plaintext)
         } catch {
             print("[AppState] group attachment descriptor malformed msg=\(serverMsgId.prefix(8)): \(error)")
+            // Fase 2 — the frame DID reach this device (it decrypted fine;
+            // only the descriptor JSON is malformed), so from the sender's
+            // perspective it was delivered — same "device receipt, not
+            // content validity" semantics as the 1:1/text path above.
+            sendGroupMsgDelivered(groupId: groupIdUuid, serverMsgId: serverMsgId)
             if live { sendGroupDelivered(serverMsgId) }
             return
         }
@@ -4961,6 +5016,8 @@ final class AppState: ObservableObject {
             presentGroupMessageBanner(
                 groupHex: groupHex, senderId: senderId,
                 plaintext: (envelope.caption?.isEmpty == false) ? envelope.caption! : previewName)
+            // Fase 2 — see the text-message path above for the reasoning.
+            sendGroupMsgDelivered(groupId: groupIdUuid, serverMsgId: serverMsgId)
             // Download + decrypt off the critical path; stamp the row when done.
             // Register the row as in-flight so an on-open retry can't kick a
             // duplicate concurrent download for the same blob.
@@ -5075,6 +5132,95 @@ final class AppState: ObservableObject {
     private func sendGroupDelivered(_ serverMsgId: String) {
         liveProvider?.getWebSocketClient().send(
             type: "msg_delivered", data: ["message_ids": [serverMsgId]])
+    }
+
+    // MARK: - Fase 2: group typing indicator + delivery/read receipts
+
+    /// Notify the ORIGINAL SENDER of a group message that THIS device
+    /// received it. Server-side: `groups_receipts.go` handleGroupMsgReceipt
+    /// resolves the sender from the stored `GroupMessage` and relays a
+    /// targeted `group_msg_receipt` to them only — best-effort, never
+    /// persisted, self-receipts and cross-group ids are rejected
+    /// server-side. Deliberately separate from `sendGroupDelivered` above,
+    /// which rides the unrelated 1:1 `msg_delivered` pending-queue-drop
+    /// path (that one keeps its existing, unrelated behavior untouched).
+    /// `groupId` MUST be the dashed-UUID wire form (never the hex
+    /// registry key) — matches what `group_msg_send`/`group_typing` send.
+    private func sendGroupMsgDelivered(groupId: String, serverMsgId: String) {
+        liveProvider?.getWebSocketClient().send(
+            type: "group_msg_delivered",
+            data: ["group_id": groupId, "server_message_id": serverMsgId])
+    }
+
+    /// Fase 2 — emit `group_msg_read` for every inbound message in this
+    /// group that has a server id, mirroring `ChatContainer.emitReadReceipts`
+    /// (called once per chat-open, not on every refresh, to keep WS chatter
+    /// bounded; no de-dup against already-acked rows — same as the 1:1
+    /// method it mirrors). Gated on the SAME global "Conferme di lettura"
+    /// privacy flag 1:1 chat uses (`PrivacyGate.readReceiptsEnabled` is not
+    /// scoped per-conversation-kind). One WS frame per message — the group
+    /// wire (unlike 1:1's batched `message_ids`) carries a single
+    /// `server_message_id` per receipt (see groups_receipts.go).
+    ///
+    /// - Parameter groupId: dashed-UUID wire form (`GroupChatScreen` passes
+    ///   `groupId.uuidString.lowercased()`).
+    func emitGroupReadReceipts(groupId: String) {
+        guard PrivacyGate.readReceiptsEnabled else { return }
+        guard let ws = liveProvider?.getWebSocketClient() else { return }
+        let groupHex = groupId.replacingOccurrences(of: "-", with: "").lowercased()
+        let inboundServerIds = GroupMessageStore.shared.messages(forGroupHex: groupHex)
+            .filter { !$0.mine }
+            .compactMap { $0.serverMessageId }
+        guard !inboundServerIds.isEmpty else { return }
+        for serverMsgId in inboundServerIds {
+            ws.send(type: "group_msg_read",
+                    data: ["group_id": groupId, "server_message_id": serverMsgId])
+        }
+    }
+
+    /// Fase 2 — group typing-indicator send-side debounce state, keyed by
+    /// groupId (dashed UUID). Mirrors `ChatContainer.typingActive`/
+    /// `typingStopWorkItem`, but lives on `AppState` (a single long-lived
+    /// `@MainActor` owner) rather than on a per-conversation container
+    /// object — `GroupChatScreen` is a plain SwiftUI `View` struct with no
+    /// container/ViewModel class like `ChatContainer` to hang this on.
+    private var groupTypingActive: [String: Bool] = [:]
+    private var groupTypingStopWorkItems: [String: DispatchWorkItem] = [:]
+
+    /// Call on every non-empty composer keystroke in a group chat. Fires
+    /// `is_typing=true` once per "session of typing" and rolls a 3s
+    /// auto-stop timer — identical cadence to `ChatContainer.notifyComposerInput`.
+    func notifyGroupComposerInput(groupId: String) {
+        guard PrivacyGate.typingIndicatorEnabled else { return }
+        guard let ws = liveProvider?.getWebSocketClient() else { return }
+        if groupTypingActive[groupId] != true {
+            groupTypingActive[groupId] = true
+            ws.send(type: "group_typing", data: ["group_id": groupId, "is_typing": true])
+        }
+        groupTypingStopWorkItems[groupId]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.groupTypingActive[groupId] = false
+            guard PrivacyGate.typingIndicatorEnabled,
+                  let ws2 = self.liveProvider?.getWebSocketClient() else { return }
+            ws2.send(type: "group_typing", data: ["group_id": groupId, "is_typing": false])
+        }
+        groupTypingStopWorkItems[groupId] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: work)
+    }
+
+    /// Call when the composer transitions non-empty → empty (user deleted
+    /// their draft). Mirrors `ChatContainer.notifyComposerCleared` — note
+    /// the SAME asymmetry as 1:1: tapping Send does not call this (the
+    /// 3s auto-stop timer clears the peer's "sta scrivendo…" instead),
+    /// matching the existing 1:1 idiom exactly rather than "fixing" it.
+    func notifyGroupComposerCleared(groupId: String) {
+        groupTypingStopWorkItems[groupId]?.cancel()
+        guard groupTypingActive[groupId] == true else { return }
+        groupTypingActive[groupId] = false
+        guard PrivacyGate.typingIndicatorEnabled,
+              let ws = liveProvider?.getWebSocketClient() else { return }
+        ws.send(type: "group_typing", data: ["group_id": groupId, "is_typing": false])
     }
 
     /// Append an undecryptable inbound group frame to the bounded retry
@@ -5889,6 +6035,15 @@ final class AppState: ObservableObject {
     /// chat uses. The recipient's chat dispatcher detects the
     /// `qa_grp:1` marker and routes to GroupChatService.
     static let groupSenderKeyCtlNotification = Notification.Name("qaudion.group.senderKeyCtl")
+
+    /// Fase 2 — group typing indicator, relayed from the WS `group_typing`
+    /// handler in `wireIncomingChatHandlers`. userInfo:
+    ///   - "groupHex": String (hex, no dashes — GroupMessageStore/Registry key)
+    ///   - "senderId": String
+    ///   - "isTyping": Bool
+    /// `GroupChatScreen` subscribes filtered by its own `groupHex`, mirroring
+    /// `chatTypingNotification`'s 1:1 contract.
+    static let groupTypingNotification = Notification.Name("qaudion.group.typing")
 
     /// W-BGK: BGAppRefreshTask notification. QAudionApp.init() posts this when
     /// iOS fires the ws-keepalive background task; AppState.handleWsKeepaliveTask

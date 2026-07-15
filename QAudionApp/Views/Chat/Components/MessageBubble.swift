@@ -40,7 +40,16 @@ enum MessageBubbleVariant {
     case admin
 }
 
-enum MessageDelivery {
+// Fase 2 — Equatable so `GroupMessageRowUi` (Equatable) can carry an
+// optional `MessageDelivery` for the group-chat delivery/read ticks
+// without hand-rolling `==`. Auto-synthesizable: every case's associated
+// value (`Double` on `.uploading`) is already Equatable.
+// `public` because `GroupMessageRowUi.delivery` (in GroupModels.swift) is a
+// `public` stored property — Swift requires the property's type to be at
+// least as accessible as the property itself, even within a single app
+// target (the compiler enforces this declaratively, not by whether another
+// module actually consumes it today).
+public enum MessageDelivery: Equatable {
     case sending     // single grey clock
     /// W446 — local-only intermediate state while an attachment upload is
     /// in flight (TUS chunked path). `progress` is `0.0...1.0`. Never

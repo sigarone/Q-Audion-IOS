@@ -38,6 +38,12 @@ struct GroupChatScreen: View {
     @State private var showingPhotoPicker = false
     @State private var photoPickerItems: [PhotosPickerItem] = []
     @State private var showingFileImporter = false
+    /// Fase 2 — userIds of OTHER members currently typing in this group
+    /// (populated from `AppState.groupTypingNotification`, filtered to
+    /// this screen's own `groupHex`). Mirrors the 1:1 `isPeerTyping` flag,
+    /// generalized to a set since a group can have several concurrent
+    /// typists.
+    @State private var typingSenderIds: Set<String> = []
 
     init(groupId: UUID, initial: GroupChatUiState) {
         self.groupId = groupId
@@ -76,9 +82,29 @@ struct GroupChatScreen: View {
             // avatar change made while this device was offline (missed
             // the live group_metadata_changed WS event) still lands.
             appState.refreshGroupMetadataFromServer(groupHex: groupHex)
+            // Fase 2 — emit group_msg_read for every inbound message with a
+            // server id, once per chat-open (mirrors the 1:1
+            // container.emitReadReceipts() call in ChatDetailScreen.onAppear).
+            appState.emitGroupReadReceipts(groupId: groupId.uuidString.lowercased())
         }
         .onDisappear {
             if appState.activeGroupHex == groupHex { appState.activeGroupHex = nil }
+        }
+        // Fase 2 — group typing indicator. Filtered to this screen's own
+        // group; is_typing=false removes the sender, true adds it — no
+        // client-side timeout fallback, same as the 1:1
+        // chatTypingNotification consumer in ChatContainer.
+        .onReceive(NotificationCenter.default.publisher(
+            for: AppState.groupTypingNotification)) { note in
+            guard let info = note.userInfo as? [String: Any],
+                  (info["groupHex"] as? String) == groupHex,
+                  let senderId = info["senderId"] as? String,
+                  let isTyping = info["isTyping"] as? Bool else { return }
+            if isTyping {
+                typingSenderIds.insert(senderId)
+            } else {
+                typingSenderIds.remove(senderId)
+            }
         }
         // Fase 1B — attachment pickers (parity with the 1:1 composer).
         .confirmationDialog("Aggiungi allegato",
@@ -240,6 +266,9 @@ struct GroupChatScreen: View {
                                 .id(msg.id)
                         }
                     }
+                    if !typingSenderIds.isEmpty {
+                        typingRow
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -252,6 +281,27 @@ struct GroupChatScreen: View {
                 }
             }
         }
+    }
+
+    /// Fase 2 — mirrors `ChatDetailScreen.typingRow`. One or more members
+    /// typing: "<name> sta scrivendo…" for exactly one, "<n> persone stanno
+    /// scrivendo…" for more (a group has no single "peer name" slot to
+    /// reuse the 1:1 phrasing for the multi-typist case).
+    private var typingRow: some View {
+        let names = typingSenderIds.map(resolveMemberName)
+        let typingText: String = names.count == 1
+            ? "\(names[0]) sta scrivendo…"
+            : "\(names.count) persone stanno scrivendo…"
+        return HStack(spacing: 8) {
+            TypingIndicator()
+            Text(typingText)
+                .qaudionStyle(type.labelSmall)
+                .italic()
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
     }
 
     /// W-GRPMSG: group id in the hex form GroupChatService /
@@ -339,7 +389,23 @@ struct GroupChatScreen: View {
 
     private var composerBinding: Binding<String> {
         Binding(get: { state.composerText },
-                set: { state.composerText = $0 })
+                set: { newValue in
+                    // Fase 2 — typing-indicator emit, mirrors
+                    // ChatDetailScreen.handleComposerTextChange: empty→non-empty
+                    // fires is_typing=true, non-empty→empty fires is_typing=false
+                    // immediately. Steady-state typing rolls the 3s auto-stop
+                    // timer inside AppState.notifyGroupComposerInput. Same
+                    // asymmetry as 1:1: tapping Send (handleSend, below) does
+                    // NOT explicitly clear typing — the 3s timer does.
+                    let wasEmpty = state.composerText.isEmpty
+                    state.composerText = newValue
+                    let gid = groupId.uuidString.lowercased()
+                    if !newValue.isEmpty {
+                        appState.notifyGroupComposerInput(groupId: gid)
+                    } else if !wasEmpty {
+                        appState.notifyGroupComposerCleared(groupId: gid)
+                    }
+                })
     }
 
     // MARK: - Handlers
@@ -424,11 +490,45 @@ struct GroupChatScreen: View {
                 mediaMime: m.mediaMime,
                 mediaLocalPath: m.mediaLocalPath,
                 fileName: m.fileName,
-                byteLength: m.byteLength)
+                byteLength: m.byteLength,
+                delivery: deliveryStatus(for: m))
         }
         // Viewing the group == reading it: clear the unread badge shown in
         // the chat list (mirrors ChatContainer.markRead for 1:1).
         GroupMessageStore.shared.markRead(groupHex: groupHex)
+    }
+
+    /// Fase 2 — roster minus self, used as the ALL-members threshold for
+    /// `deliveryStatus(for:)`. Separate from `groupCallInvitees` (identical
+    /// filter, different concern) so the two call sites don't couple.
+    private var otherGroupMemberIds: [String] {
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return [] }
+        let selfId = AppState.currentUserIdSnapshot ?? ""
+        return entry.members.filter { $0 != selfId && !$0.isEmpty }
+    }
+
+    /// Fase 2 — WhatsApp-style ALL-members threshold for a `mine` row's
+    /// delivery tick: `.sending` before the server self-echo binds a
+    /// `serverMessageId`; `.sent` (single check) until at least one other
+    /// member acks; `.delivered` (double grey) once EVERY other member has
+    /// delivered-or-read; `.read` (double blue) once EVERY other member has
+    /// specifically read. A member's `read` receipt also counts toward the
+    /// `delivered` threshold (reading implies the message reached the
+    /// device) — covers the edge case where `group_msg_read` lands without
+    /// a distinct prior `group_msg_delivered` for that member (both are
+    /// independent best-effort sends, see groups_receipts.go). Always nil
+    /// for an inbound (non-mine) row.
+    private func deliveryStatus(for m: GroupMessageStore.Stored) -> MessageDelivery? {
+        guard m.mine else { return nil }
+        guard m.serverMessageId != nil else { return .sending }
+        let others = otherGroupMemberIds
+        guard !others.isEmpty else { return .sent }
+        let othersSet = Set(others)
+        let readBy = Set(m.readBy ?? [])
+        if othersSet.isSubset(of: readBy) { return .read }
+        let deliveredOrRead = Set(m.deliveredBy ?? []).union(readBy)
+        if othersSet.isSubset(of: deliveredOrRead) { return .delivered }
+        return .sent
     }
 
     /// Fase 1B — resolve a group member/sender `userId` to a human label.
@@ -751,11 +851,22 @@ private struct GroupMessageBubble: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     messageBody
-                    Text(message.timestamp)
-                        .qaudionStyle(type.labelSmall)
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                        .frame(maxWidth: .infinity,
-                               alignment: message.mine ? .trailing : .leading)
+                    HStack(spacing: 4) {
+                        if message.mine { Spacer(minLength: 0) }
+                        Text(message.timestamp)
+                            .qaudionStyle(type.labelSmall)
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                        // Fase 2 — delivery/read tick, mine rows only.
+                        // Reuses the shared `MessageDelivery` type + the
+                        // same 4 icon mappings as the 1:1
+                        // `MessageBubble.deliveryIcon(_:)` footer.
+                        if message.mine, let delivery = message.delivery {
+                            groupDeliveryIcon(delivery)
+                        }
+                        if !message.mine { Spacer(minLength: 0) }
+                    }
+                    .frame(maxWidth: .infinity,
+                           alignment: message.mine ? .trailing : .leading)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .frame(maxWidth: 280, alignment: .leading)
@@ -767,6 +878,37 @@ private struct GroupMessageBubble: View {
         }
         .frame(maxWidth: .infinity,
                alignment: message.mine ? .trailing : .leading)
+    }
+
+    /// Fase 2 — same 4 icon mappings as the 1:1 `MessageBubble.deliveryIcon`
+    /// footer (`.uploading`/`.failed` are unreachable for a group row today
+    /// — group sends have no upload-progress or hard-failure UI state yet
+    /// — but the switch must be exhaustive over the shared `MessageDelivery`
+    /// enum, so they fall back to the same icon as their nearest neighbor).
+    @ViewBuilder
+    private func groupDeliveryIcon(_ delivery: MessageDelivery) -> some View {
+        switch delivery {
+        case .sending, .uploading:
+            Image(systemName: "clock")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(scheme.onSurfaceVariant)
+        case .sent:
+            Image(systemName: "checkmark")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(scheme.onSurfaceVariant)
+        case .delivered:
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(scheme.onSurfaceVariant)
+        case .read:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(scheme.primary)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(scheme.error)
+        }
     }
 
     /// Fase 1B — bubble body: an image/file attachment (reusing the exact
