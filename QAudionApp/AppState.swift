@@ -2318,6 +2318,21 @@ final class AppState: ObservableObject {
                         wire = frame
                     } else {
                         guard let psk = AppState.resolveGroupCtrlPsk(peer: peer) else {
+                            // GAP A2 — before failing outright, offer the KMS-
+                            // prebootstrap fallback a chance to produce a
+                            // self-authenticating envelope (mirrors Android's
+                            // ADR-014a bootstrap-off-published-bundle path).
+                            // Returns nil unconditionally today (NOT yet
+                            // ported to iOS — see the exhaustive TODO on
+                            // `attemptGroupCtrlKmsPreBootstrap` above), so
+                            // this branch is presently a documented no-op:
+                            // behavior is byte-identical to before this hook
+                            // was added.
+                            if let wrapped = AppState.attemptGroupCtrlKmsPreBootstrap(peer: peer, selfId: senderId, envelopeJson: envelopeJson) {
+                                ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapped.utf8))
+                                print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) transport=kms_prebootstrap")
+                                return true
+                            }
                             print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=no_v4_session_and_no_psk (pairwise 1:1 relationship never established)")
                             return false
                         }
@@ -11497,6 +11512,87 @@ extension AppState {
     /// `v4RoutingLock` then serializes both directions). Same Keychain-backed
     /// vault as ``ratchet`` so v3.1 and v4 share the device trust boundary.
     static let sharedV4Ratchet: MessageRatchet = MessageRatchet(vault: KeychainRatchetVault())
+
+    /// GAP A2 (2026-07-15 group-video-call incident recon) — splice point for
+    /// a group-call KMS-prebootstrap fallback, mirroring Android's
+    /// ADR-014a `KmsPreBootstrapSender` (`feature-chat/.../KmsPreBootstrapSender.kt`,
+    /// wired from `GroupCallController.kt::sendControlEnvelope` L852+ /
+    /// commit tag W-GRPKMSPB). Android ALREADY closes this gap: when a
+    /// group-call peer has no contact-bound 1:1 PSK at all (never called/
+    /// messaged before this call), it asynchronously bootstraps one from the
+    /// peer's published identity-key bundle + a one-time prekey (X3DH-style,
+    /// no prior interaction required) instead of silently failing to deliver
+    /// `sender_key_init`/`sender_key_rotate`.
+    ///
+    /// **iOS status: NOT implemented — returns `nil` unconditionally today,
+    /// so this call is a no-op and behavior is UNCHANGED from before this
+    /// hook existed.** Every raw crypto primitive ADR-014a needs is already
+    /// present on iOS (ML-KEM-1024 via `PqcKeyExchange.swift`, X25519/
+    /// Ed25519/HKDF/ChaCha20Poly1305 via CryptoKit, CBOR via
+    /// `CanonicalCbor.swift`), and the two purely-additive networking calls
+    /// this needs are already wired (`BCryptoKmsClient.fetchUserIdentityBundleV2`,
+    /// `.fetchNextPrekey`) — but the ADR-014a envelope ASSEMBLY itself
+    /// (binary frame layout, canonical-CBOR AD-bytes, HKDF-Extract →
+    /// `RK_0`, Ed25519 transcript sign/verify, one-time-prekey sig
+    /// verification, a replay-window cache) does not exist anywhere on iOS
+    /// (confirmed by repo-wide grep for `KmsPreBootstrap`/`qa_kms` — zero
+    /// hits outside this comment). Writing that by hand here, without a
+    /// Swift toolchain available to validate the encode/decode round-trip
+    /// against the SAME cross-platform KAT fixture Android/Desktop already
+    /// share (`qaudion-android-new/qaudion-engine/src/test/resources/
+    /// kms-prebootstrap-kat.json`), risks shipping a subtly-wrong AEAD/CBOR
+    /// implementation that LOOKS like it works — exactly the class of bug
+    /// Android's own `KmsPreBootstrapSender.kt` comment (L512-524) warns
+    /// about ("legacy shared CanonicalCbor encoder produced byte-different
+    /// output... on at least one edge case"). That risk is why this is
+    /// scoped as a documented follow-up rather than a same-pass port.
+    ///
+    /// To complete this (see the Android reference file:line for each step):
+    ///  1. Port `KmsPreBootstrap.encode`/`.decode`
+    ///     (`qaudion-engine/.../crypto/KmsPreBootstrap.kt` L150-313 / L327-496)
+    ///     into a new `KmsPreBootstrap.swift`, validated against the shared
+    ///     KAT fixture BEFORE wiring it into any live call path.
+    ///  2. Port the sig preimage `IdentityKeyV2Preimage.build` used to verify
+    ///     a peer's self-signed bundle (referenced but not yet located in
+    ///     this recon — read it before porting).
+    ///  3. Add a small time-windowed `(sender_uuid, nonce)` replay cache
+    ///     (mirrors Android's `ReplayCache`, `KmsPreBootstrap.kt` decode
+    ///     parameter).
+    ///  4. Call `provider.kmsClient.fetchUserIdentityBundleV2(userId: peer)`
+    ///     then `.fetchNextPrekey(userId: peer)` (both already implemented,
+    ///     `BCryptoKmsClient.swift`), verify the bundle self-sig + prekey
+    ///     sig, then `KmsPreBootstrap.encode(...)`.
+    ///  5. Install the resulting `RK_0` as a contact-bound PSK via
+    ///     `SovereignKeyVault` (same `auto:<prefix>:<peerId>` naming
+    ///     `resolveGroupCtrlPsk` below reads) so THIS device's own next send
+    ///     to `peer` routes through the now-shared ratchet.
+    ///  6. Ship the resulting `{"qa_kms":1,"env_b64":...}` wrapper directly
+    ///     as the `opaque_message` body (it is already self-authenticating —
+    ///     do NOT additionally wrap it in `qa_grpcall_ctrl`/`ratchet.encrypt`,
+    ///     see Android's `sendControlEnvelope` L890-903 for why).
+    ///  7. Receive side: `GroupCallController`'s inbound-opaque dispatch
+    ///     needs a matching `qa_kms` branch (peek the marker, decode via the
+    ///     new `KmsPreBootstrap.decode`, then feed the recovered
+    ///     `sender_key_init`/`sender_key_rotate` payload into the SAME
+    ///     `sender_key_init`/`_rotate` handling the plaintext branch already
+    ///     uses) — mirrors Android's `onOpaqueMessage`'s `qa_kms` branch +
+    ///     `handleGroupControlPayload` split.
+    ///  8. Note step 1 above is ALSO required doing this makes the enclosing
+    ///     `onSendControlEnvelope` closure need to become async (the bundle/
+    ///     prekey fetch are network calls) — `sendSenderKeyEnvelope`/
+    ///     `sendSenderKeyRotateEnvelope` in `GroupCallController.swift`
+    ///     (L771-783) currently call it synchronously; that call chain needs
+    ///     an async-friendly redesign too (e.g. fire off a `Task` here and
+    ///     accept that a prebootstrap send is inherently best-effort/delayed
+    ///     relative to today's synchronous `Bool` return).
+    ///
+    /// Do NOT flip this from a documented no-op to a partial/guessed
+    /// implementation — an unverified crypto envelope that a peer silently
+    /// fails to decrypt is worse than today's clean, observable
+    /// `no_v4_session_and_no_psk` failure (which at least logs distinctly).
+    static func attemptGroupCtrlKmsPreBootstrap(peer: String, selfId: String, envelopeJson: String) -> String? {
+        return nil
+    }
 
     /// W-GRPSENDERKEY (2026-07-13): PSK lookup ladder for the group-call
     /// `qa_grpcall_ctrl` control channel — same `auto:<prefix>:<peerId>`

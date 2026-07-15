@@ -239,6 +239,139 @@ public final class BCryptoKmsClient {
         }
     }
 
+    /// ADR-014a §2.3 — full v2 identity bundle for a peer, used by the
+    /// group-call KMS-prebootstrap send path (gap A2, see
+    /// `AppState.attemptGroupCtrlKmsPreBootstrap`). Unlike
+    /// `fetchUserIdentityKey`/`fetchUserIdentityKeySet` (which only read the
+    /// Ed25519 signing key), this decodes the FULL v2 bundle the server
+    /// already returns from the SAME endpoint: the post-quantum
+    /// (ML-KEM-1024) and X25519 long-term public legs plus the self-
+    /// signature over them. Mirrors Android
+    /// `KmsPreBootstrapSender.ResolvedPeerIdentity` /
+    /// `parseAndVerifyIdentityKey` (`feature-chat/.../KmsPreBootstrapSender.kt`
+    /// L203-302) and the server response shape (`bcrypto-server`
+    /// `cmd/bcrypto-lite/users_identity_key.go` `bundlePayload()` L252-269).
+    ///
+    /// Returns `nil` on 404 (peer hasn't published), transport error, or a
+    /// pre-v2/legacy response missing `ik_pq_pub_b64` (no PQ leg — a
+    /// KMS-prebootstrap encap is impossible against that peer; the caller
+    /// falls back to the existing default flow). Deliberately does NOT
+    /// verify the self-signature — that requires porting Android's
+    /// `IdentityKeyV2Preimage` preimage builder + Ed25519 verify, which does
+    /// not exist on iOS yet (see the TODO on
+    /// `AppState.attemptGroupCtrlKmsPreBootstrap`). Do not treat an
+    /// unverified bundle as trusted key material beyond that TODO's scope.
+    public struct IdentityBundleV2 {
+        public let uuidRaw: Data          // 16B, RFC 4122 raw form
+        public let ed25519Pub: Data       // 32B
+        public let pqPub: Data            // ~1568B ML-KEM-1024 public key
+        public let x25519Pub: Data?       // 32B, nil on a v1-fallback peer
+        public let selfSig: Data?         // 64B Ed25519 sig, nil on a pre-self-sig server row
+        public let version: Int
+        public let createdAtMs: Int64
+    }
+
+    public func fetchUserIdentityBundleV2(userId: String) async -> IdentityBundleV2? {
+        guard !userId.isEmpty else { return nil }
+        do {
+            let data = try await rest.get("/api/v1/users/\(userId)/identity-key")
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            guard let edB64 = (json["ed25519_pub_b64"] as? String) ?? (json["public_key_b64"] as? String),
+                  let edPub = Data(base64Encoded: edB64), edPub.count == 32 else {
+                return nil
+            }
+            // No PQ leg published (pre-v2 / legacy peer) — a KMS-prebootstrap
+            // encap is impossible; caller must fall back to the default flow.
+            guard let pqB64 = json["ik_pq_pub_b64"] as? String, !pqB64.isEmpty,
+                  let pqPub = Data(base64Encoded: pqB64), !pqPub.isEmpty else {
+                return nil
+            }
+            let x25519Pub: Data? = (json["ik_x25519_pub_b64"] as? String).flatMap { Data(base64Encoded: $0) }
+            let selfSig: Data? = (json["self_sig_b64"] as? String).flatMap { Data(base64Encoded: $0) }
+            let uuidStr = json["uuid"] as? String ?? userId
+            guard let uuidRaw = Self.uuidToRawBytes(uuidStr) else { return nil }
+            let version = json["version"] as? Int ?? 1
+            let createdAtMs = (json["created_at_ms"] as? NSNumber)?.int64Value ?? 0
+            return IdentityBundleV2(
+                uuidRaw: uuidRaw,
+                ed25519Pub: edPub,
+                pqPub: pqPub,
+                x25519Pub: x25519Pub,
+                selfSig: selfSig,
+                version: version,
+                createdAtMs: createdAtMs
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    /// Convert a canonical UUID string to its 16 raw bytes (RFC 4122
+    /// §4.1.2), matching Android `KmsPreBootstrapSender.uuidToRaw`. Returns
+    /// nil if `uuidStr` is not a well-formed UUID.
+    private static func uuidToRawBytes(_ uuidStr: String) -> Data? {
+        guard let u = UUID(uuidString: uuidStr) else { return nil }
+        return withUnsafeBytes(of: u.uuid) { Data($0) }
+    }
+
+    /// One-time prekey DTO — `GET /api/v1/identity/{uuid}/prekey/next`
+    /// (ADR-014a §2.3 step 2 / §4.1 sig preimage). Mirrors Android's prekey
+    /// DTO (`BCryptoApi.kt` / `KmsPreBootstrapSender.fetchAndVerifyPrekey`)
+    /// and the server handler `handleFetchNextPrekey`
+    /// (`bcrypto-server/cmd/bcrypto-lite/prekeys.go` L272-341).
+    public struct OneTimePrekeyDTO {
+        public let prekeyId: UInt32
+        public let pqPub: Data        // ~1568B ML-KEM-1024 public key
+        public let x25519Pub: Data    // 32B
+        public let createdAtMs: Int64
+        public let sig: Data          // 64B Ed25519, over sha256(pq_pub||x25519_pub||createdAtMs_be64)
+    }
+
+    /// Fetch + atomically consume one of the peer's published one-time
+    /// prekeys (server does get-then-delete under a per-target mutex).
+    /// Returns `nil` on 204 (pool empty — caller falls back to the peer's
+    /// long-term bundle keys per ADR-014a §3.4), 404 (peer doesn't exist),
+    /// 429 (rate-limited), 503 (DR read-only replica — see `prekeys.go`
+    /// L317-324), transport error, or a malformed response. All of these
+    /// collapse to `nil` here because `BCryptoRestClient.get` throws
+    /// `BCryptoError.httpError(code)` uniformly for any non-2xx status — the
+    /// caller cannot and does not need to distinguish them.
+    ///
+    /// Deliberately does NOT verify the per-prekey signature — that
+    /// requires the same Ed25519-over-SHA256(pq_pub‖x25519_pub‖
+    /// createdAtMs_be64) check Android does
+    /// (`KmsPreBootstrapSender.fetchAndVerifyPrekey` L318-368) against the
+    /// peer's pinned key from `fetchUserIdentityBundleV2`; not implemented
+    /// on iOS yet (see the TODO on
+    /// `AppState.attemptGroupCtrlKmsPreBootstrap`).
+    public func fetchNextPrekey(userId: String) async -> OneTimePrekeyDTO? {
+        guard !userId.isEmpty else { return nil }
+        do {
+            let data = try await rest.get("/api/v1/identity/\(userId)/prekey/next")
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            guard let prekeyIdNum = json["prekey_id"] as? NSNumber,
+                  let pqB64 = json["pq_pub_b64"] as? String, let pqPub = Data(base64Encoded: pqB64),
+                  let xB64 = json["x25519_pub_b64"] as? String, let xPub = Data(base64Encoded: xB64),
+                  let sigB64 = json["sig_b64"] as? String, let sig = Data(base64Encoded: sigB64) else {
+                return nil
+            }
+            let createdAtMs = (json["created_at_ms"] as? NSNumber)?.int64Value ?? 0
+            return OneTimePrekeyDTO(
+                prekeyId: prekeyIdNum.uint32Value,
+                pqPub: pqPub,
+                x25519Pub: xPub,
+                createdAtMs: createdAtMs,
+                sig: sig
+            )
+        } catch {
+            return nil
+        }
+    }
+
     /// Acknowledge earbud-exclusive hw_only key delivery with SE PoP.
     /// POST /api/v1/kms/earbud-ack-pop
     ///
