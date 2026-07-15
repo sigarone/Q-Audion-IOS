@@ -2294,23 +2294,40 @@ final class AppState: ObservableObject {
             // wiring), so `.sync` here cannot deadlock.
             groupController.onSendControlEnvelope = { peer, senderId, envelopeJson in
                 DispatchQueue.main.sync {
+                    // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): every
+                    // `return false` below used to be completely silent —
+                    // this is the app-layer transport for sender_key_init/
+                    // rotate, and a failure here means the recipient NEVER
+                    // even sees the envelope (as opposed to seeing it and
+                    // rejecting it, which `onGroupCallControlEnvelope`'s own
+                    // new logging now covers). Root-causing whether S26<->iOS
+                    // failed here specifically (no pairwise 1:1 session yet)
+                    // was explicitly left as an unresolved residual by the
+                    // 2026-07-15 recon precisely because this call site had
+                    // no observability — this closes that gap.
+                    let envType = (try? JSONSerialization.jsonObject(with: Data(envelopeJson.utf8)) as? [String: Any])?["t"] as? String ?? "?"
                     let msgId = UUID().uuidString
                     let plaintext = Data(envelopeJson.utf8)
                     let wire: Data
                     if AppState.sharedV4Ratchet.hasV4Session(peer) {
                         guard let frame = AppState.sharedV4Ratchet.encryptV4Routed(peerId: peer, plaintext: plaintext),
                               let first = frame.first, first == MessageRatchet.magicV4 else {
+                            print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v4_encrypt_failed (hasV4Session=true)")
                             return false
                         }
                         wire = frame
                     } else {
-                        guard let psk = AppState.resolveGroupCtrlPsk(peer: peer) else { return false }
+                        guard let psk = AppState.resolveGroupCtrlPsk(peer: peer) else {
+                            print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=no_v4_session_and_no_psk (pairwise 1:1 relationship never established)")
+                            return false
+                        }
                         do {
                             let session = try AppState.ratchet.ensureSession(
                                 epochId: "v1", selfId: senderId, peerId: peer, pskRoot: psk)
                             let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: peer, clientMsgId: msgId)
                             wire = try AppState.ratchet.encrypt(session: session, plaintext: plaintext, aad: aad, clientMsgId: msgId)
                         } catch {
+                            print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v1_session_or_encrypt_failed: \(error)")
                             return false
                         }
                     }
@@ -2320,8 +2337,12 @@ final class AppState: ObservableObject {
                         "blob": wire.base64EncodedString()
                     ]
                     guard let data = try? JSONSerialization.data(withJSONObject: wrapper),
-                          let wrapperJson = String(data: data, encoding: .utf8) else { return false }
+                          let wrapperJson = String(data: data, encoding: .utf8) else {
+                        print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=wrapper_json_encode_failed")
+                        return false
+                    }
                     ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapperJson.utf8))
+                    print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) cmid=\(msgId.prefix(8)) transport=\(AppState.sharedV4Ratchet.hasV4Session(peer) ? "v4" : "v1")")
                     return true
                 }
             }
@@ -6255,19 +6276,36 @@ final class AppState: ObservableObject {
            let wire = Data(base64Encoded: blobB64) {
             let selfId = currentUserId ?? ""
             let json: String?
+            // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): this is the
+            // receive-side mirror of `onSendControlEnvelope`'s new logging
+            // above — a decrypt failure HERE means the sender's envelope
+            // (which the sender-side log confirms was actually shipped)
+            // never reaches `GroupCallController.onGroupCallControlEnvelope`
+            // at all, silently, with no prior trace anywhere. Distinguishing
+            // "sent OK but couldn't be opened here" from "never sent" is
+            // exactly the missing piece the 2026-07-15 recon flagged as an
+            // unresolved residual for the S26<->iOS leg of this incident.
             if MessageWireFormat.detect(wire) == .v4 {
                 json = Self.sharedV4Ratchet.decryptV4Routed(peerId: senderId, frame: wire)
                     .flatMap { String(data: $0, encoding: .utf8) }
+                if json == nil {
+                    print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v4_decrypt_failed")
+                }
             } else if let psk = Self.resolveGroupCtrlPsk(peer: senderId),
                       let session = try? Self.ratchet.ensureSession(
                           epochId: "v1", selfId: selfId, peerId: senderId, pskRoot: psk) {
                 let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: selfId, clientMsgId: cmid)
                 json = Self.ratchet.decrypt(session: session, wire: wire, aad: aad)
                     .flatMap { String(data: $0, encoding: .utf8) }
+                if json == nil {
+                    print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v1_decrypt_failed")
+                }
             } else {
                 json = nil
+                print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=no_psk_and_not_v4 (no pairwise 1:1 session established with this sender)")
             }
             if let json = json {
+                print("[GroupCallController][telemetry] ctrl envelope RECEIVED+decrypted sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)), forwarding to GroupCallController")
                 groupCallController?.onGroupCallControlEnvelope(json: json, fromUserId: senderId)
             }
             return

@@ -294,41 +294,75 @@ public final class GroupCallController: @unchecked Sendable {
     /// THIS active call — chat's own `qa_grp:1` envelopes never reach here
     /// (they ride the regular message channel, not opaque_message).
     public func onGroupCallControlEnvelope(json: String, fromUserId: String) {
-        guard let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { return }
-        guard (obj["qa_grp"] as? NSNumber)?.intValue == 1 else { return }
+        // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): every early-return
+        // below used to be totally silent — a peer's sender_key_init could
+        // vanish at any of these gates with zero observable trace anywhere
+        // (device log or server). This is the single most important new
+        // telemetry in this pass: it directly distinguishes "never arrived
+        // here at all" (transport/decrypt problem, see AppState's
+        // onSendControlEnvelope/dispatchInboundOpaque logging) from
+        // "arrived but was rejected here" (protocol/state problem) from
+        // "installed successfully" (the happy path — rules THIS hop out).
+        guard let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+            print("[GroupCallController][telemetry] ctrl envelope from \(fromUserId.prefix(8)) failed: not valid JSON")
+            return
+        }
+        guard (obj["qa_grp"] as? NSNumber)?.intValue == 1 else {
+            print("[GroupCallController][telemetry] ctrl envelope from \(fromUserId.prefix(8)) failed: missing/wrong qa_grp marker")
+            return
+        }
         lock.lock()
-        guard let gs = groupState, let callId = activeCallId else { lock.unlock(); return }
+        guard let gs = groupState, let callId = activeCallId else {
+            lock.unlock()
+            print("[GroupCallController][telemetry] ctrl envelope from \(fromUserId.prefix(8)) failed: no active GroupState (call not bootstrapped or already torn down)")
+            return
+        }
         let expectedG = GroupSenderKey.toHex(Data(callId.utf8))
-        guard obj["g"] as? String == expectedG else { lock.unlock(); return }
+        guard obj["g"] as? String == expectedG else {
+            lock.unlock()
+            print("[GroupCallController][telemetry] ctrl envelope from \(fromUserId.prefix(8)) failed: groupId mismatch (envelope for a different/stale call)")
+            return
+        }
         // W-GRPLIVEKIT: set on a successful install so we can push the fresh
         // SK_0 into the SFU key provider AFTER releasing `lock` below —
         // `applySfuRemoteKey` takes the lock itself (NSLock is non-reentrant,
         // see the kdoc on `_state`/`lock` near the top of this file).
         var installedSenderId: String?
-        switch obj["t"] as? String {
+        let envType = obj["t"] as? String ?? "?"
+        switch envType {
         case "sender_key_init":
             guard let e = (obj["e"] as? NSNumber)?.uint32Value,
                   let seed = obj["seed"] as? String,
-                  let idx = (obj["idx"] as? NSNumber)?.uint64Value else { lock.unlock(); return }
+                  let idx = (obj["idx"] as? NSNumber)?.uint64Value else {
+                lock.unlock()
+                print("[GroupCallController][telemetry] sender_key_init from \(fromUserId.prefix(8)) failed: malformed envelope (missing e/seed/idx)")
+                return
+            }
             let env = SenderKeyInitEnvelope(g: expectedG, e: e, seed: seed, idx: idx)
             do {
                 try groupSession.handleSenderKeyInit(state: gs, env: env, fromUserId: fromUserId)
                 installedSenderId = fromUserId
+                print("[GroupCallController][telemetry] sender_key_init INSTALLED sender=\(fromUserId.prefix(8)) epoch=\(e) idx=\(idx)")
             } catch {
-                print("[GroupCallController] handleSenderKeyInit failed sender=\(fromUserId): \(error)")
+                print("[GroupCallController][telemetry] sender_key_init FAILED sender=\(fromUserId.prefix(8)) epoch=\(e) reason=\(error)")
             }
         case "sender_key_rotate":
             guard let e = (obj["e"] as? NSNumber)?.uint32Value,
-                  let seed = obj["seed"] as? String else { lock.unlock(); return }
+                  let seed = obj["seed"] as? String else {
+                lock.unlock()
+                print("[GroupCallController][telemetry] sender_key_rotate from \(fromUserId.prefix(8)) failed: malformed envelope (missing e/seed)")
+                return
+            }
             let env = SenderKeyRotateEnvelope(g: expectedG, e: e, seed: seed)
             do {
                 try groupSession.handleSenderKeyRotate(state: gs, env: env, fromUserId: fromUserId)
                 installedSenderId = fromUserId
+                print("[GroupCallController][telemetry] sender_key_rotate INSTALLED sender=\(fromUserId.prefix(8)) epoch=\(e)")
             } catch {
-                print("[GroupCallController] handleSenderKeyRotate failed sender=\(fromUserId): \(error)")
+                print("[GroupCallController][telemetry] sender_key_rotate FAILED sender=\(fromUserId.prefix(8)) epoch=\(e) reason=\(error)")
             }
         default:
-            break // not ours
+            print("[GroupCallController][telemetry] ctrl envelope from \(fromUserId.prefix(8)) ignored: unknown type=\(envType)")
         }
         lock.unlock()
         if let senderId = installedSenderId {
@@ -495,13 +529,31 @@ public final class GroupCallController: @unchecked Sendable {
     private func applySfuSelfKey(graceMs: Double? = nil) {
         lock.lock()
         guard usingSfu, let gs = groupState, let ck = groupSession.currentSendKey(state: gs) else {
-            lock.unlock(); return
+            // W-GRPCALL-DIAG fix: snapshot the lock-protected fields BEFORE
+            // unlocking — `usingSfu`/`groupState` follow the same
+            // lock-discipline as `_state` (see this file's kdoc on `_state`
+            // near the top: "every internal site that already holds `lock`
+            // reads/writes ... directly, every other site goes through [a
+            // locked accessor]"). Reading them again in the print AFTER
+            // `lock.unlock()` would be exactly the unlocked-read race that
+            // kdoc says was already found and fixed once for `_state`.
+            let usingSfuSnapshot = usingSfu
+            let hasGroupState = groupState != nil
+            lock.unlock()
+            print("[GroupCallController][telemetry] local sender-key emit SKIPPED (usingSfu=\(usingSfuSnapshot), groupState present=\(hasGroupState))")
+            return
         }
         let selfId = manager.selfUserId
-        let keyIndex = Int32(gs.groupEpoch % Self.livekitKeyringSize)
+        let epoch = gs.groupEpoch
+        let keyIndex = Int32(epoch % Self.livekitKeyringSize)
         let keyB64 = ck.base64EncodedString()
         let room = sfuRoom
         lock.unlock()
+        // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): proves OUR OWN
+        // key actually reached the SFU key provider — cross-reference
+        // against every OTHER participant's "sender_key_init INSTALLED"
+        // line for this same selfId/epoch to confirm delivery end-to-end.
+        print("[GroupCallController][telemetry] local sender-key emitted selfId=\(selfId.prefix(8)) keyIndex=\(keyIndex) epoch=\(epoch) sfuRoomConnected=\(room != nil)")
         room?.applyKey(GroupMediaKey(identity: selfId, keyIndex: keyIndex, keyB64: keyB64, graceMs: graceMs))
     }
 
@@ -511,12 +563,21 @@ public final class GroupCallController: @unchecked Sendable {
     private func applySfuRemoteKey(senderId: String) {
         lock.lock()
         guard usingSfu, let gs = groupState, let ck = groupSession.currentRecvKey(state: gs, senderId: senderId) else {
-            lock.unlock(); return
+            // W-GRPCALL-DIAG fix: same snapshot-before-unlock rationale as
+            // `applySfuSelfKey` above — `usingSfu`/`groupState` must not be
+            // read again once `lock` is released.
+            let usingSfuSnapshot = usingSfu
+            let hasRecvChain = groupState?.recvChains.contains(where: { $0.0 == senderId }) ?? false
+            lock.unlock()
+            print("[GroupCallController][telemetry] remote recv-key push for sender=\(senderId.prefix(8)) SKIPPED (usingSfu=\(usingSfuSnapshot), recv chain installed=\(hasRecvChain))")
+            return
         }
-        let keyIndex = Int32(gs.groupEpoch % Self.livekitKeyringSize)
+        let epoch = gs.groupEpoch
+        let keyIndex = Int32(epoch % Self.livekitKeyringSize)
         let keyB64 = ck.base64EncodedString()
         let room = sfuRoom
         lock.unlock()
+        print("[GroupCallController][telemetry] remote recv-key pushed to SFU sender=\(senderId.prefix(8)) keyIndex=\(keyIndex) epoch=\(epoch) sfuRoomConnected=\(room != nil)")
         room?.applyKey(GroupMediaKey(identity: senderId, keyIndex: keyIndex, keyB64: keyB64))
     }
 

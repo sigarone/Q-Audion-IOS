@@ -254,7 +254,17 @@ class GroupCallViewModel: ObservableObject {
             // above, so the same "bind once, here" pattern applies.
             controller.onRemoteVideoTrack = { [weak self] identity, track in
                 DispatchQueue.main.async {
-                    guard let self = self, let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
+                    guard let self = self else { return }
+                    // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): the
+                    // final hop of hypothesis B (tile-binding) — proves
+                    // WHICH tile (by participant id) a remote track was
+                    // actually bound to, or that no matching tile existed
+                    // yet (roster hadn't caught up with the SFU subscribe).
+                    guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else {
+                        print("[GroupCallController][telemetry] remote video track for identity=\(identity.prefix(8)) has NO matching participant tile yet (roster/SFU race)")
+                        return
+                    }
+                    print("[GroupCallController][telemetry] remote video track bound to tile identity=\(identity.prefix(8))")
                     self.participants[idx].videoTrack = track
                 }
             }

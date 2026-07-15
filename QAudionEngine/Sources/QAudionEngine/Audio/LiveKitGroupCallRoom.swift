@@ -157,9 +157,14 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
 
         try await room.connect(url: url, token: token)
         _ = try await room.localParticipant.setMicrophone(enabled: true)
+        // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): local publish
+        // confirmation — proves OUR OWN mic reached the SFU at all, cheap
+        // to cross-reference against the SFU-side "track published" log.
+        print("[GroupCallController][telemetry] local audio track published identity=\(room.localParticipant.identity?.stringValue ?? "self") callSid=\(room.sid?.stringValue ?? "?")")
         if wantsVideo {
             if await ensureCameraAuthorized() {
                 _ = try await room.localParticipant.setCamera(enabled: true)
+                print("[GroupCallController][telemetry] local video track published identity=\(room.localParticipant.identity?.stringValue ?? "self")")
                 onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
             } else {
                 // Graceful audio-only fallback: mic is already published
@@ -230,11 +235,27 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
 extension LiveKitGroupCallRoom: RoomDelegate {
     public func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
         let identity = participant.identity?.stringValue ?? ""
+        // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): this is the
+        // earliest point a REMOTE track exists locally at all — logging it
+        // separates "never subscribed" (SFU/ICE/transport issue) from
+        // "subscribed but never decrypts" (E2EE issue, see
+        // `didUpdateE2EEState` below) and from "subscribed+decrypts but the
+        // UI never binds it to a tile" (app-layer binding issue).
         if let audioTrack = publication.track as? RemoteAudioTrack {
+            print("[GroupCallController][telemetry] remote audio track subscribed identity=\(identity)")
             onRemoteAudioTrack?(identity, audioTrack)
         } else if let videoTrack = publication.track as? RemoteVideoTrack {
+            print("[GroupCallController][telemetry] remote video track subscribed identity=\(identity)")
             onRemoteVideoTrack?(identity, videoTrack)
         }
+    }
+
+    public func room(_ room: Room, participant: RemoteParticipant, didFailToSubscribeTrackWithSid trackSid: Track.Sid, error: LiveKitError) {
+        // W-GRPCALL-DIAG: the SDK-level counterpart to a successful
+        // `didSubscribeTrack` above — if this fires for a peer whose track
+        // publish the SFU logs confirm succeeded, the failure is on OUR
+        // subscribe side (ICE/transport), not the sender's publish.
+        print("[GroupCallController][telemetry] remote track subscribe FAILED identity=\(participant.identity?.stringValue ?? "") sid=\(trackSid) error=\(error)")
     }
 
     public func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
@@ -256,6 +277,36 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // just surfaces the error; resuming the mesh mid-call is a known
         // follow-up, not silently claimed as handled here.
         if let error = error { onError?(error) }
+    }
+
+    /// W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): the single most
+    /// direct signal for hypothesis A (silent E2EE key-install failure).
+    /// `client-sdk-swift` 2.13.0's native `FrameCryptor` calls this per
+    /// track whenever its crypto state changes; `.missing_key` means a
+    /// track is arriving at the SFU and being handed to the cryptor, but no
+    /// key has been installed for that participant/index yet (exactly what
+    /// a never-delivered/never-decrypted `sender_key_init` produces);
+    /// `.decryption_failed` means a key WAS installed but doesn't match the
+    /// sender's actual key. Both explain "silence + black tile" with zero
+    /// app-visible error, matching the reported symptoms exactly.
+    public func room(_ room: Room, trackPublication: TrackPublication, didUpdateE2EEState state: E2EEState) {
+        let identity = Self.resolveIdentity(for: trackPublication, in: room)
+        let kind = trackPublication.kind == .video ? "video" : "audio"
+        print("[GroupCallController][telemetry] e2ee-state identity=\(identity ?? "?") kind=\(kind) state=\(state.toString())")
+    }
+
+    /// `TrackPublication` does not publicly expose its owning participant
+    /// (the `participant` property is package-internal) — resolve it by
+    /// matching `sid` against `room.localParticipant`/`room.remoteParticipants`
+    /// instead, both of which DO publicly expose `trackPublications`.
+    private static func resolveIdentity(for publication: TrackPublication, in room: Room) -> String? {
+        if room.localParticipant.trackPublications[publication.sid] != nil {
+            return room.localParticipant.identity?.stringValue ?? "self"
+        }
+        for (identity, participant) in room.remoteParticipants where participant.trackPublications[publication.sid] != nil {
+            return identity.stringValue
+        }
+        return nil
     }
 }
 
