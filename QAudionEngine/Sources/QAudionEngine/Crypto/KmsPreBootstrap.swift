@@ -542,7 +542,8 @@ public enum KmsPreBootstrap {
         // PRK directly, which we then feed into a SEPARATE `expand` call
         // below — the two-step form, not the single-shot `deriveKey`
         // convenience (which would not expose the bare PRK as `RK_0`).
-        return HKDF<SHA256>.extract(inputKeyMaterial: SymmetricKey(data: ikm), salt: salt)
+        let prk = HKDF<SHA256>.extract(inputKeyMaterial: SymmetricKey(data: ikm), salt: salt)
+        return SymmetricKey(data: Data(prk))
     }
 
     private static func hkdfExpand(prk: SymmetricKey, info: Data, length: Int) -> Data {
