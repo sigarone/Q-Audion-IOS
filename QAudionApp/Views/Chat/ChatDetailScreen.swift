@@ -675,6 +675,11 @@ struct ChatDetailScreen: View {
     private var messageList: some View {
         // Group messages by day so we can interleave DayHeader rows.
         let grouped = groupedByDay(container.viewModel.messages)
+        // Fase 2 — built once per render (not per row) so every
+        // `ImageBubbleContent` shares the same in-display-order image
+        // list and the fullscreen gallery can swipe across the whole
+        // conversation. See `ImageGalleryItem`.
+        let galleryItems = imageGalleryItems(container.viewModel.messages)
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 6) {
@@ -690,7 +695,7 @@ struct ChatDetailScreen: View {
                     ForEach(grouped, id: \.key) { day, msgs in
                         DayHeader(date: day)
                         ForEach(msgs) { msg in
-                            messageRow(for: msg)
+                            messageRow(for: msg, galleryItems: galleryItems)
                                 .id(msg.id)
                         }
                     }
@@ -758,8 +763,38 @@ struct ChatDetailScreen: View {
         return MarkdownLiteParser.attributedBody(raw, linkColor: linkColor)
     }
 
+    /// Fase 2 — every image message with a decrypted local cache path,
+    /// in display order (self included), for the fullscreen gallery's
+    /// swipe next/prev. See `ImageGalleryItem`.
+    ///
+    /// VERIFY FIX — must exclude every inbound view-once image, opened
+    /// or not. `messageRow`'s `isVO && voOpened` branch (the
+    /// "Visualizzato" tombstone) catches an ALREADY-opened view-once row
+    /// too, before it ever reaches the `mime.hasPrefix("image/")`
+    /// branch — so `ImageBubbleContent` is never rendered for a
+    /// view-once inbound image at all, opened or not (only the sender's
+    /// own outbound copy is exempt, per the `direction != .outgoing`
+    /// guard below, mirroring `messageRow`'s `isVO`). The background
+    /// download stamps `mediaLocalPath` as soon as the ciphertext
+    /// decrypts — well before (and, for the 5s window, also shortly
+    /// after) the recipient taps to reveal — so without this guard the
+    /// image was still reachable by swiping the fullscreen gallery in
+    /// from an unrelated photo, bypassing tap-to-reveal entirely and, on
+    /// an already-viewed row, letting the recipient re-view a "single
+    /// view" image for as long as `mediaLocalPath` lingers before
+    /// `EphemeralMessageJanitor` sweeps it.
+    private func imageGalleryItems(_ messages: [Message]) -> [ImageGalleryItem] {
+        messages.compactMap { m in
+            guard let mime = m.mediaMimeType, mime.hasPrefix("image/"),
+                  let path = m.mediaLocalPath, !path.isEmpty else { return nil }
+            let isVO = m.isViewOnce == true && m.direction != .outgoing
+            guard !isVO else { return nil }
+            return ImageGalleryItem(id: m.id, localPath: path)
+        }
+    }
+
     @ViewBuilder
-    private func messageRow(for msg: Message) -> some View {
+    private func messageRow(for msg: Message, galleryItems: [ImageGalleryItem]) -> some View {
         let variant: MessageBubbleVariant = (msg.direction == .outgoing) ? .sent : .received
         let timeLabel = Self.timeFormatter.string(from: msg.sentAt)
         // W446: while an attachment upload is in flight, prefer the
@@ -853,7 +888,8 @@ struct ChatDetailScreen: View {
                     messageId: msg.id,
                     mediaLocalPath: msg.mediaLocalPath,
                     saveRequest: mediaSaveRequestBinding(for: msg.id),
-                    shareRequest: mediaShareRequestBinding(for: msg.id)
+                    shareRequest: mediaShareRequestBinding(for: msg.id),
+                    galleryItems: galleryItems
                 )
             } else if let mime = msg.mediaMimeType, !mime.isEmpty {
                 // W446: generic file attachment (PDF, doc, archive, …) —

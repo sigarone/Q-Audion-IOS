@@ -4,6 +4,30 @@ import Combine
 import PhotosUI                    // Fase 1B: group attachment picker
 import UniformTypeIdentifiers      // Fase 1B: file mime resolution
 import QAudionEngine   // W-GRPRING: GroupCallController (group-call entry point)
+import CryptoKit                    // VERIFY FIX: deterministicGalleryId(for:)
+
+/// VERIFY FIX — a `GroupMessageRowUi.id` (String) is USUALLY a UUID
+/// string (client_msg_id, minted via `UUID().uuidString` on send), but
+/// `AppState.landIncomingGroupAttachment` falls back to the raw
+/// `server_message_id` (`rowId = clientMsgId ?? serverMsgId`) when the
+/// wire omits `client_msg_id` — not guaranteed to be UUID-formatted.
+/// `imageGalleryItems` and `messageBody` each independently need to map
+/// that same string id to a `UUID` (`ImageGalleryItem.id` /
+/// `ImageBubbleContent.messageId`); a plain `UUID(uuidString:) ?? UUID()`
+/// mints a *different* random UUID at each call site for a non-UUID
+/// string, so the gallery's `items.firstIndex(where: { $0.id ==
+/// messageId })` lookup (in `ImageBubbleContent`) would never match and
+/// the fullscreen viewer would silently always open on page 0 instead of
+/// the tapped image. This derives a stable UUID from the string's
+/// SHA-256 digest so every call site converges on the identical value.
+private func deterministicGalleryId(for raw: String) -> UUID {
+    if let u = UUID(uuidString: raw) { return u }
+    let digest = SHA256.hash(data: Data(raw.utf8))
+    let bytes = Array(digest.prefix(16))
+    return bytes.withUnsafeBufferPointer { buf in
+        NSUUID(uuidBytes: buf.baseAddress!) as UUID
+    }
+}
 
 /// Group chat detail. 1:1 port di Android
 /// `qaudion-android-new/feature/feature-chat/.../group/GroupChatScreen.kt`.
@@ -254,15 +278,33 @@ struct GroupChatScreen: View {
 
     // MARK: - Message list
 
+    /// Fase 2 — every image message with a decrypted local cache path,
+    /// in display order (self included), for the fullscreen gallery's
+    /// swipe next/prev. Mirrors `ChatDetailScreen.imageGalleryItems`;
+    /// `id` uses the same `deterministicGalleryId(for:)` mapping
+    /// `messageBody` applies per-row (a group row id is a String, not a
+    /// UUID — see that helper's doc comment for why a plain
+    /// `UUID(uuidString:) ?? UUID()` fallback is unsafe here).
+    private var imageGalleryItems: [ImageGalleryItem] {
+        state.messages.compactMap { m in
+            guard m.attachmentKind == GroupAttachmentEnvelope.kindImage,
+                  let path = m.mediaLocalPath, !path.isEmpty else { return nil }
+            return ImageGalleryItem(id: deterministicGalleryId(for: m.id), localPath: path)
+        }
+    }
+
     private var messageList: some View {
-        ScrollViewReader { proxy in
+        // Fase 2 — built once per render (not per row), same reasoning
+        // as ChatDetailScreen.messageList.
+        let galleryItems = imageGalleryItems
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 6) {
                     if state.messages.isEmpty {
                         emptyState
                     } else {
                         ForEach(state.messages) { msg in
-                            GroupMessageBubble(message: msg)
+                            GroupMessageBubble(message: msg, galleryItems: galleryItems)
                                 .id(msg.id)
                         }
                     }
@@ -430,9 +472,9 @@ struct GroupChatScreen: View {
 
     // MARK: - W-GRPRING: start a group call from the group chat
 
-    /// The real roster (registry), never the stub fallback of
-    /// `makeInfoState()` — inviting the placeholder `u-1`/`u-2` ids would
-    /// create a call nobody can join.
+    /// The real roster (registry) — never `makeInfoState()`'s
+    /// self-only loading state for a not-yet-populated registry, which
+    /// would otherwise invite nobody.
     private var groupCallInvitees: [String] {
         guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return [] }
         let selfId = AppState.currentUserIdSnapshot ?? ""
@@ -782,9 +824,9 @@ struct GroupChatScreen: View {
     }
 
     private func makeInfoState() -> GroupInfoUiState {
-        // W399 — read real membership from GroupRegistry. Falls back
-        // to the legacy stub layout only if the group hasn't been
-        // joined yet (e.g. invite not accepted, or registry corrupted).
+        // W399 — read real membership from GroupRegistry. Falls back to
+        // a self-only loading state (see below) only if the group hasn't
+        // been joined yet (e.g. invite not accepted, or registry corrupted).
         let groupIdHex = groupId.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let selfId = AppState.currentUserIdSnapshot ?? "u-self"
         if let entry = GroupRegistry.shared.entry(for: groupIdHex) {
@@ -807,23 +849,25 @@ struct GroupChatScreen: View {
                     URL(string: "\(appState.serverUrl)/api/v1/files/\($0)")
                 })
         }
-        // Stub fallback — kept so a fresh group view doesn't crash
-        // before the user accepts the invite (or AppState bootstrap
-        // races the SwiftUI render).
+        // Fase 2 — registry not populated yet (invite not accepted, or
+        // AppState bootstrap races the SwiftUI render). Previously this
+        // fabricated fake "Membro N" rows with placeholder `u-N` ids to
+        // pad out to `state.memberCount` — those ids aren't real users:
+        // besides rendering nonsense names, `handleSend`/
+        // `sendAttachmentOverWire` resolve their wire recipients from
+        // this same `members` list, so a fake id there would silently
+        // address a message to nobody. Show a real loading/empty state
+        // instead (surfaced via `error`, which `GroupInfoScreen` already
+        // renders as a banner) — no fabricated members.
         return GroupInfoUiState(
+            groupId: groupId,
             name: state.name,
             epoch: 1,
             members: [
                 GroupMemberRowUi(userId: selfId, displayName: "Tu",
                                  isAdmin: true, isSelf: true)
-            ] + (1...max(0, state.memberCount - 1)).map { i in
-                GroupMemberRowUi(
-                    userId: "u-\(i)",
-                    displayName: "Membro \(i)",
-                    isAdmin: false,
-                    isSelf: false
-                )
-            }
+            ],
+            error: "Elenco membri non ancora disponibile — in attesa di sincronizzazione."
         )
     }
 }
@@ -836,6 +880,9 @@ private struct GroupMessageBubble: View {
     @Environment(\.qaudionType) private var type
 
     let message: GroupMessageRowUi
+    /// Fase 2 — see `ImageGalleryItem`; empty default keeps this struct
+    /// constructible without callers threading the list through.
+    var galleryItems: [ImageGalleryItem] = []
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
@@ -919,8 +966,14 @@ private struct GroupMessageBubble: View {
         switch message.attachmentKind {
         case GroupAttachmentEnvelope.kindImage?:
             ImageBubbleContent(
-                messageId: UUID(uuidString: message.id) ?? UUID(),
-                mediaLocalPath: message.mediaLocalPath)
+                // VERIFY FIX — must match imageGalleryItems' id mapping
+                // exactly (deterministicGalleryId, not a fresh random
+                // UUID()) or ImageBubbleContent's startIndex lookup into
+                // galleryItems silently fails whenever message.id isn't
+                // already UUID-formatted.
+                messageId: deterministicGalleryId(for: message.id),
+                mediaLocalPath: message.mediaLocalPath,
+                galleryItems: galleryItems)
             if !message.text.isEmpty {
                 Text(message.text)
                     .qaudionStyle(type.bodyMedium)

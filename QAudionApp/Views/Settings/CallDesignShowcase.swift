@@ -2,9 +2,15 @@ import SwiftUI
 
 /// Dev-mode visual showcase for the W21+W22 call screens. Available
 /// from `Settings → System → Call Design Showcase` so the new screens
-/// (Incoming, Outgoing, InCall, GroupCall) can be QA'd visually
-/// against the Android source and the Stitch desktop reference WITHOUT
-/// touching the production call lifecycle.
+/// (Incoming, Outgoing, InCall) can be QA'd visually against the
+/// Android source and the Stitch desktop reference WITHOUT touching
+/// the production call lifecycle.
+///
+/// Fase 2 — the "Group" preview section (mocked `GroupCallScreen`) was
+/// removed: it predated the LiveKit SFU work and had been superseded
+/// by the real, live `GroupCallView` (`ContentView`'s group-call cover)
+/// for a while, making the mock the only remaining reference to a dead
+/// type. Group-call design QA now happens against the live screen.
 ///
 /// This entry exists because the engine has not yet surfaced the
 /// fields the new `InCallScreen` reads (sasWords, keyInfo,
@@ -129,20 +135,6 @@ struct CallDesignShowcase: View {
             Section("Live data preview") {
                 NavigationLink("LiveInCallScreen · binding live AppState") {
                     LiveInCallScreen()
-                }
-            }
-
-            Section("Group") {
-                NavigationLink("Group call · 5 participants") {
-                    GroupCallScreen(
-                        callId: "f3a8b07c-9d51-4f2a-87e2-a1d0f5bb1a2e",
-                        participants: ["user-mario", "user-anna",
-                                       "user-luigi", "user-self",
-                                       "user-paolo"],
-                        selfUserId: "user-self",
-                        muted: false,
-                        onToggleMute: {}, onLeave: {}
-                    )
                 }
             }
 

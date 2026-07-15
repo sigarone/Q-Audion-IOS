@@ -9,9 +9,9 @@ import SwiftUI
 /// mute toggle (warning when active / surfaceVariant when inactive, 48),
 /// audio-route cycler, video toggle, etc.
 ///
-/// Optional caption label below the button (used in GroupCallScreen
-/// "Attiva / Muto / Termina" labels). When `caption == nil` the button
-/// is a single circle, no extra layout.
+/// Optional caption label below the button ("Attiva / Muto / Termina"
+/// style labels). When `caption == nil` the button is a single circle,
+/// no extra layout.
 struct CircularAction: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type

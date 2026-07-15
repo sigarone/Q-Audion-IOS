@@ -1,6 +1,19 @@
 import SwiftUI
 import QAudionEngine
 
+/// Fase 2 — one conversation image reachable from the fullscreen
+/// gallery. `ChatDetailScreen`/`GroupChatScreen` build the full,
+/// in-display-order list (every image row with a decrypted local
+/// cache path, self included) once per render and hand it to every
+/// `ImageBubbleContent` row so tapping ANY image opens a gallery that
+/// can swipe to every other image in the same conversation — not just
+/// the one tapped. Empty (the default) degrades to a single-image
+/// gallery, so a call site that hasn't been updated keeps working.
+struct ImageGalleryItem: Identifiable, Equatable {
+    let id: UUID
+    let localPath: String
+}
+
 /// W82 — bubble content for image attachments.
 ///
 /// Three states reflected in the UI:
@@ -42,6 +55,8 @@ struct ImageBubbleContent: View {
     /// "Condividi immagine" row can trigger the share sheet here,
     /// where the loaded `UIImage`/on-disk path already live.
     var shareRequest: Binding<Bool>? = nil
+    /// Fase 2 — see `ImageGalleryItem` doc comment above.
+    var galleryItems: [ImageGalleryItem] = []
 
     @State private var fullscreen: Bool = false
     @State private var loadedImage: UIImage? = nil
@@ -85,8 +100,17 @@ struct ImageBubbleContent: View {
             }
         }
         .sheet(isPresented: $fullscreen) {
-            if let img = loadedImage {
-                ImageFullscreenView(image: img, onDismiss: { fullscreen = false })
+            // Fase 2 — `loadedImage` only gates presentation (confirms this
+            // bubble's own image decoded); the gallery itself lazily
+            // decodes each page independently, so other conversation
+            // images swiped into view don't block on this one.
+            if loadedImage != nil, let path = mediaLocalPath, !path.isEmpty {
+                let items = galleryItems.isEmpty
+                    ? [ImageGalleryItem(id: messageId, localPath: path)]
+                    : galleryItems
+                let startIndex = items.firstIndex(where: { $0.id == messageId }) ?? 0
+                ImageFullscreenView(items: items, startIndex: startIndex,
+                                    onDismiss: { fullscreen = false })
             }
         }
         .alert("Salvata in Foto", isPresented: $saveAlertVisible) {
@@ -222,23 +246,34 @@ private struct ShimmeringRectangle: View {
     }
 }
 
-/// Minimal fullscreen image viewer — pinch-to-zoom is iOS' native
-/// behaviour on `Image` inside a `ScrollView` on iOS 17+. For iOS 16
-/// the user just sees a big aspect-fit image with a Done button.
+/// Fase 2 — fullscreen image gallery. Swipes (native `TabView` paging)
+/// across every `ImageGalleryItem` in the conversation, starting on the
+/// tapped image. Each page pinch-zooms (`MagnificationGesture`, 1x–4x)
+/// with drag-to-pan once zoomed, and double-tap resets to 1x — same
+/// gesture set as the Photos app. Replaces the previous single-image,
+/// double-tap-only 2x toggle (W135).
 /// W125: metadata header overlays the dismiss button — shows W×H plus
-/// the rough size in MP if reachable.
+/// the rough size in MP for whichever page is currently on screen.
 struct ImageFullscreenView: View {
-    @Environment(\.qaudionScheme) private var scheme
-    let image: UIImage
+    let items: [ImageGalleryItem]
     let onDismiss: () -> Void
 
-    /// W135: double-tap toggle 1x ↔ 2x. iOS Photos pattern. 0.25s
-    /// spring animates the scaleEffect.
-    @State private var zoomed: Bool = false
+    @State private var selection: Int
+    /// Populated lazily as each page decodes its own image, so the
+    /// metadata line has something to read for the current page without
+    /// the gallery having to decode every image up front.
+    @State private var loadedImages: [Int: UIImage] = [:]
+
+    init(items: [ImageGalleryItem], startIndex: Int, onDismiss: @escaping () -> Void) {
+        self.items = items
+        self.onDismiss = onDismiss
+        _selection = State(initialValue: min(max(startIndex, 0), max(items.count - 1, 0)))
+    }
 
     private var metadataLine: String {
-        let w = Int(image.size.width)
-        let h = Int(image.size.height)
+        guard let img = loadedImages[selection] else { return "" }
+        let w = Int(img.size.width)
+        let h = Int(img.size.height)
         let mp = Double(w * h) / 1_000_000.0
         if mp >= 0.05 {
             return String(format: "%d × %d  ·  %.1f MP", w, h, mp)
@@ -250,29 +285,27 @@ struct ImageFullscreenView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            ScrollView([.horizontal, .vertical]) {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .scaleEffect(zoomed ? 2.0 : 1.0)
-                    .animation(.spring(response: 0.25, dampingFraction: 0.85),
-                               value: zoomed)
-                    .onTapGesture(count: 2) {
-                        zoomed.toggle()
-                    }
+            TabView(selection: $selection) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    GalleryPage(localPath: item.localPath,
+                                onLoaded: { img in loadedImages[index] = img })
+                        .tag(index)
+                }
             }
+            .tabViewStyle(.page(indexDisplayMode: .never))
             VStack {
                 HStack {
-                    Text(metadataLine)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule().fill(.black.opacity(0.4))
-                        )
-                        .padding(.leading)
+                    if !metadataLine.isEmpty {
+                        Text(metadataLine)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule().fill(.black.opacity(0.4))
+                            )
+                            .padding(.leading)
+                    }
                     Spacer()
                     Button(action: onDismiss) {
                         Image(systemName: "xmark.circle.fill")
@@ -282,7 +315,112 @@ struct ImageFullscreenView: View {
                     .padding()
                 }
                 Spacer()
+                // Fase 2 — "N / total" page counter, only meaningful once
+                // there's more than one image to swipe through.
+                if items.count > 1 {
+                    Text("\(selection + 1) / \(items.count)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.bottom, 24)
+                }
             }
         }
+    }
+}
+
+/// Fase 2 — one page of the fullscreen gallery. Decodes its own image
+/// off the local cache path (same `Data(contentsOf:)` + `UIImage(data:)`
+/// load `ImageBubbleContent.loadIfNeeded` uses — no second decode path)
+/// so opening the gallery never blocks on every image in the
+/// conversation at once. Pinch-to-zoom + drag-to-pan once zoomed;
+/// double-tap resets to 1x.
+private struct GalleryPage: View {
+    let localPath: String
+    let onLoaded: (UIImage) -> Void
+
+    @State private var image: UIImage?
+    @State private var loadFailed = false
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    var body: some View {
+        GeometryReader { geo in
+            Group {
+                if let img = image {
+                    Image(uiImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .scaleEffect(scale)
+                        .offset(offset)
+                        .gesture(magnifyGesture)
+                        .simultaneousGesture(panGesture)
+                        .onTapGesture(count: 2) { resetZoom() }
+                } else if loadFailed {
+                    VStack(spacing: 8) {
+                        Image(systemName: "photo.badge.exclamationmark")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.white.opacity(0.6))
+                        Text("Immagine non disponibile")
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height)
+                } else {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                }
+            }
+        }
+        .onAppear(perform: load)
+    }
+
+    private func load() {
+        guard image == nil, !loadFailed else { return }
+        let path = localPath
+        guard !path.isEmpty else { loadFailed = true; return }
+        Task { @MainActor in
+            let url = URL(fileURLWithPath: path)
+            if let data = try? Data(contentsOf: url), let img = UIImage(data: data) {
+                self.image = img
+                self.onLoaded(img)
+            } else {
+                self.loadFailed = true
+            }
+        }
+    }
+
+    private func resetZoom() {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+            scale = 1.0
+            lastScale = 1.0
+            offset = .zero
+            lastOffset = .zero
+        }
+    }
+
+    private var magnifyGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                scale = min(max(lastScale * value, 1.0), 4.0)
+            }
+            .onEnded { _ in
+                lastScale = scale
+                if scale <= 1.0 { resetZoom() }
+            }
+    }
+
+    private var panGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard scale > 1.0 else { return }
+                offset = CGSize(width: lastOffset.width + value.translation.width,
+                                 height: lastOffset.height + value.translation.height)
+            }
+            .onEnded { _ in
+                lastOffset = offset
+            }
     }
 }
