@@ -9,10 +9,28 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.792",
+              date: "2026-07-16",
+              title: "v1.0.792",
+              bullets: [
+                "ci(ios): sync broadcast extension version with the host build",
+                "ci(ios): provision Bundle ID + App Groups for the broadcast extension",
+                "feat(groups): ReplayKit broadcast extension + LiveKit screen-share toggle",
+                "feat(chat): export-permission enforcement + pre-send UI + group TTL sweep",
+                "feat(groups): in-call chat + attachment panel for group calls",
+                "fix(chat): surface photo-send failures to user; purge expired attachment files from disk",
+                "feat(groups): security-info pin for group calls (parity with 1:1)",
+                "docs: note the xcframework checksum-fix cycle + force fresh SPM resolution",
+                "feat(crypto): wire AES-256 patch into group-call SFU media (iOS)",
+                "fix(crypto): HKDF<SHA256>.extract returns HashedAuthenticationCode, not SymmetricKey",
+                "feat(crypto): real ADR-014a KmsPreBootstrap port — gap A2 iOS half",
+                "feat(groups): telemetry + KMS-prebootstrap scaffolding for group-call control envelopes",
+              ]),
         .init(id: "v1.0.791",
               date: "2026-07-15",
               title: "v1.0.791",
               bullets: [
+                "chore: regenerate changelog for v1.0.791",
                 "fix(calls): widen VIDEODIAG arrived-idle threshold to 20s (parity with Android)",
               ]),
         .init(id: "v1.0.790",
@@ -149,13 +167,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.773",
                 "fix(crash): stop off-main @Published/AppState writes in WS call handlers (heap corruption)",
                 "docs: fix stale DEFAULT-OFF v4-ratchet comment + stub-linking claim",
-              ]),
-        .init(id: "v1.0.772",
-              date: "2026-07-12",
-              title: "v1.0.772",
-              bullets: [
-                "chore: regenerate changelog for v1.0.772",
-                "fix(audio): clamp applied mic-AGC gain per-frame to peak headroom (anti-clip)",
               ]),
     ]
 }
