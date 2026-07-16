@@ -13,6 +13,7 @@ extension ReleaseNote {
               date: "2026-07-16",
               title: "v1.0.797",
               bullets: [
+                "chore: regenerate changelog for v1.0.797",
                 "ci(ios): hard-cap Build-reality-xcframework at 20min, it hung 1h13m+",
               ]),
         .init(id: "v1.0.796",
