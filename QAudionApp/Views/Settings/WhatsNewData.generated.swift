@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.794",
+              date: "2026-07-16",
+              title: "v1.0.794",
+              bullets: [
+                "fix(ios): codemagic-cli-tools wants --capability, not --capabilities",
+              ]),
         .init(id: "v1.0.793",
               date: "2026-07-16",
               title: "v1.0.793",
               bullets: [
+                "chore: regenerate changelog for v1.0.793",
                 "fix(ios): use XcodeGen's exactVersion key, not SPM's raw exact",
               ]),
         .init(id: "v1.0.792",
@@ -159,13 +166,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.775",
                 "fix(audio): de-zipper mic AGC gain (per-sample ramp) — kill the crackle",
-              ]),
-        .init(id: "v1.0.774",
-              date: "2026-07-12",
-              title: "v1.0.774",
-              bullets: [
-                "chore: regenerate changelog for v1.0.774",
-                "fix(crash): lock CallService cross-thread relay slots (ARC data race)",
               ]),
     ]
 }
