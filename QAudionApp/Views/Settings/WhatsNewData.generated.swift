@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.796",
+              date: "2026-07-16",
+              title: "v1.0.796",
+              bullets: [
+                "ci(ios): add a raw signed-archive diagnostic step for when it fails silently",
+              ]),
         .init(id: "v1.0.795",
               date: "2026-07-16",
               title: "v1.0.795",
               bullets: [
+                "chore: regenerate changelog for v1.0.795",
                 "fix(ios): pass the human display name to enable-capabilities, not the enum key",
               ]),
         .init(id: "v1.0.794",
@@ -160,12 +167,6 @@ extension ReleaseNote {
                 "fix(swift6): resolve the 3 earbud GATT proxy actor-conformance warnings",
                 "feat(audio): canonical iOS VoIP stack — VP-IO on everywhere, custom DSP retired to fallback",
                 "chore: regenerate changelog for v1.0.776",
-              ]),
-        .init(id: "v1.0.776",
-              date: "2026-07-12",
-              title: "v1.0.776",
-              bullets: [
-                "fix(audio): lower mic AGC noise gate 2%->0.8% (quiet earpiece mic)",
               ]),
     ]
 }
