@@ -39,7 +39,7 @@ packages:
   # toolchain this stage); flagged as a residual build-verification risk.
   LiveKitBroadcast:
     url: https://github.com/sigarone/client-sdk-swift.git
-    exact: "2.13.0-aes256-livekit"
+    exactVersion: "2.13.0-aes256-livekit"
 
 targets:
   QAudionApp:
