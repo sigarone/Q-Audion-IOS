@@ -1099,6 +1099,19 @@ struct ChatDetailScreen: View {
         return "\(failed) foto su \(total) non leggibili."
     }
 
+    /// W611: stage-2 counterpart to `photoFailureSnackbarText` above.
+    /// Stage 1 (`processMultiPhotoPicker`) catches items the system
+    /// picker couldn't hand back as `Data` at all; this covers the
+    /// later rejection inside `ChatContainer.sendImage` itself —
+    /// undecodable bytes or over the 10MB post-downscale cap — which
+    /// used to be a print-only silent drop with zero user feedback.
+    private static func photoSendFailureSnackbarText(failed: Int, total: Int) -> String {
+        if total == 1 {
+            return "Invio foto non riuscito: formato non valido o file troppo grande."
+        }
+        return "\(failed) foto su \(total) non inviate: formato non valido o file troppo grandi."
+    }
+
     // MARK: - W447: pre-send attachment timer dialog — dispatch
 
     /// Fires the actual `container.send*` call for a `PendingAttachmentSend`
@@ -1111,10 +1124,29 @@ struct ChatDetailScreen: View {
     private func performAttachmentSend(_ pending: PendingAttachmentSend, overrideSeconds: Int?) {
         switch pending {
         case .image(let data):
-            container.sendImage(data, overrideTimerSeconds: overrideSeconds)
+            // W611: sendImage now reports rejection (undecodable bytes /
+            // over the 10MB cap) instead of silently print-and-returning
+            // with zero local echo — surface it via the same snackbar
+            // mechanism the stage-1 multi-picker failures already use.
+            let sent = container.sendImage(data, overrideTimerSeconds: overrideSeconds)
+            if !sent {
+                snackbar?.show(.init(
+                    text: Self.photoSendFailureSnackbarText(failed: 1, total: 1),
+                    severity: .warning,
+                    durationSeconds: 3))
+            }
         case .multiImage(let items):
+            var failed = 0
             for data in items {
-                container.sendImage(data, overrideTimerSeconds: overrideSeconds)
+                if !container.sendImage(data, overrideTimerSeconds: overrideSeconds) {
+                    failed += 1
+                }
+            }
+            if failed > 0 {
+                snackbar?.show(.init(
+                    text: Self.photoSendFailureSnackbarText(failed: failed, total: items.count),
+                    severity: .warning,
+                    durationSeconds: 3))
             }
         case .file(let url):
             container.sendFileAttachment(url: url, overrideTimerSeconds: overrideSeconds)

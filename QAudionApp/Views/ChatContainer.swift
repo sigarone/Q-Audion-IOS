@@ -1355,7 +1355,17 @@ final class ChatContainer: ObservableObject {
     ///   chosen in the pre-send dialog. `nil` (default) means "no
     ///   override, use the conversation default" — identical behavior
     ///   to before this parameter existed.
-    func sendImage(_ rawImageData: Data, overrideTimerSeconds: Int? = nil) {
+    /// - Returns: W611 — `false` when the image was rejected before any
+    ///   local echo was created (undecodable bytes, or over the 10MB
+    ///   post-downscale cap); `true` once a `Message` row has been
+    ///   appended and the send has been queued (or simulated, in the
+    ///   preview/unit-test fallback). Callers (`ChatDetailScreen`'s
+    ///   `performAttachmentSend`) use this to surface a visible snackbar
+    ///   for the rejection instead of the previous print-only silent
+    ///   drop — critical for a multi-select batch, where one bad photo
+    ///   among several used to vanish with zero indication.
+    @discardableResult
+    func sendImage(_ rawImageData: Data, overrideTimerSeconds: Int? = nil) -> Bool {
         let peerId = peerUserId
         let convId = conversationId
         let msgId = UUID()
@@ -1363,12 +1373,12 @@ final class ChatContainer: ObservableObject {
         // Normalize: load → downscale → re-encode JPEG (no EXIF).
         guard let normalized = Self.normalizeImageForChat(rawImageData) else {
             print("[ChatContainer] sendImage normalization failed")
-            return
+            return false
         }
         let jpeg = normalized.data
         guard jpeg.count <= 10 * 1024 * 1024 else {
             print("[ChatContainer] sendImage rejected: \(jpeg.count) bytes > 10MB cap")
-            return
+            return false
         }
 
         // Persist the local copy first so the sender bubble shows the
@@ -1419,7 +1429,7 @@ final class ChatContainer: ObservableObject {
                 )
                 self?.refreshFromStore()
             }
-            return
+            return true
         }
 
         Task { [weak self] in
@@ -1430,6 +1440,7 @@ final class ChatContainer: ObservableObject {
                 sendService: sendService, appState: appState
             )
         }
+        return true
     }
 
     /// Extracted body of the `sendImage` upload `Task` — same rationale

@@ -539,14 +539,43 @@ public final class ConversationStore {
 
     /// Delete all messages whose `expiresAt` is non-nil and in the past.
     /// Called by EphemeralMessageJanitor every 60 s.
+    ///
+    /// W612: mirrors `applyDeleteByClientMsgId`'s capture-then-remove
+    /// pattern — a bare `deleteAll` only drops the DB row, leaving any
+    /// cached attachment blob the expired message pointed at (e.g. a
+    /// decrypted TTL/view-once photo in `Library/Caches/images/`) on
+    /// disk forever. That defeats the entire point of TTL/view-once:
+    /// the plaintext must actually become unrecoverable, not just
+    /// hidden from the UI. Cleanup is signal-not-kill: capture the
+    /// paths before the transaction, delete the rows, then — only
+    /// after the commit has succeeded — best-effort remove the files.
+    /// A missing file or filesystem error is logged and swallowed; it
+    /// never blocks or fails the DB delete itself.
     public func deleteExpiredMessages() {
         do {
             let now = Date()
+            var cachedPathsToRemove: [String] = []
             _ = try db.writer.write { db in
+                let expired = try Message
+                    .filter(Column("expiresAt") != nil)
+                    .filter(Column("expiresAt") <= now)
+                    .fetchAll(db)
+                cachedPathsToRemove = expired.compactMap { $0.mediaLocalPath }.filter { !$0.isEmpty }
                 try Message
                     .filter(Column("expiresAt") != nil)
                     .filter(Column("expiresAt") <= now)
                     .deleteAll(db)
+            }
+            // Rows are committed — now best-effort reclaim the cached
+            // blobs. Never propagate failures here: the DB delete
+            // already succeeded.
+            for path in cachedPathsToRemove {
+                guard FileManager.default.fileExists(atPath: path) else { continue }
+                do {
+                    try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
+                } catch {
+                    print("[ConversationStore] deleteExpiredMessages: cache cleanup failed for \(path): \(error)")
+                }
             }
         } catch {
             print("[ConversationStore] deleteExpiredMessages failed: \(error)")
