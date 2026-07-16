@@ -624,6 +624,47 @@ jobs:
           if-no-files-found: warn
 
       # ----------------------------------------------------------
+      # 7c) Diagnose Archive/signing errors ONLY when Build IPA fails
+      #     AND the Swift-compile diagnostic above came back clean.
+      #     `xcode-project build-ipa` (7a) runs archive through
+      #     xcbeautify, which summarizes/filters the real xcodebuild
+      #     output -- a genuine signing/entitlements failure can come
+      #     back as a bare "Failed to archive" with zero detail (seen
+      #     on v1.0.795: Swift-compile diag passed clean, archive still
+      #     failed in ~11s with nothing printed). This re-runs the
+      #     IDENTICAL archive invocation xcode-project uses internally,
+      #     but raw (no xcbeautify), so the real reason surfaces.
+      # ----------------------------------------------------------
+      - name: Diagnose archive (raw xcodebuild, signed)
+        if: failure()
+        working-directory: QAudionApp
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          mkdir -p build/ios/xcarchive
+          xcodebuild archive \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -archivePath build/ios/xcarchive/QAudionApp_diag.xcarchive \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            DEVELOPMENT_TEAM=5G22P9239N \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGN_STYLE=Manual \
+            2>&1 | tee archive-diag.log
+          echo "--- archive-diag.log tail ---"
+          tail -80 archive-diag.log
+
+      - name: Upload archive-diag.log
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: archive-diag-${{ github.run_number }}
+          path: QAudionApp/archive-diag.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      # ----------------------------------------------------------
       # 8) Patch onnxruntime.framework MinimumOSVersion + re-sign.
       #    See CLAUDE.md sec 4 for the full story. Currently 1.24.2.
       #    The plutil line forces 16.0 regardless of what the XCFramework
