@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.795",
+              date: "2026-07-16",
+              title: "v1.0.795",
+              bullets: [
+                "fix(ios): pass the human display name to enable-capabilities, not the enum key",
+              ]),
         .init(id: "v1.0.794",
               date: "2026-07-16",
               title: "v1.0.794",
               bullets: [
+                "chore: regenerate changelog for v1.0.794",
                 "fix(ios): codemagic-cli-tools wants --capability, not --capabilities",
               ]),
         .init(id: "v1.0.793",
@@ -159,13 +166,6 @@ extension ReleaseNote {
               title: "v1.0.776",
               bullets: [
                 "fix(audio): lower mic AGC noise gate 2%->0.8% (quiet earpiece mic)",
-              ]),
-        .init(id: "v1.0.775",
-              date: "2026-07-12",
-              title: "v1.0.775",
-              bullets: [
-                "chore: regenerate changelog for v1.0.775",
-                "fix(audio): de-zipper mic AGC gain (per-sample ramp) — kill the crackle",
               ]),
     ]
 }
