@@ -352,10 +352,19 @@ jobs:
           plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$EXT_PLIST"
           plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$EXT_PLIST"
 
+          # Same rule for the broadcast (screen-share) extension — its
+          # Info.plist otherwise keeps a hardcoded placeholder version and
+          # fails the same host/extension version-match validation.
+          BCAST_PLIST="../QAudionBroadcastExtension/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$BCAST_PLIST"
+          plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$BCAST_PLIST"
+
           plutil -extract CFBundleShortVersionString raw -o - Info.plist
           plutil -extract CFBundleVersion             raw -o - Info.plist
           echo "--- extension ---"
           plutil -extract CFBundleVersion raw -o - "$EXT_PLIST"
+          echo "--- broadcast extension ---"
+          plutil -extract CFBundleVersion raw -o - "$BCAST_PLIST"
 
           # Expose the resolved version + build number as step outputs so the
           # dSYM-archival step below can name its artifact by version
