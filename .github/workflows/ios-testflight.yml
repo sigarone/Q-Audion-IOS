@@ -268,6 +268,16 @@ jobs:
         if: steps.cache-reality.outputs.cache-hit != 'true'
         # Kept non-blocking on the release path -- see NOTE above.
         continue-on-error: true
+        # v1.0.796 (2026-07-16): this step hung for 1h13m+ on a shared
+        # runner -- continue-on-error only forgives a step that actually
+        # EXITS (success or failure); it does nothing for a hang, since the
+        # step never reaches an exit code to forgive. The same script ran
+        # successfully in engine-tests.yml's ios-simulator-tests job the
+        # same day (6-13 min total job time), so this looks like transient
+        # runner/network flakiness rather than a deterministic bug -- but
+        # cap it hard either way so a repeat never silently burns an hour+
+        # of the 150-minute job budget again.
+        timeout-minutes: 20
         env:
           # actions/setup-go@v6 sets GOTOOLCHAIN=local at the job level when
           # go-version is pinned (here: 1.22, for WireGuardKitGo's CGO build
