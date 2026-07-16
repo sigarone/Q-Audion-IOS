@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.793",
+              date: "2026-07-16",
+              title: "v1.0.793",
+              bullets: [
+                "fix(ios): use XcodeGen's exactVersion key, not SPM's raw exact",
+              ]),
         .init(id: "v1.0.792",
               date: "2026-07-16",
               title: "v1.0.792",
               bullets: [
+                "chore: regenerate changelog for v1.0.792",
                 "ci(ios): sync broadcast extension version with the host build",
                 "ci(ios): provision Bundle ID + App Groups for the broadcast extension",
                 "feat(groups): ReplayKit broadcast extension + LiveKit screen-share toggle",
@@ -159,14 +166,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.774",
                 "fix(crash): lock CallService cross-thread relay slots (ARC data race)",
-              ]),
-        .init(id: "v1.0.773",
-              date: "2026-07-12",
-              title: "v1.0.773",
-              bullets: [
-                "chore: regenerate changelog for v1.0.773",
-                "fix(crash): stop off-main @Published/AppState writes in WS call handlers (heap corruption)",
-                "docs: fix stale DEFAULT-OFF v4-ratchet comment + stub-linking claim",
               ]),
     ]
 }
