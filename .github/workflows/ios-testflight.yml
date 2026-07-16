@@ -493,6 +493,72 @@ jobs:
             echo "WARNING: could not resolve Extension Bundle ID resource -- archive may fail."
           fi
 
+          # ── Broadcast extension: App Groups ─────────────────────────────
+          # QAudionBroadcastExtension.entitlements (ReplayKit screen-share,
+          # feat(groups): ReplayKit broadcast extension) requires App Groups.
+          # Same class of fix as the VPN extension above: fetch-signing-files
+          # --create makes the Bundle ID but not the capability -- the profile
+          # it produces has no entitlements and xcodebuild archive rejects it.
+          # No NETWORK_EXTENSIONS needed here (broadcast, not a tunnel).
+          BCAST_BID="com.qaudion.app.broadcast"
+
+          BCAST_FETCH_TMP=$(mktemp)
+          app-store-connect fetch-signing-files "$BCAST_BID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificate-key "@file:$CERT_KEY_PATH" \
+            --strict-match-identifier 2>&1 | tee "$BCAST_FETCH_TMP" || true
+          BCAST_FETCH_OUT=$(cat "$BCAST_FETCH_TMP")
+          rm -f "$BCAST_FETCH_TMP"
+
+          BCAST_PLAIN=$(printf '%s\n' "$BCAST_FETCH_OUT" | sed 's/\x1b\[[0-9;]*m//g')
+
+          BCAST_BID_RES=$(printf '%s\n' "$BCAST_PLAIN" \
+            | grep -oE 'Created Bundle ID [A-Z0-9]{10}|Bundle ID [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$BCAST_BID_RES" ]; then
+            BCAST_BID_RES=$(printf '%s\n' "$BCAST_PLAIN" \
+              | grep -F "com.qaudion.app.broadcast" \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Broadcast Extension Bundle ID res-id: ${BCAST_BID_RES:-UNKNOWN}"
+
+          BCAST_PROF_RES=$(printf '%s\n' "$BCAST_PLAIN" \
+            | grep -oE 'Created Profile [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$BCAST_PROF_RES" ]; then
+            BCAST_PROF_RES=$(printf '%s\n' "$BCAST_PLAIN" \
+              | grep -E '^- IOS_APP_STORE' \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Broadcast Extension Profile res-id: ${BCAST_PROF_RES:-UNKNOWN}"
+
+          if [ -n "$BCAST_BID_RES" ]; then
+            echo "Enabling APP_GROUPS on $BCAST_BID_RES..."
+            app-store-connect bundle-ids enable-capabilities \
+              "$BCAST_BID_RES" --capabilities APP_GROUPS 2>&1 \
+              && echo "  APP_GROUPS: done" \
+              || echo "  APP_GROUPS: WARN (may already be enabled)"
+
+            if [ -n "$BCAST_PROF_RES" ]; then
+              echo "Deleting stale profile $BCAST_PROF_RES (created without capabilities)..."
+              app-store-connect profiles delete "$BCAST_PROF_RES" 2>&1 \
+                && echo "  Profile deleted." \
+                || echo "  Profile delete WARN (may already be gone)"
+            fi
+
+            echo "Re-creating broadcast extension signing files with capabilities..."
+            app-store-connect fetch-signing-files "$BCAST_BID" \
+              --type IOS_APP_STORE \
+              --create \
+              --platform IOS \
+              --certificate-key "@file:$CERT_KEY_PATH" \
+              --strict-match-identifier
+          else
+            echo "WARNING: could not resolve Broadcast Extension Bundle ID resource -- archive may fail."
+          fi
+
           keychain add-certificates
           xcode-project use-profiles --project "QAudionApp/$XCODE_PROJECT"
 
