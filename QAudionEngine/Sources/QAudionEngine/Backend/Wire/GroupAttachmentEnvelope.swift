@@ -37,6 +37,8 @@ import Foundation
 ///     "height":       1080,            // image-only
 ///     "blurhash":     "LEHV6nWB..."    // image-only, optional
 ///     // "duration_ms": 5234           // file-only optional (audio/video)
+///     // "ex":  -1                     // OPTIONAL per-attachment TTL override
+///     // "xp":  0                      // OPTIONAL export-permission override
 ///   },
 ///   "dl": {                            // §4 PATH 1 — per-member capability tokens
 ///     "<memberUuid>": { "tok":"<hex>", "exp":<expiresAtMs>, "max":<maxUses> }
@@ -169,12 +171,29 @@ public struct GroupAttachmentMeta: Equatable {
     public let blurhash: String?
     // file-only optional
     public let durationMs: Int64?
+    /// Per-attachment ephemeral-timer override — GROUP counterpart of the
+    /// 1:1 ``AttachAnnounceMeta/ex``. IDENTICAL semantics/encoding
+    /// (mirrored verbatim, not a parallel implementation): absent or 0 =
+    /// no TTL (message persists); -1 = view-once; positive N = TTL in
+    /// seconds. Brand-new optional key — group had NO TTL/view-once
+    /// concept before this field. Old decoders ignore the unknown key;
+    /// old encoders simply omit it, which this decoder maps to `nil`.
+    /// Resolve with the SAME ``AttachmentTimerResolver`` the 1:1 path
+    /// uses (no group-specific reimplementation of the precedence rule).
+    public let ex: Int?
+    /// Export-permission override — GROUP counterpart of the 1:1
+    /// ``AttachAnnounceMeta/xp``. IDENTICAL semantics/encoding: absent or
+    /// 1 = export allowed (today's behavior, unchanged); 0 = export
+    /// blocked. Client-side/UI honor-system signal only — no server-side
+    /// enforcement, same caveat as the 1:1 field.
+    public let xp: Int?
 
     public init(id: String, fileId: String, mime: String, byteLength: Int64,
                 sha256B64: String, keyB64: String, filename: String,
                 chunkSize: Int, totalChunks: Int,
                 width: Int? = nil, height: Int? = nil, blurhash: String? = nil,
-                durationMs: Int64? = nil) {
+                durationMs: Int64? = nil,
+                ex: Int? = nil, xp: Int? = nil) {
         self.id = id
         self.fileId = fileId
         self.mime = mime
@@ -188,6 +207,8 @@ public struct GroupAttachmentMeta: Equatable {
         self.height = height
         self.blurhash = blurhash
         self.durationMs = durationMs
+        self.ex = ex
+        self.xp = xp
     }
 
     static func int64(_ any: Any?) -> Int64? {
@@ -226,13 +247,26 @@ public struct GroupAttachmentMeta: Equatable {
         let filename = (dict["filename"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "attachment.bin"
         let chunkSize = int(dict["chunk_size"]) ?? 262144
         let totalChunks = int(dict["total_chunks"]) ?? 1
+        // `ex`/`xp` are brand-new optional keys, same backward-compat
+        // contract as the 1:1 `AttachAnnounceMeta` counterparts — absent
+        // in every descriptor produced before this change. Missing key →
+        // nil, so old-shape JSON keeps decoding unchanged.
+        let ex = int(dict["ex"])
+        if let e = ex, e < -1 {
+            throw GroupAttachmentEnvelope.Error.invalidValue("attachment.ex")
+        }
+        let xp = int(dict["xp"])
+        if let x = xp, x != 0 && x != 1 {
+            throw GroupAttachmentEnvelope.Error.invalidValue("attachment.xp")
+        }
         return GroupAttachmentMeta(
             id: id, fileId: fileId, mime: mime, byteLength: byteLength,
             sha256B64: sha256B64, keyB64: keyB64, filename: filename,
             chunkSize: chunkSize, totalChunks: totalChunks,
             width: int(dict["width"]), height: int(dict["height"]),
             blurhash: dict["blurhash"] as? String,
-            durationMs: int64(dict["duration_ms"]))
+            durationMs: int64(dict["duration_ms"]),
+            ex: ex, xp: xp)
     }
 
     func toJsonDict() -> [String: Any] {
@@ -251,6 +285,11 @@ public struct GroupAttachmentMeta: Equatable {
         if let h = height { d["height"] = NSNumber(value: h) }
         if let b = blurhash, !b.isEmpty { d["blurhash"] = b }
         if let dm = durationMs { d["duration_ms"] = NSNumber(value: dm) }
+        // Only emit when explicitly set (non-nil) — same contract as the
+        // 1:1 `ex`/`xp` fields — so the wire shape is byte-identical to
+        // today when no override is chosen.
+        if let e = ex { d["ex"] = NSNumber(value: e) }
+        if let x = xp { d["xp"] = NSNumber(value: x) }
         return d
     }
 }

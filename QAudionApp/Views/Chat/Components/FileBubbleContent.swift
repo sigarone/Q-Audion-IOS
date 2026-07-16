@@ -45,11 +45,20 @@ struct FileBubbleContent: View {
     /// Byte size of the decrypted file, when known. `nil` hides the
     /// size line rather than showing a misleading "0 KB".
     let fileSizeBytes: Int64?
+    /// Export-permission — mirrors `Message.exportBlocked` /
+    /// `GroupMessageStore.Stored.exportBlocked`. `false` (default) =
+    /// export allowed, unchanged behaviour. `true` = the sender marked
+    /// this attachment export-blocked: the inline "Salva"/"Condividi"
+    /// row below is replaced with an explicit locked indicator instead
+    /// of silently disabling the buttons — client-side/UI-level
+    /// honor-system gate only, same trust model as view-once.
+    let exportBlocked: Bool
 
-    init(messageId: UUID, mediaLocalPath: String?, fileSizeBytes: Int64? = nil) {
+    init(messageId: UUID, mediaLocalPath: String?, fileSizeBytes: Int64? = nil, exportBlocked: Bool = false) {
         self.messageId = messageId
         self.mediaLocalPath = mediaLocalPath
         self.fileSizeBytes = fileSizeBytes
+        self.exportBlocked = exportBlocked
     }
 
     private var isReady: Bool {
@@ -120,14 +129,18 @@ struct FileBubbleContent: View {
                                 .qaudionStyle(type.labelSmall)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
-                        actionButton(title: "Salva", systemImage: "square.and.arrow.down") {
-                            guard let path = mediaLocalPath, !path.isEmpty else { return }
-                            sharingURL = ShareTarget(url: URL(fileURLWithPath: path))
-                            saveConfirmVisible = true
-                        }
-                        actionButton(title: "Condividi", systemImage: "square.and.arrow.up") {
-                            guard let path = mediaLocalPath, !path.isEmpty else { return }
-                            sharingURL = ShareTarget(url: URL(fileURLWithPath: path))
+                        if exportBlocked {
+                            lockedExportBadge
+                        } else {
+                            actionButton(title: "Salva", systemImage: "square.and.arrow.down") {
+                                guard let path = mediaLocalPath, !path.isEmpty else { return }
+                                sharingURL = ShareTarget(url: URL(fileURLWithPath: path))
+                                saveConfirmVisible = true
+                            }
+                            actionButton(title: "Condividi", systemImage: "square.and.arrow.up") {
+                                guard let path = mediaLocalPath, !path.isEmpty else { return }
+                                sharingURL = ShareTarget(url: URL(fileURLWithPath: path))
+                            }
                         }
                     }
                 } else {
@@ -151,6 +164,25 @@ struct FileBubbleContent: View {
         // .contextMenu installs its own UIContextMenuInteraction, which
         // wins the long-press touch over ChatDetailScreen's outer
         // .onLongPressGesture — see BubbleActionSheet's doc comment).
+    }
+
+    /// Replaces the Salva/Condividi row when `exportBlocked` is true —
+    /// an explicit, non-interactive indicator rather than silently
+    /// hiding the row with no explanation.
+    private var lockedExportBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Esportazione non consentita")
+                .qaudionStyle(type.labelSmall)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+        .foregroundStyle(scheme.onSurfaceVariant)
     }
 
     @ViewBuilder

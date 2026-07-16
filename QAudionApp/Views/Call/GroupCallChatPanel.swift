@@ -79,6 +79,11 @@ struct GroupCallChatPanel: View {
     @State private var showingPhotoPicker = false
     @State private var photoPickerItems: [PhotosPickerItem] = []
     @State private var showingFileImporter = false
+    /// W-XPTTL — pending group attachment awaiting the pre-send options
+    /// choice. See `GroupChatScreen`'s identical field for the full
+    /// reasoning (shared `PendingAttachmentSend` enum, `.voiceNote`
+    /// unreachable here).
+    @State private var pendingGroupAttachmentSend: PendingAttachmentSend? = nil
 
     /// Hex form (dashes stripped, lowercase) — the key space
     /// `GroupMessageStore`/`GroupRegistry`/`GroupChatService` all use.
@@ -154,6 +159,23 @@ struct GroupCallChatPanel: View {
                       allowedContentTypes: [.item],
                       allowsMultipleSelection: false) { result in
             handlePickedFile(result)
+        }
+        // W-XPTTL — pre-send options for group attachments. Same pattern
+        // as `GroupChatScreen`.
+        .sheet(isPresented: Binding(
+            get: { pendingGroupAttachmentSend != nil },
+            set: { presented in if !presented { pendingGroupAttachmentSend = nil } }
+        )) {
+            AttachmentSendOptionsSheet(
+                currentDefaultSeconds: nil,
+                onConfirm: { overrideSeconds, exportBlocked in
+                    guard let pending = pendingGroupAttachmentSend else { return }
+                    pendingGroupAttachmentSend = nil
+                    performGroupAttachmentSend(pending, overrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
+                },
+                onCancel: { pendingGroupAttachmentSend = nil }
+            )
+            .presentationDetents([.medium])
         }
     }
 
@@ -317,7 +339,8 @@ struct GroupCallChatPanel: View {
                 mediaLocalPath: m.mediaLocalPath,
                 fileName: m.fileName,
                 byteLength: m.byteLength,
-                delivery: deliveryStatus(for: m))
+                delivery: deliveryStatus(for: m),
+                exportBlocked: m.exportBlocked)
         }
         // Viewing the panel == reading it, same as GroupChatScreen — also
         // clears the unread badge on the call-screen toggle icon (that
@@ -412,45 +435,97 @@ struct GroupCallChatPanel: View {
 
     // MARK: - Send: attachments (reuses GroupAttachmentSender — see type doc)
 
+    /// Load each picked photo as JPEG bytes, then defer to the pre-send
+    /// options sheet (one dialog for the whole batch) — see
+    /// `GroupChatScreen.processPickedGroupPhotos` for the identical
+    /// pattern this mirrors.
     private func handlePickedPhotos(_ items: [PhotosPickerItem]) {
         guard !items.isEmpty, !groupHex.isEmpty else { return }
+        let picked = items
         photoPickerItems = []
-        for item in items {
-            Task { @MainActor in
-                guard let raw = try? await item.loadTransferable(type: Data.self),
-                      let img = UIImage(data: raw),
-                      let jpeg = img.jpegData(compressionQuality: 0.85) else {
-                    snackbar?.show(.init(text: "Immagine non leggibile", severity: .warning))
-                    return
-                }
-                await sendAttachmentOverWire(
-                    data: jpeg, mime: "image/jpeg", kind: GroupAttachmentEnvelope.kindImage,
-                    filename: "IMG-\(Int(Date().timeIntervalSince1970)).jpg",
-                    width: Int(img.size.width), height: Int(img.size.height))
-            }
-        }
+        Task { await processPickedGroupPhotos(picked) }
     }
 
+    private func processPickedGroupPhotos(_ items: [PhotosPickerItem]) async {
+        var loaded: [Data] = []
+        var failures = 0
+        for item in items {
+            if let raw = try? await item.loadTransferable(type: Data.self),
+               let img = UIImage(data: raw),
+               let jpeg = img.jpegData(compressionQuality: 0.85) {
+                loaded.append(jpeg)
+            } else {
+                failures += 1
+            }
+        }
+        if failures > 0 {
+            await MainActor.run {
+                snackbar?.show(.init(
+                    text: "\(failures) foto su \(items.count) non leggibili.",
+                    severity: .warning, durationSeconds: 3))
+            }
+        }
+        guard !loaded.isEmpty else { return }
+        await MainActor.run { pendingGroupAttachmentSend = .multiImage(loaded) }
+    }
+
+    /// File picked — defer the actual read to `performGroupAttachmentSend`,
+    /// mirroring `GroupChatScreen.handlePickedFile`.
     private func handlePickedFile(_ result: Result<[URL], Swift.Error>) {
         guard case .success(let urls) = result, let url = urls.first, !groupHex.isEmpty else { return }
-        Task { @MainActor in
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url) else {
-                snackbar?.show(.init(text: "File non leggibile", severity: .warning))
-                return
+        pendingGroupAttachmentSend = .file(url)
+    }
+
+    /// Fires the actual group attachment send once the pre-send options
+    /// are confirmed. `.voiceNote` is unreachable here (no group
+    /// voice-note send flow) — kept only for the shared enum's
+    /// exhaustiveness, same as `GroupChatScreen`.
+    private func performGroupAttachmentSend(_ pending: PendingAttachmentSend, overrideSeconds: Int?, exportBlocked: Bool) {
+        switch pending {
+        case .image(let data):
+            let img = UIImage(data: data)
+            Task {
+                await sendAttachmentOverWire(
+                    data: data, mime: "image/jpeg", kind: GroupAttachmentEnvelope.kindImage,
+                    filename: "IMG-\(Int(Date().timeIntervalSince1970)).jpg",
+                    width: img.map { Int($0.size.width) }, height: img.map { Int($0.size.height) },
+                    timerOverrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
             }
-            let ext = url.pathExtension
-            let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
-            await sendAttachmentOverWire(
-                data: data, mime: mime, kind: GroupAttachmentEnvelope.kindFile,
-                filename: url.lastPathComponent, width: nil, height: nil)
+        case .multiImage(let items):
+            for data in items {
+                let img = UIImage(data: data)
+                Task {
+                    await sendAttachmentOverWire(
+                        data: data, mime: "image/jpeg", kind: GroupAttachmentEnvelope.kindImage,
+                        filename: "IMG-\(Int(Date().timeIntervalSince1970)).jpg",
+                        width: img.map { Int($0.size.width) }, height: img.map { Int($0.size.height) },
+                        timerOverrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
+                }
+            }
+        case .file(let url):
+            Task {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                guard let data = try? Data(contentsOf: url) else {
+                    snackbar?.show(.init(text: "File non leggibile", severity: .warning))
+                    return
+                }
+                let ext = url.pathExtension
+                let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
+                await sendAttachmentOverWire(
+                    data: data, mime: mime, kind: GroupAttachmentEnvelope.kindFile,
+                    filename: url.lastPathComponent, width: nil, height: nil,
+                    timerOverrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
+            }
+        case .voiceNote:
+            break
         }
     }
 
     @MainActor
     private func sendAttachmentOverWire(
-        data: Data, mime: String, kind: String, filename: String, width: Int?, height: Int?
+        data: Data, mime: String, kind: String, filename: String, width: Int?, height: Int?,
+        timerOverrideSeconds: Int? = nil, exportBlocked: Bool = false
     ) async {
         let members = memberIds
         let selfId = AppState.currentUserIdSnapshot ?? "u-self"
@@ -460,11 +535,22 @@ struct GroupCallChatPanel: View {
             prepared = try await GroupAttachmentSender(appState: appState).prepare(
                 data: data, mime: mime, kind: kind, filename: filename,
                 caption: nil, width: width, height: height,
-                members: members, selfId: selfId)
+                members: members, selfId: selfId,
+                timerOverrideSeconds: timerOverrideSeconds, exportBlocked: exportBlocked)
         } catch {
             snackbar?.show(.init(text: "Allegato non inviato — \(error.localizedDescription)",
                                  severity: .error, durationSeconds: 5))
             return
+        }
+
+        // Same resolver + stamping as GroupChatScreen.sendAttachmentOverWire
+        // and the receive path (AppState.landIncomingGroupAttachment).
+        let now = Date()
+        let effectiveTimerSecs = AttachmentTimerResolver.resolve(
+            overrideSeconds: timerOverrideSeconds, conversationDefault: nil)
+        let isViewOnce = (effectiveTimerSecs ?? 0) == -1
+        let ephExpiry: Date? = effectiveTimerSecs.flatMap { s in
+            s > 0 ? now.addingTimeInterval(Double(s)) : nil
         }
 
         let clientMsgId = UUID().uuidString
@@ -476,13 +562,16 @@ struct GroupCallChatPanel: View {
                 senderId: selfId,
                 mine: true,
                 text: prepared.caption ?? "",
-                ts: Date(),
+                ts: now,
                 attachmentKind: prepared.kind,
                 mediaMime: prepared.mime,
                 fileName: prepared.filename,
                 byteLength: prepared.byteLength,
                 mediaLocalPath: prepared.localPath,
-                descriptorJson: prepared.descriptorJson))
+                descriptorJson: prepared.descriptorJson,
+                expiresAt: ephExpiry,
+                isViewOnce: isViewOnce ? true : nil,
+                exportBlocked: exportBlocked ? true : nil))
 
         let pendingInits = GroupChatService.shared.pendingInitsAfterBootstrap(
             groupId: groupHex, members: members, selfId: selfId)

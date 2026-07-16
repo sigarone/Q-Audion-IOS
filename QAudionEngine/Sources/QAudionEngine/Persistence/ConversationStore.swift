@@ -369,7 +369,8 @@ public final class ConversationStore {
                     reactions: msg.reactions,
                     expiresAt: msg.expiresAt,
                     isViewOnce: msg.isViewOnce,
-                    viewOnceOpened: msg.viewOnceOpened
+                    viewOnceOpened: msg.viewOnceOpened,
+                    exportBlocked: msg.exportBlocked
                 )
                 try msg.save(db)
                 return true
@@ -640,7 +641,8 @@ public final class ConversationStore {
                         reactions: msg.reactions,
                         expiresAt: deadline,
                         isViewOnce: msg.isViewOnce,
-                        viewOnceOpened: true
+                        viewOnceOpened: true,
+                        exportBlocked: msg.exportBlocked
                     )
                     try msg.save(db)
                 }

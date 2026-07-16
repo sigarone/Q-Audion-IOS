@@ -70,6 +70,13 @@ final class ChatVoiceNoteSender {
     ///     override (conversation default applies at receive time via
     ///     ``AttachmentTimerResolver``); embedded as `qfile.ex` /
     ///     `attach_announce.att.ex` so the receiver honors it too.
+    ///   - exportBlocked: export-permission choice from the pre-send
+    ///     dialog. `false` (default) = export allowed. Only reaches the
+    ///     wire on the `attach_announce` path (embedded as `att.xp`) —
+    ///     the legacy qfile marker is NOT being extended with this field
+    ///     (see ``AttachAnnounceMeta/xp`` doc), so a send that falls back
+    ///     to (or is default-routed through) the qfile path silently
+    ///     cannot signal export-block to the peer today.
     ///   - onProgress: optional local-UI callback, `(bytesUploaded,
     ///     totalBytes)`. Only wired on the legacy qfile path (the
     ///     `attach_announce` cross-platform path, gated behind
@@ -88,6 +95,7 @@ final class ChatVoiceNoteSender {
         for recording: VoiceNoteRecorder.Recording,
         recipientUserId: String,
         timerOverrideSeconds: Int? = nil,
+        exportBlocked: Bool = false,
         onProgress: ((Int64, Int64) -> Void)? = nil,
         resumeClientMsgId: String? = nil
     ) async throws -> String {
@@ -101,7 +109,8 @@ final class ChatVoiceNoteSender {
                 return try await ChatAttachAnnounceSender(appState: appState)
                     .prepareEnvelopeJson(recording: recording,
                                           recipientUserId: recipientUserId,
-                                          timerOverrideSeconds: timerOverrideSeconds)
+                                          timerOverrideSeconds: timerOverrideSeconds,
+                                          exportBlocked: exportBlocked)
             } catch {
                 // Fall back to the legacy qfile path on any error so
                 // the user can still send during the rollover.

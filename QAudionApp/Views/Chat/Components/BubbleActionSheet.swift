@@ -64,6 +64,13 @@ struct BubbleActionSheet: View {
     /// file. Invoked for both `.image` and `.voiceNote`. Default no-op
     /// for the same reason as `onSaveImage`.
     var onShareMedia: () -> Void = {}
+    /// Export-permission — mirrors `Message.exportBlocked`. Only
+    /// meaningful when `mediaKind == .image` (the only media kind this
+    /// sheet gates a save/share pair for — `FileBubbleContent` gates its
+    /// own always-visible inline buttons directly, not through this
+    /// sheet). `true` replaces the "Salva in Foto"/"Condividi immagine"
+    /// rows with an explicit locked row instead of silently hiding them.
+    var exportBlocked: Bool = false
     /// W141: edit eligibility window. When the message was sent more
     /// than `editWindowSeconds` ago, "Modifica" is hidden — Telegram
     /// uses 48h, WhatsApp 15min; we follow WhatsApp by default.
@@ -126,15 +133,23 @@ struct BubbleActionSheet: View {
                 // W446: image-only rows — moved here from
                 // ImageBubbleContent's inner .contextMenu (see the
                 // struct doc comment above for why).
+                // Export-permission — when the sender blocked export,
+                // replace both actionable rows with a single explicit
+                // locked row instead of silently hiding them (per the
+                // "disable/hide with a clear message" instruction).
                 if mediaKind == .image {
-                    actionRow(label: "Salva in Foto",
-                              icon: "square.and.arrow.down",
-                              danger: false,
-                              action: { onSaveImage(); dismiss() })
-                    actionRow(label: "Condividi immagine",
-                              icon: "square.and.arrow.up",
-                              danger: false,
-                              action: { onShareMedia(); dismiss() })
+                    if exportBlocked {
+                        lockedExportRow
+                    } else {
+                        actionRow(label: "Salva in Foto",
+                                  icon: "square.and.arrow.down",
+                                  danger: false,
+                                  action: { onSaveImage(); dismiss() })
+                        actionRow(label: "Condividi immagine",
+                                  icon: "square.and.arrow.up",
+                                  danger: false,
+                                  action: { onShareMedia(); dismiss() })
+                    }
                 }
                 // W446: voice-note-only row — moved here from
                 // VoiceNoteBubbleContent's inner .contextMenu.
@@ -242,6 +257,25 @@ struct BubbleActionSheet: View {
                 showPlusHint = false
             }
         }
+    }
+
+    // MARK: - Export-permission locked row
+
+    /// Non-interactive row shown instead of "Salva in Foto"/"Condividi
+    /// immagine" when the sender marked this attachment export-blocked.
+    private var lockedExportRow: some View {
+        HStack(spacing: 16) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .frame(width: 22)
+            Text("Esportazione non consentita dal mittente")
+                .qaudionStyle(type.bodyLarge)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Spacer()
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
     }
 
     // MARK: - Action row

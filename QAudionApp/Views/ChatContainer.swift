@@ -689,7 +689,14 @@ final class ChatContainer: ObservableObject {
     ///   marker's `ex` field AND used to stamp this send's own local
     ///   echo `expiresAt`/`isViewOnce`, taking precedence over the
     ///   conversation default for this one message.
-    func sendVoiceNote(_ recording: VoiceNoteRecorder.Recording, overrideTimerSeconds: Int? = nil) {
+    /// - Parameter exportBlocked: export-permission choice from the
+    ///   pre-send dialog. `false` (default) = export allowed. Stamped
+    ///   onto the local echo `Message.exportBlocked` AND threaded through
+    ///   to `ChatVoiceNoteSender.prepareMarkerJson` — unlike
+    ///   `sendImage`/`sendFileAttachment`, THIS path can actually reach
+    ///   the wire (`att.xp`) when `VoiceNote.attachAnnounce.enabled` is
+    ///   on; the legacy qfile fallback still cannot carry it.
+    func sendVoiceNote(_ recording: VoiceNoteRecorder.Recording, overrideTimerSeconds: Int? = nil, exportBlocked: Bool = false) {
         let peerId = peerUserId
         let convId = conversationId
         let durSec = Double(recording.durationMs) / 1000.0
@@ -729,7 +736,8 @@ final class ChatContainer: ObservableObject {
             // W86: stamp clientMsgId so peer can target with edit/delete.
             clientMsgId: msgId.uuidString,
             expiresAt: ephExpiry,
-            isViewOnce: isViewOnce ? true : nil
+            isViewOnce: isViewOnce ? true : nil,
+            exportBlocked: exportBlocked ? true : nil
         )
         store.appendMessage(local)
         store.recordNewMessage(
@@ -762,7 +770,8 @@ final class ChatContainer: ObservableObject {
                 weakContainer: Weak(self), recording: recording, peerId: peerId,
                 convId: convId, msgId: msgId,
                 sendService: sendService, appState: appState,
-                overrideTimerSeconds: overrideTimerSeconds
+                overrideTimerSeconds: overrideTimerSeconds,
+                exportBlocked: exportBlocked
             )
         }
     }
@@ -806,7 +815,8 @@ final class ChatContainer: ObservableObject {
         msgId: UUID,
         sendService: ChatMessageSendService,
         appState: AppState,
-        overrideTimerSeconds: Int? = nil
+        overrideTimerSeconds: Int? = nil,
+        exportBlocked: Bool = false
     ) async {
         // W-BGUP: extend the process's execution window past the ~30s
         // the OS grants a freshly-backgrounded app, so a large voice
@@ -821,7 +831,8 @@ final class ChatContainer: ObservableObject {
                 weakContainer: weakContainer, recording: recording, peerId: peerId,
                 convId: convId, msgId: msgId,
                 sendService: sendService, appState: appState,
-                overrideTimerSeconds: overrideTimerSeconds
+                overrideTimerSeconds: overrideTimerSeconds,
+                exportBlocked: exportBlocked
             )
         }
     }
@@ -834,7 +845,8 @@ final class ChatContainer: ObservableObject {
         msgId: UUID,
         sendService: ChatMessageSendService,
         appState: AppState,
-        overrideTimerSeconds: Int? = nil
+        overrideTimerSeconds: Int? = nil,
+        exportBlocked: Bool = false
     ) async {
         let prep = ChatVoiceNoteSender(appState: appState)
         let markerJson: String
@@ -843,6 +855,7 @@ final class ChatContainer: ObservableObject {
                 for: recording,
                 recipientUserId: peerId,
                 timerOverrideSeconds: overrideTimerSeconds,
+                exportBlocked: exportBlocked,
                 onProgress: { bytesUploaded, totalBytes in
                     // W446: called from TusUploadClient's upload loop,
                     // not guaranteed to already be on the MainActor —
@@ -1355,6 +1368,15 @@ final class ChatContainer: ObservableObject {
     ///   chosen in the pre-send dialog. `nil` (default) means "no
     ///   override, use the conversation default" — identical behavior
     ///   to before this parameter existed.
+    /// - Parameter exportBlocked: export-permission choice from the
+    ///   pre-send dialog. `false` (default) = export allowed, stamped
+    ///   onto the local echo `Message.exportBlocked` so the sender's own
+    ///   bubble gates Save/Condividi consistently with the receiver.
+    ///   Does NOT reach the wire for this send path — `sendImage` always
+    ///   routes through the legacy qfile marker
+    ///   (`ChatVoiceNoteSender.prepareAttachmentMarkerJson`), which is
+    ///   explicitly not being extended with `xp` (see
+    ///   `AttachAnnounceMeta/xp` doc) — only the local echo is affected.
     /// - Returns: W611 — `false` when the image was rejected before any
     ///   local echo was created (undecodable bytes, or over the 10MB
     ///   post-downscale cap); `true` once a `Message` row has been
@@ -1365,7 +1387,7 @@ final class ChatContainer: ObservableObject {
     ///   drop — critical for a multi-select batch, where one bad photo
     ///   among several used to vanish with zero indication.
     @discardableResult
-    func sendImage(_ rawImageData: Data, overrideTimerSeconds: Int? = nil) -> Bool {
+    func sendImage(_ rawImageData: Data, overrideTimerSeconds: Int? = nil, exportBlocked: Bool = false) -> Bool {
         let peerId = peerUserId
         let convId = conversationId
         let msgId = UUID()
@@ -1407,7 +1429,8 @@ final class ChatContainer: ObservableObject {
             // W86: stamp clientMsgId so peer can target with edit/delete.
             clientMsgId: msgId.uuidString,
             expiresAt: ephExpiry,
-            isViewOnce: isViewOnce ? true : nil
+            isViewOnce: isViewOnce ? true : nil,
+            exportBlocked: exportBlocked ? true : nil
         )
         store.appendMessage(local)
         store.recordNewMessage(
@@ -1702,7 +1725,12 @@ final class ChatContainer: ObservableObject {
     ///   chosen in the pre-send dialog. `nil` (default) means "no
     ///   override, use the conversation default" — identical behavior
     ///   to before this parameter existed.
-    func sendFileAttachment(url: URL, overrideTimerSeconds: Int? = nil) {
+    /// - Parameter exportBlocked: export-permission choice from the
+    ///   pre-send dialog. `false` (default) = export allowed, stamped
+    ///   onto the local echo `Message.exportBlocked`. Same wire-reach
+    ///   caveat as `sendImage` — this path also routes through the
+    ///   legacy qfile marker, which never carries `xp`.
+    func sendFileAttachment(url: URL, overrideTimerSeconds: Int? = nil, exportBlocked: Bool = false) {
         let peerId = peerUserId
         let convId = conversationId
         let msgId = UUID()
@@ -1733,7 +1761,8 @@ final class ChatContainer: ObservableObject {
             status: .sending,
             clientMsgId: msgId.uuidString,
             expiresAt: ephExpiry,
-            isViewOnce: isViewOnce ? true : nil
+            isViewOnce: isViewOnce ? true : nil,
+            exportBlocked: exportBlocked ? true : nil
         )
         store.appendMessage(local)
         store.recordNewMessage(

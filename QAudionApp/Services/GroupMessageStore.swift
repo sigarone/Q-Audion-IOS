@@ -65,13 +65,37 @@ public final class GroupMessageStore: ObservableObject {
         // property), same trade-off as the Fase 1B attachment fields above.
         public var deliveredBy: [String]?
         public var readBy: [String]?
+        // Export-permission + group-TTL fields — GROUP counterpart of
+        // Message's expiresAt/isViewOnce/viewOnceOpened/exportBlocked.
+        // Group had NO TTL/view-once concept before this; nil for every
+        // pre-existing row and for every plain-text row (the concept only
+        // applies to attachments). Old persisted JSON lacking these keys
+        // decodes unchanged via Swift's synthesized `decodeIfPresent` for
+        // Optionals — same additive-field contract already documented
+        // above for `deliveredBy`/`readBy` and the Fase 1B attachment
+        // fields, no separate migration mechanism needed (this store is
+        // a UserDefaults JSON blob, not GRDB).
+        /// UTC timestamp at which this row auto-deletes locally. Resolved
+        /// via the SAME ``AttachmentTimerResolver`` the 1:1 path uses (no
+        /// group-specific reimplementation of the precedence rule).
+        public var expiresAt: Date?
+        /// nil = false for backward compat with older stored rows.
+        public var isViewOnce: Bool?
+        /// True once the user has tapped to reveal a view-once row.
+        public var viewOnceOpened: Bool?
+        /// Mirrors ``Message/exportBlocked`` — nil/false = export allowed
+        /// (today's behavior); true = the sender marked this attachment
+        /// export-blocked. Client-side/UI honor-system signal only.
+        public var exportBlocked: Bool?
 
         public init(id: String, serverMessageId: String?, senderId: String,
                     mine: Bool, text: String, ts: Date,
                     attachmentKind: String? = nil, mediaMime: String? = nil,
                     fileName: String? = nil, byteLength: Int64? = nil,
                     mediaLocalPath: String? = nil, descriptorJson: String? = nil,
-                    deliveredBy: [String]? = nil, readBy: [String]? = nil) {
+                    deliveredBy: [String]? = nil, readBy: [String]? = nil,
+                    expiresAt: Date? = nil, isViewOnce: Bool? = nil,
+                    viewOnceOpened: Bool? = nil, exportBlocked: Bool? = nil) {
             self.id = id
             self.serverMessageId = serverMessageId
             self.senderId = senderId
@@ -86,6 +110,10 @@ public final class GroupMessageStore: ObservableObject {
             self.descriptorJson = descriptorJson
             self.deliveredBy = deliveredBy
             self.readBy = readBy
+            self.expiresAt = expiresAt
+            self.isViewOnce = isViewOnce
+            self.viewOnceOpened = viewOnceOpened
+            self.exportBlocked = exportBlocked
         }
     }
 
@@ -263,6 +291,65 @@ public final class GroupMessageStore: ObservableObject {
         lastRead[groupHex] = newest
         persistReadMarkers()
         postDidChange(groupHex)
+    }
+
+    // MARK: - Ephemeral timers (W-XPTTL)
+
+    /// Delete all messages (across every group) whose `expiresAt` is
+    /// non-nil and in the past, called by `EphemeralMessageJanitor` every
+    /// 60s alongside the 1:1 sweep.
+    ///
+    /// Mirrors `ConversationStore.deleteExpiredMessages()`'s exact
+    /// capture-then-remove + best-effort disk cleanup contract (W612):
+    /// this store had NO expiry sweep at all before this field — TTL is
+    /// meaningless without one. Cached attachment blobs (a decrypted
+    /// TTL/view-once photo/file in the sender's `writeLocalCopy` temp dir
+    /// or the receiver's download cache) are captured BEFORE the rows are
+    /// dropped from `byGroup`, then best-effort removed from disk AFTER
+    /// the in-memory removal + `persist()` — a missing file or filesystem
+    /// error is logged and swallowed, never blocks the sweep.
+    public func deleteExpiredMessages() {
+        let now = Date()
+        var cachedPathsToRemove: [String] = []
+        var changedGroupHexes: [String] = []
+        // Snapshot the keys first — mutating `byGroup` while iterating
+        // it directly is unnecessary risk to reason about; iterating a
+        // separate `[String]` snapshot is unambiguous.
+        for groupHex in Array(byGroup.keys) {
+            guard let arr = byGroup[groupHex] else { continue }
+            let expired = arr.filter { msg in
+                guard let exp = msg.expiresAt else { return false }
+                return exp <= now
+            }
+            guard !expired.isEmpty else { continue }
+            cachedPathsToRemove.append(contentsOf: expired.compactMap { $0.mediaLocalPath }.filter { !$0.isEmpty })
+            let remaining = arr.filter { msg in
+                guard let exp = msg.expiresAt else { return true }
+                return exp > now
+            }
+            byGroup[groupHex] = remaining
+            changedGroupHexes.append(groupHex)
+        }
+        guard !changedGroupHexes.isEmpty else { return }
+        persist()
+        // Rows are committed to UserDefaults — now best-effort reclaim the
+        // cached blobs. Never propagate failures here: the row removal
+        // already succeeded.
+        for path in cachedPathsToRemove {
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            do {
+                try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
+            } catch {
+                print("[GroupMessageStore] deleteExpiredMessages: cache cleanup failed for \(path): \(error)")
+            }
+        }
+        // Notify every open GroupChatScreen/GroupCallChatPanel so a
+        // swept row disappears from the currently-visible list — same
+        // notification `append`/`bindServerId`/etc. already post, no new
+        // observer wiring needed on the UI side.
+        for groupHex in changedGroupHexes {
+            postDidChange(groupHex)
+        }
     }
 
     public func clear(groupHex: String) {

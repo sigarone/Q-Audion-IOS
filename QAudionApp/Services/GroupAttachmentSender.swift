@@ -68,6 +68,17 @@ final class GroupAttachmentSender {
     /// - Parameters:
     ///   - members: the FULL current roster (incl. self); a token is minted
     ///     for every member except `selfId`.
+    ///   - timerOverrideSeconds: GROUP counterpart of the 1:1
+    ///     `ChatAttachAnnounceSender.prepareEnvelopeJson`'s per-attachment
+    ///     ephemeral-timer override. `nil`/`0` (default) = no override,
+    ///     embedded verbatim into `attachment.ex` — resolve on receive
+    ///     with the SAME ``AttachmentTimerResolver`` the 1:1 path uses
+    ///     (`conversationDefault: nil`, since group has no per-group
+    ///     default timer).
+    ///   - exportBlocked: export-permission choice. `false` (default) =
+    ///     export allowed, matches the wire default and omits
+    ///     `attachment.xp` entirely; `true` embeds `attachment.xp: 0`.
+    ///     Client-side/UI honor-system signal only.
     func prepare(
         data: Data,
         mime: String,
@@ -77,7 +88,9 @@ final class GroupAttachmentSender {
         width: Int?,
         height: Int?,
         members: [String],
-        selfId: String
+        selfId: String,
+        timerOverrideSeconds: Int? = nil,
+        exportBlocked: Bool = false
     ) async throws -> Prepared {
         guard let token = appState.authService.loadToken(), !token.isEmpty, !selfId.isEmpty else {
             throw SendError.notAuthenticated
@@ -151,7 +164,9 @@ final class GroupAttachmentSender {
             width: width,
             height: height,
             blurhash: nil,
-            durationMs: nil)
+            durationMs: nil,
+            ex: timerOverrideSeconds,
+            xp: exportBlocked ? 0 : nil)
         let envelope = GroupAttachmentEnvelope(
             kind: kind,
             caption: (caption?.isEmpty == false) ? caption : nil,

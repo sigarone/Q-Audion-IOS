@@ -331,6 +331,7 @@ struct ChatDetailScreen: View {
                 mediaKind: mediaKind(for: msgIdWrapper.id),
                 onSaveImage: { mediaSaveRequestId = msgIdWrapper.id },
                 onShareMedia: { mediaShareRequestId = msgIdWrapper.id },
+                exportBlocked: mediaExportBlocked(for: msgIdWrapper.id),
                 // W141: surface the sentAt so BubbleActionSheet can
                 // hide the Modifica row past the 15-min edit window.
                 sentAt: container.viewModel.messages
@@ -409,63 +410,57 @@ struct ChatDetailScreen: View {
         } message: {
             Text("I messaggi verranno eliminati automaticamente. \"Visualizza una volta\" li elimina appena aperti.")
         }
-        // W447: pre-send per-attachment timer picker. Intercepts the
-        // attach flow (paperclip → photo/camera/paste/file/voice-note)
-        // right before the send call fires: same options as the
-        // conversation-level dialog above, pre-selected to the
-        // conversation's current default (marked with a checkmark).
-        // Confirm proceeds to send with the chosen override; cancel/
-        // dismiss sends nothing (no row created, no upload started) —
-        // `pendingAttachmentSend` is only cleared, never executed, on
-        // the cancel path.
-        .confirmationDialog(
-            "Timer per questo allegato",
-            isPresented: Binding(
-                get: { pendingAttachmentSend != nil },
-                set: { presented in
-                    guard !presented else { return }
-                    // W447 fix: this setter is SwiftUI's single choke-point
-                    // for EVERY dismissal of this dialog — explicit cancel,
-                    // tapping an option, swipe-to-dismiss, tap-outside — it
-                    // always writes `false` back through this Binding. The
-                    // confirm/option path already clears `pendingAttachmentSend`
-                    // itself before calling performAttachmentSend, so by the
-                    // time SwiftUI's own dismissal reaches here it's already
-                    // nil on that path and there's nothing to clean up. On
-                    // every other (i.e. cancelled) path it's still holding
-                    // the pending value, so this is where we catch a
-                    // cancelled `.voiceNote`: VoiceNoteRecorder.stop() (see
-                    // handleVoiceNoteFinish) already wrote the M4A to disk
-                    // before this dialog ever appeared, and cancelling here
-                    // must not orphan that temp file — mirror
-                    // VoiceNoteRecorder.cancel()'s exact best-effort idiom.
+        // W447/W-XPTTL: pre-send per-attachment options — TTL/view-once
+        // timer override PLUS the export-permission toggle, presented
+        // together in one sheet (see AttachmentSendOptionsSheet's doc
+        // comment for why a `.sheet` replaced the original bare
+        // confirmationDialog — a live Toggle can't live inside a
+        // confirmationDialog's button list). Intercepts the attach flow
+        // (paperclip → photo/camera/paste/file/voice-note) right before
+        // the send call fires. Confirm proceeds to send with the chosen
+        // override; cancel/dismiss sends nothing (no row created, no
+        // upload started) — `pendingAttachmentSend` is only cleared,
+        // never executed, on the cancel path.
+        .sheet(isPresented: Binding(
+            get: { pendingAttachmentSend != nil },
+            set: { presented in
+                guard !presented else { return }
+                // W447 fix (carried over from the confirmationDialog this
+                // sheet replaced): this setter is SwiftUI's single
+                // choke-point for EVERY dismissal — explicit cancel, swipe-
+                // to-dismiss — it always writes `false` back through this
+                // Binding. The confirm path already clears
+                // `pendingAttachmentSend` itself before calling
+                // performAttachmentSend, so by the time SwiftUI's own
+                // dismissal reaches here it's already nil on that path and
+                // there's nothing to clean up. On the cancel path it's
+                // still holding the pending value, so this is where we
+                // catch a cancelled `.voiceNote`: VoiceNoteRecorder.stop()
+                // (see handleVoiceNoteFinish) already wrote the M4A to disk
+                // before this sheet ever appeared, and cancelling here must
+                // not orphan that temp file — mirror
+                // VoiceNoteRecorder.cancel()'s exact best-effort idiom.
+                if case .voiceNote(let recording) = pendingAttachmentSend {
+                    try? FileManager.default.removeItem(at: recording.fileURL)
+                }
+                pendingAttachmentSend = nil
+            }
+        )) {
+            AttachmentSendOptionsSheet(
+                currentDefaultSeconds: container.viewModel.conversation.ephemeralTimerSeconds,
+                onConfirm: { overrideSeconds, exportBlocked in
+                    guard let pending = pendingAttachmentSend else { return }
+                    pendingAttachmentSend = nil
+                    performAttachmentSend(pending, overrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
+                },
+                onCancel: {
                     if case .voiceNote(let recording) = pendingAttachmentSend {
                         try? FileManager.default.removeItem(at: recording.fileURL)
                     }
                     pendingAttachmentSend = nil
                 }
-            ),
-            titleVisibility: .visible
-        ) {
-            let currentDefault = container.viewModel.conversation.ephemeralTimerSeconds
-            ForEach(EphemeralTimerOption.all) { option in
-                Button {
-                    guard let pending = pendingAttachmentSend else { return }
-                    pendingAttachmentSend = nil
-                    performAttachmentSend(pending, overrideSeconds: option.seconds)
-                } label: {
-                    if option.seconds == currentDefault {
-                        Label(option.label, systemImage: "checkmark")
-                    } else {
-                        Text(option.label)
-                    }
-                }
-            }
-            Button("Annulla", role: .cancel) {
-                pendingAttachmentSend = nil
-            }
-        } message: {
-            Text("Scegli il timer per questo allegato. Il valore predefinito della chat è preselezionato.")
+            )
+            .presentationDetents([.medium])
         }
         // W445: forward message picker sheet.
         .sheet(isPresented: $showingForwardPicker) {
@@ -889,7 +884,8 @@ struct ChatDetailScreen: View {
                     mediaLocalPath: msg.mediaLocalPath,
                     saveRequest: mediaSaveRequestBinding(for: msg.id),
                     shareRequest: mediaShareRequestBinding(for: msg.id),
-                    galleryItems: galleryItems
+                    galleryItems: galleryItems,
+                    exportBlocked: msg.exportBlocked ?? false
                 )
             } else if let mime = msg.mediaMimeType, !mime.isEmpty {
                 // W446: generic file attachment (PDF, doc, archive, …) —
@@ -902,7 +898,8 @@ struct ChatDetailScreen: View {
                 // populates the decrypted cache path.
                 FileBubbleContent(
                     messageId: msg.id,
-                    mediaLocalPath: msg.mediaLocalPath
+                    mediaLocalPath: msg.mediaLocalPath,
+                    exportBlocked: msg.exportBlocked ?? false
                 )
             } else if let dur = msg.mediaDurationMs, dur > 0 {
                 VoiceNoteBubbleContent(
@@ -1115,20 +1112,26 @@ struct ChatDetailScreen: View {
     // MARK: - W447: pre-send attachment timer dialog — dispatch
 
     /// Fires the actual `container.send*` call for a `PendingAttachmentSend`
-    /// captured earlier, now that the user has confirmed a timer choice in
-    /// the dialog. `overrideSeconds` uses the same encoding as
-    /// `EphemeralTimerOption.seconds` (nil = off/no-override, -1 =
-    /// view-once, positive = TTL seconds) and is threaded straight through
-    /// to `ChatContainer` so it lands in the envelope's `ex` field AND
-    /// stamps the sender's own local echo `Message.expiresAt`.
-    private func performAttachmentSend(_ pending: PendingAttachmentSend, overrideSeconds: Int?) {
+    /// captured earlier, now that the user has confirmed the options in
+    /// `AttachmentSendOptionsSheet`. `overrideSeconds` uses the same
+    /// encoding as `EphemeralTimerOption.seconds` (nil = off/no-override,
+    /// -1 = view-once, positive = TTL seconds) and is threaded straight
+    /// through to `ChatContainer` so it lands in the envelope's `ex` field
+    /// AND stamps the sender's own local echo `Message.expiresAt`.
+    /// `exportBlocked` (`false` = allowed, the default) is threaded the
+    /// same way for `Message.exportBlocked` / the envelope's `xp` field —
+    /// see `ChatContainer.sendImage`/`sendFileAttachment`/`sendVoiceNote`
+    /// doc comments for the per-attachment-type wire-reach caveat (the
+    /// legacy qfile marker never carries `xp`; only the `attach_announce`
+    /// path — voice notes when the feature flag is on — does).
+    private func performAttachmentSend(_ pending: PendingAttachmentSend, overrideSeconds: Int?, exportBlocked: Bool) {
         switch pending {
         case .image(let data):
             // W611: sendImage now reports rejection (undecodable bytes /
             // over the 10MB cap) instead of silently print-and-returning
             // with zero local echo — surface it via the same snackbar
             // mechanism the stage-1 multi-picker failures already use.
-            let sent = container.sendImage(data, overrideTimerSeconds: overrideSeconds)
+            let sent = container.sendImage(data, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked)
             if !sent {
                 snackbar?.show(.init(
                     text: Self.photoSendFailureSnackbarText(failed: 1, total: 1),
@@ -1138,7 +1141,7 @@ struct ChatDetailScreen: View {
         case .multiImage(let items):
             var failed = 0
             for data in items {
-                if !container.sendImage(data, overrideTimerSeconds: overrideSeconds) {
+                if !container.sendImage(data, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked) {
                     failed += 1
                 }
             }
@@ -1149,9 +1152,9 @@ struct ChatDetailScreen: View {
                     durationSeconds: 3))
             }
         case .file(let url):
-            container.sendFileAttachment(url: url, overrideTimerSeconds: overrideSeconds)
+            container.sendFileAttachment(url: url, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked)
         case .voiceNote(let recording):
-            container.sendVoiceNote(recording, overrideTimerSeconds: overrideSeconds)
+            container.sendVoiceNote(recording, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked)
         }
     }
 
@@ -1302,6 +1305,13 @@ struct ChatDetailScreen: View {
             return .voiceNote
         }
         return .none
+    }
+
+    /// Export-permission for a message's attachment, used to gate
+    /// `BubbleActionSheet`'s save/share rows. `nil`/`false` on
+    /// `Message.exportBlocked` = export allowed (unchanged behaviour).
+    private func mediaExportBlocked(for id: UUID) -> Bool {
+        container.viewModel.messages.first(where: { $0.id == id })?.exportBlocked ?? false
     }
 
     /// W446: id-scoped `Binding<Bool>` for `ImageBubbleContent.saveRequest`.

@@ -115,6 +115,18 @@ public final class QAudionDatabase {
             }
         }
 
+        // Export-permission flag (`Message.exportBlocked`, wire `xp` on
+        // AttachAnnounceMeta/GroupAttachmentMeta). Mirrors the v4 migration
+        // above exactly: a single nullable/defaulted column added via
+        // `ALTER TABLE ADD COLUMN`, no data rewrite, no destructive
+        // migration — every pre-existing row decodes with `exportBlocked
+        // == nil` (= export allowed, today's behavior unchanged).
+        migrator.registerMigration("v5-export-permission") { db in
+            try db.alter(table: "messages") { t in
+                t.add(column: "exportBlocked", .boolean)
+            }
+        }
+
         return migrator
     }
     

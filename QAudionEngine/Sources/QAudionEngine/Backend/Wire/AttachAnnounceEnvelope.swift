@@ -149,6 +149,17 @@ public struct AttachAnnounceMeta: Equatable {
     /// unchanged); -1 = view-once; positive N = TTL in seconds. Old
     /// decoders ignore the unknown key; old encoders simply omit it.
     public let ex: Int?
+    /// Export-permission override, wire key "xp" — mirrors the naming
+    /// convention of `ex` (both terse to keep the sealed envelope small).
+    /// Additive/backward-compatible: absent or 1 = export allowed
+    /// (today's behavior, unchanged); 0 = export blocked. Old decoders
+    /// ignore the unknown key (so an old build treats every attachment
+    /// as export-allowed, same as before this field existed); old
+    /// encoders simply omit it, which this decoder maps to `nil` (=
+    /// allowed). This is a client-side/UI honor-system signal, not DRM —
+    /// see ``AttachmentTimerResolver`` sibling doc for the same caveat on
+    /// `ex`; there is no server-side enforcement of either.
+    public let xp: Int?
 
     public init(
         id: String,
@@ -157,7 +168,8 @@ public struct AttachAnnounceMeta: Equatable {
         sha256B64: String,
         fileId: String,
         durationMs: Int64? = nil,
-        ex: Int? = nil
+        ex: Int? = nil,
+        xp: Int? = nil
     ) {
         self.id = id
         self.mime = mime
@@ -166,6 +178,7 @@ public struct AttachAnnounceMeta: Equatable {
         self.fileId = fileId
         self.durationMs = durationMs
         self.ex = ex
+        self.xp = xp
     }
 
     /// Validate non-empty + non-negative invariants. Throws on malformed.
@@ -182,6 +195,11 @@ public struct AttachAnnounceMeta: Equatable {
         // seconds. Anything < -1 is not a valid value on the wire.
         if let e = ex, e < -1 {
             throw AttachAnnounceEnvelope.Error.invalidValue("att.ex")
+        }
+        // xp semantics: absent/1 = export allowed, 0 = export blocked.
+        // Any other integer is not a valid value on the wire.
+        if let x = xp, x != 0 && x != 1 {
+            throw AttachAnnounceEnvelope.Error.invalidValue("att.xp")
         }
     }
 
@@ -231,10 +249,23 @@ public struct AttachAnnounceMeta: Equatable {
         if let e = ex, e < -1 {
             throw AttachAnnounceEnvelope.Error.invalidValue("att.ex")
         }
+        // `xp` is a brand-new optional key, same backward-compat contract
+        // as `ex` above — absent in every envelope produced before this
+        // change. Missing key → nil, exactly like `ex`/`durationMs`, so
+        // old-shape JSON keeps decoding unchanged.
+        var xp: Int?
+        if let n = dict["xp"] as? Int {
+            xp = n
+        } else if let n = dict["xp"] as? NSNumber {
+            xp = n.intValue
+        }
+        if let x = xp, x != 0 && x != 1 {
+            throw AttachAnnounceEnvelope.Error.invalidValue("att.xp")
+        }
         return AttachAnnounceMeta(
             id: id, mime: mime, byteLength: byteLength,
             sha256B64: sha256B64, fileId: fileId, durationMs: durationMs,
-            ex: ex
+            ex: ex, xp: xp
         )
     }
 
@@ -255,6 +286,12 @@ public struct AttachAnnounceMeta: Equatable {
         // whatever the caller passed to keep the encode/decode symmetric.
         if let e = ex {
             dict["ex"] = NSNumber(value: e)
+        }
+        // Same "only emit when explicitly set" contract as `ex` above —
+        // omitting the key entirely when `xp == nil` keeps the wire
+        // byte-identical to before this field existed.
+        if let x = xp {
+            dict["xp"] = NSNumber(value: x)
         }
         return dict
     }

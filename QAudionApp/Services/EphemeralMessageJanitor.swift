@@ -10,6 +10,13 @@ import QAudionEngine
 /// Messages become eligible when `expiresAt` is non-nil and in the past.
 /// The sweep delegates to `ConversationStore.deleteExpiredMessages()` which
 /// runs a single SQL DELETE ... WHERE expiresAt IS NOT NULL AND expiresAt <= ?
+///
+/// W-XPTTL: also sweeps `GroupMessageStore` — group attachments gained a
+/// TTL/view-once field this stage and had NO expiry sweep whatsoever
+/// before it (unlike the 1:1 path, which this janitor already covered).
+/// `GroupMessageStore` is `@MainActor`-isolated (UserDefaults-backed, not
+/// GRDB), so that half of the sweep hops to the main actor via `Task`
+/// rather than running inline like the GRDB-backed 1:1 half above.
 final class EphemeralMessageJanitor {
 
     static let shared = EphemeralMessageJanitor()
@@ -36,5 +43,12 @@ final class EphemeralMessageJanitor {
 
     private func sweep() {
         store.deleteExpiredMessages()
+        // W-XPTTL: GroupMessageStore is @MainActor-isolated; hop via Task
+        // rather than requiring this whole class (and its Timer-driven
+        // nonisolated `sweep()`) to become MainActor-isolated just for
+        // this one call.
+        Task { @MainActor in
+            GroupMessageStore.shared.deleteExpiredMessages()
+        }
     }
 }

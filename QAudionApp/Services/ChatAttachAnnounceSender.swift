@@ -69,10 +69,17 @@ final class ChatAttachAnnounceSender {
     ///   `nil`/`0` = no override, embedded verbatim into `att.ex` so the
     ///   receiver can prefer it over the conversation default (see
     ///   ``AttachmentTimerResolver``).
+    /// - Parameter exportBlocked: export-permission choice from the
+    ///   pre-send dialog. `false` (default) = export allowed, matches
+    ///   the wire default and omits `att.xp` entirely; `true` embeds
+    ///   `att.xp: 0` so the receiver marks the attachment export-blocked.
+    ///   Client-side/UI honor-system signal only — see
+    ///   ``AttachAnnounceMeta/xp`` doc.
     func prepareEnvelopeJson(
         recording: VoiceNoteRecorder.Recording,
         recipientUserId: String,
-        timerOverrideSeconds: Int? = nil
+        timerOverrideSeconds: Int? = nil,
+        exportBlocked: Bool = false
     ) async throws -> String {
         guard let token = appState.authService.loadToken(), !token.isEmpty,
               let senderId = appState.currentUserId, !senderId.isEmpty else {
@@ -135,7 +142,8 @@ final class ChatAttachAnnounceSender {
             sha256B64: encrypted.sha256Plain.base64EncodedString(),
             fileId: fileId,
             durationMs: Int64(recording.durationMs),
-            ex: timerOverrideSeconds
+            ex: timerOverrideSeconds,
+            xp: exportBlocked ? 0 : nil
         )
         let envelope = AttachAnnounceEnvelope(
             att: attMeta,

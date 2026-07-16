@@ -57,6 +57,16 @@ struct ImageBubbleContent: View {
     var shareRequest: Binding<Bool>? = nil
     /// Fase 2 — see `ImageGalleryItem` doc comment above.
     var galleryItems: [ImageGalleryItem] = []
+    /// Export-permission — mirrors `Message.exportBlocked` /
+    /// `GroupMessageStore.Stored.exportBlocked`. `false` (default) =
+    /// export allowed, unchanged behaviour. `true` = the sender marked
+    /// this attachment export-blocked: `saveRequest`/`shareRequest` are
+    /// honored at the BINDING level too (not just hidden upstream in
+    /// `BubbleActionSheet`) — defense in depth, per the "disable/hide
+    /// with a clear message, never silently degrade" instruction. This
+    /// is a client-side/UI-level honor-system gate, same trust model as
+    /// view-once — no DRM, no server enforcement.
+    var exportBlocked: Bool = false
 
     @State private var fullscreen: Bool = false
     @State private var loadedImage: UIImage? = nil
@@ -71,6 +81,10 @@ struct ImageBubbleContent: View {
     /// activity items list contains either the on-disk URL (when the
     /// JPEG cache hit) or the in-memory UIImage (fallback).
     @State private var sharingTarget: ImageShareTarget? = nil
+    /// Export-permission gate feedback — shown when a save/share
+    /// request lands while `exportBlocked` is true, so the user gets an
+    /// explicit explanation instead of a silently-ignored tap.
+    @State private var exportBlockedAlertVisible: Bool = false
 
     private struct ImageShareTarget: Identifiable {
         let id = UUID()
@@ -121,19 +135,41 @@ struct ImageBubbleContent: View {
         .sheet(item: $sharingTarget) { target in
             ActivityShareSheet(activityItems: target.activityItems)
         }
+        .alert("Esportazione non consentita", isPresented: $exportBlockedAlertVisible) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Il mittente ha disattivato il salvataggio e la condivisione per questo allegato.")
+        }
         // W446: `BubbleActionSheet`'s "Salva in Foto" / "Condividi
         // immagine" rows flip these bindings to trigger the same
         // save/share logic the old inner `.contextMenu` used —
         // unchanged behaviour, just invoked from the shared sheet
         // instead of a competing long-press recognizer.
+        // Export-permission gate checked HERE too (not just upstream in
+        // BubbleActionSheet, which hides the rows entirely when
+        // exportBlocked) — defense in depth so this view never performs
+        // the save/share even if some other future call site forgets to
+        // gate its own entry point.
         .onChange(of: saveRequest?.wrappedValue ?? false) { requested in
-            guard requested, let img = loadedImage else { return }
+            guard requested else { return }
+            guard !exportBlocked else {
+                exportBlockedAlertVisible = true
+                saveRequest?.wrappedValue = false
+                return
+            }
+            guard let img = loadedImage else { return }
             UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
             saveAlertVisible = true
             saveRequest?.wrappedValue = false
         }
         .onChange(of: shareRequest?.wrappedValue ?? false) { requested in
-            guard requested, let img = loadedImage else { return }
+            guard requested else { return }
+            guard !exportBlocked else {
+                exportBlockedAlertVisible = true
+                shareRequest?.wrappedValue = false
+                return
+            }
+            guard let img = loadedImage else { return }
             if let path = mediaLocalPath, !path.isEmpty {
                 sharingTarget = ImageShareTarget(activityItems: [URL(fileURLWithPath: path)])
             } else {

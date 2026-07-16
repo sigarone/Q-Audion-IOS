@@ -76,12 +76,21 @@ public struct GroupMessageRowUi: Identifiable, Equatable {
     /// (non-mine) row, mirroring the 1:1 `MessageBubble` contract where
     /// only outgoing bubbles show a delivery icon.
     public let delivery: MessageDelivery?
+    /// Export-permission — GROUP counterpart of `Message.exportBlocked`,
+    /// sourced from `GroupMessageStore.Stored.exportBlocked`. `nil`/
+    /// `false` = export allowed (unchanged behaviour, and the value for
+    /// every plain-text row — the concept only applies to attachments).
+    /// `true` = the sender marked this attachment export-blocked; gates
+    /// `ImageBubbleContent`/`FileBubbleContent`'s save/share affordances
+    /// in `GroupMessageBubble`, same as the 1:1 bubble.
+    public let exportBlocked: Bool?
 
     public init(id: String, text: String, senderLabel: String,
                 timestamp: String, mine: Bool,
                 attachmentKind: String? = nil, mediaMime: String? = nil,
                 mediaLocalPath: String? = nil, fileName: String? = nil,
-                byteLength: Int64? = nil, delivery: MessageDelivery? = nil) {
+                byteLength: Int64? = nil, delivery: MessageDelivery? = nil,
+                exportBlocked: Bool? = nil) {
         self.id = id; self.text = text; self.senderLabel = senderLabel
         self.timestamp = timestamp; self.mine = mine
         self.attachmentKind = attachmentKind
@@ -90,6 +99,7 @@ public struct GroupMessageRowUi: Identifiable, Equatable {
         self.fileName = fileName
         self.byteLength = byteLength
         self.delivery = delivery
+        self.exportBlocked = exportBlocked
     }
 }
 

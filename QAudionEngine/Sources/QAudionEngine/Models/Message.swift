@@ -81,6 +81,16 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// True once the user has tapped to reveal a view-once message.
     /// nil = not yet opened. Swept by EphemeralMessageJanitor (expiresAt set on open).
     public let viewOnceOpened: Bool?
+    /// Export-permission flag for this attachment, mirroring the wire
+    /// `xp` field (``AttachAnnounceMeta/xp``). `nil`/`false` = export
+    /// allowed (today's behavior, unchanged and the default for every
+    /// pre-existing stored row); `true` = the sender marked this
+    /// attachment export-blocked. `nil` for plain text messages (the
+    /// concept only applies to attachments) and for backward compat with
+    /// stored rows predating this field. Client-side/UI honor-system
+    /// signal only — see ``AttachAnnounceMeta/xp`` doc for the same
+    /// no-server-enforcement caveat that already applies to view-once.
+    public let exportBlocked: Bool?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
@@ -95,7 +105,8 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
                 reactions: [String: [String]]? = nil,
                 expiresAt: Date? = nil,
                 isViewOnce: Bool? = nil,
-                viewOnceOpened: Bool? = nil) {
+                viewOnceOpened: Bool? = nil,
+                exportBlocked: Bool? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -116,5 +127,6 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.expiresAt = expiresAt
         self.isViewOnce = isViewOnce
         self.viewOnceOpened = viewOnceOpened
+        self.exportBlocked = exportBlocked
     }
 }

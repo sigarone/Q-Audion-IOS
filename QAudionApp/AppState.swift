@@ -5082,6 +5082,21 @@ final class AppState: ObservableObject {
         }
         let att = envelope.attachment
         let rowId = clientMsgId ?? serverMsgId
+
+        // Group-TTL + export-permission. Reuses the SAME
+        // AttachmentTimerResolver the 1:1 path uses (no group-specific
+        // reimplementation) — `conversationDefault: nil` because group
+        // has no per-conversation default timer (design decision: group
+        // had NO TTL/view-once concept before this field), so the
+        // effective value is purely the per-attachment `att.ex` override.
+        let effectiveTimerSecs = AttachmentTimerResolver.resolve(
+            overrideSeconds: att.ex, conversationDefault: nil)
+        let isViewOnce = (effectiveTimerSecs ?? 0) == -1
+        let ephExpiry: Date? = effectiveTimerSecs.flatMap { s in
+            s > 0 ? ts.addingTimeInterval(Double(s)) : nil
+        }
+        let exportBlocked: Bool? = ((att.xp ?? 1) == 0) ? true : nil
+
         let inserted = GroupMessageStore.shared.append(
             groupHex: groupHex,
             GroupMessageStore.Stored(
@@ -5096,7 +5111,10 @@ final class AppState: ObservableObject {
                 fileName: att.filename,
                 byteLength: att.byteLength,
                 mediaLocalPath: nil,
-                descriptorJson: plaintext))
+                descriptorJson: plaintext,
+                expiresAt: ephExpiry,
+                isViewOnce: isViewOnce ? true : nil,
+                exportBlocked: exportBlocked))
         if inserted {
             let previewName = att.filename
             presentGroupMessageBanner(
@@ -5682,6 +5700,15 @@ final class AppState: ObservableObject {
             s > 0 ? receivedNow.addingTimeInterval(Double(s)) : nil
         }
 
+        // Export-permission override. Modern-envelope-only — the legacy
+        // qfile marker is NOT being extended with `xp` (see
+        // `AttachAnnounceMeta.xp` doc), so only `pendingAttachAnnounce`
+        // can ever carry it; a qfile-marker attachment always decodes as
+        // export-allowed (nil), same as today. absent/1 on the wire =
+        // allowed (nil here, the default); 0 = blocked.
+        let wireXp: Int? = pendingAttachAnnounce?.att.xp
+        let exportBlocked: Bool? = ((wireXp ?? 1) == 0) ? true : nil
+
         let msg = Message(
             id: msgUUID,
             conversationId: conv.id,
@@ -5698,7 +5725,8 @@ final class AppState: ObservableObject {
             mediaMimeType: pendingMarker?.qfile.mime ?? pendingAttachAnnounce?.att.mime,
             clientMsgId: clientMsgId,
             expiresAt: ephExpiry,
-            isViewOnce: isViewOnce ? true : nil
+            isViewOnce: isViewOnce ? true : nil,
+            exportBlocked: exportBlocked
         )
         store.appendMessage(msg)
         // W83: bump conversation preview + activity + unread so the
