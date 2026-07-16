@@ -107,6 +107,121 @@ public final class GroupCallController: @unchecked Sendable {
     /// which reflects the WS roster regardless of media transport).
     public var onSfuParticipant: ((_ identity: String, _ present: Bool) -> Void)?
     public var onSfuError: ((Error) -> Void)?
+    /// Tier-1 layout toggle (item 5, 2026-07-16 wire contract) — passthrough
+    /// of `LiveKitGroupCallRoom.onSpeakingParticipantsChanged`. Pure
+    /// data-layer plumbing in this pass: no wire message, LiveKit's own
+    /// native active-speaker detection (see that property's kdoc).
+    public var onActiveSpeakersChanged: (([String]) -> Void)?
+    /// Tier-1 (2026-07-16 wire contract) — fires once the local mic has
+    /// been (attempted to be) auto-muted in response to a received
+    /// `group_call_mute_request_recv`. `requesterId` is the peer's userId;
+    /// resolving it to a display name for the one-shot toast ("{displayName}
+    /// ti ha silenziato") is an app-layer concern, same division of labor
+    /// as `BCryptoGroupCallManager.nameResolver`. No confirmation UI is
+    /// needed on the requester's side — see this callback's call site
+    /// (`handleMuteRequest`) for the auto-mute-on-receipt rationale.
+    public var onMuteRequested: ((_ requesterId: String) -> Void)?
+
+    // ─── Tier-1: transient reactions + raised-hand state (data layer) ──
+    // In-memory only — never persisted, matches this file's "no
+    // persistence anywhere" convention (no MessageStore/CoreData/SQLite).
+
+    /// One reaction to render — sender + emoji + a monotonic id (so
+    /// SwiftUI list diffing never collides same-emoji-same-sender bursts).
+    /// Auto-discarded ~2s after arrival (see `appendReactionEvent`).
+    public struct ReactionEvent: Identifiable, Equatable {
+        public let id: UUID
+        public let senderId: String
+        public let emoji: String
+        public let receivedAt: Date
+
+        public init(senderId: String, emoji: String) {
+            self.id = UUID()
+            self.senderId = senderId
+            self.emoji = emoji
+            self.receivedAt = Date()
+        }
+    }
+
+    private var _reactionEvents: [ReactionEvent] = []
+    /// KNOWN ACCEPTED LIMITATION (wire contract item 3): fed ONLY by the
+    /// `group_call_raise_hand_recv` stream since joining (plus our own
+    /// optimistic toggle below) — there is no server-side authoritative
+    /// roster snapshot, so a participant who joins/reconnects mid-call
+    /// will not see who currently has a hand raised. Shipping this
+    /// ephemeral-only version deliberately; adding server-side state is
+    /// out of scope for this pass.
+    private var _raisedHands: Set<String> = []
+
+    public var reactionEvents: [ReactionEvent] { lock.lock(); defer { lock.unlock() }; return _reactionEvents }
+    public var raisedHands: Set<String> { lock.lock(); defer { lock.unlock() }; return _raisedHands }
+    /// Fires with the full up-to-date list on every change (own optimistic
+    /// send OR an incoming `_recv`) — mirrors `onParticipantsChanged`'s
+    /// passthrough shape so a future ViewModel can just re-render from it.
+    public var onReactionEventsChanged: (([ReactionEvent]) -> Void)?
+    public var onRaisedHandsChanged: ((Set<String>) -> Void)?
+
+    /// Send + optimistically render our own group-call reaction. Per the
+    /// wire contract: the sender does NOT wait for the `_recv` round trip —
+    /// the local entry is appended immediately, then the manager ships the
+    /// wire message. Server does not validate `emoji` (opaque, client UI
+    /// constraint only — see `BCryptoGroupCallManager.sendGroupCallReaction`).
+    public func sendReaction(emoji: String) {
+        manager.sendGroupCallReaction(emoji: emoji)
+        appendReactionEvent(senderId: manager.selfUserId, emoji: emoji)
+    }
+
+    /// Raise/lower our own hand — explicit boolean toggle (idempotent
+    /// resend is safe), NOT a continuous-activity ping like `group_typing`.
+    /// Reflects the toggle into `raisedHands` locally too (the server never
+    /// echoes our own send back to us, so without this our own raised hand
+    /// would never appear in the set the way every OTHER participant's does).
+    public func setHandRaised(_ raised: Bool) {
+        manager.sendGroupCallRaiseHand(raised: raised)
+        let selfId = manager.selfUserId
+        lock.lock()
+        if raised { _raisedHands.insert(selfId) } else { _raisedHands.remove(selfId) }
+        let snapshot = _raisedHands
+        lock.unlock()
+        onRaisedHandsChanged?(snapshot)
+    }
+
+    /// Tier-1 mute-request auto-mute-on-receipt (item 4, 2026-07-16 wire
+    /// contract) — Signal's real behavior: no confirmation dialog, fully
+    /// reversible in one tap, no lockout. Flips BOTH the legacy
+    /// WS-relay-mesh gate (`setMuted`, gates `sendOutgoingOpusFrame`) AND
+    /// the real LiveKit SFU mic toggle (`setMicrophoneEnabled`) — item 6's
+    /// fix: before it existed only the former did anything, so a
+    /// mute-request received during an actual SFU call silently failed to
+    /// touch the real outbound audio.
+    private func handleMuteRequest(fromSenderId: String) {
+        setMuted(true)
+        Task { [weak self] in
+            _ = await self?.setMicrophoneEnabled(false)
+        }
+        onMuteRequested?(fromSenderId)
+    }
+
+    /// Append one reaction and schedule its ~2s auto-expiry. Removes by
+    /// `id` specifically (not "the oldest") so a fast burst of reactions
+    /// from different senders/emoji expires each entry independently
+    /// instead of clearing the whole list on the first timer to fire.
+    private func appendReactionEvent(senderId: String, emoji: String) {
+        let event = ReactionEvent(senderId: senderId, emoji: emoji)
+        lock.lock()
+        _reactionEvents.append(event)
+        let snapshot = _reactionEvents
+        lock.unlock()
+        onReactionEventsChanged?(snapshot)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self = self else { return }
+            self.lock.lock()
+            self._reactionEvents.removeAll { $0.id == event.id }
+            let after = self._reactionEvents
+            self.lock.unlock()
+            self.onReactionEventsChanged?(after)
+        }
+    }
 
     /// W-GRPVIDEO: whether the call is actually riding the LiveKit SFU right
     /// now. The WS-relay mesh fallback path has no video pipeline, so the UI
@@ -448,6 +563,34 @@ public final class GroupCallController: @unchecked Sendable {
         manager.onSfuUnavailable = { [weak self] callId, reason in
             self?.handleSfuUnavailable(callId: callId, reason: reason)
         }
+        // Tier-1 (2026-07-16 wire contract) — all three gated on
+        // `callId == activeCallId`, same defensive pattern already used by
+        // `handleSfuToken`/`handleSfuUnavailable` above.
+        manager.onGroupCallReactionReceived = { [weak self] callId, senderId, emoji in
+            guard let self = self else { return }
+            self.lock.lock()
+            let current = self.activeCallId
+            self.lock.unlock()
+            guard callId == current else { return }
+            self.appendReactionEvent(senderId: senderId, emoji: emoji)
+        }
+        manager.onGroupCallRaiseHandReceived = { [weak self] callId, senderId, raised in
+            guard let self = self else { return }
+            self.lock.lock()
+            guard callId == self.activeCallId else { self.lock.unlock(); return }
+            if raised { self._raisedHands.insert(senderId) } else { self._raisedHands.remove(senderId) }
+            let snapshot = self._raisedHands
+            self.lock.unlock()
+            self.onRaisedHandsChanged?(snapshot)
+        }
+        manager.onGroupCallMuteRequestReceived = { [weak self] callId, senderId in
+            guard let self = self else { return }
+            self.lock.lock()
+            let current = self.activeCallId
+            self.lock.unlock()
+            guard callId == current else { return }
+            self.handleMuteRequest(fromSenderId: senderId)
+        }
     }
 
     // MARK: - W-GRPLIVEKIT: SFU lifecycle (capability-gated, soft fallback)
@@ -472,6 +615,9 @@ public final class GroupCallController: @unchecked Sendable {
         room.onLocalScreenShareChanged = { [weak self] active in self?.onLocalScreenShareChanged?(active) }
         room.onParticipant = { [weak self] id, present in self?.onSfuParticipant?(id, present) }
         room.onError = { [weak self] err in self?.onSfuError?(err) }
+        // Tier-1 layout toggle (item 5) — passthrough, see
+        // `onActiveSpeakersChanged`'s kdoc.
+        room.onSpeakingParticipantsChanged = { [weak self] identities in self?.onActiveSpeakersChanged?(identities) }
 
         lock.lock()
         sfuRoom = room
@@ -525,6 +671,30 @@ public final class GroupCallController: @unchecked Sendable {
             return true
         } catch {
             print("[GroupCallController] setVideoEnabled(\(enabled)) failed: \(error)")
+            return false
+        }
+    }
+
+    /// W-GRPMUTEFIX (item 6, 2026-07-16 wire contract) — the REAL SFU
+    /// mic-toggle, same shape as `setVideoEnabled` above. No-op (returns
+    /// false) unless the call is actually riding the LiveKit SFU — the
+    /// WS-relay mesh fallback's own mute gate is `setMuted(_:)`, unaffected
+    /// by this method. Called from BOTH `handleMuteRequest` (peer-initiated
+    /// auto-mute) and the local mute button's own action (making that
+    /// action itself SFU-aware, since the button is shown regardless of
+    /// transport — see `LiveKitGroupCallRoom.setMicrophoneEnabled`'s kdoc
+    /// for the bug this closes).
+    @discardableResult
+    public func setMicrophoneEnabled(_ enabled: Bool) async -> Bool {
+        lock.lock()
+        let room = sfuRoom
+        lock.unlock()
+        guard let room = room else { return false }
+        do {
+            try await room.setMicrophoneEnabled(enabled)
+            return true
+        } catch {
+            print("[GroupCallController] setMicrophoneEnabled(\(enabled)) failed: \(error)")
             return false
         }
     }
@@ -724,6 +894,26 @@ public final class GroupCallController: @unchecked Sendable {
         if !rotatesToSend.isEmpty {
             applySfuSelfKey(graceMs: 3000)
         }
+
+        // Tier-1 (2026-07-16 wire contract, item 3) — a departed
+        // participant's raised-hand entry must not survive their
+        // departure. Same roster-departure EVENT as the rekey logic above,
+        // but deliberately NOT gated behind the `senderKeyEpoch > 0` legacy
+        // guard: that guard exists only to protect the crypto epoch
+        // derivation from a stale-server divergence risk — this is plain
+        // in-memory UI state with no security implication, so it always
+        // reconciles against the fresh `participants` roster.
+        lock.lock()
+        guard callId == activeCallId else { lock.unlock(); return }
+        let departedRaised = _raisedHands.subtracting(participants)
+        if !departedRaised.isEmpty {
+            _raisedHands.subtract(departedRaised)
+        }
+        let raisedSnapshot = _raisedHands
+        lock.unlock()
+        if !departedRaised.isEmpty {
+            onRaisedHandsChanged?(raisedSnapshot)
+        }
     }
 
     private func handleIncomingFrame(senderId: String, sealed: Data) {
@@ -857,6 +1047,11 @@ public final class GroupCallController: @unchecked Sendable {
         activeCallId = nil
         initSentTo.removeAll()
         wantsVideo = false
+        // Tier-1: reset per-call transient state so a subsequent call
+        // (this controller is long-lived across calls) never leaks the
+        // previous call's reactions/raised-hands.
+        _reactionEvents.removeAll()
+        _raisedHands.removeAll()
         let room = sfuRoom
         sfuRoom = nil
         usingSfu = true // reset the capability flag for the NEXT call
@@ -865,6 +1060,8 @@ public final class GroupCallController: @unchecked Sendable {
             Task { await room.disconnect() }
         }
         setState(.idle)
+        onReactionEventsChanged?([])
+        onRaisedHandsChanged?([])
     }
 
     private func setState(_ newState: State) {

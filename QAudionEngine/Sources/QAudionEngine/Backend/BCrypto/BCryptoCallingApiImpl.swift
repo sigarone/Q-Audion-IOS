@@ -192,6 +192,23 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ws.send(type: "call_ice", data: data)
     }
 
+    /// Tier-1 (2026-07-16 wire contract) — 1:1 call TARGETED reaction.
+    /// Mirrors `sendIceCandidate`'s send path: rides the internally-tracked
+    /// `currentCallId()` rather than an externally-passed callId (the call
+    /// is already established by the time a reaction can be sent).
+    /// `targetId` is the peer's userId; the server validates both sender
+    /// and target are the two call parties (mirrors bcrypto-server's
+    /// `group_call_signal` case) before relaying as `call_reaction_recv`.
+    /// Wire: {call_id, target_id, emoji}.
+    public func sendCallReaction(targetId: String, emoji: String) async throws {
+        let cid = currentCallId()
+        ws.send(type: "call_reaction", data: [
+            "call_id":   cid,
+            "target_id": targetId,
+            "emoji":     emoji,
+        ])
+    }
+
     public func sendHangup(recipientId: String) async throws {
         let cid = currentCallId()
         // W419 — log so we can correlate with bcrypto.service journalctl.

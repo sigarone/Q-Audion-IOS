@@ -86,6 +86,14 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public var onLocalScreenShareChanged: ((Bool) -> Void)?
     public var onParticipant: ((_ identity: String, _ present: Bool) -> Void)?
     public var onError: ((Error) -> Void)?
+    /// Tier-1 layout toggle (item 5, 2026-07-16 wire contract) — fires with
+    /// the current set of speaking participant identities whenever LiveKit's
+    /// native active-speaker detection updates (`RoomDelegate.room(_:
+    /// didUpdateSpeakingParticipants:)`, confirmed present on the pinned
+    /// `sigarone/client-sdk-swift@2.13.0-aes256-livekit` fork). Data-layer
+    /// plumbing only in this pass — the speaker/gallery layout toggle itself
+    /// (pin/enlarge whichever identity this names) is a UI-layer follow-up.
+    public var onSpeakingParticipantsChanged: ((_ identities: [String]) -> Void)?
 
     private let wantsVideo: Bool
     private var room: Room?
@@ -220,6 +228,21 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         }
         _ = try await room.localParticipant.setCamera(enabled: enabled)
         onLocalVideoTrack?(enabled ? room.localParticipant.firstCameraVideoTrack : nil)
+    }
+
+    /// W-GRPMUTEFIX (item 6, 2026-07-16 wire contract) — the REAL SFU
+    /// mic-toggle, mirroring `setCameraEnabled`/`setScreenShareEnabled`'s
+    /// shape exactly. Confirmed pre-existing gap: `connect()` above calls
+    /// `room.localParticipant.setMicrophone(enabled: true)` exactly ONCE at
+    /// connect time and nothing else in this file ever toggled it again —
+    /// `GroupCallController.setMuted(_:)` only ever gated the LEGACY
+    /// WS-relay-mesh `sendOutgoingOpusFrame` path, so pressing "mute" during
+    /// an actual LiveKit-SFU call (the default/production transport) did
+    /// NOT silence the outbound LiveKit audio track. This is the method
+    /// that actually does.
+    public func setMicrophoneEnabled(_ enabled: Bool) async throws {
+        guard let room = room else { return }
+        _ = try await room.localParticipant.setMicrophone(enabled: enabled)
     }
 
     /// W-GRPSCREENSHARE: mid-call screen-share on/off.
@@ -380,6 +403,16 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         onParticipant?(participant.identity?.stringValue ?? "", true)
     }
 
+    /// Tier-1 layout toggle (item 5, 2026-07-16 wire contract) — native
+    /// active-speaker detection, wired for the first time. Surfaces the
+    /// identities so the (future) UI layer can pin/enlarge whoever the SDK
+    /// currently names as speaking; `Participant.identity` is nil only in
+    /// pathological SDK states, so those entries are dropped rather than
+    /// surfaced as an empty-string identity.
+    public func room(_ room: Room, didUpdateSpeakingParticipants participants: [Participant]) {
+        onSpeakingParticipantsChanged?(participants.compactMap { $0.identity?.stringValue })
+    }
+
     public func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
         onParticipant?(participant.identity?.stringValue ?? "", false)
     }
@@ -452,6 +485,9 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public var onLocalScreenShareChanged: ((Bool) -> Void)?
     public var onParticipant: ((_ identity: String, _ present: Bool) -> Void)?
     public var onError: ((Error) -> Void)?
+    /// Tier-1 layout toggle — stub counterpart of the real class's
+    /// same-named property (see this stub's own doc comment above).
+    public var onSpeakingParticipantsChanged: ((_ identities: [String]) -> Void)?
 
     public init(video: Bool) { super.init() }
 
@@ -462,6 +498,12 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public func applyKey(_ key: GroupMediaKey) { /* no-op */ }
 
     public func setCameraEnabled(_ enabled: Bool) async throws {
+        throw LiveKitUnavailableError.notAvailable
+    }
+
+    /// W-GRPMUTEFIX — stub counterpart of the real class's same-named
+    /// method (see this stub's own doc comment above).
+    public func setMicrophoneEnabled(_ enabled: Bool) async throws {
         throw LiveKitUnavailableError.notAvailable
     }
 

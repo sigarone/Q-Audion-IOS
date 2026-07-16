@@ -95,6 +95,36 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// (never hard-fail). Wire: {call_id, reason}.
     public var onSfuUnavailable: ((_ callId: String, _ reason: String) -> Void)?
 
+    // ─── Tier-1 call features: reactions / raise-hand / mute-request ──
+    // Wire contract finalized 2026-07-16. `callId` on every one of these
+    // is the EPHEMERAL call-session id (GroupCall.ID / the 1:1 call's own
+    // id) — a different id space from any persisted chat `group_id`.
+
+    /// call_reaction_recv — 1:1 call TARGETED reaction (Template A, mirrors
+    /// bcrypto-server's `group_call_signal` case). Registered on THIS
+    /// manager (not a 1:1-specific type) purely because it owns the shared
+    /// `ws` instance for the app's whole persistent-socket lifetime — see
+    /// `AppState.connectPersistentSocket`'s kdoc on why this manager is
+    /// constructed exactly once per session. `callId` here is the 1:1
+    /// call's OWN id (see `BCryptoCallingApiImpl.sendCallReaction`), NOT
+    /// this manager's own group `_callId`. Wire: {call_id, sender_id, emoji}.
+    public var onCallReactionReceived: ((_ callId: String, _ senderId: String, _ emoji: String) -> Void)?
+    /// group_call_reaction_recv — group-call BROADCAST reaction (Template B,
+    /// mirrors `group_typing`). Server does not validate `emoji` content —
+    /// the fixed 6-emoji set is a CLIENT UI constraint only. Wire:
+    /// {call_id, sender_id, emoji}.
+    public var onGroupCallReactionReceived: ((_ callId: String, _ senderId: String, _ emoji: String) -> Void)?
+    /// group_call_raise_hand_recv — group-call BROADCAST explicit boolean
+    /// toggle (Template B). Unlike a reaction burst this is persistent
+    /// state until explicitly lowered — idempotent resend is safe. Wire:
+    /// {call_id, sender_id, raised}.
+    public var onGroupCallRaiseHandReceived: ((_ callId: String, _ senderId: String, _ raised: Bool) -> Void)?
+    /// group_call_mute_request_recv — group-call TARGETED (Template A,
+    /// mirrors `group_call_signal` verbatim). FLAT, non-admin-gated: no
+    /// `target_id` on the `_recv` envelope — the recipient knows they're
+    /// the target by virtue of receiving it at all. Wire: {call_id, sender_id}.
+    public var onGroupCallMuteRequestReceived: ((_ callId: String, _ senderId: String) -> Void)?
+
     // MARK: - Dependencies
 
     private let ws: BCryptoWebSocketClient
@@ -254,6 +284,44 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         ws.send(type: "group_call_sfu_token", data: ["call_id": callId])
     }
 
+    /// Tier-1: group-call BROADCAST reaction (Template B, mirrors
+    /// `group_typing`'s two-phase lock-then-network send). No-op outside an
+    /// active call (mirrors `forwardAudioFrame`'s guard). Server does not
+    /// validate `emoji` — the fixed 6-emoji set is a CLIENT UI constraint
+    /// only (see `onGroupCallReactionReceived`'s kdoc).
+    public func sendGroupCallReaction(emoji: String) {
+        guard let cid = callId else { return }
+        ws.send(type: "group_call_reaction", data: [
+            "call_id": cid,
+            "emoji": emoji
+        ])
+    }
+
+    /// Tier-1: group-call BROADCAST raise/lower-hand — explicit boolean
+    /// toggle, NOT a continuous-activity ping (no auto-expiry timer, unlike
+    /// `group_typing`). Idempotent resend is safe.
+    public func sendGroupCallRaiseHand(raised: Bool) {
+        guard let cid = callId else { return }
+        ws.send(type: "group_call_raise_hand", data: [
+            "call_id": cid,
+            "raised": raised
+        ])
+    }
+
+    /// Tier-1: group-call TARGETED mute-request (Template A, mirrors
+    /// `group_call_signal` verbatim). FLAT, non-admin-gated by design: the
+    /// server does zero role/permission check beyond both parties being
+    /// current participants — any participant can request any other mute,
+    /// matching Signal's real behavior (no moderator role in Signal group
+    /// calls).
+    public func sendGroupCallMuteRequest(targetId: String) {
+        guard let cid = callId else { return }
+        ws.send(type: "group_call_mute_request", data: [
+            "call_id": cid,
+            "target_id": targetId
+        ])
+    }
+
     /// Toggle local mute state
     public func toggleMute() -> Bool {
         lock.lock()
@@ -348,6 +416,44 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             guard let self = self, let cid = data["call_id"] as? String else { return }
             let reason = data["reason"] as? String ?? "unknown"
             self.onSfuUnavailable?(cid, reason)
+        }
+
+        // ─── Tier-1 call features (2026-07-16 wire contract) ───────────
+
+        // call_reaction_recv — 1:1 TARGETED. `call_id` here is the 1:1
+        // call's own id (see `onCallReactionReceived`'s kdoc for why this
+        // 1:1 handler lives on this manager). Wire: {call_id, sender_id, emoji}.
+        ws.registerHandler(type: "call_reaction_recv") { [weak self] _, data in
+            guard let self = self,
+                  let cid = data["call_id"] as? String,
+                  let senderId = data["sender_id"] as? String,
+                  let emoji = data["emoji"] as? String else { return }
+            self.onCallReactionReceived?(cid, senderId, emoji)
+        }
+        // group_call_reaction_recv — group BROADCAST. Wire: {call_id, sender_id, emoji}.
+        ws.registerHandler(type: "group_call_reaction_recv") { [weak self] _, data in
+            guard let self = self,
+                  let cid = data["call_id"] as? String,
+                  let senderId = data["sender_id"] as? String,
+                  let emoji = data["emoji"] as? String else { return }
+            self.onGroupCallReactionReceived?(cid, senderId, emoji)
+        }
+        // group_call_raise_hand_recv — group BROADCAST. Wire: {call_id, sender_id, raised}.
+        ws.registerHandler(type: "group_call_raise_hand_recv") { [weak self] _, data in
+            guard let self = self,
+                  let cid = data["call_id"] as? String,
+                  let senderId = data["sender_id"] as? String,
+                  let raised = data["raised"] as? Bool else { return }
+            self.onGroupCallRaiseHandReceived?(cid, senderId, raised)
+        }
+        // group_call_mute_request_recv — group TARGETED, no target_id on the
+        // _recv envelope (recipient knows they're the target by virtue of
+        // receiving it). Wire: {call_id, sender_id}.
+        ws.registerHandler(type: "group_call_mute_request_recv") { [weak self] _, data in
+            guard let self = self,
+                  let cid = data["call_id"] as? String,
+                  let senderId = data["sender_id"] as? String else { return }
+            self.onGroupCallMuteRequestReceived?(cid, senderId)
         }
     }
 

@@ -17,10 +17,20 @@ struct GroupCallView: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Item 4 (2026-07-16 wire contract) — one-shot mute-request toast,
+    /// same environment-provided host every other screen in this codebase
+    /// uses (`GroupCallChatPanel`/`ChatListScreen`/etc. all follow this
+    /// exact `@Environment(\.qaudionSnackbar) private var snackbar` +
+    /// `snackbar?.show(.init(text:severity:))` idiom).
+    @Environment(\.qaudionSnackbar) private var snackbar
     /// Security sheet presentation state — purely a "is the aggregating
     /// sheet open" UI flag, nothing security-critical is gated by it
     /// (mirrors `InCallScreen.showSecuritySheet` exactly).
     @State private var showSecuritySheet = false
+    /// Item 1 (2026-07-16 wire contract) — reaction-picker popup
+    /// presentation state, same "icon toggle -> dismissible popup"
+    /// mechanism as `showSecuritySheet`/`showChatPanel`.
+    @State private var showReactionPicker = false
 
     /// In-call chat + attachments panel — same "icon toggle -> dismissible
     /// sheet" mechanism as `showSecuritySheet` above, reused verbatim for a
@@ -55,6 +65,28 @@ struct GroupCallView: View {
                             .font(.caption).monospacedDigit()
                             .foregroundColor(Color(red: 0, green: 0.9, blue: 0.47))
                     }
+                    // Item 5 (2026-07-16 wire contract) — pure client-side
+                    // layout toggle, no wire message at all (LiveKit's own
+                    // native active-speaker detection, wired through
+                    // `GroupCallController.onActiveSpeakersChanged`). Placed
+                    // in the header rather than the already-crowded control
+                    // bar below; icon shows the CURRENT layout, same
+                    // current-state-not-destination convention as every
+                    // control-bar toggle (mute/video/screen-share) below.
+                    Button {
+                        viewModel.toggleLayoutMode()
+                    } label: {
+                        Image(systemName: viewModel.layoutMode == .speaker
+                              ? "person.crop.rectangle.fill" : "square.grid.2x2.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Circle())
+                    }
+                    .padding(.leading, 10)
+                    .accessibilityLabel(viewModel.layoutMode == .speaker
+                        ? "Passa a vista griglia" : "Passa a vista relatore")
                 }
                 .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
 
@@ -109,12 +141,39 @@ struct GroupCallView: View {
 
                 // Participant grid
                 ScrollView {
+                    // Item 5 (2026-07-16 wire contract) — speaker-mode
+                    // spotlight: mirrors the pre-existing screen-share
+                    // spotlight tile above (full-width, ABOVE the regular
+                    // grid) rather than restructuring the grid itself, same
+                    // "shared content dominates, faces stay small" policy
+                    // extended to whichever participant the active-speaker
+                    // signal currently names. See `GroupCallViewModel.
+                    // currentSpeakerId`'s kdoc for the SFU-vs-mesh source.
+                    if viewModel.layoutMode == .speaker,
+                       let speakerId = viewModel.currentSpeakerId,
+                       let speaker = viewModel.participants.first(where: { $0.id == speakerId }) {
+                        ParticipantTile(
+                            participant: speaker,
+                            isPinned: true,
+                            isSelf: speaker.id == viewModel.selfUserId,
+                            reactionEmoji: viewModel.latestReactionEmoji(for: speaker.id),
+                            onRequestMute: { viewModel.requestMute(participantId: speaker.id) }
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
+                    }
+
                     LazyVGrid(columns: [
                         GridItem(.flexible(), spacing: 12),
                         GridItem(.flexible(), spacing: 12)
                     ], spacing: 12) {
-                        ForEach(viewModel.participants) { participant in
-                            ParticipantTile(participant: participant)
+                        ForEach(gridParticipants) { participant in
+                            ParticipantTile(
+                                participant: participant,
+                                isSelf: participant.id == viewModel.selfUserId,
+                                reactionEmoji: viewModel.latestReactionEmoji(for: participant.id),
+                                onRequestMute: { viewModel.requestMute(participantId: participant.id) }
+                            )
                         }
                     }
                     .padding(.horizontal, 16)
@@ -183,6 +242,43 @@ struct GroupCallView: View {
                         }
                         .accessibilityLabel(viewModel.isScreenSharing ? "Interrompi condivisione schermo" : "Condividi schermo")
                     }
+
+                    // Item 1 (2026-07-16 wire contract) — raise/lower
+                    // hand, state-dependent background color exactly like
+                    // the mute button above (`Color.red.opacity(0.3)`
+                    // muted / `Color.white.opacity(0.15)` unmuted) — same
+                    // pattern, orange being the raised-hand's own semantic
+                    // (distinct from mute's red / screen-share's blue)
+                    // since it's not an error/alert state.
+                    Button {
+                        viewModel.toggleHandRaised()
+                    } label: {
+                        Image(systemName: viewModel.isHandRaised ? "hand.raised.fill" : "hand.raised")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .frame(width: 56, height: 56)
+                            .background(viewModel.isHandRaised ? Color.orange.opacity(0.35) : Color.white.opacity(0.15))
+                            .clipShape(Circle())
+                    }
+                    .accessibilityLabel(viewModel.isHandRaised ? "Abbassa la mano" : "Alza la mano")
+
+                    // Item 1 — reaction picker: small popup with the fixed
+                    // 6-emoji set (see `reactionPicker` below). `.popover`
+                    // gives the "small popup" shape for free.
+                    Button {
+                        showReactionPicker = true
+                    } label: {
+                        Image(systemName: "face.smiling")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .frame(width: 56, height: 56)
+                            .background(Color.white.opacity(0.15))
+                            .clipShape(Circle())
+                    }
+                    .popover(isPresented: $showReactionPicker) {
+                        reactionPicker
+                    }
+                    .accessibilityLabel("Invia una reazione")
 
                     // In-call chat + attachments panel toggle — same
                     // icon-toggle -> dismissible-sheet mechanism as the
@@ -279,6 +375,19 @@ struct GroupCallView: View {
         // activeGroupId`'s kdoc), but re-checking on every change costs
         // nothing and guards against any future reordering.
         .onChange(of: viewModel.activeGroupId) { _ in refreshChatUnreadCount() }
+        // Item 4 (2026-07-16 wire contract) — one-shot mute-request toast.
+        // The ViewModel is a plain `ObservableObject` with no reach into
+        // the environment-provided `QAudionSnackbarHostState`, so it just
+        // publishes the resolved text and this View pushes it through the
+        // same snackbar every other screen uses, then clears it back to
+        // nil so a later identical message can still re-fire (`current` on
+        // `QAudionSnackbarHostState` de-dupes only by that instance, but
+        // `.onChange` needs a real value transition to fire at all).
+        .onChange(of: viewModel.muteRequestToastText) { text in
+            guard let text else { return }
+            snackbar?.show(.init(text: text, severity: .info))
+            viewModel.muteRequestToastText = nil
+        }
         // Badge upkeep — mirrors `ChatListScreen`'s reactive unread badge,
         // driven off the SAME `GroupMessageStore.didChangeNotification` the
         // list screen and `GroupChatScreen` both already observe. Fires
@@ -301,6 +410,37 @@ struct GroupCallView: View {
         guard !viewModel.activeGroupHex.isEmpty else { chatUnreadCount = 0; return }
         chatUnreadCount = showChatPanel ? 0
             : GroupMessageStore.shared.unreadCount(forGroupHex: viewModel.activeGroupHex)
+    }
+
+    /// Item 5: the regular grid's participant list — in `.speaker` layout
+    /// mode the pinned spotlight tile above already renders the active
+    /// speaker, so exclude them here to avoid a duplicate tile (mirrors
+    /// the pre-existing screen-share spotlight's "small tiles stay
+    /// small, shared content dominates" policy).
+    private var gridParticipants: [GroupCallViewModel.ParticipantUI] {
+        guard viewModel.layoutMode == .speaker, let speakerId = viewModel.currentSpeakerId else {
+            return viewModel.participants
+        }
+        return viewModel.participants.filter { $0.id != speakerId }
+    }
+
+    /// Item 1: the reaction-picker popup content — the wire contract's
+    /// fixed 6-emoji set. Tapping one sends it and dismisses the popup;
+    /// the sender renders their own reaction optimistically (see
+    /// `GroupCallViewModel.sendReaction`'s kdoc chain), so no spinner/wait
+    /// state is needed here.
+    private var reactionPicker: some View {
+        HStack(spacing: 14) {
+            ForEach(["👍", "❤️", "😂", "👏", "😮", "🤔"], id: \.self) { emoji in
+                Button {
+                    viewModel.sendReaction(emoji: emoji)
+                    showReactionPicker = false
+                } label: {
+                    Text(emoji).font(.system(size: 30))
+                }
+            }
+        }
+        .padding(20)
     }
 
     /// Unified call UI (group-call adaptation) — same "chip row ending in
@@ -372,6 +512,23 @@ struct GroupCallView: View {
 
 struct ParticipantTile: View {
     let participant: GroupCallViewModel.ParticipantUI
+    /// Item 5: enlarged spotlight rendering when this tile is the pinned
+    /// active speaker in `.speaker` layout mode. Defaults `false` so the
+    /// pre-existing regular-grid call site (now explicit about it too)
+    /// needs no behavior change.
+    var isPinned: Bool = false
+    /// Item 2: whether this tile is the local user's own — gates the
+    /// mute-others context menu (can't request muting yourself). Defaults
+    /// `false`; a preview/call site that never passes it simply never
+    /// shows the menu, which is the safe default.
+    var isSelf: Bool = false
+    /// Item 3: the freshest still-live reaction for this participant, or
+    /// nil — `GroupCallViewModel.latestReactionEmoji(for:)` already only
+    /// ever returns a not-yet-2s-expired entry, so this view just renders
+    /// whatever is currently live with no timer of its own.
+    var reactionEmoji: String? = nil
+    /// Item 2: invoked from the mute-others context-menu action.
+    var onRequestMute: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 8) {
@@ -389,9 +546,20 @@ struct ParticipantTile: View {
                         .font(.title).fontWeight(.semibold)
                         .foregroundColor(.white)
                 }
+
+                // Item 3: transient reaction overlay — floats over this
+                // same ZStack (video or avatar), matching the wire
+                // contract's "transient floating/fading overlay over the
+                // sender's participant tile" spec.
+                if let reactionEmoji {
+                    Text(reactionEmoji)
+                        .font(.system(size: isPinned ? 44 : 28))
+                        .transition(.scale.combined(with: .opacity))
+                        .animation(.easeOut(duration: 0.2), value: reactionEmoji)
+                }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: participant.videoTrack != nil ? 120 : 64)
+            .frame(height: tileHeight)
             .overlay(
                 RoundedRectangle(cornerRadius: participant.videoTrack != nil ? 12 : 32)
                     .stroke(participant.isSpeaking ? Color(red: 0, green: 0.9, blue: 0.47) : Color.clear, lineWidth: 3)
@@ -409,9 +577,21 @@ struct ParticipantTile: View {
                         .background(Circle().fill(Color.blue.opacity(0.85)))
                 }
             }
+            // Item 3: raised-hand badge — topTrailing, a DIFFERENT corner
+            // than the screen-share badge (bottomTrailing) above to avoid
+            // collision when both are showing on the same tile at once.
+            .overlay(alignment: .topTrailing) {
+                if participant.handRaised {
+                    Image(systemName: "hand.raised.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(5)
+                        .background(Circle().fill(Color.orange.opacity(0.9)))
+                }
+            }
 
             Text(participant.displayName)
-                .font(.caption).foregroundColor(.white)
+                .font(isPinned ? .body : .caption).foregroundColor(.white)
                 .lineLimit(1)
 
             if participant.isMuted {
@@ -420,9 +600,30 @@ struct ParticipantTile: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
+        .padding(.vertical, isPinned ? 20 : 16)
         .background(Color.white.opacity(0.05))
         .cornerRadius(16)
+        // Item 2: mute-others UI — long-press context menu on any OTHER
+        // participant's tile (never shown on the local user's own tile).
+        // Flat/non-admin-gated per the wire contract: no client-side
+        // permission check beyond "not self" — the server enforces the
+        // only real gate (both must be current participants).
+        .contextMenu {
+            if !isSelf, let onRequestMute {
+                Button {
+                    onRequestMute()
+                } label: {
+                    Label("Silenzia \(participant.displayName)", systemImage: "mic.slash")
+                }
+            }
+        }
+    }
+
+    /// Item 5: taller/more prominent sizing for the pinned spotlight tile,
+    /// otherwise identical to the pre-existing per-content-type sizing.
+    private var tileHeight: CGFloat {
+        if isPinned { return participant.videoTrack != nil ? 220 : 140 }
+        return participant.videoTrack != nil ? 120 : 64
     }
 }
 
@@ -445,6 +646,16 @@ class GroupCallViewModel: ObservableObject {
         /// once (see `GroupCallController.onRemoteScreenShareTrack`'s
         /// kdoc). Nil until subscribed / after unsubscribe.
         var screenShareTrack: AnyObject? = nil
+        /// Tier-1 (item 3, 2026-07-16 wire contract) — mirrors
+        /// `GroupCallController.raisedHands` for this participant; seeded/
+        /// refreshed from the ViewModel's `raisedHandsCache` (see the
+        /// `onRaisedHandsChanged` wiring in `init` and the roster-rebuild
+        /// in `onParticipantsChanged` below). KNOWN ACCEPTED LIMITATION
+        /// (wire contract item 3): ephemeral, fed only by the
+        /// `group_call_raise_hand_recv` stream since joining — a
+        /// participant who joins/reconnects mid-call won't see who
+        /// currently has a hand raised.
+        var handRaised: Bool = false
     }
 
     @Published var participants: [ParticipantUI] = []
@@ -472,6 +683,37 @@ class GroupCallViewModel: ObservableObject {
     /// kdoc chain down to `LiveKitGroupCallRoom.setScreenShareEnabled` for
     /// the full mechanism.
     @Published var isScreenSharing = false
+    /// Tier-1 (2026-07-16 wire contract) — mirrors `GroupCallController.
+    /// reactionEvents` 1:1 (bound via `onReactionEventsChanged` in `init`
+    /// below). `GroupCallController` already only ever hands back
+    /// not-yet-2s-expired entries (its own removal timer), so this array
+    /// is always "currently live" — no extra expiry bookkeeping here.
+    @Published var reactionEvents: [GroupCallController.ReactionEvent] = []
+    /// Item 1: our OWN raised-hand toggle state — flipped optimistically
+    /// by `toggleHandRaised()`, same self-authoritative shape as
+    /// `isMuted`/`isVideoEnabled` above (not derived from the roster, so
+    /// the button responds instantly regardless of roster-refresh timing).
+    @Published var isHandRaised = false
+    /// Item 5: pure client-side layout toggle — no wire message at all.
+    /// Starts `.gallery` (today's existing grid) so a call that never
+    /// touches the new header button behaves exactly as before.
+    @Published var layoutMode: LayoutMode = .gallery
+    enum LayoutMode {
+        case gallery
+        case speaker
+    }
+    /// Item 5: passthrough of `GroupCallController.onActiveSpeakersChanged`
+    /// (LiveKit's own native active-speaker detection) — only ever set
+    /// while riding the SFU; see `currentSpeakerId`'s kdoc for the mesh
+    /// fallback.
+    @Published var activeSpeakerId: String? = nil
+    /// Item 4: resolved toast text for a just-received
+    /// `group_call_mute_request_recv`, or nil. This plain
+    /// `ObservableObject` has no reach into the environment-provided
+    /// `QAudionSnackbarHostState`, so `GroupCallView` observes this via
+    /// `.onChange` and pushes it through that snackbar itself, then
+    /// clears it back to nil (see that call site's kdoc).
+    @Published var muteRequestToastText: String? = nil
     /// In-call chat panel — the persisted-group id (DASHED UUID, server wire
     /// form) this ACTIVE call is associated with, or "" for an ad-hoc group
     /// call started from the contact picker with no persisted group behind
@@ -507,6 +749,28 @@ class GroupCallViewModel: ObservableObject {
     /// continuously-live surface, so a computed passthrough avoids a
     /// second state copy that could drift from the source of truth.
     var currentEpoch: Int64 { manager.senderKeyEpoch }
+    /// Item 2/3: our own participant id — used to gate the mute-others
+    /// context menu (can't target yourself) and to look up our own
+    /// raised-hand/reaction state alongside everyone else's.
+    var selfUserId: String { manager.selfUserId }
+    /// Item 5: which participant is currently "the speaker" for layout
+    /// purposes. Over the LiveKit SFU this is `activeSpeakerId` (LiveKit's
+    /// own native active-speaker detection). On the WS-relay mesh
+    /// fallback (no SFU room, so that callback never fires) this instead
+    /// reuses each participant's pre-existing `isSpeaking` flag — already
+    /// driven by `BCryptoGroupCallManager`'s own 500ms-decay speaking
+    /// heuristic (the SAME flag that already rings a tile's border) — per
+    /// the wire contract's explicit "reuse the existing heuristic, no new
+    /// mesh plumbing" instruction.
+    var currentSpeakerId: String? {
+        if isSfuActive { return activeSpeakerId }
+        return participants.first(where: { $0.isSpeaking })?.id
+    }
+    /// Item 3: the freshest still-live reaction for one participant, or
+    /// nil if none is currently displayed.
+    func latestReactionEmoji(for participantId: String) -> String? {
+        reactionEvents.last(where: { $0.senderId == participantId })?.emoji
+    }
 
     private let manager: BCryptoGroupCallManager
     /// W367: optional GroupCallController (W354/W358/W366) bound to
@@ -517,6 +781,12 @@ class GroupCallViewModel: ObservableObject {
     private let controller: GroupCallController?
     private var startTime = Date()
     private var timer: Timer?
+    /// Item 3: local mirror of `GroupCallController.raisedHands`, used to
+    /// seed each `ParticipantUI.handRaised` when the roster rebuilds in
+    /// `onParticipants` below (that closure only ever has the fresh
+    /// `[Participant]` list from the manager, not the controller's
+    /// separate raised-hand set, so this cache bridges the two).
+    private var raisedHandsCache: Set<String> = []
 
     init(manager: BCryptoGroupCallManager, controller: GroupCallController? = nil) {
         self.manager = manager
@@ -564,7 +834,8 @@ class GroupCallViewModel: ObservableObject {
                     ParticipantUI(id: $0.id, displayName: $0.displayName,
                                   isMuted: $0.isMuted, isSpeaking: $0.isSpeaking,
                                   videoTrack: existingTracks[$0.id] ?? nil,
-                                  screenShareTrack: existingScreenShareTracks[$0.id] ?? nil)
+                                  screenShareTrack: existingScreenShareTracks[$0.id] ?? nil,
+                                  handRaised: self.raisedHandsCache.contains($0.id))
                 }
             }
         }
@@ -619,6 +890,51 @@ class GroupCallViewModel: ObservableObject {
             controller.onLocalScreenShareChanged = { [weak self] active in
                 DispatchQueue.main.async { self?.isScreenSharing = active }
             }
+            // Tier-1 (2026-07-16 wire contract) — reactions/raised-hand/
+            // active-speaker/mute-request data-layer passthroughs. Same
+            // "bind once, here" pattern as every other `controller.on*`
+            // callback above.
+            controller.onReactionEventsChanged = { [weak self] events in
+                DispatchQueue.main.async { self?.reactionEvents = events }
+            }
+            controller.onRaisedHandsChanged = { [weak self] raised in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.raisedHandsCache = raised
+                    for idx in self.participants.indices {
+                        self.participants[idx].handRaised = raised.contains(self.participants[idx].id)
+                    }
+                }
+            }
+            controller.onActiveSpeakersChanged = { [weak self] identities in
+                DispatchQueue.main.async { self?.activeSpeakerId = identities.first }
+            }
+            controller.onMuteRequested = { [weak self] requesterId in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    // Item 4(a): the REAL mute (legacy WS-relay gate +
+                    // SFU mic toggle) is already applied by
+                    // `GroupCallController.handleMuteRequest` before this
+                    // callback fires — see that method's kdoc. Here we
+                    // only need item 4(b): "update local mute-button UI
+                    // state" — this control-bar button's own flag.
+                    // Deliberately NOT also poking `manager.toggleMute()`
+                    // to sync the roster's separate self-entry mute badge:
+                    // `BCryptoGroupCallManager` exposes only a pure
+                    // `toggleMute() -> Bool` (no idempotent setter, no
+                    // current-value getter), so a blind call here could
+                    // flip it back to unmuted if the roster already
+                    // agreed — not worth the risk for a purely cosmetic
+                    // second badge.
+                    self.isMuted = true
+                    // Item 4(c): one-shot, non-blocking toast — resolve
+                    // the requester's display name from the live roster,
+                    // falling back to the raw id if it hasn't caught up
+                    // yet.
+                    let displayName = self.participants.first(where: { $0.id == requesterId })?.displayName ?? requesterId
+                    self.muteRequestToastText = "\(displayName) ti ha silenziato"
+                }
+            }
         } else {
             manager.onStateChanged = onState
             manager.onParticipantsChanged = onParticipants
@@ -631,6 +947,61 @@ class GroupCallViewModel: ObservableObject {
         // gates outgoing PCM frames (without this, mute is UI-only and
         // audio still streams to peers).
         controller?.setMuted(isMuted)
+        // W-GRPMUTEFIX (item 6, 2026-07-16 wire contract): the two calls
+        // above only ever gated the LEGACY WS-relay-mesh pipeline —
+        // pressing this SAME button during an actual LiveKit-SFU call (the
+        // default/production transport) did NOT silence the outbound
+        // LiveKit audio track. `setMicrophoneEnabled` is a real no-op
+        // (returns false) when the call isn't riding the SFU, so firing it
+        // unconditionally (rather than branching on `isSfuActive`) is safe
+        // — this makes the action itself SFU-aware instead of gating the
+        // button's visibility (see `GroupCallController.
+        // setMicrophoneEnabled`'s kdoc for the bug this closes). Same
+        // unwrap-and-fire idiom as `toggleScreenShare` below.
+        if let controller = controller {
+            let micEnabled = !isMuted
+            Task {
+                _ = await controller.setMicrophoneEnabled(micEnabled)
+            }
+        }
+    }
+
+    /// Item 1 (2026-07-16 wire contract): send + optimistically render our
+    /// own group-call reaction. The controller (not the manager directly)
+    /// owns the optimistic local render — see `GroupCallController.
+    /// sendReaction`'s kdoc — so route through it, same unwrap-and-fire
+    /// idiom as `toggleScreenShare` below. No-op with no controller bound
+    /// (legacy preview path has no group-call features to show).
+    func sendReaction(emoji: String) {
+        controller?.sendReaction(emoji: emoji)
+    }
+
+    /// Item 1: raise/lower our own hand — explicit boolean toggle,
+    /// idempotent resend is safe (see `GroupCallController.setHandRaised`'s
+    /// kdoc). `isHandRaised` flips optimistically, same self-authoritative
+    /// shape as `isMuted`.
+    func toggleHandRaised() {
+        guard let controller = controller else { return }
+        isHandRaised.toggle()
+        controller.setHandRaised(isHandRaised)
+    }
+
+    /// Item 2 (2026-07-16 wire contract): request another participant mute
+    /// themselves. Sent straight through the manager — unlike `sendReaction`/
+    /// `setHandRaised`, a mute-request has no crypto/session state of its
+    /// own for the controller to own (see `BCryptoGroupCallManager.
+    /// sendGroupCallMuteRequest`'s kdoc). Flat, non-admin-gated by design:
+    /// any participant can target any other current participant — the
+    /// server enforces the only real gate.
+    func requestMute(participantId: String) {
+        manager.sendGroupCallMuteRequest(targetId: participantId)
+    }
+
+    /// Item 5: toggle between gallery (today's existing grid) and speaker
+    /// (pinned active-speaker spotlight) layout. Pure client-side state,
+    /// no wire message.
+    func toggleLayoutMode() {
+        layoutMode = layoutMode == .gallery ? .speaker : .gallery
     }
 
     /// W-GRPVIDEO: flip the local camera. Optimistic UI update (mirrors
