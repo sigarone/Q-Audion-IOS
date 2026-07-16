@@ -122,6 +122,19 @@ public final class GroupCallController: @unchecked Sendable {
     /// (`handleMuteRequest`) for the auto-mute-on-receipt rationale.
     public var onMuteRequested: ((_ requesterId: String) -> Void)?
 
+    /// W-GRPTELEM: forwards this call's SFU/media telemetry to the app
+    /// layer. QAudionEngine cannot import QAudionApp
+    /// (`TelemetryService`/`CallMediaTelemetry` live there) — same
+    /// rationale as `QAudionWebRtcCallController.videoTelemetry` on the
+    /// 1:1 path. `AppState.ensureGroupCallController` wires this once,
+    /// mirroring that pattern. Fed by `LiveKitGroupCallRoom.onTelemetry`
+    /// (which already emits `call.media.connected` — wired in
+    /// `handleSfuToken` below) plus this controller's own
+    /// `call.media.ended` (see `teardown`), so the connected/ended pair
+    /// both flow through the same closure regardless of which layer
+    /// originates them.
+    public var groupTelemetry: ((_ kind: String, _ callId: String?, _ attrs: [String: Any]) -> Void)?
+
     // ─── Tier-1: transient reactions + raised-hand state (data layer) ──
     // In-memory only — never persisted, matches this file's "no
     // persistence anywhere" convention (no MessageStore/CoreData/SQLite).
@@ -319,13 +332,13 @@ public final class GroupCallController: @unchecked Sendable {
     public func leave() {
         manager.leaveGroupCall()
         stopAudioPipeline()
-        teardown()
+        teardown(reason: "user_left")
     }
 
     public func endCallForAll() {
         manager.endGroupCall()
         stopAudioPipeline()
-        teardown()
+        teardown(reason: "ended_for_all")
     }
 
     public func setMuted(_ muted: Bool) {
@@ -543,7 +556,7 @@ public final class GroupCallController: @unchecked Sendable {
                 }
             case .ended:
                 self.stopAudioPipeline()
-                self.teardown()
+                self.teardown(reason: "remote_ended")
             case .idle:
                 self.setState(.idle)
             }
@@ -618,6 +631,8 @@ public final class GroupCallController: @unchecked Sendable {
         // Tier-1 layout toggle (item 5) — passthrough, see
         // `onActiveSpeakersChanged`'s kdoc.
         room.onSpeakingParticipantsChanged = { [weak self] identities in self?.onActiveSpeakersChanged?(identities) }
+        // W-GRPTELEM: straight passthrough — see `groupTelemetry`'s kdoc.
+        room.onTelemetry = { [weak self] kind, cid, attrs in self?.groupTelemetry?(kind, cid, attrs) }
 
         lock.lock()
         sfuRoom = room
@@ -626,7 +641,7 @@ public final class GroupCallController: @unchecked Sendable {
         Task { [weak self] in
             guard let self = self else { return }
             do {
-                try await room.connect(url: url, token: token)
+                try await room.connect(url: url, token: token, callId: callId)
                 self.resendMediaKeysToSfu()
             } catch {
                 print("[GroupCallController] LiveKit connect failed, falling back to WS-relay mesh: \(error)")
@@ -1039,8 +1054,17 @@ public final class GroupCallController: @unchecked Sendable {
     /// that; see the TODO this change closes for the full rationale.
     public var onSendControlEnvelope: ((_ peer: String, _ selfId: String, _ envelopeJson: String) async -> Bool)?
 
-    private func teardown() {
+    /// W-GRPTELEM: `reason` closes the `call.media.connected`/`call.media.
+    /// ended` pair `LiveKitGroupCallRoom.connect` opens — without this,
+    /// `CallMediaTelemetry.shared` (which `AppState`'s `groupTelemetry`
+    /// wiring routes `call.media.ended` into, mirroring the 1:1 path)
+    /// would never see this call's `recordEnded`, leaving it "leaked"
+    /// until the NEXT call's `recordConnected` force-flushes it as
+    /// `"preempted"` (see that class's kdoc) — losing this call's real
+    /// duration/heartbeat-count/end-reason in the process.
+    private func teardown(reason: String) {
         lock.lock()
+        let endedCallId = activeCallId
         perSenderDecoders.removeAll()
         muted = false
         groupState = nil
@@ -1056,6 +1080,9 @@ public final class GroupCallController: @unchecked Sendable {
         sfuRoom = nil
         usingSfu = true // reset the capability flag for the NEXT call
         lock.unlock()
+        if let cid = endedCallId {
+            groupTelemetry?("call.media.ended", cid, ["reason": reason])
+        }
         if let room = room {
             Task { await room.disconnect() }
         }

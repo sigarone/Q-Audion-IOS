@@ -11587,6 +11587,42 @@ extension AppState {
         let capture = AudioCapture()
         let playback = AudioPlayback()
         controller.attachAudioPipeline(capture: capture, playback: playback)
+        // W-GRPTELEM: group-call SFU A/V telemetry — QAudionEngine cannot
+        // import QAudionApp, so this closure is the ONLY place
+        // `call.media.connected`/`call.media.ended` (emitted by
+        // `LiveKitGroupCallRoom`/`GroupCallController` respectively) get
+        // routed into `CallMediaTelemetry.shared`, the SAME per-call
+        // connected/heartbeat/summary tracker the 1:1 path uses (see that
+        // class's kdoc) — reused here rather than duplicated because a
+        // device is never in a 1:1 AND a group call at once, so the
+        // singleton's one `currentCallId` slot is never actually contended
+        // between the two paths. Everything else passes straight through
+        // to `TelemetryService`, mirroring `videoTelemetry`'s wiring below.
+        controller.groupTelemetry = { kind, callId, attrs in
+            guard let cid = callId else {
+                TelemetryService.shared.emit(kind: kind, attrs: attrs)
+                return
+            }
+            switch kind {
+            case "call.media.connected":
+                // `CallMediaTelemetry` is `@MainActor`-isolated but this
+                // closure is invoked off arbitrary threads (RoomDelegate's
+                // own doc comment: "not guaranteed to be main") — hop
+                // explicitly rather than calling it synchronously.
+                let peerPrefix = (attrs["peer_prefix"] as? String) ?? "group"
+                let sasSource = (attrs["sas_source"] as? String) ?? "sfu"
+                Task { @MainActor in
+                    CallMediaTelemetry.shared.recordConnected(callId: cid, peerPrefix: peerPrefix, sasSource: sasSource)
+                }
+            case "call.media.ended":
+                let reason = (attrs["reason"] as? String) ?? "unknown"
+                Task { @MainActor in
+                    CallMediaTelemetry.shared.recordEnded(callId: cid, reason: reason)
+                }
+            default:
+                TelemetryService.shared.emit(kind: kind, callId: cid, attrs: attrs)
+            }
+        }
         groupCallController = controller
         return controller
     }

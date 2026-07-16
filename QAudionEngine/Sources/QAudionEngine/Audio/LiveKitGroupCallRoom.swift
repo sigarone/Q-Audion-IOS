@@ -94,10 +94,24 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// plumbing only in this pass — the speaker/gallery layout toggle itself
     /// (pin/enlarge whichever identity this names) is a UI-layer follow-up.
     public var onSpeakingParticipantsChanged: ((_ identities: [String]) -> Void)?
+    /// W-GRPTELEM: app-layer telemetry sink — QAudionEngine cannot import
+    /// QAudionApp (`TelemetryService`/`CallMediaTelemetry` live there),
+    /// same rationale as `QAudionWebRtcCallController.videoTelemetry` for
+    /// the 1:1 path. `GroupCallController.handleSfuToken` wires this
+    /// right after constructing this room (alongside the other `onXxx`
+    /// callbacks below). `callId` is split out as its own parameter
+    /// (rather than folded into `attrs`) so the wiring can pass it
+    /// straight through to `TelemetryService.emit(kind:callId:attrs:)`
+    /// without duplicating it inside the dict — see `emitTelemetry`.
+    public var onTelemetry: ((_ kind: String, _ callId: String?, _ attrs: [String: Any]) -> Void)?
 
     private let wantsVideo: Bool
     private var room: Room?
     private var keyProvider: BaseKeyProvider?
+    /// W-GRPTELEM: set once at `connect(url:token:callId:)` time so every
+    /// RoomDelegate/TrackDelegate callback fired afterwards (they don't
+    /// otherwise carry the call id) can attach it to its telemetry event.
+    private var callId: String?
     private let lock = NSLock()
     // NOTE: deliberately `DispatchWorkItem` + `asyncAfter`, NOT `Timer`.
     // `applyKey` is invoked from `GroupCallController`, itself driven off
@@ -141,6 +155,40 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         super.init()
     }
 
+    /// W-GRPTELEM: emit one telemetry event, folding in the `callId`
+    /// captured at `connect(url:token:callId:)` time. Mirrors
+    /// `QAudionWebRtcCallController.videoTelemetry`'s (kind, attrs) shape.
+    private func emitTelemetry(_ kind: String, _ attrs: [String: Any] = [:]) {
+        onTelemetry?(kind, callId, attrs)
+    }
+
+    /// W-GRPTELEM: the `video.stats`/`call.audio.stats` equivalent of
+    /// `QAudionWebRtcCallController.pollVideoStatsOnce` — event-driven off
+    /// the SDK's OWN native per-track statistics timer
+    /// (`Track.set(reportStatistics:)`, verified against the real SDK
+    /// source at the pinned tag: `Track._statisticsTimer`, a 1s
+    /// `AsyncTimer` that drives `TrackDelegate.track(_:didUpdateStatistics:
+    /// simulcastStatistics:)`) rather than a hand-rolled `Timer`.
+    /// Deliberately NOT a `Timer` here: `graceWorkItems`'s kdoc above
+    /// already documents why a `Timer` silently never fires when driven
+    /// off a non-RunLoop-pumped queue, and `RoomDelegate`'s own doc
+    /// comment says its callbacks "are not guaranteed to be the main
+    /// thread" — the SDK's internal timer sidesteps that entirely.
+    /// Gated on `onTelemetry` being wired (mirrors `videoTelemetry`'s own
+    /// `guard videoTelemetry != nil` gate on the 1:1 path) so a room used
+    /// without app-layer telemetry wiring never pays for the SDK's
+    /// internal per-track polling.
+    private func attachStatsReporting(to track: Track?) {
+        guard let track, onTelemetry != nil else { return }
+        track.add(delegate: self)
+        Task { try? await track.set(reportStatistics: true) }
+    }
+
+    private func detachStatsReporting(from track: Track?) {
+        guard let track else { return }
+        track.remove(delegate: self)
+    }
+
     /// Build the E2EE room, connect, and publish local mic (+camera if
     /// `video`). Throws on failure so the caller (`GroupCallController`)
     /// falls back to the existing WS-relay mesh path.
@@ -149,7 +197,14 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// unlike a room-connect failure, losing the camera must degrade to an
     /// audio-only SFU call (mic still published), never abort the whole
     /// call. See `ensureCameraAuthorized`'s kdoc for why this check exists.
-    public func connect(url: String, token: String) async throws {
+    ///
+    /// W-GRPTELEM: `callId` (new) is stored so every subsequent telemetry
+    /// event — including the ones fired asynchronously from RoomDelegate
+    /// callbacks below — can attach it. Was previously not threaded
+    /// through at all (`GroupCallController` held its own `activeCallId`
+    /// but never passed it down here).
+    public func connect(url: String, token: String, callId: String) async throws {
+        self.callId = callId
         // Options set EXPLICITLY — SDK defaults diverge across platforms
         // (the JS SDK defaults `sharedKey: true`; we need per-participant
         // keys, so this must never rely on a default).
@@ -187,16 +242,36 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // confirmation — proves OUR OWN mic reached the SFU at all, cheap
         // to cross-reference against the SFU-side "track published" log.
         print("[GroupCallController][telemetry] local audio track published identity=\(room.localParticipant.identity?.stringValue ?? "self") callSid=\(room.sid?.stringValue ?? "?")")
+        // W-GRPTELEM (item a): the `call.media.connected`-equivalent — fired
+        // right here, NOT from a delegate callback, because no RoomDelegate
+        // method fires on a successful INITIAL connect in this SDK version
+        // (`didFailToConnectWithError` only covers the failure half; the
+        // closest success signal, `roomDidConnect(_:)`, would double-fire
+        // this exact event since `room.connect` above already only returns
+        // once connected). `peer_prefix`/`sas_source` are shaped to match
+        // `CallMediaTelemetry.recordConnected`'s parameters 1:1 so
+        // `AppState`'s wiring can route this kind straight into it (see
+        // that class's kdoc) and get the heartbeat/summary pair for free.
+        emitTelemetry("call.media.connected", [
+            "transport": "sfu",
+            "call_type": wantsVideo ? "video" : "audio",
+            "participant_count": room.remoteParticipants.count + 1,
+            "peer_prefix": "group:\(room.remoteParticipants.count + 1)",
+            "sas_source": "sfu"
+        ])
+        attachStatsReporting(to: room.localParticipant.firstAudioTrack)
         if wantsVideo {
             if await ensureCameraAuthorized() {
                 _ = try await room.localParticipant.setCamera(enabled: true)
                 print("[GroupCallController][telemetry] local video track published identity=\(room.localParticipant.identity?.stringValue ?? "self")")
                 onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
+                attachStatsReporting(to: room.localParticipant.firstCameraVideoTrack)
             } else {
                 // Graceful audio-only fallback: mic is already published
                 // above, we simply never publish a camera track. No throw —
                 // a camera-permission denial must not tear down the whole
                 // SFU connection.
+                emitTelemetry("call.media.camera_permission_denied")
                 onError?(CameraPermissionError.denied)
             }
         }
@@ -227,7 +302,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
             guard await ensureCameraAuthorized() else { throw CameraPermissionError.denied }
         }
         _ = try await room.localParticipant.setCamera(enabled: enabled)
-        onLocalVideoTrack?(enabled ? room.localParticipant.firstCameraVideoTrack : nil)
+        let track = enabled ? room.localParticipant.firstCameraVideoTrack : nil
+        onLocalVideoTrack?(track)
+        if enabled {
+            attachStatsReporting(to: track)
+        }
     }
 
     /// W-GRPMUTEFIX (item 6, 2026-07-16 wire contract) — the REAL SFU
@@ -339,8 +418,13 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // "subscribed but never decrypts" (E2EE issue, see
         // `didUpdateE2EEState` below) and from "subscribed+decrypts but the
         // UI never binds it to a tile" (app-layer binding issue).
+        // W-GRPTELEM: the `video.stats`/`call.audio.stats` receiver side —
+        // see `attachStatsReporting`'s kdoc. Applies to every subscribed
+        // track regardless of source (camera/screen-share/mic).
+        attachStatsReporting(to: publication.track)
         if let audioTrack = publication.track as? RemoteAudioTrack {
             print("[GroupCallController][telemetry] remote audio track subscribed identity=\(identity)")
+            emitTelemetry("call.audio.remote_track", ["identity": identity, "track_sid": publication.sid.stringValue])
             onRemoteAudioTrack?(identity, audioTrack)
         } else if let videoTrack = publication.track as? RemoteVideoTrack {
             // W-GRPSCREENSHARE: a participant can publish a camera track AND
@@ -352,9 +436,11 @@ extension LiveKitGroupCallRoom: RoomDelegate {
             // silently drop whichever published second.
             if publication.source == .screenShareVideo {
                 print("[GroupCallController][telemetry] remote screen-share track subscribed identity=\(identity)")
+                emitTelemetry("video.remote_track", ["identity": identity, "kind": "screen_share", "track_sid": publication.sid.stringValue])
                 onRemoteScreenShareTrack?(identity, videoTrack)
             } else {
                 print("[GroupCallController][telemetry] remote video track subscribed identity=\(identity)")
+                emitTelemetry("video.remote_track", ["identity": identity, "kind": "camera", "track_sid": publication.sid.stringValue])
                 onRemoteVideoTrack?(identity, videoTrack)
             }
         }
@@ -370,6 +456,12 @@ extension LiveKitGroupCallRoom: RoomDelegate {
     /// PRE-EXISTING gap, out of this change's scope — not fixed here to
     /// avoid touching unrelated behavior.
     public func room(_ room: Room, participant: RemoteParticipant, didUnsubscribeTrack publication: RemoteTrackPublication) {
+        // W-GRPTELEM: stop the stats-reporting timer for this track
+        // regardless of source — the screen-share-only gate right below is
+        // this method's PRE-EXISTING UI-callback scope, not a reason to
+        // leave a camera/mic track's SDK-internal 1s poll running after
+        // it's gone.
+        detachStatsReporting(from: publication.track)
         guard publication.source == .screenShareVideo else { return }
         let identity = participant.identity?.stringValue ?? ""
         print("[GroupCallController][telemetry] remote screen-share track unsubscribed identity=\(identity)")
@@ -397,9 +489,15 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // publish the SFU logs confirm succeeded, the failure is on OUR
         // subscribe side (ICE/transport), not the sender's publish.
         print("[GroupCallController][telemetry] remote track subscribe FAILED identity=\(participant.identity?.stringValue ?? "") sid=\(trackSid) error=\(error)")
+        emitTelemetry("video.remote_track_failed", [
+            "identity": participant.identity?.stringValue ?? "",
+            "track_sid": trackSid.stringValue,
+            "error": "\(error)"
+        ])
     }
 
     public func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
+        emitTelemetry("call.media.participant", ["identity": participant.identity?.stringValue ?? "", "present": true])
         onParticipant?(participant.identity?.stringValue ?? "", true)
     }
 
@@ -414,10 +512,12 @@ extension LiveKitGroupCallRoom: RoomDelegate {
     }
 
     public func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
+        emitTelemetry("call.media.participant", ["identity": participant.identity?.stringValue ?? "", "present": false])
         onParticipant?(participant.identity?.stringValue ?? "", false)
     }
 
     public func room(_ room: Room, didFailToConnectWithError error: LiveKitError?) {
+        emitTelemetry("call.media.sfu_connect_failed", ["error": error.map { "\($0)" } ?? "unknown"])
         if let error = error { onError?(error) }
     }
 
@@ -427,7 +527,28 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // connect attempt — see `GroupCallController.handleSfuToken`). This
         // just surfaces the error; resuming the mesh mid-call is a known
         // follow-up, not silently claimed as handled here.
+        emitTelemetry("call.media.sfu_disconnected", ["error": error.map { "\($0)" } ?? "none"])
         if let error = error { onError?(error) }
+    }
+
+    /// W-GRPTELEM (item b) — ongoing SFU connection-state telemetry, the
+    /// heartbeat-equivalent asked for in the confirmed-facts recon.
+    /// Verified against the real `RoomDelegate` protocol at the pinned
+    /// fork's base tag (`sigarone/client-sdk-swift@2.13.0-aes256-livekit`,
+    /// untouched from upstream `livekit/client-sdk-swift@2.13.0` outside
+    /// the AES-256/E2EE bits per `Package.swift`'s own comment) rather than
+    /// assumed — this method DOES exist on `RoomDelegate` in this SDK
+    /// version. Fires on every SFU-level transition
+    /// (`.connecting`/`.connected`/`.reconnecting`/`.disconnected`), a
+    /// strictly richer signal than a fixed-interval heartbeat: a
+    /// `.reconnecting` that never resolves for the rest of the call is
+    /// visible here, where a fixed heartbeat would simply go silent
+    /// (indistinguishable from "app suspended").
+    public func room(_ room: Room, didUpdateConnectionState connectionState: ConnectionState, from oldConnectionState: ConnectionState) {
+        emitTelemetry("call.media.sfu_connection_state", [
+            "state": "\(connectionState)",
+            "from": "\(oldConnectionState)"
+        ])
     }
 
     /// W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): the single most
@@ -444,6 +565,7 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         let identity = Self.resolveIdentity(for: trackPublication, in: room)
         let kind = trackPublication.kind == .video ? "video" : "audio"
         print("[GroupCallController][telemetry] e2ee-state identity=\(identity ?? "?") kind=\(kind) state=\(state.toString())")
+        emitTelemetry("call.media.e2ee_state", ["identity": identity ?? "?", "kind": kind, "state": state.toString()])
     }
 
     /// `TrackPublication` does not publicly expose its owning participant
@@ -455,6 +577,89 @@ extension LiveKitGroupCallRoom: RoomDelegate {
             return room.localParticipant.identity?.stringValue ?? "self"
         }
         for (identity, participant) in room.remoteParticipants where participant.trackPublications[publication.sid] != nil {
+            return identity.stringValue
+        }
+        return nil
+    }
+}
+
+extension LiveKitGroupCallRoom: TrackDelegate {
+    /// W-GRPTELEM: the `video.stats`/`call.audio.stats` equivalent of
+    /// `QAudionWebRtcCallController.pollVideoStatsOnce` — see
+    /// `attachStatsReporting`'s kdoc for why this rides the SDK's native
+    /// per-track timer instead of a hand-rolled one. Field names are kept
+    /// close to the 1:1 `video.stats` shape (`out_frames_enc`, `in_bytes`,
+    /// etc.) so a dashboard already built for the 1:1 kind reads these
+    /// with minimal adaptation.
+    public func track(_ track: Track, didUpdateStatistics statistics: TrackStatistics, simulcastStatistics: [VideoCodec: TrackStatistics]) {
+        guard let room = self.room else { return }
+        let identity = Self.resolveIdentity(forTrack: track, in: room) ?? "?"
+        let isLocal = identity == (room.localParticipant.identity?.stringValue ?? "self")
+        switch track.kind {
+        case .video:
+            if isLocal, let out = statistics.outboundRtpStream.first {
+                emitTelemetry("video.stats", [
+                    "identity": identity,
+                    "direction": "out",
+                    "out_frames_enc": Int(out.framesEncoded ?? 0),
+                    "out_key_frames_enc": Int(out.keyFramesEncoded ?? 0),
+                    "out_bytes": Int(out.bytesSent ?? 0),
+                    "out_frame_w": Int(out.frameWidth ?? 0),
+                    "out_frame_h": Int(out.frameHeight ?? 0),
+                    "out_encoder_impl": out.encoderImplementation ?? "?",
+                    "out_quality_limit": out.qualityLimitationReason?.rawValue ?? "?"
+                ])
+            } else if let inb = statistics.inboundRtpStream.first {
+                emitTelemetry("video.stats", [
+                    "identity": identity,
+                    "direction": "in",
+                    "in_frames_dec": Int(inb.framesDecoded ?? 0),
+                    "in_frames_rec": Int(inb.framesReceived ?? 0),
+                    "in_bytes": Int(inb.bytesReceived ?? 0),
+                    "in_frame_w": Int(inb.frameWidth ?? 0),
+                    "in_frame_h": Int(inb.frameHeight ?? 0),
+                    "in_freeze_count": Int(inb.freezeCount ?? 0),
+                    "in_frames_dropped": Int(inb.framesDropped ?? 0),
+                    "in_decoder_impl": inb.decoderImplementation ?? "?"
+                ])
+            }
+        case .audio:
+            if isLocal, let out = statistics.outboundRtpStream.first {
+                emitTelemetry("call.audio.stats", [
+                    "identity": identity,
+                    "direction": "out",
+                    "out_packets_sent": Int(out.packetsSent ?? 0),
+                    "out_bytes": Int(out.bytesSent ?? 0)
+                ])
+            } else if let inb = statistics.inboundRtpStream.first {
+                emitTelemetry("call.audio.stats", [
+                    "identity": identity,
+                    "direction": "in",
+                    "in_packets_received": Int(inb.packetsReceived ?? 0),
+                    "in_packets_lost": Int(inb.packetsLost ?? 0),
+                    "in_jitter": inb.jitter ?? -1,
+                    "in_bytes": Int(inb.bytesReceived ?? 0),
+                    "in_concealed_samples": Int(inb.concealedSamples ?? 0)
+                ])
+            }
+        case .none:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    /// Same rationale as `resolveIdentity(for publication:in:)` above, but
+    /// keyed off the `Track` itself (the `TrackDelegate` callback doesn't
+    /// hand us a `TrackPublication`) — named distinctly (`forTrack:`
+    /// rather than reusing the `for:` label) purely to avoid any reader
+    /// confusion between the two overloads, not because Swift requires it.
+    private static func resolveIdentity(forTrack track: Track, in room: Room) -> String? {
+        if room.localParticipant.trackPublications.values.contains(where: { $0.track === track }) {
+            return room.localParticipant.identity?.stringValue ?? "self"
+        }
+        for (identity, participant) in room.remoteParticipants
+            where participant.trackPublications.values.contains(where: { $0.track === track }) {
             return identity.stringValue
         }
         return nil
@@ -488,10 +693,13 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// Tier-1 layout toggle — stub counterpart of the real class's
     /// same-named property (see this stub's own doc comment above).
     public var onSpeakingParticipantsChanged: ((_ identities: [String]) -> Void)?
+    /// W-GRPTELEM — stub counterpart of the real class's same-named
+    /// property (see this stub's own doc comment above). Never fires here.
+    public var onTelemetry: ((_ kind: String, _ callId: String?, _ attrs: [String: Any]) -> Void)?
 
     public init(video: Bool) { super.init() }
 
-    public func connect(url: String, token: String) async throws {
+    public func connect(url: String, token: String, callId: String) async throws {
         throw LiveKitUnavailableError.notAvailable
     }
 

@@ -2,7 +2,12 @@ import SwiftUI
 import QAudionEngine
 
 /// Group call screen with participant grid and controls.
-/// Max 8 participants in 2-column layout with speaking indicators.
+/// The gallery grid packs participants adaptively (`adaptiveGridLayout`)
+/// rather than a fixed column count — column/row counts and tile size are
+/// recomputed from the live participant count and the real available
+/// space so e.g. 3 participants render as a centered 2x2-with-one-gap
+/// layout at full size instead of a fixed 2-column grid with a dangling
+/// empty half-row. Documented/tested call sizes go up to 8.
 struct GroupCallView: View {
     @ObservedObject var viewModel: GroupCallViewModel
     @Environment(\.dismiss) private var dismiss
@@ -139,47 +144,79 @@ struct GroupCallView: View {
                     .padding(.bottom, 12)
                 }
 
-                // Participant grid
-                ScrollView {
-                    // Item 5 (2026-07-16 wire contract) — speaker-mode
-                    // spotlight: mirrors the pre-existing screen-share
-                    // spotlight tile above (full-width, ABOVE the regular
-                    // grid) rather than restructuring the grid itself, same
-                    // "shared content dominates, faces stay small" policy
-                    // extended to whichever participant the active-speaker
-                    // signal currently names. See `GroupCallViewModel.
-                    // currentSpeakerId`'s kdoc for the SFU-vs-mesh source.
-                    if viewModel.layoutMode == .speaker,
-                       let speakerId = viewModel.currentSpeakerId,
-                       let speaker = viewModel.participants.first(where: { $0.id == speakerId }) {
-                        ParticipantTile(
-                            participant: speaker,
-                            isPinned: true,
-                            isSelf: speaker.id == viewModel.selfUserId,
-                            reactionEmoji: viewModel.latestReactionEmoji(for: speaker.id),
-                            onRequestMute: { viewModel.requestMute(participantId: speaker.id) }
-                        )
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 12)
-                    }
-
-                    LazyVGrid(columns: [
-                        GridItem(.flexible(), spacing: 12),
-                        GridItem(.flexible(), spacing: 12)
-                    ], spacing: 12) {
-                        ForEach(gridParticipants) { participant in
-                            ParticipantTile(
-                                participant: participant,
-                                isSelf: participant.id == viewModel.selfUserId,
-                                reactionEmoji: viewModel.latestReactionEmoji(for: participant.id),
-                                onRequestMute: { viewModel.requestMute(participantId: participant.id) }
-                            )
-                        }
-                    }
+                // Item 5 (2026-07-16 wire contract) — speaker-mode
+                // spotlight: mirrors the pre-existing screen-share
+                // spotlight tile above (full-width, ABOVE the regular
+                // grid) rather than restructuring the grid itself, same
+                // "shared content dominates, faces stay small" policy
+                // extended to whichever participant the active-speaker
+                // signal currently names. Moved out of the (now-removed)
+                // `ScrollView` into this outer `VStack`, alongside the
+                // screen-share spotlight above — same "fixed panel above
+                // the flexible grid" placement; the tile's own rendering
+                // is untouched. See `GroupCallViewModel.currentSpeakerId`'s
+                // kdoc for the SFU-vs-mesh source.
+                if viewModel.layoutMode == .speaker,
+                   let speakerId = viewModel.currentSpeakerId,
+                   let speaker = viewModel.participants.first(where: { $0.id == speakerId }) {
+                    ParticipantTile(
+                        participant: speaker,
+                        isPinned: true,
+                        isSelf: speaker.id == viewModel.selfUserId,
+                        reactionEmoji: viewModel.latestReactionEmoji(for: speaker.id),
+                        onRequestMute: { viewModel.requestMute(participantId: speaker.id) }
+                    )
                     .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
                 }
 
-                Spacer()
+                // Participant grid — ADAPTIVE packing (replaces the old
+                // fixed 2-column `LazyVGrid` inside a `ScrollView`, which
+                // always left half a row empty for e.g. 3 participants —
+                // "tutto lo spazio vuoto e il video in 3 pallini").
+                // `GeometryReader` gives the REAL bounded space this
+                // section occupies (between the fixed header/spotlights
+                // above and the fixed control bar below); `adaptiveGridLayout`
+                // then computes the (cols, rows, tileW, tileH) that
+                // maximizes rendered tile area for the current participant
+                // count, and the `VStack`-of-`HStack`s below renders
+                // exactly that grid, centering a short last row via the
+                // symmetric `Spacer()`s on every row (a full row's own
+                // `Spacer()`s collapse to ~0 since its tiles already span
+                // the row). At the call sizes this app supports
+                // (documented up to 8) everything fits per the algorithm,
+                // so the previous `ScrollView` is no longer needed.
+                // Recomputes automatically on every `body` re-evaluation —
+                // i.e. whenever `gridParticipants` or the container size
+                // changes, since SwiftUI re-renders `body` on `@Published`
+                // changes.
+                GeometryReader { geo in
+                    let layout = Self.adaptiveGridLayout(
+                        count: gridParticipants.count,
+                        width: geo.size.width,
+                        height: geo.size.height
+                    )
+                    let participantRows = gridRows(cols: layout.cols)
+                    VStack(spacing: Self.gridSpacing) {
+                        ForEach(Array(participantRows.enumerated()), id: \.offset) { _, row in
+                            HStack(spacing: Self.gridSpacing) {
+                                Spacer(minLength: 0)
+                                ForEach(row) { participant in
+                                    ParticipantTile(
+                                        participant: participant,
+                                        isSelf: participant.id == viewModel.selfUserId,
+                                        reactionEmoji: viewModel.latestReactionEmoji(for: participant.id),
+                                        onRequestMute: { viewModel.requestMute(participantId: participant.id) },
+                                        tileSize: CGSize(width: layout.tileW, height: layout.tileH)
+                                    )
+                                }
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .padding(.horizontal, 16)
 
                 // Control bar
                 HStack(spacing: 32) {
@@ -424,6 +461,80 @@ struct GroupCallView: View {
         return viewModel.participants.filter { $0.id != speakerId }
     }
 
+    /// Chunks `gridParticipants` into rows of `cols` for the adaptive
+    /// grid's `VStack`-of-`HStack`s render — `LazyVGrid` has no API for
+    /// "N columns, but size every cell to an externally computed
+    /// tileW/tileH and center a short last row", so this manual chunk +
+    /// render replaces it (see `adaptiveGridLayout` below).
+    private func gridRows(cols: Int) -> [[GroupCallViewModel.ParticipantUI]] {
+        guard cols > 0 else { return [] }
+        return stride(from: 0, to: gridParticipants.count, by: cols).map {
+            Array(gridParticipants[$0..<min($0 + cols, gridParticipants.count)])
+        }
+    }
+
+    /// Adaptive gallery grid — result of `adaptiveGridLayout`: render
+    /// exactly `cols` columns x `rows` rows, each tile sized `tileW` x
+    /// `tileH`.
+    private struct AdaptiveGridLayout {
+        let cols: Int
+        let rows: Int
+        let tileW: CGFloat
+        let tileH: CGFloat
+    }
+
+    /// TARGET_ASPECT — matches the existing video aspect convention
+    /// already used on Desktop's `.tile` CSS, kept consistent across all
+    /// 3 platforms per this feature's spec.
+    private static let targetAspect: CGFloat = 16.0 / 9.0
+    private static let gridSpacing: CGFloat = 12
+
+    /// The adaptive video-grid packing algorithm — applied identically
+    /// per spec (this is the exact packing logic, not a suggestion to
+    /// redesign). For every candidate column count from 1 to N, compute
+    /// the resulting row count, the per-cell size, and the largest
+    /// `targetAspect`-conformant tile that fits in that cell — then keep
+    /// whichever (cols, rows) maximizes the rendered tile's area.
+    /// `width`/`height` must be the REAL bounded container size (from
+    /// `GeometryReader`), not an unbounded/scrolling area — see this
+    /// method's call site for why the old `ScrollView` was dropped.
+    /// `gridSpacing` is subtracted from the raw container size before
+    /// dividing into cells — an addition beyond the literal pseudocode,
+    /// needed so N tiles PLUS their inter-tile gaps actually fit inside
+    /// `width`/`height` rather than overflowing it by the total gap
+    /// amount.
+    private static func adaptiveGridLayout(count: Int, width: CGFloat, height: CGFloat) -> AdaptiveGridLayout {
+        guard count > 0, width > 0, height > 0 else {
+            return AdaptiveGridLayout(cols: 1, rows: max(count, 1), tileW: max(width, 0), tileH: max(height, 0))
+        }
+        var best: AdaptiveGridLayout?
+        var bestArea: CGFloat = -1
+        for cols in 1...count {
+            let rows = (count + cols - 1) / cols // ceil(count / cols), integer-only (no Foundation `ceil` needed)
+            let cellW = (width - CGFloat(cols - 1) * gridSpacing) / CGFloat(cols)
+            let cellH = (height - CGFloat(rows - 1) * gridSpacing) / CGFloat(rows)
+            guard cellW > 0, cellH > 0 else { continue }
+            let tileW: CGFloat
+            let tileH: CGFloat
+            if cellW / cellH > targetAspect {
+                tileH = cellH
+                tileW = cellH * targetAspect
+            } else {
+                tileW = cellW
+                tileH = tileW / targetAspect
+            }
+            let area = tileW * tileH
+            if area > bestArea {
+                bestArea = area
+                best = AdaptiveGridLayout(cols: cols, rows: rows, tileW: tileW, tileH: tileH)
+            }
+        }
+        // Only reachable if EVERY candidate's cell math went non-positive
+        // (a container smaller than `gridSpacing` itself) — fall back to
+        // a single column rather than rendering nothing.
+        return best ?? AdaptiveGridLayout(cols: 1, rows: count, tileW: max(width, 1), tileH: max(height / CGFloat(count), 1))
+    }
+
     /// Item 1: the reaction-picker popup content — the wire contract's
     /// fixed 6-emoji set. Tapping one sends it and dismisses the popup;
     /// the sender renders their own reaction optimistically (see
@@ -529,6 +640,15 @@ struct ParticipantTile: View {
     var reactionEmoji: String? = nil
     /// Item 2: invoked from the mute-others context-menu action.
     var onRequestMute: (() -> Void)? = nil
+    /// Adaptive gallery grid (`GroupCallView.adaptiveGridLayout`) — the
+    /// exact (width, height) this tile must render at, computed by the
+    /// packing algorithm so N tiles fill the available screen space with
+    /// no half-empty row. `nil` for every OTHER call site (the speaker-mode
+    /// spotlight tile above, and any preview) — those keep the
+    /// pre-existing fixed-constant sizing (`mediaHeight` below) completely
+    /// untouched via `AdaptiveGridClamp`'s no-op branch, exactly as specced
+    /// ("keep the spotlight panels exactly as they are").
+    var tileSize: CGSize? = nil
 
     var body: some View {
         VStack(spacing: 8) {
@@ -559,7 +679,7 @@ struct ParticipantTile: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: tileHeight)
+            .frame(height: mediaHeight)
             .overlay(
                 RoundedRectangle(cornerRadius: participant.videoTrack != nil ? 12 : 32)
                     .stroke(participant.isSpeaking ? Color(red: 0, green: 0.9, blue: 0.47) : Color.clear, lineWidth: 3)
@@ -617,13 +737,58 @@ struct ParticipantTile: View {
                 }
             }
         }
+        // Adaptive gallery grid — the ONLY new modifier in this whole view;
+        // everything above is byte-for-byte unchanged. A no-op (`content`
+        // passed straight through) whenever `tileSize` is nil, which is
+        // true for every pre-existing call site (the speaker spotlight
+        // above, previews) — see `AdaptiveGridClamp`'s kdoc. Deliberately
+        // LAST in the chain: it clamps the FULLY composed view (padding +
+        // background + cornerRadius already applied) to the packing
+        // algorithm's exact tileW x tileH, which is what the parent
+        // HStack/VStack row math in `GroupCallView.body` depends on to
+        // avoid rows structurally overflowing the available height —
+        // independent of whether this tile's own natural content (video +
+        // label + padding) is a perfect pixel match for that size.
+        .modifier(AdaptiveGridClamp(tileSize: tileSize))
     }
 
     /// Item 5: taller/more prominent sizing for the pinned spotlight tile,
-    /// otherwise identical to the pre-existing per-content-type sizing.
-    private var tileHeight: CGFloat {
+    /// otherwise identical to the pre-existing per-content-type sizing —
+    /// UNLESS the adaptive grid assigned this tile a `tileSize`, in which
+    /// case the media area scales with it (reserving `chromeReserve` for
+    /// the name label / mute icon / padding below) instead of using the
+    /// old fixed constants. Purely cosmetic best-effort sizing — the outer
+    /// `AdaptiveGridClamp` above is what actually guarantees the tile's
+    /// REPORTED size to its parent never exceeds the packing budget, so an
+    /// imperfect estimate here only risks a few points of blank space or
+    /// visual overflow WITHIN this one tile, never a structural row
+    /// overflow.
+    private var mediaHeight: CGFloat {
+        if let tileSize {
+            return max(24, tileSize.height - Self.chromeReserve)
+        }
         if isPinned { return participant.videoTrack != nil ? 220 : 140 }
         return participant.videoTrack != nil ? 120 : 64
+    }
+
+    private static let chromeReserve: CGFloat = 50
+}
+
+/// Adaptive gallery grid — clamps a `ParticipantTile` to an exact size
+/// computed by `GroupCallView.adaptiveGridLayout`, or passes the view
+/// through completely untouched when no size was assigned. Kept as a
+/// standalone `ViewModifier` (rather than an inline `if/else` in
+/// `ParticipantTile.body`) specifically so the `nil` branch is
+/// syntactically guaranteed to be a no-op — there is no risk of the two
+/// branches' modifier chains silently drifting apart over time.
+private struct AdaptiveGridClamp: ViewModifier {
+    let tileSize: CGSize?
+    func body(content: Content) -> some View {
+        if let tileSize {
+            content.frame(width: tileSize.width, height: tileSize.height)
+        } else {
+            content
+        }
     }
 }
 
