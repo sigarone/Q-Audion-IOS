@@ -97,6 +97,12 @@ public final class GroupCallController: @unchecked Sendable {
     /// W-GRPVIDEO: fires with OUR OWN camera track (type-erased, nil ==
     /// camera off) — see `LiveKitGroupCallRoom.onLocalVideoTrack`.
     public var onLocalVideoTrack: ((_ track: AnyObject?) -> Void)?
+    /// W-GRPSCREENSHARE: passthrough of `LiveKitGroupCallRoom.
+    /// onRemoteScreenShareTrack` / `onLocalScreenShareChanged` — see those
+    /// properties' kdoc for the full rationale (separate from the camera
+    /// callbacks above since a participant can publish both at once).
+    public var onRemoteScreenShareTrack: ((_ identity: String, _ track: AnyObject?) -> Void)?
+    public var onLocalScreenShareChanged: ((Bool) -> Void)?
     /// SFU-specific participant presence (independent of `onParticipantsChanged`,
     /// which reflects the WS roster regardless of media transport).
     public var onSfuParticipant: ((_ identity: String, _ present: Bool) -> Void)?
@@ -462,6 +468,8 @@ public final class GroupCallController: @unchecked Sendable {
         room.onRemoteAudioTrack = { [weak self] id, track in self?.onRemoteAudioTrack?(id, track) }
         room.onRemoteVideoTrack = { [weak self] id, track in self?.onRemoteVideoTrack?(id, track) }
         room.onLocalVideoTrack = { [weak self] track in self?.onLocalVideoTrack?(track) }
+        room.onRemoteScreenShareTrack = { [weak self] id, track in self?.onRemoteScreenShareTrack?(id, track) }
+        room.onLocalScreenShareChanged = { [weak self] active in self?.onLocalScreenShareChanged?(active) }
         room.onParticipant = { [weak self] id, present in self?.onSfuParticipant?(id, present) }
         room.onError = { [weak self] err in self?.onSfuError?(err) }
 
@@ -517,6 +525,30 @@ public final class GroupCallController: @unchecked Sendable {
             return true
         } catch {
             print("[GroupCallController] setVideoEnabled(\(enabled)) failed: \(error)")
+            return false
+        }
+    }
+
+    /// W-GRPSCREENSHARE: mid-call screen-share on/off. Same shape as
+    /// `setVideoEnabled` above — no-op unless the call is actually riding
+    /// the LiveKit SFU (the WS-relay mesh fallback has no video/screen-share
+    /// pipeline). Unlike `setVideoEnabled`, a `true` result here does NOT
+    /// mean screen sharing is now live — it only means the underlying SDK
+    /// call didn't throw (which, on the FIRST toggle, just means the system
+    /// broadcast picker was shown — see `LiveKitGroupCallRoom.
+    /// setScreenShareEnabled`'s kdoc). The authoritative live/not-live signal
+    /// is `onLocalScreenShareChanged`, wired above.
+    @discardableResult
+    public func setScreenShareEnabled(_ enabled: Bool) async -> Bool {
+        lock.lock()
+        let room = sfuRoom
+        lock.unlock()
+        guard let room = room else { return false }
+        do {
+            try await room.setScreenShareEnabled(enabled)
+            return true
+        } catch {
+            print("[GroupCallController] setScreenShareEnabled(\(enabled)) failed: \(error)")
             return false
         }
     }

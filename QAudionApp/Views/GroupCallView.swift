@@ -67,6 +67,46 @@ struct GroupCallView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
 
+                // W-GRPSCREENSHARE: spotlight tile for whichever remote
+                // participant is currently sharing their screen — rendered
+                // full-width, ABOVE the regular participant grid, so a
+                // shared screen reads with visual priority over the small
+                // per-participant tiles (mirrors the common Meet/Zoom
+                // pattern: shared content dominates, faces stay small).
+                // Simple, documented policy (no Android UI reference existed
+                // yet to mirror at the time this was written — see this
+                // file's own header for the recon note): if more than one
+                // participant is somehow sharing at once, this shows
+                // whichever one appears FIRST in `participants` — the
+                // control bar toggle only ever lets ONE local share exist at
+                // a time, and the server-side call model doesn't otherwise
+                // arbitrate concurrent shares, so ties are not expected in
+                // practice.
+                if let sharer = viewModel.participants.first(where: { $0.screenShareTrack != nil }),
+                   let screenTrack = sharer.screenShareTrack {
+                    VStack(alignment: .leading, spacing: 6) {
+                        GroupCallVideoView(track: screenTrack)
+                            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                            .frame(maxWidth: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.2), lineWidth: 1))
+                            .overlay(alignment: .topLeading) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "rectangle.on.rectangle")
+                                        .font(.system(size: 11, weight: .bold))
+                                    Text("Schermo di \(sharer.displayName)")
+                                        .font(.caption2).fontWeight(.semibold)
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Capsule().fill(Color.black.opacity(0.55)))
+                                .padding(8)
+                            }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                }
+
                 // Participant grid
                 ScrollView {
                     LazyVGrid(columns: [
@@ -114,6 +154,34 @@ struct GroupCallView: View {
                                 .background(viewModel.isVideoEnabled ? Color.white.opacity(0.15) : Color.red.opacity(0.3))
                                 .clipShape(Circle())
                         }
+                    }
+
+                    // W-GRPSCREENSHARE: screen-share on/off. Same SFU-only
+                    // gating as the camera toggle above — screen share, like
+                    // camera, only exists over the LiveKit SFU transport.
+                    // Tapping this calls straight into `GroupCallController.
+                    // setScreenShareEnabled`, which itself calls LiveKit's
+                    // own `LocalParticipant.setScreenShare(enabled:)` — that
+                    // SDK call is what shows the SYSTEM broadcast picker
+                    // (`RPSystemBroadcastPickerView`, via `BroadcastManager.
+                    // shared.requestActivation()`) when starting; there is no
+                    // custom in-app permission flow to build here (see
+                    // `LiveKitGroupCallRoom.setScreenShareEnabled`'s kdoc for
+                    // the verified source trail).
+                    if viewModel.isSfuActive {
+                        Button {
+                            viewModel.toggleScreenShare()
+                        } label: {
+                            Image(systemName: viewModel.isScreenSharing
+                                  ? "rectangle.on.rectangle.circle.fill"
+                                  : "rectangle.on.rectangle")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .frame(width: 56, height: 56)
+                                .background(viewModel.isScreenSharing ? Color.blue.opacity(0.35) : Color.white.opacity(0.15))
+                                .clipShape(Circle())
+                        }
+                        .accessibilityLabel(viewModel.isScreenSharing ? "Interrompi condivisione schermo" : "Condividi schermo")
                     }
 
                     // In-call chat + attachments panel toggle — same
@@ -328,6 +396,19 @@ struct ParticipantTile: View {
                 RoundedRectangle(cornerRadius: participant.videoTrack != nil ? 12 : 32)
                     .stroke(participant.isSpeaking ? Color(red: 0, green: 0.9, blue: 0.47) : Color.clear, lineWidth: 3)
             )
+            // W-GRPSCREENSHARE: small badge marking WHO is sharing, visible
+            // even while looking at the regular grid (the big spotlight
+            // tile above only shows the shared content itself, not whose
+            // tile it came from at a glance while scrolling).
+            .overlay(alignment: .bottomTrailing) {
+                if participant.screenShareTrack != nil {
+                    Image(systemName: "rectangle.on.rectangle")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(5)
+                        .background(Circle().fill(Color.blue.opacity(0.85)))
+                }
+            }
 
             Text(participant.displayName)
                 .font(.caption).foregroundColor(.white)
@@ -358,6 +439,12 @@ class GroupCallViewModel: ObservableObject {
         /// SFU subscribes this participant's camera; cleared again on
         /// participant departure. Rendered via `GroupCallVideoView`.
         var videoTrack: AnyObject? = nil
+        /// W-GRPSCREENSHARE: type-erased `RemoteVideoTrack` for this
+        /// participant's SCREEN-SHARE publication — kept SEPARATE from
+        /// `videoTrack` (camera) since a participant can publish both at
+        /// once (see `GroupCallController.onRemoteScreenShareTrack`'s
+        /// kdoc). Nil until subscribed / after unsubscribe.
+        var screenShareTrack: AnyObject? = nil
     }
 
     @Published var participants: [ParticipantUI] = []
@@ -376,6 +463,15 @@ class GroupCallViewModel: ObservableObject {
     /// gates the camera-toggle button (the WS-relay mesh fallback has no
     /// video pipeline).
     @Published var isSfuActive = false
+    /// W-GRPSCREENSHARE: whether OUR OWN screen share is actually live right
+    /// now. Deliberately NOT flipped optimistically by `toggleScreenShare()`
+    /// — the real transition is asynchronous (system broadcast picker +
+    /// the user actually starting the recording, both outside this app's
+    /// control) and this is driven authoritatively by
+    /// `GroupCallController.onLocalScreenShareChanged`. See that property's
+    /// kdoc chain down to `LiveKitGroupCallRoom.setScreenShareEnabled` for
+    /// the full mechanism.
+    @Published var isScreenSharing = false
     /// In-call chat panel — the persisted-group id (DASHED UUID, server wire
     /// form) this ACTIVE call is associated with, or "" for an ad-hoc group
     /// call started from the contact picker with no persisted group behind
@@ -461,10 +557,14 @@ class GroupCallViewModel: ObservableObject {
                 // roster updates (join/leave of ANY member re-sends the
                 // full list).
                 let existingTracks = Dictionary(uniqueKeysWithValues: self.participants.map { ($0.id, $0.videoTrack) })
+                // W-GRPSCREENSHARE: same preserve-across-refresh rationale as
+                // `existingTracks` above, for the separate screen-share slot.
+                let existingScreenShareTracks = Dictionary(uniqueKeysWithValues: self.participants.map { ($0.id, $0.screenShareTrack) })
                 self.participants = list.map {
                     ParticipantUI(id: $0.id, displayName: $0.displayName,
                                   isMuted: $0.isMuted, isSpeaking: $0.isSpeaking,
-                                  videoTrack: existingTracks[$0.id] ?? nil)
+                                  videoTrack: existingTracks[$0.id] ?? nil,
+                                  screenShareTrack: existingScreenShareTracks[$0.id] ?? nil)
                 }
             }
         }
@@ -504,7 +604,20 @@ class GroupCallViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self = self, let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
                     self.participants[idx].videoTrack = nil
+                    self.participants[idx].screenShareTrack = nil
                 }
+            }
+            // W-GRPSCREENSHARE: same "bind once, here" pattern as
+            // `onRemoteVideoTrack`/`onLocalVideoTrack` above — see
+            // `GroupCallController.onRemoteScreenShareTrack`'s kdoc.
+            controller.onRemoteScreenShareTrack = { [weak self] identity, track in
+                DispatchQueue.main.async {
+                    guard let self = self, let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
+                    self.participants[idx].screenShareTrack = track
+                }
+            }
+            controller.onLocalScreenShareChanged = { [weak self] active in
+                DispatchQueue.main.async { self?.isScreenSharing = active }
             }
         } else {
             manager.onStateChanged = onState
@@ -532,6 +645,21 @@ class GroupCallViewModel: ObservableObject {
             if !ok {
                 await MainActor.run { self?.isVideoEnabled = !target }
             }
+        }
+    }
+
+    /// W-GRPSCREENSHARE: toggle screen sharing. Unlike `toggleVideo()`, this
+    /// does NOT optimistically flip `isScreenSharing` first — the real
+    /// transition is asynchronous and outside this call's control (system
+    /// broadcast picker, then the user actually starting the recording), so
+    /// flipping the UI here would show "sharing" the instant the button is
+    /// tapped even though nothing has started yet. `isScreenSharing` is
+    /// driven authoritatively by `onLocalScreenShareChanged` (wired above).
+    func toggleScreenShare() {
+        guard let controller = controller else { return }
+        let target = !isScreenSharing
+        Task {
+            _ = await controller.setScreenShareEnabled(target)
         }
     }
 

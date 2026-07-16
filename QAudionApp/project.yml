@@ -24,6 +24,22 @@ packages:
   WireGuardKit:
     url: https://github.com/sigarone/wireguard-apple
     from: "1.0.18"
+  # LiveKit client SDK, declared a SECOND time here (same URL + exact tag as
+  # QAudionEngine/Package.swift's own `client-sdk-swift` dependency) so
+  # QAudionBroadcastExtension can link the `LiveKit` product DIRECTLY,
+  # bypassing QAudionEngine's product. QAudionEngine's product statically
+  # bundles onnxruntime, GRDB, CLiboqs (mlkem-native), COpus, and the main
+  # (H265/AES-256) WebRTC binary as PRIVATE dependencies of its own target;
+  # linking that whole graph into a ReplayKit broadcast-upload extension
+  # (~50MB RSS budget before iOS kills it) would be reckless. Pinned to the
+  # IDENTICAL exact tag QAudionEngine already resolves so SPM's package graph
+  # collapses this to a single checkout (same diamond-dependency pattern as
+  # any two targets sharing one external package at a compatible version).
+  # NOT independently verified in an actual Xcode resolve (no local
+  # toolchain this stage); flagged as a residual build-verification risk.
+  LiveKitBroadcast:
+    url: https://github.com/sigarone/client-sdk-swift.git
+    exact: "2.13.0-aes256-livekit"
 
 targets:
   QAudionApp:
@@ -121,6 +137,9 @@ targets:
       - sdk: NetworkExtension.framework
       # VPN: embed the packet tunnel extension into the app bundle.
       - target: QAudionPacketTunnel
+        embed: true
+      # Screen/window share: embed the ReplayKit broadcast upload extension.
+      - target: QAudionBroadcastExtension
         embed: true
     resources:
       - path: Assets.xcassets
@@ -259,3 +278,43 @@ targets:
           echo "  Go: $(go version)"
 
           make -C "$WG_GO_SRC" build
+
+  # ------------------------------------------------------------------ #
+  # QAudionBroadcastExtension - ReplayKit Broadcast Upload Extension    #
+  # Separate OS-launched process (RPBroadcastSampleHandler); relays     #
+  # captured screen/audio samples to the main app over a Unix-domain    #
+  # socket (LiveKit's own Broadcast IPC, App-Group-container-relative,  #
+  # see BroadcastBundleInfo.swift) for group-call screen sharing via    #
+  # LiveKit's BroadcastScreenCapturer.                                  #
+  # Bundle: com.qaudion.app.broadcast                                   #
+  # ------------------------------------------------------------------ #
+  QAudionBroadcastExtension:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../QAudionBroadcastExtension
+    settings:
+      base:
+        INFOPLIST_FILE: ../QAudionBroadcastExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../QAudionBroadcastExtension/QAudionBroadcastExtension.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app.broadcast
+        PRODUCT_NAME: QAudionBroadcastExtension
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: 5G22P9239N
+        CODE_SIGN_STYLE: Automatic
+        # Extension-only: suppress "main" entry point and standard library
+        # linking that the OS handles for extensions.
+        SKIP_INSTALL: YES
+    dependencies:
+      # Direct dependency on client-sdk-swift's `LiveKit` product ONLY;
+      # deliberately NOT `package: QAudionEngine` (see the LiveKitBroadcast
+      # package comment above for why: this process has a tight ReplayKit
+      # memory ceiling and must not link onnxruntime/GRDB/CLiboqs/COpus/the
+      # main WebRTC binary). `SampleHandler.swift` subclasses LiveKit's
+      # `LKSampleHandler` (Sources/LiveKit/Broadcast/LKSampleHandler.swift),
+      # which is part of this single product (LiveKit's Package.swift has
+      # no separate "Broadcast" target/product; confirmed by reading the
+      # actual manifest, not assumed).
+      - package: LiveKitBroadcast
+        product: LiveKit

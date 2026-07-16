@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Group shared with the main QAudionApp target, dedicated to
+	     screen-share IPC (LiveKit BroadcastUploader/BroadcastReceiver socket).
+	     Deliberately SEPARATE from the VPN group (group.com.bcrypto.qaudion.vpn)
+	     to match this project's per-feature App Group convention. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.bcrypto.qaudion.broadcast</string>
+	</array>
+</dict>
+</plist>

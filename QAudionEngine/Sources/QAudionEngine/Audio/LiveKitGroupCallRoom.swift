@@ -66,6 +66,24 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// self-preview tile). See the class doc comment for why this is
     /// type-erased to `AnyObject` rather than exposing `LocalVideoTrack`.
     public var onLocalVideoTrack: ((_ track: AnyObject?) -> Void)?
+    /// W-GRPSCREENSHARE: a remote participant's SCREEN-SHARE track was
+    /// subscribed (non-nil) or unsubscribed (nil). Deliberately SEPARATE
+    /// from `onRemoteVideoTrack` — mirrors Android's `GroupCallRoom.
+    /// Callbacks.onRemoteScreenShareTrack` (same rationale there: a
+    /// participant can publish a camera track AND a screen-share track at
+    /// the same time — two independent `Track.Source` values — so routing
+    /// both through one `identity -> track` slot would silently drop
+    /// whichever published second). See the `RoomDelegate` conformance
+    /// below for how this is split off `onRemoteVideoTrack`.
+    public var onRemoteScreenShareTrack: ((_ identity: String, _ track: AnyObject?) -> Void)?
+    /// W-GRPSCREENSHARE: fires as OUR OWN screen-share track publishes
+    /// (`true`) / unpublishes (`false`) — driven by the SDK's own
+    /// ReplayKit-broadcast-lifecycle plumbing (see `setScreenShareEnabled`'s
+    /// kdoc), NOT by this class synchronously deciding it. No self-preview
+    /// tile is rendered off this signal — showing your own shared screen
+    /// back to yourself inside itself is not useful UX — the app layer
+    /// uses it purely to reconcile the toggle button state.
+    public var onLocalScreenShareChanged: ((Bool) -> Void)?
     public var onParticipant: ((_ identity: String, _ present: Bool) -> Void)?
     public var onError: ((Error) -> Void)?
 
@@ -204,6 +222,63 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         onLocalVideoTrack?(enabled ? room.localParticipant.firstCameraVideoTrack : nil)
     }
 
+    /// W-GRPSCREENSHARE: mid-call screen-share on/off.
+    ///
+    /// `enabled=true` calls the SDK's own `LocalParticipant.setScreenShare
+    /// (enabled:)` directly — verified against the actual fork source
+    /// (`Participant/LocalParticipant.swift`), not assumed:
+    ///   - `setScreenShare(enabled:)` is `try await set(source: .screenShareVideo,
+    ///     enabled: true)`.
+    ///   - On iOS, `set(source:enabled:)`'s `.screenShareVideo` branch checks
+    ///     `defaultScreenShareCaptureOptions.useBroadcastExtension`, which
+    ///     defaults to `BroadcastBundleInfo.hasExtension` — `true` once our
+    ///     `RTCAppGroupIdentifier`/`RTCScreenSharingExtension` Info.plist
+    ///     overrides resolve to a real App-Group container (see
+    ///     `QAudionBroadcastExtension`'s wiring) — so no custom `RoomOptions`
+    ///     override is needed here.
+    ///   - When `useBroadcastExtension` is true and `BroadcastManager.shared.
+    ///     isBroadcasting` is NOT yet true, this branch itself calls
+    ///     `BroadcastManager.shared.requestActivation()` (shows the SYSTEM
+    ///     `RPSystemBroadcastPickerView`) and returns `nil` — so this method
+    ///     deliberately does NOT invoke the picker itself; the SDK already
+    ///     owns that UI, and inventing a second picker call site here would
+    ///     just double-show it.
+    ///   - The REAL publish happens asynchronously, later, once the user
+    ///     actually starts the broadcast from the system picker:
+    ///     `LocalParticipant`'s own `init` subscribes to `BroadcastManager.
+    ///     shared.isBroadcastingPublisher` and re-invokes `setScreenShare
+    ///     (enabled: true)` itself at that point (confirmed in the same
+    ///     file). That second, SDK-internal call is what actually creates
+    ///     the `BroadcastScreenCapturerTrack` and publishes it — this
+    ///     method's own `try await` only covers the FIRST call (picker
+    ///     request), so a caller must not treat this call's return as
+    ///     "screen share is now live". `onLocalScreenShareChanged` /
+    ///     `onRemoteScreenShareTrack` (via the `didPublishTrack`/
+    ///     `didUnpublishTrack` `RoomDelegate` hooks below) are the actual
+    ///     source of truth for that.
+    ///
+    /// `enabled=false` unpublishes the track (`setScreenShare(enabled:
+    /// false)` — this hits the `else { unpublish(publication:) }` branch of
+    /// `set(source:enabled:)` since `.screenShareVideo` is neither `.camera`
+    /// nor `.microphone`) AND explicitly calls `BroadcastManager.shared.
+    /// requestStop()`. Both are required: unpublishing alone does NOT stop
+    /// the underlying ReplayKit recording — `LKSampleHandler` (the broadcast
+    /// extension process) only tears itself down when it receives the
+    /// `.broadcastRequestStop` Darwin notification (confirmed by reading
+    /// that file's actual `init`, not assumed); without calling
+    /// `requestStop()` here, the system status-bar recording indicator and
+    /// the extension process would keep running after the room-side track
+    /// is gone.
+    public func setScreenShareEnabled(_ enabled: Bool) async throws {
+        guard let room = room else { return }
+        if enabled {
+            _ = try await room.localParticipant.setScreenShare(enabled: true)
+        } else {
+            _ = try await room.localParticipant.setScreenShare(enabled: false)
+            BroadcastManager.shared.requestStop()
+        }
+    }
+
     /// Apply a media-key update. `graceMs` (only ever set for our own key
     /// after a member leave) delays application so in-flight frames still
     /// decrypt under the previous slot until we flip.
@@ -245,9 +320,52 @@ extension LiveKitGroupCallRoom: RoomDelegate {
             print("[GroupCallController][telemetry] remote audio track subscribed identity=\(identity)")
             onRemoteAudioTrack?(identity, audioTrack)
         } else if let videoTrack = publication.track as? RemoteVideoTrack {
-            print("[GroupCallController][telemetry] remote video track subscribed identity=\(identity)")
-            onRemoteVideoTrack?(identity, videoTrack)
+            // W-GRPSCREENSHARE: a participant can publish a camera track AND
+            // a screen-share track simultaneously (two independent
+            // `Track.Source` values) — split on `publication.source` and
+            // route each to its OWN callback, mirroring Android's identical
+            // split in `GroupCallRoom.wireEvents`'s `TrackSubscribed`
+            // handling. Routing both through `onRemoteVideoTrack` would
+            // silently drop whichever published second.
+            if publication.source == .screenShareVideo {
+                print("[GroupCallController][telemetry] remote screen-share track subscribed identity=\(identity)")
+                onRemoteScreenShareTrack?(identity, videoTrack)
+            } else {
+                print("[GroupCallController][telemetry] remote video track subscribed identity=\(identity)")
+                onRemoteVideoTrack?(identity, videoTrack)
+            }
         }
+    }
+
+    /// W-GRPSCREENSHARE: only the screen-share case is handled here (clears
+    /// the tile on unsubscribe) — mirrors Android's identical split in
+    /// `GroupCallRoom.wireEvents`'s `TrackUnsubscribed` handling. Camera-
+    /// track unsubscribe (a peer turning their camera off while remaining in
+    /// the call) has no handler in this file either, before or after this
+    /// change — today's `onSfuParticipant` only clears a tile on full
+    /// participant DEPARTURE, not on camera-off. That is a separate,
+    /// PRE-EXISTING gap, out of this change's scope — not fixed here to
+    /// avoid touching unrelated behavior.
+    public func room(_ room: Room, participant: RemoteParticipant, didUnsubscribeTrack publication: RemoteTrackPublication) {
+        guard publication.source == .screenShareVideo else { return }
+        let identity = participant.identity?.stringValue ?? ""
+        print("[GroupCallController][telemetry] remote screen-share track unsubscribed identity=\(identity)")
+        onRemoteScreenShareTrack?(identity, nil)
+    }
+
+    /// W-GRPSCREENSHARE: OUR OWN screen-share track publish/unpublish —
+    /// see `onLocalScreenShareChanged`'s kdoc for why this is the actual
+    /// source of truth (not `setScreenShareEnabled`'s own return).
+    public func room(_ room: Room, participant: LocalParticipant, didPublishTrack publication: LocalTrackPublication) {
+        guard publication.source == .screenShareVideo else { return }
+        print("[GroupCallController][telemetry] local screen-share track published")
+        onLocalScreenShareChanged?(true)
+    }
+
+    public func room(_ room: Room, participant: LocalParticipant, didUnpublishTrack publication: LocalTrackPublication) {
+        guard publication.source == .screenShareVideo else { return }
+        print("[GroupCallController][telemetry] local screen-share track unpublished")
+        onLocalScreenShareChanged?(false)
     }
 
     public func room(_ room: Room, participant: RemoteParticipant, didFailToSubscribeTrackWithSid trackSid: Track.Sid, error: LiveKitError) {
@@ -327,6 +445,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public var onRemoteAudioTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
     public var onRemoteVideoTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
     public var onLocalVideoTrack: ((_ track: AnyObject?) -> Void)?
+    /// W-GRPSCREENSHARE: stub counterpart of the real class's same-named
+    /// property — kept so `GroupCallController` compiles identically in
+    /// both build configurations (see this stub's own doc comment above).
+    public var onRemoteScreenShareTrack: ((_ identity: String, _ track: AnyObject?) -> Void)?
+    public var onLocalScreenShareChanged: ((Bool) -> Void)?
     public var onParticipant: ((_ identity: String, _ present: Bool) -> Void)?
     public var onError: ((Error) -> Void)?
 
@@ -339,6 +462,10 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public func applyKey(_ key: GroupMediaKey) { /* no-op */ }
 
     public func setCameraEnabled(_ enabled: Bool) async throws {
+        throw LiveKitUnavailableError.notAvailable
+    }
+
+    public func setScreenShareEnabled(_ enabled: Bool) async throws {
         throw LiveKitUnavailableError.notAvailable
     }
 

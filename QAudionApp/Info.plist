@@ -70,6 +70,20 @@
 	<array>
 		<string>com.bcrypto.qaudion.ws-keepalive</string>
 	</array>
+	<!-- LiveKit screen-share (ReplayKit broadcast upload extension): override
+	     BroadcastBundleInfo's bundle-id-derived defaults because this app's
+	     bundle id (com.qaudion.app) doesn't share the "com.bcrypto.qaudion.*"
+	     prefix this project's App Groups use. Both keys are read via
+	     Bundle.main.infoDictionary, see client-sdk-swift
+	     Sources/LiveKit/Broadcast/BroadcastBundleInfo.swift.
+	     RTCAppGroupIdentifier is ALSO set (identical value) in
+	     QAudionBroadcastExtension/Info.plist: each process (main app vs.
+	     extension) reads its OWN Bundle.main, so the override must be present
+	     on BOTH sides or the IPC socket path diverges between them. -->
+	<key>RTCAppGroupIdentifier</key>
+	<string>group.com.bcrypto.qaudion.broadcast</string>
+	<key>RTCScreenSharingExtension</key>
+	<string>com.qaudion.app.broadcast</string>
 	<!--
 	  Export Compliance - required by Apple to skip the manual
 	  "Provide Export Compliance Information" prompt in TestFlight.

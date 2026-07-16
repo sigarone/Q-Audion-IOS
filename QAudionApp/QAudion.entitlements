@@ -8,10 +8,14 @@
 	</array>
 	<key>aps-environment</key>
 	<string>production</string>
-	<!-- VPN: App Group shared with QAudionPacketTunnel extension -->
+	<!-- App Groups: one entry per feature-scoped extension.
+	     - group.com.bcrypto.qaudion.vpn: shared with QAudionPacketTunnel
+	     - group.com.bcrypto.qaudion.broadcast: shared with QAudionBroadcastExtension
+	       (LiveKit ReplayKit screen-share IPC) -->
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.com.bcrypto.qaudion.vpn</string>
+		<string>group.com.bcrypto.qaudion.broadcast</string>
 	</array>
 	<!-- VPN: Network Extension capability (packet tunnel manager side) -->
 	<key>com.apple.developer.networking.networkextension</key>
