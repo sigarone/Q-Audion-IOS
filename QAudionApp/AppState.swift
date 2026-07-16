@@ -518,6 +518,13 @@ final class AppState: ObservableObject {
     /// always fall back to `join(callId:)`'s `video: false` default even
     /// when the invite was a video call.
     var pendingGroupCallJoinVideo: Bool = false
+    /// In-call chat panel — the latched invite's `groupId` (dashed UUID,
+    /// "" for an ad-hoc call), set alongside `pendingGroupCallJoinId` so
+    /// the cold-start path can still bind `GroupCallViewModel.activeGroupId`
+    /// once the controller exists (see the consumption site in
+    /// `wireGroupCallManager`/`connectPersistentSocket`, mirroring how
+    /// `pendingGroupCallJoinVideo` is threaded through the same latch).
+    var pendingGroupCallJoinGroupId: String = ""
     /// W391: live video pipeline for the active 1:1 video call.
     /// Created in startCall(video:true), stopped in endCall. Held by
     /// AppState (not by the View) so SwiftUI re-creation doesn't tear
@@ -2426,7 +2433,13 @@ final class AppState: ObservableObject {
                 self.pendingGroupCallJoinId = nil
                 let pendingVideo = self.pendingGroupCallJoinVideo
                 self.pendingGroupCallJoinVideo = false
+                let pendingGroupId = self.pendingGroupCallJoinGroupId
+                self.pendingGroupCallJoinGroupId = ""
                 print("[AppState] W-GRPRING consuming latched group-call join \(pendingJoin.prefix(8))…")
+                // In-call chat panel — bind before join so the panel's
+                // group binding is ready the moment the call surfaces
+                // (mirrors the non-cold-start bind order below).
+                self.groupCallViewModel?.bindGroupId(pendingGroupId)
                 groupController.join(callId: pendingJoin, video: pendingVideo)
             }
         }
@@ -11136,6 +11149,9 @@ extension AppState {
             // push woke us. Latch; `connectPersistentSocket()` consumes it.
             pendingGroupCallJoinId = invite.callId
             pendingGroupCallJoinVideo = invite.hasVideo
+            // In-call chat panel — latch the group id too (see
+            // `pendingGroupCallJoinGroupId` kdoc); "" for an ad-hoc call.
+            pendingGroupCallJoinGroupId = invite.groupId
             print("[AppState] W-GRPRING accept latched (no controller yet) call=\(invite.callId.prefix(8))…")
             return
         }
@@ -11148,6 +11164,10 @@ extension AppState {
         // presentation). The controller's own emission moments later carries the
         // identical value, so this is a no-op then.
         groupCallControllerState = .connecting(callId: invite.callId)
+        // In-call chat panel — bind the persisted-group id (if any) BEFORE
+        // join, same reasoning as the cold-start branch above: the panel's
+        // binding must already be in place by the time the call UI appears.
+        groupCallViewModel?.bindGroupId(invite.groupId)
         // The SAME join path as before: single source of truth for the WS
         // `group_call_join` AND the GroupSession crypto bootstrap.
         controller.join(callId: invite.callId, video: invite.hasVideo)

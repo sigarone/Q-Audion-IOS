@@ -515,14 +515,20 @@ struct GroupChatScreen: View {
             return
         }
         let name = state.name
+        let dashedGroupId = groupId.uuidString.lowercased()
         let created = appState.groupCallController?.createCall(
             invitees: invitees,
             title: name,
             callType: video ? "video" : "audio",
-            groupId: groupId.uuidString.lowercased(),  // dashed UUID == server wire id
+            groupId: dashedGroupId,  // dashed UUID == server wire id
             groupName: name)
         if created == nil {
             snackbar?.show(.init(text: "Chiamata di gruppo non disponibile ora", severity: .error))
+        } else {
+            // In-call chat panel — bind this call to its persisted group so
+            // `GroupCallView`'s chat panel knows which group's messages/
+            // roster to use (see `GroupCallViewModel.activeGroupId` kdoc).
+            appState.groupCallViewModel?.bindGroupId(dashedGroupId)
         }
     }
 
@@ -891,7 +897,10 @@ struct GroupChatScreen: View {
 
 // MARK: - GroupMessageBubble
 
-private struct GroupMessageBubble: View {
+/// Internal (not `private`) so `GroupCallChatPanel` (the in-call chat
+/// panel) can reuse this EXACT bubble rendering rather than duplicating it —
+/// pure access-level change, no behavior change.
+struct GroupMessageBubble: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type

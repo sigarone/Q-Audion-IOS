@@ -22,6 +22,20 @@ struct GroupCallView: View {
     /// (mirrors `InCallScreen.showSecuritySheet` exactly).
     @State private var showSecuritySheet = false
 
+    /// In-call chat + attachments panel — same "icon toggle -> dismissible
+    /// sheet" mechanism as `showSecuritySheet` above, reused verbatim for a
+    /// new "chat" icon in the control row (see `GroupCallChatPanel.swift`).
+    @State private var showChatPanel = false
+    /// Badge shown on the chat toggle icon while the panel is CLOSED,
+    /// mirroring the existing group-chat-list unread badge
+    /// (`GroupMessageStore.unreadCount(forGroupHex:)` — see
+    /// `ChatListScreen`'s identical `Capsule`-badge use of that same call).
+    /// Refreshed on appear and on every `GroupMessageStore.didChangeNotification`
+    /// for this call's group; cleared to 0 whenever the panel is open (the
+    /// panel itself calls `GroupMessageStore.shared.markRead`, same as
+    /// `GroupChatScreen.onAppear`/`reloadMessagesFromStore`).
+    @State private var chatUnreadCount = 0
+
     var body: some View {
         ZStack {
             Color(red: 0.05, green: 0.07, blue: 0.12).ignoresSafeArea()
@@ -102,6 +116,40 @@ struct GroupCallView: View {
                         }
                     }
 
+                    // In-call chat + attachments panel toggle — same
+                    // icon-toggle -> dismissible-sheet mechanism as the
+                    // security shield button in `groupTrustBar` above,
+                    // reused here per the control-row placement this
+                    // feature was specced against (rather than the trust
+                    // bar, which is reserved for always-visible crypto
+                    // chips). Disabled placement decision: kept enabled
+                    // even for an ad-hoc call with no persisted group —
+                    // `GroupCallChatPanel` itself renders the "unavailable"
+                    // explanation in that case rather than hiding the
+                    // entry point (so the user isn't left wondering why a
+                    // control silently vanished).
+                    Button {
+                        showChatPanel = true
+                    } label: {
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .frame(width: 56, height: 56)
+                            .background(Color.white.opacity(0.15))
+                            .clipShape(Circle())
+                            .overlay(alignment: .topTrailing) {
+                                if chatUnreadCount > 0 {
+                                    Text(chatUnreadCount > 99 ? "99+" : "\(chatUnreadCount)")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 5).padding(.vertical, 2)
+                                        .background(Capsule().fill(Color.red))
+                                        .offset(x: 6, y: -4)
+                                }
+                            }
+                    }
+                    .accessibilityLabel("Chat di gruppo")
+
                     // End call button
                     Button {
                         viewModel.endCall()
@@ -146,6 +194,45 @@ struct GroupCallView: View {
                 onDismiss: { showSecuritySheet = false }
             )
         }
+        // In-call chat + attachments panel — same system-sheet mechanism as
+        // the security sheet above (native drag-to-dismiss, never a custom
+        // overlay that could get stuck covering the video).
+        .sheet(isPresented: $showChatPanel) {
+            GroupCallChatPanel(
+                groupIdDashed: viewModel.activeGroupId,
+                onDismiss: { showChatPanel = false }
+            )
+            .onDisappear { refreshChatUnreadCount() }
+        }
+        .onAppear { refreshChatUnreadCount() }
+        // Defensive: `activeGroupId` is normally already bound by the time
+        // this view appears (both AppState bind sites run synchronously
+        // before the call surface presents — see `GroupCallViewModel.
+        // activeGroupId`'s kdoc), but re-checking on every change costs
+        // nothing and guards against any future reordering.
+        .onChange(of: viewModel.activeGroupId) { _ in refreshChatUnreadCount() }
+        // Badge upkeep — mirrors `ChatListScreen`'s reactive unread badge,
+        // driven off the SAME `GroupMessageStore.didChangeNotification` the
+        // list screen and `GroupChatScreen` both already observe. Fires
+        // regardless of which screen is on top (the receive path in
+        // AppState is view-independent — see `GroupCallChatPanel`'s header
+        // comment) so a message that arrives while this call is on screen
+        // but the panel is closed still bumps the badge live.
+        .onReceive(NotificationCenter.default.publisher(
+            for: GroupMessageStore.didChangeNotification)) { note in
+            guard (note.userInfo?["groupHex"] as? String) == viewModel.activeGroupHex else { return }
+            refreshChatUnreadCount()
+        }
+    }
+
+    /// While the panel is open it owns read-marking itself (mirrors
+    /// `GroupChatScreen.reloadMessagesFromStore`'s `markRead` call), so the
+    /// toggle badge stays at 0 during that time rather than racing the
+    /// panel's own reload.
+    private func refreshChatUnreadCount() {
+        guard !viewModel.activeGroupHex.isEmpty else { chatUnreadCount = 0; return }
+        chatUnreadCount = showChatPanel ? 0
+            : GroupMessageStore.shared.unreadCount(forGroupHex: viewModel.activeGroupHex)
     }
 
     /// Unified call UI (group-call adaptation) — same "chip row ending in
@@ -289,6 +376,33 @@ class GroupCallViewModel: ObservableObject {
     /// gates the camera-toggle button (the WS-relay mesh fallback has no
     /// video pipeline).
     @Published var isSfuActive = false
+    /// In-call chat panel — the persisted-group id (DASHED UUID, server wire
+    /// form) this ACTIVE call is associated with, or "" for an ad-hoc group
+    /// call started from the contact picker with no persisted group behind
+    /// it (see `BCryptoGroupCallManager.IncomingGroupInvite.groupId` kdoc —
+    /// that field is already documented as "empty for an ad-hoc call").
+    ///
+    /// Neither `BCryptoGroupCallManager` nor `GroupCallController` retain
+    /// this anywhere for the lifetime of a call (the crypto/audio layers
+    /// only ever need `callId`, a distinct concept — see the "groupId
+    /// mismatch" ctrl-envelope check in `GroupCallController`, which is
+    /// about the call's own crypto domain, NOT this persisted-chat-group
+    /// id). So AppState binds it here explicitly at the two points the
+    /// value is actually known: `GroupChatScreen.handleStartGroupCall`
+    /// (caller, already has `groupId: UUID`) and
+    /// `AppState.performAcceptIncomingGroupCall` (callee, from
+    /// `incomingGroupCallInvite.groupId` before it's cleared). Reset to ""
+    /// on `.ended` below, mirroring how `participants`/`selfVideoTrack`
+    /// already reset per-call state.
+    @Published private(set) var activeGroupId: String = ""
+    /// Hex form (dashes stripped, lowercase) — the key space
+    /// `GroupMessageStore`/`GroupRegistry`/`GroupChatService` all use.
+    var activeGroupHex: String {
+        activeGroupId.isEmpty ? "" : activeGroupId.replacingOccurrences(of: "-", with: "").lowercased()
+    }
+    func bindGroupId(_ dashedGroupId: String) {
+        activeGroupId = dashedGroupId
+    }
     /// Unified call UI (group security sheet) — server-canonical
     /// sender-key epoch, plain passthrough of
     /// `BCryptoGroupCallManager.senderKeyEpoch` (already thread-safe via
@@ -330,7 +444,13 @@ class GroupCallViewModel: ObservableObject {
                 }
             }
             if state == .active { self?.startTimer() }
-            if state == .ended { self?.timer?.invalidate() }
+            if state == .ended {
+                self?.timer?.invalidate()
+                // In-call chat panel — clear the previous call's group
+                // binding so a subsequent, different call (this ViewModel
+                // is long-lived across calls) doesn't leak the old one.
+                self?.activeGroupId = ""
+            }
         }
         let onParticipants: ([BCryptoGroupCallManager.Participant]) -> Void = { [weak self] list in
             DispatchQueue.main.async {
