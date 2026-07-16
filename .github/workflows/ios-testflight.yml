@@ -469,13 +469,13 @@ jobs:
 
             echo "Enabling APP_GROUPS on $EXT_BID_RES..."
             app-store-connect bundle-ids enable-capabilities \
-              "$EXT_BID_RES" --capability APP_GROUPS 2>&1 \
+              "$EXT_BID_RES" --capability "App Groups" 2>&1 \
               && echo "  APP_GROUPS: done" \
               || echo "  APP_GROUPS: WARN (may already be enabled)"
 
             echo "Enabling NETWORK_EXTENSIONS on $EXT_BID_RES..."
             app-store-connect bundle-ids enable-capabilities \
-              "$EXT_BID_RES" --capability NETWORK_EXTENSIONS 2>&1 \
+              "$EXT_BID_RES" --capability "Network Extensions" 2>&1 \
               && echo "  NETWORK_EXTENSIONS: done" \
               || echo "  NETWORK_EXTENSIONS: WARN"
 
@@ -546,7 +546,7 @@ jobs:
           if [ -n "$BCAST_BID_RES" ]; then
             echo "Enabling APP_GROUPS on $BCAST_BID_RES..."
             app-store-connect bundle-ids enable-capabilities \
-              "$BCAST_BID_RES" --capability APP_GROUPS 2>&1 \
+              "$BCAST_BID_RES" --capability "App Groups" 2>&1 \
               && echo "  APP_GROUPS: done" \
               || echo "  APP_GROUPS: WARN (may already be enabled)"
 
