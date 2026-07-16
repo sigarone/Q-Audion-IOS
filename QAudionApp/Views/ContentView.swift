@@ -142,7 +142,13 @@ struct ContentView: View {
             if let invite = appState.incomingGroupCallInvite {
                 incomingGroupCallScreen(invite)
             } else if let vm = appState.groupCallViewModel {
+                // GroupSecuritySheet (unified call UI — group-call
+                // adaptation) reads `appState.liveProvider` for its
+                // per-member `PeerTrustEvaluator` lookups. Explicit
+                // re-apply here mirrors the same defensive pattern already
+                // used a few lines up for `GroupInviteSheet`.
                 GroupCallView(viewModel: vm)
+                    .environmentObject(appState)
             }
         }
         // W403: cross-platform auto-join — when a Desktop or Android

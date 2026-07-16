@@ -7,6 +7,21 @@ struct GroupCallView: View {
     @ObservedObject var viewModel: GroupCallViewModel
     @Environment(\.dismiss) private var dismiss
 
+    // Unified call UI (group-call adaptation) — trust bar + security
+    // sheet, 1:1 ported from `InCallScreen.trustBar`/`securitySheet` (see
+    // that file's header comment for the full pattern, and
+    // `GroupSecuritySheet.swift` for this screen's sheet). These design
+    // tokens are ambient via `ContentView`'s root `.qAudionTheme` — no
+    // need to reapply it here, same as every other sheet call site in
+    // this codebase.
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
+    @Environment(\.qaudionType) private var type
+    /// Security sheet presentation state — purely a "is the aggregating
+    /// sheet open" UI flag, nothing security-critical is gated by it
+    /// (mirrors `InCallScreen.showSecuritySheet` exactly).
+    @State private var showSecuritySheet = false
+
     var body: some View {
         ZStack {
             Color(red: 0.05, green: 0.07, blue: 0.12).ignoresSafeArea()
@@ -28,6 +43,15 @@ struct GroupCallView: View {
                     }
                 }
                 .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
+
+                // Unified call UI (group-call adaptation) — always-visible
+                // chip row + shield button, matching the 1:1 screen's
+                // `trustBar` position (right below the header, above the
+                // main content) so it never steals space from the
+                // participant grid.
+                groupTrustBar
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
 
                 // Participant grid
                 ScrollView {
@@ -112,6 +136,82 @@ struct GroupCallView: View {
                 }
             }
         }
+        // Unified call UI (group-call adaptation) — same aggregating
+        // security sheet pattern as `InCallScreen.securitySheet`: system
+        // sheet (native drag-to-dismiss), not a custom overlay.
+        .sheet(isPresented: $showSecuritySheet) {
+            GroupSecuritySheet(
+                participants: viewModel.participants,
+                epoch: viewModel.currentEpoch,
+                onDismiss: { showSecuritySheet = false }
+            )
+        }
+    }
+
+    /// Unified call UI (group-call adaptation) — same "chip row ending in
+    /// a shield button" shape as `InCallScreen.trustBar` (see that file's
+    /// header comment for the full 1:1 pattern). Always visible, never
+    /// covers the participant grid; tapping the shield opens
+    /// `GroupSecuritySheet`. Chips shown are group-call constants (every
+    /// group call bootstraps via ML-KEM-1024 and rides the AES-256-GCM
+    /// LiveKit media path — see `GroupSecuritySheet.overviewBody` for the
+    /// full, sourced detail) rather than per-call conditionals like the
+    /// 1:1 bar's `sasVerified`/`pqcActive` (group calls have no in-call
+    /// SAS ceremony of their own).
+    private var groupTrustBar: some View {
+        HStack(spacing: 7) {
+            groupTrustChip(icon: "lock.shield.fill", label: "PQC", color: extras.pqcAccent)
+            groupTrustChip(icon: nil, label: "AES-256", color: scheme.onSurfaceVariant)
+            Spacer(minLength: 0)
+            Button {
+                showSecuritySheet = true
+            } label: {
+                Image(systemName: "checkmark.shield")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(extras.pqcAccent)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(scheme.surfaceVariant)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Apri sicurezza chiamata di gruppo")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(scheme.surfaceVariant.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(scheme.outline.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    /// Same small monospace chip `InCallScreen.trustChip` renders. Kept
+    /// local (not extracted from that file into a shared component): the
+    /// 1:1 screen's version is `private` to `InCallScreen` and nothing
+    /// else needs this exact shape yet, so duplicating ~15 lines here
+    /// avoids modifying the 1:1 screen for a cosmetic-only reuse.
+    private func groupTrustChip(icon: String?, label: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .bold))
+            }
+            Text(label)
+                .qaudionStyle(type.labelSmall)
+                .tracking(0.4)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(color.opacity(0.4), lineWidth: 1)
+        )
     }
 }
 
@@ -189,6 +289,14 @@ class GroupCallViewModel: ObservableObject {
     /// gates the camera-toggle button (the WS-relay mesh fallback has no
     /// video pipeline).
     @Published var isSfuActive = false
+    /// Unified call UI (group security sheet) — server-canonical
+    /// sender-key epoch, plain passthrough of
+    /// `BCryptoGroupCallManager.senderKeyEpoch` (already thread-safe via
+    /// its own lock). Read on-demand when the sheet opens rather than
+    /// mirrored into a separate `@Published` slot: the sheet is not a
+    /// continuously-live surface, so a computed passthrough avoids a
+    /// second state copy that could drift from the source of truth.
+    var currentEpoch: Int64 { manager.senderKeyEpoch }
 
     private let manager: BCryptoGroupCallManager
     /// W367: optional GroupCallController (W354/W358/W366) bound to
