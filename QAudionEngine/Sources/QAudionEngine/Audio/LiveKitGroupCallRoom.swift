@@ -618,16 +618,29 @@ extension LiveKitGroupCallRoom: TrackDelegate {
     /// tx_enc, packetsReceived→rx_recv, packetsReceived-packetsLost→rx_dec,
     /// packetsLost→rx_dec_err — same reconciliation Android's own kdoc
     /// documents doing for parity with the 1:1 kind tune-report.py was
-    /// originally written against). `in_codec`/`out_codec`/`in_fps`/
-    /// `out_fps` are NOT added here — this SDK version's `TrackStatistics`
-    /// wasn't verified (no build environment here) to expose codec/fps
-    /// fields distinctly from what's already read below; left as a known,
-    /// smaller residual gap rather than guessing at property names that
-    /// could fail to compile.
+    /// originally written against).
+    ///
+    /// W-GRPTELEM-VIDEODETAIL (2026-07-17) — `in_codec`/`out_codec`/`in_fps`/
+    /// `out_fps` added: verified against the EXACT pinned SDK source (a
+    /// local clone of `sigarone/client-sdk-swift@2.13.0-aes256-livekit`,
+    /// diffed byte-identical against upstream `v2.13.0` for the stats
+    /// files) rather than guessed. `TrackStatistics.codec: [CodecStatistics]`
+    /// is a SEPARATE array joined via `codecId` (no direct codec-name
+    /// property on the RTP stream stats themselves — mirrors the join
+    /// pattern the 1:1 path's `pollVideoStatsOnce` already does by hand
+    /// against the raw WebRTC `RTCStatisticsReport`, confirming this join
+    /// shape is the right one for this stats-model family). `framesPerSecond`
+    /// IS a first-class field directly on both in/outbound stream stats —
+    /// no join needed for that one.
     public func track(_ track: Track, didUpdateStatistics statistics: TrackStatistics, simulcastStatistics: [VideoCodec: TrackStatistics]) {
         guard let room = self.room else { return }
         let identity = Self.resolveIdentity(forTrack: track, in: room) ?? "?"
         let isLocal = identity == (room.localParticipant.identity?.stringValue ?? "self")
+        func codecMime(_ codecId: String?) -> String {
+            guard let codecId = codecId,
+                  let entry = statistics.codec.first(where: { $0.id == codecId }) else { return "?" }
+            return entry.mimeType ?? "?"
+        }
         switch track.kind {
         case .video:
             if isLocal, let out = statistics.outboundRtpStream.first {
@@ -639,6 +652,8 @@ extension LiveKitGroupCallRoom: TrackDelegate {
                     "out_bytes": Int(out.bytesSent ?? 0),
                     "out_frame_w": Int(out.frameWidth ?? 0),
                     "out_frame_h": Int(out.frameHeight ?? 0),
+                    "out_fps": out.framesPerSecond ?? -1,
+                    "out_codec": codecMime(out.codecId),
                     "out_encoder_impl": out.encoderImplementation ?? "?",
                     "out_quality_limit": out.qualityLimitationReason?.rawValue ?? "?"
                 ])
@@ -651,6 +666,8 @@ extension LiveKitGroupCallRoom: TrackDelegate {
                     "in_bytes": Int(inb.bytesReceived ?? 0),
                     "in_frame_w": Int(inb.frameWidth ?? 0),
                     "in_frame_h": Int(inb.frameHeight ?? 0),
+                    "in_fps": inb.framesPerSecond ?? -1,
+                    "in_codec": codecMime(inb.codecId),
                     // tune-report.py reads "in_freeze" (not "in_freeze_count").
                     "in_freeze": Int(inb.freezeCount ?? 0),
                     "in_frames_dropped": Int(inb.framesDropped ?? 0),
