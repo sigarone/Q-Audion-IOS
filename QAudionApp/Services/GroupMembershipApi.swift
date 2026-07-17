@@ -156,6 +156,18 @@ struct GroupFetchResult {
     var isSuccess: Bool { (200..<300).contains(statusCode) }
 }
 
+/// One entry of `GET /api/v1/groups`'s `groups[]` array — same fields as
+/// `GroupFetchResult` plus the group id, since a list response (unlike the
+/// single-group GET) doesn't already have the id from the request path.
+struct GroupListEntry {
+    let groupIdWire: String
+    let groupEpoch: UInt32
+    let members: [String]
+    let admins: [String]
+    let metadataBlobB64: String?
+    let metadataVersion: UInt32
+}
+
 @MainActor
 final class GroupMembershipApi {
 
@@ -361,6 +373,51 @@ final class GroupMembershipApi {
             metadataBlobB64: json?["metadata_blob_b64"] as? String,
             metadataVersion: version,
             statusCode: status)
+    }
+
+    /// GET /api/v1/groups — reconciliation backstop (2026-07-17): the server
+    /// fan-out for `group_membership_changed`/`group_metadata_changed` is
+    /// live-WS-only best-effort (no APNs/FCM wake) — a member added while
+    /// offline, or one whose WS reconnects mid-event, never receives it and
+    /// had NO other way to discover the group (the per-group GET above
+    /// requires already knowing `group_id`). Lists every group the caller
+    /// is CURRENTLY a member of, full roster + epoch + opaque metadata
+    /// blob. Call on launch + WS reconnect (see `AppState.reconcileAllGroupsFromServer`).
+    /// Returns nil only on a transport-level failure or non-2xx — an empty
+    /// array is a valid "no groups" response, not a failure.
+    func fetchAllGroups() async -> [GroupListEntry]? {
+        guard let url = endpoint("/api/v1/groups") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        addAuth(&req)
+        guard let (data, status) = await fireRaw(req, label: "groups.fetchAll") else { return nil }
+        guard (200..<300).contains(status) else { return nil }
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let arr = json["groups"] as? [[String: Any]] else {
+            return []
+        }
+        return arr.compactMap { g -> GroupListEntry? in
+            guard let groupIdWire = g["group_id"] as? String, !groupIdWire.isEmpty else { return nil }
+            let epoch: UInt32
+            if let n = g["group_epoch"] as? NSNumber {
+                epoch = UInt32(truncatingIfNeeded: n.int64Value)
+            } else {
+                epoch = 0
+            }
+            let version: UInt32
+            if let n = g["metadata_version"] as? NSNumber {
+                version = UInt32(truncatingIfNeeded: n.int64Value)
+            } else {
+                version = 0
+            }
+            return GroupListEntry(
+                groupIdWire: groupIdWire,
+                groupEpoch: epoch,
+                members: g["members"] as? [String] ?? [],
+                admins: g["admins"] as? [String] ?? [],
+                metadataBlobB64: g["metadata_blob_b64"] as? String,
+                metadataVersion: version)
+        }
     }
 
     // MARK: - Internals

@@ -10617,15 +10617,7 @@ extension AppState {
         }
 
         // Server-authoritative roster.
-        var updated = entry
-        updated.members = members
-        updated.admins = admins
-        GroupRegistry.shared.upsert(updated)
-        // Fase 1A — persist the server-canonical membership epoch so the
-        // GroupChatService vault probe stays anchored across launches.
-        if serverEpoch > 0 {
-            GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: serverEpoch)
-        }
+        applyServerRoster(groupHex: groupHex, members: members, admins: admins, serverEpoch: serverEpoch)
 
         // Crypto side-effects. Fase 1C — admin promote/demote ("admin_add" /
         // "admin_remove") reuse this SAME event but never touch membership
@@ -10722,6 +10714,81 @@ extension AppState {
         recoverGroupMetadataOnBootstrap(groupHex: groupHex, selfId: selfId)
     }
 
+    /// Write the server-authoritative roster (members/admins/epoch) onto an
+    /// EXISTING GroupRegistry entry. Factored out of the live
+    /// `group_membership_changed` handler so `reconcileAllGroupsFromServer`
+    /// and `fetchAndApplyGroupMetadata` can apply the exact same
+    /// roster/epoch fields a bulk or per-group GET returns — both
+    /// previously discarded `members`/`admins`/`group_epoch` from the GET
+    /// reply entirely, so a rename/avatar refresh (or launch-time
+    /// reconcile) never backfilled a membership change the live WS event
+    /// was missed for (2026-07-17 bug). No-op if the group isn't locally
+    /// known yet — callers needing bootstrap use `bootstrapGroupFromServer`.
+    @MainActor
+    private func applyServerRoster(groupHex: String, members: [String], admins: [String], serverEpoch: UInt32) {
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
+        var updated = entry
+        updated.members = members
+        updated.admins = admins
+        GroupRegistry.shared.upsert(updated)
+        // Fase 1A — persist the server-canonical membership epoch so the
+        // GroupChatService vault probe stays anchored across launches.
+        if serverEpoch > 0 {
+            GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: serverEpoch)
+        }
+    }
+
+    /// Reconciliation backstop (2026-07-17) — lists every group the server
+    /// says this account currently belongs to (`GET /api/v1/groups`) and
+    /// applies each one:
+    ///   - unknown group_id (never bootstrapped locally) → this is a group
+    ///     the user was added to while offline / before the WS handler for
+    ///     `group_membership_changed` ever fired for it. Bootstrap it
+    ///     exactly like the live event does (`replay: true` — no toast
+    ///     spam, mirrors the WS catch-up burst's own UX contract).
+    ///   - known group_id → apply the server-authoritative roster/epoch
+    ///     (`applyServerRoster`) so a membership change missed live (added/
+    ///     removed while this device was offline or mid-reconnect) is
+    ///     backfilled — same "snapshot" semantics as the WS catch-up
+    ///     replay: roster/epoch only, no additional crypto rekey here
+    ///     (peers independently re-emit `sender_key_rotate` on their own
+    ///     snapshot receipt, same as the live snapshot op does).
+    ///   - fresh metadata blob (if present) is decrypted + version-gated
+    ///     applied via the same path `fetchAndApplyGroupMetadata` uses.
+    /// Call on app launch and WS reconnect. Best-effort: a network/auth
+    /// failure silently no-ops (the live WS path remains the primary
+    /// channel; this only fills the gap when that path was missed).
+    @MainActor
+    func reconcileAllGroupsFromServer() async {
+        guard let selfId = currentUserId ?? AppState.currentUserIdSnapshot, !selfId.isEmpty,
+              let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken) else { return }
+        guard let entries = await api.fetchAllGroups() else { return }
+        for entry in entries {
+            guard entry.members.contains(selfId) else { continue }
+            let groupHex = entry.groupIdWire.replacingOccurrences(of: "-", with: "").lowercased()
+            if GroupRegistry.shared.entry(for: groupHex) == nil {
+                bootstrapGroupFromServer(
+                    groupHex: groupHex, members: entry.members, admins: entry.admins,
+                    actor: entry.admins.first ?? "", selfId: selfId, replay: true,
+                    serverEpoch: entry.groupEpoch)
+            } else {
+                applyServerRoster(
+                    groupHex: groupHex, members: entry.members, admins: entry.admins,
+                    serverEpoch: entry.groupEpoch)
+                NotificationCenter.default.post(
+                    name: AppState.groupRegistryChangedNotification,
+                    object: nil,
+                    userInfo: ["groupId": groupHex])
+                if let blobB64 = entry.metadataBlobB64, !blobB64.isEmpty {
+                    decryptAndApplyGroupMetadataBlob(
+                        groupHex: groupHex, blobB64: blobB64,
+                        version: entry.metadataVersion, selfId: selfId)
+                }
+            }
+        }
+        print("[AppState] reconcileAllGroupsFromServer: reconciled \(entries.count) group(s)")
+    }
+
     /// Fase 1C — `GET /api/v1/groups/{gid}` best-effort fetch + decrypt,
     /// used at fresh-device bootstrap (see call site above). Thin wrapper
     /// over `fetchAndApplyGroupMetadata` — kept as its own name so the
@@ -10749,33 +10816,52 @@ extension AppState {
     }
 
     /// Shared core of `recoverGroupMetadataOnBootstrap` /
-    /// `refreshGroupMetadataFromServer` — GET the group, decrypt its
-    /// current `metadata_blob_b64` with the embedded sender's recv chain,
-    /// and apply it (version-gated) via `applyGroupMetadataPayload`.
+    /// `refreshGroupMetadataFromServer` — GET the group, apply the
+    /// server-authoritative roster/epoch (2026-07-17 fix: this used to
+    /// fetch `members`/`admins`/`group_epoch` in `res` and silently
+    /// discard all three, so a membership change missed live never
+    /// backfilled here even though the data was already in hand), then
+    /// decrypt+apply the metadata blob via `decryptAndApplyGroupMetadataBlob`.
     @MainActor
     private func fetchAndApplyGroupMetadata(groupHex: String, selfId: String) {
         guard let groupIdWire = Self.hexToDashedUUID(groupHex),
               let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken) else { return }
         Task { @MainActor in
-            guard let res = await api.fetchGroup(groupIdWire: groupIdWire), res.isSuccess,
-                  let blobB64 = res.metadataBlobB64, !blobB64.isEmpty,
-                  let wire = Data(base64Encoded: blobB64) else { return }
-            guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
-            // The GET reply doesn't carry `actor_user_id`, but the 0xE4
-            // wire header itself embeds `sender_id` (`GroupSenderKey`
-            // wire layout, spec §2) — unpack it instead of guessing.
-            guard let parsed = try? GroupSenderKey.unpackGroupWire(wire) else {
-                print("[AppState] fetchAndApplyGroupMetadata: malformed wire g=\(groupHex.prefix(8))")
-                return
+            guard let res = await api.fetchGroup(groupIdWire: groupIdWire), res.isSuccess else { return }
+            if GroupRegistry.shared.entry(for: groupHex) != nil {
+                applyServerRoster(
+                    groupHex: groupHex, members: res.members, admins: res.admins,
+                    serverEpoch: res.groupEpoch)
             }
-            guard let plaintext = GroupChatService.shared.decrypt(
-                wire: wire, senderId: parsed.senderId, groupId: groupHex,
-                members: entry.members, selfId: selfId) else {
-                print("[AppState] fetchAndApplyGroupMetadata: decrypt failed g=\(groupHex.prefix(8)) sender=\(parsed.senderId.prefix(8))")
-                return
-            }
-            self.applyGroupMetadataPayload(groupHex: groupHex, json: plaintext, version: res.metadataVersion)
+            guard let blobB64 = res.metadataBlobB64, !blobB64.isEmpty else { return }
+            self.decryptAndApplyGroupMetadataBlob(
+                groupHex: groupHex, blobB64: blobB64, version: res.metadataVersion, selfId: selfId)
         }
+    }
+
+    /// Decrypt + version-gate + apply an already-fetched metadata blob —
+    /// shared core of `fetchAndApplyGroupMetadata`'s per-group GET and
+    /// `reconcileAllGroupsFromServer`'s bulk GET, which arrive with the
+    /// identical `metadata_blob_b64`/`metadata_version` shape from two
+    /// different REST calls.
+    @MainActor
+    private func decryptAndApplyGroupMetadataBlob(groupHex: String, blobB64: String, version: UInt32, selfId: String) {
+        guard let wire = Data(base64Encoded: blobB64) else { return }
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
+        // The GET reply doesn't carry `actor_user_id`, but the 0xE4
+        // wire header itself embeds `sender_id` (`GroupSenderKey`
+        // wire layout, spec §2) — unpack it instead of guessing.
+        guard let parsed = try? GroupSenderKey.unpackGroupWire(wire) else {
+            print("[AppState] decryptAndApplyGroupMetadataBlob: malformed wire g=\(groupHex.prefix(8))")
+            return
+        }
+        guard let plaintext = GroupChatService.shared.decrypt(
+            wire: wire, senderId: parsed.senderId, groupId: groupHex,
+            members: entry.members, selfId: selfId) else {
+            print("[AppState] decryptAndApplyGroupMetadataBlob: decrypt failed g=\(groupHex.prefix(8)) sender=\(parsed.senderId.prefix(8))")
+            return
+        }
+        self.applyGroupMetadataPayload(groupHex: groupHex, json: plaintext, version: version)
     }
 
     /// Ship our `sender_key_init` to every member of `groupHex` that has not

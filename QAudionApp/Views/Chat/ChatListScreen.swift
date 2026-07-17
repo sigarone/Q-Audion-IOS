@@ -261,18 +261,17 @@ struct ChatListScreen: View {
             container.setSearchQuery(newValue)
         }
         .refreshable { container.loadFromStore() }
-        // GAP FIX — app-launch group-list metadata refresh. The chat list
-        // is the first screen shown after login/launch; on each appear,
-        // best-effort GET the current metadata_version for every locally
-        // joined group and apply it if newer (same version-gated no-op
-        // otherwise). Closes the gap where GET-based cold-recovery ran
-        // ONLY at fresh-device bootstrap — a rename/avatar change made
-        // while this device was offline now lands without waiting for the
-        // group to be opened or for the next live WS event.
+        // GAP FIX — app-launch group reconciliation. The chat list is the
+        // first screen shown after login/launch; on each appear, best-effort
+        // GET /api/v1/groups (every group the server says this account
+        // belongs to) and apply it: a brand-new group whose
+        // `group_membership_changed` add-event this device missed while
+        // offline now gets bootstrapped here instead of never appearing
+        // (2026-07-17 bug), and an already-known group's roster/metadata
+        // refreshes the same way the old per-entry loop did (one bulk call
+        // instead of N per-group GETs — see `reconcileAllGroupsFromServer`).
         .task {
-            for entry in groupRegistry.entries {
-                appState.refreshGroupMetadataFromServer(groupHex: entry.id)
-            }
+            await appState.reconcileAllGroupsFromServer()
         }
         // Fase 1B — recompute the group rows' preview / unread / time when a
         // group message lands or is marked read (GroupMessageStore signals
