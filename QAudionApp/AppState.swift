@@ -4823,6 +4823,31 @@ final class AppState: ObservableObject {
             // race-handling already in place for the callee side (W521).
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                // W-GRPVPIO-CRASH-2 (2026-07-17) — a stray/replayed 1:1
+                // `call_answer` arriving while a GROUP call is active must
+                // never reach CallService: handleCallAnswered() →
+                // startAudioIOIfReady() (and its 1s W574b fallback) call
+                // straight into the legacy AudioProcessingPipeline's
+                // `setVoiceProcessingEnabled(true)`, racing LiveKit's own
+                // VP-IO unit on the SAME hardware — exactly the
+                // AVAudioEngineGraph::_Connect EXC_CRASH/SIGABRT root-caused
+                // live via App Store Connect crash logs (crashPointId
+                // B4lMk7amGdH7pnGoa5qsYT, 4 occurrences 2026-07-17, always
+                // during an active/joining group call). Unlike
+                // `onAudioSessionActivated` (gated at AppState.swift:1773),
+                // this WS-driven path had no such guard — a queued
+                // `call_answer` redelivered on WS reconnect (which churns on
+                // every group-call participant join/leave, confirmed via
+                // server logs correlating each crash to a join event ~300ms
+                // prior) reaches here regardless of `callState`. Group calls
+                // never use `callService`/CallKit's 1:1 audio path at all
+                // (see the comment on `onAudioSessionActivated`), so
+                // dropping this entirely while `groupCallKitId != nil` is
+                // safe — mirrors that exact guard.
+                guard self.groupCallKitId == nil else {
+                    print("[AppState] call_answer ignored — group call active")
+                    return
+                }
                 // W574b: unblock the mic UNCONDITIONALLY — before the
                 // .ringing guard. The guard below only protects the state
                 // transition; gating the mic unblock on it left the mic
