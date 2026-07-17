@@ -1739,12 +1739,36 @@ final class AppState: ObservableObject {
             // stops its AVAudioEngine capture/playback at the right time.
             provider.onAudioSessionActivated = { [weak self] in
                 Task { @MainActor in
-                    self?.callService.handleAudioSessionActivated()
+                    guard let self = self else { return }
+                    // W-GRPVPIO-CRASH (2026-07-17) — CXProvider's didActivate:
+                    // fires for the app's ONE shared AVAudioSession regardless of
+                    // WHICH call (1:1 or group) CallKit is reporting — unlike
+                    // onAnswerCall/onEndCall above, this callback carries no uuid
+                    // to fork on. A group call owns its own audio entirely through
+                    // LiveKit's SFU room (LiveKitGroupCallRoom.connect()), which
+                    // configures the SAME physical VoiceProcessingIO hardware unit
+                    // independently. Unconditionally starting CallService's
+                    // legacy 1:1 AudioCapture/AudioProcessingPipeline here as well
+                    // raced LiveKit's own engine setup and crashed both test
+                    // devices (EXC_CRASH/SIGABRT in AVAudioEngineGraph::_Connect
+                    // inside -[AVAudioIONode setVoiceProcessingEnabled:error:],
+                    // call 3d8324ec, 2026-07-17 10:08-10:09 UTC — Apple crash
+                    // portal, same crashPointId on both). `groupCallKitId` stays
+                    // non-nil for the whole ring→active→end lifetime of a group
+                    // call (set in reportGroupCall.../cleared only in
+                    // clearGroupCallKitCall), so it's the right guard here even
+                    // without a uuid to compare.
+                    guard self.groupCallKitId == nil else { return }
+                    self.callService.handleAudioSessionActivated()
                 }
             }
             provider.onAudioSessionDeactivated = { [weak self] in
                 Task { @MainActor in
                     guard let self = self else { return }
+                    // W-GRPVPIO-CRASH — same fork as onAudioSessionActivated:
+                    // a group call's audio is LiveKit's to manage, never
+                    // CallService's.
+                    guard self.groupCallKitId == nil else { return }
                     if self.selfManagedAudioSession {
                         // W-WAKEONLY — CallKit released its audio-session hold
                         // after we dismissed the system UI, but the call is still
