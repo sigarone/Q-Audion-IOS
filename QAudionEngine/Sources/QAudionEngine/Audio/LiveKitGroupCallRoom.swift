@@ -104,6 +104,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// straight through to `TelemetryService.emit(kind:callId:attrs:)`
     /// without duplicating it inside the dict — see `emitTelemetry`.
     public var onTelemetry: ((_ kind: String, _ callId: String?, _ attrs: [String: Any]) -> Void)?
+    /// W-GRPSENDERKEY-NACK — operational (not just diagnostic) forwarding of
+    /// `didUpdateE2EEState`, fired alongside the `call.media.e2ee_state`
+    /// telemetry emit in that delegate method below. `state` is the raw
+    /// `.toString()` value ("missing_key" / "decryption_failed" / ...).
+    public var onE2eeStateChanged: ((_ identity: String, _ kind: String, _ state: String) -> Void)?
 
     private let wantsVideo: Bool
     private var room: Room?
@@ -566,6 +571,14 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         let kind = trackPublication.kind == .video ? "video" : "audio"
         print("[GroupCallController][telemetry] e2ee-state identity=\(identity ?? "?") kind=\(kind) state=\(state.toString())")
         emitTelemetry("call.media.e2ee_state", ["identity": identity ?? "?", "kind": kind, "state": state.toString()])
+        // W-GRPSENDERKEY-NACK (2026-07-17) — forward this SAME signal
+        // operationally, not just diagnostically: GroupCallController
+        // reacts to missing_key/decryption_failed by nudging the sender to
+        // reship their key (see its onE2eeStateChanged wiring in
+        // handleSfuToken).
+        if let identity = identity {
+            onE2eeStateChanged?(identity, kind, state.toString())
+        }
     }
 
     /// `TrackPublication` does not publicly expose its owning participant
@@ -584,13 +597,33 @@ extension LiveKitGroupCallRoom: RoomDelegate {
 }
 
 extension LiveKitGroupCallRoom: TrackDelegate {
-    /// W-GRPTELEM: the `video.stats`/`call.audio.stats` equivalent of
+    /// W-GRPTELEM: the `video.stats`/`call.audio.counts` equivalent of
     /// `QAudionWebRtcCallController.pollVideoStatsOnce` — see
     /// `attachStatsReporting`'s kdoc for why this rides the SDK's native
-    /// per-track timer instead of a hand-rolled one. Field names are kept
-    /// close to the 1:1 `video.stats` shape (`out_frames_enc`, `in_bytes`,
-    /// etc.) so a dashboard already built for the 1:1 kind reads these
-    /// with minimal adaptation.
+    /// per-track timer instead of a hand-rolled one.
+    ///
+    /// W-GRPTELEM-KEYNAMES (2026-07-17) — every field name here (both kinds)
+    /// MUST match what `bcrypto-server/tools/tune-report.py`'s `build_legs()`
+    /// literally reads via `attrs.get(...)` — it is a dumb dict-key parser,
+    /// not a schema-aware one, and a mismatched key silently renders as "X"
+    /// with no error anywhere. Confirmed live: this method's ORIGINAL field
+    /// names (`out_packets_sent`, `in_packets_received`, `in_frames_dropped`,
+    /// etc.) and, for audio, its ORIGINAL kind (`call.audio.stats` — the
+    /// parser only recognizes `call.audio.counts`, there is no fallback)
+    /// left every iOS group-call leg's audio panel and several video fields
+    /// permanently blank across 3 live tests today, hiding real e2ee/decrypt
+    /// data that WAS being collected. Video's core counters already matched
+    /// by name (kept below); audio's did not (kind AND every key renamed,
+    /// mirroring Android's `GroupCallRoom.kt.pollAudioStats()`: packetsSent→
+    /// tx_enc, packetsReceived→rx_recv, packetsReceived-packetsLost→rx_dec,
+    /// packetsLost→rx_dec_err — same reconciliation Android's own kdoc
+    /// documents doing for parity with the 1:1 kind tune-report.py was
+    /// originally written against). `in_codec`/`out_codec`/`in_fps`/
+    /// `out_fps` are NOT added here — this SDK version's `TrackStatistics`
+    /// wasn't verified (no build environment here) to expose codec/fps
+    /// fields distinctly from what's already read below; left as a known,
+    /// smaller residual gap rather than guessing at property names that
+    /// could fail to compile.
     public func track(_ track: Track, didUpdateStatistics statistics: TrackStatistics, simulcastStatistics: [VideoCodec: TrackStatistics]) {
         guard let room = self.room else { return }
         let identity = Self.resolveIdentity(forTrack: track, in: room) ?? "?"
@@ -618,25 +651,32 @@ extension LiveKitGroupCallRoom: TrackDelegate {
                     "in_bytes": Int(inb.bytesReceived ?? 0),
                     "in_frame_w": Int(inb.frameWidth ?? 0),
                     "in_frame_h": Int(inb.frameHeight ?? 0),
-                    "in_freeze_count": Int(inb.freezeCount ?? 0),
+                    // tune-report.py reads "in_freeze" (not "in_freeze_count").
+                    "in_freeze": Int(inb.freezeCount ?? 0),
                     "in_frames_dropped": Int(inb.framesDropped ?? 0),
                     "in_decoder_impl": inb.decoderImplementation ?? "?"
                 ])
             }
         case .audio:
             if isLocal, let out = statistics.outboundRtpStream.first {
-                emitTelemetry("call.audio.stats", [
+                // tune-report.py only recognizes kind "call.audio.counts" for
+                // audio TX/RX counters (see W-GRPTELEM-KEYNAMES) — "call.audio.stats"
+                // was silently dropped by build_legs(), never a recognized kind.
+                emitTelemetry("call.audio.counts", [
                     "identity": identity,
                     "direction": "out",
-                    "out_packets_sent": Int(out.packetsSent ?? 0),
+                    "tx_enc": Int(out.packetsSent ?? 0),
                     "out_bytes": Int(out.bytesSent ?? 0)
                 ])
             } else if let inb = statistics.inboundRtpStream.first {
-                emitTelemetry("call.audio.stats", [
+                let received = Int(inb.packetsReceived ?? 0)
+                let lost = Int(inb.packetsLost ?? 0)
+                emitTelemetry("call.audio.counts", [
                     "identity": identity,
                     "direction": "in",
-                    "in_packets_received": Int(inb.packetsReceived ?? 0),
-                    "in_packets_lost": Int(inb.packetsLost ?? 0),
+                    "rx_recv": received,
+                    "rx_dec": max(received - lost, 0),
+                    "rx_dec_err": lost,
                     "in_jitter": inb.jitter ?? -1,
                     "in_bytes": Int(inb.bytesReceived ?? 0),
                     "in_concealed_samples": Int(inb.concealedSamples ?? 0)
@@ -696,6 +736,9 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// W-GRPTELEM — stub counterpart of the real class's same-named
     /// property (see this stub's own doc comment above). Never fires here.
     public var onTelemetry: ((_ kind: String, _ callId: String?, _ attrs: [String: Any]) -> Void)?
+    /// W-GRPSENDERKEY-NACK — stub counterpart of the real class's same-named
+    /// property (see this stub's own doc comment above). Never fires here.
+    public var onE2eeStateChanged: ((_ identity: String, _ kind: String, _ state: String) -> Void)?
 
     public init(video: Bool) { super.init() }
 

@@ -64,6 +64,10 @@ public final class GroupCallController: @unchecked Sendable {
     /// (see that method's kdoc): a peer missing from this set just can't
     /// decrypt our audio yet, it doesn't block sending to everyone else.
     private var initSentTo: Set<String> = []
+    /// W-GRPSENDERKEY-NACK — peers we've already sent a `sender_key_nack`
+    /// this call (see `onE2eeStateChanged` wiring in `handleSfuToken`);
+    /// rate-limits to one nack per peer per call.
+    private var nackedPeers: Set<String> = []
 
     // ─── W-GRPLIVEKIT: LiveKit SFU media transport (capability-gated) ──
     // When `usingSfu` (default true), an active call first requests a
@@ -462,6 +466,7 @@ public final class GroupCallController: @unchecked Sendable {
         // `applySfuRemoteKey` takes the lock itself (NSLock is non-reentrant,
         // see the kdoc on `_state`/`lock` near the top of this file).
         var installedSenderId: String?
+        var nackRetryEnv: SenderKeyInitEnvelope?
         let envType = obj["t"] as? String ?? "?"
         switch envType {
         case "sender_key_init":
@@ -495,12 +500,30 @@ public final class GroupCallController: @unchecked Sendable {
             } catch {
                 print("[GroupCallController][telemetry] sender_key_rotate FAILED sender=\(fromUserId.prefix(8)) epoch=\(e) reason=\(error)")
             }
+        case "sender_key_nack":
+            // W-GRPSENDERKEY-NACK — fromUserId has no usable key from us
+            // (their LiveKit reported missing_key/decryption_failed for our
+            // track). Clear our own send-confirmation gate AND resend right
+            // now, rather than waiting for the next onUpdate roster event —
+            // a stable call might not get another one for the rest of the
+            // call.
+            initSentTo.remove(fromUserId)
+            nackRetryEnv = SenderKeyInitEnvelope(
+                g: expectedG,
+                e: gs.groupEpoch,
+                seed: gs.sendChain.ck.base64EncodedString(),
+                idx: gs.sendChain.nextIdx
+            )
+            print("[GroupCallController][telemetry] sender_key_nack received from \(fromUserId.prefix(8)) — resending init")
         default:
             print("[GroupCallController][telemetry] ctrl envelope from \(fromUserId.prefix(8)) ignored: unknown type=\(envType)")
         }
         lock.unlock()
         if let senderId = installedSenderId {
             applySfuRemoteKey(senderId: senderId)
+        }
+        if let retryEnv = nackRetryEnv {
+            sendSenderKeyEnvelope(peer: fromUserId, selfId: manager.selfUserId, env: retryEnv)
         }
     }
 
@@ -633,6 +656,26 @@ public final class GroupCallController: @unchecked Sendable {
         room.onSpeakingParticipantsChanged = { [weak self] identities in self?.onActiveSpeakersChanged?(identities) }
         // W-GRPTELEM: straight passthrough — see `groupTelemetry`'s kdoc.
         room.onTelemetry = { [weak self] kind, cid, attrs in self?.groupTelemetry?(kind, cid, attrs) }
+        // W-GRPSENDERKEY-NACK (2026-07-17) — LiveKit's own E2EE state is the
+        // most direct signal that WE never got a usable key for a peer
+        // (mirrors Android's onE2eeStateChanged; see sendSenderKeyNackEnvelope's
+        // kdoc for the full root-cause chain: sendSenderKeyEnvelope only
+        // confirms local encrypt+dispatch, never actual delivery, and
+        // onUpdate's retry loop only re-evaluates on roster changes, so a
+        // control envelope lost in-flight — e.g. during the WS reconnect
+        // that fires on every group-call participant join/leave — leaves
+        // that peer permanently silent for the rest of the call). Rate-
+        // limited via nackedPeers, one nack per peer per call.
+        room.onE2eeStateChanged = { [weak self] identity, _, state in
+            guard let self = self else { return }
+            guard state == "missing_key" || state == "decryption_failed" else { return }
+            self.lock.lock()
+            let alreadyNacked = self.nackedPeers.contains(identity)
+            if !alreadyNacked { self.nackedPeers.insert(identity) }
+            self.lock.unlock()
+            guard !alreadyNacked else { return }
+            self.sendSenderKeyNackEnvelope(peer: identity, selfId: self.manager.selfUserId)
+        }
 
         lock.lock()
         sfuRoom = room
@@ -1035,6 +1078,26 @@ public final class GroupCallController: @unchecked Sendable {
         }
     }
 
+    /// W-GRPSENDERKEY-NACK — "I have no usable key for you" nudge, sent to
+    /// `peer` when LiveKit reports missing_key/decryption_failed for their
+    /// track (see `onE2eeStateChanged` wiring in `handleSfuToken`). Carries
+    /// no key material — `peer`'s handler (the "sender_key_nack" case in
+    /// `onGroupCallControlEnvelope`) just clears their own `initSentTo` gate
+    /// for us and immediately resends their current key. Best-effort like
+    /// every other control-plane send here.
+    private func sendSenderKeyNackEnvelope(peer: String, selfId: String) {
+        lock.lock()
+        guard let gs = groupState else { lock.unlock(); return }
+        let expectedG = GroupSenderKey.toHex(gs.groupIdBytes)
+        lock.unlock()
+        guard let onSend = onSendControlEnvelope else { return }
+        let obj: [String: Any] = ["qa_grp": 1, "t": "sender_key_nack", "g": expectedG]
+        guard let json = try? Self.jsonString(obj) else { return }
+        Task {
+            _ = await onSend(peer, selfId, json)
+        }
+    }
+
     /// App-layer hook: given (peer, selfId, plaintext envelope JSON), seal
     /// via the shared pairwise 1:1 ratchet + ship as an `opaque_message`,
     /// returning whether the send actually went out. Injected rather than
@@ -1070,6 +1133,7 @@ public final class GroupCallController: @unchecked Sendable {
         groupState = nil
         activeCallId = nil
         initSentTo.removeAll()
+        nackedPeers.removeAll()
         wantsVideo = false
         // Tier-1: reset per-call transient state so a subsequent call
         // (this controller is long-lived across calls) never leaks the
