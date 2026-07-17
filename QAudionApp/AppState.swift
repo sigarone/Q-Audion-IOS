@@ -705,6 +705,18 @@ final class AppState: ObservableObject {
     /// Capped so a flood of undecryptable frames can't grow unbounded.
     private var bufferedGroupWires: [(data: [String: Any], live: Bool)] = []
     private static let maxBufferedGroupWires = 128
+    /// 2026-07-17 — same buffering idea as `bufferedGroupWires`, but for a
+    /// `group_metadata_changed`/GET-fetched metadata blob whose decrypt
+    /// failed because the ACTOR's (the renaming admin's) recv chain isn't
+    /// installed yet. Before this fix, a decrypt failure here was final —
+    /// no retry existed for metadata specifically (only for TEXT frames),
+    /// so a group discovered via `reconcileAllGroupsFromServer` (which
+    /// never lived through the rename's live WS event) kept showing the
+    /// placeholder/stale name forever, even once the admin's
+    /// `sender_key_init` eventually arrived via normal 1:1 delivery.
+    /// Keyed by groupHex — only the LATEST blob per group is worth
+    /// retrying (an older version would just get re-superseded).
+    private var bufferedGroupMetadata: [String: (blobB64: String, version: UInt32, selfId: String)] = [:]
     /// Fase 1B: rowIds (clientMsgId/serverMsgId) of inbound group-attachment
     /// blobs whose download+decrypt is in flight. Shared by the initial
     /// land path and the on-open retry so re-opening a group while a
@@ -2092,8 +2104,36 @@ final class AppState: ObservableObject {
             // W-PUSHHEAL: re-assert UNCONDITIONALLY (see launch path).
             reassertVoipPushTokenRegistration()
             reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
+            // 2026-07-17 — this interactive login path only ever set
+            // currentUserId from the raw auth response, never fetching the
+            // short PBX extension the cold-launch path (below) already
+            // gets from getProfile(). Left the hero card showing the long
+            // UUID after every re-login until the user happened to open
+            // Settings (whose own onAppear separately fetches it).
+            refreshOwnDialExtension()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// 2026-07-17 — shared by both interactive login paths below: fetch our
+    /// OWN profile and cache the short PBX extension the same way the
+    /// cold-launch path (see `connectPersistentSocket`'s caller) already
+    /// does, so the hero card shows "Int. NNN" immediately after a fresh
+    /// login instead of the long UUID until Settings is opened. Best-effort
+    /// — `liveProvider` is set synchronously by `connectPersistentSocket()`
+    /// just above every call site, but a network failure here just leaves
+    /// the UUID fallback showing, same as it did before this fix.
+    @MainActor
+    private func refreshOwnDialExtension() {
+        guard let provider = liveProvider else { return }
+        Task {
+            guard let profile = try? await provider.accountApi.getProfile() else { return }
+            if let ext = profile.dialExtension, ext > 0 {
+                let extStr = String(ext)
+                self.currentUserDialExtension = extStr
+                UserDefaults.standard.set(extStr, forKey: "currentUserDialExtension")
+            }
         }
     }
 
@@ -2121,6 +2161,8 @@ final class AppState: ObservableObject {
             // W-PUSHHEAL: re-assert UNCONDITIONALLY (see launch path).
             reassertVoipPushTokenRegistration()
             reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
+            // 2026-07-17 — see the identical comment in `login(userId:credential:)`.
+            refreshOwnDialExtension()
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
@@ -5373,6 +5415,22 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Re-run every buffered group METADATA blob through
+    /// `decryptAndApplyGroupMetadataBlob` (e.g. after a sender_key_init
+    /// install unblocked the renaming admin's recv chain). Still-undecryptable
+    /// blobs re-buffer themselves via that same function, mirroring
+    /// `retryBufferedGroupMessages` above for TEXT frames.
+    private func retryBufferedGroupMetadata() {
+        guard !bufferedGroupMetadata.isEmpty else { return }
+        let pending = bufferedGroupMetadata
+        bufferedGroupMetadata = [:]
+        for (groupHex, entry) in pending {
+            decryptAndApplyGroupMetadataBlob(
+                groupHex: groupHex, blobB64: entry.blobB64,
+                version: entry.version, selfId: entry.selfId)
+        }
+    }
+
     /// Parse the server RFC3339 `server_ts`; fall back to now (mirrors
     /// Android's `Instant.parse` with a `toLongOrNull` fallback).
     private static func parseGroupServerTs(_ ts: String?) -> Date {
@@ -5574,6 +5632,7 @@ final class AppState: ObservableObject {
                 // before this sender's sender_key_init. Retry them now.
                 if groupCtlType == "sender_key_init" || groupCtlType == "sender_key_rotate" {
                     retryBufferedGroupMessages()
+                    retryBufferedGroupMetadata()
                 }
                 return
             }
@@ -10882,7 +10941,19 @@ extension AppState {
         guard let plaintext = GroupChatService.shared.decrypt(
             wire: wire, senderId: parsed.senderId, groupId: groupHex,
             members: entry.members, selfId: selfId) else {
-            print("[AppState] decryptAndApplyGroupMetadataBlob: decrypt failed g=\(groupHex.prefix(8)) sender=\(parsed.senderId.prefix(8))")
+            // 2026-07-17 — the single most common reason this fails: this
+            // device discovered the group via reconciliation and never
+            // lived through the renaming admin's sender_key_init, so no
+            // recv chain is installed for `parsed.senderId` yet. Buffer
+            // instead of dropping — `retryBufferedGroupMetadata` re-runs
+            // this the moment ANY sender_key_init/rotate installs (see
+            // that call site), same "buffer + retry on next key install"
+            // shape as `bufferGroupWire`/`retryBufferedGroupMessages` for
+            // TEXT frames. Before this fix, a decrypt failure here was
+            // final — the placeholder/stale name lingered forever even
+            // once the key eventually arrived.
+            print("[AppState] decryptAndApplyGroupMetadataBlob: decrypt failed g=\(groupHex.prefix(8)) sender=\(parsed.senderId.prefix(8)) — buffering for retry")
+            bufferedGroupMetadata[groupHex] = (blobB64: blobB64, version: version, selfId: selfId)
             return
         }
         self.applyGroupMetadataPayload(groupHex: groupHex, json: plaintext, version: version)

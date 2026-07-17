@@ -162,13 +162,20 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             // participant build. Cheap (UserDefaults read + JSON
             // decode of a small list); group calls are bounded to 8
             // participants so the worst-case cost is trivial.
+            //
+            // 2026-07-17 — a fellow group member the user never 1:1-chatted
+            // with has no rubrica entry, and used to fall through to the
+            // bare 36-char user_id ("il numero id lungo non deve essere
+            // visualizzato come primario"). NEVER return the raw id even
+            // as a last resort — truncate it, matching the 1:1 call path's
+            // `callKitDisplayName` Tier-3 fallback exactly.
             self.nameResolver = { uid in
                 let stored = ContactsStore().load()
                 if let match = stored.first(where: { $0.userId == uid }),
                    !match.displayName.isEmpty {
                     return match.displayName
                 }
-                return uid
+                return uid.count > 12 ? String(uid.prefix(8)) + "…" + String(uid.suffix(4)) : uid
             }
         }
         registerHandlers()
