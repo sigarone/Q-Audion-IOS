@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.800",
+              date: "2026-07-17",
+              title: "v1.0.800",
+              bullets: [
+                "fix(video): dismantle preview layer session before AVCaptureSession teardown",
+              ]),
         .init(id: "v1.0.799",
               date: "2026-07-17",
               title: "v1.0.799",
               bullets: [
+                "chore: regenerate changelog for v1.0.799",
                 "fix(groups): restore audio-relay SFU-unavailable fallback for platform parity",
                 "refactor(groups): retire legacy N-way mesh + WS-relay, SFU-only",
                 "feat(groups): SFU A/V telemetry wiring + adaptive video-grid layout",
@@ -154,14 +161,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.781",
                 "fix(group-chat): sendGroupDelivered — getWebSocketClient() is non-optional",
-              ]),
-        .init(id: "v1.0.780",
-              date: "2026-07-14",
-              title: "v1.0.780",
-              bullets: [
-                "chore: regenerate changelog for v1.0.780",
-                "feat(group-chat): adopt server group_msg transport (Android/Desktop parity)",
-                "feat(call): handle call_busy + call_missed wire events",
               ]),
     ]
 }
