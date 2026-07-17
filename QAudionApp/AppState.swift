@@ -11015,6 +11015,24 @@ extension AppState {
                     "envelopeJson": rot.envelopeJson,
                 ])
         }
+        // 2026-07-17 — group metadata (name/avatar) is sealed via this SAME
+        // per-epoch 0xE4 send-chain (updateGroupMetadata → encryptForWire →
+        // encryptForGroup), so once group_epoch advances past whatever
+        // epoch it was last sealed at, it becomes PERMANENTLY undecryptable
+        // for anyone who has since moved on — this very rekey just wiped
+        // every recv chain. Confirmed live on Desktop (same architecture):
+        // a stale rename threw "group_epoch mismatch: wire=0 state=1", not
+        // a missing/delayed key. Self-heal: whichever admin's device
+        // processes this rekey immediately re-seals the CURRENT known
+        // name/avatar (newName/avatarData nil = keep-as-is, per
+        // updateGroupMetadata's own contract) under the fresh epoch, so the
+        // group converges again without waiting for a manual rename.
+        // No-op for non-admins — updateGroupMetadata's own admin guard
+        // would reject anyway, checked here first to avoid a noisy log for
+        // the common (non-admin) case.
+        if GroupRegistry.shared.entry(for: groupHex)?.admins.contains(selfId) == true {
+            updateGroupMetadata(groupId: groupHex, newName: nil, avatarData: nil)
+        }
     }
 
     /// Robustly read a UInt32 field from a WS JSON payload (values arrive
