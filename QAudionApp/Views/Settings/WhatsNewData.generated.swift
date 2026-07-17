@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.804",
+              date: "2026-07-17",
+              title: "v1.0.804",
+              bullets: [
+                "fix(calls): drop stray 1:1 call_answer while a group call is active",
+                "fix(groups): auto-reseal metadata under the fresh epoch after any bump",
+              ]),
         .init(id: "v1.0.803",
               date: "2026-07-17",
               title: "v1.0.803",
               bullets: [
+                "chore: regenerate changelog for v1.0.803",
                 "fix(groups): never show raw long UUID, retry metadata decrypt, fix relogin extension",
                 "feat(groups): paginate the video grid instead of shrinking without limit",
               ]),
@@ -157,13 +165,6 @@ extension ReleaseNote {
                 "feat(groups): Fase-1B — image/file attachments in group chat (send + receive)",
                 "feat(groups): Fase-1B UX — sender-name, group unread/preview, group banner + empty-group loop fix",
                 "chore: regenerate changelog for v1.0.783",
-              ]),
-        .init(id: "v1.0.783",
-              date: "2026-07-15",
-              title: "v1.0.783",
-              bullets: [
-                "fix(groups): register iOS-created groups server-side (POST /api/v1/groups)",
-                "feat(groups): Fase-1A — add/remove member UI + epoch persistence (the keystone)",
               ]),
     ]
 }
