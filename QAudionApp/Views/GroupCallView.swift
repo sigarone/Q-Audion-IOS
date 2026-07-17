@@ -155,7 +155,7 @@ struct GroupCallView: View {
                 // screen-share spotlight above — same "fixed panel above
                 // the flexible grid" placement; the tile's own rendering
                 // is untouched. See `GroupCallViewModel.currentSpeakerId`'s
-                // kdoc for the LiveKit active-speaker source.
+                // kdoc for the SFU-vs-mesh source.
                 if viewModel.layoutMode == .speaker,
                    let speakerId = viewModel.currentSpeakerId,
                    let speaker = viewModel.participants.first(where: { $0.id == speakerId }) {
@@ -232,26 +232,30 @@ struct GroupCallView: View {
                             .clipShape(Circle())
                     }
 
-                    // W-GRPVIDEO: camera on/off. Works whether the call
+                    // W-GRPVIDEO: camera on/off. Only shown once the call is
+                    // actually riding the LiveKit SFU (isUsingSfu) — the
+                    // WS-relay mesh fallback path has no video pipeline, so
+                    // there is nothing to toggle. Works whether the call
                     // started as audio or video: publishing a fresh camera
                     // track mid-call is a supported LiveKit path (see
-                    // GroupCallController.setVideoEnabled kdoc). The action
-                    // itself is a safe no-op until the SFU room is actually
-                    // connected (see that method's kdoc), so the button is
-                    // shown unconditionally rather than gated on transport.
-                    Button {
-                        viewModel.toggleVideo()
-                    } label: {
-                        Image(systemName: viewModel.isVideoEnabled ? "video.fill" : "video.slash.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 56, height: 56)
-                            .background(viewModel.isVideoEnabled ? Color.white.opacity(0.15) : Color.red.opacity(0.3))
-                            .clipShape(Circle())
+                    // GroupCallController.setVideoEnabled kdoc).
+                    if viewModel.isSfuActive {
+                        Button {
+                            viewModel.toggleVideo()
+                        } label: {
+                            Image(systemName: viewModel.isVideoEnabled ? "video.fill" : "video.slash.fill")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .frame(width: 56, height: 56)
+                                .background(viewModel.isVideoEnabled ? Color.white.opacity(0.15) : Color.red.opacity(0.3))
+                                .clipShape(Circle())
+                        }
                     }
 
-                    // W-GRPSCREENSHARE: screen-share on/off. Tapping this
-                    // calls straight into `GroupCallController.
+                    // W-GRPSCREENSHARE: screen-share on/off. Same SFU-only
+                    // gating as the camera toggle above — screen share, like
+                    // camera, only exists over the LiveKit SFU transport.
+                    // Tapping this calls straight into `GroupCallController.
                     // setScreenShareEnabled`, which itself calls LiveKit's
                     // own `LocalParticipant.setScreenShare(enabled:)` — that
                     // SDK call is what shows the SYSTEM broadcast picker
@@ -260,19 +264,21 @@ struct GroupCallView: View {
                     // custom in-app permission flow to build here (see
                     // `LiveKitGroupCallRoom.setScreenShareEnabled`'s kdoc for
                     // the verified source trail).
-                    Button {
-                        viewModel.toggleScreenShare()
-                    } label: {
-                        Image(systemName: viewModel.isScreenSharing
-                              ? "rectangle.on.rectangle.circle.fill"
-                              : "rectangle.on.rectangle")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 56, height: 56)
-                            .background(viewModel.isScreenSharing ? Color.blue.opacity(0.35) : Color.white.opacity(0.15))
-                            .clipShape(Circle())
+                    if viewModel.isSfuActive {
+                        Button {
+                            viewModel.toggleScreenShare()
+                        } label: {
+                            Image(systemName: viewModel.isScreenSharing
+                                  ? "rectangle.on.rectangle.circle.fill"
+                                  : "rectangle.on.rectangle")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .frame(width: 56, height: 56)
+                                .background(viewModel.isScreenSharing ? Color.blue.opacity(0.35) : Color.white.opacity(0.15))
+                                .clipShape(Circle())
+                        }
+                        .accessibilityLabel(viewModel.isScreenSharing ? "Interrompi condivisione schermo" : "Condividi schermo")
                     }
-                    .accessibilityLabel(viewModel.isScreenSharing ? "Interrompi condivisione schermo" : "Condividi schermo")
 
                     // Item 1 (2026-07-16 wire contract) — raise/lower
                     // hand, state-dependent background color exactly like
@@ -829,6 +835,10 @@ class GroupCallViewModel: ObservableObject {
     /// (`GroupCallController.wantsVideo`, surfaced via `callWantsVideo`),
     /// then flipped by `toggleVideo()`.
     @Published var isVideoEnabled = false
+    /// W-GRPVIDEO: whether the call is riding the LiveKit SFU right now —
+    /// gates the camera-toggle button (the WS-relay mesh fallback has no
+    /// video pipeline).
+    @Published var isSfuActive = false
     /// W-GRPSCREENSHARE: whether OUR OWN screen share is actually live right
     /// now. Deliberately NOT flipped optimistically by `toggleScreenShare()`
     /// — the real transition is asynchronous (system broadcast picker +
@@ -858,18 +868,10 @@ class GroupCallViewModel: ObservableObject {
         case speaker
     }
     /// Item 5: passthrough of `GroupCallController.onActiveSpeakersChanged`
-    /// (LiveKit's own native active-speaker detection) — the first entry
-    /// of `activeSpeakerIds`, used to pin the `.speaker`-layout spotlight
-    /// tile (see `currentSpeakerId`).
+    /// (LiveKit's own native active-speaker detection) — only ever set
+    /// while riding the SFU; see `currentSpeakerId`'s kdoc for the mesh
+    /// fallback.
     @Published var activeSpeakerId: String? = nil
-    /// Item 5 / per-tile speaking indicator: the FULL set from the same
-    /// `onActiveSpeakersChanged` callback — drives each `ParticipantUI.
-    /// isSpeaking` (the gallery-grid tile border highlight), not just the
-    /// single spotlight pick above. Phase 5 (2026-07-17): replaces the
-    /// retired WS-relay-mesh `BCryptoGroupCallManager.Participant.
-    /// isSpeaking` heuristic, which only ever fired on the deleted
-    /// `group_call_frame` mesh path.
-    private var activeSpeakerIds: Set<String> = []
     /// Item 4: resolved toast text for a just-received
     /// `group_call_mute_request_recv`, or nil. This plain
     /// `ObservableObject` has no reach into the environment-provided
@@ -917,9 +919,18 @@ class GroupCallViewModel: ObservableObject {
     /// raised-hand/reaction state alongside everyone else's.
     var selfUserId: String { manager.selfUserId }
     /// Item 5: which participant is currently "the speaker" for layout
-    /// purposes — LiveKit's own native active-speaker detection
-    /// (`activeSpeakerId`, the first entry of `activeSpeakerIds`).
-    var currentSpeakerId: String? { activeSpeakerId }
+    /// purposes. Over the LiveKit SFU this is `activeSpeakerId` (LiveKit's
+    /// own native active-speaker detection). On the WS-relay mesh
+    /// fallback (no SFU room, so that callback never fires) this instead
+    /// reuses each participant's pre-existing `isSpeaking` flag — already
+    /// driven by `BCryptoGroupCallManager`'s own 500ms-decay speaking
+    /// heuristic (the SAME flag that already rings a tile's border) — per
+    /// the wire contract's explicit "reuse the existing heuristic, no new
+    /// mesh plumbing" instruction.
+    var currentSpeakerId: String? {
+        if isSfuActive { return activeSpeakerId }
+        return participants.first(where: { $0.isSpeaking })?.id
+    }
     /// Item 3: the freshest still-live reaction for one participant, or
     /// nil if none is currently displayed.
     func latestReactionEmoji(for participantId: String) -> String? {
@@ -959,6 +970,7 @@ class GroupCallViewModel: ObservableObject {
                 guard let self = self else { return }
                 self.callState = state
                 if state == .active {
+                    self.isSfuActive = controller?.isUsingSfu ?? false
                     self.isVideoEnabled = controller?.callWantsVideo ?? false
                 }
             }
@@ -985,7 +997,7 @@ class GroupCallViewModel: ObservableObject {
                 let existingScreenShareTracks = Dictionary(uniqueKeysWithValues: self.participants.map { ($0.id, $0.screenShareTrack) })
                 self.participants = list.map {
                     ParticipantUI(id: $0.id, displayName: $0.displayName,
-                                  isMuted: $0.isMuted, isSpeaking: self.activeSpeakerIds.contains($0.id),
+                                  isMuted: $0.isMuted, isSpeaking: $0.isSpeaking,
                                   videoTrack: existingTracks[$0.id] ?? nil,
                                   screenShareTrack: existingScreenShareTracks[$0.id] ?? nil,
                                   handRaised: self.raisedHandsCache.contains($0.id))
@@ -1060,18 +1072,7 @@ class GroupCallViewModel: ObservableObject {
                 }
             }
             controller.onActiveSpeakersChanged = { [weak self] identities in
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    self.activeSpeakerId = identities.first
-                    // Phase 5 (2026-07-17): also drives the per-tile
-                    // gallery-grid speaking border (see `ParticipantUI.
-                    // isSpeaking`'s kdoc) — same "cache + reconcile every
-                    // participant" pattern as `onRaisedHandsChanged` above.
-                    self.activeSpeakerIds = Set(identities)
-                    for idx in self.participants.indices {
-                        self.participants[idx].isSpeaking = self.activeSpeakerIds.contains(self.participants[idx].id)
-                    }
-                }
+                DispatchQueue.main.async { self?.activeSpeakerId = identities.first }
             }
             controller.onMuteRequested = { [weak self] requesterId in
                 DispatchQueue.main.async {
@@ -1107,20 +1108,21 @@ class GroupCallViewModel: ObservableObject {
 
     func toggleMute() {
         isMuted = manager.toggleMute()
-        // W-GRPMUTEFIX (item 6, 2026-07-16 wire contract): this button used
-        // to only flip the manager's own roster-mute flag above — pressing
-        // it during an actual LiveKit-SFU call (the default/production
-        // transport) did NOT silence the outbound LiveKit audio track.
-        // `setMicrophoneEnabled` is the real SFU mic toggle; it's a safe
-        // no-op (returns false) until the SFU room is actually connected,
-        // so firing it unconditionally here is safe — this makes the
-        // action itself SFU-aware instead of gating the button's
-        // visibility (see `GroupCallController.setMicrophoneEnabled`'s
-        // kdoc for the bug this closes). Same unwrap-and-fire idiom as
-        // `toggleScreenShare` below. Phase 5 (2026-07-17): the legacy
-        // WS-relay-mesh mute gate this comment used to also describe
-        // (`GroupCallController.setMuted`) has been retired along with the
-        // rest of the mesh audio path.
+        // W367: also flip the controller's mute so the audio pipeline
+        // gates outgoing PCM frames (without this, mute is UI-only and
+        // audio still streams to peers).
+        controller?.setMuted(isMuted)
+        // W-GRPMUTEFIX (item 6, 2026-07-16 wire contract): the two calls
+        // above only ever gated the LEGACY WS-relay-mesh pipeline —
+        // pressing this SAME button during an actual LiveKit-SFU call (the
+        // default/production transport) did NOT silence the outbound
+        // LiveKit audio track. `setMicrophoneEnabled` is a real no-op
+        // (returns false) when the call isn't riding the SFU, so firing it
+        // unconditionally (rather than branching on `isSfuActive`) is safe
+        // — this makes the action itself SFU-aware instead of gating the
+        // button's visibility (see `GroupCallController.
+        // setMicrophoneEnabled`'s kdoc for the bug this closes). Same
+        // unwrap-and-fire idiom as `toggleScreenShare` below.
         if let controller = controller {
             let micEnabled = !isMuted
             Task {

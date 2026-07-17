@@ -314,11 +314,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// shape exactly. Confirmed pre-existing gap: `connect()` above calls
     /// `room.localParticipant.setMicrophone(enabled: true)` exactly ONCE at
     /// connect time and nothing else in this file ever toggled it again —
-    /// the UI's mute button previously only ever gated the LEGACY
-    /// WS-relay-mesh audio-send path (retired in Phase 5, 2026-07-17), so
-    /// pressing "mute" during an actual LiveKit-SFU call (the
-    /// default/production transport) did NOT silence the outbound LiveKit
-    /// audio track. This is the method that actually does.
+    /// `GroupCallController.setMuted(_:)` only ever gated the LEGACY
+    /// WS-relay-mesh `sendOutgoingOpusFrame` path, so pressing "mute" during
+    /// an actual LiveKit-SFU call (the default/production transport) did
+    /// NOT silence the outbound LiveKit audio track. This is the method
+    /// that actually does.
     public func setMicrophoneEnabled(_ enabled: Bool) async throws {
         guard let room = room else { return }
         _ = try await room.localParticipant.setMicrophone(enabled: enabled)
