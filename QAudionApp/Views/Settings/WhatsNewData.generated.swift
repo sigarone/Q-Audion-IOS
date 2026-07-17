@@ -9,6 +9,21 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.799",
+              date: "2026-07-17",
+              title: "v1.0.799",
+              bullets: [
+                "fix(groups): restore audio-relay SFU-unavailable fallback for platform parity",
+                "refactor(groups): retire legacy N-way mesh + WS-relay, SFU-only",
+                "feat(groups): SFU A/V telemetry wiring + adaptive video-grid layout",
+                "feat(groups): Tier-1 call features — reactions, raise-hand, mute-request, layout toggle",
+              ]),
+        .init(id: "v1.0.798",
+              date: "2026-07-16",
+              title: "v1.0.798",
+              bullets: [
+                "chore: regenerate changelog for v1.0.798",
+              ]),
         .init(id: "v1.0.797",
               date: "2026-07-16",
               title: "v1.0.797",
@@ -147,26 +162,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.780",
                 "feat(group-chat): adopt server group_msg transport (Android/Desktop parity)",
                 "feat(call): handle call_busy + call_missed wire events",
-              ]),
-        .init(id: "v1.0.779",
-              date: "2026-07-14",
-              title: "v1.0.779",
-              bullets: [
-                "chore: regenerate changelog for v1.0.779",
-                "feat(group-call): iOS LiveKit SFU group calls with E2EE per-participant keys (#27)",
-                "fix(group-call): close critical audio-availability bug + 3 concurrency findings",
-                "feat(group-call): per-sender E2E audio + real UI reachability (W-GRPSENDERKEY/W-GRPUI)",
-                "fix(audio): drop stale-integration frames sent after call teardown",
-                "fix(video): drop stale-pipeline frames sent after call teardown",
-                "fix(trust): close 2 confirmed bugs in persistent safety-number wiring",
-                "feat(trust): wire real persistent safety-number to ContactDetailScreen",
-              ]),
-        .init(id: "v1.0.778",
-              date: "2026-07-13",
-              title: "v1.0.778",
-              bullets: [
-                "diag(pqc): unconditional entry breadcrumb in onAndroidBundleReceived",
-                "docs: correct overstated crypto label + misleading video-degrade log",
               ]),
     ]
 }
