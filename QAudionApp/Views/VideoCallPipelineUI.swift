@@ -37,6 +37,25 @@ public struct LocalCameraPreview: UIViewRepresentable {
         uiView.attach(to: pipeline.captureSession)
     }
 
+    // W-CRASH-AVF2 — production crash (v1.0.798, iOS 26.5.2, call 7212ec21,
+    // right after a rapid video downgrade→reupgrade): EXC_CRASH/SIGABRT in
+    // `-[AVCaptureSession dealloc]` → `_makeConfigurationLive:` →
+    // `detachFromFigCaptureSession:`, triggered from a SwiftUI view-array
+    // deinit cascade on the main thread. Root cause: this view never
+    // implemented `dismantleUIView`, so when SwiftUI tears the view out of
+    // the hierarchy (e.g. `startVideoPipeline` swaps in a fresh
+    // `VideoCallPipeline` on upgrade — see AppState.swift), `PreviewUIView`
+    // deallocates with `previewLayer.session` still pointing at the old,
+    // dying `AVCaptureSession`. AVFoundation's own dealloc-time safety net
+    // tries to force-detach the still-attached preview layer and asserts
+    // because that happens re-entrantly inside the SwiftUI deinit chain
+    // instead of a clean, ordered teardown. Explicitly nil-ing the session
+    // here — guaranteed by SwiftUI to run BEFORE the UIView is released —
+    // makes the detach happen on our terms, ahead of any dealloc.
+    public static func dismantleUIView(_ uiView: PreviewUIView, coordinator: ()) {
+        uiView.previewLayer.session = nil
+    }
+
     public final class PreviewUIView: UIView {
         public override class var layerClass: AnyClass {
             AVCaptureVideoPreviewLayer.self
