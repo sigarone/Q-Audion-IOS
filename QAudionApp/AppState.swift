@@ -2254,6 +2254,21 @@ final class AppState: ObservableObject {
             guard let self else { return false }
             return self.callState == .active || self.callState == .encrypted
         }
+        // W-GRPVPIO-CRASH-3 — a group call owns the VP-IO hardware unit via
+        // LiveKit; every 1:1 audio-engine start must refuse to run so a
+        // stray/redelivered 1:1 signaling message can't crash the process
+        // (see CallService.isGroupCallActive kdoc). `groupCallKitId` is
+        // non-nil for the whole ring→active→end lifetime of a group call.
+        callService.isGroupCallActive = { [weak self] in
+            guard let self else { return false }
+            // Cover BOTH signals: `groupCallKitId` (set for the CallKit ring
+            // lifetime) AND the controller being non-idle (covers
+            // callKitFreeMode + the connecting window before/without a
+            // CallKit id). Either being live means LiveKit owns VP-IO.
+            if self.groupCallKitId != nil { return true }
+            if case .idle = self.groupCallControllerState { return false }
+            return true
+        }
         // W525: stamp the call_id onto every outbound audio_frame so
         // Android (BcryptoWsFrameRelayTransport) and Desktop
         // (MediaTransport) don't silently drop our frames. The engine's

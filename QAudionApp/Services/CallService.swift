@@ -205,6 +205,23 @@ final class CallService: @unchecked Sendable {
     public var getPeerId: PeerIdProvider?
     public var isCallActive: CallActiveProvider?
     public var getCallId: CallIdProvider?
+    /// W-GRPVPIO-CRASH-3 (2026-07-17) — returns true while a GROUP call owns
+    /// the shared VoiceProcessingIO hardware unit (LiveKit's SFU room drives
+    /// it directly). Injected by AppState (`{ groupCallKitId != nil }`).
+    /// Every 1:1 audio-engine START path guards on this so NO caller — any
+    /// WS message handler, CallKit callback, or stale redelivered signaling —
+    /// can call `setVoiceProcessingEnabled(true)` on a SECOND engine while
+    /// LiveKit already holds the unit: that throws an uncatchable ObjC
+    /// NSException inside AVAudioEngineGraph::_Connect (EXC_CRASH/SIGABRT,
+    /// crashPointId B4lMk7amGdH7pnGoa5qsYT — repro'd 5+ times today via the
+    /// App Store Connect crash portal, always "crash after answering" a
+    /// group call). The earlier fix gated ONLY the `call_answer` WS handler;
+    /// the crash log's Last Exception Backtrace (still
+    /// NSURLSessionWebSocketTask.receive → app → setVoiceProcessingEnabled)
+    /// proved another WS message path reaches it. Guarding at the engine
+    /// entry points here is defense-in-depth: it closes every path at once
+    /// rather than playing whack-a-mole with individual message handlers.
+    public var isGroupCallActive: (() -> Bool)?
     /// W-DCAUDIO — send a sealed audio frame over the WebRTC DataChannel if it is
     /// open; returns true if queued there, false to fall back to the WS relay.
     /// Wired by AppState to `QAudionWebRtcCallController.sendAudioFrameData`. The
@@ -652,6 +669,15 @@ final class CallService: @unchecked Sendable {
     ///   - integration: The responder integration built during ringing.
     func activateIncomingCallAudio(engine: QAudionEngine,
                                    integration: QAudionCallIntegration) throws {
+        // W-GRPVPIO-CRASH-3 — refuse to build a 1:1 audio engine while a
+        // group call owns the VP-IO unit (see `isGroupCallActive` kdoc). A
+        // stray/redelivered 1:1 accept-path message during a group call
+        // otherwise reaches setVoiceProcessingEnabled here and aborts the
+        // whole process.
+        if isGroupCallActive?() == true {
+            print("[CallService] activateIncomingCallAudio SKIPPED — group call active (VP-IO owned by LiveKit)")
+            return
+        }
         // W574i — preserve the M-15 relay sealers across the defensive
         // teardown. On the CALLEE the PQC handshake completes DURING ringing,
         // so onRelaySessionReady -> installRelaySealers has ALREADY run by the
@@ -1261,6 +1287,15 @@ final class CallService: @unchecked Sendable {
     /// engines). Whichever runs last with `audioSessionActive == true`
     /// performs the real start.
     private func startAudioIOIfReady() {
+        // W-GRPVPIO-CRASH-3 — the single chokepoint every 1:1 audio start
+        // funnels through (activateIncomingCallAudio, handleAudioSessionActivated,
+        // handleCallAnswered, and CallKit didActivate all reach here). Refusing
+        // it while a group call owns VP-IO closes EVERY path to the crashing
+        // setVoiceProcessingEnabled at once (see `isGroupCallActive` kdoc).
+        if isGroupCallActive?() == true {
+            print("[CallService] startAudioIOIfReady SKIPPED — group call active (VP-IO owned by LiveKit)")
+            return
+        }
         guard audioSessionActive else {
             print("[CallService] audio I/O deferred — waiting for CallKit didActivate")
             return
