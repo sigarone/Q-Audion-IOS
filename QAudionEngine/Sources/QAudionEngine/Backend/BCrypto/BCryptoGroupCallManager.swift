@@ -16,7 +16,6 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         public let id: String  // userId
         public var displayName: String
         public var isMuted: Bool = false
-        public var isSpeaking: Bool = false
     }
 
     /// W-GRPRING — decoded `group_call_invite` (server commit 9619df4). The
@@ -78,8 +77,6 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     public var onStateChanged: ((State) -> Void)?
     /// Callback for participant list updates
     public var onParticipantsChanged: (([Participant]) -> Void)?
-    /// Callback for incoming audio frames
-    public var onAudioFrame: ((String, Data) -> Void)?  // (senderId, frameData)
     /// W-GRPSENDERKEY / W-GRPREKEY — fires on every `group_call_update` with
     /// the full server-canonical tuple GroupCallController needs to bootstrap
     /// and rekey the per-sender ratchet. `onParticipantsChanged` above only
@@ -90,9 +87,11 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// minted a LiveKit access token for `callId`. Wire:
     /// {call_id, node_id, url, token}.
     public var onSfuTokenReceived: ((_ callId: String, _ nodeId: String, _ url: String, _ token: String) -> Void)?
-    /// W-GRPLIVEKIT — fires on `group_call_sfu_unavailable`: the caller
-    /// MUST soft-fall-back to the existing WS-relay group-call mesh path
-    /// (never hard-fail). Wire: {call_id, reason}.
+    /// W-GRPLIVEKIT — fires on `group_call_sfu_unavailable`. Phase 5
+    /// (2026-07-17): the caller now fails the call hard — there is no more
+    /// WS-relay group-call mesh path to fall back to (that path has been
+    /// retired; see `GroupCallController.handleSfuUnavailable`). Wire:
+    /// {call_id, reason}.
     public var onSfuUnavailable: ((_ callId: String, _ reason: String) -> Void)?
 
     // ─── Tier-1 call features: reactions / raise-hand / mute-request ──
@@ -259,22 +258,6 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         endLocally()
     }
 
-    /// Forward one encrypted audio frame — the server SFU relays it,
-    /// broadcast-once, to every OTHER participant of `callId`. There is no
-    /// per-recipient targeting on the wire (verified against the live
-    /// `case "group_call_forward"` handler in `cmd/bcrypto-lite/main.go`:
-    /// `{call_id, frame}` in, single relay to all non-sender participants
-    /// out) — encryption must therefore be per-SENDER (one ciphertext every
-    /// recipient can open), never per-recipient. `GroupCallController` seals
-    /// with the caller's own `GroupSenderKey` chain before calling this.
-    public func forwardAudioFrame(_ frameData: Data) {
-        guard let cid = callId, state == .active else { return }
-        ws.send(type: "group_call_forward", data: [
-            "call_id": cid,
-            "frame": frameData.base64EncodedString()
-        ])
-    }
-
     /// W-GRPLIVEKIT: request a LiveKit SFU access token for `callId`. Reply
     /// arrives asynchronously as either `group_call_sfu_token_recv`
     /// ([onSfuTokenReceived]) or `group_call_sfu_unavailable`
@@ -285,10 +268,10 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     }
 
     /// Tier-1: group-call BROADCAST reaction (Template B, mirrors
-    /// `group_typing`'s two-phase lock-then-network send). No-op outside an
-    /// active call (mirrors `forwardAudioFrame`'s guard). Server does not
-    /// validate `emoji` — the fixed 6-emoji set is a CLIENT UI constraint
-    /// only (see `onGroupCallReactionReceived`'s kdoc).
+    /// `group_typing`'s two-phase lock-then-network send). No-op with no
+    /// active `callId`. Server does not validate `emoji` — the fixed
+    /// 6-emoji set is a CLIENT UI constraint only (see
+    /// `onGroupCallReactionReceived`'s kdoc).
     public func sendGroupCallReaction(emoji: String) {
         guard let cid = callId else { return }
         ws.send(type: "group_call_reaction", data: [
@@ -345,8 +328,12 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     // that dead protocol (`group_call_state`, `group_call_receive`,
     // `invite_user_ids`, per-target `forward{target_id,data}`) and its
     // "current vs legacy-alias" framing was backwards: the real server only
-    // ever speaks `group_call_invite` / `group_call_update` / `group_call_frame`
-    // / `group_call_ended`, so those are now the ONLY handlers registered.
+    // ever speaks `group_call_invite` / `group_call_update` / `group_call_ended`
+    // (plus the SFU/Tier-1 messages below), so those are now the ONLY
+    // handlers registered. Phase 5 (2026-07-17): `group_call_frame` (the
+    // legacy WS-relay mesh audio-forward broadcast) has been retired along
+    // with the client-side mesh path — this manager no longer registers a
+    // handler for it.
 
     private func registerHandlers() {
         // W-GRPRING — `group_call_invite` wire (server commit 9619df4):
@@ -391,12 +378,6 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             self?.handleGroupCallUpdate(data: data)
         }
 
-        // Sent by the SFU relay for every forwarded frame. Wire:
-        // {call_id, frame, sender}.
-        ws.registerHandler(type: "group_call_frame") { [weak self] _, data in
-            self?.handleGroupCallFrame(data: data)
-        }
-
         // Wire: {call_id}.
         ws.registerHandler(type: "group_call_ended") { [weak self] _, _ in
             self?.endLocally()
@@ -411,7 +392,8 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
                   let token = data["token"] as? String else { return }
             self.onSfuTokenReceived?(cid, nodeId, url, token)
         }
-        // Wire: {call_id, reason}. MUST soft-fall-back, never hard-fail.
+        // Wire: {call_id, reason}. Phase 5: the client now hard-fails the
+        // call on this (see `onSfuUnavailable`'s kdoc above).
         ws.registerHandler(type: "group_call_sfu_unavailable") { [weak self] _, data in
             guard let self = self, let cid = data["call_id"] as? String else { return }
             let reason = data["reason"] as? String ?? "unknown"
@@ -492,35 +474,6 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// `GroupCallController.join(callId:)`; reject → do nothing (there is no
     /// `group_call_decline` wire type: the room stays open for the others).
     public var onIncomingInvite: ((IncomingGroupInvite) -> Void)?
-
-    /// Apply an inbound SFU frame to participant speaking state and surface
-    /// the encrypted audio bytes to the engine. Wire: {call_id, frame, sender}.
-    private func handleGroupCallFrame(data: [String: Any]) {
-        guard let senderId = data["sender"] as? String,
-              let frameB64 = data["frame"] as? String,
-              let frameData = Data(base64Encoded: frameB64)
-        else { return }
-        // Mark sender as speaking
-        lock.lock()
-        if let idx = _participants.firstIndex(where: { $0.id == senderId }) {
-            _participants[idx].isSpeaking = true
-            // Reset speaking after 500ms
-            let list = _participants
-            lock.unlock()
-            onParticipantsChanged?(list)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self = self else { return }
-                self.lock.lock()
-                if let idx = self._participants.firstIndex(where: { $0.id == senderId }) {
-                    self._participants[idx].isSpeaking = false
-                }
-                self.lock.unlock()
-            }
-        } else {
-            lock.unlock()
-        }
-        onAudioFrame?(senderId, frameData)
-    }
 
     private func endLocally() {
         lock.lock()

@@ -11569,11 +11569,13 @@ extension AppState {
     /// Lazy-init shared GroupCallController backed by:
     /// - the live BCryptoGroupCallManager (WS protocol)
     /// - a KeychainGroupSessionVault (W364) for chain-state persistence
-    /// - bound AudioCapture / AudioPlayback for the audio pipeline
+    /// - the LiveKit SFU for media (Phase 5, 2026-07-17: the legacy
+    ///   WS-relay mesh audio pipeline this controller used to drive has
+    ///   been retired — SFU is the sole group-call media transport now)
     ///
     /// One controller per AppState; reused across calls. The
     /// PARITY_AUDIT_HONEST.md item "Group voice call ROTTO" is now
-    /// fully closed — engine + WS protocol + audio pipeline + state
+    /// fully closed — engine + WS protocol + SFU media + state
     /// persistence are all wired through this property.
     func ensureGroupCallController(
         _ manager: BCryptoGroupCallManager
@@ -11582,11 +11584,6 @@ extension AppState {
             return existing
         }
         let controller = GroupCallController(manager: manager)
-        // Attach the shared audio capture / playback so the
-        // controller drives them in lockstep with call state.
-        let capture = AudioCapture()
-        let playback = AudioPlayback()
-        controller.attachAudioPipeline(capture: capture, playback: playback)
         // W-GRPTELEM: group-call SFU A/V telemetry — QAudionEngine cannot
         // import QAudionApp, so this closure is the ONLY place
         // `call.media.connected`/`call.media.ended` (emitted by
