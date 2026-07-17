@@ -50,6 +50,10 @@ struct GroupCallView: View {
     /// panel itself calls `GroupMessageStore.shared.markRead`, same as
     /// `GroupChatScreen.onAppear`/`reloadMessagesFromStore`).
     @State private var chatUnreadCount = 0
+    /// 2026-07-17 — which page of the paginated gallery grid is showing.
+    /// Clamped back on-screen if a departure shrinks the page count below
+    /// this index — see the `.onChange(of: gridPages.count)` below.
+    @State private var currentGridPage = 0
 
     var body: some View {
         ZStack {
@@ -178,43 +182,63 @@ struct GroupCallView: View {
                 // section occupies (between the fixed header/spotlights
                 // above and the fixed control bar below); `adaptiveGridLayout`
                 // then computes the (cols, rows, tileW, tileH) that
-                // maximizes rendered tile area for the current participant
-                // count, and the `VStack`-of-`HStack`s below renders
-                // exactly that grid, centering a short last row via the
-                // symmetric `Spacer()`s on every row (a full row's own
-                // `Spacer()`s collapse to ~0 since its tiles already span
-                // the row). At the call sizes this app supports
-                // (documented up to 8) everything fits per the algorithm,
-                // so the previous `ScrollView` is no longer needed.
-                // Recomputes automatically on every `body` re-evaluation —
-                // i.e. whenever `gridParticipants` or the container size
-                // changes, since SwiftUI re-renders `body` on `@Published`
-                // changes.
+                // maximizes rendered tile area for the current PAGE's
+                // participant count.
+                //
+                // 2026-07-17 — live-test report (same fix as Android/
+                // Desktop): `adaptiveGridLayout` alone kept shrinking every
+                // tile to squeeze the WHOLE roster onto one screen, useless
+                // once a real meeting-sized call made every tile illegible.
+                // `gridPageCapacity` is purely a property of the container
+                // size + a minimum-legible-tile floor (`gridMinTileWidth`),
+                // independent of the actual headcount — a bigger/landscape
+                // screen naturally fits more per page, never a hardcoded
+                // count. Once the roster exceeds that capacity it's split
+                // into pages (native `TabView(.page)` swipe + dot
+                // indicator) instead of shrinking tiles further, with
+                // whoever is CURRENTLY SPEAKING (`activeSpeakerIds`) sorted
+                // to the front so they land on page 1.
                 GeometryReader { geo in
-                    let layout = Self.adaptiveGridLayout(
-                        count: gridParticipants.count,
-                        width: geo.size.width,
-                        height: geo.size.height
-                    )
-                    let participantRows = gridRows(cols: layout.cols)
-                    VStack(spacing: Self.gridSpacing) {
-                        ForEach(Array(participantRows.enumerated()), id: \.offset) { _, row in
-                            HStack(spacing: Self.gridSpacing) {
-                                Spacer(minLength: 0)
-                                ForEach(row) { participant in
-                                    ParticipantTile(
-                                        participant: participant,
-                                        isSelf: participant.id == viewModel.selfUserId,
-                                        reactionEmoji: viewModel.latestReactionEmoji(for: participant.id),
-                                        onRequestMute: { viewModel.requestMute(participantId: participant.id) },
-                                        tileSize: CGSize(width: layout.tileW, height: layout.tileH)
-                                    )
+                    let pageCapacity = Self.gridPageCapacity(width: geo.size.width, height: geo.size.height)
+                    let pages = gridPages(pageCapacity: pageCapacity)
+                    TabView(selection: $currentGridPage) {
+                        ForEach(Array(pages.enumerated()), id: \.offset) { pageIndex, pageParticipants in
+                            let layout = Self.adaptiveGridLayout(
+                                count: pageParticipants.count,
+                                width: geo.size.width,
+                                height: geo.size.height
+                            )
+                            let participantRows = Self.chunkRows(pageParticipants, cols: layout.cols)
+                            VStack(spacing: Self.gridSpacing) {
+                                ForEach(Array(participantRows.enumerated()), id: \.offset) { _, row in
+                                    HStack(spacing: Self.gridSpacing) {
+                                        Spacer(minLength: 0)
+                                        ForEach(row) { participant in
+                                            ParticipantTile(
+                                                participant: participant,
+                                                isSelf: participant.id == viewModel.selfUserId,
+                                                reactionEmoji: viewModel.latestReactionEmoji(for: participant.id),
+                                                onRequestMute: { viewModel.requestMute(participantId: participant.id) },
+                                                tileSize: CGSize(width: layout.tileW, height: layout.tileH)
+                                            )
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
                                 }
-                                Spacer(minLength: 0)
                             }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .tag(pageIndex)
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .tabViewStyle(.page(indexDisplayMode: pages.count > 1 ? .always : .never))
+                    .onChange(of: pages.count) { newCount in
+                        // A member leaving can shrink page count below the
+                        // page the user was looking at — clamp back onto
+                        // the last real page instead of a blank tab.
+                        if currentGridPage > newCount - 1 {
+                            currentGridPage = max(newCount - 1, 0)
+                        }
+                    }
                 }
                 .padding(.horizontal, 16)
 
@@ -453,23 +477,47 @@ struct GroupCallView: View {
     /// mode the pinned spotlight tile above already renders the active
     /// speaker, so exclude them here to avoid a duplicate tile (mirrors
     /// the pre-existing screen-share spotlight's "small tiles stay
-    /// small, shared content dominates" policy).
+    /// small, shared content dominates" policy). 2026-07-17 — additionally
+    /// sorted so anyone currently in `activeSpeakerIds` comes first, so
+    /// `gridPages` below lands them on page 1 (stable otherwise: everyone
+    /// not currently speaking keeps their existing relative order).
     private var gridParticipants: [GroupCallViewModel.ParticipantUI] {
-        guard viewModel.layoutMode == .speaker, let speakerId = viewModel.currentSpeakerId else {
-            return viewModel.participants
+        let base: [GroupCallViewModel.ParticipantUI]
+        if viewModel.layoutMode == .speaker, let speakerId = viewModel.currentSpeakerId {
+            base = viewModel.participants.filter { $0.id != speakerId }
+        } else {
+            base = viewModel.participants
         }
-        return viewModel.participants.filter { $0.id != speakerId }
+        let speaking = base.filter { viewModel.activeSpeakerIds.contains($0.id) }
+        let resting = base.filter { !viewModel.activeSpeakerIds.contains($0.id) }
+        return speaking + resting
     }
 
-    /// Chunks `gridParticipants` into rows of `cols` for the adaptive
-    /// grid's `VStack`-of-`HStack`s render — `LazyVGrid` has no API for
-    /// "N columns, but size every cell to an externally computed
-    /// tileW/tileH and center a short last row", so this manual chunk +
-    /// render replaces it (see `adaptiveGridLayout` below).
-    private func gridRows(cols: Int) -> [[GroupCallViewModel.ParticipantUI]] {
+    /// 2026-07-17 — splits the (already speaker-sorted) `gridParticipants`
+    /// into pages of at most `pageCapacity` each, for the `TabView(.page)`
+    /// pager above. A page with fewer participants than capacity still
+    /// gets full-size tiles via `adaptiveGridLayout` (capacity is a
+    /// CEILING per page, not a per-page target).
+    private func gridPages(pageCapacity: Int) -> [[GroupCallViewModel.ParticipantUI]] {
+        guard pageCapacity > 0, !gridParticipants.isEmpty else { return gridParticipants.isEmpty ? [] : [gridParticipants] }
+        return stride(from: 0, to: gridParticipants.count, by: pageCapacity).map {
+            Array(gridParticipants[$0..<min($0 + pageCapacity, gridParticipants.count)])
+        }
+    }
+
+    /// Chunks an explicit participant array (one page's worth) into rows of
+    /// `cols` for the adaptive grid's `VStack`-of-`HStack`s render —
+    /// `LazyVGrid` has no API for "N columns, but size every cell to an
+    /// externally computed tileW/tileH and center a short last row", so
+    /// this manual chunk + render replaces it (see `adaptiveGridLayout`
+    /// below). Static + explicit-array (rather than reading `gridParticipants`
+    /// directly) so each page in the pager can chunk its OWN slice.
+    private static func chunkRows(
+        _ items: [GroupCallViewModel.ParticipantUI], cols: Int
+    ) -> [[GroupCallViewModel.ParticipantUI]] {
         guard cols > 0 else { return [] }
-        return stride(from: 0, to: gridParticipants.count, by: cols).map {
-            Array(gridParticipants[$0..<min($0 + cols, gridParticipants.count)])
+        return stride(from: 0, to: items.count, by: cols).map {
+            Array(items[$0..<min($0 + cols, items.count)])
         }
     }
 
@@ -488,6 +536,34 @@ struct GroupCallView: View {
     /// 3 platforms per this feature's spec.
     private static let targetAspect: CGFloat = 16.0 / 9.0
     private static let gridSpacing: CGFloat = 12
+
+    /// 2026-07-17 — floor below which a tile is no longer legible
+    /// (face/name unreadable). Same value and same role as Android's
+    /// `GRID_MIN_TILE_WIDTH`/Desktop's `--grid-min-tile-width`: below this
+    /// width `gridPageCapacity` paginates instead of `adaptiveGridLayout`
+    /// shrinking every tile further to fit the whole roster on one screen.
+    private static let gridMinTileWidth: CGFloat = 110
+
+    /// How many tiles fit in `width` x `height` without any tile dropping
+    /// below `gridMinTileWidth`. Independent of the actual participant
+    /// count — purely a property of the container + the readability floor
+    /// — so the interface adapts the page size to whatever screen it's
+    /// given (iPad/landscape fits more per page than a small iPhone in
+    /// portrait) instead of a hardcoded number.
+    private static func gridPageCapacity(width: CGFloat, height: CGFloat) -> Int {
+        guard width > 0, height > 0 else { return 1 }
+        var best = 1
+        var cols = 1
+        while cols <= 12 {
+            let cellW = (width - CGFloat(cols - 1) * gridSpacing) / CGFloat(cols)
+            if cellW < gridMinTileWidth { break }
+            let cellH = cellW / targetAspect
+            let rows = max(Int((height + gridSpacing) / (cellH + gridSpacing)), 1)
+            best = max(best, cols * rows)
+            cols += 1
+        }
+        return best
+    }
 
     /// The adaptive video-grid packing algorithm — applied identically
     /// per spec (this is the exact packing logic, not a suggestion to
@@ -872,6 +948,12 @@ class GroupCallViewModel: ObservableObject {
     /// while riding the SFU; see `currentSpeakerId`'s kdoc for the mesh
     /// fallback.
     @Published var activeSpeakerId: String? = nil
+    /// 2026-07-17 — the FULL currently-speaking set (identities.first alone,
+    /// stored above as [activeSpeakerId], is only ever used for the single
+    /// spotlight pin). The paginated gallery grid needs everyone who's
+    /// currently talking, not just the loudest one, to sort them to page 1
+    /// — see [GroupCallView]'s grid-paging kdoc.
+    @Published var activeSpeakerIds: Set<String> = []
     /// Item 4: resolved toast text for a just-received
     /// `group_call_mute_request_recv`, or nil. This plain
     /// `ObservableObject` has no reach into the environment-provided
@@ -1072,7 +1154,10 @@ class GroupCallViewModel: ObservableObject {
                 }
             }
             controller.onActiveSpeakersChanged = { [weak self] identities in
-                DispatchQueue.main.async { self?.activeSpeakerId = identities.first }
+                DispatchQueue.main.async {
+                    self?.activeSpeakerId = identities.first
+                    self?.activeSpeakerIds = Set(identities)
+                }
             }
             controller.onMuteRequested = { [weak self] requesterId in
                 DispatchQueue.main.async {
