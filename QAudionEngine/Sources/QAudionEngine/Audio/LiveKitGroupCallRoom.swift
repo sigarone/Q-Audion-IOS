@@ -235,7 +235,19 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // KeyProvider-driven media E2EE, without also turning on data-channel
         // encryption (group TEXT CHAT is untouched by this feature).
         let encryptionOptions = EncryptionOptions(keyProvider: keyProvider, encryptionType: .gcm)
-        let roomOptions = RoomOptions(encryptionOptions: encryptionOptions)
+        // W-GRPRED: red: false is MANDATORY under E2EE. RED (redundant audio)
+        // wraps the opus payload AFTER the FrameCryptor has encrypted it, so
+        // the RED block headers the SFU/receivers must parse are ciphertext —
+        // total audio silence while video (no RED) works with the same keys.
+        // The JS SDK force-disables RED when E2EE is on (client-sdk-js
+        // PR #858); client-sdk-swift (upstream AND our 2.13.0-aes256 fork)
+        // has no such guard (AudioPublishOptions.red defaults true), so the
+        // app must. Covers both the setMicrophone(enabled:) publish below
+        // and the preconnect path via the room default.
+        let roomOptions = RoomOptions(
+            defaultAudioPublishOptions: AudioPublishOptions(red: false),
+            encryptionOptions: encryptionOptions
+        )
         let room = Room(delegate: self, roomOptions: roomOptions)
 
         self.keyProvider = keyProvider
