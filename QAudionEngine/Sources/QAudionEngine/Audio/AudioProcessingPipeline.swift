@@ -1,4 +1,5 @@
 import Foundation
+import QAudionVPIOSafe   // W-GRPVPIO-CRASH-5 — ObjC @try/@catch around setVoiceProcessingEnabled
 #if canImport(UIKit)
 import UIKit   // W574f — UIDevice.userInterfaceIdiom for the iPad VP-IO gate
 #endif
@@ -463,7 +464,35 @@ public final class AudioProcessingPipeline {
         if shouldEnable {
             // iOS 13+: setVoiceProcessingEnabled enables Apple's full VoIP DSP
             if #available(iOS 13.0, *) {
-                try inputNode.setVoiceProcessingEnabled(true)
+                // W-GRPVPIO-CRASH-5 — setVoiceProcessingEnabled(true) internally
+                // reconnects the engine graph and, when the hardware VP-IO unit
+                // is already owned by another engine (a concurrent LiveKit group
+                // call), AVFAudio raises an Objective-C NSException from
+                // AVAudioEngineGraph::_Connect. Swift's `try` CANNOT catch an
+                // ObjC exception, so it SIGABRTs (crashPointId
+                // B4lMk7amGdH7pnGoa5qsYT — the group-call answer/join crash that
+                // survived the v807/809 app-layer gates because AudioCapture
+                // self-restarts through its own observers). Wrap it in an ObjC
+                // @try/@catch: on an exception we degrade to VP-IO-off (mic still
+                // captures, just without HW AEC/NS/AGC) instead of killing the
+                // process — the same "working call beats dead engine" fallback
+                // the starve watchdog already uses.
+                var vpioError: NSError?
+                var vpioSwiftError: Error?
+                let ran = QAudionRunCatchingNSException({
+                    do { try inputNode.setVoiceProcessingEnabled(true) }
+                    catch { vpioSwiftError = error }
+                }, &vpioError)
+                if let e = vpioError {
+                    print("[AudioProcessingPipeline] setVoiceProcessingEnabled raised ObjC NSException — degrading VP-IO OFF (no crash): \(e.localizedDescription)")
+                    voiceProcessingActive = false
+                    vpioBypassedEverThisCall = true
+                    latchAudioDiag(vpioEnabled: false, agcEnabled: false)
+                    emitSessionDiagnostics(vpioEnabled: false)
+                    return
+                }
+                if let e = vpioSwiftError { throw e }
+                _ = ran
                 // W-CANONICAL — Apple AGC ON on ALL routes (supersedes W537/
                 // W574c which disabled it off-speaker). The W537 "envelope
                 // pumping" report predates the discovery that the iPhone

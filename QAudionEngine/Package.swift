@@ -191,6 +191,11 @@ let package = Package(
             ]
         ),
         .target(
+            name: "QAudionVPIOSafe",
+            path: "Sources/QAudionVPIOSafe",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "COpus",
             path: "Sources/COpus",
             publicHeadersPath: "include",
@@ -223,6 +228,9 @@ let package = Package(
             dependencies: [
                 "CLiboqs",
                 "COpus",
+                "QAudionVPIOSafe",  // W-GRPVPIO-CRASH-5: ObjC @try/@catch shim so an
+                                    // uncatchable AVFAudio NSException from
+                                    // setVoiceProcessingEnabled degrades instead of SIGABRT
                 "CQaudionCryptoCore",  // Phase 3: v4 PQ ratchet C ABI (default-ON since 2026-06-27; see above)
                 .product(name: "onnxruntime", package: "onnxruntime-spm"),
                 "WebRTC",  // local binaryTarget (webrtc-sdk H265 build) — see below
