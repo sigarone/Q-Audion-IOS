@@ -154,8 +154,32 @@ public final class AudioCapture {
         self.audioPipeline = audioPipeline ?? AudioProcessingPipeline()
     }
 
+    /// W-GRPVPIO-CRASH-4 — set by the 1:1 CallService on ITS capture instance
+    /// (never on the group-call controller's own capture). When it returns
+    /// true, a LiveKit group call currently owns the hardware VP-IO audio
+    /// unit, and this 1:1 engine MUST NOT start: `enableVoiceProcessing` →
+    /// `setVoiceProcessingEnabled(true)` would make AVFAudio raise an
+    /// Objective-C `NSException` from `AVAudioEngineGraph::_Connect` (the
+    /// hardware unit is already claimed), which Swift's `try` cannot catch →
+    /// SIGABRT (crashPointId B4lMk7amGdH7pnGoa5qsYT). The v807 fix guarded the
+    /// two CallService *entry* chokepoints, but `AudioCapture` self-restarts
+    /// through its OWN route-change / interruption observers + starve watchdog
+    /// (all funnel back through `start()`), bypassing those app-layer guards —
+    /// so the gate has to live HERE, at the single funnel. Left nil on the
+    /// group-call controller's capture so the WS-relay group fallback (which
+    /// legitimately owns VP-IO itself) is unaffected.
+    public var isGroupCallActive: (() -> Bool)?
+
     public func start() throws {
         guard !isRunning else { return }
+        // W-GRPVPIO-CRASH-4 — refuse to (re)build the 1:1 engine while a group
+        // call owns VP-IO. Covers every restart path (route change,
+        // interruption resume, starve watchdog) that funnels through start(),
+        // not just the CallService entry points the v807 guard covered.
+        if isGroupCallActive?() == true {
+            print("[AudioCapture] start SKIPPED — group call owns VP-IO (LiveKit); refusing 1:1 engine to avoid setVoiceProcessingEnabled SIGABRT")
+            return
+        }
         // W475 — start each capture session with an empty re-chunk
         // accumulator so a stale partial frame from a prior call or a
         // pre-interruption session can't desync the frame boundaries.

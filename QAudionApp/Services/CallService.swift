@@ -482,6 +482,12 @@ final class CallService: @unchecked Sendable {
         // Best-effort: errori catturati e loggati — la chiamata continua
         // anche se il capture / playback falliscono (es. simulator).
         let capture = AudioCapture(audioPipeline: pipeline)
+        // W-GRPVPIO-CRASH-4 — gate THIS 1:1 engine's own restart paths
+        // (route change / interruption / starve watchdog) on the same
+        // group-call-ownership signal the entry chokepoints use, so a stray
+        // observer-driven restart during a group call can't SIGABRT in
+        // setVoiceProcessingEnabled. See AudioCapture.isGroupCallActive kdoc.
+        capture.isGroupCallActive = { [weak self] in self?.isGroupCallActive?() == true }
         let playback = AudioPlayback()
 
         // Encrypt-on-mic-frame callback: ogni PCM dal mic passa attraverso
@@ -726,6 +732,10 @@ final class CallService: @unchecked Sendable {
         self.audioPipeline = pipeline
 
         let capture = AudioCapture(audioPipeline: pipeline)
+        // W-GRPVPIO-CRASH-4 — same restart-path gate as the outgoing side
+        // (see startCall). Closes the observer-driven restart that bypasses
+        // the activateIncomingCallAudio entry guard during a group call.
+        capture.isGroupCallActive = { [weak self] in self?.isGroupCallActive?() == true }
         let playback = AudioPlayback()
 
         // TX path: mic → VP DSP → encrypt → WS send (same as outgoing).
