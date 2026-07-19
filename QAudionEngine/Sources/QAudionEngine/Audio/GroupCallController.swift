@@ -44,7 +44,11 @@ public final class GroupCallController: @unchecked Sendable {
     public var state: State { lock.lock(); defer { lock.unlock() }; return _state }
     public var onStateChange: ((State) -> Void)?
 
-    private let manager: BCryptoGroupCallManager
+    /// `var` (not `let`) since W-GRPSTALEMGR: `rebind(manager:)` swaps in
+    /// the fresh manager `connectPersistentSocket` builds on every socket
+    /// rebuild. Only ever reassigned there (MainActor, between calls) —
+    /// every other access keeps treating it as effectively immutable.
+    private var manager: BCryptoGroupCallManager
     private let lock = NSLock()
     private var muted = false
     /// Per-sender Opus decoders (one per peer; Opus state is stateful
@@ -287,6 +291,38 @@ public final class GroupCallController: @unchecked Sendable {
 
     public init(manager: BCryptoGroupCallManager) {
         self.manager = manager
+        wireManagerCallbacks()
+    }
+
+    /// W-GRPSTALEMGR (2026-07-19, iPad late-join "in the call but sees
+    /// nobody"): re-point this controller at the NEW manager built for a
+    /// rebuilt socket. `connectPersistentSocket` constructs a fresh
+    /// `BCryptoGroupCallManager` against every fresh WS (foreground
+    /// reconnect / `reviveSignalingSocket` on the incoming-call push — its
+    /// "runs exactly once per AppState lifetime" comment predates those
+    /// `liveProvider = nil` paths), but `ensureGroupCallController` used to
+    /// return this controller still wired to the FIRST manager. The new
+    /// manager — the one whose registered WS handlers actually receive
+    /// `group_call_update` — had every callback slot nil, so a late
+    /// joiner's one-and-only full-roster snapshot fired into nothing
+    /// (further updates only come on join/leave, so the roster stayed
+    /// empty for the whole call), and `join()` went out on the dead/stale
+    /// previous WS. Clears the OLD manager's slots too, so a zombie socket
+    /// that later revives can't double-deliver stale events into this
+    /// controller.
+    public func rebind(manager newManager: BCryptoGroupCallManager) {
+        guard newManager !== manager else { return }
+        let old = manager
+        old.onStateChanged = nil
+        old.onParticipantsChanged = nil
+        old.onGroupUpdate = nil
+        old.onAudioFrame = nil
+        old.onSfuTokenReceived = nil
+        old.onSfuUnavailable = nil
+        old.onGroupCallReactionReceived = nil
+        old.onGroupCallRaiseHandReceived = nil
+        old.onGroupCallMuteRequestReceived = nil
+        manager = newManager
         wireManagerCallbacks()
     }
 

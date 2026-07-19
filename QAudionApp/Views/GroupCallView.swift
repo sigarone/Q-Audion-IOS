@@ -1230,6 +1230,26 @@ class GroupCallViewModel: ObservableObject {
             manager.onStateChanged = onState
             manager.onParticipantsChanged = onParticipants
         }
+
+        // W-GRPSTALEMGR belt-and-suspenders (2026-07-19): every closure
+        // above only observes FUTURE events — a roster/state the manager
+        // already holds at construction time would otherwise never render
+        // (this ViewModel is rebuilt on every socket rebuild, and a
+        // group_call_update that landed before this init ran is the late
+        // joiner's ONLY full-roster snapshot; the next one needs someone
+        // else to join/leave). Android's Compose `collectAsState` reads the
+        // CURRENT StateFlow value at composition, making it immune to this
+        // whole missed-event class by construction — this seed is the iOS
+        // equivalent. Both closures hop to the main queue internally, so
+        // invoking them directly here is safe from any context.
+        let participantsSnapshot = manager.participants
+        if !participantsSnapshot.isEmpty {
+            onParticipants(participantsSnapshot)
+        }
+        let stateSnapshot = manager.state
+        if stateSnapshot != .idle {
+            onState(stateSnapshot)
+        }
     }
 
     func toggleMute() {

@@ -2354,10 +2354,14 @@ final class AppState: ObservableObject {
         self.contactKeyExchange = cke
         wireOpaqueMessageHandler(on: ws, cke: cke)
         // W-GRPSENDERKEY / W-GRPREKEY — build the group-call manager against
-        // THIS session's live ws (this function runs exactly once per
-        // AppState lifetime, guarded above, so the manager stays bound to
-        // the same transport for as long as `ensureGroupCallController`'s
-        // controller lives — see that method's kdoc). Wires the control-
+        // THIS session's live ws. NOTE (W-GRPSTALEMGR): this function does
+        // NOT run exactly once per AppState lifetime — every socket rebuild
+        // (willEnterForeground / reviveSignalingSocket sets
+        // `liveProvider = nil` first) re-enters here with a fresh ws, so a
+        // fresh manager is built each time and `ensureGroupCallController`
+        // REBINDS the long-lived controller onto it (see that method's
+        // kdoc for the zero-participant late-join bug the old
+        // return-without-rebind caused). Wires the control-
         // envelope send hook (seal via the shared 1:1 ratchet, wrap in
         // `qa_grpcall_ctrl`, ship as an opaque_message) so
         // GroupCallController never needs to import BCryptoWebSocketClient.
@@ -11917,6 +11921,19 @@ extension AppState {
         _ manager: BCryptoGroupCallManager
     ) -> GroupCallController {
         if let existing = groupCallController {
+            // W-GRPSTALEMGR (2026-07-19, TestFlight v1.0.812/813 3-way test):
+            // `connectPersistentSocket` re-runs on every socket rebuild
+            // (willEnterForeground / `reviveSignalingSocket` on the very
+            // push that announces the group call) and hands us a FRESH
+            // manager bound to the live WS each time. Returning the
+            // existing controller WITHOUT rebinding left it wired to the
+            // previous (dead/stale) manager: `join()` went out on the old
+            // socket and the new manager's `group_call_update` — a late
+            // joiner's only full-roster snapshot — fired into nil slots,
+            // so an iPad answering a group invite after any background
+            // reconnect sat in the call UI with zero participants. No-op
+            // when the manager instance is unchanged.
+            existing.rebind(manager: manager)
             return existing
         }
         let controller = GroupCallController(manager: manager)
