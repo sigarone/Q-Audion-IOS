@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.812",
+              date: "2026-07-19",
+              title: "v1.0.812",
+              bullets: [
+                "fix(groupchat): stale group metadata never re-seals after member rekey",
+              ]),
         .init(id: "v1.0.811",
               date: "2026-07-19",
               title: "v1.0.811",
               bullets: [
+                "chore: regenerate changelog for v1.0.811",
                 "fix(groupcall): VP-IO engine race crash, key-pin video-zero, track/tile race, stuck join",
               ]),
         .init(id: "v1.0.810",
@@ -156,13 +163,6 @@ extension ReleaseNote {
                 "fix(crypto): HKDF<SHA256>.extract returns HashedAuthenticationCode, not SymmetricKey",
                 "feat(crypto): real ADR-014a KmsPreBootstrap port — gap A2 iOS half",
                 "feat(groups): telemetry + KMS-prebootstrap scaffolding for group-call control envelopes",
-              ]),
-        .init(id: "v1.0.791",
-              date: "2026-07-15",
-              title: "v1.0.791",
-              bullets: [
-                "chore: regenerate changelog for v1.0.791",
-                "fix(calls): widen VIDEODIAG arrived-idle threshold to 20s (parity with Android)",
               ]),
     ]
 }
