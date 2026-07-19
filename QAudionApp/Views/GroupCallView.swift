@@ -1034,6 +1034,24 @@ class GroupCallViewModel: ObservableObject {
     /// `[Participant]` list from the manager, not the controller's
     /// separate raised-hand set, so this cache bridges the two).
     private var raisedHandsCache: Set<String> = []
+    /// W-GRPCALL-DIAG follow-up (was diagnostic-only since 2026-07-15,
+    /// incident 419eb1dc — see the `onRemoteVideoTrack`/
+    /// `onRemoteScreenShareTrack` kdoc below): `manager.onParticipantsChanged`
+    /// (WS control-plane roster) and `room.onRemoteVideoTrack`/
+    /// `onRemoteScreenShareTrack` (LiveKit SFU data-plane track-subscribe)
+    /// are two INDEPENDENT event streams over two different transports —
+    /// there is no ordering guarantee between them. In a bigger call
+    /// (roster broadcast fan-out takes longer with more members) the SFU
+    /// can subscribe a remote track for an identity before this device's
+    /// WS roster lists that participant yet; that used to just drop the
+    /// track on the floor forever (only the roster-rebuild's
+    /// `existingTracks` dictionary carries a track forward, and a track
+    /// that was never attached in the first place isn't in it). These two
+    /// caches hold a track that arrived with no matching tile YET, so the
+    /// very next roster rebuild in `onParticipants` below can attach it
+    /// instead of silently losing it.
+    private var pendingVideoTracks: [String: AnyObject] = [:]
+    private var pendingScreenShareTracks: [String: AnyObject] = [:]
 
     init(manager: BCryptoGroupCallManager, controller: GroupCallController? = nil) {
         self.manager = manager
@@ -1077,12 +1095,18 @@ class GroupCallViewModel: ObservableObject {
                 // W-GRPSCREENSHARE: same preserve-across-refresh rationale as
                 // `existingTracks` above, for the separate screen-share slot.
                 let existingScreenShareTracks = Dictionary(uniqueKeysWithValues: self.participants.map { ($0.id, $0.screenShareTrack) })
-                self.participants = list.map {
-                    ParticipantUI(id: $0.id, displayName: $0.displayName,
-                                  isMuted: $0.isMuted, isSpeaking: $0.isSpeaking,
-                                  videoTrack: existingTracks[$0.id] ?? nil,
-                                  screenShareTrack: existingScreenShareTracks[$0.id] ?? nil,
-                                  handRaised: self.raisedHandsCache.contains($0.id))
+                self.participants = list.map { entry in
+                    // Roster/SFU race fix (see `pendingVideoTracks`' kdoc):
+                    // a track that arrived before this identity had a tile
+                    // gets attached NOW, on the roster refresh that finally
+                    // introduces that tile, instead of staying lost.
+                    let video = existingTracks[entry.id] ?? self.pendingVideoTracks.removeValue(forKey: entry.id)
+                    let screenShare = existingScreenShareTracks[entry.id] ?? self.pendingScreenShareTracks.removeValue(forKey: entry.id)
+                    return ParticipantUI(id: entry.id, displayName: entry.displayName,
+                                  isMuted: entry.isMuted, isSpeaking: entry.isSpeaking,
+                                  videoTrack: video,
+                                  screenShareTrack: screenShare,
+                                  handRaised: self.raisedHandsCache.contains(entry.id))
                 }
             }
         }
@@ -1107,7 +1131,11 @@ class GroupCallViewModel: ObservableObject {
                     // actually bound to, or that no matching tile existed
                     // yet (roster hadn't caught up with the SFU subscribe).
                     guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else {
-                        print("[GroupCallController][telemetry] remote video track for identity=\(identity.prefix(8)) has NO matching participant tile yet (roster/SFU race)")
+                        // Roster/SFU race (see `pendingVideoTracks`'s kdoc):
+                        // hold the track instead of dropping it — the next
+                        // `onParticipants` roster refresh will attach it.
+                        print("[GroupCallController][telemetry] remote video track for identity=\(identity.prefix(8)) has NO matching participant tile yet (roster/SFU race) — cached pending roster catch-up")
+                        self.pendingVideoTracks[identity] = track
                         return
                     }
                     print("[GroupCallController][telemetry] remote video track bound to tile identity=\(identity.prefix(8))")
@@ -1120,7 +1148,13 @@ class GroupCallViewModel: ObservableObject {
             controller.onSfuParticipant = { [weak self] identity, present in
                 guard !present else { return }
                 DispatchQueue.main.async {
-                    guard let self = self, let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
+                    guard let self = self else { return }
+                    // A participant can leave before the roster/SFU race
+                    // above ever resolved for them — drop any pending track
+                    // too, so it can't get misattached to a later identity.
+                    self.pendingVideoTracks.removeValue(forKey: identity)
+                    self.pendingScreenShareTracks.removeValue(forKey: identity)
+                    guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
                     self.participants[idx].videoTrack = nil
                     self.participants[idx].screenShareTrack = nil
                 }
@@ -1130,7 +1164,14 @@ class GroupCallViewModel: ObservableObject {
             // `GroupCallController.onRemoteScreenShareTrack`'s kdoc.
             controller.onRemoteScreenShareTrack = { [weak self] identity, track in
                 DispatchQueue.main.async {
-                    guard let self = self, let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
+                    guard let self = self else { return }
+                    guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else {
+                        // Same roster/SFU race as `onRemoteVideoTrack` above —
+                        // cache it for the next roster refresh instead of
+                        // dropping it.
+                        self.pendingScreenShareTracks[identity] = track
+                        return
+                    }
                     self.participants[idx].screenShareTrack = track
                 }
             }

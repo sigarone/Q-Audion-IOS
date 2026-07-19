@@ -560,7 +560,8 @@ public final class GroupCallController: @unchecked Sendable {
                     let parts = self.manager.participants.map(\.id)
                     self.setState(.active(callId: cid, participants: parts))
                     self.lock.lock()
-                    let attemptSfu = self.usingSfu && self.sfuRoom == nil
+                    let roomExists = self.sfuRoom != nil
+                    let attemptSfu = self.usingSfu && !roomExists
                     self.lock.unlock()
                     if attemptSfu {
                         // Hold off on the WS-relay mic/speaker pipeline until
@@ -572,7 +573,21 @@ public final class GroupCallController: @unchecked Sendable {
                         // start the mesh pipeline themselves if SFU doesn't
                         // pan out.
                         self.manager.requestSfuToken(callId: cid)
-                    } else {
+                    } else if !roomExists {
+                        // crashPointId DbQJymhbdtXWBvt7OjOd_4 — only take the
+                        // WS-relay mesh fallback when NO SFU room has ever
+                        // been created for this call (`usingSfu` was already
+                        // false, so `attemptSfu` never fires). If `sfuRoom`
+                        // already exists, `manager.onStateChanged` re-firing
+                        // `.active` (WS reconnect / duplicate state sync — the
+                        // same redelivery class already handled by the 1:1
+                        // `isGroupCallActive` gates) must be a no-op here:
+                        // LiveKit already owns the hardware VP-IO unit, and
+                        // starting this controller's OWN AudioCapture/
+                        // AudioPlayback engine concurrently races it for the
+                        // same RemoteIO unit — this is exactly how the mirror
+                        // bug in `handleSfuUnavailable` crashed a live 5-way
+                        // call in `AVAudioPlayerNode.play()`.
                         do { try self.startAudioPipeline() }
                         catch { print("[GroupCallController] startAudioPipeline failed: \(error)") }
                     }
@@ -684,7 +699,16 @@ public final class GroupCallController: @unchecked Sendable {
         Task { [weak self] in
             guard let self = self else { return }
             do {
-                try await room.connect(url: url, token: token, callId: callId)
+                // W-GRPKEYPIN: pass our OWN current send-chain key so
+                // `LiveKitGroupCallRoom.connect` seeds it into the
+                // KeyProvider BEFORE publishing mic/camera — see that
+                // method's kdoc (mirrors Android's `initialKeys`/
+                // `computeSelfMediaKey` fix). Without this, both the mic
+                // and camera tracks published inside `connect()` pin their
+                // sender FrameCryptor to an empty key slot that
+                // `resendMediaKeysToSfu()` below (which only runs AFTER
+                // `connect()` returns) can never fix retroactively.
+                try await room.connect(url: url, token: token, callId: callId, selfKey: self.computeSelfMediaKey())
                 self.resendMediaKeysToSfu()
             } catch {
                 print("[GroupCallController] LiveKit connect failed, falling back to WS-relay mesh: \(error)")
@@ -702,9 +726,26 @@ public final class GroupCallController: @unchecked Sendable {
     /// Server declined the SFU for `callId` (`group_call_sfu_unavailable`) —
     /// soft-fall-back to the WS-relay mesh path. Never a hard failure: the
     /// call proceeds exactly as it did before this feature existed.
+    ///
+    /// crashPointId DbQJymhbdtXWBvt7OjOd_4 (2026-07-19, both iOS devices in a
+    /// live 5-way group call, `AVAudioPlayerNode.play()` -> `AVAudioEngineGraph`
+    /// -> `[NSException]` -> SIGABRT) — this handler used to call
+    /// `startAudioPipeline()` unconditionally, with no check for whether
+    /// `sfuRoom` already exists. `group_call_sfu_unavailable` can legitimately
+    /// arrive AFTER a successful `handleSfuToken` connect (SFU node
+    /// failover/health-check mid-call, or a stale/redelivered WS message —
+    /// same failure class as the 1:1 `isGroupCallActive` redelivery bugs
+    /// above): in that case LiveKit already owns the hardware VP-IO unit, and
+    /// starting THIS controller's own `AudioCapture`/`AudioPlayback` engine
+    /// concurrently races it for the same RemoteIO unit — the exact
+    /// `setVoiceProcessingEnabled` conflict this whole gating scheme exists to
+    /// prevent, just between two group-call-owned engines instead of a 1:1
+    /// engine vs a group one. Mirror `handleSfuToken`'s own `stillCurrent`
+    /// invariant (`sfuRoom == nil`): only fall back to the mesh pipeline when
+    /// no SFU room has been created for this call yet.
     private func handleSfuUnavailable(callId: String, reason: String) {
         lock.lock()
-        guard callId == activeCallId else { lock.unlock(); return }
+        guard callId == activeCallId, sfuRoom == nil else { lock.unlock(); return }
         usingSfu = false
         lock.unlock()
         print("[GroupCallController] SFU unavailable (\(reason)) — using WS-relay mesh")
@@ -779,6 +820,23 @@ public final class GroupCallController: @unchecked Sendable {
             print("[GroupCallController] setScreenShareEnabled(\(enabled)) failed: \(error)")
             return false
         }
+    }
+
+    /// W-GRPKEYPIN: compute our OWN current LiveKit media key WITHOUT
+    /// applying it — used to pre-seed `LiveKitGroupCallRoom.connect` BEFORE
+    /// the mic/camera publish (see that method's kdoc for the full
+    /// mechanism), closing the deterministic ordering gap that
+    /// `applySfuSelfKey` cannot (it bails when `sfuRoom` is still nil, which
+    /// is exactly the state during connect). Returns nil when the group
+    /// session/send key isn't ready yet — same derivation as
+    /// `applySfuSelfKey`, mirrors Android's `computeSelfMediaKey` 1:1.
+    private func computeSelfMediaKey() -> GroupMediaKey? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let gs = groupState, let ck = groupSession.currentSendKey(state: gs) else { return nil }
+        let selfId = manager.selfUserId
+        let keyIndex = Int32(gs.groupEpoch % Self.livekitKeyringSize)
+        return GroupMediaKey(identity: selfId, keyIndex: keyIndex, keyB64: ck.base64EncodedString())
     }
 
     /// Push our own key (a fresh COPY of the current send-chain SK_0) into

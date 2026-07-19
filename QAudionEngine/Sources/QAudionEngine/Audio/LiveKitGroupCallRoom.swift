@@ -208,7 +208,28 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// callbacks below — can attach it. Was previously not threaded
     /// through at all (`GroupCallController` held its own `activeCallId`
     /// but never passed it down here).
-    public func connect(url: String, token: String, callId: String) async throws {
+    ///
+    /// W-GRPKEYPIN (2026-07-19): `selfKey`, when non-nil, seeds the
+    /// KeyProvider with OUR OWN current send-chain key BEFORE this method
+    /// publishes mic/camera below. Mirrors Android's identical fix
+    /// (`GroupCallRoom.kt.connect`'s `initialKeys` param / `InitialMediaKey`
+    /// kdoc — byte-verified there against the shipped livekit-android AAR):
+    /// the SDK's E2EEManager pins each new sender FrameCryptor to
+    /// `keyProvider`'s latest key index for our identity EXACTLY ONCE, at
+    /// track-publish time, and never re-syncs it on a later `setKey` — both
+    /// platforms wrap the SAME underlying native frame-cryptor. Before this
+    /// fix, iOS called `room.connect`/`setMicrophone`/`setCamera` here with
+    /// a brand-new EMPTY `BaseKeyProvider`, then only pushed the real key
+    /// afterward via `GroupCallController.resendMediaKeysToSfu()` — once
+    /// `connect()` (this whole method) had already returned. Every track
+    /// published in between pins to the empty/wrong slot and is silently
+    /// dropped for the rest of the call (`GetKeySet(index)==null` at the
+    /// native encoder) — no throw, no error, no crash — exactly the
+    /// zero-video-all-call / zero-outbound-frames symptom this fix closes.
+    /// Caller (`GroupCallController.handleSfuToken`) computes this the same
+    /// way `applySfuSelfKey` does (current send-chain key at `groupEpoch %
+    /// livekitKeyringSize`).
+    public func connect(url: String, token: String, callId: String, selfKey: GroupMediaKey? = nil) async throws {
         self.callId = callId
         // Options set EXPLICITLY — SDK defaults diverge across platforms
         // (the JS SDK defaults `sharedKey: true`; we need per-participant
@@ -231,6 +252,13 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
             // defaultRatchetWindowSize=0, defaultKeyRingSize=16) — set anyway.
         )
         let keyProvider = BaseKeyProvider(options: keyProviderOptions)
+        // W-GRPKEYPIN: seed BEFORE `room.connect()`/`setMicrophone`/
+        // `setCamera` below — see this method's kdoc above for why the
+        // ordering (not just the eventual presence of the key) is what
+        // matters here.
+        if let selfKey = selfKey {
+            keyProvider.setKey(key: selfKey.keyB64, participantId: selfKey.identity, index: selfKey.keyIndex)
+        }
         // `EncryptionOptions` (not the deprecated `E2EEOptions`) — same
         // KeyProvider-driven media E2EE, without also turning on data-channel
         // encryption (group TEXT CHAT is untouched by this feature).
@@ -771,7 +799,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
 
     public init(video: Bool) { super.init() }
 
-    public func connect(url: String, token: String, callId: String) async throws {
+    public func connect(url: String, token: String, callId: String, selfKey: GroupMediaKey? = nil) async throws {
         throw LiveKitUnavailableError.notAvailable
     }
 

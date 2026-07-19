@@ -2522,6 +2522,7 @@ final class AppState: ObservableObject {
                 // (mirrors the non-cold-start bind order below).
                 self.groupCallViewModel?.bindGroupId(pendingGroupId)
                 groupController.join(callId: pendingJoin, video: pendingVideo)
+                self.armGroupCallJoinTimeout(callId: pendingJoin)
             }
         }
         // W530: register the audio_frame RX handler EAGERLY at login.
@@ -11300,6 +11301,39 @@ extension AppState {
         }
     }
 
+    /// W-GRPRING-JOIN (2026-07-19, incident "invito di gruppo rimasto in
+    /// sospeso"): bound how long we wait after ACCEPTING a group-call invite
+    /// for the server to confirm the join (`group_call_update` → controller
+    /// `.active`). The server can reject `group_call_join` for a stale/ended
+    /// call_id, a no-longer-invited user, or a full room (cmd/bcrypto-lite/
+    /// main.go, case "group_call_join": "group call not found" / "not invited
+    /// to this group call" / "group call full") — but that rejection is a
+    /// generic `{type:"error"}` envelope with no `call_id`/`code` (see W329's
+    /// handler), so it cannot be reliably correlated back to THIS join. Only
+    /// a client-side bound self-clears it, same idiom as
+    /// `armGroupCallRingTimeout` for the PRE-accept ring. Without this, a
+    /// rejected/stale join left `groupCallControllerState` stuck at
+    /// `.connecting` forever: the call cover never dismisses (not
+    /// actionable), AND — per the busy-guard in `presentIncomingGroupCall`
+    /// (`groupCallControllerState != .idle`) — every subsequent incoming
+    /// group-call invite is silently dropped as "busy" until the app
+    /// restarts.
+    @MainActor
+    private func armGroupCallJoinTimeout(callId: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
+            guard let self = self,
+                  case .connecting(let cid) = self.groupCallControllerState,
+                  cid == callId else { return }
+            print("[AppState] W-GRPRING-JOIN join timed out (no group_call_update) call=\(callId.prefix(8))…")
+            // Best-effort server-side cleanup (safe no-op if the join never
+            // actually registered us — see group_call_leave's `wasParticipant`
+            // guard server-side) + local state unwind so the busy-gate clears.
+            self.groupCallController?.leave()
+            self.groupCallControllerState = .idle
+            self.clearGroupCallKitCall(reason: .failed("group_call_join_timeout"))
+        }
+    }
+
     /// Ring surface for a group call that arrived over the LIVE WS. Mirrors the
     /// 1:1 `call_incoming` fork exactly:
     ///   foreground        → in-app full-screen ring + in-app ringtone
@@ -11438,6 +11472,7 @@ extension AppState {
         // The SAME join path as before: single source of truth for the WS
         // `group_call_join` AND the GroupSession crypto bootstrap.
         controller.join(callId: invite.callId, video: invite.hasVideo)
+        armGroupCallJoinTimeout(callId: invite.callId)
     }
 
     /// Reject the incoming group call. There is deliberately NO wire message:
