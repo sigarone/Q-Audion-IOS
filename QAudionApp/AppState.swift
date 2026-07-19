@@ -717,6 +717,20 @@ final class AppState: ObservableObject {
     /// Keyed by groupHex — only the LATEST blob per group is worth
     /// retrying (an older version would just get re-superseded).
     private var bufferedGroupMetadata: [String: (blobB64: String, version: UInt32, selfId: String)] = [:]
+    /// 2026-07-19 — closes the residual gap left by the 2026-07-17
+    /// self-heal in `applyRemovalRekey`: that one only re-seals metadata
+    /// the FIRST time THIS device's own crypto epoch transitions past the
+    /// target (`removeMemberLocally`'s idempotent no-op guard once already
+    /// caught up never fires again). If every admin's device had already
+    /// caught its crypto epoch up BEFORE ever running the 2026-07-17 fix,
+    /// nothing re-triggers a republish and the metadata blob stays sealed
+    /// at its old epoch forever. `maybeReSealStaleGroupMetadata` detects
+    /// this independently (any decrypt failure whose wire epoch is
+    /// strictly behind our live epoch) and de-dupes per (group, epoch)
+    /// here so the GET-recovery / WS-push / reconcile call sites — which
+    /// can all observe the identical stale blob within moments of each
+    /// other — don't each fire a redundant republish.
+    private var attemptedEpochReseal: [String: UInt32] = [:]
     /// Fase 1B: rowIds (clientMsgId/serverMsgId) of inbound group-attachment
     /// blobs whose download+decrypt is in flight. Shared by the initial
     /// land path and the on-open retry so re-opening a group while a
@@ -10995,9 +11009,39 @@ extension AppState {
             // once the key eventually arrived.
             print("[AppState] decryptAndApplyGroupMetadataBlob: decrypt failed g=\(groupHex.prefix(8)) sender=\(parsed.senderId.prefix(8)) — buffering for retry")
             bufferedGroupMetadata[groupHex] = (blobB64: blobB64, version: version, selfId: selfId)
+            maybeReSealStaleGroupMetadata(groupHex: groupHex, wireGroupEpoch: parsed.groupEpoch, selfId: selfId)
             return
         }
         self.applyGroupMetadataPayload(groupHex: groupHex, json: plaintext, version: version)
+    }
+
+    /// 2026-07-19 — retroactive gap-close (see `attemptedEpochReseal`'s
+    /// doc). Only fires when the failed blob was sealed at an epoch
+    /// STRICTLY BEHIND our own live crypto epoch — that is architecturally
+    /// permanent (the remove/leave that bumped us past it wiped every recv
+    /// chain for the old epoch, `GroupSession.handleMemberRemoved`), unlike
+    /// a wire epoch AHEAD of us (we simply haven't caught up yet — the
+    /// existing buffer-and-retry-on-next-key-install path already handles
+    /// that correctly and must be left alone) or an equal-epoch AEAD
+    /// failure (genuine corruption/attack — must still be rejected, never
+    /// papered over). Requires self to be admin AND to already hold a real
+    /// cached name (not the "xxxxxxxx…" bootstrap placeholder) so a
+    /// still-uninitialized joiner never republishes garbage over a
+    /// legitimate rename it just hasn't seen yet.
+    @MainActor
+    private func maybeReSealStaleGroupMetadata(groupHex: String, wireGroupEpoch: UInt32, selfId: String) {
+        guard let entry = GroupRegistry.shared.entry(for: groupHex),
+              entry.admins.contains(selfId) else { return }
+        guard let state = GroupChatService.shared.session(
+            groupId: groupHex, members: entry.members, selfId: selfId) else { return }
+        let liveEpoch = state.groupEpoch
+        guard wireGroupEpoch < liveEpoch else { return }
+        let bootstrapPlaceholder = String(groupHex.prefix(8)) + "…"
+        guard !entry.name.isEmpty, entry.name != bootstrapPlaceholder else { return }
+        if attemptedEpochReseal[groupHex] == liveEpoch { return }
+        attemptedEpochReseal[groupHex] = liveEpoch
+        print("[AppState] proactively re-sealing stale group metadata g=\(groupHex.prefix(8)) wireEpoch=\(wireGroupEpoch) liveEpoch=\(liveEpoch)")
+        updateGroupMetadata(groupId: groupHex, newName: nil, avatarData: nil)
     }
 
     /// Ship our `sender_key_init` to every member of `groupHex` that has not
@@ -11159,6 +11203,14 @@ extension AppState {
             wire: wire, senderId: actor, groupId: groupHex,
             members: entry.members, selfId: selfId) else {
             print("[AppState] group_metadata_changed: decrypt failed g=\(groupHex.prefix(8)) actor=\(actor.prefix(8))")
+            // 2026-07-19 — same retroactive gap-close as the GET-recovery
+            // path (`decryptAndApplyGroupMetadataBlob`): a live push can be
+            // this stale for the identical reason (sealed at an epoch our
+            // crypto state has since moved past). Unpacking here only to
+            // read the epoch field — no crypto/decrypt attempted twice.
+            if let parsed = try? GroupSenderKey.unpackGroupWire(wire) {
+                maybeReSealStaleGroupMetadata(groupHex: groupHex, wireGroupEpoch: parsed.groupEpoch, selfId: selfId)
+            }
             return
         }
         applyGroupMetadataPayload(groupHex: groupHex, json: plaintext, version: version)
