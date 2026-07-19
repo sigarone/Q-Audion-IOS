@@ -2467,7 +2467,15 @@ final class AppState: ObservableObject {
                         print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=wrapper_json_encode_failed")
                         return false
                     }
-                    ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapperJson.utf8))
+                    // W-GRPCTRL-TRANSPORT (2026-07-19, call 60aca70c) — MUST
+                    // ship the wrapper as the RAW UTF-8 JSON string in `data`.
+                    // `sendOpaqueMessage(payload: Data)` base64-wraps, which
+                    // NO receiver of this channel parses: Android's
+                    // `onOpaqueMessage` and our own `dispatchInboundOpaque`
+                    // Path C both JSON-parse `data` verbatim (Desktop now
+                    // does too). The old base64 wrap made every iOS ctrl
+                    // envelope silently undecodable on all three platforms.
+                    ws.sendOpaqueMessageString(recipientId: peer, payload: wrapperJson)
                     print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) cmid=\(msgId.prefix(8)) transport=\(transport)")
                     return true
                 case .noPsk:
@@ -2480,7 +2488,11 @@ final class AppState: ObservableObject {
                     if let wrapped = await AppState.attemptGroupCtrlKmsPreBootstrap(
                         peer: peer, selfId: senderId, envelopeJson: envelopeJson, kmsClient: provider.kmsClient
                     ) {
-                        ws.sendOpaqueMessage(recipientId: peer, payload: Data(wrapped.utf8))
+                        // W-GRPCTRL-TRANSPORT — raw JSON string, NOT base64:
+                        // Android's qa_kms branch / Desktop's Path-D mirror
+                        // parse `data` verbatim. See the qa_grpcall_ctrl send
+                        // above for the full rationale.
+                        ws.sendOpaqueMessageString(recipientId: peer, payload: wrapped)
                         print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) transport=kms_prebootstrap")
                         return true
                     }
