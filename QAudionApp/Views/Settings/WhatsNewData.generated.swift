@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.819",
+              date: "2026-07-20",
+              title: "v1.0.819",
+              bullets: [
+                "fix(ui): resolve PERSISTED UUID-shaped conversation titles at render (W-UUIDSWEEP-2)",
+              ]),
         .init(id: "v1.0.818",
               date: "2026-07-20",
               title: "v1.0.818",
               bullets: [
+                "chore: regenerate changelog for v1.0.818",
                 "fix(ui): never show raw UUIDs anywhere — central DisplayName resolver + sweep (W-UUIDSWEEP)",
               ]),
         .init(id: "v1.0.817",
@@ -146,12 +153,6 @@ extension ReleaseNote {
                 "refactor(groups): retire legacy N-way mesh + WS-relay, SFU-only",
                 "feat(groups): SFU A/V telemetry wiring + adaptive video-grid layout",
                 "feat(groups): Tier-1 call features — reactions, raise-hand, mute-request, layout toggle",
-              ]),
-        .init(id: "v1.0.798",
-              date: "2026-07-16",
-              title: "v1.0.798",
-              bullets: [
-                "chore: regenerate changelog for v1.0.798",
               ]),
     ]
 }
