@@ -289,23 +289,29 @@ struct GroupCallView: View {
                 .padding(.bottom, 40)
             }
 
-            // W-GRPVIDEO: self-preview PiP, bottom-trailing — mirrors the
-            // 1:1 VideoCallView's localPreview placement. Only shown while
-            // our own camera track is actually publishing.
-            if let selfTrack = viewModel.selfVideoTrack {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        GroupCallVideoView(track: selfTrack)
-                            .frame(width: 90, height: 120)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
-                            .padding(.trailing, 16)
-                            .padding(.bottom, 120)
-                    }
-                }
-            }
+            // W-GRPSELFGRID (2026-07-20, live 2-way call 3A5A03DE) — REMOVED
+            // the old "W-GRPVIDEO self-preview PiP" floating overlay that
+            // used to live here. Root cause of the reported "iOS shows its
+            // own video as a separate disconnected mirror instead of a
+            // participant like Android does": the "Tu" (self) entry has
+            // always existed inside `viewModel.participants` (seeded by
+            // `BCryptoGroupCallManager._participants = [Participant(id:
+            // selfUserId, displayName: "Tu")]` and confirmed present in every
+            // server `group_call_update` roster since), so it always rendered
+            // as a real tile in the SAME grid as remote participants below —
+            // but that tile's `videoTrack` was never populated (only
+            // `viewModel.selfVideoTrack` was, feeding exclusively this now-
+            // removed PiP), so the grid tile stayed a blank avatar while the
+            // REAL live camera floated in its own corner box outside the
+            // shared grid entirely. Android's `GroupCallScreen.ParticipantTile`
+            // call site has no equivalent PiP — it swaps `localVideoTrack`
+            // straight into the SAME tile (`videoTrack = if (uid == selfId)
+            // localVideoTrack else remoteVideoTracks[uid]`). Fixed by
+            // `GroupCallViewModel.onLocalVideoTrack` now writing straight
+            // into `participants[idx].videoTrack` for the self entry (see
+            // its kdoc), so `ParticipantTile`'s existing `isSelf` rendering
+            // (highlighted border) is now paired with the live feed itself,
+            // in the grid, matching Android — no separate view needed here.
         }
         // Unified call UI (group-call adaptation) — same aggregating
         // security sheet pattern as `InCallScreen.securitySheet`: system
@@ -1027,7 +1033,14 @@ class GroupCallViewModel: ObservableObject {
     @Published var isMuted = false
     @Published var elapsedTime = "0:00"
     /// W-GRPVIDEO: our own camera preview (type-erased `LocalVideoTrack`),
-    /// nil when off.
+    /// nil when off. W-GRPSELFGRID (2026-07-20): `GroupCallView.body` no
+    /// longer renders this directly (the removed self-preview PiP) — the
+    /// same track is now also written into `participants[selfIdx].videoTrack`
+    /// (see `onLocalVideoTrack` below) so the grid tile is the one live
+    /// consumer. Kept as its own published slot rather than removed outright:
+    /// it is the raw signal `onLocalVideoTrack` writes into both places from,
+    /// and a future non-grid surface (e.g. a picture-in-picture mode) may
+    /// still want it directly.
     @Published var selfVideoTrack: AnyObject? = nil
     /// W-GRPVIDEO: mirrors whether OUR camera is currently publishing —
     /// seeded from the call's `callType` on the `.active` transition
@@ -1278,7 +1291,24 @@ class GroupCallViewModel: ObservableObject {
                     // a track that arrived before this identity had a tile
                     // gets attached NOW, on the roster refresh that finally
                     // introduces that tile, instead of staying lost.
-                    let video = existingTracks[entry.id] ?? self.pendingVideoTracks.removeValue(forKey: entry.id)
+                    //
+                    // W-GRPSELFGRID (2026-07-20): the self entry never goes
+                    // through `pendingVideoTracks` (that dictionary is only
+                    // ever written by `onRemoteVideoTrack`, which LiveKit
+                    // never fires for our own identity) — fall back to
+                    // `self.selfVideoTrack` directly for `entry.id ==
+                    // selfUserId` so a roster broadcast introducing this
+                    // entry for the FIRST time (e.g. a callee joining via
+                    // `joinGroupCall`, which — unlike `createGroupCall` —
+                    // does not pre-seed a "Tu" row) still picks up an
+                    // already-published camera track instead of rendering a
+                    // blank tile until the next roster refresh.
+                    let video: AnyObject?
+                    if entry.id == self.selfUserId {
+                        video = existingTracks[entry.id] ?? self.selfVideoTrack
+                    } else {
+                        video = existingTracks[entry.id] ?? self.pendingVideoTracks.removeValue(forKey: entry.id)
+                    }
                     let screenShare = existingScreenShareTracks[entry.id] ?? self.pendingScreenShareTracks.removeValue(forKey: entry.id)
                     return ParticipantUI(id: entry.id, displayName: entry.displayName,
                                   isMuted: entry.isMuted, isSpeaking: entry.isSpeaking,
@@ -1331,7 +1361,25 @@ class GroupCallViewModel: ObservableObject {
                 }
             }
             controller.onLocalVideoTrack = { [weak self] track in
-                DispatchQueue.main.async { self?.selfVideoTrack = track }
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.selfVideoTrack = track
+                    // W-GRPSELFGRID (2026-07-20): route our own live camera
+                    // into the SAME grid tile every remote participant
+                    // renders through, instead of leaving that tile's
+                    // `videoTrack` permanently nil and showing the live feed
+                    // only in a disconnected floating PiP (see `GroupCallView.
+                    // body`'s removed self-preview overlay for the incident
+                    // this closes). Mirrors Android's `GroupCallScreen.
+                    // ParticipantTile` call site exactly: `videoTrack = if
+                    // (uid == selfId) localVideoTrack else remoteVideoTracks[uid]`.
+                    // `track` is nil-able (camera can also turn back off
+                    // mid-call), so this both attaches AND clears in lockstep
+                    // with `selfVideoTrack` above.
+                    if let idx = self.participants.firstIndex(where: { $0.id == self.selfUserId }) {
+                        self.participants[idx].videoTrack = track
+                    }
+                }
             }
             controller.onSfuParticipant = { [weak self] identity, present in
                 DispatchQueue.main.async {

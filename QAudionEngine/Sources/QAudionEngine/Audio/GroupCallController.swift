@@ -767,6 +767,21 @@ public final class GroupCallController: @unchecked Sendable {
         room.onE2eeStateChanged = { [weak self] identity, _, state in
             guard let self = self else { return }
             guard state == "missing_key" || state == "decryption_failed" else { return }
+            // W-GRPE2EESELF (2026-07-20, Android parity) — `didUpdateE2EEState`
+            // fires for OUR OWN published tracks too, not just remote
+            // subscribed ones (see `LiveKitGroupCallRoom.resolveIdentity`,
+            // which explicitly checks `room.localParticipant.trackPublications`
+            // FIRST and returns our own identity, falling back to the literal
+            // string "self"). A concerning state on our OWN track means our
+            // own send-side FrameCryptor is broken — no amount of "resend your
+            // sender_key_init to me" self-messaging fixes that, and the nack
+            // protocol only makes sense addressed at a genuine remote peer.
+            // Root-caused on the Android sibling (GroupCallController.kt,
+            // same tag) via a live 3-way call (3A5A03DE-9582-4778-A324-
+            // 70832BB1B3C5, 2026-07-20) where an identical unguarded check
+            // made a healthy self-track e2ee OK event indistinguishable from
+            // a genuine roster-unlisted 3rd SFU participant in the raw logs.
+            guard identity != self.manager.selfUserId, identity != "self" else { return }
             self.lock.lock()
             let alreadyNacked = self.nackedPeers.contains(identity)
             if !alreadyNacked { self.nackedPeers.insert(identity) }

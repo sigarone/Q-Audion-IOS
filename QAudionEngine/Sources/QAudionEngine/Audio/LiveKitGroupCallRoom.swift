@@ -679,8 +679,16 @@ extension LiveKitGroupCallRoom: RoomDelegate {
     public func room(_ room: Room, trackPublication: TrackPublication, didUpdateE2EEState state: E2EEState) {
         let identity = Self.resolveIdentity(for: trackPublication, in: room)
         let kind = trackPublication.kind == .video ? "video" : "audio"
-        print("[GroupCallController][telemetry] e2ee-state identity=\(identity ?? "?") kind=\(kind) state=\(state.toString())")
-        emitTelemetry("call.media.e2ee_state", ["identity": identity ?? "?", "kind": kind, "state": state.toString()])
+        // W-GRPE2EESELF (2026-07-20, Android parity) — this fires for OUR OWN
+        // published tracks too (see resolveIdentity, which checks
+        // room.localParticipant.trackPublications FIRST); tag it explicitly so
+        // a self e2ee-state line can never again be misread as a genuine
+        // roster-unlisted remote participant from raw logs alone (see
+        // onE2eeStateChanged's kdoc in GroupCallController.swift for the full
+        // live incident this was root-caused from).
+        let isSelf = identity == nil ? false : room.localParticipant.trackPublications[trackPublication.sid] != nil
+        print("[GroupCallController][telemetry] e2ee-state identity=\(identity ?? "?") self=\(isSelf) kind=\(kind) state=\(state.toString())")
+        emitTelemetry("call.media.e2ee_state", ["identity": identity ?? "?", "self": isSelf, "kind": kind, "state": state.toString()])
         // W-GRPSENDERKEY-NACK (2026-07-17) — forward this SAME signal
         // operationally, not just diagnostically: GroupCallController
         // reacts to missing_key/decryption_failed by nudging the sender to
