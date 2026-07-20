@@ -141,7 +141,10 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     private func reloadRecents() {
         let records = Array(PersistentCallRecordStore.shared.records.prefix(20))
         let items: [CPListItem] = records.map { rec in
-            let item = CPListItem(text: rec.peerDisplayName,
+            let carTitle = DisplayName.looksLikeUUID(rec.peerDisplayName) || rec.peerDisplayName.isEmpty
+                ? DisplayName.forUser(rec.peerUserId)
+                : rec.peerDisplayName
+            let item = CPListItem(text: carTitle,
                                   detailText: Self.recentSubtitle(rec))
             item.handler = { _, completion in
                 CarPlayBridge.shared.requestCall(
@@ -209,7 +212,10 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             let detail: String = conv.unreadCount > 0
                 ? "\(conv.unreadCount) non letti · Tocca per chiamare"
                 : "Tocca per chiamare"
-            let item = CPListItem(text: conv.peerDisplayName, detailText: detail)
+            let convTitle = DisplayName.looksLikeUUID(conv.peerDisplayName) || conv.peerDisplayName.isEmpty
+                ? DisplayName.forUser(conv.peerUserId)
+                : conv.peerDisplayName
+            let item = CPListItem(text: convTitle, detailText: detail)
             item.handler = { _, completion in
                 CarPlayBridge.shared.requestCall(
                     peerUserId: conv.peerUserId, displayName: conv.peerDisplayName)

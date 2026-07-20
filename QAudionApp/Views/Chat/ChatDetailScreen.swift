@@ -156,6 +156,19 @@ struct ChatDetailScreen: View {
 
     // MARK: - Body
 
+    /// W-UUIDSWEEP-2: never trust a PERSISTED UUID-shaped conversation
+    /// title at render — rows written before the write-site fixes carry the
+    /// raw UUID; re-resolve through the central chain.
+    private var resolvedPeerTitle: String {
+        let stored = container.viewModel.conversation.peerDisplayName
+        guard DisplayName.looksLikeUUID(stored) || stored.isEmpty else { return stored }
+        if container.viewModel.conversation.kind == .group {
+            return DisplayName.forGroup(id: container.viewModel.conversation.peerUserId, name: nil)
+        }
+        return DisplayName.forUser(container.viewModel.conversation.peerUserId,
+                                   contacts: appState.cachedContacts)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             topBar
@@ -494,7 +507,7 @@ struct ChatDetailScreen: View {
             .accessibilityLabel("Indietro")
 
             QAudionAvatar(
-                displayName: container.viewModel.conversation.peerDisplayName,
+                displayName: resolvedPeerTitle,
                 kind: container.viewModel.conversation.kind == .group ? .group : .person,
                 size: 36,
                 // W72: prefer live presence from engine, fall back to model.
@@ -507,7 +520,7 @@ struct ChatDetailScreen: View {
             )
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(container.viewModel.conversation.peerDisplayName)
+                Text(resolvedPeerTitle)
                     .qaudionStyle(type.titleSmall)
                     .foregroundStyle(scheme.onSurface)
                     .lineLimit(1)
@@ -925,7 +938,7 @@ struct ChatDetailScreen: View {
     private var typingRow: some View {
         // W251: pre-bind the deep property chain to dodge type-checker timeouts.
         // See CLAUDE.md §13.
-        let peerName: String = container.viewModel.conversation.peerDisplayName
+        let peerName: String = resolvedPeerTitle
         let typingText: String = peerName + " sta scrivendo…"
         return HStack(spacing: 8) {
             TypingIndicator()
@@ -1409,6 +1422,9 @@ private struct ForwardMessageSheet: View {
     let onSelect: (UUID) -> Void
 
     @State private var conversations: [Conversation] = []
+    /// W-UUIDSWEEP-2: rubrica snapshot for resolving persisted UUID-shaped
+    /// titles (this sheet has no AppState in scope; one load at init).
+    private let rubrica = ContactsStore().load()
 
     var body: some View {
         NavigationStack {
@@ -1417,7 +1433,9 @@ private struct ForwardMessageSheet: View {
                     onSelect(conv.id)
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(conv.peerDisplayName)
+                        Text(DisplayName.looksLikeUUID(conv.peerDisplayName) || conv.peerDisplayName.isEmpty
+                            ? DisplayName.forUser(conv.peerUserId, contacts: rubrica)
+                            : conv.peerDisplayName)
                             .foregroundStyle(scheme.onSurface)
                         if let preview = conv.lastMessagePreview, !preview.isEmpty {
                             Text(preview)

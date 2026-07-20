@@ -566,13 +566,30 @@ struct ChatListScreen: View {
 
     // MARK: - Conversation row (1-to-1)
 
+    /// W-UUIDSWEEP-2 (2026-07-20): the conversations table PERSISTS
+    /// `peerDisplayName`, so rows created before the write-site fixes carry
+    /// the raw 36-char UUID baked in as the title — the contacts-store
+    /// migration cannot reach them. Never trust a persisted UUID-shaped
+    /// title at render: re-resolve through the central chain (rubrica →
+    /// "Utente/Gruppo xxxxxxxx…").
+    private func resolvedRowTitle(_ item: ConversationListViewModel.Item) -> String {
+        guard DisplayName.looksLikeUUID(item.peerDisplayName) || item.peerDisplayName.isEmpty else {
+            return item.peerDisplayName
+        }
+        if item.kind == .group {
+            return DisplayName.forGroup(id: item.peerUserId, name: nil)
+        }
+        return DisplayName.forUser(item.peerUserId, contacts: appState.cachedContacts)
+    }
+
     private func conversationRow(_ item: ConversationListViewModel.Item) -> some View {
-        NavigationLink(destination: chatDestination(for: item)) {
+        let rowTitle = resolvedRowTitle(item)
+        return NavigationLink(destination: chatDestination(for: item)) {
             HStack(spacing: 12) {
                 // W120: presence dot on the avatar — green when peer
                 // online via PresenceService, gray when offline. Group
                 // avatars don't get a dot.
-                QAudionAvatar(displayName: item.peerDisplayName,
+                QAudionAvatar(displayName: rowTitle,
                               kind: item.kind == .group ? .group : .person,
                               size: 44,
                               presenceDot: item.kind == .group
@@ -594,7 +611,7 @@ struct ChatListScreen: View {
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
-                        Text(item.peerDisplayName)
+                        Text(rowTitle)
                             .qaudionStyle(type.titleSmall)
                             .foregroundStyle(scheme.onSurface)
                             .lineLimit(1)
