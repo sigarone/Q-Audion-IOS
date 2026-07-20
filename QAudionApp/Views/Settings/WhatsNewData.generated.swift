@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.822",
+              date: "2026-07-20",
+              title: "v1.0.822",
+              bullets: [
+                "feat(groupcall): signal AES-256 raw-key version-skew instead of silent decrypt failure (W-GRPVERSIONSKEW)",
+              ]),
         .init(id: "v1.0.821",
               date: "2026-07-20",
               title: "v1.0.821",
               bullets: [
+                "chore: regenerate changelog for v1.0.821",
                 "fix(groupcall,ui): reconcile SFU roster with WS roster, close CallKit-title UUID gap (W-GRPSFUGHOST, W-GRPTITLE-UUIDGAP)",
               ]),
         .init(id: "v1.0.820",
@@ -142,14 +149,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.803",
                 "fix(groups): never show raw long UUID, retry metadata decrypt, fix relogin extension",
                 "feat(groups): paginate the video grid instead of shrinking without limit",
-              ]),
-        .init(id: "v1.0.801",
-              date: "2026-07-17",
-              title: "v1.0.801",
-              bullets: [
-                "chore: regenerate changelog for v1.0.801",
-                "fix(groups): don't run 1:1 CallService audio setup during a group call",
-                "feat(groups): discover new groups + backfill roster via GET /api/v1/groups",
               ]),
     ]
 }
