@@ -719,6 +719,26 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // - false → opens the front camera via RTCCameraVideoCapturer.
         startCameraCapture(for: videoSource)
 
+        // W-VIDTELGAP (2026-07-20, call 40f6d641) — a mid-call upgrade adds
+        // m=video to an ALREADY-negotiated PeerConnection (audio was live
+        // long before the user tapped video). `startVideoStatsTelemetry()`
+        // was previously reachable ONLY from `didChangeIceConnectionState`'s
+        // `.connected`/`.completed` cases — but ICE reached `.connected`
+        // during the ORIGINAL audio handshake and, since neither this
+        // method nor `acceptUpgradeOffer` requests an ICE restart, never
+        // transitions through `.connected` again for this renegotiation.
+        // Net effect: iOS silently emits ZERO `video.stats` telemetry for
+        // the rest of the call — the tuning card shows the peer's leg with
+        // real (if sentinel) values while iOS's leg is entirely absent
+        // ("! video tx: ios blind"), which reads as "iOS never touched the
+        // camera" even when it did. Starting the poll here (idempotent —
+        // guarded by `videoStatsTimer == nil`) makes telemetry track
+        // "a local video track now exists" instead of "ICE just connected",
+        // which is the condition that actually matters and is still true
+        // on call start (ICE connects once, this call remains a no-op
+        // there since the ICE-connected path already started it).
+        startVideoStatsTelemetry()
+
         // SENDER-CRYPTOR MID-CALL-UPGRADE FIX (2026-07-10) — root cause of
         // Desktop receiving 100% garbage/plaintext H265 from an iOS CALLER
         // (this initiator/offerer path) that started AUDIO-ONLY then
@@ -1034,6 +1054,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // video TX starts once it ships. Hold TX until the peer's
         // call_media_ready (or 2s), then enable + force IDR.
         beginVideoTxHold()
+        // W-VIDTELGAP (2026-07-20, call 40f6d641) — same gap as
+        // `upgradeToVideo()` above, responder side: this renegotiation
+        // reuses the ALREADY-connected PC from the audio phase, so
+        // `didChangeIceConnectionState` will not fire `.connected`/
+        // `.completed` again and `startVideoStatsTelemetry()` would
+        // otherwise never run for a peer-initiated mid-call upgrade.
+        // Idempotent (guarded by `videoStatsTimer == nil`).
+        startVideoStatsTelemetry()
         return answerSdp
     }
 

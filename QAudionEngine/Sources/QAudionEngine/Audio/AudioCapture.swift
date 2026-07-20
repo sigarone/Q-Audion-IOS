@@ -49,8 +49,9 @@ public final class AudioCapture {
     // troppo / pumping": a SLOW, BOOST-ONLY make-up gain toward a target RMS,
     // gated on voice (never amplifies silence/background hiss) and capped so an
     // already-loud frame is never over-driven (the limiter still backstops
-    // peaks). ONLY runs when VP-IO is inactive — when VP-IO is on, Apple's own
-    // AGC is already normalising, so stacking ours would double-boost. Lock-free
+    // peaks). Runs in BOTH VP-IO modes (see agcMaxGainVpio below for why — W-
+    // TUNEGAP 2026-07-20 restored this after a same-day-in-2026-07-12 refactor
+    // (a542727) had silently disabled the VP-IO-on half). Lock-free
     // single-thread state (the 50 fps tap callback). Killswitch if it regresses.
     public static var micAgcEnabled = true
     private var micAgcGain: Float = 1.0
@@ -78,6 +79,21 @@ public final class AudioCapture {
     // quiet — ~5% peak raw, ~11% with VP-IO's AGC — vs Android ~71%; gating our
     // AGC to VP-IO-off left the transmitted level faint. Lifting under VP-IO too
     // closes that gap.
+    //
+    // W-TUNEGAP (2026-07-20) — this constant went DEAD for 8 days. Commit
+    // 04f82f1 (2026-07-12 19:17) added it and wired the make-up AGC to run in
+    // BOTH VP-IO modes for exactly the reason above. The SAME DAY at 23:32,
+    // commit a542727 ("canonical iOS VoIP stack") re-gated the make-up AGC to
+    // `!vpioActiveThisEngine` as a side effect of its broader "retire custom
+    // DSP to the raw-mic fallback only" policy, silently discarding the
+    // dual-mode fix and re-asserting — without new evidence — the very
+    // "Apple's AGC alone is enough" assumption 04f82f1 had just measured to be
+    // false. `agcMaxGainVpio` was left declared but unreachable ever since.
+    // Real call 40f6d641 (2026-07-20) reproduced exactly the predicted
+    // regression: agc_ever_active=true, vpio_ever_active=true, yet tx
+    // rms_pct=2% — well below the "healthy 5-15%" band a542727's own commit
+    // message set as its target. Restored below (see the micAgcEnabled gate
+    // in the tap callback) — the ceiling here is unchanged from 04f82f1.
     private static let agcMaxGainVpio: Float = 3.0
     private static let agcPeakHeadroom: Float = 0.90 // never boost a frame's peak past 90%
     // TX-RMS (2026-07-12) — sum of squares + sample count for the mic RMS,
@@ -341,19 +357,35 @@ public final class AudioCapture {
             } else {
                 return
             }
-            // W-MICAGC — gentle make-up AGC. W-CANONICAL (2026-07-12): VP-IO is
-            // now the single owner of AGC (Apple's, per-device tuned, enabled on
-            // all routes inside enableVoiceProcessing) — the software make-up
-            // AGC is HARD-BYPASSED whenever this engine instance was built with
-            // VP-IO active (gain pinned at 1.0; two AGCs adapting on the same
-            // signal is the classic pumping/double-boost pattern). It remains
-            // ONLY as the leveling fallback for the raw-mic path: user
-            // killswitch (CallsGate all-off) or the W-AEC-FIX starve-watchdog
-            // rebuild, where no Apple AGC runs. `vpioActiveThisEngine` is the
-            // per-engine-instance latch captured right after
-            // setVoiceProcessingEnabled — never live global state.
-            if Self.micAgcEnabled && !vpioActiveThisEngine {
-                let maxGain = Self.agcMaxGain
+            // W-MICAGC — gentle make-up AGC. Runs in BOTH modes: VP-IO off (we
+            // own leveling entirely, ceiling agcMaxGain=6.0) and VP-IO on
+            // (rides on top of Apple's own AGC with a LOWER ceiling,
+            // agcMaxGainVpio=3.0, to bound any double-AGC interaction — still
+            // boost-only + noise-gated + slow one-pole + de-zippered +
+            // peak-headroom clamped, so it cannot pump).
+            //
+            // W-TUNEGAP (2026-07-20) — RESTORED. This dual-mode gate shipped
+            // in 04f82f1 (2026-07-12 19:17) after real telemetry (call
+            // c4185402) proved Apple's VP-IO AGC alone leaves the iOS mic at
+            // only ~11% peak vs Android's ~71% ("faint"). The SAME DAY at
+            // 23:32, commit a542727's broader "canonical VP-IO everywhere"
+            // refactor silently re-gated this to `!vpioActiveThisEngine`
+            // (VP-IO-off only) as a side effect of its "retire custom DSP to
+            // fallback only" policy — re-asserting, without new evidence, the
+            // very "Apple's AGC alone is enough" assumption 04f82f1 had just
+            // disproven. Real call 40f6d641 (2026-07-20) reproduced exactly
+            // the predicted regression: agc_ever_active=true,
+            // vpio_ever_active=true, yet tx rms_pct=2% (Android decoded the
+            // exact same 2% on its end — confirmed no transport/decode loss,
+            // this is genuinely how quiet the transmitted signal was), far
+            // below the "healthy 5-15%" band a542727's own commit message set
+            // as its target. `vpioActiveThisEngine` is the per-engine-instance
+            // latch captured right after setVoiceProcessingEnabled — never
+            // live global state — so the ceiling selection can't desync
+            // mid-call (double-AGC risk) for buffers already in flight on a
+            // prior engine.
+            if Self.micAgcEnabled {
+                let maxGain = vpioActiveThisEngine ? Self.agcMaxGainVpio : Self.agcMaxGain
                 raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
                     guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
                     let n = rawBuf.count / 2
