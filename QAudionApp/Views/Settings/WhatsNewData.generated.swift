@@ -9,6 +9,13 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.815",
+              date: "2026-07-20",
+              title: "v1.0.815",
+              bullets: [
+                "feat(groupcall): true AES-256-GCM frame crypto — raw 32-byte SK_0 via fork overload (flag-day)",
+                "chore: regenerate changelog for v1.0.814",
+              ]),
         .init(id: "v1.0.814",
               date: "2026-07-19",
               title: "v1.0.814",
@@ -145,13 +152,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.795",
                 "fix(ios): pass the human display name to enable-capabilities, not the enum key",
-              ]),
-        .init(id: "v1.0.794",
-              date: "2026-07-16",
-              title: "v1.0.794",
-              bullets: [
-                "chore: regenerate changelog for v1.0.794",
-                "fix(ios): codemagic-cli-tools wants --capability, not --capabilities",
               ]),
     ]
 }
