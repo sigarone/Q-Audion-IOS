@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.825",
+              date: "2026-07-21",
+              title: "v1.0.825",
+              bullets: [
+                "fix(call): restore VP-IO make-up AGC + mid-call video-tx telemetry gap",
+              ]),
         .init(id: "v1.0.824",
               date: "2026-07-20",
               title: "v1.0.824",
               bullets: [
+                "chore: regenerate changelog for v1.0.824",
                 "fix(call): callee-path telemetry wiring + speaker-route re-assertion (W-TELEMPARITY, W-CALLSPKR)",
               ]),
         .init(id: "v1.0.823",
@@ -140,13 +147,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.806",
                 "fix(groupcall): add real resolution/fps/codec to group-call video telemetry",
-              ]),
-        .init(id: "v1.0.805",
-              date: "2026-07-17",
-              title: "v1.0.805",
-              bullets: [
-                "chore: regenerate changelog for v1.0.805",
-                "fix(groupcall): port sender_key_nack + fix group-call telemetry key names",
               ]),
     ]
 }
