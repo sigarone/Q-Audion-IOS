@@ -474,9 +474,11 @@ public final class GroupSession {
     /// NON-MUTATING read of our OWN current send-chain key (a COPY). Used as
     /// the LiveKit SFU media key sink: under the SFU, `encryptForGroup` is
     /// NOT called for media, so `sendChain.ck` never advances per-frame and
-    /// equals `SK_0` for the current epoch. Feeding `base64(SK_0)` to the
-    /// LiveKit key provider (keyed under our own userId) makes every
-    /// receiver derive the identical per-participant AES-128-GCM frame key.
+    /// equals `SK_0` for the current epoch. Feeding the RAW 32-byte `SK_0`
+    /// to the LiveKit key provider (keyed under our own userId; base64 is
+    /// only the wire/carrier form, decoded at the provider boundary — see
+    /// `LiveKitGroupCallRoom.rawKeyMaterial`, W-GRPKEY256) makes every
+    /// receiver derive the identical per-participant AES-256-GCM frame key.
     /// Returns `nil` if the send chain is empty (should never happen for a
     /// bootstrapped state). Does NOT step the ratchet — callers get a
     /// defensive copy. Mirrors Desktop `GroupSession.currentSendKey`

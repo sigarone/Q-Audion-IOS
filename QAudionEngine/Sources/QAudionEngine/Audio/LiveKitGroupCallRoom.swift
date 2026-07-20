@@ -9,11 +9,19 @@ import Foundation
 public struct GroupMediaKey {
     public let identity: String
     public let keyIndex: Int32
-    /// `base64(SK_0)` — fed VERBATIM as the key material string. The native
-    /// FrameCryptor UTF-8-encodes this string and PBKDF2-derives the
-    /// AES-128-GCM frame key from it (see `LiveKitGroupE2eeKatTests` for the
-    /// frozen vector). Never decode this to raw bytes before handing it to
-    /// the key provider — the STRING is the cross-platform contract input.
+    /// `base64(SK_0)` — base64 stays the WIRE/state carrier format
+    /// (`sender_key_init` etc. are untouched), but since W-GRPKEY256
+    /// (2026-07-20 lockstep flag day) it is DECODED to the raw 32-byte SK_0
+    /// at the key-provider boundary (`LiveKitGroupCallRoom.rawKeyMaterial`)
+    /// and the RAW BYTES are handed to the native FrameCryptor, whose
+    /// patched DeriveKeys (`password.size() == 32 ? 256 : 128`,
+    /// aes256-framecryptor.patch) then PBKDF2-derives an AES-256-GCM frame
+    /// key (see `LiveKitGroupE2eeKatTests` for the frozen vectors). The
+    /// pre-flip contract fed the 44-byte base64 STRING as UTF-8 — which
+    /// could never fire the ==32 gate, so the fleet silently derived
+    /// AES-128-GCM. A value that fails base64-decode or is not exactly 32
+    /// bytes is REJECTED fail-closed (no key installed, never a fallback to
+    /// the string path).
     public let keyB64: String
     public let graceMs: Double?
 
@@ -38,11 +46,17 @@ import AVFoundation
 /// byte-identical to:
 ///
 ///   KeyProvider options: sharedKey=false, ratchetSalt="LKFrameEncryptionKey",
-///                        ratchetWindowSize=0, keyRingSize=16 (AES-128-GCM is
-///                        the SDK's fixed/only cipher for this path — the
-///                        Swift `KeyProviderOptions` type has no separate
-///                        `keySize` knob the way the JS SDK's does).
-///   Key input string:   S = base64(SK_0) (RFC4648, '=' padding, no newlines)
+///                        ratchetWindowSize=0, keyRingSize=16.
+///   Key input (W-GRPKEY256, 2026-07-20 lockstep flag day): the RAW 32-byte
+///                        SK_0 (base64-decoded from the wire form at this
+///                        boundary), passed via the fork's raw-Data
+///                        `setKey(keyData:)` overload (tag 2.13.1-aes256-raw)
+///                        so the patched native DeriveKeys gate
+///                        (`password.size() == 32 ? 256 : 128`) fires and
+///                        derives AES-256-GCM. Decode-fail or length != 32
+///                        = fail closed (key NOT installed; never falls back
+///                        to the legacy utf8(base64) string input, which
+///                        derived AES-128-GCM).
 ///   keyIndex:            epoch % 16 ; participant identity == userId UUID.
 ///
 /// Owned directly by `GroupCallController` (no main/renderer process split
@@ -257,7 +271,17 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // ordering (not just the eventual presence of the key) is what
         // matters here.
         if let selfKey = selfKey {
-            keyProvider.setKey(key: selfKey.keyB64, participantId: selfKey.identity, index: selfKey.keyIndex)
+            // W-GRPKEY256: raw 32-byte SK_0, fail closed on bad material —
+            // see `rawKeyMaterial`'s kdoc. Publishing then proceeds with an
+            // UNKEYED provider, which the native cryptor drops (exactly
+            // today's fail-closed behavior for a missing key: `.missing_key`
+            // E2EE state, no plaintext, no weaker cipher).
+            if let raw = Self.rawKeyMaterial(selfKey.keyB64) {
+                keyProvider.setKey(keyData: raw, participantId: selfKey.identity, index: selfKey.keyIndex)
+            } else {
+                print("[GroupCallController][telemetry] e2ee self-key REJECTED identity=\(selfKey.identity) idx=\(selfKey.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
+                emitTelemetry("call.media.e2ee_key_invalid", ["identity": selfKey.identity, "key_index": Int(selfKey.keyIndex), "site": "connect_self_seed"])
+            }
         }
         // `EncryptionOptions` (not the deprecated `E2EEOptions`) — same
         // KeyProvider-driven media E2EE, without also turning on data-channel
@@ -426,13 +450,37 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         }
     }
 
+    /// W-GRPKEY256: decode the wire-format `base64(SK_0)` to the RAW
+    /// 32-byte key the native provider now receives verbatim (via the
+    /// fork's `setKey(keyData:)` overload, tag 2.13.1-aes256-raw). Returns
+    /// nil — caller MUST fail closed (skip the install, never fall back to
+    /// the legacy utf8-string input) — when the value is not valid base64
+    /// or not exactly 32 bytes: 32 is what fires the patched native
+    /// `password.size() == 32 ? 256 : 128` DeriveKeys gate, so anything
+    /// else would silently derive AES-128-GCM and break both the lockstep
+    /// contract and the no-downgrade rule.
+    private static func rawKeyMaterial(_ keyB64: String) -> Data? {
+        guard let raw = Data(base64Encoded: keyB64), raw.count == 32 else { return nil }
+        return raw
+    }
+
     /// Apply a media-key update. `graceMs` (only ever set for our own key
     /// after a member leave) delays application so in-flight frames still
     /// decrypt under the previous slot until we flip.
+    ///
+    /// W-GRPKEY256: installs the RAW 32-byte SK_0 (AES-256-GCM native
+    /// derivation). Bad material = fail closed: the slot keeps whatever it
+    /// had (usually nothing → `.missing_key` drop at the native cryptor),
+    /// identical to today's missing-key behavior — no weaker path exists.
     public func applyKey(_ key: GroupMediaKey) {
         guard let kp = keyProvider else { return }
+        guard let raw = Self.rawKeyMaterial(key.keyB64) else {
+            print("[GroupCallController][telemetry] e2ee key REJECTED identity=\(key.identity) idx=\(key.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
+            emitTelemetry("call.media.e2ee_key_invalid", ["identity": key.identity, "key_index": Int(key.keyIndex), "site": "apply_key"])
+            return
+        }
         let apply = {
-            kp.setKey(key: key.keyB64, participantId: key.identity, index: key.keyIndex)
+            kp.setKey(keyData: raw, participantId: key.identity, index: key.keyIndex)
         }
         if let grace = key.graceMs, grace > 0 {
             let work = DispatchWorkItem(block: apply)

@@ -130,7 +130,18 @@ let package = Package(
         // exists only to force a fresh SPM resolution in CI so the new
         // checksum gets picked up (Package.resolved caching could otherwise
         // mask a stale binary).
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.13.0-aes256-livekit"),
+        //
+        // W-GRPKEY256 (2026-07-20 lockstep flag day): tag 2.13.1-aes256-raw is
+        // 2.13.0-aes256-livekit + EXACTLY ONE commit (9255cb3, fork branch
+        // aes256-raw): a raw-Data `setKey(keyData:participantId:index:)`
+        // overload on `BaseKeyProvider` that hands the bytes VERBATIM to
+        // `LKRTCFrameCryptorKeyProvider` (the String overload UTF-8-encodes,
+        // so a 44-char base64 key can never fire the patched native
+        // `password.size() == 32 ? 256 : 128` gate — the whole fleet was
+        // silently deriving AES-128-GCM). `LiveKitGroupCallRoom` now feeds
+        // the RAW 32-byte SK_0 through this overload -> native derives
+        // AES-256-GCM. Nothing else differs from the analysis above.
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.13.1-aes256-raw"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
