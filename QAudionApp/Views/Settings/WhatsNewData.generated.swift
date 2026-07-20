@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.817",
+              date: "2026-07-20",
+              title: "v1.0.817",
+              bullets: [
+                "fix(groupcall): iPhone control-bar overflow, earpiece-routed audio, simulcast stats, hang-up ends call for all",
+              ]),
         .init(id: "v1.0.816",
               date: "2026-07-20",
               title: "v1.0.816",
               bullets: [
+                "chore: regenerate changelog for v1.0.816",
                 "fix(build): align LiveKitBroadcast pin with the 2.13.1-aes256-raw fork tag",
               ]),
         .init(id: "v1.0.815",
@@ -145,13 +152,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.797",
                 "ci(ios): hard-cap Build-reality-xcframework at 20min, it hung 1h13m+",
-              ]),
-        .init(id: "v1.0.796",
-              date: "2026-07-16",
-              title: "v1.0.796",
-              bullets: [
-                "chore: regenerate changelog for v1.0.796",
-                "ci(ios): add a raw signed-archive diagnostic step for when it fails silently",
               ]),
     ]
 }
