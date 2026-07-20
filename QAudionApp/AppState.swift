@@ -246,6 +246,17 @@ final class AppState: ObservableObject {
     @Published var isVideoCall: Bool = false
     @Published var callState: CallState = .idle
     @Published var callContactId: String?
+    /// W-CALLSPKR (2026-07-20) — the user's live loudspeaker preference for
+    /// the CURRENT 1:1 call, set by `setSpeaker(_:)` and consulted by the
+    /// `onAudioSessionActivated` fork below. Mirrors the state group calls
+    /// already track implicitly via `routeGroupCallAudioToSpeaker()` (which
+    /// re-derives "should be on speaker" from the live route instead of a
+    /// flag — not reusable here because a 1:1 call's default IS the
+    /// earpiece, so "current route is receiver" can't distinguish "user
+    /// never asked for speaker" from "CallKit just downgraded us out of
+    /// it"). Reset to `false` on every call teardown (endCall) so a stale
+    /// preference never leaks into the next call.
+    private var callSpeakerOn: Bool = false
     /// W-OFFERBUFFER (2026-07-12) — OFFER messages (PQC or Android-JSON)
     /// that arrived while `callContactId` was still nil. Desktop/Android
     /// ship the opaque OFFER BEFORE the `call_offer` envelope that sets
@@ -1828,6 +1839,25 @@ final class AppState: ObservableObject {
                         return
                     }
                     self.callService.handleAudioSessionActivated()
+                    // W-CALLSPKR (2026-07-20) — same class of gap as
+                    // W-GRPSPKR above, different code path: didActivate just
+                    // forced plain `.voiceChat` (no `.defaultToSpeaker`) onto
+                    // the shared session, same as the group-call fork. On a
+                    // 1:1 call that ONLY matters if the user had already
+                    // tapped the in-call speaker button — CallKit can refire
+                    // didActivate mid-call (interruption-end, hold/resume,
+                    // Bluetooth reactivation) without any speaker toggle from
+                    // the user, silently dropping the option that keeps the
+                    // route "sticky" against the proximity sensor. Re-assert
+                    // via the same two-step setSpeaker(true) path (category +
+                    // override) whenever the user's latched preference says
+                    // speaker should be on; no-ops (harmless) if it's already
+                    // correctly routed. Left OFF the fast path when
+                    // `callSpeakerOn` is false so the default earpiece call
+                    // start is untouched.
+                    if self.callSpeakerOn {
+                        self.setSpeaker(true)
+                    }
                 }
             }
             provider.onAudioSessionDeactivated = { [weak self] in
@@ -8953,6 +8983,31 @@ final class AppState: ObservableObject {
         if self.callState == .ringing {
             self.callState = .active
         }
+        // W-TELEMPARITY (2026-07-20) — per-call media lifecycle telemetry for
+        // the ANSWER (callee) side. `startCall()` (the OUTGOING/caller path,
+        // ~line 8646) has always called `CallMediaTelemetry.shared.
+        // recordConnected(...)` right after entering `.active`; this callee
+        // path never did. Root-caused on call 689eda51-49c8-4446-ba35-
+        // 08d5cb82268d (2026-07-20, Android→iOS 1:1 audio call): server-side
+        // telemetry showed a FULL call.media.connected/heartbeat(x30)/summary
+        // trio from Android but ONLY a single call.encrypted line from iOS for
+        // the entire 150s call — because `CallMediaTelemetry.currentCallId`
+        // was never set to this call's id, so its idempotency guards
+        // (`recordConnected`'s `cid == currentCallId`, `recordEnded`'s same
+        // check) silently no-op'd `call.media.connected`, the 5s heartbeat
+        // loop, and `call.media.summary` for every call where this device
+        // was the CALLEE. `tune-report.py`'s per-call view depends on this
+        // family to anchor+populate the iOS leg, so the leg rendered empty
+        // despite iOS's telemetry-batch POSTs succeeding (200 OK) throughout.
+        // `getActiveCallId()` is already bound here (bindIncomingCallId ran
+        // in the `call_incoming` WS handler before the user could answer).
+        if let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() {
+            CallMediaTelemetry.shared.recordConnected(
+                callId: cid,
+                peerPrefix: String((self.callContactId ?? "").prefix(8)),
+                sasSource: "answered"
+            )
+        }
         // W521: catch up to .encrypted if PQC completed during ringing.
         if self.callState == .active && self.callSasKeySource == .mlKem {
             self.callState = .encrypted
@@ -9213,6 +9268,9 @@ final class AppState: ObservableObject {
         // comes out of the external speaker at low perceived volume when
         // the user holds the phone to their ear expecting the earpiece.
         try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+        // W-CALLSPKR — drop the latched speaker preference alongside the
+        // route reset above so it can't leak into the next call.
+        callSpeakerOn = false
         // W347 / H-6: tear down the WebRTC bridge for this call.
         // W495 — send WS call_hangup BEFORE closing the peer connection.
         // Old pattern (closeSynchronously THEN Task { hangup() }) was broken:
@@ -9325,6 +9383,11 @@ final class AppState: ObservableObject {
 
     func setSpeaker(_ enabled: Bool) {
         // W520: route audio to the external loudspeaker (or back to the earpiece).
+        //
+        // W-CALLSPKR — latch the preference BEFORE touching the session so
+        // a didActivate refire that lands mid-toggle still sees the
+        // intended end state.
+        callSpeakerOn = enabled
         //
         // Two-step approach required:
         // 1. Reconfigure the category options: include .defaultToSpeaker only
