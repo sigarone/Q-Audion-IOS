@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.820",
+              date: "2026-07-20",
+              title: "v1.0.820",
+              bullets: [
+                "feat(groupcall,ui): ctrl-recipe parity, rejoin on reconnect, extension-first names (W-GRPCTRL-PARITY, W-GRPREJOIN, W-EXTCHAIN)",
+              ]),
         .init(id: "v1.0.819",
               date: "2026-07-20",
               title: "v1.0.819",
               bullets: [
+                "chore: regenerate changelog for v1.0.819",
                 "fix(ui): resolve PERSISTED UUID-shaped conversation titles at render (W-UUIDSWEEP-2)",
               ]),
         .init(id: "v1.0.818",
@@ -143,16 +150,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.800",
                 "fix(video): dismantle preview layer session before AVCaptureSession teardown",
-              ]),
-        .init(id: "v1.0.799",
-              date: "2026-07-17",
-              title: "v1.0.799",
-              bullets: [
-                "chore: regenerate changelog for v1.0.799",
-                "fix(groups): restore audio-relay SFU-unavailable fallback for platform parity",
-                "refactor(groups): retire legacy N-way mesh + WS-relay, SFU-only",
-                "feat(groups): SFU A/V telemetry wiring + adaptive video-grid layout",
-                "feat(groups): Tier-1 call features — reactions, raise-hand, mute-request, layout toggle",
               ]),
     ]
 }
