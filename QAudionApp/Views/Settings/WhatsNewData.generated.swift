@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.824",
+              date: "2026-07-20",
+              title: "v1.0.824",
+              bullets: [
+                "fix(call): callee-path telemetry wiring + speaker-route re-assertion (W-TELEMPARITY, W-CALLSPKR)",
+              ]),
         .init(id: "v1.0.823",
               date: "2026-07-20",
               title: "v1.0.823",
               bullets: [
+                "chore: regenerate changelog for v1.0.823",
                 "fix(groupcall): self video in unified grid, self-vs-remote e2ee guard (W-GRPSELFGRID, W-GRPE2EESELF)",
               ]),
         .init(id: "v1.0.822",
@@ -140,14 +147,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.805",
                 "fix(groupcall): port sender_key_nack + fix group-call telemetry key names",
-              ]),
-        .init(id: "v1.0.804",
-              date: "2026-07-17",
-              title: "v1.0.804",
-              bullets: [
-                "chore: regenerate changelog for v1.0.804",
-                "fix(calls): drop stray 1:1 call_answer while a group call is active",
-                "fix(groups): auto-reseal metadata under the fresh epoch after any bump",
               ]),
     ]
 }
