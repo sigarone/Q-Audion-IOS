@@ -472,14 +472,34 @@ final class AppState: ObservableObject {
         var hasVideo: Bool { callType == "video" }
         /// What the ring screen shows: the group when the call was started
         /// from a real group, otherwise whoever started it.
+        ///
+        /// W-GRPTITLE-UUIDGAP (2026-07-20): `groupName`/`creatorName` here
+        /// are wire/push-supplied values (`group_call_invite`'s raw
+        /// `group_name` is NEVER resolved — see
+        /// `BCryptoGroupCallManager.registerHandlers`'s kdoc: "additive... a
+        /// create sent by an older client leaves them empty strings", not
+        /// necessarily a real name) and were trusted VERBATIM here with no
+        /// `looksLikeUUID` guard — unlike every other identity render in
+        /// this codebase, which goes through `DisplayName.forUser`/
+        /// `forGroup` specifically BECAUSE a raw id can surface un-sanitised
+        /// this way. This is the one `displayTitle` feeds: CallKit's
+        /// `callerName` (the native lock-screen/in-call incoming-call UI)
+        /// and the W-NOCALLKIT local notification banner — i.e. exactly the
+        /// surface most likely to be "the group call screen" a user sees a
+        /// raw UUID on, since it renders before the app UI (which uses the
+        /// correctly-guarded per-participant `nameResolver`) is even open.
         var displayTitle: String {
             let g = groupName.trimmingCharacters(in: .whitespaces)
-            if !g.isEmpty { return g }
+            if !g.isEmpty, !DisplayName.looksLikeUUID(g) { return g }
             let c = creatorName.trimmingCharacters(in: .whitespaces)
-            if !c.isEmpty { return c }
-            // Central chain (DisplayName.swift): rubrica lookup for the
-            // creator before any fallback — "Utente a1b2c3d4…" at worst,
+            if !c.isEmpty, !DisplayName.looksLikeUUID(c) { return c }
+            // groupName/creatorName were empty OR themselves UUID-shaped —
+            // never fall through to them. A real group gets the humane
+            // per-kind fallback ("Gruppo a1b2c3d4…"); otherwise resolve the
+            // creator through the central chain (rubrica -> "Utente
+            // a1b2c3d4…") — matches DisplayName.forUser/forGroup exactly,
             // never a bare UUID slice.
+            if !groupId.isEmpty { return DisplayName.shortGroupFallback(groupId) }
             return DisplayName.forUser(creatorId)
         }
     }
@@ -7679,15 +7699,23 @@ final class AppState: ObservableObject {
 
     @MainActor
     private func callKitDisplayName(callerId: String, fallback: String?) -> String {
+        // W-GRPTITLE-UUIDGAP (2026-07-20): both tiers below used to trust
+        // their source verbatim — a legacy UUID-shaped rubrica row (Tier 1)
+        // or a UUID-shaped push `caller_name`/`creatorName` (Tier 2, e.g.
+        // group-call PushKit payloads via `prepareIncomingPushGroupCall`)
+        // rendered straight onto CallKit's native incoming-call UI with no
+        // guard, unlike `DisplayName.forUser`'s identical two tiers which
+        // both call `looksLikeUUID`. Added the same guard here so this
+        // older, parallel resolver can't leak a raw id either.
         // Tier 1: local rubrica (cached snapshot) by userId.
         if let match = cachedContacts.first(where: { $0.userId == callerId }),
-           !match.displayName.isEmpty {
+           !match.displayName.isEmpty, !DisplayName.looksLikeUUID(match.displayName) {
             return match.displayName
         }
         // Tier 2: server-supplied name (push caller_name), sanitised. A bare
         // numeric value is the PBX extension → format as "Int. NNN".
         let san = StringSanitiser.displayName(fallback, fallback: "")
-        if !san.isEmpty {
+        if !san.isEmpty, !DisplayName.looksLikeUUID(san) {
             if san.allSatisfy({ $0.isNumber }) { return "Int. " + san }
             return san
         }

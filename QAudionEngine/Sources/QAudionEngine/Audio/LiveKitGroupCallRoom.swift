@@ -124,6 +124,28 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// `.toString()` value ("missing_key" / "decryption_failed" / ...).
     public var onE2eeStateChanged: ((_ identity: String, _ kind: String, _ state: String) -> Void)?
 
+    /// W-GRPSFUGHOST follow-up (2026-07-20): a point-in-time snapshot of
+    /// every remote identity LiveKit currently considers connected to this
+    /// room — the same ground-truth `onParticipant` fires FUTURE
+    /// connect/disconnect events for, but readable synchronously. Exists so
+    /// a freshly-(re)constructed `GroupCallViewModel` (built again on every
+    /// socket rebuild, see `AppState.connectPersistentSocket`'s
+    /// W-GRPSTALEMGR kdoc) can seed `sfuPresentIdentities` from whoever was
+    /// ALREADY in the room before it started listening, mirroring the
+    /// existing `manager.participants` snapshot-at-bind pattern for the
+    /// WS roster (`GroupCallViewModel.init`'s "belt-and-suspenders" block).
+    /// Without this, a participant who joined the SFU before a mid-call
+    /// rebind would never get a tile via `onParticipant` alone — same
+    /// missed-event class as the WS roster, just on the SFU-presence data
+    /// source instead. Read directly off `room.remoteParticipants` — no
+    /// extra locking beyond what the SDK itself provides, matching every
+    /// other direct `room.remoteParticipants` read in this file (e.g.
+    /// `resolveIdentity` above).
+    public var connectedRemoteIdentities: [String] {
+        guard let room = room else { return [] }
+        return room.remoteParticipants.keys.map { $0.stringValue }
+    }
+
     private let wantsVideo: Bool
     private var room: Room?
     private var keyProvider: BaseKeyProvider?
@@ -857,6 +879,10 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// W-GRPSENDERKEY-NACK — stub counterpart of the real class's same-named
     /// property (see this stub's own doc comment above). Never fires here.
     public var onE2eeStateChanged: ((_ identity: String, _ kind: String, _ state: String) -> Void)?
+    /// W-GRPSFUGHOST — stub counterpart of the real class's same-named
+    /// property (see this stub's own doc comment above). No room ever
+    /// connects here, so always empty.
+    public var connectedRemoteIdentities: [String] { [] }
 
     public init(video: Bool) { super.init() }
 

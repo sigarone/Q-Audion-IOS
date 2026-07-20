@@ -254,11 +254,22 @@ struct ContentView: View {
 
     /// "Chiamata di gruppo · <chi ha chiamato>" (video variant included).
     /// Static so it has its own clean type-check scope (CLAUDE.md §13).
+    ///
+    /// W-GRPTITLE-UUIDGAP follow-up (2026-07-20): `invite.creatorName` had
+    /// no `looksLikeUUID` guard of its own here — it happened to be safe
+    /// transitively (every construction site now routes `creatorName`
+    /// through `callKitDisplayName`, which IS guarded), but a future
+    /// construction site skipping that resolver would silently reopen the
+    /// raw-UUID leak on this exact in-app ring screen. Guard directly
+    /// instead of relying on upstream callers staying disciplined.
     private static func groupCallSubtitle(
         _ invite: AppState.IncomingGroupCallInvite
     ) -> String {
         let kind = invite.hasVideo ? "Videochiamata di gruppo" : "Chiamata di gruppo"
-        let creator = invite.creatorName.trimmingCharacters(in: .whitespaces)
+        var creator = invite.creatorName.trimmingCharacters(in: .whitespaces)
+        if creator.isEmpty || DisplayName.looksLikeUUID(creator) {
+            creator = DisplayName.forUser(invite.creatorId)
+        }
         if creator.isEmpty || creator == invite.displayTitle { return kind }
         return kind + " · " + creator
     }

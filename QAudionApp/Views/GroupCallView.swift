@@ -1052,6 +1052,28 @@ class GroupCallViewModel: ObservableObject {
         reactionEvents.last(where: { $0.senderId == participantId })?.emoji
     }
 
+    /// W-GRPSFUGHOST: append a synthesized tile for any `sfuPresentIdentities`
+    /// entry missing from `participants` — called both right after a
+    /// `group_call_update` roster rebuild (`onParticipants`) and immediately
+    /// on a fresh `Room.participantDidConnect` (`onSfuParticipant`), so
+    /// neither path can leave a real SFU room member without a tile for
+    /// longer than one runloop turn. MainActor-only (both call sites already
+    /// hop via `DispatchQueue.main.async`), so no locking needed here —
+    /// mirrors every other mutation of `participants` in this class.
+    private func mergeSfuOnlyParticipants() {
+        let known = Set(participants.map(\.id))
+        for identity in sfuPresentIdentities where !known.contains(identity) && identity != selfUserId {
+            print("[GroupCallViewModel][telemetry] SFU-only participant identity=\(identity.prefix(8)) has no WS-roster tile — synthesizing one from LiveKit presence")
+            participants.append(ParticipantUI(
+                id: identity,
+                displayName: DisplayName.forUser(identity),
+                videoTrack: pendingVideoTracks.removeValue(forKey: identity),
+                screenShareTrack: pendingScreenShareTracks.removeValue(forKey: identity),
+                handRaised: raisedHandsCache.contains(identity)
+            ))
+        }
+    }
+
     private let manager: BCryptoGroupCallManager
     /// W367: optional GroupCallController (W354/W358/W366) bound to
     /// the audio pipeline. When set, mute toggles and end-call route
@@ -1085,6 +1107,28 @@ class GroupCallViewModel: ObservableObject {
     /// instead of silently losing it.
     private var pendingVideoTracks: [String: AnyObject] = [:]
     private var pendingScreenShareTracks: [String: AnyObject] = [:]
+    /// W-GRPSFUGHOST (2026-07-20, live 3-way call DC7D18B9): identities
+    /// LiveKit itself has told us are actual room members
+    /// (`Room.participantDidConnect`, via `onSfuParticipant(_, true)`),
+    /// independent of whether the WS-signaling roster
+    /// (`manager.onParticipantsChanged`, fed by `group_call_update`) has
+    /// ever listed them. These two rosters are two INDEPENDENT sources of
+    /// truth — before this fix `participants` (tile existence) was driven
+    /// 100% by the WS roster, with the SFU-native signal used only to
+    /// attach/detach tracks onto an ALREADY-existing tile. Live-repro: the
+    /// server reaps a participant from `GroupCall.Participants` after an
+    /// ungraceful-disconnect grace window (commit 5a3b2e1) even while that
+    /// participant's LiveKit session — and its WS opaque-message
+    /// ctrl-channel — stays fully alive; a peer stuck in exactly that state
+    /// was invisible in the grid forever (both iPhones exchanged
+    /// sender-key rotates with a Desktop peer neither ever rendered a tile
+    /// for), because no `group_call_update` was ever coming to introduce
+    /// one. `mergeSfuOnlyParticipants` keeps any identity in this set
+    /// present in `participants` even across a roster rebuild that still
+    /// doesn't mention them — the next roster update that DOES include them
+    /// simply supersedes the synthesized entry (same id, so `list.map`'s
+    /// own entry wins the position; the merge only appends what's missing).
+    private var sfuPresentIdentities: Set<String> = []
 
     init(manager: BCryptoGroupCallManager, controller: GroupCallController? = nil) {
         self.manager = manager
@@ -1114,6 +1158,17 @@ class GroupCallViewModel: ObservableObject {
                 // binding so a subsequent, different call (this ViewModel
                 // is long-lived across calls) doesn't leak the old one.
                 self?.activeGroupId = ""
+                // W-GRPSFUGHOST: when WE hang up, LiveKit does not fire a
+                // per-remote `participantDidDisconnect` for everyone else
+                // still in the room (only OUR OWN room teardown runs) — so
+                // without this, `sfuPresentIdentities` would carry stale
+                // identities from THIS call into the next one, and
+                // `mergeSfuOnlyParticipants` could synthesize a ghost tile
+                // for someone who isn't even in the new call. This
+                // ViewModel is long-lived across calls (same rationale as
+                // `activeGroupId` above), so this state must be reset
+                // explicitly rather than relying on per-departure cleanup.
+                self?.sfuPresentIdentities.removeAll()
             }
         }
         let onParticipants: ([BCryptoGroupCallManager.Participant]) -> Void = { [weak self] list in
@@ -1141,6 +1196,15 @@ class GroupCallViewModel: ObservableObject {
                                   screenShareTrack: screenShare,
                                   handRaised: self.raisedHandsCache.contains(entry.id))
                 }
+                // W-GRPSFUGHOST: a stale/incomplete WS roster (see
+                // `sfuPresentIdentities`' kdoc) must not erase a tile for
+                // someone LiveKit itself confirms is still in the room —
+                // `list.map` above is a full REPLACE keyed only off the
+                // server's `participants` array, so without this a synthesized
+                // tile added by `onSfuParticipant` would vanish again on the
+                // very next unrelated roster broadcast (e.g. a THIRD member
+                // joining/leaving) if the server still hasn't reconciled.
+                self.mergeSfuOnlyParticipants()
             }
         }
         if let controller = controller {
@@ -1179,17 +1243,36 @@ class GroupCallViewModel: ObservableObject {
                 DispatchQueue.main.async { self?.selfVideoTrack = track }
             }
             controller.onSfuParticipant = { [weak self] identity, present in
-                guard !present else { return }
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    // A participant can leave before the roster/SFU race
-                    // above ever resolved for them — drop any pending track
-                    // too, so it can't get misattached to a later identity.
-                    self.pendingVideoTracks.removeValue(forKey: identity)
-                    self.pendingScreenShareTracks.removeValue(forKey: identity)
-                    guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
-                    self.participants[idx].videoTrack = nil
-                    self.participants[idx].screenShareTrack = nil
+                    guard present else {
+                        // A participant can leave before the roster/SFU race
+                        // above ever resolved for them — drop any pending track
+                        // too, so it can't get misattached to a later identity.
+                        // KNOWN RESIDUAL: this only clears tracks, it does NOT
+                        // remove a tile that exists ONLY because
+                        // `mergeSfuOnlyParticipants` synthesized it (no
+                        // per-tile "was this WS-confirmed" provenance is
+                        // tracked) — relies on the WS roster's own eventual
+                        // `group_call_update` to fully drop the tile, same as
+                        // it always has for a roster-known departure. Still
+                        // strictly better than the pre-fix behavior (that
+                        // participant never getting a tile at all).
+                        self.sfuPresentIdentities.remove(identity)
+                        self.pendingVideoTracks.removeValue(forKey: identity)
+                        self.pendingScreenShareTracks.removeValue(forKey: identity)
+                        guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
+                        self.participants[idx].videoTrack = nil
+                        self.participants[idx].screenShareTrack = nil
+                        return
+                    }
+                    // W-GRPSFUGHOST: see `sfuPresentIdentities`'/
+                    // `mergeSfuOnlyParticipants`'s kdoc — this is the
+                    // ground-truth "LiveKit says this identity is really in
+                    // the room" signal, tracked independently of whatever the
+                    // WS-signaling roster currently believes.
+                    self.sfuPresentIdentities.insert(identity)
+                    self.mergeSfuOnlyParticipants()
                 }
             }
             // W-GRPSCREENSHARE: same "bind once, here" pattern as
@@ -1285,6 +1368,22 @@ class GroupCallViewModel: ObservableObject {
         let stateSnapshot = manager.state
         if stateSnapshot != .idle {
             onState(stateSnapshot)
+        }
+        // W-GRPSFUGHOST follow-up (2026-07-20): same snapshot-at-bind
+        // rationale as `participantsSnapshot`/`stateSnapshot` above, but for
+        // the INDEPENDENT SFU-presence source `sfuPresentIdentities` tracks
+        // (see that property's kdoc) — `onSfuParticipant` above only ever
+        // observes FUTURE LiveKit connect/disconnect events, so a remote
+        // participant already connected to the SFU room before THIS
+        // (re)bind (e.g. a mid-call socket rebuild that reconstructs this
+        // ViewModel — `GroupCallController.rebind(manager:)`'s kdoc) would
+        // otherwise never get a tile via that path either.
+        if let controller = controller {
+            let sfuSnapshot = controller.sfuConnectedIdentities
+            if !sfuSnapshot.isEmpty {
+                sfuPresentIdentities.formUnion(sfuSnapshot)
+                mergeSfuOnlyParticipants()
+            }
         }
     }
 

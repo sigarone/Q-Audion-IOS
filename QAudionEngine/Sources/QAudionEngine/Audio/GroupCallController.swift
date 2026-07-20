@@ -252,6 +252,21 @@ public final class GroupCallController: @unchecked Sendable {
     /// read by the UI once on the `.active` transition to seed its own
     /// camera-on/off toggle state.
     public var callWantsVideo: Bool { lock.lock(); defer { lock.unlock() }; return wantsVideo }
+    /// W-GRPSFUGHOST follow-up (2026-07-20) — passthrough of
+    /// `LiveKitGroupCallRoom.connectedRemoteIdentities`: every remote
+    /// identity the SFU room ALREADY considers connected, readable
+    /// synchronously instead of only via future `onSfuParticipant` events.
+    /// Lets a freshly-(re)built `GroupCallViewModel` (rebuilt on every
+    /// socket rebuild — see `rebind(manager:)`'s kdoc above) seed its
+    /// `sfuPresentIdentities` at bind time, the SFU-presence counterpart of
+    /// the existing `manager.participants` WS-roster snapshot. Empty
+    /// (never nil) when not currently riding the SFU.
+    public var sfuConnectedIdentities: [String] {
+        lock.lock()
+        let room = sfuRoom
+        lock.unlock()
+        return room?.connectedRemoteIdentities ?? []
+    }
 
     // ─── Control-envelope transport ───────────────────────────────────
     // Deliberately NOT owned here. An earlier version of this file kept its
