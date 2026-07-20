@@ -148,6 +148,17 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// initialiser — handy for tests that want deterministic names.
     private let nameResolver: (String) -> String
 
+    /// W-EXTRESOLVE (2026-07-20) — rubrica rows can change DURING a live
+    /// call: the app layer's NameResolutionService asynchronously upserts
+    /// server names / "Int. NNN" for ids that first rendered as the short8
+    /// placeholder. Participant display names here are resolved once at
+    /// roster build and cached (`handleGroupCallUpdate` deliberately reuses
+    /// `existing` entries), so without this observer a member who joined as
+    /// "Utente ab12cd34…" would stay that way for the whole call. On every
+    /// `.contactsDidChange` we re-run `nameResolver` over the cached roster
+    /// and re-fire `onParticipantsChanged` only if something changed.
+    private var contactsObserver: (any NSObjectProtocol)?
+
     public init(
         ws: BCryptoWebSocketClient,
         selfUserId: String,
@@ -184,6 +195,46 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             }
         }
         registerHandlers()
+        // See `contactsObserver`'s kdoc. queue nil = fires on the posting
+        // thread; refreshParticipantNames is lock-guarded and resolver
+        // calls happen outside the lock, so any thread is fine.
+        contactsObserver = NotificationCenter.default.addObserver(
+            forName: .contactsDidChange, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.refreshParticipantNames()
+        }
+    }
+
+    deinit {
+        if let o = contactsObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+    }
+
+    /// Re-resolve the cached roster's display names against the (just
+    /// changed) rubrica and republish if anything actually differs. Resolver
+    /// calls run OUTSIDE the lock — the injected resolver reads ContactsStore
+    /// / UserDefaults and may kick further async work; holding our NSLock
+    /// across an arbitrary closure would invite deadlocks.
+    private func refreshParticipantNames() {
+        lock.lock()
+        let ids = _participants.map { $0.id }
+        lock.unlock()
+        guard !ids.isEmpty else { return }
+        var resolved: [String: String] = [:]
+        for uid in ids { resolved[uid] = nameResolver(uid) }
+        lock.lock()
+        var changed = false
+        for idx in _participants.indices {
+            if let fresh = resolved[_participants[idx].id],
+               !fresh.isEmpty, fresh != _participants[idx].displayName {
+                _participants[idx].displayName = fresh
+                changed = true
+            }
+        }
+        let list = _participants
+        lock.unlock()
+        if changed { onParticipantsChanged?(list) }
     }
 
     // MARK: - Actions

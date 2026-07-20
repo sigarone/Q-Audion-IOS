@@ -127,6 +127,62 @@ public enum MessageCryptoV2 {
         return openWithPsk(parsed: parsed, psk: psk, aad: aad)
     }
 
+    public enum EncodeError: Error, Equatable {
+        case epochTagLength(Int)
+    }
+
+    /// W-GRPCTRL-PARITY (2026-07-20) — v2 (0xE2) wire ENCODER. Byte-for-byte
+    /// parity with Android `MessageCrypto.encrypt`'s v2 pack and Desktop
+    /// `MessageCrypto.ts` `encrypt(…, { epochTag })`:
+    ///
+    ///   `0xE2 | len(epoch) | epoch | salt(32) | nonce(12) | ct | tag(16)`
+    ///   key = HKDF-SHA256(IKM = psk, salt = random 32B,
+    ///                     info = "q-audion-msg-key", L = 32)
+    ///
+    /// This file was decode-only until now (iOS chat seals v3/v4), but the
+    /// group-call control channel (`qa_grpcall_ctrl`) needs the encoder: the
+    /// cross-platform contract for contact-bound X25519/RK_0 PSKs (the rv=2
+    /// class in Desktop's vault tagging) seals v2 under the channel AAD with
+    /// the PSK NAME riding the wire as the epoch tag — see
+    /// `AppState.onSendControlEnvelope`'s non-v4 branch.
+    public static func seal(plaintext: Data, psk: Data, epochTag: String, aad: Data) throws -> Data {
+        let epochBytes = Data(epochTag.utf8)
+        guard (1...255).contains(epochBytes.count) else {
+            throw EncodeError.epochTagLength(epochBytes.count)
+        }
+        let salt = randomBytes(saltSize)
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: psk),
+            salt: salt,
+            info: msgKeyInfo,
+            outputByteCount: keySize
+        )
+        let nonceBytes = randomBytes(nonceSize)
+        let nonce = try AES.GCM.Nonce(data: nonceBytes)
+        let sealed = try AES.GCM.seal(plaintext, using: key, nonce: nonce, authenticating: aad)
+        var wire = Data()
+        wire.reserveCapacity(2 + epochBytes.count + saltSize + nonceSize + sealed.ciphertext.count + tagSize)
+        wire.append(magicV2)
+        wire.append(UInt8(epochBytes.count))
+        wire.append(epochBytes)
+        wire.append(salt)
+        wire.append(nonceBytes)
+        wire.append(sealed.ciphertext)
+        wire.append(sealed.tag)
+        return wire
+    }
+
+    /// Same CSPRNG pattern as `MessageCrypto.randomBytes` (v1 encoder).
+    private static func randomBytes(_ count: Int) -> Data {
+        var bytes = Data(count: count)
+        let status = bytes.withUnsafeMutableBytes { ptr -> Int32 in
+            guard let base = ptr.baseAddress else { return errSecParam }
+            return SecRandomCopyBytes(kSecRandomDefault, count, base)
+        }
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
+        return bytes
+    }
+
     public static func isV2Wire(_ wire: Data) -> Bool {
         return !wire.isEmpty && wire[wire.startIndex] == magicV2
     }

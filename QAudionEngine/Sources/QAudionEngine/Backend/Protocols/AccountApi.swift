@@ -70,19 +70,30 @@ public struct PublicUser: Codable, Hashable {
     public var displayName: String?
     public var avatarUrl: String?
     public var statusMessage: String?
+    /// PBX internal extension ("interno"). The server GUARANTEES every
+    /// userId has one (bcrypto-lite `handleUserProfile` returns
+    /// `"extension": user.Extension` on both `/users/{id}` and
+    /// `/users/{id}/profile`). Optional here only for decode tolerance
+    /// against older payloads — a missing/zero value at runtime is an
+    /// upstream data error, not an acceptable state (Pavel rule
+    /// 2026-07-20: the display chain must END in "Int. NNN", never in a
+    /// steady-state short8 placeholder).
+    public var extensionNumber: Int64?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
         case displayName = "display_name"
         case avatarUrl = "avatar_url"
         case statusMessage = "status_message"
+        case extensionNumber = "extension"
     }
 
-    public init(userId: String, displayName: String? = nil, avatarUrl: String? = nil, statusMessage: String? = nil) {
+    public init(userId: String, displayName: String? = nil, avatarUrl: String? = nil, statusMessage: String? = nil, extensionNumber: Int64? = nil) {
         self.userId = userId
         self.displayName = displayName
         self.avatarUrl = avatarUrl
         self.statusMessage = statusMessage
+        self.extensionNumber = extensionNumber
     }
 }
 

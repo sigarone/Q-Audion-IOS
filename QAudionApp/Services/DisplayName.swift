@@ -13,8 +13,13 @@ import QAudionEngine
 ///   2. server-supplied display (`caller_display` / push `caller_name` /
 ///      wire `group_name`), sanitised; a bare numeric value is the PBX
 ///      extension and renders as "Int. NNN",
-///   3. humane last resort: "Utente a1b2c3d4…" (short8 + ellipsis) for
-///      users, "Gruppo a1b2c3d4…" for groups — NEVER the 36-char UUID.
+///   3. TRANSIENT last resort: "Utente a1b2c3d4…" (short8 + ellipsis) for
+///      users, "Gruppo a1b2c3d4…" for groups — NEVER the 36-char UUID, and
+///      (corrected rule 2026-07-20) never a steady state for users either:
+///      hitting it kicks `NameResolutionService.ensureResolved`, which
+///      fetches the profile and upserts server name / "Int. NNN" into the
+///      rubrica (every userId has a server-guaranteed interno; a fetch that
+///      yields neither is logged as a real error).
 ///
 /// Debug/diagnostics screens (explicitly labeled) and technical-id captions
 /// in QR/invite flows (small, monospaced, labeled "ID tecnico") are the only
@@ -55,8 +60,19 @@ enum DisplayName {
         // 3. Legacy dev-seed convention ("user-mario" → "Mario").
         if id.hasPrefix("user-") { return String(id.dropFirst(5)).capitalized }
         // 4. Short human-scale ids (extensions etc.) pass through; long
-        //    opaque ids get the humane short8 fallback.
-        return id.count > 12 ? shortUserFallback(id) : id
+        //    opaque ids get the humane short8 fallback — TRANSIENTLY.
+        //    Pavel corrected rule (2026-07-20): "Utente short8…" is not an
+        //    acceptable steady state — every userId has a server-side
+        //    extension ("interno"), so kick a fire-and-forget profile
+        //    fetch. NameResolutionService upserts the server name (or
+        //    "Int. NNN") into the rubrica and .contactsDidChange re-renders
+        //    every observer; this call stays synchronous and returns the
+        //    placeholder only for the instant the fetch is in flight.
+        if id.count > 12 {
+            NameResolutionService.shared.ensureResolved(userId: id)
+            return shortUserFallback(id)
+        }
+        return id
     }
 
     /// Last-resort user label — "Utente a1b2c3d4…". For call sites that

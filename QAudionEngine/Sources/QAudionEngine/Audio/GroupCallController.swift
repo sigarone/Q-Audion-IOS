@@ -326,6 +326,38 @@ public final class GroupCallController: @unchecked Sendable {
         wireManagerCallbacks()
     }
 
+    /// W-GRPREJOIN (2026-07-20, call FB75E465): re-send `group_call_join`
+    /// for the in-flight call after the signaling socket reconnected. A
+    /// dropped WS gets this participant reaped from the server's roster
+    /// once the ghost-grace expires, so a reconnect that does NOT re-join
+    /// leaves the user stranded alone in the call UI — the server allows
+    /// rejoin for invited/former participants. Called by the app layer on
+    /// the WS transition INTO `.authenticated` (once per reconnect by
+    /// construction); a strict no-op unless this controller is currently
+    /// `.connecting`/`.active`, so it can never join anything
+    /// spontaneously. Deliberately does NOT re-run
+    /// `bootstrapGroupSession`: the sender-key chains survive the socket
+    /// loss, and a re-bootstrap would rotate our send key without a
+    /// `sender_key_rotate` reaching the other members. The server's
+    /// `group_call_update` reply re-drives the roster + (via the manager's
+    /// `.active` transition) the SFU token round-trip when the LiveKit
+    /// room needs rebuilding — both paths are already no-ops when the
+    /// room/pipeline is still alive.
+    public func rejoinAfterReconnect() {
+        lock.lock()
+        let cid = activeCallId
+        let st = _state
+        lock.unlock()
+        guard let callId = cid else { return }
+        switch st {
+        case .connecting, .active:
+            print("[GroupCallController] rejoinAfterReconnect: re-sending group_call_join call=\(callId.prefix(8))…")
+            manager.joinGroupCall(callId: callId)
+        case .idle, .failed:
+            break
+        }
+    }
+
     // MARK: - Public API
 
     /// Create a new group call and invite the listed peers.
