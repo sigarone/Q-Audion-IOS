@@ -242,152 +242,31 @@ struct GroupCallView: View {
                 }
                 .padding(.horizontal, 16)
 
-                // Control bar
-                HStack(spacing: 32) {
-                    // Mute button
-                    Button {
-                        viewModel.toggleMute()
-                    } label: {
-                        Image(systemName: viewModel.isMuted ? "mic.slash.fill" : "mic.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 56, height: 56)
-                            .background(viewModel.isMuted ? Color.red.opacity(0.3) : Color.white.opacity(0.15))
-                            .clipShape(Circle())
-                    }
-
-                    // W-GRPVIDEO: camera on/off. Only shown once the call is
-                    // actually riding the LiveKit SFU (isUsingSfu) — the
-                    // WS-relay mesh fallback path has no video pipeline, so
-                    // there is nothing to toggle. Works whether the call
-                    // started as audio or video: publishing a fresh camera
-                    // track mid-call is a supported LiveKit path (see
-                    // GroupCallController.setVideoEnabled kdoc).
-                    if viewModel.isSfuActive {
-                        Button {
-                            viewModel.toggleVideo()
-                        } label: {
-                            Image(systemName: viewModel.isVideoEnabled ? "video.fill" : "video.slash.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 56, height: 56)
-                                .background(viewModel.isVideoEnabled ? Color.white.opacity(0.15) : Color.red.opacity(0.3))
-                                .clipShape(Circle())
-                        }
-                    }
-
-                    // W-GRPSCREENSHARE: screen-share on/off. Same SFU-only
-                    // gating as the camera toggle above — screen share, like
-                    // camera, only exists over the LiveKit SFU transport.
-                    // Tapping this calls straight into `GroupCallController.
-                    // setScreenShareEnabled`, which itself calls LiveKit's
-                    // own `LocalParticipant.setScreenShare(enabled:)` — that
-                    // SDK call is what shows the SYSTEM broadcast picker
-                    // (`RPSystemBroadcastPickerView`, via `BroadcastManager.
-                    // shared.requestActivation()`) when starting; there is no
-                    // custom in-app permission flow to build here (see
-                    // `LiveKitGroupCallRoom.setScreenShareEnabled`'s kdoc for
-                    // the verified source trail).
-                    if viewModel.isSfuActive {
-                        Button {
-                            viewModel.toggleScreenShare()
-                        } label: {
-                            Image(systemName: viewModel.isScreenSharing
-                                  ? "rectangle.on.rectangle.circle.fill"
-                                  : "rectangle.on.rectangle")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 56, height: 56)
-                                .background(viewModel.isScreenSharing ? Color.blue.opacity(0.35) : Color.white.opacity(0.15))
-                                .clipShape(Circle())
-                        }
-                        .accessibilityLabel(viewModel.isScreenSharing ? "Interrompi condivisione schermo" : "Condividi schermo")
-                    }
-
-                    // Item 1 (2026-07-16 wire contract) — raise/lower
-                    // hand, state-dependent background color exactly like
-                    // the mute button above (`Color.red.opacity(0.3)`
-                    // muted / `Color.white.opacity(0.15)` unmuted) — same
-                    // pattern, orange being the raised-hand's own semantic
-                    // (distinct from mute's red / screen-share's blue)
-                    // since it's not an error/alert state.
-                    Button {
-                        viewModel.toggleHandRaised()
-                    } label: {
-                        Image(systemName: viewModel.isHandRaised ? "hand.raised.fill" : "hand.raised")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 56, height: 56)
-                            .background(viewModel.isHandRaised ? Color.orange.opacity(0.35) : Color.white.opacity(0.15))
-                            .clipShape(Circle())
-                    }
-                    .accessibilityLabel(viewModel.isHandRaised ? "Abbassa la mano" : "Alza la mano")
-
-                    // Item 1 — reaction picker: small popup with the fixed
-                    // 6-emoji set (see `reactionPicker` below). `.popover`
-                    // gives the "small popup" shape for free.
-                    Button {
-                        showReactionPicker = true
-                    } label: {
-                        Image(systemName: "face.smiling")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 56, height: 56)
-                            .background(Color.white.opacity(0.15))
-                            .clipShape(Circle())
-                    }
-                    .popover(isPresented: $showReactionPicker) {
-                        reactionPicker
-                    }
-                    .accessibilityLabel("Invia una reazione")
-
-                    // In-call chat + attachments panel toggle — same
-                    // icon-toggle -> dismissible-sheet mechanism as the
-                    // security shield button in `groupTrustBar` above,
-                    // reused here per the control-row placement this
-                    // feature was specced against (rather than the trust
-                    // bar, which is reserved for always-visible crypto
-                    // chips). Disabled placement decision: kept enabled
-                    // even for an ad-hoc call with no persisted group —
-                    // `GroupCallChatPanel` itself renders the "unavailable"
-                    // explanation in that case rather than hiding the
-                    // entry point (so the user isn't left wondering why a
-                    // control silently vanished).
-                    Button {
-                        showChatPanel = true
-                    } label: {
-                        Image(systemName: "bubble.left.and.bubble.right.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 56, height: 56)
-                            .background(Color.white.opacity(0.15))
-                            .clipShape(Circle())
-                            .overlay(alignment: .topTrailing) {
-                                if chatUnreadCount > 0 {
-                                    Text(chatUnreadCount > 99 ? "99+" : "\(chatUnreadCount)")
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 5).padding(.vertical, 2)
-                                        .background(Capsule().fill(Color.red))
-                                        .offset(x: 6, y: -4)
-                                }
-                            }
-                    }
-                    .accessibilityLabel("Chat di gruppo")
-
-                    // End call button
-                    Button {
-                        viewModel.endCall()
-                        dismiss()
-                    } label: {
-                        Image(systemName: "phone.down.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 56, height: 56)
-                            .background(Color.red)
-                            .clipShape(Circle())
-                    }
+                // Control bar — responsive sizing (2026-07-20, live 5-way
+                // call 694147de): the old fixed `HStack(spacing: 32)` of
+                // 56pt circles needed ~584pt for the full 7-button SFU row
+                // — wider than ANY iPhone in portrait (390-430pt logical),
+                // so the row overflowed the screen on BOTH sides (the mute
+                // and end-call buttons landed fully OFF-SCREEN) and
+                // inflated the enclosing VStack past the device width,
+                // while iPad (≥744pt) happened to fit — "layout fisso che
+                // non fitta il telefono". Same container-driven philosophy
+                // as the grid's `gridPageCapacity` above: derive the button
+                // diameter and gap from the REAL row width, each capped at
+                // the original 56pt/32pt so any screen that already fit
+                // (iPad, landscape) renders exactly as before.
+                GeometryReader { controlGeo in
+                    let buttonCount = CGFloat(viewModel.isSfuActive ? 7 : 5)
+                    // max(0, …) guards the zero-size first layout pass a
+                    // GeometryReader can report — a negative frame dimension
+                    // is a SwiftUI runtime error, not just a visual glitch.
+                    let controlSize = max(0, min(56, (controlGeo.size.width - 8 * (buttonCount - 1)) / buttonCount))
+                    let controlSpacing = max(0, min(32, (controlGeo.size.width - controlSize * buttonCount) / max(buttonCount - 1, 1)))
+                    controlBar(buttonSize: controlSize, spacing: controlSpacing)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .frame(height: 56)
+                .padding(.horizontal, 8)
                 .padding(.bottom, 40)
             }
 
@@ -471,6 +350,160 @@ struct GroupCallView: View {
         guard !viewModel.activeGroupHex.isEmpty else { chatUnreadCount = 0; return }
         chatUnreadCount = showChatPanel ? 0
             : GroupMessageStore.shared.unreadCount(forGroupHex: viewModel.activeGroupHex)
+    }
+
+    /// The control-row buttons, extracted from `body` verbatim (2026-07-20
+    /// responsive-control-bar fix — see the call site's comment): every
+    /// button used to hard-code `.frame(width: 56, height: 56)` inside an
+    /// `HStack(spacing: 32)`; both constants now arrive from the call
+    /// site's `GeometryReader`, capped at those same values, so nothing
+    /// changes visually wherever the old row already fit.
+    private func controlBar(buttonSize: CGFloat, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            // Mute button
+            Button {
+                viewModel.toggleMute()
+            } label: {
+                Image(systemName: viewModel.isMuted ? "mic.slash.fill" : "mic.fill")
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .background(viewModel.isMuted ? Color.red.opacity(0.3) : Color.white.opacity(0.15))
+                    .clipShape(Circle())
+            }
+
+            // W-GRPVIDEO: camera on/off. Only shown once the call is
+            // actually riding the LiveKit SFU (isUsingSfu) — the
+            // WS-relay mesh fallback path has no video pipeline, so
+            // there is nothing to toggle. Works whether the call
+            // started as audio or video: publishing a fresh camera
+            // track mid-call is a supported LiveKit path (see
+            // GroupCallController.setVideoEnabled kdoc).
+            if viewModel.isSfuActive {
+                Button {
+                    viewModel.toggleVideo()
+                } label: {
+                    Image(systemName: viewModel.isVideoEnabled ? "video.fill" : "video.slash.fill")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: buttonSize, height: buttonSize)
+                        .background(viewModel.isVideoEnabled ? Color.white.opacity(0.15) : Color.red.opacity(0.3))
+                        .clipShape(Circle())
+                }
+            }
+
+            // W-GRPSCREENSHARE: screen-share on/off. Same SFU-only
+            // gating as the camera toggle above — screen share, like
+            // camera, only exists over the LiveKit SFU transport.
+            // Tapping this calls straight into `GroupCallController.
+            // setScreenShareEnabled`, which itself calls LiveKit's
+            // own `LocalParticipant.setScreenShare(enabled:)` — that
+            // SDK call is what shows the SYSTEM broadcast picker
+            // (`RPSystemBroadcastPickerView`, via `BroadcastManager.
+            // shared.requestActivation()`) when starting; there is no
+            // custom in-app permission flow to build here (see
+            // `LiveKitGroupCallRoom.setScreenShareEnabled`'s kdoc for
+            // the verified source trail).
+            if viewModel.isSfuActive {
+                Button {
+                    viewModel.toggleScreenShare()
+                } label: {
+                    Image(systemName: viewModel.isScreenSharing
+                          ? "rectangle.on.rectangle.circle.fill"
+                          : "rectangle.on.rectangle")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: buttonSize, height: buttonSize)
+                        .background(viewModel.isScreenSharing ? Color.blue.opacity(0.35) : Color.white.opacity(0.15))
+                        .clipShape(Circle())
+                }
+                .accessibilityLabel(viewModel.isScreenSharing ? "Interrompi condivisione schermo" : "Condividi schermo")
+            }
+
+            // Item 1 (2026-07-16 wire contract) — raise/lower
+            // hand, state-dependent background color exactly like
+            // the mute button above (`Color.red.opacity(0.3)`
+            // muted / `Color.white.opacity(0.15)` unmuted) — same
+            // pattern, orange being the raised-hand's own semantic
+            // (distinct from mute's red / screen-share's blue)
+            // since it's not an error/alert state.
+            Button {
+                viewModel.toggleHandRaised()
+            } label: {
+                Image(systemName: viewModel.isHandRaised ? "hand.raised.fill" : "hand.raised")
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .background(viewModel.isHandRaised ? Color.orange.opacity(0.35) : Color.white.opacity(0.15))
+                    .clipShape(Circle())
+            }
+            .accessibilityLabel(viewModel.isHandRaised ? "Abbassa la mano" : "Alza la mano")
+
+            // Item 1 — reaction picker: small popup with the fixed
+            // 6-emoji set (see `reactionPicker` below). `.popover`
+            // gives the "small popup" shape for free.
+            Button {
+                showReactionPicker = true
+            } label: {
+                Image(systemName: "face.smiling")
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .background(Color.white.opacity(0.15))
+                    .clipShape(Circle())
+            }
+            .popover(isPresented: $showReactionPicker) {
+                reactionPicker
+            }
+            .accessibilityLabel("Invia una reazione")
+
+            // In-call chat + attachments panel toggle — same
+            // icon-toggle -> dismissible-sheet mechanism as the
+            // security shield button in `groupTrustBar` above,
+            // reused here per the control-row placement this
+            // feature was specced against (rather than the trust
+            // bar, which is reserved for always-visible crypto
+            // chips). Disabled placement decision: kept enabled
+            // even for an ad-hoc call with no persisted group —
+            // `GroupCallChatPanel` itself renders the "unavailable"
+            // explanation in that case rather than hiding the
+            // entry point (so the user isn't left wondering why a
+            // control silently vanished).
+            Button {
+                showChatPanel = true
+            } label: {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .background(Color.white.opacity(0.15))
+                    .clipShape(Circle())
+                    .overlay(alignment: .topTrailing) {
+                        if chatUnreadCount > 0 {
+                            Text(chatUnreadCount > 99 ? "99+" : "\(chatUnreadCount)")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(Capsule().fill(Color.red))
+                                .offset(x: 6, y: -4)
+                        }
+                    }
+            }
+            .accessibilityLabel("Chat di gruppo")
+
+            // End call button
+            Button {
+                viewModel.endCall()
+                dismiss()
+            } label: {
+                Image(systemName: "phone.down.fill")
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .background(Color.red)
+                    .clipShape(Circle())
+            }
+        }
     }
 
     /// Item 5: the regular grid's participant list — in `.speaker` layout
@@ -1346,13 +1379,21 @@ class GroupCallViewModel: ObservableObject {
     }
 
     func endCall() {
-        // W367: stop the audio pipeline cleanly via the controller; if
-        // no controller is bound (legacy preview), fall through to the
-        // raw manager.endGroupCall().
+        // W-GRPEND-CREATOR (2026-07-20, live incident): this used to call
+        // endCallForAll() UNCONDITIONALLY — every iOS participant's red
+        // hang-up button terminated the call for the whole roster (live
+        // repro: a non-creator iPad hung up and the 5-way call died for
+        // everyone). Android's "Termina" and Desktop's hang-up both send
+        // group_call_leave; iOS was the only platform sending
+        // group_call_end. Hang-up now LEAVES (server also gates end on the
+        // creator since the same incident, downgrading a non-creator's end
+        // to leave — this client fix makes the intent explicit rather than
+        // relying on the server downgrade). endCallForAll() remains
+        // available for a future explicit creator-only "end for all" UI.
         if let controller = controller {
-            controller.endCallForAll()
+            controller.leave()
         } else {
-            manager.endGroupCall()
+            manager.leaveGroupCall()
         }
     }
 

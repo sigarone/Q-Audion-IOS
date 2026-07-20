@@ -731,7 +731,20 @@ extension LiveKitGroupCallRoom: TrackDelegate {
         }
         switch track.kind {
         case .video:
-            if isLocal, let out = statistics.outboundRtpStream.first {
+            // W-GRPTELEM-SIMULCAST (2026-07-20, call 694147de leg e1f5690b):
+            // `VideoPublishOptions.simulcast` defaults TRUE in the pinned SDK
+            // (verified in the fork source: `simulcast: Bool = true`), so
+            // `outboundRtpStream` carries one entry PER simulcast layer and
+            // the array order is arbitrary — `.first` regularly lands on a
+            // suspended/bandwidth-starved layer, which reports
+            // frameWidth/Height nil (rendered as 0x0) and framesPerSecond
+            // nil (rendered as -1) even while another layer is actively
+            // encoding. Pick the layer that actually carries frames
+            // (max framesEncoded, tie-broken by bytesSent) so tune-report
+            // reflects the real outbound picture instead of an idle layer.
+            if isLocal, let out = statistics.outboundRtpStream.max(by: {
+                (($0.framesEncoded ?? 0), ($0.bytesSent ?? 0)) < (($1.framesEncoded ?? 0), ($1.bytesSent ?? 0))
+            }) {
                 emitTelemetry("video.stats", [
                     "identity": identity,
                     "direction": "out",

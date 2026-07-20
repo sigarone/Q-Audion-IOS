@@ -1784,7 +1784,19 @@ final class AppState: ObservableObject {
                     // call (set in reportGroupCall.../cleared only in
                     // clearGroupCallKitCall), so it's the right guard here even
                     // without a uuid to compare.
-                    guard self.groupCallKitId == nil else { return }
+                    guard self.groupCallKitId == nil else {
+                        // W-GRPSPKR (2026-07-20, call 694147de) —
+                        // CallKitProvider.didActivate just forced plain
+                        // `.voiceChat` (no `.defaultToSpeaker`) onto the
+                        // shared session, which on iPhone routes group-call
+                        // playback to the EARPIECE (iPad has no receiver —
+                        // hence "iPad hears, iPhone silent" on one build).
+                        // LiveKit owns the group call's audio ENGINE, but the
+                        // output ROUTE is ours to keep on the loudspeaker
+                        // (no-op unless currently on the receiver).
+                        self.routeGroupCallAudioToSpeaker()
+                        return
+                    }
                     self.callService.handleAudioSessionActivated()
                 }
             }
@@ -2528,11 +2540,33 @@ final class AppState: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     self.groupCallControllerState = s
+                    // W-GRPSPKR — the group-call surface is hands-free: route
+                    // playback to the loudspeaker if the session default left
+                    // it on the iPhone earpiece (no-op on iPad/BT/wired — see
+                    // routeGroupCallAudioToSpeaker's kdoc).
+                    if case .active = s { self.routeGroupCallAudioToSpeaker() }
                     // W-GRPRING — the group call is over (left / ended / never
                     // started): clear the CallKit call we reported for it, else
                     // the system call UI would stay up forever.
-                    if s == .idle { self.clearGroupCallKitCall(reason: .remoteEnded) }
+                    if s == .idle {
+                        self.clearGroupCallKitCall(reason: .remoteEnded)
+                        // W-GRPSPKR — drop the loudspeaker lock so the NEXT
+                        // (1:1) call starts on the earpiece as always —
+                        // mirrors endCall()'s identical reset.
+                        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+                    }
                 }
+            }
+            // W-GRPSPKR — re-assert the speaker route as each remote audio
+            // track subscribes: LiveKit's engine start (and a late CallKit
+            // didActivate) reconfigures the shared AVAudioSession AFTER the
+            // `.active` hook above ran, silently dropping the override back
+            // to the earpiece. This closure slot was previously unbound
+            // (LiveKit plays remote audio itself; nothing else consumes it)
+            // and the routine no-ops unless the current output route is the
+            // built-in receiver, so re-firing per track is safe.
+            groupController.onRemoteAudioTrack = { [weak self] _, _ in
+                DispatchQueue.main.async { self?.routeGroupCallAudioToSpeaker() }
             }
             self.groupCallManager = groupManager
             self.groupCallViewModel = GroupCallViewModel(manager: groupManager, controller: groupController)
@@ -9141,6 +9175,50 @@ final class AppState: ObservableObject {
         } catch {
             let msg: String = error.localizedDescription
             RTLog.warn("call", "setSpeaker failed: " + msg)
+        }
+    }
+
+    /// W-GRPSPKR (2026-07-20, live 5-way call 694147de): group calls have NO
+    /// speaker toggle and NO hold-to-ear UX — the surface is a hands-free
+    /// participant grid — yet nothing ever routed their playback off the
+    /// session default. `CallKitProvider` (CXStartCallAction / didActivate)
+    /// installs `.playAndRecord`/`.voiceChat` WITHOUT `.defaultToSpeaker`,
+    /// so on iPhone the LiveKit room's decoded remote audio played through
+    /// the EARPIECE: server telemetry showed the leg decoding thousands of
+    /// frames while the user heard nothing. iPad has no receiver port, so
+    /// the identical build sounded fine there — exactly the reported
+    /// asymmetry. Mirrors `setSpeaker(true)`'s two-step category+override
+    /// lock, but guarded on the built-in receiver being the CURRENT output
+    /// route so it never hijacks Bluetooth/wired routes (and no-ops on
+    /// iPad/simulator). Idempotent — safe to re-assert from every hook that
+    /// can stomp the route: the group `.active` transition, CallKit's
+    /// `didActivate` (which re-installs plain `.voiceChat` mid-call), and
+    /// each remote-audio-track subscribe (LiveKit's engine start applies
+    /// its own session config AFTER `.active` fired).
+    func routeGroupCallAudioToSpeaker() {
+        let session = AVAudioSession.sharedInstance()
+        let onReceiver = session.currentRoute.outputs.contains {
+            $0.portType == .builtInReceiver
+        }
+        guard onReceiver else { return }
+        do {
+            #if !targetEnvironment(simulator)
+            let opts: AVAudioSession.CategoryOptions = [
+                .allowBluetoothHFP,
+                .interruptSpokenAudioAndMixWithOthers,
+                .defaultToSpeaker
+            ]
+            #else
+            let opts: AVAudioSession.CategoryOptions = [
+                .interruptSpokenAudioAndMixWithOthers,
+                .defaultToSpeaker
+            ]
+            #endif
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
+            try session.overrideOutputAudioPort(.speaker)
+            RTLog.info("call", "group-call speaker route applied (was receiver)")
+        } catch {
+            RTLog.warn("call", "group-call speaker route failed: " + error.localizedDescription)
         }
     }
 
