@@ -17,6 +17,18 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         public var displayName: String
         public var isMuted: Bool = false
         public var isSpeaking: Bool = false
+        /// W-RAWKEY256 (2026-07-20) — whether this member's build advertised
+        /// `supports_raw_key_aes256` on its own create/join (server's
+        /// `GroupCall.RawKeyCapable` map, mirrors `SenderKeysCapable` byte-
+        /// for-byte). Defaults `true` so every pre-existing call site that
+        /// constructs a bare `Participant(id:displayName:)` (previews, the
+        /// local self-seed in `createGroupCall`, an SFU-only ghost tile in
+        /// `GroupCallViewModel.mergeSfuOnlyParticipants`) stays silent by
+        /// default rather than spuriously flagging someone this manager has
+        /// no real wire signal for yet — only `handleGroupCallUpdate` below
+        /// ever sets this to `false`, from the real server-canonical
+        /// `raw_key_capable` roster.
+        public var isRawKeyCapable: Bool = true
     }
 
     /// W-GRPRING — decoded `group_call_invite` (server commit 9619df4). The
@@ -61,6 +73,15 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// `supports_group_sender_keys` on create/join. Mirrors the server's
     /// `GroupCall.SenderKeysCapable` map (main.go).
     private var _senderKeysCapable: Set<String> = []
+    /// W-RAWKEY256 — subset of `_participants` that advertised
+    /// `supports_raw_key_aes256` on create/join. Mirrors the server's
+    /// `GroupCall.RawKeyCapable` map (main.go), byte-for-byte parallel to
+    /// `_senderKeysCapable` above. PASS-THROUGH signal only — this manager
+    /// never touches actual key material; it exists so the UI layer can
+    /// warn about a version-skew pair (legacy AES-128-from-base64(SK_0) vs
+    /// current AES-256-from-raw-SK_0 key derivation) instead of the two
+    /// builds silently failing to decrypt each other's SFU media.
+    private var _rawKeyCapable: Set<String> = []
     /// W-GRPREKEY — server-canonical epoch counter (`GroupCall.SenderKeyEpoch`),
     /// relayed on every `group_call_update`. Bumped by the server on a real
     /// membership departure; clients pre-set their local epoch to
@@ -72,6 +93,8 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     public var callId: String? { lock.lock(); defer { lock.unlock() }; return _callId }
     public var participants: [Participant] { lock.lock(); defer { lock.unlock() }; return _participants }
     public var senderKeysCapable: Set<String> { lock.lock(); defer { lock.unlock() }; return _senderKeysCapable }
+    /// W-RAWKEY256 — mirrors `senderKeysCapable` above, exact same shape.
+    public var rawKeyCapable: Set<String> { lock.lock(); defer { lock.unlock() }; return _rawKeyCapable }
     public var senderKeyEpoch: Int64 { lock.lock(); defer { lock.unlock() }; return _senderKeyEpoch }
 
     /// Callback for state changes
@@ -286,6 +309,13 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             "call_id": newCallId,
             "recipients": recipients,
             "supports_group_sender_keys": true,
+            // W-RAWKEY256 (2026-07-20) — unconditional true, no negotiation:
+            // this build always derives the SFU media key from the raw
+            // 32-byte SK_0 (AES-256-GCM), never the legacy
+            // UTF8(base64(SK_0))->AES-128-GCM path. Mirrors
+            // `supports_group_sender_keys` exactly — server-contract field
+            // name is `supports_raw_key_aes256` (`GroupCall.RawKeyCapable`).
+            "supports_raw_key_aes256": true,
             "call_type": callType,
             "group_id": groupId,
             "group_name": groupName
@@ -294,7 +324,8 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     }
 
     /// Join an existing group call. Always advertises sender-key support —
-    /// every live client on this codebase now ships GroupSession.
+    /// every live client on this codebase now ships GroupSession — and,
+    /// W-RAWKEY256, raw-key AES-256 support, for the same reason.
     public func joinGroupCall(callId: String) {
         lock.lock()
         _state = .creating
@@ -304,7 +335,8 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
 
         ws.send(type: "group_call_join", data: [
             "call_id": callId,
-            "supports_group_sender_keys": true
+            "supports_group_sender_keys": true,
+            "supports_raw_key_aes256": true
         ])
     }
 
@@ -449,7 +481,10 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         }
 
         // Sent on both join and leave. Wire:
-        // {call_id, participants, sender_keys_capable, sender_key_epoch}.
+        // {call_id, participants, sender_keys_capable, sender_key_epoch,
+        // raw_key_capable}. `raw_key_capable` (W-RAWKEY256, 2026-07-20) is
+        // additive/parallel to `sender_keys_capable` — see
+        // `Participant.isRawKeyCapable`'s kdoc.
         ws.registerHandler(type: "group_call_update") { [weak self] _, data in
             self?.handleGroupCallUpdate(data: data)
         }
@@ -530,16 +565,26 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
               let participantIds = data["participants"] as? [String] else { return }
         let capableIds = data["sender_keys_capable"] as? [String] ?? []
         let epoch = (data["sender_key_epoch"] as? NSNumber)?.int64Value ?? 1
+        // W-RAWKEY256 (2026-07-20) — same `?? []` fallback idiom as
+        // `sender_keys_capable` above (mirrors it exactly): server always
+        // ships this field on every `group_call_update` broadcast, so an
+        // absent key only happens against a stale/never-updated server,
+        // same failure mode `sender_keys_capable` already accepts.
+        let rawKeyCapableIds = data["raw_key_capable"] as? [String] ?? []
+        let rawKeyCapableSet = Set(rawKeyCapableIds)
         lock.lock()
         _participants = participantIds.map { uid in
-            if let existing = _participants.first(where: { $0.id == uid }) {
+            let isRawKeyCapable = rawKeyCapableSet.contains(uid)
+            if var existing = _participants.first(where: { $0.id == uid }) {
+                existing.isRawKeyCapable = isRawKeyCapable
                 return existing
             }
             // Server only ships UUIDs — resolve to a human name client-side
             // via the local rubrica, falling back to the bare UUID.
-            return Participant(id: uid, displayName: nameResolver(uid))
+            return Participant(id: uid, displayName: nameResolver(uid), isRawKeyCapable: isRawKeyCapable)
         }
         _senderKeysCapable = Set(capableIds)
+        _rawKeyCapable = rawKeyCapableSet
         _senderKeyEpoch = epoch
         _state = .active
         let list = _participants
@@ -590,6 +635,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         _state = .ended
         _participants.removeAll()
         _senderKeysCapable.removeAll()
+        _rawKeyCapable.removeAll()
         _senderKeyEpoch = 1
         _callId = nil
         lock.unlock()

@@ -108,6 +108,25 @@ struct GroupCallView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
 
+                // W-RAWKEY256 (2026-07-20) — real, live production incident:
+                // the SFU frame-crypto key derivation migrated from legacy
+                // UTF8(base64(SK_0))->PBKDF2->AES-128-GCM to raw-32-byte-
+                // SK_0->PBKDF2->AES-256-GCM (iOS commit 1f48275, v1.0.816).
+                // A build on one side of that migration paired with a build
+                // on the other side derives DIFFERENT keys from the SAME
+                // SK_0 — 100% silent decrypt failure for that pair
+                // specifically, no error surfaced to either side (confirmed
+                // via Loki: 2x v1.0.816 + 2x v1.0.810 in the same SFU
+                // key-install exchange). Non-blocking advisory, same
+                // "signal, don't block" posture as `identityChangeBanner`
+                // on the 1:1 screen (`InCallScreen.swift`) — the call itself
+                // is never gated on this.
+                if !outdatedMembers.isEmpty {
+                    outdatedMembersBanner
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 10)
+                }
+
                 // W-GRPSCREENSHARE: spotlight tile for whichever remote
                 // participant is currently sharing their screen — rendered
                 // full-width, ABOVE the regular participant grid, so a
@@ -728,6 +747,71 @@ struct GroupCallView: View {
                 .stroke(color.opacity(0.4), lineWidth: 1)
         )
     }
+
+    // MARK: - W-RAWKEY256: version-skew advisory (2026-07-20)
+
+    /// Real roster members (never self — the server always lists the
+    /// sender of its own `supports_raw_key_aes256: true` create/join, but
+    /// excluded here defensively anyway, same belt-and-suspenders posture
+    /// as `ParticipantTile`'s `isSelf` mute-menu gate) missing from the
+    /// server's `raw_key_capable` broadcast — i.e. still on the legacy
+    /// AES-128 key-derivation build. See the banner's kdoc at its call
+    /// site in `body` for the full incident this closes.
+    private var outdatedMembers: [GroupCallViewModel.ParticipantUI] {
+        viewModel.participants.filter { !$0.isRawKeyCapable && $0.id != viewModel.selfUserId }
+    }
+
+    /// Non-blocking version-skew advisory — mirrors `InCallScreen.
+    /// identityChangeBanner`'s exact content shape (warning icon + all-caps
+    /// title + description sentence) for this screen's analogous "signal,
+    /// don't block" situation, but reuses THIS screen's own `groupTrustBar`
+    /// fill/stroke chrome (`scheme.surfaceVariant` background, tinted
+    /// stroke) rather than `identityChangeBanner`'s `scheme.surfaceVariant`
+    /// solid fill, since that reads correctly against this screen's fixed
+    /// dark backdrop the same way `groupTrustBar` already does immediately
+    /// above it.
+    private var outdatedMembersBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(extras.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("AGGIORNAMENTO RICHIESTO")
+                    .qaudionStyle(type.labelSmall)
+                    .tracking(0.6)
+                    .foregroundStyle(extras.warning)
+                Text(outdatedMembersMessage)
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(Color.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scheme.surfaceVariant.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(extras.warning.opacity(0.55), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Avviso: \(outdatedMembersMessage)")
+    }
+
+    /// Names every affected member — never a raw id (`displayName` is
+    /// already resolved through the manager's own rubrica chain, same
+    /// discipline as every other name shown on this screen). Singular vs
+    /// plural Italian verb agreement, matching this screen's own register
+    /// ("Chiamata di gruppo" / "partecipanti" elsewhere in `body`).
+    private var outdatedMembersMessage: String {
+        let names = outdatedMembers.map(\.displayName)
+        if names.count == 1 {
+            return "\(names[0]) deve aggiornare l'app per la chiamata audio/video con te."
+        }
+        return "\(names.joined(separator: ", ")) devono aggiornare l'app per la chiamata audio/video con te."
+    }
 }
 
 struct ParticipantTile: View {
@@ -930,6 +1014,12 @@ class GroupCallViewModel: ObservableObject {
         /// participant who joins/reconnects mid-call won't see who
         /// currently has a hand raised.
         var handRaised: Bool = false
+        /// W-RAWKEY256 (2026-07-20) — passthrough of `BCryptoGroupCallManager.
+        /// Participant.isRawKeyCapable`. Defaults `true` for the same reason
+        /// that field does (see its kdoc): a tile synthesized with no real
+        /// WS-roster signal yet (SFU-only ghost in `mergeSfuOnlyParticipants`,
+        /// previews) must stay silent rather than spuriously warning.
+        var isRawKeyCapable: Bool = true
     }
 
     @Published var participants: [ParticipantUI] = []
@@ -1194,7 +1284,8 @@ class GroupCallViewModel: ObservableObject {
                                   isMuted: entry.isMuted, isSpeaking: entry.isSpeaking,
                                   videoTrack: video,
                                   screenShareTrack: screenShare,
-                                  handRaised: self.raisedHandsCache.contains(entry.id))
+                                  handRaised: self.raisedHandsCache.contains(entry.id),
+                                  isRawKeyCapable: entry.isRawKeyCapable)
                 }
                 // W-GRPSFUGHOST: a stale/incomplete WS roster (see
                 // `sfuPresentIdentities`' kdoc) must not erase a tile for
