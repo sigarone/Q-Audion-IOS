@@ -312,8 +312,8 @@ struct HomeView: View {
                 let name: String = {
                     if !appState.incomingCallerName.isEmpty { return appState.incomingCallerName }
                     let cid = appState.callContactId ?? ""
-                    if cid.count > 12 { return String(cid.prefix(8)) + "…" + String(cid.suffix(4)) }
-                    return cid.isEmpty ? "Sconosciuto" : cid
+                    guard !cid.isEmpty else { return "Sconosciuto" }
+                    return DisplayName.forUser(cid, contacts: appState.cachedContacts)
                 }()
                 Text(name)
                     .font(.subheadline.weight(.semibold))
@@ -362,12 +362,12 @@ struct HomeView: View {
                     // refreshed on every ContactsStore write — avoids a UserDefaults
                     // decode on every in-call banner render).
                     let stored = appState.cachedContacts
-                    if let m = stored.first(where: { $0.userId == cid }), !m.displayName.isEmpty {
+                    if let m = stored.first(where: { $0.userId == cid }),
+                       !m.displayName.isEmpty, !DisplayName.looksLikeUUID(m.displayName) {
                         return "Chiamata attiva con \(m.displayName)"
                     }
-                    // Extension from dialExtension map if available, else truncate UUID.
-                    if cid.count > 12 { return "Chiamata attiva con \(String(cid.prefix(8)))…\(String(cid.suffix(4)))" }
-                    return "Chiamata attiva con \(cid)"
+                    // Central humane fallback — never the raw/truncated UUID.
+                    return "Chiamata attiva con \(DisplayName.forUser(cid, contacts: stored))"
                 }())
                 Spacer()
                 Text("Tocca per rientrare")
@@ -526,7 +526,8 @@ private struct CallsTabView: View {
         if let name = contactNameByUserId[userId], !name.isEmpty {
             return name
         }
-        return userId
+        // Central rule (DisplayName.swift): never the raw UUID.
+        return DisplayName.forUser(userId, contacts: appState.cachedContacts)
     }
 
     /// Rebuild the in-memory display-name map from AppState.cachedContacts.
@@ -534,7 +535,11 @@ private struct CallsTabView: View {
     /// so this is effectively free (no UserDefaults access, no JSON decode).
     private func reloadContactNameCache() {
         var map: [String: String] = [:]
-        for c in appState.cachedContacts where !c.displayName.isEmpty {
+        // W-UUIDSWEEP: skip UUID-shaped stored names (legacy rows persisted
+        // before addScannedContact was fixed) so displayNameFor falls
+        // through to DisplayName.forUser's humane fallback.
+        for c in appState.cachedContacts
+        where !c.displayName.isEmpty && !DisplayName.looksLikeUUID(c.displayName) {
             map[c.userId] = c.displayName
         }
         contactNameByUserId = map

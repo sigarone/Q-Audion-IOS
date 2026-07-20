@@ -122,10 +122,13 @@ private struct DecodedDetailView: View {
     }
 
     private var headerTitle: String {
+        // Central rule (DisplayName.swift): the HEADLINE is always the
+        // resolved human name — the full technical id stays available in
+        // the labeled monospaced rows of `detailSection` below.
         switch decoded {
-        case .identity(let id): return id.userId
-        case .deviceLink(let dl): return dl.userId
-        case .fastSetup(let fs): return fs.userId
+        case .identity(let id): return DisplayName.forUser(id.userId)
+        case .deviceLink(let dl): return DisplayName.forUser(dl.userId)
+        case .fastSetup(let fs): return DisplayName.forUser(fs.userId)
         case .groupInvite(let gi):
             return gi.groupName.isEmpty ? "Gruppo" : gi.groupName
         case .invalid(let kind, _): return "Codice \(kind.rawValue) non valido"

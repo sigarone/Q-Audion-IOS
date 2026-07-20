@@ -477,9 +477,10 @@ final class AppState: ObservableObject {
             if !g.isEmpty { return g }
             let c = creatorName.trimmingCharacters(in: .whitespaces)
             if !c.isEmpty { return c }
-            return creatorId.count > 12
-                ? String(creatorId.prefix(8)) + "…"
-                : creatorId
+            // Central chain (DisplayName.swift): rubrica lookup for the
+            // creator before any fallback — "Utente a1b2c3d4…" at worst,
+            // never a bare UUID slice.
+            return DisplayName.forUser(creatorId)
         }
     }
 
@@ -2378,7 +2379,17 @@ final class AppState: ObservableObject {
         // `qa_grpcall_ctrl`, ship as an opaque_message) so
         // GroupCallController never needs to import BCryptoWebSocketClient.
         if let selfId = currentUserId {
-            let groupManager = BCryptoGroupCallManager(ws: ws, selfUserId: selfId)
+            // Central name-resolution rule (see DisplayName.swift): the
+            // manager's participant roster feeds the group-call tiles, so
+            // inject the app-side resolver (rubrica alias → server display
+            // → "Utente a1b2c3d4…") instead of the engine's minimal
+            // default. Fires on the WS background thread — DisplayName.
+            // forUser is nonisolated by design.
+            let groupManager = BCryptoGroupCallManager(
+                ws: ws,
+                selfUserId: selfId,
+                nameResolver: { DisplayName.forUser($0) }
+            )
             let groupController = ensureGroupCallController(groupManager)
             // W-GRPSENDERKEY / regression-risk fix (2026-07-13): seal via
             // AppState's OWN shared `Self.ratchet`/`Self.sharedV4Ratchet`
@@ -3066,13 +3077,13 @@ final class AppState: ObservableObject {
                 // W-CC: use cached snapshot — avoids a UserDefaults decode
                 // on every incoming call ringing path.
                 if let match = self.cachedContacts.first(where: { $0.userId == senderId }),
-                   !match.displayName.isEmpty {
+                   !match.displayName.isEmpty, !DisplayName.looksLikeUUID(match.displayName) {
                     return match.displayName
                 }
-                // Last resort: never show the raw 36-char UUID to the user.
-                // Truncate to head…tail like the Settings/profile screens do.
+                // Last resort: never show the raw 36-char UUID to the user —
+                // humane short8 fallback (central rule, see DisplayName.swift).
                 if senderId.count > 12 {
-                    return String(senderId.prefix(8)) + "…" + String(senderId.suffix(4))
+                    return DisplayName.shortUserFallback(senderId)
                 }
                 return senderId
             }()
@@ -3382,7 +3393,7 @@ final class AppState: ObservableObject {
                         return match.displayName
                     }
                     if callerId.count > 12 {
-                        return String(callerId.prefix(8)) + "…" + String(callerId.suffix(4))
+                        return DisplayName.shortUserFallback(callerId)
                     }
                     return callerId.isEmpty ? "Sconosciuto" : callerId
                 }()
@@ -5770,9 +5781,9 @@ final class AppState: ObservableObject {
             // on every incoming message path.
             let resolvedName: String = {
                 if let name = self.cachedContacts.first(where: { $0.userId == senderId })?.displayName,
-                   !name.isEmpty { return name }
+                   !name.isEmpty, !DisplayName.looksLikeUUID(name) { return name }
                 if senderId.count > 12 {
-                    return String(senderId.prefix(8)) + "…" + String(senderId.suffix(4))
+                    return DisplayName.shortUserFallback(senderId)
                 }
                 return senderId
             }()
@@ -5953,7 +5964,9 @@ final class AppState: ObservableObject {
             HapticFeedback.messageSent()
         }
         if bannersGlobalEnabled && !isMuted && activePeerUserId != senderId {
-            let title = conv.peerDisplayName.isEmpty ? senderId : conv.peerDisplayName
+            let title = conv.peerDisplayName.isEmpty
+                ? DisplayName.forUser(senderId, contacts: self.cachedContacts)
+                : conv.peerDisplayName
             // W106: privacy toggle — hide content in notifications.
             // Defaults false; when on the body is replaced with a
             // generic "Nuovo messaggio" so the lock-screen / banner
@@ -7568,9 +7581,10 @@ final class AppState: ObservableObject {
             if san.allSatisfy({ $0.isNumber }) { return "Int. " + san }
             return san
         }
-        // Tier 3: never show the raw 36-char UUID — truncate head…tail.
+        // Tier 3: never show the raw 36-char UUID — humane short8 fallback
+        // (central rule, see DisplayName.swift).
         if callerId.count > 12 {
-            return String(callerId.prefix(8)) + "…" + String(callerId.suffix(4))
+            return DisplayName.shortUserFallback(callerId)
         }
         return callerId
     }
@@ -7654,9 +7668,36 @@ final class AppState: ObservableObject {
 
     /// Reload the in-memory contacts snapshot from UserDefaults.
     /// Called at app start (initialize), on auth success (bindPresenceAfterAuth),
-    /// and automatically whenever ContactsStore posts .contactsDidChange.
+    /// and automatically whenever ContactsDidChange posts .contactsDidChange.
+    ///
+    /// W-UUIDSWEEP migration: legacy rows persisted by the pre-fix
+    /// `addScannedContact` carry the RAW 36-char userId as `displayName` —
+    /// the direct-`displayName` renderers (contacts list, chat headers,
+    /// CarPlay) then show the UUID as the contact's NAME. Rewrite such rows
+    /// once, in place, to the humane short fallback; a later server lookup /
+    /// user rename upgrades them further. The rewrite triggers ONE extra
+    /// .contactsDidChange -> refreshContactsCache pass, which then finds
+    /// nothing UUID-shaped and terminates (no loop).
     private func refreshContactsCache() {
-        cachedContacts = ContactsStore().load()
+        let store = ContactsStore()
+        var contacts = store.load()
+        var migrated = false
+        for (i, c) in contacts.enumerated() where DisplayName.looksLikeUUID(c.displayName) {
+            contacts[i] = ContactsStore.StoredContact(
+                userId: c.userId,
+                displayName: DisplayName.shortUserFallback(c.userId),
+                phoneHash: c.phoneHash,
+                avatarUrl: c.avatarUrl,
+                lastSeen: c.lastSeen,
+                isVerified: c.isVerified,
+                pubkey: c.pubkey,
+                verifiedFingerprintHex: c.verifiedFingerprintHex,
+                verifiedAtMs: c.verifiedAtMs,
+                verificationMethod: c.verificationMethod)
+            migrated = true
+        }
+        if migrated { store.save(contacts) }
+        cachedContacts = contacts
     }
 
     /// Fail over off a dead node (driven by the WS client's onNodeStalled signal):

@@ -67,7 +67,7 @@ final class InCallContainer: ObservableObject {
                     return (try? Fingerprint.format(pubkey: pk))
                         ?? String(cid.prefix(8)) + "…" + String(cid.suffix(4))
                 }()
-                let fallbackName: String = String(cid.prefix(8)) + "…" + String(cid.suffix(4))
+                let fallbackName: String = DisplayName.shortUserFallback(cid)
 
                 // Apply local result immediately so the UI is not blank.
                 self.update {

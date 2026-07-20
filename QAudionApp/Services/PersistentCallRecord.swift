@@ -297,7 +297,9 @@ public final class PersistentCallRecordStore: ObservableObject {
             return String(userId.dropFirst(5)).capitalized
         }
         if userId.count > 12 {
-            return String(userId.prefix(8)) + "…" + String(userId.suffix(4))
+            // Central humane fallback (see DisplayName.swift) — call
+            // history rows say "Utente a1b2c3d4…", never a bare UUID slice.
+            return DisplayName.shortUserFallback(userId)
         }
         return userId
     }

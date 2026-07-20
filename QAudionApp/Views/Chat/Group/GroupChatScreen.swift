@@ -629,16 +629,10 @@ struct GroupChatScreen: View {
     /// Fallback chain mirrors the 1:1 inbound path: cached contact display
     /// name → abbreviated id. NEVER returns a raw UUID.
     private func resolveMemberName(_ userId: String) -> String {
-        if let name = appState.cachedContacts.first(where: { $0.userId == userId })?.displayName,
-           !name.isEmpty {
-            return name
-        }
-        return Self.shortLabel(userId)
-    }
-
-    private static func shortLabel(_ userId: String) -> String {
-        if userId.count > 12 { return String(userId.prefix(8)) + "…" }
-        return userId
+        // Central chain (DisplayName.swift): rubrica alias → server display
+        // → "Utente a1b2c3d4…". Passes the cached snapshot so the per-bubble
+        // render path stays free of UserDefaults decodes.
+        return DisplayName.forUser(userId, contacts: appState.cachedContacts)
     }
 
     private func handleSend() {

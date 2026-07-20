@@ -67,7 +67,10 @@ struct PhonebookImportView: View {
             List(matched, id: \.userId) { m in
                 VStack(alignment: .leading) {
                     Text(m.localName).font(.body)
-                    Text(m.userId).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    // Technical id caption — short8, never the full UUID
+                    // (central rule, see DisplayName.swift).
+                    Text("ID: " + String(m.userId.prefix(8)) + "…")
+                        .font(.caption.monospaced()).foregroundStyle(.secondary)
                 }
             }
         }

@@ -1255,7 +1255,10 @@ class GroupCallViewModel: ObservableObject {
                     // the requester's display name from the live roster,
                     // falling back to the raw id if it hasn't caught up
                     // yet.
-                    let displayName = self.participants.first(where: { $0.id == requesterId })?.displayName ?? requesterId
+                    // Never fall back to the raw id — resolve through the
+                    // central chain (rubrica → "Utente a1b2c3d4…").
+                    let displayName = self.participants.first(where: { $0.id == requesterId })?.displayName
+                        ?? DisplayName.forUser(requesterId)
                     self.muteRequestToastText = "\(displayName) ti ha silenziato"
                 }
             }

@@ -160,10 +160,13 @@ struct ContentView: View {
             guard let info = note.userInfo,
                   let gid = info["groupId"] as? String,
                   let from = info["fromAdmin"] as? String else { return }
-            let shortFrom = from.count > 12 ? String(from.prefix(8)) + "…" : from
-            let shortGid = String(gid.prefix(8)) + "…"
+            // Central chain (DisplayName.swift): resolve the admin's name
+            // via rubrica and the group's registry name (the auto-bootstrap
+            // already populated it) — humane fallbacks otherwise.
+            let fromName = DisplayName.forUser(from)
+            let groupLabel = DisplayName.forGroup(id: gid)
             snackbarHost.show(.init(
-                text: "Aggiunto al gruppo \(shortGid) da \(shortFrom)",
+                text: "Aggiunto al gruppo \(groupLabel) da \(fromName)",
                 severity: .info,
                 durationSeconds: 5
             ))
@@ -378,7 +381,7 @@ struct ContentView: View {
                 outgoingDisplayName = String(id.dropFirst(5)).capitalized
                 outgoingShortNumber = nil
             } else if id.count > 12 {
-                outgoingDisplayName = String(id.prefix(8)) + "…" + String(id.suffix(4))
+                outgoingDisplayName = DisplayName.shortUserFallback(id)
                 outgoingShortNumber = nil
             } else {
                 outgoingDisplayName = id

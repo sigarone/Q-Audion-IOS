@@ -125,7 +125,7 @@ struct GroupInviteQrSheet: View {
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             HStack(spacing: 10) {
-                Text("groupId")
+                Text("ID tecnico")
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 80, alignment: .leading)

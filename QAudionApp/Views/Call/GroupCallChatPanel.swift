@@ -373,11 +373,9 @@ struct GroupCallChatPanel: View {
     }
 
     private func resolveMemberName(_ userId: String) -> String {
-        if let name = appState.cachedContacts.first(where: { $0.userId == userId })?.displayName,
-           !name.isEmpty {
-            return name
-        }
-        return userId.count > 12 ? String(userId.prefix(8)) + "…" : userId
+        // Central chain (DisplayName.swift) — same as GroupChatScreen's
+        // resolveMemberName; never the raw UUID.
+        return DisplayName.forUser(userId, contacts: appState.cachedContacts)
     }
 
     // MARK: - Send: text (reuses GroupChatService + AppState's fan-out — see type doc)

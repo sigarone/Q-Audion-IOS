@@ -139,12 +139,9 @@ struct GroupInviteSheet: View {
     }
 
     private func displayName(for userId: String) -> String {
-        // Best-effort: show the userId prefix if no contact resolves.
-        // A future ContactsStore lookup can replace this.
-        if userId.count > 16 {
-            return String(userId.prefix(8)) + "…"
-        }
-        return userId
+        // Central chain (DisplayName.swift): rubrica alias → server display
+        // → "Utente a1b2c3d4…". Never the raw UUID.
+        return DisplayName.forUser(userId)
     }
 }
 

@@ -175,7 +175,12 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
                    !match.displayName.isEmpty {
                     return match.displayName
                 }
-                return uid.count > 12 ? String(uid.prefix(8)) + "…" + String(uid.suffix(4)) : uid
+                // Same humane last-resort format as the app-side central
+                // resolver (QAudionApp DisplayName.shortUserFallback) —
+                // this default only runs for tests/previews now that
+                // AppState injects the full resolver, but keep the two in
+                // the same shape so no path can regress to a bare UUID.
+                return uid.count > 12 ? "Utente " + String(uid.prefix(8)) + "…" : uid
             }
         }
         registerHandlers()

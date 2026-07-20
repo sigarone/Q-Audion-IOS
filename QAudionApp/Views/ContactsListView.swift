@@ -73,11 +73,17 @@ final class ContactsListContainer: ObservableObject {
         switch decoded {
         case .identity(let id):
             userId = id.userId
-            displayName = id.userId
+            // W-UUIDSWEEP root cause: this used to persist the RAW 36-char
+            // userId as the contact's displayName — the UUID then rendered
+            // as the contact's NAME everywhere downstream (contacts list,
+            // chat list, call screens, CarPlay). Persist the humane short
+            // fallback instead; the server-lookup recovery (InCallContainer)
+            // and any later rename upgrade it to the real name.
+            displayName = DisplayName.shortUserFallback(id.userId)
             pubkey = id.pubkey
         case .deviceLink(let dl):
             userId = dl.userId
-            displayName = dl.userId
+            displayName = DisplayName.shortUserFallback(dl.userId)
             pubkey = dl.pubkey
         case .groupInvite(let invite):
             // W68c: invece di no-op, persistiamo la pending invite in

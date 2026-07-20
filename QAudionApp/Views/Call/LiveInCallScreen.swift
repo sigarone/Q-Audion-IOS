@@ -576,7 +576,7 @@ struct LiveInCallScreen: View {
                 cachedPeerDisplayName = String(id.dropFirst(5)).capitalized
                 cachedPeerShortNumber = nil
             } else if id.count > 12 {
-                cachedPeerDisplayName = String(id.prefix(8)) + "…" + String(id.suffix(4))
+                cachedPeerDisplayName = DisplayName.shortUserFallback(id)
                 cachedPeerShortNumber = nil
             } else {
                 cachedPeerDisplayName = id

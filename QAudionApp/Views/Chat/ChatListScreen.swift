@@ -390,7 +390,10 @@ struct ChatListScreen: View {
             return GroupRowUi(
                 id: uuid,
                 hex: e.id,
-                name: e.name,
+                // Central rule (DisplayName.swift): a group whose registry
+                // name is empty/UUID-shaped renders "Gruppo a1b2c3d4…",
+                // never the raw id.
+                name: DisplayName.forGroup(id: e.id, name: e.name),
                 memberCount: e.members.count,
                 epoch: Int(e.epoch),
                 preview: Self.groupPreviewText(for: last),

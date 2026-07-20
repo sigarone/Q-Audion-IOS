@@ -687,7 +687,7 @@ struct VideoCallView: View {
             if !resolved.isEmpty {
                 peerDisplayName = resolved
             } else if id.count > 12 {
-                peerDisplayName = String(id.prefix(8)) + "…" + String(id.suffix(4))
+                peerDisplayName = DisplayName.shortUserFallback(id)
             } else {
                 peerDisplayName = id
             }

@@ -40,7 +40,7 @@ struct GroupCallContactPickerSheet: View {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(contact.displayName).font(.body)
-                                        Text(contact.userId.prefix(12) + "…")
+                                        Text(contact.userId.prefix(8) + "…")
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                     }
