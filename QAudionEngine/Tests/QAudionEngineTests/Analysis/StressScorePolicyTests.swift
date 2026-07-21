@@ -24,8 +24,13 @@ final class StressScorePolicyTests: XCTestCase {
         // with hardware AEC/NS/AGC (StressDetector.kt JITTER_NORMAL/SHIMMER_NORMAL).
         let legacy = legacyComposite(jitter: 0.06, shimmer: 0.12)
         XCTAssertEqual(legacy, 0.60, accuracy: 0.001)
-        XCTAssertGreaterThanOrEqual(legacy * 100, 60,
-                                    "Pre-fix formula classified calibrated-normal speech as 'agitated'")
+        // Lands ON the "agitated" threshold. Asserted with a tolerance rather
+        // than `>= 60`: in Float32 this evaluates to 59.999996, so an exact
+        // comparison fails on a rounding artifact — CI caught precisely that.
+        // The point being fenced is that calibrated-NORMAL speech scored at the
+        // threshold under the old formula, which a 4e-6 gap does not change.
+        XCTAssertEqual(legacy * 100, 60, accuracy: 0.001,
+                       "Pre-fix formula classified calibrated-normal speech as 'agitated'")
     }
 
     func testCalibratedNormalSpeechScoresCalm() {
