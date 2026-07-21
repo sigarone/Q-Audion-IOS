@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 @testable import QAudionEngine
 
 /// W-AGCCEIL (2026-07-21) — regression tests for the make-up AGC control law
@@ -33,6 +34,25 @@ import XCTest
 /// later refactor cannot quietly revert it, which is precisely what happened to
 /// the sibling fix (a542727 silently undid 04f82f1 four hours later, unnoticed
 /// for eight days — see `AudioCaptureAgcGateTests`).
+///
+/// W-TXHEADROOM (2026-07-21) — SECOND ROUND, and the one that answers the
+/// original complaint ("audio encoded by iOS sounds worse on Android than the
+/// reverse, consistently, across many builds").
+///
+/// W-AGCCEIL fixed WHERE the ceiling was applied. It did not fix WHAT the
+/// ceiling was, nor that a `gain < 1 → 1` floor ran after it and cancelled it
+/// outright on any buffer already at full scale. Net effect: iOS handed Opus a
+/// signal with 0.9 dB of headroom, Android handed it 9.1 dB — with byte-identical
+/// encoder settings on both sides (CBR, complexity 10, SIGNAL_VOICE, FULLBAND,
+/// DTX off, FEC on, LSB 16, 48 kHz/mono/20 ms). Opus's reconstruction is not
+/// bounded by its input, so the far-end decoder saturated: on call d0f84651
+/// Android measured rx_peak_pct 100.003 % decoding iOS (a sample at −32768,
+/// libopus SATURATE16) versus 29.4 % decoding its own peer. Hard clipping at the
+/// RECEIVER is broadband distortion that no sender-side metric can see — loss
+/// 0 %, tx_enc_err 0, rx_dec_err 0 on exactly the calls that sound bad.
+///
+/// The tests below therefore lock TWO things: the headroom is real (≥3 dB), and
+/// the clamp that delivers it is allowed to attenuate — bounded, only on breach.
 ///
 /// Pure arithmetic only: no AVFoundation, no WebRTC, so this runs on the macOS
 /// CI runner via `swift test`.
@@ -89,29 +109,53 @@ final class AudioCaptureLevelControlTests: XCTestCase {
         }
     }
 
-    /// Replay of the real overdrive. On a buffer whose peak alone permits ~2.0×,
-    /// the OLD law moved the gain only 5% of the way there (one-pole, alpha
-    /// 0.05) and kept applying ~2.7× — which is how post-gain peaks reached
-    /// 1.045–1.251 × full scale. The new law lands ON the safe value in one
-    /// buffer, because that drop (−2.7 dB) is inside the attack bound.
-    func testOnsetIsMetInOneBufferWhenWithinTheAttackBound() {
+    /// The law must land EXACTLY on the safe value, or — when the required drop
+    /// exceeds one buffer's attack budget — exactly on the attack floor. Never
+    /// anything in between, and never above.
+    ///
+    /// W-TXHEADROOM: this used to be a single-point test asserting "met in ONE
+    /// buffer", which only held because the old 0.90 headroom happened to make
+    /// the required drop fit inside the −3 dB attack bound at the chosen peak.
+    /// With a 0.70 headroom the required drops are systematically larger, so a
+    /// hand-picked operating point would be passing by luck. Asserting the
+    /// closed form over a sweep is both stronger and headroom-independent.
+    /// The peak range starts at 30 % so the peak term is genuinely the binding
+    /// one at every point (below that the one-pole term wins and there is no
+    /// ceiling behaviour to assert).
+    func testOnsetIsMetAsFastAsTheAttackBoundAllows() {
         let previous: Float = 2.74          // the max gain call 076e32f0 reached
+        for peakPercent in stride(from: 30, through: 100, by: 5) {
+            let peak = Float(peakPercent) / 100
+            let gain = AudioCapture.nextMakeUpAgcGain(previousGain: previous,
+                                                     bufferRms: 0.02,
+                                                     bufferPeak: peak,
+                                                     maxGain: vpioCeiling)
+            let peakSafe = AudioCapture.agcPeakHeadroom / peak
+            let attackFloor = previous * AudioCapture.agcMaxAttackStep
+            XCTAssertEqual(gain, min(max(peakSafe, attackFloor), vpioCeiling),
+                           accuracy: 1e-4,
+                           "peak \(peakPercent)% did not land on the closed form")
+        }
+    }
+
+    /// Replay of the real overdrive, kept so the contrast with the pre-W-AGCCEIL
+    /// law is not lost: on a buffer whose peak alone permits 1.56×, the OLD law
+    /// moved the gain only 5 % of the way there (one-pole, alpha 0.05) and kept
+    /// applying ~2.68× — which is how post-gain peaks reached 1.045–1.251 ×
+    /// full scale and pinned the memoryless waveshaper in circuit.
+    func testPreFixLawWouldHaveOverdrivenIntoTheLimiter() {
+        let previous: Float = 2.74
         let peak: Float = 0.45
+        let peakSafe = AudioCapture.agcPeakHeadroom / peak
+        let oldGain = previous + (peakSafe - previous) * 0.05
+        XCTAssertGreaterThan(oldGain * peak, AudioCapture.limiterKnee,
+                             "the pre-fix law is expected to overdrive into the limiter")
+        // The current law, on the same buffer, keeps the waveshaper out.
         let gain = AudioCapture.nextMakeUpAgcGain(previousGain: previous,
                                                  bufferRms: 0.02,
                                                  bufferPeak: peak,
                                                  maxGain: vpioCeiling)
-        let peakSafe = AudioCapture.agcPeakHeadroom / peak   // 2.0
-        XCTAssertEqual(gain, peakSafe, accuracy: 1e-4)
-        // And the consequence that actually matters: the limiter stays out of
-        // circuit, because the post-gain peak is below its knee.
         XCTAssertLessThan(gain * peak, AudioCapture.limiterKnee)
-
-        // The old behaviour, kept explicit so the contrast is not lost: target
-        // clamped, applied gain smoothed toward it at alpha 0.05.
-        let oldGain = previous + (peakSafe - previous) * 0.05
-        XCTAssertGreaterThan(oldGain * peak, AudioCapture.limiterKnee,
-                             "the pre-fix law is expected to overdrive into the limiter")
     }
 
     // MARK: - Bounded attack
@@ -133,10 +177,10 @@ final class AudioCaptureLevelControlTests: XCTestCase {
     /// 400 ms release is what left the limiter engaged across whole onsets.
     func testSustainedLoudLevelConvergesWithinAFewBuffers() {
         var gain: Float = 3.0
-        // peak 0.6 ⇒ peakSafe 1.5, i.e. a target the boost-only stage can
-        // actually reach. (At peak 1.0 peakSafe is 0.9, below the unity floor,
-        // so the signal is simply passed through and there is nothing to
-        // converge to — that case is covered by testNeverAttenuates.)
+        // peak 0.6 ⇒ peakSafe 1.167. W-TXHEADROOM: peak 1.0 is no longer a
+        // special case — peakSafe there is 0.70 and the stage now converges to
+        // it instead of passing the buffer through at unity. That case has its
+        // own test, `testAttenuatesOnlyToRestoreCodecHeadroom`.
         let peak: Float = 0.6
         var buffers = 0
         while gain * peak > AudioCapture.agcPeakHeadroom + 1e-4 && buffers < 50 {
@@ -221,15 +265,117 @@ final class AudioCaptureLevelControlTests: XCTestCase {
 
     // MARK: - Guards
 
-    func testNeverAttenuates() {
-        for peak in [Float(0.5), 0.9, 0.99, 1.0] {
+    /// W-TXHEADROOM (2026-07-21) — REPLACES the former `testNeverAttenuates`.
+    ///
+    /// That test asserted gain ≥ 1.0 for every peak including 1.0, i.e. it
+    /// LOCKED IN the behaviour that a buffer VP-IO had already driven to full
+    /// scale was forwarded to Opus at full scale. The `if gain < 1 { gain = 1 }`
+    /// floor ran AFTER the peak ceiling and silently undid it on exactly the
+    /// input the ceiling exists for. Measured consequence at the far end
+    /// (call d0f84651): Android's Opus decoder output hit the int16 rail
+    /// (rx_peak_pct 100.003 ⇒ a sample at −32768, libopus SATURATE16), while
+    /// the reverse direction — Android encodes with 9.1 dB of headroom because
+    /// it runs no AGC at all — decoded at 29.4 %.
+    ///
+    /// The replacement keeps the property that actually mattered ("a make-up
+    /// stage must not quietly turn into a downward compressor") but states it
+    /// correctly: attenuation happens ONLY to restore headroom, only when the
+    /// headroom is actually breached, and is bounded by `agcPeakHeadroom`.
+    func testAttenuatesOnlyToRestoreCodecHeadroom() {
+        // (a) Below the headroom target there is nothing to give back: unity.
+        for peak in [Float(0.10), 0.35, 0.50, AudioCapture.agcPeakHeadroom] {
             let gain = AudioCapture.nextMakeUpAgcGain(previousGain: 1.0,
-                                                     bufferRms: 0.30,
+                                                     bufferRms: 0.30,   // loud ⇒ step 1 asks for 1×
                                                      bufferPeak: peak,
                                                      maxGain: vpioCeiling)
-            XCTAssertGreaterThanOrEqual(gain, 1.0)
+            XCTAssertEqual(gain, 1.0, accuracy: 1e-4,
+                           "peak \(peak) is within headroom — must not be touched")
+        }
+        // (b) Above it, the excess — and only the excess — is removed. Settled
+        //     over a few buffers rather than asserted in one: from unity the
+        //     bounded attack (−3 dB/buffer) needs two buffers to cover the
+        //     −3.1 dB a full-scale peak requires. That bound is deliberate
+        //     (see testSingleFullScaleOutlierCannotPunchAHole).
+        for peak in [Float(0.80), 0.90, 0.99, 1.0] {
+            var gain: Float = 1.0
+            for _ in 0..<5 {
+                gain = AudioCapture.nextMakeUpAgcGain(previousGain: gain,
+                                                      bufferRms: 0.30,
+                                                      bufferPeak: peak,
+                                                      maxGain: vpioCeiling)
+            }
+            XCTAssertLessThan(gain, 1.0, "peak \(peak) breaches headroom — must be pulled down")
+            XCTAssertEqual(gain * peak, AudioCapture.agcPeakHeadroom, accuracy: 1e-3,
+                           "attenuation must land exactly on the headroom target")
         }
     }
+
+    /// The attenuation is bounded BY CONSTRUCTION — peakSafe = headroom / peak
+    /// and peak ≤ 1 — so no input can drive the stage into a hole. Swept over
+    /// the full peak range and over a wound-up starting gain.
+    func testAttenuationIsBoundedByTheHeadroomItself() {
+        for previous in [Float(1.0), 2.0, 3.0] {
+            for peakPercent in stride(from: 1, through: 100, by: 1) {
+                let gain = AudioCapture.nextMakeUpAgcGain(previousGain: previous,
+                                                         bufferRms: 0.30,
+                                                         bufferPeak: Float(peakPercent) / 100,
+                                                         maxGain: vpioCeiling)
+                XCTAssertGreaterThanOrEqual(gain, AudioCapture.agcPeakHeadroom - 1e-3,
+                                            "gain fell below the headroom bound at peak \(peakPercent)%")
+            }
+        }
+    }
+
+    /// The end-to-end contract this whole change exists for, stated as the
+    /// number the far end sees: whatever VP-IO hands us, the samples that reach
+    /// Opus never sit closer to full scale than `agcPeakHeadroom` in steady
+    /// state. On call d0f84651 the measured TX peak was 98 % (the limiter
+    /// ceiling); the settled value below is the 70 % it should have been.
+    func testEncoderNeverSeesLessThanTheConfiguredHeadroom() {
+        for peakPercent in [30, 50, 70, 90, 100] {
+            let peak = Float(peakPercent) / 100
+            var gain: Float = 1.0
+            for _ in 0..<400 {
+                gain = AudioCapture.nextMakeUpAgcGain(previousGain: gain,
+                                                      bufferRms: peak / 15,
+                                                      bufferPeak: peak,
+                                                      maxGain: vpioCeiling)
+            }
+            XCTAssertLessThanOrEqual(gain * peak, AudioCapture.agcPeakHeadroom + 1e-4,
+                                     "raw peak \(peakPercent)% still reaches Opus without headroom")
+        }
+    }
+
+    /// The headroom must be enough to absorb an Opus-class decoder's true-peak
+    /// overshoot (~1–3 dB). Guards against someone "restoring loudness" by
+    /// nudging the constant back toward full scale, which is what produced the
+    /// far-end saturation in the first place.
+    func testHeadroomIsAtLeastThreeDecibels() {
+        let dB = 20 * log10(AudioCapture.agcPeakHeadroom)
+        XCTAssertLessThanOrEqual(dB, -3.0,
+                                 "agcPeakHeadroom leaves \(dB) dBFS — too little for codec overshoot")
+    }
+
+    /// W-TXHEADROOM — the LOWER fence, which this suite was missing.
+    ///
+    /// Adversarial review found `agcPeakHeadroom` was pinned from one side
+    /// only: `testHeadroomIsAtLeastThreeDecibels` above stops it being raised,
+    /// but every other reference computes `peakSafe` FROM the constant and is
+    /// therefore self-referential. The counter-example the review constructed:
+    /// set it to 0.30 (−10.5 dBFS) and the ENTIRE suite still passed while
+    /// stripping 10 dB from every transmitted buffer — precisely the faint-mic
+    /// failure mode 04f82f1/dcace27 exist to prevent, and worse than the 7.6 dB
+    /// strip that got a different proposal rejected the same night.
+    ///
+    /// −4 dBFS is the bound: enough room below the shipped −3.1 dB to retune
+    /// for codec overshoot if evidence calls for it, tight enough that a
+    /// silent slide into attenuation-as-a-loudness-policy fails here first.
+    func testHeadroomIsNotSoLowItStartsStrippingLevel() {
+        let dB = 20 * log10(AudioCapture.agcPeakHeadroom)
+        XCTAssertGreaterThanOrEqual(dB, -4.0,
+                                    "agcPeakHeadroom leaves \(dB) dBFS — this is no longer headroom, it is attenuation")
+    }
+
 
     func testNeverExceedsTheCeiling() {
         var gain: Float = 1.0

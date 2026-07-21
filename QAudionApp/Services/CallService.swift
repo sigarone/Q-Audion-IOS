@@ -1271,6 +1271,40 @@ final class CallService: @unchecked Sendable {
                     "tap_ch":             diag.tapChannels,
                     "engine_restarts":    diag.engineRestarts,
                     "vpio_bypassed_ever": diag.vpioBypassedEver,
+                    // W-VPIORETRY (2026-07-21) — vpio_bypassed_ever is a BOOL and
+                    // therefore could not distinguish "one transient starve during a
+                    // car-kit route change, recovered" from "the entire call ran with
+                    // no AEC / no NS / no Apple AGC". On call 1de9935f it was the
+                    // latter, because forceDisableVoiceProcessing used to be a one-way
+                    // latch cleared only at call end. These two counters make the
+                    // difference readable: bypass_count > retry_count + 1 means we
+                    // never got VP-IO back.
+                    "vpio_bypass_count":  diag.vpioBypassCount,
+                    "vpio_retry_count":   diag.vpioRetryCount,
+                    // W-AGCNOISE (2026-07-21) — the make-up loop's actual behaviour,
+                    // which agc_gain alone cannot show. agc_gain is a call-MAX and has
+                    // the same blind spot as peak_pct: 5.89 reads the same whether the
+                    // loop touched the ceiling once or lived on it. agc_gain_mean is
+                    // the time-average APPLIED gain; agc_hold_pct is the share of
+                    // buffers the SNR gate classified as background (high = the loop
+                    // correctly refused to chase noise); agc_noise_floor_pct is the
+                    // tracked background level that now sets the ceiling — if the
+                    // noise-floor model is wrong, that field is what says so.
+                    //
+                    // PRIVACY — levels and counters only, same class as the peak/rms
+                    // fields already here. Nothing spectral, no fundamental frequency,
+                    // no affective inference: call.audio.diag is stored UNSEALED on
+                    // the server (see the va_* note below).
+                    "agc_gain_mean":      (level.agcGainMean * 100).rounded() / 100,
+                    "agc_noise_floor_pct": (level.agcNoiseFloorPct * 100).rounded() / 100,
+                    "agc_hold_pct":       (level.agcHoldPct * 10).rounded() / 10,
+                    // W-TXBURST (2026-07-21) — most 20 ms frames emitted from a SINGLE
+                    // tap callback. 1–2 is a steady 50 fps stream. A large value means
+                    // iOS is handing the peer bursts rather than a stream, which is the
+                    // open question behind the Android leg discarding 3512 of 5559
+                    // received frames on call 1de9935f (jitter-buffer overrun / emergency
+                    // drain — both are over-full paths). Counter only.
+                    "tx_burst_max":       level.txBurstMax,
                     // W-VOICEZERO (2026-07-21) — Guardian-analyzer health, the
                     // instrument this subsystem never had. va_results counts
                     // analyzer callbacks this call (0 ⇒ nothing is feeding the

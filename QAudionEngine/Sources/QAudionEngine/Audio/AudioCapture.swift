@@ -74,6 +74,23 @@ public final class AudioCapture {
     public static var micAgcEnabled = true
     private var micAgcGain: Float = 1.0
     private var micAgcMaxGainThisCall: Float = 1.0   // for telemetry
+    // W-AGCNOISE (2026-07-21) — tracked background floor + the instruments that
+    // make this loop's behaviour VISIBLE from server telemetry. `agc_gain` alone
+    // is a call-MAX and, exactly like `peak_pct`, cannot distinguish "touched
+    // the ceiling once" from "sat on the ceiling for 110 s" — which is why the
+    // pumping went unnoticed. The mean gain and the hold ratio can.
+    // Same single-thread (tap callback) ownership as the fields above.
+    private var micAgcNoiseFloor: Float = 0
+    private var micAgcGainSum: Double = 0
+    private var micAgcBufferCount: Int64 = 0
+    private var micAgcHoldCount: Int64 = 0
+    // W-TXBURST (2026-07-21) — TX delivery cadence. `installTap` hands us
+    // whatever the hardware I/O duration produces, so one callback can emit
+    // several 20 ms frames back to back; on the far end that arrives as a burst
+    // into a jitter buffer sized for a steady 50 fps. This counts the largest
+    // such burst so the hypothesis can be tested instead of argued about (see
+    // the Android `drops` split shipped alongside).
+    private var txBurstMaxThisCall: Int = 0
     // W-DEZIPPER (2026-07-12) — the gain actually applied to the LAST sample of
     // the previous frame. The make-up gain is ramped per-sample from this to the
     // current frame's target so the gain is continuous across the 20 ms frame
@@ -140,6 +157,177 @@ public final class AudioCapture {
     // in the tap callback) — the ceiling here is unchanged from 04f82f1.
     private static let agcMaxGainVpio: Float = 3.0
 
+    // ── W-AGCNOISE (2026-07-21) — the make-up stage learns how NOISY its input
+    // is, and lets that (not "is Apple's AGC running") decide how much gain it
+    // is allowed to apply.
+    //
+    // THE INVERSION THIS FIXES. `selectMakeUpAgcMaxGain` picks the ceiling from
+    // `vpioActive`: 3.0 when Apple's VP-IO chain is running, 6.0 when it is not.
+    // But VP-IO is the bundle that provides AEC **and noise suppression**. So
+    // the signal with NO noise suppression, NO echo cancellation and NO Apple
+    // AGC — a raw car-kit mic full of road noise and loudspeaker echo — is the
+    // one this stage allows TWICE as much blind make-up gain on. Measured on two
+    // real calls with the same pair of devices, ten minutes apart:
+    //
+    //   d0f84651  earpiece, VP-IO ON  (ceiling 3.0)  agc_gain 2.73  rms 6.0 %
+    //   1de9935f  car kit,  VP-IO OFF (ceiling 6.0)  agc_gain 5.89  rms 9.7 %
+    //
+    // Both sit at 91 % / 98 % of their respective ceilings, i.e. the RMS-seeking
+    // term was SATURATED in both and the ceiling alone decided the gain. The
+    // second call was reported as "quasi incomprensibile" at the far end.
+    //
+    // WHY THE ABSOLUTE NOISE GATE CANNOT CATCH THIS. `agcNoiseGate` is 0.008,
+    // tuned against a QUIET ROOM floor ("<0.8 %", see its note). A car cabin
+    // with VP-IO's NS bypassed sits far above that, so the gate is open on
+    // ROAD NOISE: `desired = agcTargetRms / bufferRms` saturates at the ceiling
+    // on noise, the loop winds to 6.0 during every inter-word gap (τ ≈ 1 s) and
+    // is ducked ≤3 dB per buffer on every syllable onset. That is textbook AGC
+    // breathing, applied to unsuppressed noise. `limiter_pct` was 0.001 % on
+    // that call, which RULES OUT the waveshaper as the distortion source — the
+    // artifact is the gain modulation itself.
+    //
+    // ANDROID IS THE REFERENCE AND DOES NEITHER. `AudioCapture.kt` ships
+    // `enableHwAgc = false` ("AGC pumps distant audio undesirably"),
+    // `DEFAULT_NOISE_GATE_RMS = 0.0f`, and attaches HW NoiseSuppressor +
+    // AcousticEchoCanceler unconditionally. `agc_ever_active=false` on both
+    // calls above. Its transmitted level is lower and its dynamics intact.
+    //
+    // THE FIX. Track the background floor and derive the ceiling from it, so
+    // the ceiling answers "how clean is this signal" instead of "who else is
+    // running an AGC". This is standard practice (WebRTC's AGC2 bounds its
+    // max gain by a noise estimate for the same reason) and it is
+    // self-calibrating: it needs no per-route tuning.
+
+    /// The highest level the BACKGROUND is allowed to reach after make-up gain,
+    /// as a fraction of full scale. The ceiling becomes
+    /// `agcNoiseCeilingRms / noiseFloor`, so a clean input is unrestricted and
+    /// a noisy one loses the make-up entirely.
+    ///
+    /// WHY 0.02, from the two calls above and from Android:
+    ///  • d0f84651 (must NOT bind — it is the acceptable call, and binding here
+    ///    would re-open the faint-mic regression 04f82f1/dcace27 exist to fix).
+    ///    VP-IO's NS was running; even taking the loosest possible reading of
+    ///    the data — that the call-average post-gain RMS of 6.0 % was ENTIRELY
+    ///    background at the max gain of 2.73 — the raw floor is at most 2.2 %,
+    ///    and with NS in circuit it is realistically 0.1–0.4 %. At 0.3 % the
+    ///    allowed gain is 0.02/0.003 = 6.7, well above the 3.0 configured
+    ///    ceiling, so this term is inert there. It only starts to bind below
+    ///    0.67 % of allowed floor, which NS does not produce.
+    ///  • 1de9935f (must bind hard). No NS at all. The raw call-average was at
+    ///    least 9.7/5.89 = 1.65 %, and the floor of a car cabin is the dominant
+    ///    part of that average. At a 1.65 % floor the allowed gain is 1.21; at
+    ///    2 % it is 1.0 (no make-up at all) — which is precisely Android's
+    ///    behaviour on the same acoustics.
+    ///  • Android's own transmitted call-average on the quiet call was 2.52 %
+    ///    INCLUDING speech, so a 2 % ceiling on the BACKGROUND alone is a
+    ///    generous bound, not an aggressive one.
+    static let agcNoiseCeilingRms: Float = 0.02
+
+    /// How far above the tracked background a buffer must sit before the
+    /// RMS-seeking loop is allowed to adapt on it. 2.0 = +6 dB.
+    ///
+    /// This RELATIVE gate is what stops the loop winding up on road noise. The
+    /// absolute `agcNoiseGate` is kept as well (a buffer under 0.8 % is silence
+    /// in any environment), so on the quiet earpiece — where the floor is far
+    /// below speech — the two gates agree and behaviour is unchanged.
+    /// +6 dB is the smallest margin that separates speech from a stationary
+    /// floor without also excluding genuinely quiet speech: at +3 dB normal
+    /// floor wander would re-open the gate on noise, at +12 dB the quiet speech
+    /// that `agcTargetRms` exists to lift would stop qualifying.
+    static let agcSnrGateRatio: Float = 2.0
+
+    /// Min-statistics follower for the background floor. Fast down so a new,
+    /// quieter environment is adopted within ~5 buffers (100 ms); very slow up
+    /// (τ ≈ 25 s at 50 fps) so a long talk-spurt cannot drag the "floor"
+    /// estimate up to speech level and disable the whole mechanism.
+    static let noiseFloorAlphaDown: Float = 0.25
+    static let noiseFloorAlphaUp: Float = 0.0008
+
+    /// W-VPIORETRY (2026-07-21) — how many times VP-IO may be re-attempted
+    /// after a bypass, per call. See `shouldRetryVoiceProcessing`.
+    static let maxVoiceProcessingRetries: Int = 1
+
+    /// Update the background-floor estimate from one buffer's RMS.
+    /// Pure; unit-tested in `AudioCaptureNoiseAdaptiveAgcTests`.
+    static func nextNoiseFloor(previous: Float, bufferRms: Float) -> Float {
+        let rms = bufferRms > 0 ? bufferRms : 0
+        // First buffer of a call/engine: seed on the observed level rather than
+        // starting at 0 (which would mean "perfectly clean" and disable the
+        // ceiling for the ~25 s the slow-up path needs to climb).
+        guard previous > 0 else { return rms }
+        let alpha: Float = rms < previous ? noiseFloorAlphaDown : noiseFloorAlphaUp
+        let next = previous + (rms - previous) * alpha
+        return next > 0 ? next : 0
+    }
+
+    /// Bound the configured ceiling by how much the BACKGROUND may be lifted.
+    /// Returns `configuredMaxGain` unchanged on a clean input; collapses toward
+    /// 1.0 (no make-up at all — Android's behaviour) as the floor rises.
+    static func noiseLimitedMaxGain(configuredMaxGain: Float, noiseFloorRms: Float) -> Float {
+        guard noiseFloorRms > 0 else { return configuredMaxGain }
+        let allowed = agcNoiseCeilingRms / noiseFloorRms
+        if allowed >= configuredMaxGain { return configuredMaxGain }
+        // W-NOISEFLOORUNKNOWN (2026-07-21) — a hard lower bound of 2.0 was
+        // ADDED HERE AND THEN REMOVED, deliberately. Recording why, so nobody
+        // re-adds it:
+        //
+        // The worry was that `agc_noise_floor_pct` ships for the first time
+        // with this change, so the real post-VP-IO earpiece floor has never
+        // been measured; back-solving the one good call admits 0.50%–1.20%,
+        // and the bad end would cap at 1.67 instead of 3.0 (−4.3 dB) — close
+        // to the class of strip that got the `agcTargetRms = 0.05` proposal
+        // rejected in review the same night for reopening the faint mic.
+        //
+        // But the rule already handles that case BY CONSTRUCTION, and the
+        // bound would have defeated the fix it was meant to guard:
+        //  • A clean, quiet mic that genuinely SHOULD be lifted has, by
+        //    definition, a LOW floor — so `allowed` stays at the configured
+        //    ceiling and nothing is squeezed.
+        //  • If the floor genuinely IS high, the input is noisy (NS bypassed,
+        //    car cabin), and NOT amplifying is the correct answer for exactly
+        //    the same reason it is correct in the car case.
+        //  • The only estimator failure that could hurt is a positive bias
+        //    (floor over-read), and the `> 1` clamp below already prevents it
+        //    from ever becoming an attenuator.
+        // Meanwhile a floor of 2.0 would have re-applied up to 2× gain at a
+        // genuinely-measured 2% car floor — i.e. re-amplified the road noise
+        // this rule exists to stop. Confirmed independently by an external
+        // model before removing.
+        return allowed > 1 ? allowed : 1
+    }
+
+    /// Whether the RMS-seeking term may adapt on this buffer. Absolute floor
+    /// AND relative (SNR) gate — see `agcSnrGateRatio`.
+    static func shouldAdaptMakeUpGain(bufferRms: Float, noiseFloorRms: Float) -> Bool {
+        guard bufferRms > agcNoiseGate else { return false }
+        guard noiseFloorRms > 0 else { return true }
+        return bufferRms >= noiseFloorRms * agcSnrGateRatio
+    }
+
+    /// W-VPIORETRY (2026-07-21) — may VP-IO be re-attempted on this restart?
+    ///
+    /// THE BUG THIS FIXES. `AudioProcessingPipeline.forceDisableVoiceProcessing`
+    /// is set by the W-AEC-FIX starve watchdog and cleared ONLY in
+    /// `AudioCapture.stop()` — i.e. at CALL END. It is a one-way latch for the
+    /// whole call: every later engine restart re-reads it and keeps VP-IO off.
+    /// On call 1de9935f the engine restarted 3 times while a car kit was
+    /// connecting, `vpio_bypassed_ever` came back true, and the remaining ~110 s
+    /// of the call therefore ran with NO echo cancellation (car speakers →
+    /// car mic), NO noise suppression and NO Apple AGC. A 1.2 s tap starve
+    /// during a route transition — which is exactly what a route transition
+    /// looks like — is enough to condemn the rest of the call.
+    ///
+    /// Only a ROUTE-driven restart is allowed to retry: the hardware conditions
+    /// genuinely changed, so the previous starve says nothing about the new
+    /// route. A watchdog-driven restart never retries, so the iPad W574f case
+    /// (which starves on a STABLE route) keeps its fallback and cannot loop.
+    /// Bounded at `maxVoiceProcessingRetries`, so the worst case is one extra
+    /// 1.2 s starve window per call instead of ~110 s without AEC.
+    static func shouldRetryVoiceProcessing(bypassCount: Int, restartIsRouteDriven: Bool) -> Bool {
+        guard restartIsRouteDriven else { return false }
+        return bypassCount > 0 && bypassCount <= maxVoiceProcessingRetries
+    }
+
     /// W-TUNEGAP (2026-07-21) — extracted so this ONE contract has its own
     /// regression test (see `AudioCaptureAgcGateTests`), decoupled from the
     /// rest of `AudioCapture`'s hardware-dependent state (AVAudioEngine,
@@ -158,16 +346,46 @@ public final class AudioCapture {
         vpioActive ? agcMaxGainVpio : agcMaxGain
     }
 
-    /// Ceiling the make-up stage aims the loudest sample of a buffer at.
-    /// W-AGCCEIL (2026-07-21) — this value is UNCHANGED (0.90, as shipped by
-    /// 04f82f1); what changed is that it is now actually ENFORCED. It used to
-    /// be applied to `desired`, i.e. to the one-pole's TARGET, so the gain that
-    /// was really applied only approached it with a ~400 ms time constant and
-    /// in practice sat permanently ABOVE it. Proof from live telemetry: if the
-    /// cap had held, no post-gain sample could exceed 0.90 — the four affected
-    /// calls measured post-gain peaks of 1.045–1.251 × full scale, i.e. the
-    /// applied gain overshot its own peak-safe value by +1.3 to +2.8 dB.
-    static let agcPeakHeadroom: Float = 0.90
+    /// Ceiling the make-up stage aims the loudest sample of a buffer at —
+    /// i.e. the peak headroom the OPUS ENCODER is given.
+    ///
+    /// W-TXHEADROOM (2026-07-21) — 0.90 → 0.70 (−0.92 dBFS → −3.1 dBFS).
+    ///
+    /// WHY THIS IS A CODEC PARAMETER, NOT A LOUDNESS ONE. Opus is a lossy
+    /// transform/predictive codec: its reconstruction is NOT bounded by its
+    /// input. Feed it peaks at −0.9 dBFS and the decoder's float output
+    /// routinely exceeds ±1.0, at which point libopus's own float→int16
+    /// conversion (SATURATE16) HARD-CLIPS it. Hard clipping is broadband
+    /// harmonic + intermodulation distortion, and it is produced at the
+    /// RECEIVER, so it is invisible to every metric we already collect —
+    /// loss 0 %, tx_enc_err 0, rx_dec_err 0 on the very calls that sound bad.
+    /// That is exactly why "iOS-encoded audio sounds worse than Android's"
+    /// survived many builds of investigation.
+    ///
+    /// MEASURED, not assumed (call d0f84651, iOS 1.0.828 ↔ Android a88d30f,
+    /// one call so identical network for both directions):
+    ///   iOS  TX peak 98 % / rms 6.0 %  →  Android decoded peak **100.003 %**
+    ///        (= a sample at −32768, the int16 rail: libopus saturated)
+    ///   Andr TX peak 35.2 % / rms 2.52 % →  iOS decoded peak 29.4 %
+    /// Android reaches its encoder with 9.1 dB of headroom because it applies
+    /// NO gain stage at all (`AudioCapture.kt`: VOICE_COMMUNICATION + HW
+    /// NS/AEC, `disableSessionAgc()`, software gate 0.0). iOS reaches its
+    /// encoder with 0.9 dB because Apple's VP-IO AGC and this make-up stage
+    /// are cascaded. Same codec settings on both sides — the difference is
+    /// entirely the level presented to it.
+    ///
+    /// WHY 0.70 AND NOT LOWER. Published true-peak overshoot for Opus-class
+    /// codecs is ~1–3 dB, so −3.1 dBFS covers it. Working the same call
+    /// backwards: raw post-VP-IO peak was 0.90/2.73 = 0.330, raw rms
+    /// 6.0/2.73 = 2.20 %. At 0.70 the gain becomes 0.70/0.330 = 2.12, giving
+    /// TX peak 70 % and TX rms 4.67 % — still 5.4 dB LOUDER than the Android
+    /// leg that already sounds good, and 7.4 dB above the faint-mic
+    /// regression 04f82f1/dcace27 exist to fix (call 40f6d641, rms 2.0 %).
+    /// So the faint mic cannot come back; only the headroom changes.
+    ///
+    /// `agcTargetRms` is deliberately NOT touched in the same change — see its
+    /// own note for why lowering it re-breaks the quiet mic.
+    static let agcPeakHeadroom: Float = 0.70
     private static let agcAlphaRise: Float = 0.02    // slow lift  (τ ≈ 1 s)
     private static let agcAlphaFall: Float = 0.05    // RMS-driven duck (τ ≈ 400 ms)
     /// Most the gain may be cut in ONE buffer (0.708 ≈ −3 dB).
@@ -212,39 +430,98 @@ public final class AudioCapture {
     ///
     /// Order matters and is the whole fix:
     ///   1. slow RMS-seeking term (voice-gated, boost-only) — unchanged;
-    ///   2. HARD peak ceiling applied to the RESULT, not to the target. This is
-    ///      the invariant that was documented but never enforced;
+    ///   2. HARD peak/headroom ceiling applied to the RESULT, not to the target.
+    ///      This is the invariant that was documented but never enforced;
     ///   3. bounded attack, so step 2 cannot punch a hole on one outlier sample.
     /// Step 3 can hold the gain above the peak-safe value for a buffer or two;
     /// that is deliberate, and it is the ONLY case in which the limiter should
     /// ever engage on content we ourselves amplified.
+    ///
+    /// W-TXHEADROOM (2026-07-21) — step 2 may now take the gain BELOW unity,
+    /// bounded at `agcPeakHeadroom`. The stage is still "boost-only" as a
+    /// LOUDNESS stage (step 1 never asks for less than 1×); what it is no
+    /// longer allowed to do is hand Opus a signal with no headroom just because
+    /// something upstream — Apple's VP-IO AGC — already pushed it to the rail.
+    /// See `agcPeakHeadroom` for the measured evidence.
+    ///
+    /// W-AGCNOISE (2026-07-21) — `noiseFloorRms` makes step 1's gate RELATIVE
+    /// as well as absolute (see `shouldAdaptMakeUpGain`). It defaults to 0,
+    /// which reproduces the pre-W-AGCNOISE gate exactly — that default exists
+    /// so the existing regression tests keep asserting the same law; the live
+    /// call site always passes the tracked floor.
     static func nextMakeUpAgcGain(previousGain: Float,
                                   bufferRms: Float,
                                   bufferPeak: Float,
-                                  maxGain: Float) -> Float {
+                                  maxGain: Float,
+                                  noiseFloorRms: Float = 0) -> Float {
         var gain = previousGain
         // 1. Only adapt when real voice is present; on silence/background HOLD
         //    the gain so hiss is never pumped up (VP-IO NS is off — W556).
-        if bufferRms > agcNoiseGate {
+        //    W-AGCNOISE — "real voice" now means "above the absolute silence
+        //    floor AND at least agcSnrGateRatio above the tracked background".
+        //    The absolute-only test held on a quiet-room floor but is wide open
+        //    in a car with NS bypassed, which is how this loop came to wind to
+        //    5.89× on road noise (call 1de9935f).
+        if shouldAdaptMakeUpGain(bufferRms: bufferRms, noiseFloorRms: noiseFloorRms) {
             var desired = agcTargetRms / bufferRms
             if desired < 1 { desired = 1 }                   // boost-only
             if desired > maxGain { desired = maxGain }
             let alpha: Float = desired > gain ? agcAlphaRise : agcAlphaFall
             gain += (desired - gain) * alpha
         }
-        // 2. Peak ceiling on the APPLIED gain. Note this runs even when the
-        //    noise gate held the loop above: a loud transient arriving during
-        //    an otherwise-quiet stretch must not be boosted just because the
-        //    buffer's RMS was still under the gate.
+        // 2. Peak/headroom ceiling on the APPLIED gain. Note this runs even when
+        //    the noise gate held the loop above: a loud transient arriving
+        //    during an otherwise-quiet stretch must not be boosted just because
+        //    the buffer's RMS was still under the gate.
+        //
+        //    W-TXHEADROOM (2026-07-21) — this clamp MAY now take the gain BELOW
+        //    unity, which is the whole fix. The stage used to floor at 1.0
+        //    ("boost-only"), so on the one input that actually needs the
+        //    ceiling — a buffer VP-IO already handed us at or near full scale —
+        //    the "hard peak ceiling" was completely inert and the signal went
+        //    to Opus at full scale. Live proof that this is not hypothetical:
+        //    across 07-13…07-20, with this stage disabled entirely (gain 1.0
+        //    throughout), iOS still logged tx peak_pct 98.4/100/99.9/100/100 on
+        //    calls 0712dd14/4b147452/2ce5f8f8/4b8cacde/40f6d641 — that is
+        //    Apple's VP-IO AGC alone reaching the rail. Android never can:
+        //    it runs no AGC at all.
+        //
+        //    This does NOT turn the stage into a downward compressor that could
+        //    fight VP-IO's own loop. It is a per-buffer static clamp with no
+        //    integrator below unity, and it is bounded by construction —
+        //    peakSafe = agcPeakHeadroom / bufferPeak and bufferPeak ≤ 1, so the
+        //    gain can never fall below `agcPeakHeadroom` itself (−3.1 dB). It
+        //    removes exactly the amount by which the peak breaches the headroom
+        //    target and nothing more, so it cannot hunt.
+        var lowerBound: Float = 1
         if bufferPeak > 0 {
             let peakSafe = agcPeakHeadroom / bufferPeak
             if peakSafe < gain { gain = peakSafe }
+            if peakSafe < lowerBound { lowerBound = peakSafe }
         }
         // 3. Bounded attack (see agcMaxAttackStep).
+        //
+        //    W-AGCNOISE (2026-07-21) — the ceiling clamp MOVED ABOVE the attack
+        //    bound. It used to be the last statement, which was harmless while
+        //    `maxGain` was a compile-time constant per route but is not now that
+        //    it tracks the background floor: a floor rising into a noisy stretch
+        //    can drop the ceiling from 6.0 to 1.0, and an unbounded final clamp
+        //    would apply that −15.6 dB in a SINGLE 20 ms buffer — a step the
+        //    1 ms de-zipper ramp turns into an audible click. Clamping first and
+        //    then applying the same −3 dB/buffer attack bound makes a ceiling
+        //    collapse decay geometrically instead (6.0 → 1.0 in 6 buffers,
+        //    ~120 ms), which is inaudible.
+        //
+        //    This reordering is behaviour-IDENTICAL whenever `previousGain` ≤
+        //    `maxGain` (then `attackFloor` = previousGain × 0.708 ≤ maxGain, so
+        //    neither clamp can move the other's result), which is every case the
+        //    existing tests exercise and every steady state. `attackFloor` is
+        //    always strictly below `previousGain`, so it can never make the gain
+        //    GROW past the ceiling — only descend to it at a bounded rate.
+        if gain > maxGain { gain = maxGain }
         let attackFloor = previousGain * agcMaxAttackStep
         if gain < attackFloor { gain = attackFloor }
-        if gain < 1 { gain = 1 }
-        if gain > maxGain { gain = maxGain }
+        if gain < lowerBound { gain = lowerBound }
         return gain
     }
     // TX-RMS (2026-07-12) — sum of squares + sample count for the mic RMS,
@@ -258,24 +535,68 @@ public final class AudioCapture {
     /// other per-call state. `rms` is in Int16 sample units (0…32767).
     /// `limiterPct` is the percentage of transmitted samples the soft-knee
     /// limiter actually shaped — the limiter's duty cycle. In steady state it
-    /// should be ~0: the make-up AGC is capped at `agcPeakHeadroom` (0.90),
-    /// below the limiter knee (0.95), so the limiter should only ever catch the
-    /// ~1 ms attack residual and transients that arrived at full scale from
-    /// VP-IO. A persistently non-trivial value means the AGC is overdriving
+    /// should be ~0: the make-up AGC is capped at `agcPeakHeadroom` (0.70 since
+    /// W-TXHEADROOM), well below the limiter knee (0.95), so the limiter should
+    /// only ever catch the ~1 ms attack residual. Transients that arrive at full
+    /// scale from VP-IO are now pulled down by the headroom clamp itself rather
+    /// than left to the waveshaper. A persistently non-trivial value means the
+    /// AGC is overdriving
     /// again — which is exactly the regression W-AGCCEIL fixed and which the
     /// old telemetry had no way to see.
-    public func consumeLevelStats() -> (peak: Int16, clipSamples: Int64, rms: Double, agcGain: Float, limiterPct: Double) {
+    ///
+    /// W-AGCNOISE (2026-07-21) — `agcGainMean`, `agcNoiseFloorPct`,
+    /// `agcHoldPct` and `txBurstMax` are the instruments this loop never had.
+    /// `agcGain` is a call-MAX and therefore has the same blind spot
+    /// `peak_pct` has: it reads ~ceiling whether the loop touched the ceiling
+    /// once or lived there. The mean gain is the number that distinguishes
+    /// them, `agcHoldPct` says how much of the call the SNR gate classified as
+    /// background, and `agcNoiseFloorPct` is the input this whole mechanism
+    /// keys off — if the noise-floor model is wrong, that field says so.
+    public struct LevelStats {
+        public let peak: Int16
+        public let clipSamples: Int64
+        public let rms: Double
+        public let agcGain: Float
+        public let limiterPct: Double
+        public let agcGainMean: Double
+        public let agcNoiseFloorPct: Double
+        public let agcHoldPct: Double
+        public let txBurstMax: Int
+    }
+
+    public func consumeLevelStats() -> LevelStats {
         let rms = rmsSampleCount > 0 ? (sumSqAmplitude / Double(rmsSampleCount)).squareRoot() : 0
         let limiterPct = rmsSampleCount > 0
             ? Double(limiterSampleCount) / Double(rmsSampleCount) * 100
             : 0
-        let stats = (peakAmplitude, clipSampleCount, rms, micAgcMaxGainThisCall, limiterPct)
+        let gainMean = micAgcBufferCount > 0
+            ? micAgcGainSum / Double(micAgcBufferCount)
+            : 1.0
+        let holdPct = micAgcBufferCount > 0
+            ? Double(micAgcHoldCount) / Double(micAgcBufferCount) * 100
+            : 0
+        let stats = LevelStats(peak: peakAmplitude,
+                               clipSamples: clipSampleCount,
+                               rms: rms,
+                               agcGain: micAgcMaxGainThisCall,
+                               limiterPct: limiterPct,
+                               agcGainMean: gainMean,
+                               agcNoiseFloorPct: Double(micAgcNoiseFloor) * 100,
+                               agcHoldPct: holdPct,
+                               txBurstMax: txBurstMaxThisCall)
         peakAmplitude = 0
         clipSampleCount = 0
         sumSqAmplitude = 0
         rmsSampleCount = 0
         limiterSampleCount = 0
         micAgcMaxGainThisCall = 1.0
+        micAgcGainSum = 0
+        micAgcBufferCount = 0
+        micAgcHoldCount = 0
+        txBurstMaxThisCall = 0
+        // NOTE: micAgcNoiseFloor is deliberately NOT reset here — `start()`
+        // owns that, so the value read above is the floor as it stood at
+        // teardown rather than 0.
         return stats
     }
     // M-12 — AVAudioSession interruption (phone call, Siri, alarm)
@@ -367,6 +688,12 @@ public final class AudioCapture {
         micAgcGain = 1.0            // W-MICAGC — start each call at unity gain
         micAgcMaxGainThisCall = 1.0
         micAgcRampFrom = 1.0        // W-DEZIPPER — reset the per-sample gain-ramp state
+        // W-AGCNOISE — re-seed the background estimate on every engine (re)start.
+        // A route change means new acoustics AND a new mic; carrying the old
+        // floor across would apply a car cabin's ceiling to a built-in mic (or
+        // the reverse) until the follower caught up. 0 = "unknown", which
+        // `nextNoiseFloor` seeds from the first buffer.
+        micAgcNoiseFloor = 0
 
         // 1. Configure AVAudioSession for VoIP (hardware AEC, AGC, NS)
         if !audioPipeline.isActive {
@@ -548,7 +875,7 @@ public final class AudioCapture {
             // mid-call (double-AGC risk) for buffers already in flight on a
             // prior engine.
             if Self.micAgcEnabled {
-                let maxGain = Self.selectMakeUpAgcMaxGain(vpioActive: vpioActiveThisEngine)
+                let configuredMaxGain = Self.selectMakeUpAgcMaxGain(vpioActive: vpioActiveThisEngine)
                 raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
                     guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
                     let n = rawBuf.count / 2
@@ -568,10 +895,25 @@ public final class AudioCapture {
                     // the APPLIED gain + bounded attack). Keeping it out of this
                     // closure is deliberate: this is the exact code a broad
                     // refactor edited by accident once already.
+                    // W-AGCNOISE — track the background floor from the RAW
+                    // (pre-gain) buffer RMS, then let it bound the ceiling. The
+                    // gain multiply below has not run yet on these samples, so
+                    // this really is the input level and not our own output.
+                    self.micAgcNoiseFloor = Self.nextNoiseFloor(previous: self.micAgcNoiseFloor,
+                                                                bufferRms: rms)
+                    let noiseFloor = self.micAgcNoiseFloor
+                    let maxGain = Self.noiseLimitedMaxGain(configuredMaxGain: configuredMaxGain,
+                                                           noiseFloorRms: noiseFloor)
+                    if !Self.shouldAdaptMakeUpGain(bufferRms: rms, noiseFloorRms: noiseFloor) {
+                        self.micAgcHoldCount &+= 1
+                    }
                     self.micAgcGain = Self.nextMakeUpAgcGain(previousGain: self.micAgcGain,
                                                              bufferRms: rms,
                                                              bufferPeak: peak,
-                                                             maxGain: maxGain)
+                                                             maxGain: maxGain,
+                                                             noiseFloorRms: noiseFloor)
+                    self.micAgcGainSum += Double(self.micAgcGain)
+                    self.micAgcBufferCount &+= 1
                     if self.micAgcGain > self.micAgcMaxGainThisCall { self.micAgcMaxGainThisCall = self.micAgcGain }
                     // W-DEZIPPER — apply the make-up gain with PER-SAMPLE ramping
                     // from the previous frame's end gain, so the gain is
@@ -596,7 +938,30 @@ public final class AudioCapture {
                     // measures whether that is actually true in the field.
                     let gStart = self.micAgcRampFrom
                     let gTarget = self.micAgcGain
-                    if gTarget > 1.001 || gStart > 1.001 {
+                    // W-TXHEADROOM-DEAD (2026-07-21) — this guard used to read
+                    // `gTarget > 1.001 || gStart > 1.001`, i.e. "only do work
+                    // when we are BOOSTING". That silently made the entire
+                    // W-TXHEADROOM attenuation half DEAD CODE in exactly the
+                    // case it was written for: once the peak clamp settles the
+                    // gain at `agcPeakHeadroom` (0.70), BOTH gStart and gTarget
+                    // are ≤ 1.001 forever, the multiply loop below never runs,
+                    // and 0 dB is applied where −3.1 dB was intended. Caught by
+                    // adversarial review, then reproduced here: 8 consecutive
+                    // buffers computed gain 0.7080/0.7071/0.7071… and applied
+                    // 1.0000 every time.
+                    //
+                    // Second-order damage from the same bug: `micAgcRampFrom`
+                    // is assigned `gTarget` unconditionally after this block, so
+                    // it recorded 0.707 while the samples had actually been
+                    // multiplied by 1.0 — the de-zipper's start point desynced
+                    // from reality and the next buffer that DID engage ramped
+                    // from a wrong value, producing precisely the click
+                    // W-DEZIPPER exists to prevent.
+                    //
+                    // The predicate is now "does the gain differ from unity in
+                    // EITHER direction", which is the actual condition for
+                    // needing to touch the samples.
+                    if abs(gTarget - 1) > 0.001 || abs(gStart - 1) > 0.001 {
                         // W-AGCCEIL — asymmetric ramp. A gain INCREASE is still
                         // spread across the whole buffer (slow, inaudible). A
                         // gain DECREASE completes in ~1 ms so a level jump is met
@@ -700,13 +1065,20 @@ public final class AudioCapture {
             self.pcmAccumulator.append(raw)
             let frameBytes = AudioConstants.bytesPerFrame
             var consumed = 0
+            var emitted = 0
             while self.pcmAccumulator.count - consumed >= frameBytes {
                 let chunk = self.pcmAccumulator.subdata(in: consumed ..< consumed + frameBytes)
                 consumed += frameBytes
+                emitted += 1
                 // W-CANONICAL — software NR retired (double-NS over VP-IO's);
                 // chunks go straight to Opus.
                 self.onFrame?(chunk)
             }
+            // W-TXBURST — largest number of 20 ms frames emitted from ONE tap
+            // callback. 1 (occasionally 2) is a steady 50 fps stream; a large
+            // value means the hardware is clumping our I/O and the peer's
+            // jitter buffer sees bursts, not a stream. Counter only.
+            if emitted > self.txBurstMaxThisCall { self.txBurstMaxThisCall = emitted }
             if consumed > 0 {
                 self.pcmAccumulator = consumed < self.pcmAccumulator.count
                     ? self.pcmAccumulator.subdata(in: consumed ..< self.pcmAccumulator.count)
@@ -864,13 +1236,13 @@ public final class AudioCapture {
             // so a flapping route doesn't thrash the engine (W574o).
             if shouldSkipRouteRestart() { return }
             print("[AudioCapture] route change: old device unavailable — restarting engine")
-            restartEngineForRoute()
+            restartEngineForRoute(routeDriven: true)
         case .newDeviceAvailable:
             // New device connected (e.g. Bluetooth HFP). The engine may be using a
             // lower-quality route; restart to prefer the new device. Throttled (W574o).
             if shouldSkipRouteRestart() { return }
             print("[AudioCapture] route change: new device available — restarting engine")
-            restartEngineForRoute()
+            restartEngineForRoute(routeDriven: true)
         case .override:
             // W574c — the output route was overridden: this is the in-call speaker
             // button (`overrideOutputAudioPort(.speaker)` / `.none`). VP-IO is
@@ -892,7 +1264,7 @@ public final class AudioCapture {
             // (nothing to skip yet), only the self-provoked echoes are now dropped.
             if shouldSkipRouteRestart() { return }
             print("[AudioCapture] route change: output override (speaker toggle) — restarting engine to re-evaluate VP-IO")
-            restartEngineForRoute()
+            restartEngineForRoute(routeDriven: true)
         default:
             break
         }
@@ -908,7 +1280,9 @@ public final class AudioCapture {
         pendingRouteRestart?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isRunning else { return }
-            self.restartEngineForRoute()
+            // W-VPIORETRY — this path is only ever armed by handleRouteChange's
+            // speaker<->earpiece detector, i.e. the route really did change.
+            self.restartEngineForRoute(routeDriven: true)
         }
         pendingRouteRestart = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
@@ -928,8 +1302,21 @@ public final class AudioCapture {
     /// Tear down and rebuild the engine on the current hardware route. Records the
     /// restart time and arms a short suppress window so the route change this restart
     /// itself provokes is ignored (breaks the self-induced thrash loop).
-    private func restartEngineForRoute() {
+    ///
+    /// W-VPIORETRY (2026-07-21) — `routeDriven` says whether the HARDWARE ROUTE
+    /// changed (headset/car-kit/speaker) as opposed to this being the starve
+    /// watchdog's own fallback restart. Only a route change may lift a previous
+    /// VP-IO bypass; see `shouldRetryVoiceProcessing` for why the latch had to
+    /// stop being permanent.
+    private func restartEngineForRoute(routeDriven: Bool = false) {
         guard isRunning else { return }
+        if audioPipeline.forceDisableVoiceProcessing,
+           Self.shouldRetryVoiceProcessing(bypassCount: audioPipeline.voiceProcessingBypassCount,
+                                           restartIsRouteDriven: routeDriven) {
+            print("[AudioCapture] W-VPIORETRY: route changed after a VP-IO bypass — re-arming Voice-Processing (AEC/NS/AGC) for the new route")
+            audioPipeline.forceDisableVoiceProcessing = false
+            audioPipeline.noteVoiceProcessingRetry()
+        }
         audioPipeline.noteEngineRestart()  // W-CANONICAL — engine_restarts telemetry
         lastEngineRestart = Date()
         restartSuppressUntil = Date().addingTimeInterval(0.6)

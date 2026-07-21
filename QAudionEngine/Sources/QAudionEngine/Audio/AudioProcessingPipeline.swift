@@ -325,6 +325,23 @@ public final class AudioProcessingPipeline {
     private var lastTapChannels: Int = 0
     private var engineRestartsThisCall: Int = 0
     private var vpioBypassedEverThisCall = false
+    // W-VPIORETRY (2026-07-21) — how many engine starts this call actually ran
+    // WITHOUT VP-IO because of a bypass, and how many times VP-IO was re-armed
+    // after one. `vpioBypassedEver` is a bool and so could not distinguish "one
+    // transient starve during a car-kit route change, recovered" from "the
+    // whole call ran with no AEC/NS/AGC" — which is precisely the difference
+    // between an acceptable call and call 1de9935f.
+    private var vpioBypassCountThisCall: Int = 0
+    private var vpioRetryCountThisCall: Int = 0
+
+    /// How many engine starts this call have been forced to run without VP-IO.
+    /// Read by `AudioCapture.restartEngineForRoute` to bound retries.
+    public var voiceProcessingBypassCount: Int { vpioBypassCountThisCall }
+
+    /// `AudioCapture` reports here when it re-arms VP-IO after a bypass.
+    public func noteVoiceProcessingRetry() {
+        vpioRetryCountThisCall += 1
+    }
 
     /// W-CANONICAL — AudioCapture reports the freshly-read post-enable tap
     /// format here at every engine (re)start.
@@ -376,6 +393,9 @@ public final class AudioProcessingPipeline {
         public let tapChannels: Int
         public let engineRestarts: Int
         public let vpioBypassedEver: Bool
+        // W-VPIORETRY — see the backing fields' note.
+        public let vpioBypassCount: Int
+        public let vpioRetryCount: Int
     }
 
     /// Read the per-call audio diagnostics and reset them for the next call.
@@ -392,7 +412,9 @@ public final class AudioProcessingPipeline {
             tapSampleRate:       lastTapSampleRate,
             tapChannels:         lastTapChannels,
             engineRestarts:      engineRestartsThisCall,
-            vpioBypassedEver:    vpioBypassedEverThisCall
+            vpioBypassedEver:    vpioBypassedEverThisCall,
+            vpioBypassCount:     vpioBypassCountThisCall,
+            vpioRetryCount:      vpioRetryCountThisCall
         )
         agcEverActiveThisCall = false
         speakerRouteEverThisCall = false
@@ -405,6 +427,8 @@ public final class AudioProcessingPipeline {
         lastTapChannels = 0
         engineRestartsThisCall = 0
         vpioBypassedEverThisCall = false
+        vpioBypassCountThisCall = 0
+        vpioRetryCountThisCall = 0
         return stats
     }
 
@@ -455,6 +479,7 @@ public final class AudioProcessingPipeline {
             // (echo returns, but a working call beats a dead mic).
             shouldEnable = false
             vpioBypassedEverThisCall = true  // W-CANONICAL — degraded-mode counter
+            vpioBypassCountThisCall += 1     // W-VPIORETRY — bounds the retry
         } else if let override = voiceProcessingOverride {
             shouldEnable = override
         } else {
@@ -487,6 +512,7 @@ public final class AudioProcessingPipeline {
                     print("[AudioProcessingPipeline] setVoiceProcessingEnabled raised ObjC NSException — degrading VP-IO OFF (no crash): \(e.localizedDescription)")
                     voiceProcessingActive = false
                     vpioBypassedEverThisCall = true
+                    vpioBypassCountThisCall += 1   // W-VPIORETRY
                     latchAudioDiag(vpioEnabled: false, agcEnabled: false)
                     emitSessionDiagnostics(vpioEnabled: false)
                     return
