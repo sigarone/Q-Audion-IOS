@@ -257,6 +257,15 @@ final class AppState: ObservableObject {
     /// it"). Reset to `false` on every call teardown (endCall) so a stale
     /// preference never leaks into the next call.
     private var callSpeakerOn: Bool = false
+    /// W-ICEGRACE (2026-07-21) — pending "ICE went `.disconnected`, give it a
+    /// chance to recover before tearing the call down" countdown. Mirrors
+    /// Android's `DISCONNECT_GRACE_MS` (CallTransportFactory.kt:821). Non-nil
+    /// only while a grace window is running; cancelled on ICE recovery, on a
+    /// terminal ICE state, and on teardown.
+    private var iceDisconnectGraceTask: Task<Void, Never>?
+    /// W-ICEGRACE — grace window length. Byte-for-byte the same 3000 ms
+    /// Android has used since its own fix; keep the two in lockstep.
+    private static let iceDisconnectGraceMs: Int = 3_000
     /// W-OFFERBUFFER (2026-07-12) — OFFER messages (PQC or Android-JSON)
     /// that arrived while `callContactId` was still nil. Desktop/Android
     /// ship the opaque OFFER BEFORE the `call_offer` envelope that sets
@@ -8785,9 +8794,15 @@ final class AppState: ObservableObject {
                 // hangup path.
                 controller.onStateChange = { [weak self] newState in
                     switch newState {
-                    case .failed, .disconnected:
+                    case .failed:
                         Task { @MainActor [weak self] in
-                            self?.handleIceTermination()
+                            self?.handleIceTermination(iceIsTerminal: true)
+                        }
+                    case .disconnected:
+                        // W-ICEGRACE — recoverable, not terminal (see
+                        // handleIceTermination). Android grants the same 3s.
+                        Task { @MainActor [weak self] in
+                            self?.handleIceTermination(iceIsTerminal: false)
                         }
                     default:
                         break
@@ -8795,9 +8810,14 @@ final class AppState: ObservableObject {
                 }
                 controller.onIceConnectionState = { [weak self] iceState in
                     switch iceState {
-                    case .failed, .disconnected, .closed:
+                    case .failed, .closed:
                         Task { @MainActor [weak self] in
-                            self?.handleIceTermination()
+                            self?.handleIceTermination(iceIsTerminal: true)
+                        }
+                    case .disconnected:
+                        // W-ICEGRACE — recoverable, not terminal.
+                        Task { @MainActor [weak self] in
+                            self?.handleIceTermination(iceIsTerminal: false)
                         }
                     case .connected, .completed:
                         // Transport indicator: WebRTC path confirmed.
@@ -8806,6 +8826,9 @@ final class AppState: ObservableObject {
                         // (→ label "TURN"). Otherwise "PQC" (→ "P2P SRTP").
                         let isRelayForced = TransportGate.forcesRelay
                         Task { @MainActor [weak self] in
+                            // W-ICEGRACE — ICE recovered: stand down the
+                            // pending teardown countdown, the call lives on.
+                            self?.cancelIceDisconnectGrace()
                             self?.backendType = isRelayForced ? "turn" : "p2p"
                         }
                     default:
@@ -8901,21 +8924,81 @@ final class AppState: ObservableObject {
     /// callbacks were never assigned, so a dropped media path left the
     /// call UI up forever. Extracted into its own @MainActor method to
     /// keep the wiring closures shallow (Swift 6 type-checker depth).
+    ///
+    /// W-ICEGRACE (2026-07-21) — `iceIsTerminal: false` (a plain
+    /// `.disconnected`) no longer tears the call down immediately. ICE
+    /// `.disconnected` is explicitly a RECOVERABLE state in the WebRTC spec
+    /// (it routinely self-heals within a second or two on a WiFi/cellular
+    /// hiccup); only `.failed`/`.closed` are terminal. Android has always
+    /// treated it that way — `CallTransportFactory.kt:548` arms
+    /// `DISCONNECT_GRACE_MS = 3_000L` and then falls back to the WS relay
+    /// rather than hanging up — while iOS called `endCall()` on the very
+    /// first `.disconnected` edge with ZERO grace. Device-verified on call
+    /// f884668c (2026-07-21, iOS↔Android 1:1 audio): iOS killed the call at
+    /// 21.9s (`call.media.summary` end_reason=user_hangup, mic tx frozen at
+    /// 970 frames) 0.3s after Android logged its own "ICE DISCONNECTED —
+    /// arming 3000ms grace" for the SAME call; Android survived and its own
+    /// summary reports duration_ms=85098. Same wire event, opposite
+    /// behavior — a pure platform-parity gap, live since 2026-05-18.
+    ///
+    /// The WS-relay fallback this grace buys time for ALREADY exists on iOS
+    /// per-frame: `sendAudioOverDataChannel` (wired to
+    /// `QAudionWebRtcCallController.sendAudioFrameData`) returns `false`
+    /// whenever the sealed DataChannel isn't open and `CallService` then
+    /// routes that frame over the WS relay. So the ONLY thing that was
+    /// missing is not killing the call while that fallback does its job.
     @MainActor
-    private func handleIceTermination() {
+    private func handleIceTermination(iceIsTerminal: Bool) {
         // F-1 (2nd-pass regression): C-3 made `isInCall` stay false until
         // the call is ANSWERED. So an ICE / connection failure DURING
         // setup (outgoing `.connecting`, incoming `.ringing`) — i.e. the
         // "can't even connect" case — was swallowed by the old
         // `guard isInCall` and left the call UI / CallKit wedged forever.
         // Tear down on any non-terminal call state, not just answered.
+        let callIsLive: Bool
         switch callState {
         case .idle, .ended:
-            return
+            callIsLive = false
         case .connecting, .ringing, .active, .encrypted:
-            break
+            callIsLive = true
         }
-        self.endCall()
+        switch iceTerminationAction(callIsLive: callIsLive, iceIsTerminal: iceIsTerminal) {
+        case .none:
+            return
+        case .endImmediately:
+            cancelIceDisconnectGrace()
+            self.endCall()
+        case .endAfterGrace:
+            // Already counting down from an earlier `.disconnected` edge —
+            // don't restart the window (a flapping ICE would otherwise keep
+            // pushing the deadline out forever).
+            guard iceDisconnectGraceTask == nil else { return }
+            RTLog.info("call", "ICE disconnected — arming \(Self.iceDisconnectGraceMs)ms grace before teardown (WS relay covers audio meanwhile)")
+            iceDisconnectGraceTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(Self.iceDisconnectGraceMs) * 1_000_000)
+                guard !Task.isCancelled, let self = self else { return }
+                self.iceDisconnectGraceTask = nil
+                // Re-check liveness: the call may have ended normally (user
+                // hangup / peer hangup) while the grace was running.
+                switch self.callState {
+                case .idle, .ended:
+                    return
+                case .connecting, .ringing, .active, .encrypted:
+                    RTLog.info("call", "ICE grace expired without recovery — ending call")
+                    self.endCall()
+                }
+            }
+        }
+    }
+
+    /// W-ICEGRACE — cancel a pending ICE-disconnect grace countdown. Called
+    /// when ICE recovers (`.connected`/`.completed`), on a terminal ICE
+    /// state, and on teardown so a stale timer can never reach into the
+    /// NEXT call and end it.
+    @MainActor
+    private func cancelIceDisconnectGrace() {
+        iceDisconnectGraceTask?.cancel()
+        iceDisconnectGraceTask = nil
     }
 
     /// call_accepted two-flag latch (WIRE_SPEC §3.5) — runs the original
@@ -9271,6 +9354,14 @@ final class AppState: ObservableObject {
         // W-CALLSPKR — drop the latched speaker preference alongside the
         // route reset above so it can't leak into the next call.
         callSpeakerOn = false
+        // W-ICEGRACE — kill any pending ICE-disconnect countdown for the call
+        // being torn down here. Without this a grace armed at the very end of
+        // one call could fire 3s later, find the NEXT call live in
+        // .connecting/.ringing, and end it — turning a one-off hiccup into a
+        // cross-call kill. (endCall() is idempotent, but the timer must not
+        // outlive its own call regardless.)
+        iceDisconnectGraceTask?.cancel()
+        iceDisconnectGraceTask = nil
         // W347 / H-6: tear down the WebRTC bridge for this call.
         // W495 — send WS call_hangup BEFORE closing the peer connection.
         // Old pattern (closeSynchronously THEN Task { hangup() }) was broken:
@@ -12795,9 +12886,16 @@ extension AppState {
         // double-teardown with the normal hangup path.
         controller.onStateChange = { [weak self] newState in
             switch newState {
-            case .failed, .disconnected:
+            case .failed:
                 Task { @MainActor [weak self] in
-                    self?.handleIceTermination()
+                    self?.handleIceTermination(iceIsTerminal: true)
+                }
+            case .disconnected:
+                // W-ICEGRACE — recoverable, not terminal (callee-side mirror
+                // of the caller path above; both must behave identically or
+                // the same call dies from whichever side answered).
+                Task { @MainActor [weak self] in
+                    self?.handleIceTermination(iceIsTerminal: false)
                 }
             default:
                 break
@@ -12805,13 +12903,20 @@ extension AppState {
         }
         controller.onIceConnectionState = { [weak self] iceState in
             switch iceState {
-            case .failed, .disconnected, .closed:
+            case .failed, .closed:
                 Task { @MainActor [weak self] in
-                    self?.handleIceTermination()
+                    self?.handleIceTermination(iceIsTerminal: true)
+                }
+            case .disconnected:
+                // W-ICEGRACE — recoverable, not terminal.
+                Task { @MainActor [weak self] in
+                    self?.handleIceTermination(iceIsTerminal: false)
                 }
             case .connected, .completed:
                 let isRelayForced = TransportGate.forcesRelay
                 Task { @MainActor [weak self] in
+                    // W-ICEGRACE — ICE recovered: stand down the countdown.
+                    self?.cancelIceDisconnectGrace()
                     self?.backendType = isRelayForced ? "turn" : "p2p"
                 }
             default:
