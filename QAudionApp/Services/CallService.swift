@@ -119,6 +119,25 @@ final class CallService: @unchecked Sendable {
     private var rxLevelPeak: Float = 0        // running max |sample|, normalized [0,1]
     private var rxLevelSumSq: Double = 0      // Σ(sample²) over the whole call
     private var rxLevelSampleCount: Int64 = 0 // n, for the RMS denominator
+    // W-VOICEZERO (2026-07-21) — voice-analysis observability. There was NO
+    // telemetry of any kind for the Guardian-ribbon analyzer, which is exactly
+    // why "STRESS/RESPIRO/TONO are always zero" survived unnoticed from the
+    // feature's first commit: the RX pipeline reported healthy audio while
+    // `PitchExtractor` declared every single frame unvoiced (un-normalised
+    // autocorrelation vs a normalised threshold — see VoicedDecisionPolicy).
+    // These two counters make the failure visible in call.audio.diag as
+    // va_results / va_voiced_pct: a call with va_results > 0 and
+    // va_voiced_pct == 0 IS the bug, unambiguously.
+    // Touched only from the two `getVoiceAnalysis().onResult` closures, which
+    // run on the same main-queue RX branch as the counters above.
+    //
+    // PRIVACY — deliberately counters ONLY, no measured voice values. Sums of
+    // f0 and stress were dropped along with the telemetry keys that carried
+    // them (see the emit site): call.audio.diag is stored unsealed on the
+    // server, and mean F0 is a voice biometric while stress is an affective
+    // inference about the user.
+    private var vaResultCount: Int64 = 0
+    private var vaVoicedCount: Int64 = 0
     // Bug B diagnostics — did the playback/capture AVAudioEngines actually
     // start (true only after startAudioIOIfReady ran with an active session),
     // and did the didActivate-fallback have to fire (CallKit skipped its own
@@ -600,6 +619,7 @@ final class CallService: @unchecked Sendable {
         // wiring does not run the full analysis pipeline unconditionally.
         if EngineConfig.production().enableVoiceAnalysis {
             integration.getVoiceAnalysis().onResult = { [weak self] result in
+                self?.recordVoiceAnalysisSample(result)
                 self?.onVoiceAnalysis?(result)
             }
             // Unified call UI — REAL RX spectrum for the Guardian ribbon's
@@ -790,6 +810,7 @@ final class CallService: @unchecked Sendable {
         // already reach the spectrum tap.
         if EngineConfig.production().enableVoiceAnalysis {
             integration.getVoiceAnalysis().onResult = { [weak self] result in
+                self?.recordVoiceAnalysisSample(result)
                 self?.onVoiceAnalysis?(result)
             }
             integration.onVoiceSpectrum = { [weak self] bands in
@@ -962,6 +983,22 @@ final class CallService: @unchecked Sendable {
         // W65+W66: stop capture/playback + rilascia AVAudioSession.
         // teardownAudioStack also handles callIntegration cleanup.
         teardownAudioStack()
+    }
+
+    /// W-VOICEZERO — accumulate the per-call Guardian-analyzer health counters
+    /// summarised in `call.audio.diag`. Two adds, called at most ~10 Hz
+    /// (`VoiceAnalysisEngine` analyses every 5th 20 ms frame), on the same
+    /// main-queue RX branch as the rx level accumulators.
+    ///
+    /// PRIVACY — counts ONLY. The measured values (f0, stress) are deliberately
+    /// NOT accumulated: they would end up in plaintext server telemetry, and a
+    /// mean fundamental frequency is a voice biometric while stress is an
+    /// affective inference. "Was the analyzer fed, and did it hear voicing"
+    /// is the whole diagnostic question, and two counters answer it.
+    private func recordVoiceAnalysisSample(_ result: VoiceAnalysisResult) {
+        vaResultCount &+= 1
+        guard result.pitch.voiced else { return }
+        vaVoicedCount &+= 1
     }
 
     /// W481 — drain frames buffered before callIntegration was bound.
@@ -1202,9 +1239,18 @@ final class CallService: @unchecked Sendable {
                     "peak_pct":           (peakPct * 10).rounded() / 10,
                     "rms_pct":            (txRmsPct * 10).rounded() / 10,
                     // W-MICAGC — max software make-up gain the mic AGC reached this
-                    // call (1.0 = never engaged / VP-IO on; higher = raw mic was
-                    // quiet and got lifted). Hitting the 6.0 cap ⇒ target unreachable.
+                    // call (1.0 = never engaged; higher = raw mic was quiet and got
+                    // lifted). Hitting the ceiling ⇒ RMS target unreachable.
                     "agc_gain":           (Double(level.agcGain) * 100).rounded() / 100,
+                    // W-AGCCEIL — soft-knee limiter duty cycle (% of tx samples the
+                    // limiter actually shaped). Expected ~0: the make-up AGC is now
+                    // hard-capped at 90% FS, below the 95% knee, so the limiter should
+                    // only catch the ~1 ms attack residual and transients VP-IO already
+                    // delivered at full scale. A persistently non-trivial value means
+                    // the AGC is overdriving into the limiter again — the W-AGCCEIL
+                    // regression, which produced the "metallic" far-end timbre and
+                    // which peak_pct/clip_samples alone could not distinguish.
+                    "limiter_pct":        (level.limiterPct * 1000).rounded() / 1000,
                     "rx_peak_pct":        (rxPeakPct * 10).rounded() / 10,
                     "rx_rms_pct":         (rxRmsPct * 10).rounded() / 10,
                     "clip_samples":       level.clipSamples,
@@ -1224,7 +1270,34 @@ final class CallService: @unchecked Sendable {
                     "tap_sr":             diag.tapSampleRate,
                     "tap_ch":             diag.tapChannels,
                     "engine_restarts":    diag.engineRestarts,
-                    "vpio_bypassed_ever": diag.vpioBypassedEver
+                    "vpio_bypassed_ever": diag.vpioBypassedEver,
+                    // W-VOICEZERO (2026-07-21) — Guardian-analyzer health, the
+                    // instrument this subsystem never had. va_results counts
+                    // analyzer callbacks this call (0 ⇒ nothing is feeding the
+                    // analyzer at all); va_voiced_pct is the share that detected
+                    // voicing. va_results > 0 with va_voiced_pct == 0 IS the
+                    // "gauges read zero" bug — that was the state of every call
+                    // from the feature's first commit until this fix.
+                    //
+                    // PRIVACY — deliberately ONLY these two counters. A first cut
+                    // of this fix also emitted `va_f0_avg` (mean fundamental
+                    // frequency) and `va_stress_avg` (mean affective score).
+                    // Both were removed before shipping: `call.audio.diag` is
+                    // stored UNSEALED in plaintext on the VPS (verified by
+                    // reading /opt/bcrypto/data/telemetry/*.jsonl directly), mean
+                    // F0 is a speaker/gender-correlated voice biometric and
+                    // stress is an inference about the user's emotional state.
+                    // Shipping either to the server contradicts this project's
+                    // stated posture — it does not even persist a phone number in
+                    // clear — and neither adds diagnostic power the two counters
+                    // above lack: "is the analyzer being fed, and does it detect
+                    // voicing" fully answers the zero-gauges question. If a future
+                    // need for the values themselves appears, they must ride the
+                    // E2EE-sealed report channel, not plaintext telemetry.
+                    "va_results":         vaResultCount,
+                    "va_voiced_pct":      vaResultCount > 0
+                        ? (Double(vaVoicedCount) / Double(vaResultCount) * 1000).rounded() / 10
+                        : 0
                 ]
                 Task { @MainActor in
                     TelemetryService.shared.emit(kind: "call.audio.diag", callId: _callId, attrs: diagAttrs)
@@ -1253,6 +1326,8 @@ final class CallService: @unchecked Sendable {
         rxLevelPeak = 0        // AUDIO-DIAG (2026-07-12) — reset RX level accumulators
         rxLevelSumSq = 0
         rxLevelSampleCount = 0
+        vaResultCount = 0      // W-VOICEZERO — reset analyzer health counters
+        vaVoicedCount = 0
         loggedFirstTxCapture = false
         loggedFirstTxEncrypt = false
         loggedTxNoTransport = false

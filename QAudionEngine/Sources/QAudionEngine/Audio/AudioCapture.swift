@@ -40,7 +40,25 @@ public final class AudioCapture {
     // full-scale (32767); `consumeLevelStats()` reads+resets at call end.
     private var peakAmplitude: Int16 = 0
     private var clipSampleCount: Int64 = 0
-    private static let clipThreshold: Int16 = 31800
+    /// W-AGCCEIL (2026-07-21) — was 31800 (97.05% FS), which sat BELOW the
+    /// soft-knee limiter's output ceiling (0.98 × 32767 = 32112). The limiter's
+    /// output asymptote therefore landed inside the "clip" band, so every
+    /// limiter-shaped sample was reported as a clip and `clip_samples` measured
+    /// LIMITER ACTIVITY, not clipping. The live data shows this cleanly: of the
+    /// four post-dcace27 calls the only one that reported 0 clips (84c06f73) is
+    /// exactly the one whose peak (96.7%) fell below 97.05%, while the three at
+    /// 97.8–98.0% reported 29/29/405 — no exceptions. Raised above the limiter
+    /// ceiling so a "clip" once again means a sample that reached full scale
+    /// without passing through the knee (i.e. real upstream/ADC clipping, which
+    /// only the gain≈1 pass-through path can produce). Limiter engagement is now
+    /// counted separately as `limiterSampleCount`.
+    static let clipThreshold: Int16 = 32600
+    /// Samples the soft-knee limiter actually shaped this call. The duty cycle
+    /// of the limiter was the one quantity the old telemetry could NOT answer
+    /// (peak is a call-max, clip_samples was contaminated as described above),
+    /// which is why "how often is the waveshaper engaged" had to be inferred
+    /// rather than measured. Reported as `limiter_pct`.
+    private var limiterSampleCount: Int64 = 0
     // W-MICAGC (2026-07-12) — gentle software make-up AGC. Server telemetry
     // showed the iOS mic ships systematically quiet (tx peak median ~5%, RMS ~1%
     // of full scale) because VP-IO/AGC is OFF on the earpiece route (W556) and
@@ -62,6 +80,32 @@ public final class AudioCapture {
     // boundary; a constant-per-frame gain that changes frame-to-frame steps the
     // waveform at each boundary → an audible click every frame ("scoppiettante").
     private var micAgcRampFrom: Float = 1.0
+    // W-AGCCEIL (2026-07-21) — DELIBERATELY LEFT AT 0.12.
+    //
+    // A first cut of the W-AGCCEIL fix lowered this to 0.05, reasoning from the
+    // four post-dcace27 calls that a 12% target was "unreachable" and therefore
+    // kept the loop railed against the peak wall. Adversarial review REFUTED
+    // that on two counts and it was reverted before shipping:
+    //
+    //  1. UNIT CONFLATION. The 3.8–5.6% figures those calls report are
+    //     `rms_pct` — a CALL-AVERAGE accumulated across the whole call
+    //     INCLUDING silence (sumSqAmplitude/rmsSampleCount, reset only in
+    //     consumeLevelStats). `agcTargetRms` is compared against a single
+    //     20 ms buffer's RMS inside `nextMakeUpAgcGain`. Comparing the two is
+    //     apples-to-oranges; the call-average is necessarily far below the
+    //     voiced-buffer RMS the control law actually sees.
+    //  2. It would have RE-BROKEN THE QUIET MIC. 0.05/0.12 is −7.60 dB applied
+    //     to `desired` before the maxGain cap. Outside a ~0.35–0.9 dB-wide
+    //     no-op band it strips up to 7.6 dB of make-up gain — precisely the
+    //     faint-iOS-mic regression `04f82f1`/`dcace27` exist to fix. Live
+    //     counter-example: call d1df20f0 ran with agc_gain 5.51 against a
+    //     ceiling of 6.0, i.e. the RMS term was NOT inert on real material.
+    //
+    // The real defect was never this constant — it was `agcPeakHeadroom` being
+    // applied to the one-pole's TARGET instead of to the APPLIED gain (see
+    // `nextMakeUpAgcGain` below). With the ceiling now enforced on the result,
+    // the peak term binds correctly on loud material and 0.12 simply lets the
+    // loop lift genuinely quiet speech, which is its job.
     private static let agcTargetRms: Float = 0.12    // 12% of full scale
     // W-QUIETMIC (2026-07-12) — the iPhone earpiece mic sits very low on normal
     // speech: telemetry across calls c591a0b2/28398a12/7b03662a shows raw RMS
@@ -114,7 +158,95 @@ public final class AudioCapture {
         vpioActive ? agcMaxGainVpio : agcMaxGain
     }
 
-    private static let agcPeakHeadroom: Float = 0.90 // never boost a frame's peak past 90%
+    /// Ceiling the make-up stage aims the loudest sample of a buffer at.
+    /// W-AGCCEIL (2026-07-21) — this value is UNCHANGED (0.90, as shipped by
+    /// 04f82f1); what changed is that it is now actually ENFORCED. It used to
+    /// be applied to `desired`, i.e. to the one-pole's TARGET, so the gain that
+    /// was really applied only approached it with a ~400 ms time constant and
+    /// in practice sat permanently ABOVE it. Proof from live telemetry: if the
+    /// cap had held, no post-gain sample could exceed 0.90 — the four affected
+    /// calls measured post-gain peaks of 1.045–1.251 × full scale, i.e. the
+    /// applied gain overshot its own peak-safe value by +1.3 to +2.8 dB.
+    static let agcPeakHeadroom: Float = 0.90
+    private static let agcAlphaRise: Float = 0.02    // slow lift  (τ ≈ 1 s)
+    private static let agcAlphaFall: Float = 0.05    // RMS-driven duck (τ ≈ 400 ms)
+    /// Most the gain may be cut in ONE buffer (0.708 ≈ −3 dB).
+    /// Without a bound, a single full-scale outlier sample (a lip smack — real:
+    /// call 4b8cacde logged exactly ONE such sample in a whole call) forces
+    /// `agcPeakHeadroom / 1.0` and would duck the entire 20 ms buffer by ~9 dB,
+    /// punching an audible hole. Bounded, an isolated outlier costs 3 dB for one
+    /// buffer and recovers, while a GENUINE sustained level rise still converges
+    /// in 1–3 buffers (20–60 ms) instead of the ~400 ms the old one-pole took.
+    /// The soft-knee limiter backstops the residual during those buffers — which
+    /// is exactly what a limiter is for, and is bounded to tens of ms per onset
+    /// rather than being in-circuit continuously.
+    static let agcMaxAttackStep: Float = 0.708
+    /// Samples over which a gain DECREASE is ramped (≈1 ms at 48 kHz). A gain
+    /// increase still ramps across the whole buffer. Fast-down/slow-up is the
+    /// standard safe limiter shape and confines onset overshoot to ~1 ms.
+    static let agcAttackRampSamples: Int = 48
+
+    // ── Soft-knee limiter (shared by the inline make-up path and the standalone
+    // raw-mic TX-LIMITER below, so the two stages can never drift apart).
+    //
+    // W-AGCCEIL (2026-07-21) — the knee was 0.90, EXACTLY equal to
+    // `agcPeakHeadroom`. Two stages stacked on the same threshold overlap by
+    // construction: the moment the AGC reached its own ceiling the limiter was
+    // already at its knee, so the limiter was in-circuit continuously rather
+    // than as a backstop. Because it is a MEMORYLESS waveshaper (per-sample
+    // curve, no gain state), being continuously engaged means continuous
+    // harmonic distortion — the reported "metallic" timbre. Raising the knee to
+    // 0.95 puts 0.47 dB of clean separation above the AGC ceiling, so in steady
+    // state the limiter is out of circuit entirely and only sees the ~1 ms
+    // attack residual and upstream transients VP-IO already let through at full
+    // scale (measured: peak_pct 100.0 on calls where our gain was 1.0).
+    static let limiterKnee: Float = 0.95
+    static let limiterCeiling: Float = 0.98
+
+    /// W-AGCCEIL (2026-07-21) — the make-up AGC control law for ONE tap buffer,
+    /// extracted pure so the peak-ceiling invariant has its own regression test
+    /// (`AudioCaptureLevelControlTests`), same pattern as
+    /// `selectMakeUpAgcMaxGain` / `IceTerminationPolicy` /
+    /// `VideoTransceiverPhantomGuard`. No AVFoundation or WebRTC in the
+    /// signature, so it runs on the macOS CI runner via `swift test`.
+    ///
+    /// Order matters and is the whole fix:
+    ///   1. slow RMS-seeking term (voice-gated, boost-only) — unchanged;
+    ///   2. HARD peak ceiling applied to the RESULT, not to the target. This is
+    ///      the invariant that was documented but never enforced;
+    ///   3. bounded attack, so step 2 cannot punch a hole on one outlier sample.
+    /// Step 3 can hold the gain above the peak-safe value for a buffer or two;
+    /// that is deliberate, and it is the ONLY case in which the limiter should
+    /// ever engage on content we ourselves amplified.
+    static func nextMakeUpAgcGain(previousGain: Float,
+                                  bufferRms: Float,
+                                  bufferPeak: Float,
+                                  maxGain: Float) -> Float {
+        var gain = previousGain
+        // 1. Only adapt when real voice is present; on silence/background HOLD
+        //    the gain so hiss is never pumped up (VP-IO NS is off — W556).
+        if bufferRms > agcNoiseGate {
+            var desired = agcTargetRms / bufferRms
+            if desired < 1 { desired = 1 }                   // boost-only
+            if desired > maxGain { desired = maxGain }
+            let alpha: Float = desired > gain ? agcAlphaRise : agcAlphaFall
+            gain += (desired - gain) * alpha
+        }
+        // 2. Peak ceiling on the APPLIED gain. Note this runs even when the
+        //    noise gate held the loop above: a loud transient arriving during
+        //    an otherwise-quiet stretch must not be boosted just because the
+        //    buffer's RMS was still under the gate.
+        if bufferPeak > 0 {
+            let peakSafe = agcPeakHeadroom / bufferPeak
+            if peakSafe < gain { gain = peakSafe }
+        }
+        // 3. Bounded attack (see agcMaxAttackStep).
+        let attackFloor = previousGain * agcMaxAttackStep
+        if gain < attackFloor { gain = attackFloor }
+        if gain < 1 { gain = 1 }
+        if gain > maxGain { gain = maxGain }
+        return gain
+    }
     // TX-RMS (2026-07-12) — sum of squares + sample count for the mic RMS,
     // accumulated on the same 50fps tap callback as peakAmplitude (no lock,
     // no extra decode). `consumeLevelStats()` folds these into `rms` (in Int16
@@ -124,13 +256,25 @@ public final class AudioCapture {
     /// Read the accumulated peak/clip/rms stats for the CURRENT call and reset
     /// them for the next one. Call from teardown, before `stop()` clears
     /// other per-call state. `rms` is in Int16 sample units (0…32767).
-    public func consumeLevelStats() -> (peak: Int16, clipSamples: Int64, rms: Double, agcGain: Float) {
+    /// `limiterPct` is the percentage of transmitted samples the soft-knee
+    /// limiter actually shaped — the limiter's duty cycle. In steady state it
+    /// should be ~0: the make-up AGC is capped at `agcPeakHeadroom` (0.90),
+    /// below the limiter knee (0.95), so the limiter should only ever catch the
+    /// ~1 ms attack residual and transients that arrived at full scale from
+    /// VP-IO. A persistently non-trivial value means the AGC is overdriving
+    /// again — which is exactly the regression W-AGCCEIL fixed and which the
+    /// old telemetry had no way to see.
+    public func consumeLevelStats() -> (peak: Int16, clipSamples: Int64, rms: Double, agcGain: Float, limiterPct: Double) {
         let rms = rmsSampleCount > 0 ? (sumSqAmplitude / Double(rmsSampleCount)).squareRoot() : 0
-        let stats = (peakAmplitude, clipSampleCount, rms, micAgcMaxGainThisCall)
+        let limiterPct = rmsSampleCount > 0
+            ? Double(limiterSampleCount) / Double(rmsSampleCount) * 100
+            : 0
+        let stats = (peakAmplitude, clipSampleCount, rms, micAgcMaxGainThisCall, limiterPct)
         peakAmplitude = 0
         clipSampleCount = 0
         sumSqAmplitude = 0
         rmsSampleCount = 0
+        limiterSampleCount = 0
         micAgcMaxGainThisCall = 1.0
         return stats
     }
@@ -419,58 +563,67 @@ public final class AudioCapture {
                         if a > peak { peak = a }
                     }
                     let rms = Float((sumSq / Double(n)).squareRoot())
-                    // Only adapt when real voice is present (above the gate); on
-                    // silence/background HOLD the gain so hiss is never pumped up.
-                    if rms > Self.agcNoiseGate {
-                        var desired = Self.agcTargetRms / rms
-                        if desired < 1 { desired = 1 }                       // boost-only
-                        if desired > maxGain { desired = maxGain }
-                        if peak > 0 {                                        // never over-drive a loud frame
-                            let peakCap = Self.agcPeakHeadroom / peak
-                            if peakCap < desired { desired = peakCap }
-                            if desired < 1 { desired = 1 }
-                        }
-                        // slow one-pole: rise slowly (lift quiet voice gently),
-                        // fall a touch faster (duck loud); both slow enough that
-                        // the ear does not perceive pumping.
-                        let alpha: Float = desired > self.micAgcGain ? 0.02 : 0.05
-                        self.micAgcGain += (desired - self.micAgcGain) * alpha
-                    }
-                    if self.micAgcGain < 1 { self.micAgcGain = 1 }
-                    if self.micAgcGain > maxGain { self.micAgcGain = maxGain }
+                    // W-AGCCEIL — the whole control law now lives in the pure,
+                    // unit-tested `nextMakeUpAgcGain` (peak ceiling enforced on
+                    // the APPLIED gain + bounded attack). Keeping it out of this
+                    // closure is deliberate: this is the exact code a broad
+                    // refactor edited by accident once already.
+                    self.micAgcGain = Self.nextMakeUpAgcGain(previousGain: self.micAgcGain,
+                                                             bufferRms: rms,
+                                                             bufferPeak: peak,
+                                                             maxGain: maxGain)
                     if self.micAgcGain > self.micAgcMaxGainThisCall { self.micAgcMaxGainThisCall = self.micAgcGain }
-                    // W-DEZIPPER — apply the smooth make-up gain with PER-SAMPLE
-                    // ramping from the previous frame's end gain to this frame's
-                    // target, so the gain is CONTINUOUS across the 20 ms frame
-                    // boundary. A constant per-frame gain that changed frame-to-
-                    // frame stepped the waveform at each boundary → an audible click
-                    // every frame (the "scoppiettante" crackle the user reported);
-                    // the earlier per-frame peak clamp made it worse by dropping the
-                    // gain hard on loud frames (it bound whenever micAgcGain*peak >
-                    // 90% FS, i.e. on the loudest ~20 ms chunks). Peak safety is now
-                    // a per-sample SOFT-KNEE (the same curve as the standalone
-                    // TX-LIMITER below) applied INLINE right after the gain, so no
-                    // sample is ever hard-flat-topped by the Int16 clamp before the
-                    // limiter can shape it — de-zippered make-up + smooth limiting
-                    // in one pass, no discontinuities.
+                    // W-DEZIPPER — apply the make-up gain with PER-SAMPLE ramping
+                    // from the previous frame's end gain, so the gain is
+                    // CONTINUOUS across the 20 ms frame boundary. A constant
+                    // per-frame gain that changed frame-to-frame stepped the
+                    // waveform at each boundary → an audible click every frame
+                    // (the "scoppiettante" crackle).
+                    //
+                    // W-AGCCEIL (2026-07-21) — CORRECTION to the note that used
+                    // to live here. It claimed "peak safety is now a per-sample
+                    // SOFT-KNEE applied inline", i.e. it treated the limiter as
+                    // the peak-safety mechanism. That is precisely the design
+                    // error: a memoryless waveshaper is a BACKSTOP, not a
+                    // leveller, and using it as one means it is in circuit
+                    // continuously (measured: post-gain peaks driven to
+                    // 1.045–1.251 × full scale on every call) and therefore
+                    // generating continuous harmonic distortion — the far end's
+                    // "metallic" report. Peak safety now lives where it belongs,
+                    // in the gain law (`nextMakeUpAgcGain`, ceiling enforced on
+                    // the APPLIED gain); the knee below sits ABOVE that ceiling
+                    // and should essentially never fire. `limiter_pct` telemetry
+                    // measures whether that is actually true in the field.
                     let gStart = self.micAgcRampFrom
                     let gTarget = self.micAgcGain
                     if gTarget > 1.001 || gStart > 1.001 {
-                        let inv: Float = 1 / Float(n)
-                        let limThresh: Float = 0.90 * fs
-                        let limCeil: Float = 0.98 * fs
+                        // W-AGCCEIL — asymmetric ramp. A gain INCREASE is still
+                        // spread across the whole buffer (slow, inaudible). A
+                        // gain DECREASE completes in ~1 ms so a level jump is met
+                        // almost immediately: the old symmetric full-buffer ramp
+                        // meant a peak arriving early in the buffer was still
+                        // multiplied by the PREVIOUS (too high) gain, so the
+                        // limiter ate the whole onset.
+                        let rampSamples = gTarget < gStart ? min(n, Self.agcAttackRampSamples) : n
+                        let inv: Float = 1 / Float(rampSamples)
+                        let limThresh: Float = Self.limiterKnee * fs
+                        let limCeil: Float = Self.limiterCeiling * fs
                         let limRange: Float = limCeil - limThresh
+                        var limited: Int64 = 0
                         for i in 0..<n {
-                            let gi = gStart + (gTarget - gStart) * (Float(i) * inv)
+                            let t: Float = i < rampSamples ? Float(i) * inv : 1
+                            let gi = gStart + (gTarget - gStart) * t
                             var v = Float(samples[i]) * gi
                             let mag = abs(v)
                             if mag > limThresh {
                                 let excess = mag - limThresh
                                 let comp = limThresh + limRange * (1 - exp(-excess / limRange))
                                 v = (v < 0 ? -1 : 1) * comp
+                                limited &+= 1
                             }
                             samples[i] = Int16(clamping: Int(v.rounded()))
                         }
+                        self.limiterSampleCount &+= limited
                     }
                     self.micAgcRampFrom = gTarget
                 }
@@ -511,8 +664,15 @@ public final class AudioCapture {
                 raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
                     guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
                     let n = rawBuf.count / 2
-                    let threshold: Float = 0.90 * Float(Int16.max)
-                    let ceiling: Float = 0.98 * Float(Int16.max)
+                    // W-AGCCEIL — shares the knee/ceiling constants with the
+                    // inline make-up limiter so the two curves can never drift
+                    // apart. NOT counted into `limiterSampleCount`: on this
+                    // (VP-IO-off) path the inline stage has already run over the
+                    // same samples with the identical curve, so counting here
+                    // would double-count. The duty-cycle metric is about the
+                    // VP-IO path, where this block does not run at all.
+                    let threshold: Float = Self.limiterKnee * Float(Int16.max)
+                    let ceiling: Float = Self.limiterCeiling * Float(Int16.max)
                     let range = ceiling - threshold
                     for i in 0..<n {
                         let sample = Float(samples[i])
