@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.827",
+              date: "2026-07-21",
+              title: "v1.0.827",
+              bullets: [
+                "fix(call): don't kill the call on a transient ICE disconnect (W-ICEGRACE)",
+              ]),
         .init(id: "v1.0.826",
               date: "2026-07-21",
               title: "v1.0.826",
               bullets: [
+                "chore: regenerate changelog for v1.0.826",
                 "fix(call): add DataChannel backpressure guard to sealed audio (W-DCBACKPRESSURE)",
                 "test(audio): extract selectMakeUpAgcMaxGain + regression test (W-TUNEGAP)",
               ]),
@@ -141,13 +148,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.808",
                 "fix(groupcall): disable audio RED under E2EE — group-call voice was silent",
-              ]),
-        .init(id: "v1.0.807",
-              date: "2026-07-18",
-              title: "v1.0.807",
-              bullets: [
-                "chore: regenerate changelog for v1.0.807",
-                "fix(calls): defense-in-depth guard — never start 1:1 audio engine during a group call",
               ]),
     ]
 }
