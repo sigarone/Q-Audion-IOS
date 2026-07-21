@@ -95,6 +95,25 @@ public final class AudioCapture {
     // message set as its target. Restored below (see the micAgcEnabled gate
     // in the tap callback) — the ceiling here is unchanged from 04f82f1.
     private static let agcMaxGainVpio: Float = 3.0
+
+    /// W-TUNEGAP (2026-07-21) — extracted so this ONE contract has its own
+    /// regression test (see `AudioCaptureAgcGateTests`), decoupled from the
+    /// rest of `AudioCapture`'s hardware-dependent state (AVAudioEngine,
+    /// VP-IO) so it runs on the macOS CI runner via `swift test` with no
+    /// device or Xcode UI needed — same shape as
+    /// `VideoTransceiverPhantomGuard.shouldIgnorePhantomVideoTransceiver` on
+    /// the video side (same "hard-won fix, silently undone 4h later by an
+    /// unrelated refactor" bug class). The specific regression this guards:
+    /// the make-up AGC must NEVER be fully disabled by VP-IO being active —
+    /// only its ceiling changes. If this ever needs to change (e.g. new
+    /// telemetry justifies a different ceiling, or a real reason to disable
+    /// it under VP-IO again), change this function AND its test together,
+    /// deliberately — don't let a broader refactor touch the call site
+    /// without also touching this.
+    static func selectMakeUpAgcMaxGain(vpioActive: Bool) -> Float {
+        vpioActive ? agcMaxGainVpio : agcMaxGain
+    }
+
     private static let agcPeakHeadroom: Float = 0.90 // never boost a frame's peak past 90%
     // TX-RMS (2026-07-12) — sum of squares + sample count for the mic RMS,
     // accumulated on the same 50fps tap callback as peakAmplitude (no lock,
@@ -385,7 +404,7 @@ public final class AudioCapture {
             // mid-call (double-AGC risk) for buffers already in flight on a
             // prior engine.
             if Self.micAgcEnabled {
-                let maxGain = vpioActiveThisEngine ? Self.agcMaxGainVpio : Self.agcMaxGain
+                let maxGain = Self.selectMakeUpAgcMaxGain(vpioActive: vpioActiveThisEngine)
                 raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
                     guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
                     let n = rawBuf.count / 2
