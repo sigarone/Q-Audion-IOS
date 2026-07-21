@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.829",
+              date: "2026-07-21",
+              title: "v1.0.829",
+              bullets: [
+                "fix(audio): iOS TX level staging -- dead headroom clamp, noise-adaptive ceiling, VP-IO retry",
+              ]),
         .init(id: "v1.0.828",
               date: "2026-07-21",
               title: "v1.0.828",
               bullets: [
+                "chore: regenerate changelog for v1.0.828",
                 "test(analysis): fix Float rounding in the legacy-stress-formula fence",
                 "fix(audio): stop the make-up AGC overdriving the limiter; fix voice gauges stuck at 0",
               ]),
@@ -142,13 +149,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.810",
                 "fix(call): catch the ObjC NSException from setVoiceProcessingEnabled",
-              ]),
-        .init(id: "v1.0.809",
-              date: "2026-07-19",
-              title: "v1.0.809",
-              bullets: [
-                "chore: regenerate changelog for v1.0.809",
-                "fix(call): stop group-call VP-IO SIGABRT at the AudioCapture funnel",
               ]),
     ]
 }
