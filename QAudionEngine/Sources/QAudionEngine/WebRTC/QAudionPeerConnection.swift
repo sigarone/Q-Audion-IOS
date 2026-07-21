@@ -148,6 +148,17 @@ public final class QAudionPeerConnection: NSObject {
     /// the DC when open, else WS). Replaces the SRTP m=audio track entirely —
     /// there is no plain DTLS-SRTP audio anywhere.
     private var audioDataChannel: RTCDataChannel?
+    /// W-DCBACKPRESSURE (2026-07-21) — mirrors Android's
+    /// `DC_BUFFERED_AMOUNT_DROP_THRESHOLD` (Wave 2C-15 hotfix, 2026-04-29,
+    /// `PeerConnectionHolder.kt`): when the outbound SCTP queue backs up
+    /// past this many bytes, prefer dropping the new frame over letting the
+    /// queue grow unbounded. iOS shipped with NO backpressure guard at all
+    /// on this exact wire mechanism (the "qaudion-audio" sealed DataChannel,
+    /// byte-identical to Android's) until this fix — under a stressed
+    /// uplink the queue could grow without limit instead of shedding load,
+    /// unlike Android's sibling implementation.
+    private static let audioDcBufferedAmountDropThreshold: UInt64 = 1500
+    private var lastAudioDcBackpressureLogAtMs: Int64 = 0
     /// Invoked on the WebRTC signalling thread for each inbound sealed audio
     /// frame received over the DataChannel. The `Data` is the raw
     /// `WireRelayFrameCodec` envelope — identical to what the WS "audio_frame"
@@ -226,12 +237,35 @@ public final class QAudionPeerConnection: NSObject {
     }
 
     /// W-DCAUDIO — send one sealed audio frame over the DataChannel if it is open.
-    /// Returns `true` if queued on the DC; `false` if the DC is not open (the
-    /// caller must then fall back to the WS relay). `data` is the raw
+    /// Returns `true` if queued on the DC (or silently dropped for backpressure,
+    /// see below — the DC itself is still healthy); `false` if the DC is not
+    /// open (the caller must then fall back to the WS relay). `data` is the raw
     /// `WireRelayFrameCodec` envelope (the exact bytes the WS path base64-wraps).
+    ///
+    /// W-DCBACKPRESSURE — mirrors Android's Wave 2C-15 hotfix: when
+    /// `dc.bufferedAmount` exceeds `audioDcBufferedAmountDropThreshold`, drop
+    /// this frame instead of enqueuing it, same as Android's
+    /// `PeerConnectionHolder.sendOnDataChannel`. Returns `true` (not `false`)
+    /// for a backpressure drop — this is a transient, self-recovering
+    /// condition on an otherwise-healthy DC, NOT a reason to force the caller
+    /// into a full WS-relay fallback (which `false` triggers); the receiver's
+    /// PLC/FEC/comfort-noise masks the occasional dropped frame, same as on
+    /// Android. Letting the queue grow unbounded instead produces a
+    /// permanent, non-recovering "voice arriving late" — or, worse, the
+    /// underlying SCTP association can itself become unhealthy under a
+    /// large enough backlog.
     @discardableResult
     public func sendAudioFrameData(_ data: Data) -> Bool {
         guard let dc = audioDataChannel, dc.readyState == .open else { return false }
+        let backlog = dc.bufferedAmount
+        if AudioDcBackpressureGate.shouldDrop(bufferedAmount: backlog, threshold: Self.audioDcBufferedAmountDropThreshold) {
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            if nowMs - lastAudioDcBackpressureLogAtMs > 1_000 {
+                print("[WebRTC] DC backpressure: dropping outbound audio frame (bufferedAmount=\(backlog) > \(Self.audioDcBufferedAmountDropThreshold))")
+                lastAudioDcBackpressureLogAtMs = nowMs
+            }
+            return true
+        }
         return dc.sendData(RTCDataBuffer(data: data, isBinary: true))
     }
 
@@ -1065,5 +1099,28 @@ func logH265FmtpLines(_ sdp: String, tag: String) {
         guard h265Pts.contains(pt) else { continue }
         let params = sdpNS.substring(with: m.range(at: 2))
         print("[WebRTC][bug3-diag] \(tag): H265 pt=\(pt) fmtp=\(params)")
+    }
+}
+
+/// W-DCBACKPRESSURE (2026-07-21) — pure decision for whether an outbound
+/// sealed-audio DataChannel frame should be dropped instead of enqueued.
+/// Mirrors Android's `PeerConnectionHolder` Wave 2C-15 hotfix
+/// (2026-04-29): when the outbound SCTP queue backs up past
+/// `threshold` bytes, prefer frame loss over unbounded buffered delay — the
+/// receiver's PLC/FEC/comfort-noise masks the occasional drop; letting the
+/// queue grow instead produces a permanent, non-recovering playout lag (or
+/// worse, an unhealthy SCTP association). iOS shipped with NO such guard at
+/// all on this wire mechanism until this fix (root-caused via call
+/// `f884668c`, 2026-07-21: iOS's own telemetry went dark ~11s into a 1:1
+/// call, well before Android's ICE state noticed anything wrong, consistent
+/// with the DC itself becoming unhealthy under sustained backpressure with
+/// nothing shedding load on iOS's send side).
+///
+/// Namespaced (no WebRTC/RTCDataChannel type needed) so it has its own
+/// regression test (`AudioDcBackpressureGateTests`), same shape as
+/// `VideoTransceiverPhantomGuard` above.
+enum AudioDcBackpressureGate {
+    static func shouldDrop(bufferedAmount: UInt64, threshold: UInt64) -> Bool {
+        bufferedAmount > threshold
     }
 }
