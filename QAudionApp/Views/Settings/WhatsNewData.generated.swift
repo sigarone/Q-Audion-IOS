@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.828",
+              date: "2026-07-21",
+              title: "v1.0.828",
+              bullets: [
+                "test(analysis): fix Float rounding in the legacy-stress-formula fence",
+                "fix(audio): stop the make-up AGC overdriving the limiter; fix voice gauges stuck at 0",
+              ]),
         .init(id: "v1.0.827",
               date: "2026-07-21",
               title: "v1.0.827",
               bullets: [
+                "chore: regenerate changelog for v1.0.827",
                 "fix(call): don't kill the call on a transient ICE disconnect (W-ICEGRACE)",
               ]),
         .init(id: "v1.0.826",
@@ -141,13 +149,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.809",
                 "fix(call): stop group-call VP-IO SIGABRT at the AudioCapture funnel",
-              ]),
-        .init(id: "v1.0.808",
-              date: "2026-07-19",
-              title: "v1.0.808",
-              bullets: [
-                "chore: regenerate changelog for v1.0.808",
-                "fix(groupcall): disable audio RED under E2EE — group-call voice was silent",
               ]),
     ]
 }
