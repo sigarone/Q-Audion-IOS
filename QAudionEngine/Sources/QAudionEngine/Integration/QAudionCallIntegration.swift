@@ -1625,6 +1625,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // multi-candidate selection logic.
                     let selection = Self.parseSelection(selectedFpStr)
                     guard let name = vault.listPskNames().first(where: { name in
+                        // W-PSKMIX step 5 — never match a `.callDerived` vault
+                        // entry (Android's "call-"/"msg-psk" rows, iOS's own
+                        // "auto:<prefix>:<peerId>" group-control-channel ratchet
+                        // seed) against a peer-echoed selectedPskFingerprint.
+                        // Mirrors the exclusion
+                        // `PskAdvertising.fingerprintsForAdvertisement` applies on
+                        // the advertise side (771f4c1); this is the matching gate
+                        // on the consuming side, which previously had no origin
+                        // check at all — a raw byte comparison would otherwise
+                        // happily select a `.callDerived` entry if its fingerprint
+                        // ever appeared in the peer's ACCEPT.
+                        guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return false }
                         guard let fp = vault.getFingerprint(name: name) else { return false }
                         return selection.contains(fp)
                     }) else { return nil }
@@ -1674,6 +1686,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // above — byte-identical for today's N=1 case.
                     let selection = Self.parseSelection(selectedFpStr)
                     guard let name = vault.listPskNames().first(where: { name in
+                        // W-PSKMIX step 5 — same `.callDerived` exclusion as the
+                        // V4 branch above; see its comment for the full rationale.
+                        guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return false }
                         guard let fp = vault.getFingerprint(name: name) else { return false }
                         return selection.contains(fp)
                     }) else { return nil }

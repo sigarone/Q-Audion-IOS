@@ -200,4 +200,102 @@ final class PskAdvertisingTests: XCTestCase {
 
         XCTAssertEqual(QAudionCallIntegration.pskIfFingerprintMatches(psk, advertisedFp), psk)
     }
+
+    // MARK: - 4. Receive-side matching gate (W-PSKMIX step 5)
+
+    /// `fingerprintsForAdvertisement` (step 4, 771f4c1) keeps a `.callDerived`
+    /// entry off the wire on the ADVERTISE side. That investigation also
+    /// found — and explicitly deferred — three RECEIVE-side call sites that
+    /// scan/match the local vault by fingerprint with no origin check at
+    /// all. `isEligibleMatchCandidate` is the fix: the same exclusion,
+    /// applied before a vault-name candidate is ever compared against a
+    /// peer-supplied fingerprint.
+    func testCallDerivedOriginIsNeverAnEligibleMatchCandidate() {
+        XCTAssertFalse(PskAdvertising.isEligibleMatchCandidate(origin: .callDerived))
+    }
+
+    func testNonCallDerivedOriginsRemainEligibleMatchCandidates() {
+        XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .manual))
+        XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .nfc))
+        XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .qr))
+        XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .kms))
+        // .deviceInternal is out of scope for this predicate — these
+        // matching-gate call sites already refuse `__device.`-prefixed
+        // names by a separate, pre-existing prefix guard (AppState.swift's
+        // W574m check); `isEligibleMatchCandidate` only ever encodes the
+        // `.callDerived` exclusion this step adds.
+        XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .deviceInternal))
+    }
+
+    /// Mirrors `AppState.routeInboundAndroidOffer`/`routeInboundAndroidAccept`
+    /// building the `eligiblePsks` catalogue: every vault entry is reduced to
+    /// (fingerprint, rawKey) pairs, EXCLUDING any entry that fails
+    /// `isEligibleMatchCandidate`, before that catalogue is ever consulted
+    /// against the peer's OFFER/ACCEPT-advertised fingerprint list. Proves a
+    /// `.callDerived` entry's fingerprint never survives into the catalogue
+    /// even though a bare byte/hash comparison against it would otherwise
+    /// succeed.
+    func testCallDerivedEntryExcludedFromResponderEligiblePsksCatalogue() {
+        let rk0 = Data(repeating: 0xAB, count: 32) // the "auto:" group-ctrl ratchet seed material
+        let manualPsk = Data(repeating: 0xCD, count: 32)
+        let entries: [PskAdvertising.Entry] = [
+            PskAdvertising.Entry(
+                name: "auto:a3f7c291:11111111-2222-3333-4444-555555555555",
+                origin: PskOrigin.inferred(fromAccountName: "auto:a3f7c291:11111111-2222-3333-4444-555555555555"),
+                material: rk0,
+                createdAt: nil
+            ),
+            PskAdvertising.Entry(name: "peer.alice", origin: .manual, material: manualPsk, createdAt: nil)
+        ]
+
+        // Same reduce-to-(fingerprint, rawKey) shape as AppState's
+        // eligiblePsks Dictionary(...) builder, minus the Keychain calls.
+        let eligiblePsks: [String: Data] = Dictionary(
+            entries.compactMap { entry -> (String, Data)? in
+                guard PskAdvertising.isEligibleMatchCandidate(origin: entry.origin) else { return nil }
+                return (canonicalFp(entry.material), entry.material)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let rk0Fp = canonicalFp(rk0)
+        XCTAssertNil(eligiblePsks[rk0Fp], "the auto: group-ctrl ratchet seed must never be an eligible call-PSK match candidate")
+        XCTAssertEqual(eligiblePsks[canonicalFp(manualPsk)], manualPsk)
+        XCTAssertEqual(eligiblePsks.count, 1)
+    }
+
+    /// Mirrors `QAudionCallIntegration`'s post-ACCEPT lookup (both the V4
+    /// branch's `vaultPsk` and the schema:2 fallback's `fallbackPsk`): find
+    /// the FIRST vault name whose fingerprint is a member of the peer-echoed
+    /// `selectedPskFingerprint` selection. Proves a `.callDerived` entry
+    /// whose fingerprint exactly equals the peer-echoed value is skipped —
+    /// even though the raw fingerprint comparison alone would match — and
+    /// that an ordinary entry is still found normally.
+    func testCallDerivedEntryNeverSelectedInInitiatorPostAcceptLookup() {
+        let rk0 = Data(repeating: 0xEF, count: 32)
+        let callDerivedName = "call-pb-tag1"
+        let entries: [PskAdvertising.Entry] = [
+            PskAdvertising.Entry(name: callDerivedName, origin: PskOrigin.inferred(fromAccountName: callDerivedName), material: rk0, createdAt: nil)
+        ]
+        let selectedFp = canonicalFp(rk0) // the peer echoed exactly this fingerprint back
+
+        // Same filter-then-match shape as the two QAudionCallIntegration
+        // closures: `vault.listPskNames().first(where: { origin-check &&
+        // fingerprint ∈ selection })`.
+        let matched = entries.first(where: { entry in
+            guard PskAdvertising.isEligibleMatchCandidate(origin: entry.origin) else { return false }
+            return canonicalFp(entry.material) == selectedFp
+        })
+        XCTAssertNil(matched, "a .callDerived entry must never be selected even when its fingerprint byte-matches the peer-echoed value")
+
+        // Sanity: an ordinary manual entry with the same fingerprint IS found.
+        let manualEntries: [PskAdvertising.Entry] = [
+            PskAdvertising.Entry(name: "peer.alice", origin: .manual, material: rk0, createdAt: nil)
+        ]
+        let matchedManual = manualEntries.first(where: { entry in
+            guard PskAdvertising.isEligibleMatchCandidate(origin: entry.origin) else { return false }
+            return canonicalFp(entry.material) == selectedFp
+        })
+        XCTAssertEqual(matchedManual?.material, rk0)
+    }
 }

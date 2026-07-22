@@ -7032,6 +7032,21 @@ final class AppState: ObservableObject {
                         // → SIGTRAP that crashed the callee mid-handshake, so the
                         // two phones never connected.
                         guard !name.hasPrefix("__device.") else { return nil }
+                        // W-PSKMIX step 5 — same `.callDerived` exclusion
+                        // `PskAdvertising.fingerprintsForAdvertisement` applies on
+                        // the advertise side (771f4c1): Android's "call-"/"msg-psk"
+                        // rows and iOS's own "auto:<prefix>:<peerId>" group-control-
+                        // channel ratchet seed must never become a candidate 1:1-
+                        // call audio PSK here either. This is the RESPONDER's
+                        // eligibility catalogue, matched against the peer's OFFER-
+                        // advertised fingerprint list inside onAndroidBundleReceived
+                        // — a fixed client no longer advertises a `.callDerived`
+                        // fingerprint, but an unpatched peer, a future regression in
+                        // the advertise-side filter, or a build predating that fix
+                        // could still put one on the wire, so this side must
+                        // independently refuse to treat it as eligible rather than
+                        // trust the sender to withhold it.
+                        guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return nil }
                         guard let fp = vault.getFingerprint(name: name),
                               let raw = (try? vault.loadPsk(name: name)) ?? nil,
                               !raw.isEmpty else { return nil }
@@ -7104,6 +7119,21 @@ final class AppState: ObservableObject {
                         // → SIGTRAP that crashed the callee mid-handshake, so the
                         // two phones never connected.
                         guard !name.hasPrefix("__device.") else { return nil }
+                        // W-PSKMIX step 5 — same `.callDerived` exclusion
+                        // `PskAdvertising.fingerprintsForAdvertisement` applies on
+                        // the advertise side (771f4c1): Android's "call-"/"msg-psk"
+                        // rows and iOS's own "auto:<prefix>:<peerId>" group-control-
+                        // channel ratchet seed must never become a candidate 1:1-
+                        // call audio PSK here either. This is the caller's
+                        // eligibility catalogue, matched against the callee's ACCEPT-
+                        // advertised fingerprint list inside onAndroidBundleReceived
+                        // — a fixed client no longer advertises a `.callDerived`
+                        // fingerprint, but an unpatched peer, a future regression in
+                        // the advertise-side filter, or a build predating that fix
+                        // could still put one on the wire, so this side must
+                        // independently refuse to treat it as eligible rather than
+                        // trust the sender to withhold it.
+                        guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return nil }
                         guard let fp = vault.getFingerprint(name: name),
                               let raw = (try? vault.loadPsk(name: name)) ?? nil,
                               !raw.isEmpty else { return nil }

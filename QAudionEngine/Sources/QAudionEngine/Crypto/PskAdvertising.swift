@@ -70,6 +70,33 @@ public enum PskAdvertising {
             .map { canonicalFingerprint(forPsk: $0.material) }
     }
 
+    /// W-PSKMIX step 5 — the RECEIVE-side twin of the exclusion above.
+    ///
+    /// `fingerprintsForAdvertisement` keeps a `.callDerived` entry off the
+    /// wire on the ADVERTISE side. That alone is not defense-in-depth: three
+    /// call sites independently scan/match the LOCAL vault by fingerprint
+    /// against a peer-supplied value with no origin check at all —
+    /// `AppState.routeInboundAndroidOffer`/`routeInboundAndroidAccept`
+    /// building the responder/caller's `eligiblePsks` catalogue from the
+    /// peer's advertised fingerprint list, and
+    /// `QAudionCallIntegration`'s post-ACCEPT lookup of the responder's
+    /// echoed `selectedPskFingerprint`. Today nothing on a fixed client ever
+    /// puts a `.callDerived` fingerprint on the wire, so there is nothing for
+    /// these sites to match against in practice — but an unpatched peer, a
+    /// future regression in `fingerprintsForAdvertisement`, or a build
+    /// predating that fix would leave these paths silently accepting one.
+    /// Each call site filters its vault-name candidates through this
+    /// predicate before ever comparing fingerprints, so a `.callDerived`
+    /// entry is never a valid match candidate — exactly as it is never
+    /// advertised.
+    ///
+    /// Pure — takes an already-resolved `PskOrigin`, no Keychain access — so
+    /// it is unit-testable without touching the real `SovereignKeyVault`,
+    /// same as `fingerprintsForAdvertisement` above.
+    public static func isEligibleMatchCandidate(origin: PskOrigin) -> Bool {
+        origin != .callDerived
+    }
+
     /// Stable-order comparator: earliest `createdAt` first; entries with no
     /// recorded creation date sort after those that have one; a tie (or two
     /// entries both missing a date) breaks by `name`. So two calls over the
