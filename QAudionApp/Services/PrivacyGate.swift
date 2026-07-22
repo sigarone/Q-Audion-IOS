@@ -120,6 +120,19 @@ public enum PrivacyGate {
     }
     public static func setPresenceVisibleToContacts(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: keyPresence)
+        // I1-RESUME — PresenceService.subscribe(userIds:) already re-checks
+        // this gate on every call (present-value re-read, not a cached one),
+        // so turning the gate back ON does not by itself put any subscribe
+        // envelope on the wire — nothing here calls subscribe again. Without
+        // this notification the user would see grey dots for everyone until
+        // the next WS reconnect happened to fire AppState's own resubscribe,
+        // which on a long-lived connection could be hours away. AppState
+        // observes this to force a fresh subscribe only when the gate just
+        // turned true; turning it off needs no equivalent push; subscribe()
+        // itself already goes silent.
+        if value {
+            NotificationCenter.default.post(name: .presenceVisibilityDidChange, object: nil)
+        }
     }
     public static func setDisappearingSeconds(_ value: TimeInterval) {
         UserDefaults.standard.set(value, forKey: keyDisappearingSeconds)
@@ -288,4 +301,10 @@ public enum PrivacyGate {
         }
         return data
     }
+}
+
+extension Notification.Name {
+    /// Posted by `PrivacyGate.setPresenceVisibleToContacts` only when the
+    /// gate turns ON. See that setter for why this exists.
+    static let presenceVisibilityDidChange = Notification.Name("qaudion.presenceVisibilityDidChange")
 }

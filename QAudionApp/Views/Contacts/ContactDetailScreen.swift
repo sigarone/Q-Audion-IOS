@@ -240,15 +240,16 @@ struct ContactDetailScreen: View {
             QAudionAvatar(displayName: item.displayName,
                           imageURL: item.avatarUrl,
                           size: 120,
-                          presenceDot: item.isOnline ? .online : .offline)
+                          presenceDot: heroPresenceDot)
             Text(item.displayName)
                 .font(.system(size: 24, weight: .semibold))
                 .italic()
                 .foregroundStyle(scheme.onSurface)
                 .multilineTextAlignment(.center)
             // W445: extended presence label — shows InCall / DND icons
-            // and localised text. Falls back to binary online/offline
-            // when extended state is .unknown (no presence update yet).
+            // and localised text. I3: `.unknown` (no presence update yet)
+            // renders its own "stato sconosciuto" copy, distinct from a
+            // confirmed `.offline` peer.
             heroPresenceLabel
         }
         .frame(maxWidth: .infinity)
@@ -257,29 +258,28 @@ struct ContactDetailScreen: View {
     /// W445: presence sub-label for the hero section. Extracted to a
     /// computed property so the SwiftUI type-checker operates in a clean
     /// scope (CLAUDE.md §13 — avoid inline expression complexity).
+    ///
+    /// I3 fix: text selection itself lives in `HeroPresenceLabel`, a pure
+    /// enum below — the View only maps the resolved case to styling. Before
+    /// this fix `.unknown` fell through to the same literal "offline" string
+    /// as a genuinely-confirmed `.offline` peer (masked further by always
+    /// reading the hardcoded `item.isOnline == false`), so a contact we
+    /// simply hadn't heard from yet looked identical to one we knew for a
+    /// fact was offline.
     @ViewBuilder
     private var heroPresenceLabel: some View {
         let presence = appState.presenceService.extendedPresence(for: item.userId)
-        let isOnline = item.isOnline
-        switch presence {
-        case .unknown:
-            // No extended update yet — fall back to binary isOnline flag.
-            let fallbackText = isOnline
-                ? "online · " + (item.isVerified ? "verified voice" : "voice non verificata")
-                : "offline"
-            Text(fallbackText)
-                .qaudionStyle(type.labelMedium)
-                .foregroundStyle(scheme.onSurfaceVariant)
+        let label = HeroPresenceLabel.select(presence: presence, isVerified: item.isVerified)
+        switch label {
         case .online:
-            let onlineText = "online · " + (item.isVerified ? "verified voice" : "voice non verificata")
-            Text(onlineText)
+            Text(label.text)
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(extras.success)
         case .inCall:
             HStack(spacing: 4) {
                 Image(systemName: "phone.fill")
                     .font(.caption)
-                Text(ExtendedPresence.inCall.label)
+                Text(label.text)
                     .qaudionStyle(type.labelMedium)
             }
             .foregroundStyle(extras.pqcAccent)
@@ -287,14 +287,37 @@ struct ContactDetailScreen: View {
             HStack(spacing: 4) {
                 Image(systemName: "moon.fill")
                     .font(.caption)
-                Text(ExtendedPresence.doNotDisturb.label)
+                Text(label.text)
                     .qaudionStyle(type.labelMedium)
             }
             .foregroundStyle(extras.warning)
-        case .offline, .invisible:
-            Text("offline")
+        case .offline:
+            Text(label.text)
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(scheme.onSurfaceVariant)
+        case .unknown:
+            // I3: distinct visual treatment from real .offline — italic +
+            // dimmer, so "never heard from the server" doesn't read as the
+            // same confirmed-offline signal at a glance.
+            Text(label.text)
+                .italic()
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
+        }
+    }
+
+    /// I2: the big hero avatar used to hardcode `item.isOnline` (always
+    /// `false` — see `ContactsListContainer` construction sites), so the
+    /// dot on this screen never reflected reality regardless of what
+    /// `PresenceService` actually knew. Reads the same live source the
+    /// label above uses. `.unknown` renders no dot at all (mirrors
+    /// `ContactsListView.presenceDot(for:)`'s policy) rather than guessing.
+    private var heroPresenceDot: PresenceDot? {
+        switch appState.presenceService.extendedPresence(for: item.userId) {
+        case .online, .inCall:                    return .online
+        case .doNotDisturb:                        return .away
+        case .offline, .invisible:                 return .offline
+        case .unknown:                             return nil
         }
     }
 
@@ -669,6 +692,50 @@ struct ContactDetailScreen: View {
     /// the closure body trivial. CLAUDE.md §13.
     private static func openChatGuidance(peer: String) -> String {
         return "Apri la chat con " + peer + " dalla scheda Chat."
+    }
+}
+
+// MARK: - I3 hero presence label (pure, testable)
+
+/// Text selection for `ContactDetailScreen`'s hero presence sub-label,
+/// pulled out of the View body so it's a plain, exhaustively-switched
+/// function of its inputs (style mirrors `PskOrigin` in
+/// `QAudionEngine/Crypto/KeyExportPolicy.swift`).
+///
+/// The bug this exists to pin: `.unknown` (no `presence_update` received
+/// yet for this peer) used to collapse into the exact same "offline"
+/// string as a genuinely-confirmed `ExtendedPresence.offline` — a contact
+/// we simply haven't heard from read identically to one the server told us
+/// is offline. `.unknown` now gets its own copy; the View additionally
+/// gives it a distinct (dimmer, italic) visual treatment.
+enum HeroPresenceLabel: Equatable {
+    case online(verifiedVoice: Bool)
+    case inCall
+    case doNotDisturb
+    case offline
+    case unknown
+
+    /// Matched exhaustively with no `default` so a new `ExtendedPresence`
+    /// case forces a decision here instead of silently falling through.
+    static func select(presence: ExtendedPresence, isVerified: Bool) -> HeroPresenceLabel {
+        switch presence {
+        case .online:                     return .online(verifiedVoice: isVerified)
+        case .inCall:                      return .inCall
+        case .doNotDisturb:                return .doNotDisturb
+        case .offline, .invisible:         return .offline
+        case .unknown:                     return .unknown
+        }
+    }
+
+    var text: String {
+        switch self {
+        case .online(let verifiedVoice):
+            return "online · " + (verifiedVoice ? "verified voice" : "voice non verificata")
+        case .inCall:       return ExtendedPresence.inCall.label
+        case .doNotDisturb: return ExtendedPresence.doNotDisturb.label
+        case .offline:      return "offline"
+        case .unknown:      return "stato sconosciuto"
+        }
     }
 }
 

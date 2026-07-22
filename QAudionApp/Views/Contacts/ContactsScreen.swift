@@ -273,8 +273,15 @@ struct ContactsScreen: View {
                     $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
                 }
             case .onlineFirst:
+                // I2: `item.isOnline` is a static snapshot value hardcoded
+                // to `false` at construction time (ContactsListContainer) —
+                // reading it here always produced a no-op sort. Read the
+                // live PresenceService state instead, same source the row
+                // dot below already uses.
                 return unsorted.sorted { a, b in
-                    if a.isOnline != b.isOnline { return a.isOnline && !b.isOnline }
+                    let aOnline = appState.presenceService.isOnline(a.userId)
+                    let bOnline = appState.presenceService.isOnline(b.userId)
+                    if aOnline != bOnline { return aOnline && !bOnline }
                     return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
                 }
             case .verifiedFirst:
@@ -284,7 +291,9 @@ struct ContactsScreen: View {
                 }
             }
         }()
-        let onlineCount = items.filter { $0.isOnline }.count
+        // I2: same fix as the sort above — the header used to read the
+        // hardcoded `item.isOnline` and always rendered "ONLINE · 0/N".
+        let onlineCount = items.filter { appState.presenceService.isOnline($0.userId) }.count
         let totalCount  = items.count
 
         return List {

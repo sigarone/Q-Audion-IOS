@@ -101,11 +101,15 @@ public final class BCryptoPresenceManager: @unchecked Sendable {
         let status = Status(rawValue: statusString) ?? .unknown
 
         lock.lock()
-        // Silently ignore updates for users we aren't tracking — server may
-        // fan out updates to all connected clients for a given user id and
-        // we don't want to cache state the UI never asked for.
+        // Ignore updates for users we aren't tracking — server may fan out
+        // updates to all connected clients for a given user id and we don't
+        // want to cache state the UI never asked for. I6: this used to drop
+        // silently; the exact same class of bug (a dropped presence_update
+        // for an untracked user) went unnoticed server-side for weeks, so
+        // log it here rather than let a future subscribed-set bug do the same.
         guard subscribed.contains(userId) else {
             lock.unlock()
+            print("[BCryptoPresenceManager] dropped presence_update for untracked userId=\(userId.prefix(8))… status=\(statusString)")
             return
         }
         statuses[userId] = status
