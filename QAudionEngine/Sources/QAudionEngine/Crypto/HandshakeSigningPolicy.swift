@@ -129,11 +129,35 @@ public enum HandshakeSigningPolicy {
         requireSigned: Bool,
         advertisedV4: Bool,
         publishedKeySet: Set<Data>? = nil,
-        advertisedSrtpDirKeyV1: Bool = false
+        advertisedSrtpDirKeyV1: Bool = false,
+        sigV2B64: String? = nil,
+        transcriptV2: Data? = nil
     ) -> Verdict {
 
+        // W-TRANSCRIPTV2 dual-signature verify-both/prefer-v2 (multi-PSK-mixing
+        // SYNTHESIS.md ship step 4): when the peer's envelope carries a non-empty
+        // `sigV2B64`, verification uses ONLY the v2 pair (`sigV2B64`/`transcriptV2`) for
+        // the WHOLE signature-validity decision below — the v1 fields
+        // (`signatureB64`/`transcript`) are never consulted once v2 is in play, and a
+        // present-but-WRONG sigV2 is fatal on its own (the normal "signature invalid" path
+        // below), never a silent fall-back to the lenient v1-only check. If `sigV2B64` is
+        // absent, behaviour is EXACTLY the v1 path as it existed before this step — an old,
+        // v1-only peer is verified exactly as before and never rejected (this is what makes
+        // the rollout staggerable by days rather than a flag day). If `sigV2B64` is present
+        // but `transcriptV2` could not be rebuilt (`nil` — see
+        // `HandshakeTranscript.advEnc`'s doc for when that happens), that is ALSO fatal
+        // (`sig_invalid`) rather than a fall-back — mirrors the Android/Desktop reference
+        // exactly: a present `sigV2` with an unbuildable transcript is never treated as
+        // "sigV2 absent".
+        let sigV2Present = !(sigV2B64 ?? "").isEmpty
+        if sigV2Present && transcriptV2 == nil {
+            return .abort(code: "sig_invalid")
+        }
+        let effectiveSignatureB64 = sigV2Present ? sigV2B64 : signatureB64
+        let effectiveTranscript = sigV2Present ? transcriptV2! : transcript
+
         // --- Signature ABSENT -------------------------------------------------
-        guard let sigB64 = signatureB64, !sigB64.isEmpty,
+        guard let sigB64 = effectiveSignatureB64, !sigB64.isEmpty,
               let sikB64 = signerIdentityKeyB64, !sikB64.isEmpty else {
             if requireSigned {
                 return .abort(code: "sig_required_missing")
@@ -192,7 +216,7 @@ public enum HandshakeSigningPolicy {
         //     mismatch: we only get here when bundleInSet is true.
         let verifyKey = matchesTrusted ? trustedKey : bundleKey
         let ok = HandshakeTranscript.verify(
-            transcript: transcript,
+            transcript: effectiveTranscript,
             signature: signature,
             signerIdentityKey: verifyKey
         )

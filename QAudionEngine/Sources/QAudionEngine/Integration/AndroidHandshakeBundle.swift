@@ -37,6 +37,7 @@ import Foundation
 /// - `pqcPublicKey`: B64 ML-KEM-1024 pub (1568 bytes raw) — OFFER only
 /// - `pskFingerprints`: [String]?  — OFFER only, full SHA-256 hex (64 chars)
 /// - `selectedPskFingerprint`: String?  — ACCEPT only
+/// - `sigV2`: String?  — W-TRANSCRIPTV2 (ship step 4), b64 Ed25519 sig over transcript v2
 /// - `strongBoxPublicKey`: B64?  — OFFER only, Android StrongBox-bound P-256
 /// - `x25519PublicKey`: B64 X25519 pub (32 bytes raw) — OFFER only
 ///
@@ -191,6 +192,19 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     public let signerIdentityKey: String?   // base64 (no-wrap, padded) of the 32-byte Ed25519 long-term identity pubkey
     public let signature: String?           // base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature
 
+    // W-TRANSCRIPTV2 (multi-PSK-mixing SYNTHESIS.md ship step 4) — dual-signed transcript
+    // rollout. base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature over
+    // `HandshakeTranscript`'s NEW v2 transcript (`offerV2`/`acceptV2`), computed by the SAME
+    // signer alongside (never instead of) `signature`. `nil` on legacy builds (pre-this-step)
+    // and on the unsigned path — verification prefers `sigV2` when present and falls back to
+    // verifying `signature` against the v1 transcript exactly as before when absent, so a
+    // peer that hasn't shipped this step yet is never rejected. APPENDED LAST so existing
+    // peers' wire bytes are unchanged (`JSONEncoder` omits nil keys via `encodeIfPresent`),
+    // same convention as `signerIdentityKey`/`signature`/`pskRoles` above. Mirrors Android
+    // `HandshakeBundleCodec.HandshakeBundle.sigV2` (commit d3244418) / Desktop
+    // `AndroidOfferBundle.sigV2`/`AndroidAcceptBundle.sigV2` (commit c6bf155).
+    public let sigV2: String?
+
     public init(
         kind: Kind,
         callId: String,
@@ -204,7 +218,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         selectedPskFingerprint: String? = nil,
         pskRoles: [Int]? = nil,
         signerIdentityKey: String? = nil,
-        signature: String? = nil
+        signature: String? = nil,
+        sigV2: String? = nil
     ) {
         self.kind = kind
         self.callId = callId
@@ -219,6 +234,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.pskRoles = pskRoles
         self.signerIdentityKey = signerIdentityKey
         self.signature = signature
+        self.sigV2 = sigV2
     }
 }
 
