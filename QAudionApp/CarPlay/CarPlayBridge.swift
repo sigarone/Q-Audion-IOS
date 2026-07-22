@@ -32,6 +32,14 @@ public final class CarPlayBridge {
     public var onCarPlayConnected: (() -> Void)?
     public var onCarPlayDisconnected: (() -> Void)?
 
+    /// W-ORPHANPEER — peers whose account no longer exists on the server, kept
+    /// in sync by `AppState`. The CarPlay contacts tab is a "who can I reach"
+    /// surface (its rows dial straight through `requestCall`), so it has to
+    /// honour the same exclusion as the phone's address book. Plain stored
+    /// property rather than a closure because the scene reads it while
+    /// building rows, not in response to an event.
+    public var orphanPeerIds: Set<String> = []
+
     // MARK: - Called by the CarPlay templates
 
     /// Place an outgoing call from a CarPlay row tap. No-op if the app hasn't

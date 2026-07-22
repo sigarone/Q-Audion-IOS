@@ -204,7 +204,14 @@ struct ContactsListView: View {
 
     var body: some View {
         List {
-            ForEach(container.viewModel.filteredItems, id: \.userId) { item in
+            // W-ORPHANPEER — this list is also the new-chat picker, so it
+            // must not offer accounts that no longer exist. Read-time filter;
+            // see the note in ContactsScreen.allList for why not in the container.
+            ForEach(
+                container.viewModel.filteredItems
+                    .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) },
+                id: \.userId
+            ) { item in
                 NavigationLink(destination: detailView(for: item)) {
                     contactRow(item)
                 }
@@ -250,7 +257,9 @@ struct ContactsListView: View {
         }
         .sheet(isPresented: $showingGroupCallPicker) {
             GroupCallContactPickerSheet(
-                contacts: container.viewModel.items,
+                // W-ORPHANPEER — group-call picker: a reach surface.
+                contacts: container.viewModel.items
+                    .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) },
                 onStart: { selectedIds, video in
                     showingGroupCallPicker = false
                     appState.groupCallController?.createCall(

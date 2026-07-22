@@ -149,6 +149,24 @@ public final class BCryptoAccountApiImpl: AccountApi {
         return try JSONDecoder().decode(PublicUser.self, from: data)
     }
 
+    /// W-ORPHANPEER — 404 becomes `nil`, everything else still throws. Body
+    /// deliberately identical in shape to `lookupByExtension` above: a genuine
+    /// "not found" reaches us only as `BCryptoError.httpError(404)` (nothing
+    /// in `BCryptoRestClient` ever throws `.notFound`, but it is matched too
+    /// so a later change there cannot silently turn absences into errors).
+    public func getPublicUserIfExists(userId: String) async throws -> PublicUser? {
+        do {
+            let data = try await rest.get("/api/v1/users/\(userId)")
+            return try JSONDecoder().decode(PublicUser.self, from: data)
+        } catch BCryptoError.httpError(let status) where status == 404 {
+            return nil
+        } catch BCryptoError.notFound {
+            return nil
+        } catch {
+            throw error
+        }
+    }
+
     @available(*, deprecated, message: "Use PhoneHash.hash(_:) — matches Android PhoneHashHelper byte-for-byte. This forwarder is kept only to avoid breaking callers in the in-progress BCrypto workstream.")
     public static func hashPhone(_ phone: String) -> String {
         // Forward to the canonical helper. Falls back to raw-hex only if

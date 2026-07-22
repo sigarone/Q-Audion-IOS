@@ -255,7 +255,14 @@ struct ContactsScreen: View {
     // MARK: - Lists
 
     private var allList: some View {
+        // W-ORPHANPEER — drop peers whose account no longer exists on the
+        // server. Filtered HERE, at read time, and not inside the container:
+        // `ContactsListContainer` builds its view model once and does not
+        // observe `.contactsDidChange`, so a filter baked in there would keep
+        // a contact visible after the 404 lands. Reading `appState.orphanPeerIds`
+        // (@Published) also makes this re-render on its own as lookups resolve.
         let unsorted = container.viewModel.filteredItems
+            .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) }
         // W58: applica il sort prescelto. Locale-aware comparison sul
         // displayName — `localizedCaseInsensitiveCompare` rispetta
         // l'ordinamento italiano (es. é < f, à < b).
