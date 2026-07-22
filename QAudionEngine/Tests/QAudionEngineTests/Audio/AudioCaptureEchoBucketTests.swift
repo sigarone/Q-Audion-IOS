@@ -148,6 +148,12 @@ final class AudioCaptureEchoBucketTests: XCTestCase {
                                                             nowMs: nowMs, holdMs: holdMs)
             totals = AudioCapture.accumulatingEchoBucket(totals, frameRms: 0.08, farEndActive: farEndActive)
         }
+        // Jump PAST the hold window before the idle run starts, otherwise the
+        // first several "idle" frames would still land inside the 200 ms hold
+        // from the last loud RX frame at nowMs=200 and get misclassified as
+        // active (the hold window is deliberately generous — see its kdoc —
+        // so a real idle run has to actually clear it, same as production).
+        nowMs += holdMs + 20
         for _ in 0..<10 {
             nowMs += 20
             let farEndActive = AudioCapture.isFarEndActive(lastLoudPlayoutAtMs: lastLoudPlayoutAtMs,

@@ -58,18 +58,28 @@ final class AudioProcessingPipelineRouteChangeTests: XCTestCase {
         // call closes the previous span and reopens a fresh one at the same
         // instant, so residency across the restarts is continuous — no gap,
         // no double count.
+        // Base offset from a realistic (non-zero) epoch-ms wall clock —
+        // `nowMs` is `0` ONLY as a sentinel meaning "no open interval"; a
+        // real `Date()`-derived timestamp is never actually 0 (that would be
+        // 1970-01-01). Using a literal `0` as the first tick here would
+        // collide with that sentinel and make the interval opened at t=0
+        // indistinguishable from "never opened" — a real edge case of the
+        // sentinel design, but one production never hits (Date() is never
+        // epoch zero), so it is worked around here rather than fixed there.
+        let base: Int64 = 1_700_000_000_000
         var acc: Int64 = 0
         var since: Int64 = 0
-        let ticks: [Int64] = [0, 300, 900, 2_000]  // call start + 3 restarts
+        let ticks: [Int64] = [0, 300, 900, 2_000].map { base + $0 }  // call start + 3 restarts
         for t in ticks {
             (acc, since) = AudioProcessingPipeline.nextSpeakerResidency(
                 accumulatedMs: acc, sinceMs: since, nowSpeaker: true, nowMs: t)
         }
         // Interval is still open (last observation was "speaker"); close it
-        // at t=2500 to read the total, mirroring consumeAudioDiagStats().
+        // 500 ms after the last tick to read the total, mirroring
+        // consumeAudioDiagStats().
         (acc, since) = AudioProcessingPipeline.nextSpeakerResidency(
-            accumulatedMs: acc, sinceMs: since, nowSpeaker: false, nowMs: 2_500)
-        XCTAssertEqual(acc, 2_500)  // continuous from t=0 to t=2500, no gaps
+            accumulatedMs: acc, sinceMs: since, nowSpeaker: false, nowMs: base + 2_500)
+        XCTAssertEqual(acc, 2_500)  // continuous from the first tick, no gaps
         XCTAssertEqual(since, 0)
     }
 
