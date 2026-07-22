@@ -115,7 +115,21 @@ public enum PeerTrustEvaluator {
             pubkey: existing.pubkey,
             verifiedFingerprintHex: fingerprintHex,
             verifiedAtMs: Int64(Date().timeIntervalSince1970 * 1000),
-            verificationMethod: method.rawValue
+            verificationMethod: method.rawValue,
+            // W-ASSURANCE/W-FLOOR — a manual SAS/QR/anti-replay verify is NOT
+            // an identity change (the OPPOSITE: it's confirming the SAME
+            // identity this call already trusts) and must never wipe a
+            // physically-established NFC presence record — that is a
+            // SEPARATE, ranked-but-never-merged trust axis (design brief:
+            // "two things that must never share a widget"). Unlike
+            // `acceptNewFingerprint` below (which deliberately OMITS these two
+            // fields so they clear via the same default-nil mechanism the
+            // verify-tier fields above already rely on), this call site must
+            // explicitly THREAD them through unchanged. See
+            // `PeerTrustEvaluatorTests.test_markVerified_preservesPresenceAuthAndFloor`
+            // (QAudionAppTests).
+            presenceAuth: existing.presenceAuth,
+            presenceFloor: existing.presenceFloor
         ))
     }
 
@@ -132,6 +146,20 @@ public enum PeerTrustEvaluator {
     /// THAT account — a full-peer wipe would also silently discard any
     /// real per-device pins established by call-handshake verification
     /// (adversarial-review finding, confirmed).
+    ///
+    /// W-ASSURANCE/W-FLOOR (design brief: "cleared unconditionally on any
+    /// peer identity change... rely on it, don't duplicate the logic"): the
+    /// `StoredContact(...)` reconstruction below deliberately does NOT pass
+    /// `presenceAuth`/`presenceFloor` — both default to `nil` in
+    /// `StoredContact.init`, so they clear as an EMERGENT side effect of this
+    /// same identity-rotation reconstruction, exactly like
+    /// `verifiedFingerprintHex`/`verifiedAtMs`/`verificationMethod` already do
+    /// on the lines below. Do NOT add explicit `presenceAuth: nil` here — the
+    /// point of this note is that nothing new needs to change; see
+    /// `ContactsStoreTests.test_reconstructingStoredContactWithoutPresenceFields_clearsThemToNil`
+    /// (QAudionEngineTests — mechanism pin) and
+    /// `PeerTrustEvaluatorTests.test_acceptNewFingerprint_clearsPresenceAuthAndFloor`
+    /// (QAudionAppTests — real call-path pin).
     public static func acceptNewFingerprint(peerUserId: String, newPeerIkEdPub: Data) {
         let pinStore = PeerIdentityPinStore()
         pinStore.wipeLegacyOnly(contactId: peerUserId)

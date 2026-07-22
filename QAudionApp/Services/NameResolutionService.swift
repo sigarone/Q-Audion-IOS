@@ -190,7 +190,13 @@ final class NameResolutionService: @unchecked Sendable {
                 pubkey: s.pubkey,
                 verifiedFingerprintHex: s.verifiedFingerprintHex,
                 verifiedAtMs: s.verifiedAtMs,
-                verificationMethod: s.verificationMethod
+                verificationMethod: s.verificationMethod,
+                // W-ASSURANCE/W-FLOOR — this branch only updates displayName
+                // for an EXISTING row; thread these through unchanged same as
+                // every other field above (a routine name-resolution pass
+                // must never silently wipe a contact's NFC presence record).
+                presenceAuth: s.presenceAuth,
+                presenceFloor: s.presenceFloor
             ))
         } else {
             contactsStore.upsert(ContactsStore.StoredContact(

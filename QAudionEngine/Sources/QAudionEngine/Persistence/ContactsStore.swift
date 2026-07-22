@@ -40,13 +40,40 @@ public final class ContactsStore {
         /// type decoupled from QAudionApp's UI layer, mirroring Android
         /// `PeerTrustEntity.verificationMethod`.
         public let verificationMethod: String?
+        /// W-ASSURANCE (multi-PSK-mixing SYNTHESIS.md ship step 6) — the
+        /// persisted "this contact has been authenticated in person before"
+        /// record. `nil` for a contact that has never reached `AssuranceState
+        /// .nfcAuthenticated` (S2) — which is EVERY contact today, since S2 is
+        /// unreachable until ship step 7 wires real `N>=2` NFC mixing (see
+        /// `AssuranceState.qualifiesForPresenceAuthWrite`'s doc). Written ONLY
+        /// by `ContactsStore.applyAssuranceOutcome` — never construct this by
+        /// hand outside that write path / tests.
+        ///
+        /// **THIS IS A DIFFERENT WIDGET from the live per-call verdict**
+        /// (`AssuranceStateUI.present`, rendered by `InCallScreen`) — a
+        /// historical "has this contact ever proven physical presence"
+        /// record, never the verdict of the CURRENT call. `ContactDetailScreen`
+        /// renders THIS field; `InCallScreen` never reads it. See this
+        /// project's "two things that must never share a widget" rule.
+        public let presenceAuth: PresenceAuth?
+        /// Ship step 8 (W-FLOOR) — per-contact "presence floor". `true` once
+        /// this contact has EVER reached `S2` (set alongside `presenceAuth`
+        /// itself by `applyAssuranceOutcome`); never cleared by an ordinary
+        /// call that merely fails to re-mix NFC — only by a peer identity-key
+        /// change (same clearing points as `presenceAuth` above). `nil` is
+        /// treated identically to `false` everywhere this is read (Optional
+        /// so legacy rows persisted before this field existed decode cleanly,
+        /// same Optional-absent-tolerant convention as `pubkey` above).
+        public let presenceFloor: Bool?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
                     pubkey: Data? = nil,
                     verifiedFingerprintHex: String? = nil,
                     verifiedAtMs: Int64? = nil,
-                    verificationMethod: String? = nil) {
+                    verificationMethod: String? = nil,
+                    presenceAuth: PresenceAuth? = nil,
+                    presenceFloor: Bool? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -57,6 +84,87 @@ public final class ContactsStore {
             self.verifiedFingerprintHex = verifiedFingerprintHex
             self.verifiedAtMs = verifiedAtMs
             self.verificationMethod = verificationMethod
+            self.presenceAuth = presenceAuth
+            self.presenceFloor = presenceFloor
+        }
+    }
+
+    /// W-ASSURANCE (ship step 6) — ranked, NEVER-MERGED presence/authentication
+    /// tiers (design brief §"Persistence"). Only `.nfcPresent` is ever WRITTEN
+    /// by this ship (`S2` is the only tier `AssuranceState.decide()` persists) —
+    /// the others are modelled now for forward compatibility / cross-platform
+    /// parity (Android/Desktop ports of this same enum) rather than left for a
+    /// later type change. `.none` from the design's ranked list is represented
+    /// by `presenceAuth == nil` (absence) — there is deliberately no `.none`
+    /// case here, mirroring this file's existing nil-means-absent convention.
+    public enum PresenceTier: String, Codable, Equatable {
+        case sasConfirmed = "SAS_CONFIRMED"
+        /// Reserved token per the design brief ("do not build, future") —
+        /// never constructed by any code in this ship.
+        case scanPresent = "SCAN_PRESENT"
+        case nfcPresent = "NFC_PRESENT"
+        /// Separate axis (earbud hw_only) — never rendered as a presence tier
+        /// per the design brief; modelled here only for the shared enum shape.
+        case hwKey = "HW_KEY"
+    }
+
+    /// W-ASSURANCE (ship step 6) — the persisted "this contact has been
+    /// authenticated in person before" record. See `StoredContact.presenceAuth`'s
+    /// doc for the widget-separation rule and `ContactsStore
+    /// .applyAssuranceOutcome` for the only sanctioned write path.
+    public struct PresenceAuth: Codable, Equatable {
+        /// A live call's `security_event` side effect this record can be
+        /// transitioned into: S1/S7 SUSPEND (greyed, "non usata nell'ultima
+        /// chiamata" — record kept, `confirmedCallCount` untouched); S3
+        /// REVOKEs the whole record instead (see `applyAssuranceOutcome`'s
+        /// doc for why revoke, not suspend, for S3 specifically). `.active`
+        /// is the default/healthy state for a freshly (re-)confirming call.
+        public enum Status: String, Codable, Equatable {
+            case active
+            case suspended
+            case revoked
+        }
+
+        public let tier: PresenceTier
+        /// 64-char lowercase-hex fingerprint of the NFC secret mixed when
+        /// this record was (most recently) confirmed.
+        public let keyFingerprint: String
+        /// Raw Ed25519 identity pubkey this record is bound to — the value
+        /// `applyAssuranceOutcome` compares against on every subsequent call
+        /// before treating an existing record as "the same contact,
+        /// continuing" vs. starting a fresh one.
+        public let peerIdentityKey: Data
+        /// callId of the call that FIRST reached S2 for this contact under
+        /// the CURRENT `peerIdentityKey`. Never overwritten by a later
+        /// confirming call — an identity-key change clears the whole record
+        /// (see `StoredContact.presenceAuth` doc), so this is never stale
+        /// relative to a rotated key.
+        public let firstConfirmedCallId: String
+        /// Epoch ms of that first confirming call. Never overwritten.
+        public let firstConfirmedAt: Int64
+        /// How many DISTINCT calls (including the first) have reached S2 for
+        /// this contact under the SAME `peerIdentityKey`. Incremented, never
+        /// reset, until an identity change clears the whole record.
+        public let confirmedCallCount: Int
+        /// Free-form description of the NFC secret's attestation provenance
+        /// at the time of the LAST confirming call (`AssuranceState.decide`'s
+        /// `witnessOk` input) — e.g. `"secure_element"` vs. `"backup_restore"`.
+        /// Deliberately a free-form String, not the {@link PresenceTier}
+        /// union: this is a SEPARATE attestation axis, not another tier.
+        public let witnessTier: String
+        public let status: Status
+
+        public init(tier: PresenceTier, keyFingerprint: String, peerIdentityKey: Data,
+                    firstConfirmedCallId: String, firstConfirmedAt: Int64,
+                    confirmedCallCount: Int, witnessTier: String, status: Status = .active) {
+            self.tier = tier
+            self.keyFingerprint = keyFingerprint
+            self.peerIdentityKey = peerIdentityKey
+            self.firstConfirmedCallId = firstConfirmedCallId
+            self.firstConfirmedAt = firstConfirmedAt
+            self.confirmedCallCount = confirmedCallCount
+            self.witnessTier = witnessTier
+            self.status = status
         }
     }
 
@@ -107,6 +215,137 @@ public final class ContactsStore {
     /// without requiring callers to walk the full contact list themselves.
     public func findPubkey(userId: String) -> Data? {
         load().first(where: { $0.userId == userId })?.pubkey
+    }
+
+    // MARK: - W-ASSURANCE/W-FLOOR (ship steps 6/8) — the ONLY sanctioned
+    // presenceAuth/presenceFloor write path
+
+    /// Apply one call's final `AssuranceState` verdict to `peerUserId`'s
+    /// persisted `presenceAuth`/`presenceFloor`. This is the MECHANISM half
+    /// of ship steps 6/8 — `AssuranceState.qualifiesForPresenceAuthWrite`
+    /// (POLICY: does this verdict even qualify) already gates whether a
+    /// fresh S2 verdict is eligible; this method also owns the S1/S3/S7
+    /// side effects the design brief's Persistence section documents.
+    ///
+    /// No-op (returns `nil`) if `peerUserId` has no existing contact row —
+    /// this never CREATES a contact, only annotates one that's already there.
+    ///
+    /// - `S2` (`.nfcAuthenticated`) with `mediaDwellMs >=
+    ///   AssuranceState.presenceAuthDwellFloorMs`: writes/updates
+    ///   `presenceAuth` and sets `presenceFloor = true`. A record already
+    ///   bound to the SAME `peerIdentityKey` has its `confirmedCallCount`
+    ///   incremented and `firstConfirmedCallId`/`firstConfirmedAt` preserved
+    ///   (never overwritten); any other existing record (different identity
+    ///   key, or a `nil`/dwell-short verdict) starts a brand-new one instead
+    ///   — first confirmation pins THIS call.
+    /// - `S3` (`.nfcIdentityMismatch`): REVOKES — clears `presenceAuth` AND
+    ///   `presenceFloor` entirely. This is a stronger response than S1/S7's
+    ///   suspend deliberately: S3 means the NFC secret mixed this call was
+    ///   bound to a DIFFERENT peer identity than the one on this call — the
+    ///   credential itself is compromised/wrong, not merely "not used this
+    ///   time", so the physical ceremony must be re-established from scratch
+    ///   rather than just re-confirmed.
+    /// - `S1` (`.kcFailed`) / `S7` (`.expectedNfcStripped`): SUSPENDS an
+    ///   EXISTING `presenceAuth` record (`status -> .suspended`) but leaves
+    ///   it, its `confirmedCallCount`, and `presenceFloor` untouched — "never
+    ///   downgraded by a single call that merely failed to mix" (design
+    ///   brief). No-op if there is no existing record (nothing to suspend).
+    /// - Every other state (S0/S4/S5/S6/S8/S9/S10): no persistence side
+    ///   effect — returns the contact unchanged. In particular S4/S5/S6 (all
+    ///   still `kcStatus == .verified` with NFC genuinely mixed, just missing
+    ///   one OTHER precondition) stay silent on the persisted record exactly
+    ///   like a plain non-mixing call would.
+    @discardableResult
+    public func applyAssuranceOutcome(
+        peerUserId: String,
+        peerIdentityKey: Data,
+        keyFingerprint: String,
+        callId: String,
+        state: AssuranceState,
+        witnessOk: Bool,
+        mediaDwellMs: Int,
+        now: Date = Date()
+    ) -> StoredContact? {
+        guard let existing = load().first(where: { $0.userId == peerUserId }) else { return nil }
+
+        switch state {
+        case .nfcAuthenticated:
+            guard AssuranceState.qualifiesForPresenceAuthWrite(state: state, mediaDwellMs: mediaDwellMs) else {
+                return existing
+            }
+            let witnessTierTag = witnessOk ? "secure_element" : "backup_restore"
+            let auth: PresenceAuth
+            if let prior = existing.presenceAuth, prior.peerIdentityKey == peerIdentityKey {
+                auth = PresenceAuth(
+                    tier: .nfcPresent,
+                    keyFingerprint: keyFingerprint,
+                    peerIdentityKey: peerIdentityKey,
+                    firstConfirmedCallId: prior.firstConfirmedCallId,
+                    firstConfirmedAt: prior.firstConfirmedAt,
+                    confirmedCallCount: prior.confirmedCallCount + 1,
+                    witnessTier: witnessTierTag,
+                    status: .active
+                )
+            } else {
+                auth = PresenceAuth(
+                    tier: .nfcPresent,
+                    keyFingerprint: keyFingerprint,
+                    peerIdentityKey: peerIdentityKey,
+                    firstConfirmedCallId: callId,
+                    firstConfirmedAt: Int64(now.timeIntervalSince1970 * 1000),
+                    confirmedCallCount: 1,
+                    witnessTier: witnessTierTag,
+                    status: .active
+                )
+            }
+            let updated = Self.rebuild(existing, presenceAuth: auth, presenceFloor: true)
+            upsert(updated)
+            return updated
+
+        case .nfcIdentityMismatch:
+            guard existing.presenceAuth != nil || existing.presenceFloor == true else { return existing }
+            let updated = Self.rebuild(existing, presenceAuth: nil, presenceFloor: false)
+            upsert(updated)
+            return updated
+
+        case .kcFailed, .expectedNfcStripped:
+            guard let prior = existing.presenceAuth, prior.status != .suspended else { return existing }
+            let suspended = PresenceAuth(
+                tier: prior.tier, keyFingerprint: prior.keyFingerprint, peerIdentityKey: prior.peerIdentityKey,
+                firstConfirmedCallId: prior.firstConfirmedCallId, firstConfirmedAt: prior.firstConfirmedAt,
+                confirmedCallCount: prior.confirmedCallCount, witnessTier: prior.witnessTier, status: .suspended
+            )
+            let updated = Self.rebuild(existing, presenceAuth: suspended, presenceFloor: existing.presenceFloor)
+            upsert(updated)
+            return updated
+
+        default:
+            return existing
+        }
+    }
+
+    /// Reconstruct a `StoredContact` identical to `base` except for
+    /// `presenceAuth`/`presenceFloor` — every OTHER field threaded through
+    /// unchanged. Centralised here (rather than repeated inline at each
+    /// `applyAssuranceOutcome` branch) specifically so this is the ONE place
+    /// that must stay in sync with `StoredContact`'s field list — see the
+    /// type doc's warning about other reconstruction call sites across the
+    /// app that must remember to thread these two fields through too.
+    private static func rebuild(_ base: StoredContact, presenceAuth: PresenceAuth?, presenceFloor: Bool?) -> StoredContact {
+        StoredContact(
+            userId: base.userId,
+            displayName: base.displayName,
+            phoneHash: base.phoneHash,
+            avatarUrl: base.avatarUrl,
+            lastSeen: base.lastSeen,
+            isVerified: base.isVerified,
+            pubkey: base.pubkey,
+            verifiedFingerprintHex: base.verifiedFingerprintHex,
+            verifiedAtMs: base.verifiedAtMs,
+            verificationMethod: base.verificationMethod,
+            presenceAuth: presenceAuth,
+            presenceFloor: presenceFloor
+        )
     }
 }
 

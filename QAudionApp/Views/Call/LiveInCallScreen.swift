@@ -236,6 +236,19 @@ struct LiveInCallScreen: View {
                 peerScreenSharing: appState.peerScreenShareActive,
                 // D11 / W-NOBRICK — non-blocking identity-change advisory banner.
                 identityUnauthenticatedChange: appState.callIdentityUnauthenticatedChange,
+                // W-ASSURANCE (ship step 6) — mapped to display copy HERE
+                // (not in AppState) specifically so `secretLabel` is the
+                // already-resolved, UI-safe `cachedPeerDisplayName` — AppState
+                // publishes only the raw verdict, never a name, so there is
+                // no risk of a raw UUID leaking into this text (standing
+                // project rule). nil verdict ⇒ nil presentation ⇒ no section.
+                assurancePresentation: appState.callAssuranceState.map {
+                    AssuranceStateUI.present(
+                        state: $0,
+                        expectedNfc: appState.callAssuranceExpectedNfc,
+                        secretLabel: cachedPeerDisplayName
+                    )
+                },
                 onAddParticipant: {},
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,

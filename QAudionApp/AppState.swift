@@ -410,6 +410,26 @@ final class AppState: ObservableObject {
     /// the integration's `onUnauthenticatedIdentityChange` (marshalled to
     /// MainActor); reset at the start of every new call.
     @Published var callIdentityUnauthenticatedChange: Bool = false
+    /// W-ASSURANCE (ship step 6) — THIS call's LIVE `AssuranceState` verdict.
+    /// `nil` until `emitKeyConfirmationTelemetry` resolves one (peer doesn't
+    /// support mix ⇒ almost immediately; otherwise after the kc_mac exchange
+    /// settles, ≤5000ms in) — `LiveInCallScreen` renders no section at all
+    /// while nil, never a fabricated placeholder. Reset at the start of
+    /// every new call, same lifecycle as `callIdentityUnauthenticatedChange`
+    /// above.
+    ///
+    /// Deliberately the RAW enum, not a pre-built `AssuranceStateUI
+    /// .Presentation` — `AssuranceStateUI.present(...)` needs a `secretLabel`
+    /// (the contact's display name, NEVER a raw UUID per this project's
+    /// standing rule), and `LiveInCallScreen` already has the UI-safe
+    /// resolved name (`cachedPeerDisplayName`) that AppState itself does not
+    /// duplicate name-resolution logic to re-derive. The View maps this to
+    /// a `Presentation` at render time.
+    @Published var callAssuranceState: AssuranceState? = nil
+    /// The `expectedNfc` this call's verdict was computed with — needed
+    /// alongside `callAssuranceState` because `AssuranceStateUI.present`'s S0
+    /// copy is a compound of BOTH.
+    @Published var callAssuranceExpectedNfc: Bool = false
     /// D11 — `sender_device_id` (server-stamped) captured from the most recent
     /// `call_incoming` envelope, keyed by `sender_id`. The OFFER/ACCEPT bundles
     /// arrive over `opaque_message`, which the server relays WITHOUT a device id
@@ -828,6 +848,16 @@ final class AppState: ObservableObject {
         /// deadline task and an inbound MAC can't double-emit telemetry.
         var resultRecorded = false
         var deadlineTask: Task<Void, Never>?
+        /// W-FLOOR (ship step 8) — moment this state was created, i.e. right
+        /// after session-key derivation. Used as a PROXY for "connected media
+        /// start" when computing `mediaDwellMs` for
+        /// `ContactsStore.applyAssuranceOutcome`'s dwell gate — not an exact
+        /// measurement of real audio frames flowing (that timer doesn't exist
+        /// anywhere in this codebase yet), but session-key derivation and
+        /// audio-stack start are, in practice, near-simultaneous on this call
+        /// path. Documented here as a deliberate, disclosed approximation
+        /// rather than silently presented as exact.
+        let readyAt = Date()
 
         init(event: QAudionCallIntegration.KcMacReadyEvent) {
             peerId = event.peerId
@@ -851,6 +881,15 @@ final class AppState: ObservableObject {
     /// entry is intentionally NOT removed until the explicit cleanup call).
     private var keyConfirmationTelemetryByCall:
         [String: (pskMixN: Int, kcMacResult: String, assuranceState: String, expectedButMissing: Bool)] = [:]
+    /// W-FLOOR (ship step 8) — the raw `AssuranceState` enum value (not just
+    /// its telemetry string) plus the peer's userId for this call's FINAL
+    /// verdict, so `clearKeyConfirmationState` can apply it to
+    /// `ContactsStore.applyAssuranceOutcome` once the call is actually
+    /// tearing down (when `mediaDwellMs` is knowable) — populated by the SAME
+    /// `emitKeyConfirmationTelemetry` call that fills
+    /// `keyConfirmationTelemetryByCall` above, a few seconds into the call;
+    /// consumed later, at teardown.
+    private var finalAssuranceByCall: [String: (state: AssuranceState, peerId: String)] = [:]
 
     /// W372: NotificationCenter observer guard — only register the
     /// group-chat fan-out listener once per AppState lifetime.
@@ -3314,6 +3353,10 @@ final class AppState: ObservableObject {
             // D11: a fresh incoming call clears any stale unauthenticated-change
             // banner from a previous call.
             self.callIdentityUnauthenticatedChange = false
+            // W-ASSURANCE: same reset — a fresh incoming call must not show a
+            // stale live-assurance verdict from a previous call.
+            self.callAssuranceState = nil
+            self.callAssuranceExpectedNfc = false
             // WIRE_SPEC §8.1: a fresh incoming call clears any stale
             // "peer paused their camera" state from a previous call.
             self.remoteVideoPaused = false
@@ -7413,12 +7456,12 @@ final class AppState: ObservableObject {
         emitKeyConfirmationTelemetry(callId: callId, state: state)
     }
 
-    /// W-KCMAC/W-ASSURANCE (ship steps 5/6, telemetry-only this step) — compute
-    /// `AssuranceState.decide()`'s best-honest-effort inputs from what THIS step
-    /// actually wires (no NFC ceremony, no presenceFloor persistence — those are
-    /// steps 7/8) and record the four counters for `CallService.
-    /// getKeyConfirmationTelemetry` to pick up at teardown. Idempotent to call
-    /// more than once for the same callId (overwrites with the latest verdict).
+    /// W-KCMAC/W-ASSURANCE/W-FLOOR (ship steps 5/6/8) — compute
+    /// `AssuranceState.decide()`'s best-honest-effort inputs from what THIS
+    /// step actually wires (no NFC ceremony exists yet — that's step 7) and
+    /// record the four counters for `CallService.getKeyConfirmationTelemetry`
+    /// to pick up at teardown. Idempotent to call more than once for the same
+    /// callId (overwrites with the latest verdict).
     @MainActor
     private func emitKeyConfirmationTelemetry(callId: String, state: KeyConfirmationCallState) {
         let kcResultStr: String
@@ -7427,23 +7470,35 @@ final class AppState: ObservableObject {
         case .absent: kcResultStr = "absent"
         case .wrong: kcResultStr = "wrong"
         }
-        // No NFC ceremony reaches this call path yet (steps 7/8) — mixRoles is
+        // No NFC ceremony reaches this call path yet (step 7) — mixRoles is
         // only ever `[.psk]` (n>=1) or `[]` (n==0), so `nfcMixed` inside
-        // `decide()` is always false today. `expectedNfc`/`witnessOk`/
-        // `nfcBound`/`floorRecorded`/`mediaDwellMs` are correspondingly the
-        // documented "not consulted"/inert defaults for this step.
+        // `decide()` is always false today. `nfcBound`/`witnessOk` are
+        // correspondingly the documented "not consulted" inert defaults.
+        // `mediaDwellMs: 0` here is correct for THIS specific call (decide()
+        // is invoked seconds into the call, long before any dwell floor could
+        // matter for S8/S9/S10's own logic, which never reads it) — the
+        // SEPARATE dwell-gated presenceAuth write happens later, at teardown
+        // (`clearKeyConfirmationState`), with a real elapsed duration.
+        //
+        // W-FLOOR (ship step 8): `expectedNfc` is fed from this contact's
+        // persisted `presenceFloor` — the ONE input this step wires for real,
+        // since S7's escalation is genuinely reachable today (a floor could
+        // already be true from a prior S2 call, even though a real call
+        // cannot yet PRODUCE a fresh S2 verdict until step 7 ships NFC
+        // mixing). `false` when the peer has no stored contact row at all.
+        let expectedNfc = ContactsStore().load().first(where: { $0.userId == state.peerId })?.presenceFloor ?? false
         let mixRoles: [AssuranceState.MixSecretRole] = state.n >= 1 ? [.psk] : []
         let assurance = AssuranceState.decide(
             peerSupportsMix: state.peerSupportsMix,
             n: state.n,
             mixRoles: mixRoles,
             peerAdvertisedRoles: state.peerAdvertisedRoles,
-            expectedNfc: false,
+            expectedNfc: expectedNfc,
             kcStatus: state.kcStatus,
             sigOk: state.sigOk,
             nfcBound: false,
             witnessOk: false,
-            floorRecorded: false,
+            floorRecorded: expectedNfc,
             mediaDwellMs: 0
         )
         // `expected_but_missing` — the half of S7's predicate this step CAN
@@ -7459,6 +7514,21 @@ final class AppState: ObservableObject {
             assuranceState: AppState.wireString(for: assurance),
             expectedButMissing: expectedButMissing
         )
+        // W-FLOOR — stash the raw verdict + peerId for `clearKeyConfirmationState`
+        // to hand to `ContactsStore.applyAssuranceOutcome` once the call is
+        // actually tearing down (see that function's doc for why teardown,
+        // not here, is the right moment to know `mediaDwellMs`).
+        finalAssuranceByCall[callId.lowercased()] = (state: assurance, peerId: state.peerId)
+
+        // W-ASSURANCE UI — publish the LIVE verdict for LiveInCallScreen. Same
+        // "only surface for the active call's peer" guard as
+        // `callIdentityUnauthenticatedChange` above, so a late/duplicate
+        // verdict from a just-ended or different call can't overwrite the
+        // CURRENT call's banner.
+        if callContactId == nil || callContactId == state.peerId {
+            callAssuranceState = assurance
+            callAssuranceExpectedNfc = expectedNfc
+        }
     }
 
     /// Stable wire/telemetry name for an `AssuranceState` — matches the
@@ -7481,8 +7551,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// W-KCMAC — drop this call's key-confirmation state. Called from
-    /// `endCall()` AFTER `callService.endCall()` (which reads
+    /// W-KCMAC/W-FLOOR — drop this call's key-confirmation state (and, first,
+    /// apply this call's final `AssuranceState` verdict to the peer's
+    /// persisted `presenceAuth`/`presenceFloor` — see `applyPresenceAuthOutcomeIfAny`).
+    /// Called from `endCall()` AFTER `callService.endCall()` (which reads
     /// `getKeyConfirmationTelemetry` during its own teardown) so the dict
     /// entries don't accumulate across the app's lifetime. Safe to call for a
     /// callId that was never tracked (e.g. a legacy-peer call that never fired
@@ -7492,9 +7564,47 @@ final class AppState: ObservableObject {
     private func clearKeyConfirmationState(callId: String?) {
         guard let callId, !callId.isEmpty else { return }
         let key = callId.lowercased()
+        applyPresenceAuthOutcomeIfAny(callId: key)
         kcCallStates[key]?.deadlineTask?.cancel()
         kcCallStates.removeValue(forKey: key)
         keyConfirmationTelemetryByCall.removeValue(forKey: key)
+        finalAssuranceByCall.removeValue(forKey: key)
+    }
+
+    /// W-ASSURANCE/W-FLOOR (ship steps 6/8) — the ONLY call site that invokes
+    /// `ContactsStore.applyAssuranceOutcome`. Runs at call teardown (see
+    /// `clearKeyConfirmationState`'s doc for why teardown rather than the
+    /// moment `emitKeyConfirmationTelemetry` decides the verdict): this is
+    /// the first point `mediaDwellMs` — computed from `KeyConfirmationCallState
+    /// .readyAt` to now — is meaningful.
+    ///
+    /// No-op if this call never reached a final verdict (`finalAssuranceByCall`
+    /// has no entry — e.g. torn down before `onKcMacReady` ever fired) or if
+    /// the peer has no `PeerIdentityPinStore` TOFU pin yet (nothing to bind a
+    /// presence record to). Both `keyFingerprint`/`witnessOk` are honestly
+    /// empty/false placeholders THIS step — no NFC ceremony exists anywhere in
+    /// this codebase yet (that's step 7), so `AssuranceState.decide()` can
+    /// never actually RETURN `.nfcAuthenticated` in production, meaning
+    /// `ContactsStore.applyAssuranceOutcome`'s S2 branch (the only branch that
+    /// reads either value) never actually consumes them today — see
+    /// `AssuranceState.qualifiesForPresenceAuthWrite`'s doc. Wired correctly
+    /// now so step 7 needs no changes at this call site, exactly like
+    /// `emitKeyConfirmationTelemetry`'s own "unreachable this step" branches.
+    @MainActor
+    private func applyPresenceAuthOutcomeIfAny(callId: String) {
+        guard let final = finalAssuranceByCall[callId] else { return }
+        guard let peerIdentityKey = PeerIdentityPinStore().pinnedKey(contactId: final.peerId) else { return }
+        guard let readyAt = kcCallStates[callId]?.readyAt else { return }
+        let mediaDwellMs = Int(Date().timeIntervalSince(readyAt) * 1000)
+        ContactsStore().applyAssuranceOutcome(
+            peerUserId: final.peerId,
+            peerIdentityKey: peerIdentityKey,
+            keyFingerprint: "",
+            callId: callId,
+            state: final.state,
+            witnessOk: false,
+            mediaDwellMs: mediaDwellMs
+        )
     }
 
     /// W534 — apply a remote `SCREEN_SHARE:start|stop` to the current
@@ -8366,7 +8476,15 @@ final class AppState: ObservableObject {
                 pubkey: c.pubkey,
                 verifiedFingerprintHex: c.verifiedFingerprintHex,
                 verifiedAtMs: c.verifiedAtMs,
-                verificationMethod: c.verificationMethod)
+                verificationMethod: c.verificationMethod,
+                // W-ASSURANCE/W-FLOOR — this rewrite touches ONLY
+                // displayName; every other field (including these two) must
+                // thread through unchanged, same as verifiedFingerprintHex
+                // above. Omitting them here would silently wipe a contact's
+                // NFC presence record on nothing more than a UUID-display-name
+                // migration pass.
+                presenceAuth: c.presenceAuth,
+                presenceFloor: c.presenceFloor)
             migrated = true
         }
         if migrated { store.save(contacts) }
@@ -8714,6 +8832,9 @@ final class AppState: ObservableObject {
         // D11: a fresh outgoing call clears any stale unauthenticated-change
         // banner from a previous call.
         callIdentityUnauthenticatedChange = false
+        // W-ASSURANCE: same reset for the fresh outgoing call.
+        callAssuranceState = nil
+        callAssuranceExpectedNfc = false
         // WIRE_SPEC §8.1: a fresh outgoing call clears any stale "peer
         // paused their camera" state from a previous call.
         remoteVideoPaused = false

@@ -332,4 +332,30 @@ final class AssuranceStatePolicyTests: XCTestCase {
         )
         XCTAssertEqual(result, .expectedNfcStripped, "peer advertised an NFC-tier (role=1) fp we both hold, but no NFC was mixed => S7")
     }
+
+    // MARK: - qualifiesForPresenceAuthWrite (ship step 6/8 persistence gate —
+    // policy half; ContactsStoreTests covers the mechanism half)
+
+    func testQualifiesForPresenceAuthWrite_s2WithSufficientDwell_true() {
+        XCTAssertTrue(AssuranceState.qualifiesForPresenceAuthWrite(state: .nfcAuthenticated, mediaDwellMs: 10_000))
+        XCTAssertTrue(AssuranceState.qualifiesForPresenceAuthWrite(state: .nfcAuthenticated, mediaDwellMs: 60_000))
+    }
+
+    func testQualifiesForPresenceAuthWrite_s2WithInsufficientDwell_false() {
+        XCTAssertFalse(AssuranceState.qualifiesForPresenceAuthWrite(state: .nfcAuthenticated, mediaDwellMs: 9_999))
+        XCTAssertFalse(AssuranceState.qualifiesForPresenceAuthWrite(state: .nfcAuthenticated, mediaDwellMs: 0))
+    }
+
+    func testQualifiesForPresenceAuthWrite_everyNonS2State_falseRegardlessOfDwell() {
+        let nonS2: [AssuranceState] = [
+            .peerLegacy, .kcFailed, .nfcIdentityMismatch, .nfcUnattestable, .identityUnverified,
+            .nfcPresentUnconfirmed, .expectedNfcStripped, .pskConfirmed, .pskUnconfirmed, .pqcOnly,
+        ]
+        for state in nonS2 {
+            XCTAssertFalse(
+                AssuranceState.qualifiesForPresenceAuthWrite(state: state, mediaDwellMs: 999_999),
+                "\(state) must never qualify for a presenceAuth write, no matter the dwell"
+            )
+        }
+    }
 }

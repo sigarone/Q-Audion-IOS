@@ -195,4 +195,27 @@ public enum AssuranceState: Equatable {
         }
         return out
     }
+
+    // MARK: - W-ASSURANCE/W-FLOOR (ship steps 6/8) — persistence-write POLICY
+    // (mechanism lives in ContactsStore.applyAssuranceOutcome)
+
+    /// The `>=10s of connected media` dwell floor `decide()`'s own doc says
+    /// deliberately does NOT live inside `decide()` — this is that promised
+    /// separate, independently-testable function. Kept here (not in
+    /// `ContactsStore`) so the POLICY question ("does this call's verdict
+    /// qualify to write `contact.presenceAuth`") stays a pure function next
+    /// to the `AssuranceState` it reads, separate from the Codable
+    /// persistence MECHANISM.
+    public static let presenceAuthDwellFloorMs = 10_000
+
+    /// `true` only for `S2` (`.nfcAuthenticated`) with at least
+    /// `presenceAuthDwellFloorMs` of connected media. `S2` is unreachable
+    /// from any real call until ship step 7 (N stays <=1 everywhere today),
+    /// so this only ever returns `true` under the synthetic inputs
+    /// `AssuranceStatePolicyTests`/`ContactsStoreTests` feed it — exactly the
+    /// "write it correctly, exercised only by synthetic S2 inputs" contract
+    /// the ship-step-6/8 task describes.
+    public static func qualifiesForPresenceAuthWrite(state: AssuranceState, mediaDwellMs: Int) -> Bool {
+        state == .nfcAuthenticated && mediaDwellMs >= presenceAuthDwellFloorMs
+    }
 }
