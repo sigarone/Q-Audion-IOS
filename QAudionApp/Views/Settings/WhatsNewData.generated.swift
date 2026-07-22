@@ -9,10 +9,24 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.834",
+              date: "2026-07-22",
+              title: "v1.0.834",
+              bullets: [
+                "fix(psk): exclude call-derived PSKs from video-HKDF-salt resolution (W-PSKMIX step 6)",
+                "fix(tests): two W-IOSECHO test bugs caught by CI (not production bugs)",
+                "fix(psk): exclude call-derived PSKs from receive-side matching gates (W-PSKMIX step 5)",
+                "feat(audio): echo-cancellation effectiveness telemetry (W-IOSECHO)",
+                "fix(psk): exclude auto: group-ctrl ratchet seed from call-PSK advertisement (W-PSKMIX step 4)",
+                "feat(psk): iOS advert hygiene — filter, stable order, fp normalisation (W-PSKMIX step 3)",
+                "fix(psk): unwrap getFingerprint's String? before Array<String>.contains",
+                "feat(psk): parse-only support for multi-PSK selection (W-PSKMIX step 2)",
+              ]),
         .init(id: "v1.0.833",
               date: "2026-07-22",
               title: "v1.0.833",
               bullets: [
+                "chore: regenerate changelog for v1.0.833",
                 "feat(presence): real subscribe gating, honest labels, invalidation, resume fix (I1-I6)",
                 "fix(ios): keep Info.plist pure ASCII, as the file itself demands (W-NFCIOS)",
               ]),
@@ -146,12 +160,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.815",
                 "feat(groupcall): true AES-256-GCM frame crypto — raw 32-byte SK_0 via fork overload (flag-day)",
                 "chore: regenerate changelog for v1.0.814",
-              ]),
-        .init(id: "v1.0.814",
-              date: "2026-07-19",
-              title: "v1.0.814",
-              bullets: [
-                "fix(groupcall): late joiner stuck with zero participants after socket rebuild",
               ]),
     ]
 }
