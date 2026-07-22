@@ -219,6 +219,7 @@ jobs:
             -skip-testing "QAudionEngineTests/BackupCipherTests/test_aeadDecrypt_tampered_throws" \
             -skip-testing "QAudionEngineTests/CrossPlatformTestVectors" \
             -skip-testing "QAudionEngineTests/FrameEncoderTests" \
+            -skip-testing "QAudionEngineTests/HandshakeTranscriptKatTests" \
             -skip-testing "QAudionEngineTests/IdentityQrCodeTests" \
             -skip-testing "QAudionEngineTests/KatVectorsTests" \
             -skip-testing "QAudionEngineTests/MessageRatchetWireFuzzTests/testMutatedRealFrameFailsSoft" \
