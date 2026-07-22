@@ -48,8 +48,16 @@ public enum PskAdvertising {
     /// Filter out device-internal bookkeeping entries (this device's own
     /// long-term identity keys and the KMS name/epoch sidecars — anything
     /// with `origin == .deviceInternal`, i.e. the `__device.*` / `__kmsname.*`
-    /// / `__kms.active_epoch.*` Keychain-account conventions) and order the
-    /// rest deterministically (oldest-registered first, tie-broken by name
+    /// / `__kms.active_epoch.*` Keychain-account conventions) AND call/control-
+    /// channel-derived entries (`origin == .callDerived` — Android's `"call-"`/
+    /// `"msg-psk"` rows, and iOS's own `"auto:<prefix>:<peerId>"` group-control-
+    /// channel ratchet seed installed by `AppState.installKmsPreBootstrapPsk`).
+    /// The latter exclusion mirrors Android's `PqcHandshake.loadEligiblePsks`,
+    /// which never puts `CALL_DERIVED` rows in its allowlist: that seed is
+    /// meant to evolve forward for the group-control ratchet, not be mixed
+    /// as a static 1:1-call audio PSK — a rotation or compromise on either
+    /// side would otherwise unintentionally couple into the other. Then order
+    /// the rest deterministically (oldest-registered first, tie-broken by name
     /// so the result never depends on Keychain's unspecified enumeration
     /// order), then map each surviving entry to its canonical fingerprint.
     ///
@@ -57,7 +65,7 @@ public enum PskAdvertising {
     /// `Entry` fixtures.
     public static func fingerprintsForAdvertisement(_ entries: [Entry]) -> [String] {
         entries
-            .filter { $0.origin != .deviceInternal }
+            .filter { $0.origin != .deviceInternal && $0.origin != .callDerived }
             .sorted(by: isOrderedBefore)
             .map { canonicalFingerprint(forPsk: $0.material) }
     }

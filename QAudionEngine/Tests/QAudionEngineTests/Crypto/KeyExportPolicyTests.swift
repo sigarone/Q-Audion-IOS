@@ -85,6 +85,28 @@ final class KeyExportPolicyTests: XCTestCase {
         XCTAssertEqual(PskOrigin.inferred(fromAccountName: "nfcbackup"), .manual)
     }
 
+    /// W-PSKMIX step 4 — the exact shape `AppState.installKmsPreBootstrapPsk`
+    /// writes for the group-control-channel ratchet seed (RK_0): both sender
+    /// and receiver install the SAME raw key under this name, via the 3-arg
+    /// `storePsk(name:key:fingerprint:)` overload, which persists NO origin
+    /// blob — so this name-based inference is what actually classifies the
+    /// entry read back by `origin(name:)`. Must resolve to `.callDerived`,
+    /// the same bucket Android's `KeyCreationMethod.CALL_DERIVED` rows and
+    /// iOS's own `"call-"`/`"msg-psk"` names already fall into, so it is
+    /// excluded from 1:1-call PSK advertisement exactly like they are.
+    func testAutoPrefixedGroupCtrlRatchetSeedIsClassifiedCallDerived() {
+        XCTAssertEqual(
+            PskOrigin.inferred(fromAccountName: "auto:a3f7c291:11111111-2222-3333-4444-555555555555"),
+            .callDerived
+        )
+    }
+
+    /// Consequence of the classification above: it must never be exportable,
+    /// same as every other `.callDerived` entry.
+    func testAutoPrefixedEntryIsNeverExportable() {
+        XCTAssertFalse(PskOrigin.inferred(fromAccountName: "auto:deadbeef:peer-1").isExportable)
+    }
+
     /// The raw values are persisted inside the Keychain generic blob, so they
     /// are storage format, not display strings. Renaming one silently reclassifies
     /// every key already written with the old spelling — most dangerously turning

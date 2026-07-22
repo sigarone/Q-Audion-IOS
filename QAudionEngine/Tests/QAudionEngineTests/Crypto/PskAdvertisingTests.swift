@@ -41,6 +41,43 @@ final class PskAdvertisingTests: XCTestCase {
         XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement(entries), [])
     }
 
+    /// W-PSKMIX step 4 — the group-control-channel ratchet seed (RK_0)
+    /// `AppState.installKmsPreBootstrapPsk` installs under
+    /// `"auto:<prefix8>:<peerId>"` must never be advertisable as a 1:1-call
+    /// PSK candidate, even though (post PR #32's `canonicalFingerprint` fix)
+    /// its fingerprint is now correctly computable and would otherwise be
+    /// advertised. `origin` here is `.callDerived` — what `PskOrigin.inferred`
+    /// actually classifies this name as (see `KeyExportPolicyTests`), since
+    /// the entry is written with no persisted origin blob.
+    func testAutoPrefixedGroupCtrlRatchetSeedIsExcludedFromAdvertisement() {
+        let rk0 = Data(repeating: 0x99, count: 32)
+        let manualPsk = Data(repeating: 0x11, count: 32)
+        let entries: [PskAdvertising.Entry] = [
+            PskAdvertising.Entry(
+                name: "auto:a3f7c291:11111111-2222-3333-4444-555555555555",
+                origin: PskOrigin.inferred(fromAccountName: "auto:a3f7c291:11111111-2222-3333-4444-555555555555"),
+                material: rk0,
+                createdAt: nil
+            ),
+            PskAdvertising.Entry(name: "peer.alice", origin: .manual, material: manualPsk, createdAt: nil)
+        ]
+
+        let advertised = PskAdvertising.fingerprintsForAdvertisement(entries)
+
+        XCTAssertEqual(advertised, [canonicalFp(manualPsk)])
+        XCTAssertFalse(advertised.contains(canonicalFp(rk0)), "the auto: group-ctrl ratchet seed must never be advertised as a call PSK")
+    }
+
+    /// Direct exclusion check independent of the name-inference path — pins
+    /// the filter itself, not just today's one caller of it.
+    func testCallDerivedOriginEntriesAreExcludedFromAdvertisement() {
+        let rk0 = Data(repeating: 0x88, count: 32)
+        let entries: [PskAdvertising.Entry] = [
+            PskAdvertising.Entry(name: "call-pb-tag1", origin: .callDerived, material: rk0, createdAt: nil)
+        ]
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement(entries), [])
+    }
+
     // MARK: - 2. Stable advertise order
 
     func testAdvertiseOrderIsStableAcrossRepeatedCalls() {
