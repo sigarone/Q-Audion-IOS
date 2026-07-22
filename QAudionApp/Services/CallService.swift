@@ -1331,7 +1331,67 @@ final class CallService: @unchecked Sendable {
                     "va_results":         vaResultCount,
                     "va_voiced_pct":      vaResultCount > 0
                         ? (Double(vaVoicedCount) / Double(vaResultCount) * 1000).rounded() / 10
-                        : 0
+                        : 0,
+                    // W-IOSECHO (2026-07-22) — iOS port of Android's
+                    // W-SPKAEC/W-SPKECHO echo-cancellation-EFFECTIVENESS
+                    // fields (commits fb6b9b7/caf6fcd/45d3618). Until now
+                    // iOS could only say VP-IO was ever nominally on/bypassed
+                    // (`vpio_ever_active`/`vpio_bypassed_ever` above) — never
+                    // whether it actually cancelled anything. These measure
+                    // near-end mic RMS while the far end was recently
+                    // audible vs while it was not; see `AudioCapture.
+                    // EchoBucketTotals` for the full method and its honest
+                    // limitations (a level-based proxy for "AEC under load",
+                    // not a hardware ERLE readout — no current iOS SDK
+                    // exposes one).
+                    //
+                    // Field-by-field mapping vs Android's `CallAudioBridge`:
+                    //  * echo_active_frames/rms_pct, echo_idle_frames/rms_pct,
+                    //    route_changes, speaker_ms — SAME name, genuinely
+                    //    equivalent measurement, so tune-report.py's existing
+                    //    "aec on/ref-bound" / "route chg/speaker" / "echo
+                    //    far/near rms" card rows (which already key off these
+                    //    exact strings under `call.audio.diag`, platform-
+                    //    agnostic) now populate for iOS legs too.
+                    //  * aec_ever_active — reused (not duplicated logic):
+                    //    Android's field exists BECAUSE its AudioEffect API
+                    //    lets a canceler be requested-but-fail-to-attach
+                    //    (hence a separate `cap.isAecActive()` check beyond
+                    //    "we asked for VOICE_COMMUNICATION source"). Apple's
+                    //    `setVoiceProcessingEnabled` has no such split — it
+                    //    is a synchronous pass/fail, and success bundles
+                    //    AEC+NS+AGC atomically. `vpio_ever_active` (above)
+                    //    THEREFORE ALREADY IS "the canceler really attached",
+                    //    not merely "requested" — so it is reported again
+                    //    here under Android's name rather than duplicated
+                    //    computation, purely so the shared tune-report.py
+                    //    card renders instead of reading "X" on every iOS leg.
+                    //  * aec_session_bound — DELIBERATELY OMITTED. Android's
+                    //    field exists because binding the output AudioTrack
+                    //    to the mic's echo-reference session is a SEPARATE,
+                    //    independently-fallible async step. On iOS the
+                    //    reference is structural: the SINGLE-ENGINE FIX
+                    //    (see AudioCapture.start()) attaches the player node
+                    //    to the SAME AVAudioEngine as the capture tap BEFORE
+                    //    VP-IO is even enabled, so there is no separate bind
+                    //    step that can fail independently of capture itself
+                    //    starting. Emitting an always-true tautology under
+                    //    Android's name would read as a real measurement
+                    //    when it is not one — omitted rather than faked.
+                    //  * echo_gain_min — DELIBERATELY OMITTED. This is
+                    //    Android's OWN software residual-echo-suppressor gain
+                    //    floor (`SpeakerEchoSuppressor`); iOS runs no
+                    //    equivalent software suppression stage (Apple's VP-IO
+                    //    is the only canceler in the chain, opaque past
+                    //    `setVoiceProcessingEnabled`), so there is nothing
+                    //    honest to report under this name.
+                    "echo_active_frames":  level.echoActiveFrames,
+                    "echo_active_rms_pct": (level.echoActiveRmsPct * 10).rounded() / 10,
+                    "echo_idle_frames":    level.echoIdleFrames,
+                    "echo_idle_rms_pct":   (level.echoIdleRmsPct * 10).rounded() / 10,
+                    "route_changes":       diag.routeChanges,
+                    "speaker_ms":          diag.speakerMs,
+                    "aec_ever_active":     diag.vpioEverActive
                 ]
                 Task { @MainActor in
                     TelemetryService.shared.emit(kind: "call.audio.diag", callId: _callId, attrs: diagAttrs)

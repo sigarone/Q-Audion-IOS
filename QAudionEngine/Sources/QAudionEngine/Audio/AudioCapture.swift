@@ -91,6 +91,22 @@ public final class AudioCapture {
     // such burst so the hypothesis can be tested instead of argued about (see
     // the Android `drops` split shipped alongside).
     private var txBurstMaxThisCall: Int = 0
+    // W-IOSECHO (2026-07-22) — echo-cancellation EFFECTIVENESS measurement,
+    // the iOS port of Android's W-SPKAEC/W-SPKECHO `echo_active_*`/
+    // `echo_idle_*` telemetry. `vpio_ever_active`/`vpio_bypassed_ever` (in
+    // AudioProcessingPipeline) already answer "was AEC nominally on"; they
+    // say nothing about whether it actually cancelled the echo. This answers
+    // that, by grading the near-end mic RMS while the far end was recently
+    // audible vs while it was not. See `EchoBucketTotals` below for the full
+    // rationale and honest limitations of the proxy. Plain vars, not locked:
+    // `lastLoudPlayoutAtMs` is written on the (main-thread-dispatched)
+    // playback path and read on the tap-callback thread, and `echoBucketThisCall`
+    // is written only on the tap-callback thread and read by `consumeLevelStats()`
+    // at teardown — the same benign-race pattern this file already accepts for
+    // `peakAmplitude`/`clipSampleCount`/`sumSqAmplitude` above (single writer
+    // per field, per-call diagnostic counters, not correctness-critical).
+    private var lastLoudPlayoutAtMs: Int64 = 0
+    private var echoBucketThisCall = EchoBucketTotals()
     // W-DEZIPPER (2026-07-12) — the gain actually applied to the LAST sample of
     // the previous frame. The make-up gain is ramped per-sample from this to the
     // current frame's target so the gain is continuous across the 20 ms frame
@@ -562,6 +578,115 @@ public final class AudioCapture {
         public let agcNoiseFloorPct: Double
         public let agcHoldPct: Double
         public let txBurstMax: Int
+        // W-IOSECHO — see `EchoBucketTotals` kdoc below.
+        public let echoActiveFrames: Int64
+        public let echoActiveRmsPct: Double
+        public let echoIdleFrames: Int64
+        public let echoIdleRmsPct: Double
+    }
+
+    // MARK: - W-IOSECHO (2026-07-22) — echo-cancellation effectiveness proxy
+
+    /// RMS threshold (fraction of Int16 full scale) above which a decoded RX
+    /// frame counts as "the far end was audible out of the transducer".
+    /// Deliberately the SAME value as Android's
+    /// `AudioPlayback.LOUD_PLAYOUT_RMS` (0.01 = 1 % FS) so the two platforms'
+    /// `echo_active_*`/`echo_idle_*` telemetry is graded against the same
+    /// yardstick and stays comparable in `tune-report.py`.
+    static let echoRefLoudRms: Float = 0.01
+
+    /// How long after the last "loud" RX frame the far end is still treated
+    /// as "active" for echo grading. Mirrors Android's
+    /// `SpeakerEchoSuppressor.DEFAULT_HOLD_MS` (200 ms): long enough to
+    /// bridge a normal inter-syllable gap in the peer's speech without
+    /// flapping the active/idle classification every frame, short enough
+    /// that real silence (peer muted, peer stopped talking) is reclassified
+    /// idle within a fraction of a second.
+    static let echoRefHoldMs: Int64 = 200
+
+    /// Whether the far end should be treated as "currently audible" for echo
+    /// grading, given the last time a loud RX frame was scheduled for
+    /// playback. Pure; unit-tested in `AudioCaptureEchoBucketTests`.
+    static func isFarEndActive(lastLoudPlayoutAtMs: Int64, nowMs: Int64, holdMs: Int64 = echoRefHoldMs) -> Bool {
+        guard lastLoudPlayoutAtMs > 0 else { return false }
+        return nowMs - lastLoudPlayoutAtMs <= holdMs
+    }
+
+    /// Whether a decoded RX frame's RMS counts as "loud" for the
+    /// far-end-active proxy above. Pure; unit-tested.
+    static func isLoudPlayout(rms: Float, threshold: Float = echoRefLoudRms) -> Bool {
+        rms >= threshold
+    }
+
+    /// One call's near-end-RMS-vs-far-end-activity split — the measurement
+    /// iOS never had before W-IOSECHO. Two buckets of TX mic energy, summed
+    /// as (per-buffer RMS)² so the aggregate is a true root-mean-square over
+    /// the whole bucket rather than a mean of per-frame RMS values (energy
+    /// adds; averaging RMS under-weights the loud frames that actually carry
+    /// the echo — same reasoning as Android's `bucketRmsPct` kdoc):
+    ///
+    ///  - `active`: frames captured while the far end was recently audible
+    ///    (`isFarEndActive` true) — an engaged AEC has real work to do here.
+    ///  - `idle`: frames captured while it was not — near-silence is the
+    ///    only honest expectation regardless of AEC state.
+    ///
+    /// On a canceler that is both ENABLED and EFFECTIVE the two buckets
+    /// should be comparable (both are just room noise). An `active` bucket
+    /// several times louder than `idle` is measured residual echo reaching
+    /// the encoder — the number `vpio_ever_active`/`vpio_bypassed_ever` alone
+    /// cannot supply, because Apple's VP-IO can be genuinely engaged and
+    /// still not fully cancel a strong acoustic coupling (the speakerphone
+    /// case this was built to investigate — see `speaker_ms`/
+    /// `speaker_route_ever` alongside this field).
+    ///
+    /// HONEST LIMITATIONS (do not read this as an ERLE measurement):
+    ///  - "far end audible" is a level-based proxy on the DECODED RX PCM,
+    ///    not a hardware echo-return-loss measurement — no current iOS SDK
+    ///    exposes a per-frame ERLE from the VP-IO unit via public API. A
+    ///    loud RX frame does not prove the near-end mic picked up an
+    ///    acoustic copy of it (an earpiece call has no acoustic coupling at
+    ///    all — read this next to `speaker_route_ever`, not on its own).
+    ///  - The mic frame graded runs on the same 20 ms tap cadence as the
+    ///    callback, but there is no hard guarantee it is sample-aligned with
+    ///    the specific RX frame that made the far end "loud" a moment
+    ///    earlier — only that SOME far-end energy was recently audible. The
+    ///    200 ms hold window is deliberately generous for exactly this
+    ///    reason (matching Android's own hold, which has the same slack).
+    ///  - Unlike Android's `SpeakerEchoSuppressor`, iOS runs no software
+    ///    residual-echo suppression, so there is no `echo_gain_min`
+    ///    equivalent to ship — Apple's VP-IO is the only canceler in the
+    ///    chain and it is opaque past `setVoiceProcessingEnabled`. This
+    ///    struct is purely a MEASUREMENT; it does not attenuate anything.
+    struct EchoBucketTotals: Equatable {
+        var activeSumSq: Double = 0
+        var activeFrames: Int64 = 0
+        var idleSumSq: Double = 0
+        var idleFrames: Int64 = 0
+    }
+
+    /// Fold one buffer's RMS into the running totals. Pure; unit-tested.
+    static func accumulatingEchoBucket(_ totals: EchoBucketTotals,
+                                        frameRms: Float,
+                                        farEndActive: Bool) -> EchoBucketTotals {
+        var next = totals
+        let sq = Double(frameRms) * Double(frameRms)
+        if farEndActive {
+            next.activeSumSq += sq
+            next.activeFrames += 1
+        } else {
+            next.idleSumSq += sq
+            next.idleFrames += 1
+        }
+        return next
+    }
+
+    /// Root-mean-square of one echo-leak bucket, as a percentage of full
+    /// scale. Same formula as Android's `CallAudioBridge.bucketRmsPct` — RMS
+    /// over the whole bucket, not a mean of per-frame RMS values (see
+    /// `EchoBucketTotals` kdoc). Pure; unit-tested.
+    static func bucketRmsPct(sumSq: Double, frames: Int64) -> Double {
+        guard frames > 0 else { return 0 }
+        return (sumSq / Double(frames)).squareRoot() * 100
     }
 
     public func consumeLevelStats() -> LevelStats {
@@ -583,7 +708,13 @@ public final class AudioCapture {
                                agcGainMean: gainMean,
                                agcNoiseFloorPct: Double(micAgcNoiseFloor) * 100,
                                agcHoldPct: holdPct,
-                               txBurstMax: txBurstMaxThisCall)
+                               txBurstMax: txBurstMaxThisCall,
+                               echoActiveFrames: echoBucketThisCall.activeFrames,
+                               echoActiveRmsPct: Self.bucketRmsPct(sumSq: echoBucketThisCall.activeSumSq,
+                                                                   frames: echoBucketThisCall.activeFrames),
+                               echoIdleFrames: echoBucketThisCall.idleFrames,
+                               echoIdleRmsPct: Self.bucketRmsPct(sumSq: echoBucketThisCall.idleSumSq,
+                                                                  frames: echoBucketThisCall.idleFrames))
         peakAmplitude = 0
         clipSampleCount = 0
         sumSqAmplitude = 0
@@ -594,6 +725,7 @@ public final class AudioCapture {
         micAgcBufferCount = 0
         micAgcHoldCount = 0
         txBurstMaxThisCall = 0
+        echoBucketThisCall = EchoBucketTotals()
         // NOTE: micAgcNoiseFloor is deliberately NOT reset here — `start()`
         // owns that, so the value read above is the floor as it stood at
         // teardown rather than 0.
@@ -846,6 +978,32 @@ public final class AudioCapture {
                 raw = int16Buf.withUnsafeBytes { Data($0) }
             } else {
                 return
+            }
+            // W-IOSECHO (2026-07-22) — echo-effectiveness proxy (iOS port of
+            // Android's W-SPKAEC/W-SPKECHO echo_active/idle buckets). Grades
+            // this frame's RAW mic RMS — post-hardware VP-IO AEC/NS/AGC if
+            // any, PRE our own software make-up gain below — against whether
+            // the far end was recently audible out of the transducer. Runs
+            // unconditionally (not gated on micAgcEnabled or VP-IO state) so
+            // it always measures the true unprocessed near-end level, same
+            // as Android grades its raw capture frame before its own
+            // software residual suppressor. See `EchoBucketTotals` above for
+            // the full rationale and honest limitations.
+            raw.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
+                guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
+                let n = raw.count / 2
+                guard n > 0 else { return }
+                var echoSumSq: Double = 0
+                for i in 0..<n {
+                    let s = Double(samples[i]) / Double(Int16.max)
+                    echoSumSq += s * s
+                }
+                let frameRms = Float((echoSumSq / Double(n)).squareRoot())
+                let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                let farEndActive = Self.isFarEndActive(lastLoudPlayoutAtMs: self.lastLoudPlayoutAtMs, nowMs: nowMs)
+                self.echoBucketThisCall = Self.accumulatingEchoBucket(self.echoBucketThisCall,
+                                                                       frameRms: frameRms,
+                                                                       farEndActive: farEndActive)
             }
             // W-MICAGC — gentle make-up AGC. Runs in BOTH modes: VP-IO off (we
             // own leveling entirely, ceiling agcMaxGain=6.0) and VP-IO on
@@ -1133,6 +1291,30 @@ public final class AudioCapture {
     /// player node that lives on THIS capture engine. Replaces the old separate
     /// `AudioPlayback`, which ran a SECOND AVAudioEngine and was therefore mute.
     public func playFrame(_ pcmData: Data) {
+        // W-IOSECHO (2026-07-22) — update the "far end recently audible"
+        // proxy the mic-tap callback reads to grade echo-cancellation
+        // effectiveness (see `EchoBucketTotals` above). Cheap Σx² scan on
+        // the decoded PCM already in hand (mirrors the AGC-DIAG TX-side
+        // scan). Deliberately runs before the guards below: "did the far end
+        // send loud audio" is true the moment this frame arrived, regardless
+        // of whether IT specifically ends up audible (engine not running,
+        // format mismatch, etc.) — the mic can still be hearing the room's
+        // response to the frames that DID play a moment earlier.
+        if pcmData.count >= 2 {
+            let n = pcmData.count / 2
+            let frameRms: Float = pcmData.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Float in
+                guard let samples = raw.bindMemory(to: Int16.self).baseAddress else { return 0 }
+                var sumSq: Double = 0
+                for i in 0..<n {
+                    let s = Double(samples[i]) / Double(Int16.max)
+                    sumSq += s * s
+                }
+                return Float((sumSq / Double(n)).squareRoot())
+            }
+            if Self.isLoudPlayout(rms: frameRms) {
+                lastLoudPlayoutAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+            }
+        }
         // W574j — build the playback buffer in the player node's LIVE output
         // format, not the cached `playFormat`. On iPad, enabling Voice
         // Processing I/O reconfigures the player→mixer bus to the hardware
@@ -1318,6 +1500,12 @@ public final class AudioCapture {
             audioPipeline.noteVoiceProcessingRetry()
         }
         audioPipeline.noteEngineRestart()  // W-CANONICAL — engine_restarts telemetry
+        // W-IOSECHO (2026-07-22) — `route_changes` (iOS port of Android's
+        // field of the same name) counts only ROUTE-DRIVEN restarts,
+        // deliberately excluding the W-AEC-FIX starve-watchdog restart
+        // (routeDriven: false), which rebuilds the engine on the SAME
+        // hardware route rather than reacting to a real route change.
+        if routeDriven { audioPipeline.noteRouteChange() }
         lastEngineRestart = Date()
         restartSuppressUntil = Date().addingTimeInterval(0.6)
         engine?.inputNode.removeTap(onBus: 0)
