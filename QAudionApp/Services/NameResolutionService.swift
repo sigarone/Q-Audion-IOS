@@ -53,6 +53,32 @@ final class NameResolutionService: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// W-ORPHANPEER — where to report "this account exists / does not exist".
+    /// Same primitives-only `@MainActor` closure pattern as ``ApiSource``, so
+    /// this service still never touches `AppState` directly.
+    typealias OrphanSink = @MainActor (String, ProfileLookupOutcome) -> Void
+
+    private static let sinkLock = NSLock()
+    private static var orphanSink: OrphanSink?
+
+    /// Inject the orphan sink. Called once from `AppState.initialize()`.
+    func configure(orphanSink: @escaping OrphanSink) {
+        Self.sinkLock.lock()
+        Self.orphanSink = orphanSink
+        Self.sinkLock.unlock()
+    }
+
+    /// Hop to the main actor and hand the outcome to whoever is listening.
+    /// A no-op before `configure(orphanSink:)` has run, which is correct: at
+    /// that point no list is on screen to hide anything from.
+    private static func recordOrphanOutcome(id: String, outcome: ProfileLookupOutcome) async {
+        sinkLock.lock()
+        let sink = orphanSink
+        sinkLock.unlock()
+        guard let sink else { return }
+        await MainActor.run { sink(id, outcome) }
+    }
+
     /// Fire-and-forget: fetch the profile for `userId` (deduped, cooled
     /// down) and upsert a resolved display name into the rubrica. Safe to
     /// call from any thread, returns immediately.
@@ -99,11 +125,29 @@ final class NameResolutionService: @unchecked Sendable {
                 return
             }
             do {
-                let pub = try await api.getPublicUser(userId: id)
-                self.apply(pub, for: id)
+                // W-ORPHANPEER — the `IfExists` variant so a 404 (the account
+                // does not exist) is distinguishable from every other failure
+                // (we could not find out). The plain throwing call, and the
+                // `try? await` form used elsewhere in the app, both flatten
+                // the two together and cannot drive a decision to hide.
+                let pub = try await api.getPublicUserIfExists(userId: id)
+                let outcome = classifyProfileLookup(succeeded: pub != nil, httpStatus: pub == nil ? 404 : nil)
+                await Self.recordOrphanOutcome(id: id, outcome: outcome)
+                if let pub {
+                    self.apply(pub, for: id)
+                } else {
+                    // Not an error: the server answered, clearly, that this
+                    // account is gone. Logging it as a failure is what sent
+                    // people hunting a server bug that was not there.
+                    RTLog.info("NameResolve", "no account on the server for \(id.prefix(8))… — hidden from pickers")
+                }
             } catch {
                 // Pavel rule: a userId we cannot resolve to name/extension is
                 // a real error, never a silently acceptable steady state.
+                // W-ORPHANPEER — but it is NOT evidence of absence: leave the
+                // orphan set untouched so a dropped connection never empties
+                // the address book, and a failed retry never un-hides a peer
+                // we already know is gone.
                 RTLog.error("NameResolve", "profile fetch FAILED for \(id.prefix(8))…: \(error)")
             }
         }

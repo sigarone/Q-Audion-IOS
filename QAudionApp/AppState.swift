@@ -241,6 +241,53 @@ final class AppState: ObservableObject {
     private(set) var cachedContacts: [ContactsStore.StoredContact] = []
     private var contactsCacheObserver: NSObjectProtocol?
 
+    /// W-ORPHANPEER — peers the server has answered a definitive 404 for:
+    /// accounts that no longer exist. Hidden from the address book and from
+    /// every "who can I reach" picker. See `PeerOrphanPolicy.swift` in the
+    /// engine for the rules, and for why "gone" and "unreachable" must not be
+    /// conflated.
+    ///
+    /// `@Published` on purpose, unlike `cachedContacts` above: this one has to
+    /// re-render the lists mid-session as the lookups land, and a plain
+    /// `private(set) var` on an ObservableObject does not fire
+    /// `objectWillChange` — the hidden contact would stay on screen until some
+    /// unrelated redraw happened to come along.
+    ///
+    /// In-memory only. Nothing is written to `ContactsStore`, so the set is
+    /// re-derived from live lookups on every launch and a restored backup or a
+    /// corrected environment brings the contact back with no user action.
+    @Published private(set) var orphanPeerIds: Set<String> = []
+
+    /// Record what a profile lookup said about a peer. Only `.absent` marks
+    /// and only `.exists` clears; `.unknown` deliberately does neither —
+    /// marking would hide a real contact over a dropped connection, clearing
+    /// would make the list flap on every failed retry.
+    func recordPeerLookupOutcome(_ userId: String, _ outcome: ProfileLookupOutcome) {
+        guard !userId.isEmpty else { return }
+        switch outcome {
+        case .absent:
+            guard !orphanPeerIds.contains(userId) else { return }
+            orphanPeerIds.insert(userId)
+        case .exists:
+            guard orphanPeerIds.contains(userId) else { return }
+            orphanPeerIds.remove(userId)
+        case .unknown:
+            return
+        }
+        // CarPlay builds its rows outside SwiftUI, so it cannot observe this
+        // object — push the set across instead. Same exclusion, same source.
+        CarPlayBridge.shared.orphanPeerIds = orphanPeerIds
+    }
+
+    /// The contacts the user can actually reach — everything in
+    /// `cachedContacts` minus the orphans. Use this wherever the question is
+    /// "who can I call or write to"; keep using `cachedContacts` where the
+    /// question is "what name goes on this row", because an existing
+    /// conversation with an orphan still needs its label.
+    var reachableContacts: [ContactsStore.StoredContact] {
+        cachedContacts.filter { !shouldHideContact(orphanPeerIds.contains($0.userId)) }
+    }
+
     // MARK: - Call state
     @Published var isInCall: Bool = false
     @Published var isVideoCall: Bool = false
@@ -1414,6 +1461,12 @@ final class AppState: ObservableObject {
         // socket rebuilds automatically.
         NameResolutionService.shared.configure(apiSource: { [weak self] in
             self?.liveProvider?.accountApi
+        })
+        // W-ORPHANPEER — same primitives-only closure pattern: the resolver
+        // reports what the server said about a peer, AppState owns the set the
+        // views observe.
+        NameResolutionService.shared.configure(orphanSink: { [weak self] userId, outcome in
+            self?.recordPeerLookupOutcome(userId, outcome)
         })
 
         let config = EngineConfig.production()

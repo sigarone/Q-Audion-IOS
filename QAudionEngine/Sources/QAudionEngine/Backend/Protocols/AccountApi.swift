@@ -54,6 +54,15 @@ public protocol AccountApi {
     /// Look up a peer user's public profile by user_id.
     /// Matches Android `GET /api/v1/users/{user_id}`.
     func getPublicUser(userId: String) async throws -> PublicUser
+    /// W-ORPHANPEER — same lookup as ``getPublicUser(userId:)`` but returning
+    /// `nil` on a 404 and throwing on everything else, so a caller can tell
+    /// "this account does not exist" apart from "we could not reach the
+    /// server". The throwing form flattens both into one error, and
+    /// `try? await getPublicUser(...)` flattens them into one `nil` — neither
+    /// can drive a decision to hide a contact.
+    ///
+    /// Same contract as the pre-existing ``lookupByExtension(_:)``.
+    func getPublicUserIfExists(userId: String) async throws -> PublicUser?
     /// W414 — dial-by-extension lookup. Resolves a short PBX extension
     /// (e.g. 175) to a `UserProfile`. Returns `nil` on 404 (extension
     /// not assigned), throws on other errors. Used by the iOS DialPad

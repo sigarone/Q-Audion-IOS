@@ -940,7 +940,9 @@ struct GroupChatScreen: View {
     /// filters out those already in the roster). Same source as
     /// CreateGroupScreen.
     private var addableContactRows: [ContactPickerRowUi] {
-        appState.cachedContacts.map {
+        // W-ORPHANPEER — reachableContacts: "who can I add" is a reach
+        // surface, so orphans are excluded here too.
+        appState.reachableContacts.map {
             ContactPickerRowUi(userId: $0.userId,
                                displayName: $0.displayName,
                                avatarUrl: $0.avatarUrl)

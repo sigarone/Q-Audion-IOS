@@ -72,7 +72,10 @@ struct CreateGroupScreen: View {
             // Populate contacts from the AppState cache — zero UserDefaults
             // overhead since cachedContacts is already loaded at app start.
             if state.contacts.isEmpty {
-                state.contacts = Self.makePickerRows(appState.cachedContacts)
+                // W-ORPHANPEER — reachableContacts, not cachedContacts: a
+                // member picker must not offer accounts that no longer
+                // exist server-side.
+                state.contacts = Self.makePickerRows(appState.reachableContacts)
             }
         }
     }

@@ -180,7 +180,12 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
     private func reloadContacts() {
         // Verified first, then alphabetical; cap at 50 rows for the head unit.
+        // W-ORPHANPEER — drop accounts that no longer exist server-side before
+        // sorting; these rows dial on tap, so offering a dead account here is
+        // the worst version of the bug.
+        let orphans = CarPlayBridge.shared.orphanPeerIds
         let contacts = contactsStore.load()
+            .filter { !shouldHideContact(orphans.contains($0.userId)) }
             .sorted { lhs, rhs in
                 if lhs.isVerified != rhs.isVerified { return lhs.isVerified }
                 return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
