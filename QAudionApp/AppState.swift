@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 import CryptoKit
 import AVFoundation
 import AudioToolbox  // AudioServicesPlayAlertSound (in-app ringtone)
@@ -81,6 +82,22 @@ final class AppState: ObservableObject {
     /// header can render online/offline dots reactively. Always non-nil
     /// so SwiftUI can `@EnvironmentObject` it without a guard.
     @Published var presenceService: PresenceService = PresenceService()
+
+    /// I4: `presenceService` is a reference type, mutated in place (its own
+    /// `statuses`/`extendedStatuses` are what changes on every
+    /// `presence_update`) and never reassigned — so `@Published` on the
+    /// property above only fires if the REFERENCE itself changes, which it
+    /// never does. Views that read `appState.presenceService.…` instead of
+    /// holding `PresenceService` as their own `@ObservedObject` therefore had
+    /// no subscription to its changes at all, and only appeared to update
+    /// when some unrelated `AppState` publish happened to re-render them.
+    /// Forwarding its `objectWillChange` here closes that gap for every such
+    /// view without touching each one individually. `lazy` gives exactly-once
+    /// wiring regardless of how many call sites touch it below.
+    private lazy var presenceServiceForwarding: AnyCancellable =
+        presenceService.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
 
     /// W74: long-lived backend provider whose WebSocket stays open as
     /// long as the user is authenticated. Server marks the user as
@@ -240,6 +257,8 @@ final class AppState: ObservableObject {
     /// private — only refreshContactsCache() may write this.
     private(set) var cachedContacts: [ContactsStore.StoredContact] = []
     private var contactsCacheObserver: NSObjectProtocol?
+    /// I1-RESUME — see `.presenceVisibilityDidChange`'s declaration.
+    private var presenceVisibilityObserver: NSObjectProtocol?
 
     /// W-ORPHANPEER — peers the server has answered a definitive 404 for:
     /// accounts that no longer exist. Hidden from the address book and from
@@ -1440,6 +1459,10 @@ final class AppState: ObservableObject {
     }
 
     func initialize() {
+        // I4: materialize the presence objectWillChange forwarding before
+        // anything can publish a presence update. `lazy` means touching it
+        // here is a no-op on every call after the first.
+        _ = presenceServiceForwarding
         // W-CC: warm the contacts cache immediately so incoming-call and
         // message-receive paths have fresh data without a synchronous disk
         // decode. The notification observer keeps it current across the session.
@@ -1451,7 +1474,35 @@ final class AppState: ObservableObject {
         ) { [weak self] _ in
             // NotificationCenter callbacks are @Sendable in iOS 18+ — hop to
             // MainActor to satisfy the @MainActor isolation of cachedContacts.
-            Task { @MainActor [weak self] in self?.refreshContactsCache() }
+            Task { @MainActor [weak self] in
+                self?.refreshContactsCache()
+                // I5: a contact added mid-session (QR scan, NFC pair, phonebook
+                // import) was never subscribed — this handler used to stop at
+                // refreshContactsCache, so BCryptoPresenceManager's own
+                // subscribed-set guard silently dropped every presence_update
+                // for that userId forever (until the next app-relaunch /
+                // bindPresenceAfterAuth). Re-run the same tracked-set push
+                // auth uses so a fresh contact starts receiving updates too.
+                self?.resubscribePresenceForTrackedContacts()
+            }
+        }
+
+        // I1-RESUME — PrivacyGate.presenceVisibleToContacts turning back ON
+        // does not by itself put anything on the wire: subscribe(userIds:)
+        // re-checks the gate on every call, but nothing calls it again just
+        // because the gate changed. Without this, a user who re-enables the
+        // setting sees every contact stay grey until the next WS reconnect,
+        // which on a long-lived connection could be hours. Only posted when
+        // the gate turns true (see the setter), so there is nothing to do
+        // here on the OFF direction — subscribe() itself already goes silent.
+        presenceVisibilityObserver = NotificationCenter.default.addObserver(
+            forName: .presenceVisibilityDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.forceResubscribePresence()
+            }
         }
 
         // W-EXTRESOLVE: wire DisplayName's async fetch backstop to the live
@@ -7897,13 +7948,72 @@ final class AppState: ObservableObject {
         // W-CC: refresh cache at auth time so the freshest contacts list
         // is used for both presence and incoming-call name resolution.
         refreshContactsCache()
+        resubscribePresenceForTrackedContacts()
+    }
+
+    /// I5: recompute the presence tracked set (contacts ∪ recent calls) and
+    /// push it to the engine. `PresenceService.subscribe(userIds:)` replaces
+    /// the whole set — the server treats it as authoritative — so calling
+    /// this again is always safe, including before `bindPresenceAfterAuth`
+    /// has ever attached a manager (it just populates the local tracked set;
+    /// the next `attach(provider:)` restores it on the live transport).
+    /// Shared by `bindPresenceAfterAuth` (post-auth) and the
+    /// `.contactsDidChange` observer — a contact added mid-session
+    /// (QR/NFC/phonebook import) must be subscribed too, not just cached.
+    ///
+    /// The `lastSubscribedUserIds` guard is load-bearing, not decorative:
+    /// `ContactsRefreshService.refresh(phonesToCheck:)` calls
+    /// `store.upsert(c)` in a loop, once per resolved contact — a
+    /// phonebook sync with dozens of matches posts `.contactsDidChange`
+    /// (and thus would call this) dozens of times in a tight burst. Without
+    /// the early-exit, each one re-sends a full `presence_subscribe` over
+    /// the WS even when the resulting set is identical to what's already
+    /// live (flagged by external code review, confirmed against the real
+    /// call site rather than left as a hypothetical).
+    private func resubscribePresenceForTrackedContacts() {
         let contacts = cachedContacts.map { $0.userId }
         let recents = recentCalls
-        let union = Array(Set(contacts + recents)).filter { !$0.isEmpty }
-        if !union.isEmpty {
-            presenceService.subscribe(userIds: union)
-        }
+        // NOTE: `Set(...).filter { }` returns `[String]` (Sequence.filter
+        // always yields an Array, even from a Set receiver) — wrap the
+        // filtered array back in `Set(...)` so `union` is actually
+        // comparable to `lastSubscribedUserIds` below.
+        let union = Set((contacts + recents).filter { !$0.isEmpty })
+        // W-PRESENCETRACKSHRINK — an adversarial review of the dedup guard
+        // above caught that requiring `!union.isEmpty` here meant a
+        // legitimate shrink-to-zero (the user deletes their last contact,
+        // no recent-call history either) returned WITHOUT clearing
+        // `lastSubscribedUserIds` and WITHOUT telling the server the
+        // tracked set is now empty — the previous, no-longer-justified
+        // subscription stayed live for the rest of the session. Comparing
+        // only against `lastSubscribedUserIds` still short-circuits the
+        // cold-start case for free: both sides start `[]`, so the equality
+        // check alone already skips the redundant first call.
+        guard union != lastSubscribedUserIds else { return }
+        lastSubscribedUserIds = union
+        presenceService.subscribe(userIds: Array(union))
     }
+
+    /// I1-RESUME — forces a fresh `presence_subscribe` even when the tracked
+    /// set is IDENTICAL to `lastSubscribedUserIds`. That dedup guard exists
+    /// to stop a burst of no-op resubscribes; it is wrong for exactly one
+    /// case: the gate was OFF (so the last real subscribe — before the gate
+    /// flipped off — is what `lastSubscribedUserIds` still holds), and it
+    /// just turned back ON. The tracked set the user cares about hasn't
+    /// changed, but the server was never told to resume, so the ordinary
+    /// path would see `union == lastSubscribedUserIds` and skip the call
+    /// that is the entire point of resuming.
+    private func forceResubscribePresence() {
+        let contacts = cachedContacts.map { $0.userId }
+        let union = Set((contacts + recentCalls).filter { !$0.isEmpty })
+        lastSubscribedUserIds = union
+        presenceService.subscribe(userIds: Array(union))
+    }
+
+    /// Last userId set actually pushed via `resubscribePresenceForTrackedContacts`.
+    /// Reset on logout (`presenceService.reset()` call site) so the next
+    /// session's first subscribe always goes out even if the set happens
+    /// to match the previous session's.
+    private var lastSubscribedUserIds: Set<String> = []
 
     // MARK: - W-CC contacts cache
 
@@ -8113,6 +8223,7 @@ final class AppState: ObservableObject {
         // W72: drop presence subscriptions + cached statuses so the next
         // login starts with a clean slate.
         presenceService.reset()
+        lastSubscribedUserIds.removeAll()
         currentUserId = nil
         UserDefaults.standard.removeObject(forKey: "currentUserId")
         currentUserDialExtension = nil

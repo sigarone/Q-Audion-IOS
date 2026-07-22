@@ -150,8 +150,12 @@ final class PresenceService: ObservableObject {
         }
         self.manager = mgr
         // Re-emit on reconnect — if we had a tracked set from a previous
-        // attach, restore it on the new transport.
-        if !subscribed.isEmpty {
+        // attach, restore it on the new transport. W411 bypass fix: this
+        // used to re-subscribe unconditionally, which silently re-enabled
+        // presence sharing on the very next reconnect after the user had
+        // turned "Presenza visibile" off — the same gate `subscribe(userIds:)`
+        // already enforces below must hold here too.
+        if !subscribed.isEmpty, PrivacyGate.presenceVisibleToContacts {
             mgr.subscribe(userIds: Array(subscribed))
         }
     }
