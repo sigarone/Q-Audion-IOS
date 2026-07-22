@@ -281,6 +281,30 @@ public final class SovereignKeyVault {
         return results.compactMap { $0[kSecAttrAccount as String] as? String }
     }
 
+    /// W-PSKMIX step 3 — same enumeration as `listPskNames()`, paired with
+    /// each item's Keychain-recorded creation date. `kSecAttrCreationDate` is
+    /// already tracked automatically by every `kSecClassGenericPassword`
+    /// item; this just reads an attribute no caller previously asked for, no
+    /// new persisted state. Used to build a stable, deterministic PSK
+    /// advertise order (oldest-registered first) instead of falling back to
+    /// whatever order `SecItemCopyMatching` happens to enumerate in, which
+    /// is unspecified and not guaranteed stable across calls.
+    public func listPskEntries() -> [(name: String, createdAt: Date?)] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+        var items: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &items)
+        guard status == errSecSuccess, let results = items as? [[String: Any]] else { return [] }
+        return results.compactMap { attrs in
+            guard let name = attrs[kSecAttrAccount as String] as? String else { return nil }
+            return (name: name, createdAt: attrs[kSecAttrCreationDate as String] as? Date)
+        }
+    }
+
     public func getFingerprint(name: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
