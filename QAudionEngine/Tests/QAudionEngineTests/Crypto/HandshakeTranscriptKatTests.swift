@@ -5,16 +5,23 @@ import CryptoKit
 /// Cross-platform KAT verifier for the Phase-10b handshake-signing transcript (§3 of
 /// `docs/phase18/HANDSHAKE-SIGNING-SPEC.md`).
 ///
-/// ⚠️ **MUST be run by Xcode / SwiftPM (`swift test`) to confirm.** This file was authored
-/// in an environment that cannot execute Swift / CryptoKit, so the assertions here are
-/// UNVERIFIED on-device. The byte LAYOUT (transcript length + SHA-256) was hand-traced
-/// against the golden JSON offline and matches (XC-4, CAPS=6 bytes: OFFER 1853 / `01496bb5…`,
-/// ACCEPT 1822 / `5e4ce2f0…`). The Ed25519 **signature** equality assertions can only be
-/// confirmed by a real CryptoKit run — `kat-cross-platform.yml` / `engine-tests.yml` is
-/// the gate. If the signature assertion fails while the SHA-256 assertion passes, the
-/// transcript bytes are correct and the divergence is purely in the Ed25519 primitive
-/// (which would be surprising — CryptoKit `Curve25519.Signing` is RFC 8032 pure, same as
-/// the Android BouncyCastle reference that produced the golden).
+/// Confirmed via a real `ios-simulator-tests` run (PR #34): CryptoKit's `Curve25519.Signing
+/// .PrivateKey.signature(for:)` does NOT reproduce a fixed golden signature byte-for-byte,
+/// even from the same seed and transcript. This is not a bug — Apple's own doc for
+/// `signature(for:)` states it outright: "Although not required by RFC 8032 ... the
+/// CryptoKit implementation of the algorithm employs randomization to generate a different
+/// signature on every call, even for the same data and key, to guard against side-channel
+/// attacks." Independently re-derived the golden signatures with an OpenSSL/`cryptography`
+/// -backed Python reference from the exact seed + transcript bytes dumped via Android's
+/// `HandshakeTranscript.offer()`/`accept()` (same golden JSON, same functions Android's own
+/// KAT test consumes) — they match byte-for-byte, confirming BouncyCastle/OpenSSL are
+/// deterministic and the golden vector itself is correct; CryptoKit alone deliberately
+/// isn't. So this test does NOT assert byte-equality on iOS's own produced signature — it
+/// asserts the property that actually matters for a live handshake: iOS's `verify()` accepts
+/// the cross-platform golden (proving iOS can validate an Android/Desktop-signed OFFER/
+/// ACCEPT) and iOS's own freshly-produced signature also verifies under its own pubkey
+/// (proving iOS's outbound signatures are valid, even though their bytes are never
+/// reproducible). The transcript LAYOUT (length + SHA-256) is still asserted byte-for-byte.
 ///
 /// Loads `handshake-sig-kat.json` (byte-copy of
 /// `apps/qaudion-desktop/tools/kat/handshake-sig/handshake-sig-kat.json`) from the test
@@ -22,9 +29,11 @@ import CryptoKit
 /// and asserts:
 ///   1. `SHA256(transcript) == expected.transcript_sha256_hex`
 ///   2. `transcript.count == expected.transcript_len`
-///   3. `Ed25519.sign(seed, transcript) == expected.signature_hex` (deterministic, RFC 8032)
+///   3. `verify(transcript, expected.signature_hex, signerIdentityKey) == true` (cross-platform
+///      golden verifies under iOS's own verifier)
 ///   4. (OFFER) `offerBinding(transcript) == expected.offer_binding_hex`
-///   5. round-trip: `verify(transcript, signature, signerIdentityKey) == true`
+///   5. `verify(transcript, sign(transcript, seed), signerIdentityKey) == true` (iOS's own
+///      freshly-produced signature is valid — never asserted byte-equal to the golden)
 ///
 /// The JSON is the immutable cross-platform contract — DO NOT modify it.
 final class HandshakeTranscriptKatTests: XCTestCase {
@@ -187,22 +196,41 @@ final class HandshakeTranscriptKatTests: XCTestCase {
         }
     }
 
-    /// Re-sign with the seed and assert byte-equal to the golden detached signature, then
-    /// confirm the signature verifies against the signer's public key.
+    /// Re-sign with the seed. Do NOT assert byte-equality with the golden `signature_hex`:
+    /// confirmed via a real `ios-simulator-tests` run (PR #34, commit 5a8b0b0) that CryptoKit
+    /// produces a DIFFERENT 64-byte signature every time, verified independently against an
+    /// OpenSSL/`cryptography`-backed reference that DOES reproduce the golden byte-for-byte
+    /// from the same seed+transcript — so the golden is correct and BouncyCastle/OpenSSL are
+    /// byte-deterministic, but CryptoKit deliberately is not. Apple's own doc for
+    /// `signature(for:)` says so explicitly: "Although not required by RFC 8032 ... the
+    /// CryptoKit implementation of the algorithm employs randomization to generate a
+    /// different signature on every call, even for the same data and key, to guard against
+    /// side-channel attacks." So byte-equality is not a valid cross-platform invariant for
+    /// this primitive — what real interop actually requires, and what every other assertion
+    /// here already checks, is that iOS's own signature verifies, and that the OTHER
+    /// platforms' golden signature ALSO verifies under iOS's own `verify()` — that's the
+    /// actual contract a live OFFER/ACCEPT handshake depends on.
     private func assertSignature(id: String, transcript: Data, inputs: [String: Any],
                                  expected: [String: Any], signerPub: Data) {
         guard let seedHex = inputs["signerSeed_hex"] as? String,
               let seed = Self.fromHex(seedHex) else {
             XCTFail("[\(id)] missing/invalid signerSeed_hex"); return
         }
-        guard let expSig = expected["signature_hex"] as? String else {
-            XCTFail("[\(id)] missing signature_hex"); return
+        guard let expSig = expected["signature_hex"] as? String,
+              let goldenSig = Self.fromHex(expSig) else {
+            XCTFail("[\(id)] missing/invalid signature_hex"); return
         }
+        // Cross-platform contract: iOS's verify() MUST accept the golden signature that
+        // Android/Desktop produced for this exact transcript — this is what a real
+        // handshake actually needs (verifying the PEER's signature), unlike byte-identical
+        // re-signing, which CryptoKit deliberately never gives you.
+        XCTAssertTrue(
+            HandshakeTranscript.verify(transcript: transcript, signature: goldenSig, signerIdentityKey: signerPub),
+            "[\(id)] verify() rejected the cross-platform golden signature — real interop break"
+        )
         do {
             let sig = try HandshakeTranscript.sign(transcript: transcript, signingPrivateKeyRaw: seed)
             XCTAssertEqual(sig.count, 64, "[\(id)] Ed25519 signature must be 64 bytes")
-            XCTAssertEqual(Self.toHex(sig), expSig.lowercased(),
-                           "[\(id)] signature mismatch (Ed25519 is deterministic / RFC 8032)")
             // Verify path: the produced signature MUST verify under the signer pubkey.
             XCTAssertTrue(
                 HandshakeTranscript.verify(transcript: transcript, signature: sig, signerIdentityKey: signerPub),
