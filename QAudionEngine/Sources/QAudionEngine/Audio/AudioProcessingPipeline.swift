@@ -333,6 +333,30 @@ public final class AudioProcessingPipeline {
     // between an acceptable call and call 1de9935f.
     private var vpioBypassCountThisCall: Int = 0
     private var vpioRetryCountThisCall: Int = 0
+    // W-IOSECHO (2026-07-22) — iOS port of Android's `route_changes`/
+    // `speaker_ms` (see AudioCapture's EchoBucketTotals for the sibling
+    // echo_active/idle port). `routeChangesThisCall` counts ROUTE-DRIVEN
+    // engine restarts only — AudioCapture.restartEngineForRoute calls
+    // `noteRouteChange()` exactly when `routeDriven == true`, deliberately
+    // excluding the W-AEC-FIX starve-watchdog restart (same route, no
+    // change). `speakerMsAccumulatedThisCall` sums wall-clock ms spent with
+    // the output on the built-in loudspeaker, sampled at every
+    // `enableVoiceProcessing` call (call start + every engine restart) via
+    // `noteSpeakerResidency` below — NOT a continuous timer. On this
+    // codebase's architecture a route can only actually change at an engine
+    // restart (VP-IO must be reconfigured on route change — see
+    // `AudioCapture.handleRouteChange`), so sampling at every restart plus
+    // once more at teardown is a continuous, gap-free reconstruction of
+    // residency FOR THE RESTARTS THAT ACTUALLY HAPPENED. The one honest gap:
+    // a route flip THROTTLED away by AudioCapture's own flap-guard
+    // (`shouldSkipRouteRestart`, W574o/W574p) never triggers a restart, so it
+    // neither opens nor closes an interval here — a rapidly flapping route
+    // that never settles long enough to escape the throttle window would
+    // under-count both fields. The common single-toggle case (the first tap
+    // is never throttled) is captured correctly.
+    private var routeChangesThisCall: Int64 = 0
+    private var speakerMsAccumulatedThisCall: Int64 = 0
+    private var speakerSinceMs: Int64 = 0   // 0 = not currently accruing speaker time
 
     /// How many engine starts this call have been forced to run without VP-IO.
     /// Read by `AudioCapture.restartEngineForRoute` to bound retries.
@@ -355,6 +379,49 @@ public final class AudioProcessingPipeline {
         engineRestartsThisCall += 1
     }
 
+    /// W-IOSECHO — AudioCapture.restartEngineForRoute reports here ONLY when
+    /// the restart was route-driven (see the ivar doc above for what this
+    /// deliberately excludes).
+    public func noteRouteChange() {
+        routeChangesThisCall += 1
+    }
+
+    /// Pure step function for the speaker-residency accumulator: given the ms
+    /// accumulated so far, whether an interval is currently open (0 = no)
+    /// and since when, the newly-observed route state, and the current wall
+    /// clock, returns the updated `(accumulatedMs, sinceMs)` pair. Extracted
+    /// so the interval arithmetic has its own regression test
+    /// (`AudioProcessingPipelineRouteChangeTests`) independent of
+    /// `AVAudioSession`/`Date()`, same pattern as `AudioCapture.
+    /// nextNoiseFloor`/`nextMakeUpAgcGain`. No AVFoundation in the
+    /// signature, so it runs on the macOS CI runner via `swift test` too
+    /// (unlike `latchAudioDiag`, which needs a live `AVAudioSession` and
+    /// currently only exercises for real on the iOS Simulator CI job).
+    static func nextSpeakerResidency(accumulatedMs: Int64,
+                                      sinceMs: Int64,
+                                      nowSpeaker: Bool,
+                                      nowMs: Int64) -> (accumulatedMs: Int64, sinceMs: Int64) {
+        var acc = accumulatedMs
+        if sinceMs != 0 {
+            acc += nowMs - sinceMs
+        }
+        return (acc, nowSpeaker ? nowMs : 0)
+    }
+
+    /// W-IOSECHO — close the currently-open speaker/non-speaker interval (if
+    /// any) and open a new one for `nowSpeaker`. Called from `latchAudioDiag`,
+    /// i.e. at every `enableVoiceProcessing` (call start + every engine
+    /// (re)start). Thin wall-clock wrapper around the pure step function
+    /// above.
+    private func noteSpeakerResidency(nowSpeaker: Bool) {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        (speakerMsAccumulatedThisCall, speakerSinceMs) = Self.nextSpeakerResidency(
+            accumulatedMs: speakerMsAccumulatedThisCall,
+            sinceMs: speakerSinceMs,
+            nowSpeaker: nowSpeaker,
+            nowMs: now)
+    }
+
     /// True when the active input route is a Bluetooth headset (HFP/LE).
     /// AirPods report `.bluetoothHFP` once the mic opens.
     public static func currentRouteHasBluetoothInput() -> Bool {
@@ -374,7 +441,9 @@ public final class AudioProcessingPipeline {
         lastGrantedSampleRate = session.sampleRate
         if vpioEnabled { vpioEverActiveThisCall = true }
         if agcEnabled  { agcEverActiveThisCall = true }
-        if Self.currentRouteHasBuiltInSpeaker() { speakerRouteEverThisCall = true }
+        let nowSpeaker = Self.currentRouteHasBuiltInSpeaker()
+        if nowSpeaker { speakerRouteEverThisCall = true }
+        noteSpeakerResidency(nowSpeaker: nowSpeaker)  // W-IOSECHO — speaker_ms
         if Self.currentRouteHasBluetoothInput() { bluetoothRouteEverThisCall = true }
     }
 
@@ -396,10 +465,22 @@ public final class AudioProcessingPipeline {
         // W-VPIORETRY — see the backing fields' note.
         public let vpioBypassCount: Int
         public let vpioRetryCount: Int
+        // W-IOSECHO — see the backing fields' note above `latchAudioDiag`.
+        public let routeChanges: Int64
+        public let speakerMs: Int64
     }
 
     /// Read the per-call audio diagnostics and reset them for the next call.
     public func consumeAudioDiagStats() -> AudioDiagStats {
+        // W-IOSECHO — close the currently-open speaker interval at teardown
+        // so the call's FINAL route segment is counted; nowSpeaker: false
+        // closes it without reopening (the call is ending).
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        (speakerMsAccumulatedThisCall, speakerSinceMs) = Self.nextSpeakerResidency(
+            accumulatedMs: speakerMsAccumulatedThisCall,
+            sinceMs: speakerSinceMs,
+            nowSpeaker: false,
+            nowMs: now)
         let stats = AudioDiagStats(
             agcEverActive:       agcEverActiveThisCall,
             speakerRouteEver:    speakerRouteEverThisCall,
@@ -414,7 +495,9 @@ public final class AudioProcessingPipeline {
             engineRestarts:      engineRestartsThisCall,
             vpioBypassedEver:    vpioBypassedEverThisCall,
             vpioBypassCount:     vpioBypassCountThisCall,
-            vpioRetryCount:      vpioRetryCountThisCall
+            vpioRetryCount:      vpioRetryCountThisCall,
+            routeChanges:        routeChangesThisCall,
+            speakerMs:           speakerMsAccumulatedThisCall
         )
         agcEverActiveThisCall = false
         speakerRouteEverThisCall = false
@@ -429,6 +512,8 @@ public final class AudioProcessingPipeline {
         vpioBypassedEverThisCall = false
         vpioBypassCountThisCall = 0
         vpioRetryCountThisCall = 0
+        routeChangesThisCall = 0
+        speakerMsAccumulatedThisCall = 0
         return stats
     }
 
