@@ -1601,8 +1601,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // rejecting the lookup. Still just a lookup, not new
                     // multi-candidate selection logic.
                     let selection = Self.parseSelection(selectedFpStr)
-                    guard let name = vault.listPskNames().first(where: {
-                        selection.contains(vault.getFingerprint(name: $0))
+                    guard let name = vault.listPskNames().first(where: { name in
+                        guard let fp = vault.getFingerprint(name: name) else { return false }
+                        return selection.contains(fp)
                     }) else { return nil }
                     let raw = (try? vault.loadPsk(name: name)) ?? nil
                     return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
@@ -1641,8 +1642,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // Same membership-vs-bare-`==` widening as the V4 branch
                     // above — byte-identical for today's N=1 case.
                     let selection = Self.parseSelection(selectedFpStr)
-                    guard let name = vault.listPskNames().first(where: {
-                        selection.contains(vault.getFingerprint(name: $0))
+                    guard let name = vault.listPskNames().first(where: { name in
+                        guard let fp = vault.getFingerprint(name: name) else { return false }
+                        return selection.contains(fp)
                     }) else { return nil }
                     let raw = (try? vault.loadPsk(name: name)) ?? nil
                     return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
