@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.831",
+              date: "2026-07-22",
+              title: "v1.0.831",
+              bullets: [
+                "fix(nfc): the iPhone was never asking Android for our application (W-NFCIOS)",
+                "feat(vault): an NFC key can be seen but never copied off the phone (W-NFCBIND, iOS parity)",
+              ]),
         .init(id: "v1.0.830",
               date: "2026-07-22",
               title: "v1.0.830",
               bullets: [
+                "chore: regenerate changelog for v1.0.830",
                 "ci: drop the untrusted aws/tap so brew stops annotating every build",
                 "feat(contacts): hide peers whose account no longer exists on the server (W-ORPHANPEER)",
               ]),
@@ -143,13 +151,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.812",
                 "fix(groupchat): stale group metadata never re-seals after member rekey",
-              ]),
-        .init(id: "v1.0.811",
-              date: "2026-07-19",
-              title: "v1.0.811",
-              bullets: [
-                "chore: regenerate changelog for v1.0.811",
-                "fix(groupcall): VP-IO engine race crash, key-pin video-zero, track/tile race, stuck join",
               ]),
     ]
 }
