@@ -172,4 +172,27 @@ public enum AssuranceState: Equatable {
 
         return .pqcOnly // S10 — final catch-all, keeps decide() total for any n < 1
     }
+
+    /// W-KCMAC (ship step 5) — the fp-matching helper `decide()`'s own doc says
+    /// callers must run BEFORE calling in: filters a peer's advertised
+    /// `(fingerprint, role)` pairs down to only the fingerprints THIS side also
+    /// holds, in the SAME index-paired-with-role convention
+    /// `HandshakeTranscript.advEnc`/`AndroidHandshakeBundle.pskRoles` already use
+    /// (role absent, or the roles array shorter than the fingerprints array at
+    /// that index, ⇒ `0`). Order-preserving over `peerFingerprints`, never
+    /// re-sorted. `peerFingerprints == nil` ⇒ `[]`.
+    public static func mutualPeerAdvertisedRoles(
+        peerFingerprints: [String]?,
+        peerRoles: [Int]?,
+        localFingerprints: Set<String>
+    ) -> [Int] {
+        guard let fps = peerFingerprints else { return [] }
+        var out: [Int] = []
+        out.reserveCapacity(fps.count)
+        for (idx, fp) in fps.enumerated() where localFingerprints.contains(fp) {
+            let role = (peerRoles != nil && idx < peerRoles!.count) ? peerRoles![idx] : 0
+            out.append(role)
+        }
+        return out
+    }
 }

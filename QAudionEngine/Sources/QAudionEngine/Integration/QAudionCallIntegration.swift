@@ -265,6 +265,65 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// unconditionally, so caller and callee install identically.
     public var onRelaySessionReady: ((Data, String) -> Void)?
 
+    /// W-KCMAC (multi-PSK-mixing SYNTHESIS.md ship step 5) — everything AppState
+    /// needs to run the `KCMAC:` piggy-back exchange, fired at the SAME two
+    /// handshake-completion sites as ``onPqcSessionKeyEstablished``
+    /// (responder's OFFER-accept and initiator's ACCEPT-decapsulate), AFTER it.
+    /// PURE OBSERVATION — `N` stays ≤1, nothing here reads/writes `PskMix` mixing
+    /// state, and AppState must never let a wrong/absent/unattempted `kc_mac`
+    /// gate the call (W-NOBRICK); the verdict is telemetry/`AssuranceState` input
+    /// only. `kcKey`/`transcript` are `nil` when the reconstructed offer/accept v2
+    /// transcripts or either identity key aren't available (unsigned/legacy peer,
+    /// or this side hasn't wired transcript-v2 signing) — AppState must treat that
+    /// as "kc_mac not attempted" (status `.absent`), never attempt to derive a MAC
+    /// from empty/placeholder bytes.
+    public struct KcMacReadyEvent {
+        /// The other party in this call (regardless of who dialled).
+        public let peerId: String
+        public let callId: String
+        /// `true` on the caller/initiator leg (sends `kc_mac_init`, verifies the
+        /// peer's `kc_mac_resp`); `false` on the responder leg (the converse).
+        public let isInitiator: Bool
+        /// The post-PSK-mix session key (`K_kc = HKDF-Expand(sessionKey, …)`'s PRK).
+        public let sessionKey: Data
+        /// `K_kc`, already derived — `nil` when a transcript couldn't be built.
+        public let kcKey: Data?
+        /// `kc_transcript` — `nil` alongside `kcKey`.
+        public let transcript: Data?
+        /// Number of secrets mixed into this call's session key (`0` or `1` — `N`
+        /// stays capped this step; see `KeyConfirmation`'s doc).
+        public let n: Int
+        /// Whether the PEER's own handshake capabilities advertised `pskMixV1` —
+        /// the KCMAC wire exchange is gated on this (see the type doc).
+        public let peerSupportsMix: Bool
+        /// Whether THIS call's OFFER/ACCEPT Ed25519 transcript signature verified
+        /// (`AssuranceState.decide`'s `sigOk` input).
+        public let sigOk: Bool
+        /// The peer's advertised per-fingerprint PSK roles, PRE-FILTERED to
+        /// fingerprints this side also holds (`AssuranceState.decide`'s
+        /// `peerAdvertisedRoles` input — this function does the fp-matching so
+        /// `decide()` itself stays a pure function with no vault access).
+        public let peerAdvertisedRoles: [Int]
+
+        public init(
+            peerId: String, callId: String, isInitiator: Bool, sessionKey: Data,
+            kcKey: Data?, transcript: Data?, n: Int, peerSupportsMix: Bool,
+            sigOk: Bool, peerAdvertisedRoles: [Int]
+        ) {
+            self.peerId = peerId
+            self.callId = callId
+            self.isInitiator = isInitiator
+            self.sessionKey = sessionKey
+            self.kcKey = kcKey
+            self.transcript = transcript
+            self.n = n
+            self.peerSupportsMix = peerSupportsMix
+            self.sigOk = sigOk
+            self.peerAdvertisedRoles = peerAdvertisedRoles
+        }
+    }
+    public var onKcMacReady: ((KcMacReadyEvent) -> Void)?
+
     /// Phase B — earbud GATT proxy for fp_adv operations (c8).
     /// Set by AppState from `earbudGattProxy` before a call starts.
     /// Nil when no earbud is bonded/connected → keyClass falls back to 0.
@@ -515,6 +574,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// v2 transcript was buildable (see `HandshakeTranscript.advEnc`'s doc for when it isn't).
     /// Cleared with the rest of the per-call state in `onCallEnded`.
     private var sentOfferTranscriptV2ByCall: [String: Data] = [:]
+
+    /// W-KCMAC (ship step 5) — the RAW fingerprint list WE advertised in the OFFER
+    /// (`onAndroidCallSetupStarted`'s `advertisedPskFingerprints`), stashed so the
+    /// CALLER leg can later rebuild `KeyConfirmation`'s `initAdvert` (its own
+    /// advertised order) once the matching ACCEPT arrives — mirrors
+    /// `sentOfferTranscriptByCall`'s stash-at-send/consume-at-receive shape.
+    /// `pskRoles` is not stashed alongside: nobody sets a non-zero role yet (see
+    /// `AndroidHandshakeBundle.pskRoles` doc), so `KeyConfirmation.pskAdvertEntries`
+    /// is called with `roles: nil` (⇒ all-zero) on both legs, matching what was
+    /// actually signed. Cleared with the rest of the per-call state in `onCallEnded`.
+    private var sentOfferPskFingerprintsByCall: [String: [String]] = [:]
 
     public init() {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
@@ -767,6 +837,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             ),
             pskFingerprints: advertisedPskFingerprints
         )
+
+        // W-KCMAC (ship step 5) — stash the advert list itself (not just the
+        // transcript bytes) so the matching ACCEPT's `onKcMacReady` can rebuild
+        // `initAdvert` in the EXACT order we sent it. Unconditional (not gated on
+        // `signingEnabled`): harmless to stash even when the KCMAC gate later finds
+        // no offer_binding to pair it with (empty ⇒ no KCMAC attempted, see
+        // `onKcMacReady`'s doc).
+        lock.withLock {
+            sentOfferPskFingerprintsByCall[callId.lowercased()] = advertisedPskFingerprints
+        }
 
         // Phase-10b (a) — SIGN the OFFER over the §3 transcript before serialize.
         // No-op when signing is not wired → `bundleToSend == offerBundle` and the
@@ -1137,6 +1217,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // the v2 transcript wasn't available (pathological psk-list, or an unsigned/
             // warn-legacy peer). Bound into the ACCEPT's `sigV2` further below.
             var verifiedOfferBindingV2 = Data()
+            // W-KCMAC — `AssuranceState.decide`'s `sigOk` input: true only for the
+            // two verdicts that actually confirm the Ed25519 transcript signature
+            // (`.authenticated`/`.authenticatedRepinFromPublished`) — `.abort` and
+            // `.proceedUnsignedWarn` leave it false (forged / absent signature).
+            var offerSigOk = false
             // Phase 18 — v4 bootstrap (BUG 2 fix): we mirror Android's `v4Ready`
             // (PqcHandshake.kt:819-826), which does NOT require an "authenticated
             // verdict". The single real input the bootstrap gate needs is a NON-EMPTY
@@ -1192,6 +1277,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     }
                 case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable):
                     applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                    offerSigOk = true
                     // The signed OFFER's binding the ACCEPT will carry. Rebuilt
                     // under the trusted key (= the bundle's signerIdentityKey,
                     // which the verdict already confirmed == pinned/server key).
@@ -1211,6 +1297,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // under the SET-PROVEN device key (the key the policy verified).
                     print("[QAudionCallIntegration] OFFER set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
                     applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                    offerSigOk = true
                     if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: deviceKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
                     }
@@ -1414,6 +1501,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // A genuinely-legacy initiator does not verify at all. callId + the
             // signed ciphertext already bind the ACCEPT to this exact call.
             var acceptToSend = accept
+            // W-KCMAC — `kc_transcript`'s `accept_binding`: `SHA-256` of the SAME v2
+            // ACCEPT transcript object `acceptTV2` below (never raw JSON bytes — see
+            // `KeyConfirmation.transcript`'s doc). Stays empty when the v2 transcript
+            // wasn't buildable (signing not wired / pathological psk-list), which the
+            // KCMAC gate below treats as "kc_mac not attempted" (status `.absent`).
+            var acceptBindingV2ForKc = Data()
             if signingEnabled, let idKey = localSignerIdentityKey,
                let acceptT = Self.acceptTranscript(from: accept, callId: callId, signerKeyRaw: idKey, offerBinding: verifiedOfferBinding) {
                 // W-TRANSCRIPTV2 — v2 sibling, binds to the v2 offer_binding computed
@@ -1421,6 +1514,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // available).
                 let acceptTV2 = Self.acceptTranscriptV2(from: accept, callId: callId, signerKeyRaw: idKey, offerBindingV2: verifiedOfferBindingV2)
                 acceptToSend = signedCopy(of: accept, transcript: acceptT, transcriptV2: acceptTV2)
+                if let acceptTV2 { acceptBindingV2ForKc = HandshakeTranscript.offerBinding(acceptTV2) }
             }
             let wire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: acceptToSend)
 
@@ -1509,6 +1603,59 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // session key and the IKM for K_video.
             onVideoKeyEstablished?(combined)
 
+            // W-KCMAC (ship step 5) — responder leg. Fires AFTER the session key
+            // and the ACCEPT's v2 binding both exist. `kcKey`/`transcript` stay
+            // nil unless BOTH transcript-v2 bindings (`verifiedOfferBindingV2`
+            // from step (b)/`acceptBindingV2ForKc` from step (c) above) and BOTH
+            // identity keys are real — AppState must read that as "not attempted"
+            // (`.absent`), never derive a MAC over placeholder/empty bytes.
+            let kcPeerSupportsMix = bundle.capabilities?.pskMixV1 ?? false
+            let kcN: Int
+            let kcMixFingerprints: [Data]
+            if let fp = selectedFp, let raw = DeviceRenewBlob.hexDecode(fp), raw.count == 32 {
+                kcN = 1
+                kcMixFingerprints = [raw]
+            } else {
+                kcN = 0
+                kcMixFingerprints = []
+            }
+            var kcKeyForEvent: Data? = nil
+            var kcTranscriptForEvent: Data? = nil
+            if !verifiedOfferBindingV2.isEmpty, !acceptBindingV2ForKc.isEmpty,
+               let ikResp = localSignerIdentityKey, let ikInit = v4PeerSik, ikInit.count == 32 {
+                // initAdvert = the OFFER's OWN advert (the initiator's, in the
+                // exact order it arrived on the wire). respAdvert = OUR OWN ACCEPT
+                // advert (`responderAdvertisedPskFingerprints`, built above) —
+                // `pskRoles: nil` since nothing sets a non-zero ACCEPT-side role yet.
+                let initEntries = KeyConfirmation.pskAdvertEntries(
+                    fingerprintsHex: bundle.pskFingerprints, roles: bundle.pskRoles)
+                let respEntries = KeyConfirmation.pskAdvertEntries(
+                    fingerprintsHex: responderAdvertisedPskFingerprints.isEmpty ? nil : responderAdvertisedPskFingerprints,
+                    roles: nil)
+                if let t = KeyConfirmation.transcript(
+                    offerBinding: verifiedOfferBindingV2,
+                    acceptBinding: acceptBindingV2ForKc,
+                    initAdvert: initEntries,
+                    respAdvert: respEntries,
+                    mixFingerprints: kcMixFingerprints,
+                    mixId: Data(),
+                    ikInit: ikInit,
+                    ikResp: ikResp
+                ) {
+                    kcTranscriptForEvent = t
+                    kcKeyForEvent = KeyConfirmation.deriveKcKey(sessionKey: combined)
+                }
+            }
+            let kcPeerAdvertisedRoles = AssuranceState.mutualPeerAdvertisedRoles(
+                peerFingerprints: bundle.pskFingerprints, peerRoles: bundle.pskRoles,
+                localFingerprints: Set(eligiblePsks.keys))
+            onKcMacReady?(KcMacReadyEvent(
+                peerId: callerId, callId: callId, isInitiator: false, sessionKey: combined,
+                kcKey: kcKeyForEvent, transcript: kcTranscriptForEvent, n: kcN,
+                peerSupportsMix: kcPeerSupportsMix, sigOk: offerSigOk,
+                peerAdvertisedRoles: kcPeerAdvertisedRoles
+            ))
+
             // Pre-negotiation parity (mirror of the QUAD .offer branch):
             // the PQC OFFER is fully deserialised and our ACCEPT is on the
             // wire — tell the Android caller we are ringing locally so its
@@ -1556,6 +1703,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // RETURNS WITHOUT initSession (no session is installed for an aborted
             // handshake). `.authenticated` commits the pin / v4 flag, then falls
             // through to the existing decapsulate + initSession.
+            // W-KCMAC — hoisted to case-scope (was a local of the `if
+            // verificationEnabled` block) so the KCMAC gate below can read our
+            // OWN sent-OFFER v2 binding (`kc_transcript`'s `offer_binding`) even
+            // though it's computed here, before the ACCEPT's own v2 transcript is
+            // known. Stays empty ⇒ "kc_mac not attempted" when verification is
+            // off or we sent an unsigned/pathological OFFER.
+            var offerBindingV2ForKc = Data()
+            // W-KCMAC — `AssuranceState.decide`'s `sigOk` input for this leg.
+            var acceptSigOk = false
             if verificationEnabled {
                 // Recompute the binding from the OFFER we sent (empty when we
                 // sent an unsigned OFFER / no stash). Split into explicit steps so
@@ -1573,6 +1729,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 if let t2 = sentOfferTV2 {
                     expectedBindingV2 = HandshakeTranscript.offerBinding(t2)
                 }
+                offerBindingV2ForKc = expectedBindingV2
                 let verdict = evaluateVerdict(
                     bundle: bundle, peerId: callerId, peerDeviceId: callerDeviceId,
                     transcriptFor: { key in Self.acceptTranscript(from: bundle, callId: callId, signerKeyRaw: key, offerBinding: expectedBinding) },
@@ -1600,6 +1757,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     }
                 case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable):
                     applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                    acceptSigOk = true
                 case .authenticatedRepinFromPublished(let deviceKey, let v4Capable, let srtpDirKeyV1Capable):
                     // D11 trust-on-publish: set-proven rotation → silent additive
                     // re-pin per-(peer, device); NO banner. Proceed to init the
@@ -1607,6 +1765,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // under this set-proven device key).
                     print("[QAudionCallIntegration] ACCEPT set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
                     applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                    acceptSigOk = true
                 case .proceedUnsignedWarn(let reason):
                     print("[QAudionCallIntegration] ACCEPT unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
                 }
@@ -1854,6 +2013,82 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             // vkey-v1: JSON caller — `combined` is the IKM for K_video.
             onVideoKeyEstablished?(combined)
+
+            // W-KCMAC (ship step 5) — initiator leg, the CALLER-side twin of the
+            // responder's fire above. `offerBindingV2ForKc` is OUR OWN sent-OFFER
+            // v2 binding (hoisted out of the `if verificationEnabled` block above
+            // at step (d)); `acceptBindingV2ForKc` is reconstructed HERE (the
+            // ACCEPT's own v2 transcript wasn't stashed — only its byte-length-
+            // prefixed pieces were used transiently inside `evaluateVerdict`)
+            // using the SAME "continuity, not trust" convention the OFFER-verify
+            // abort branch above already uses: the bundle's OWN carried
+            // `signerIdentityKey`, not necessarily the pinned/set-proven key —
+            // KCMAC is a redundant integrity check on top of, not a substitute
+            // for, the Ed25519 signature verdict already evaluated above.
+            let kcCallerPeerSupportsMix = bundle.capabilities?.pskMixV1 ?? false
+            let kcCallerN: Int
+            let kcCallerMixFingerprints: [Data]
+            if !selectedFpStr.isEmpty, let raw = DeviceRenewBlob.hexDecode(selectedFpStr), raw.count == 32 {
+                kcCallerN = 1
+                kcCallerMixFingerprints = [raw]
+            } else {
+                kcCallerN = 0
+                kcCallerMixFingerprints = []
+            }
+            var kcCallerKeyForEvent: Data? = nil
+            var kcCallerTranscriptForEvent: Data? = nil
+            // `v4InitPeerSik` (computed just above for the v4 bootstrap gate) is
+            // the SAME decoded peer identity key KCMAC needs — reused, not
+            // re-decoded.
+            if !offerBindingV2ForKc.isEmpty,
+               let ikInit = localSignerIdentityKey,
+               let ikResp = v4InitPeerSik, ikResp.count == 32,
+               let acceptTV2ForKc = Self.acceptTranscriptV2(
+                   from: bundle, callId: callId, signerKeyRaw: ikResp, offerBindingV2: offerBindingV2ForKc) {
+                let acceptBindingV2ForKc = HandshakeTranscript.offerBinding(acceptTV2ForKc)
+                // initAdvert = OUR OWN OFFER's advert (stashed at send time, step
+                // (a)'s `sentOfferPskFingerprintsByCall`); `roles: nil` mirrors the
+                // OFFER bundle itself never carrying a `pskRoles` array today.
+                // respAdvert = the ACCEPT's OWN advert (the responder's, exactly as
+                // received on the wire).
+                let sentInitFps = lock.withLock { sentOfferPskFingerprintsByCall[callId.lowercased()] }
+                let initEntries = KeyConfirmation.pskAdvertEntries(
+                    fingerprintsHex: (sentInitFps?.isEmpty ?? true) ? nil : sentInitFps, roles: nil)
+                let respEntries = KeyConfirmation.pskAdvertEntries(
+                    fingerprintsHex: bundle.pskFingerprints, roles: bundle.pskRoles)
+                if let t = KeyConfirmation.transcript(
+                    offerBinding: offerBindingV2ForKc,
+                    acceptBinding: acceptBindingV2ForKc,
+                    initAdvert: initEntries,
+                    respAdvert: respEntries,
+                    mixFingerprints: kcCallerMixFingerprints,
+                    mixId: Data(),
+                    ikInit: ikInit,
+                    ikResp: ikResp
+                ) {
+                    kcCallerTranscriptForEvent = t
+                    kcCallerKeyForEvent = KeyConfirmation.deriveKcKey(sessionKey: combined)
+                }
+            }
+            // "Fingerprints this side holds" — same vault-eligibility filter the
+            // PSK-selection lookups above already apply (`.callDerived` excluded).
+            let kcCallerVault = SovereignKeyVault()
+            let kcCallerLocalFingerprints: Set<String> = Set(
+                kcCallerVault.listPskNames().compactMap { name -> String? in
+                    guard PskAdvertising.isEligibleMatchCandidate(origin: kcCallerVault.origin(name: name)) else { return nil }
+                    return kcCallerVault.getFingerprint(name: name)
+                }
+            )
+            let kcCallerPeerAdvertisedRoles = AssuranceState.mutualPeerAdvertisedRoles(
+                peerFingerprints: bundle.pskFingerprints, peerRoles: bundle.pskRoles,
+                localFingerprints: kcCallerLocalFingerprints)
+            onKcMacReady?(KcMacReadyEvent(
+                peerId: callerId, callId: callId, isInitiator: true, sessionKey: combined,
+                kcKey: kcCallerKeyForEvent, transcript: kcCallerTranscriptForEvent, n: kcCallerN,
+                peerSupportsMix: kcCallerPeerSupportsMix, sigOk: acceptSigOk,
+                peerAdvertisedRoles: kcCallerPeerAdvertisedRoles
+            ))
+
             // W529: caller's ACCEPT decapsulation succeeded → cancel
             // any outstanding 5 s OFFER retry.
             offerRetryTask?.cancel()
@@ -2688,6 +2923,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         sentOfferTranscriptByCall.removeAll()
         // W-TRANSCRIPTV2 — same reasoning, v2 sibling.
         sentOfferTranscriptV2ByCall.removeAll()
+        // W-KCMAC — same reasoning, the stashed sent-OFFER PSK advert list.
+        sentOfferPskFingerprintsByCall.removeAll()
         // Phase B: drain any pending FPSET continuations with zeros so
         // awaiting tasks don't leak across call teardown.
         for (_, cont) in fpSetContinuationByCall {

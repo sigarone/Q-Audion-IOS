@@ -101,6 +101,25 @@ public enum KeyConfirmation {
         return out
     }
 
+    /// Build a `[PskAdvertEntry]` from the wire's parallel `(fingerprints, roles)`
+    /// arrays — the SAME shape `AndroidHandshakeBundle.pskFingerprints`/`pskRoles`
+    /// and `HandshakeTranscript`'s own private `advEnc(_:_:)` already use: `roles`
+    /// absent or shorter than `fingerprints` at a given index ⇒ role `0` there
+    /// (mirrors `AndroidHandshakeBundle.pskRoles`'s "absent means all-zero/
+    /// ordinary" convention). Order is preserved EXACTLY as given — callers must
+    /// pass the wire-received order, never a re-sorted one (see this type's doc).
+    /// `fingerprints == nil` ⇒ `[]` (an empty advert, `advEnc` encodes `u8(0)`).
+    public static func pskAdvertEntries(
+        fingerprintsHex: [String]?,
+        roles: [Int]?
+    ) -> [PskAdvertEntry] {
+        guard let fps = fingerprintsHex else { return [] }
+        return fps.enumerated().map { idx, fp in
+            let role = (roles != nil && idx < roles!.count) ? roles![idx] : 0
+            return PskAdvertEntry(role: role, fingerprintHex: fp)
+        }
+    }
+
     /// Decode a 64-char lowercase/uppercase hex fingerprint to its raw 32-byte form.
     /// Not well-formed (wrong length or a non-hex char) => a deterministic 32-zero-byte
     /// placeholder — never throws, same discipline as `HandshakeTranscript.hexFpToRaw32`.

@@ -275,4 +275,61 @@ final class AssuranceStatePolicyTests: XCTestCase {
         let result: AssuranceState = s2Baseline(kcStatus: .wrong)
         XCTAssertEqual(result, .kcFailed)
     }
+
+    // MARK: - mutualPeerAdvertisedRoles (ship step 5 wiring helper: decide()'s own
+    // doc says the caller must pre-filter to mutually-held fingerprints; this is
+    // that filter)
+
+    func testMutualPeerAdvertisedRolesFiltersToLocalFingerprintsOnly() {
+        let result = AssuranceState.mutualPeerAdvertisedRoles(
+            peerFingerprints: ["a", "b", "c"],
+            peerRoles: [1, 0, 1],
+            localFingerprints: ["a", "c"]
+        )
+        XCTAssertEqual(result, [1, 1], "must drop the role for 'b' (not locally held) but keep 'a'/'c' in order")
+    }
+
+    func testMutualPeerAdvertisedRolesNilFingerprintsIsEmpty() {
+        XCTAssertEqual(
+            AssuranceState.mutualPeerAdvertisedRoles(peerFingerprints: nil, peerRoles: [1], localFingerprints: ["a"]),
+            []
+        )
+    }
+
+    func testMutualPeerAdvertisedRolesNilRolesDefaultToZero() {
+        let result = AssuranceState.mutualPeerAdvertisedRoles(
+            peerFingerprints: ["a", "b"], peerRoles: nil, localFingerprints: ["a", "b"]
+        )
+        XCTAssertEqual(result, [0, 0])
+    }
+
+    func testMutualPeerAdvertisedRolesShorterRolesArrayDefaultsTrailingToZero() {
+        let result = AssuranceState.mutualPeerAdvertisedRoles(
+            peerFingerprints: ["a", "b", "c"], peerRoles: [9], localFingerprints: ["a", "b", "c"]
+        )
+        XCTAssertEqual(result, [9, 0, 0])
+    }
+
+    func testMutualPeerAdvertisedRolesNoOverlapIsEmpty() {
+        let result = AssuranceState.mutualPeerAdvertisedRoles(
+            peerFingerprints: ["x", "y"], peerRoles: [1, 1], localFingerprints: ["a", "b"]
+        )
+        XCTAssertEqual(result, [], "no mutually-held fingerprint => S7's role-1 signal must never fire from this alone")
+    }
+
+    // MARK: - Integration shape: mutualPeerAdvertisedRoles feeding decide() end-to-end
+
+    func testMutualRoleOneFeedsS7WhenNfcNotMixed() {
+        // The exact composition `handleKcMacReady`/`emitKeyConfirmationTelemetry`
+        // (AppState, ship step 5) perform: filter, then feed into decide().
+        let filtered = AssuranceState.mutualPeerAdvertisedRoles(
+            peerFingerprints: ["fp-held-by-both"], peerRoles: [1], localFingerprints: ["fp-held-by-both"]
+        )
+        let result = AssuranceState.decide(
+            peerSupportsMix: true, n: 1, mixRoles: [.psk], peerAdvertisedRoles: filtered,
+            expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: false,
+            witnessOk: false, floorRecorded: false, mediaDwellMs: 0
+        )
+        XCTAssertEqual(result, .expectedNfcStripped, "peer advertised an NFC-tier (role=1) fp we both hold, but no NFC was mixed => S7")
+    }
 }

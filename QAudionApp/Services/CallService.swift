@@ -246,6 +246,16 @@ final class CallService: @unchecked Sendable {
     /// Wired by AppState to `QAudionWebRtcCallController.sendAudioFrameData`. The
     /// payload is the raw WireRelayFrameCodec envelope (same bytes as the WS path).
     public var sendAudioOverDataChannel: ((Data) -> Bool)?
+    /// W-KCMAC (multi-PSK-mixing SYNTHESIS.md ship step 5) — live-getter for the
+    /// active call's key-confirmation telemetry snapshot, same pattern as
+    /// `getCallId` above. Wired by AppState to read its own per-call
+    /// `keyConfirmationTelemetryByCall` dict. `nil` when the current call never
+    /// fired `onKcMacReady` (no active call, or the PQC handshake never
+    /// completed) — `teardownAudioStack()` simply omits the four fields in
+    /// that case rather than emitting placeholders. Read (not consumed) at
+    /// `call.audio.diag` teardown — no new telemetry channel, per the design.
+    public var getKeyConfirmationTelemetry:
+        (() -> (pskMixN: Int, kcMacResult: String, assuranceState: String, expectedButMissing: Bool)?)?
     /// Token usato per de-registrare il handler "audio_frame" su endCall
     /// — assumiamo che `registerHandler` sostituisca il precedente per
     /// type, quindi de-register è no-op (ma resettiamo wsClient così
@@ -1235,7 +1245,7 @@ final class CallService: @unchecked Sendable {
                 let rxRmsPct = rxLevelSampleCount > 0
                     ? (rxLevelSumSq / Double(rxLevelSampleCount)).squareRoot() * 100
                     : 0
-                let diagAttrs: [String: Any] = [
+                var diagAttrs: [String: Any] = [
                     "peak_pct":           (peakPct * 10).rounded() / 10,
                     "rms_pct":            (txRmsPct * 10).rounded() / 10,
                     // W-MICAGC — max software make-up gain the mic AGC reached this
@@ -1393,6 +1403,18 @@ final class CallService: @unchecked Sendable {
                     "speaker_ms":          diag.speakerMs,
                     "aec_ever_active":     diag.vpioEverActive
                 ]
+                // W-KCMAC/W-ASSURANCE (ship step 5, telemetry-only) — riding the
+                // EXISTING call.audio.diag emission rather than a new channel
+                // (per the design). `nil` when this call never fired
+                // `onKcMacReady` at all (e.g. torn down before the handshake
+                // completed) — the four fields are simply omitted, exactly like
+                // the "skipped" AudioAutoTuner case above omits its fields.
+                if let kc = getKeyConfirmationTelemetry?() {
+                    diagAttrs["psk_mix_n"] = kc.pskMixN
+                    diagAttrs["kc_mac_result"] = kc.kcMacResult
+                    diagAttrs["assurance_state"] = kc.assuranceState
+                    diagAttrs["expected_but_missing"] = kc.expectedButMissing
+                }
                 Task { @MainActor in
                     TelemetryService.shared.emit(kind: "call.audio.diag", callId: _callId, attrs: diagAttrs)
                 }

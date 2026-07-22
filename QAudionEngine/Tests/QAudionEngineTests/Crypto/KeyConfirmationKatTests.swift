@@ -235,4 +235,38 @@ final class KeyConfirmationKatTests: XCTestCase {
         )
         XCTAssertNil(result, "an oversized advert list on either side must fail gracefully (nil), never trap")
     }
+
+    // MARK: - pskAdvertEntries (ship step 5 wiring helper: wire fields → PskAdvertEntry[])
+
+    func testPskAdvertEntriesNilFingerprintsIsEmpty() {
+        XCTAssertEqual(KeyConfirmation.pskAdvertEntries(fingerprintsHex: nil, roles: nil), [])
+        XCTAssertEqual(KeyConfirmation.pskAdvertEntries(fingerprintsHex: nil, roles: [1, 2]), [])
+    }
+
+    func testPskAdvertEntriesNilRolesDefaultToZero() {
+        let fps = ["a", "b", "c"]
+        let entries = KeyConfirmation.pskAdvertEntries(fingerprintsHex: fps, roles: nil)
+        XCTAssertEqual(entries.map(\.role), [0, 0, 0])
+        XCTAssertEqual(entries.map(\.fingerprintHex), fps)
+    }
+
+    func testPskAdvertEntriesShorterRolesArrayDefaultsTrailingToZero() {
+        // Mirrors `HandshakeTranscript.advEnc`'s "roles shorter than fingerprints
+        // ⇒ 0 for the missing tail" convention.
+        let fps = ["a", "b", "c"]
+        let entries = KeyConfirmation.pskAdvertEntries(fingerprintsHex: fps, roles: [7])
+        XCTAssertEqual(entries.map(\.role), [7, 0, 0])
+    }
+
+    func testPskAdvertEntriesPreservesOrderExactly() {
+        let fps = ["z", "a", "m"]
+        let roles = [3, 1, 2]
+        let entries = KeyConfirmation.pskAdvertEntries(fingerprintsHex: fps, roles: roles)
+        XCTAssertEqual(entries.map(\.fingerprintHex), fps, "must preserve wire order verbatim, never re-sort")
+        XCTAssertEqual(entries.map(\.role), roles)
+    }
+
+    func testPskAdvertEntriesEmptyFingerprintsIsEmptyEntries() {
+        XCTAssertEqual(KeyConfirmation.pskAdvertEntries(fingerprintsHex: [], roles: nil), [])
+    }
 }

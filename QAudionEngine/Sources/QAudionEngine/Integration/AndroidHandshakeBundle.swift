@@ -439,4 +439,21 @@ public enum CallPiggyBack: Equatable {
         precondition(fpAdv.count == 32, "fpAdv must be 32 bytes")
         return "\(callId)|FPSET:\(fpAdv.base64EncodedString())"
     }
+
+    /// W-KCMAC (ship step 5) — build the wire string for a key-confirmation MAC:
+    /// `"<callId>|KCMAC:" + base64(role(1) || mac(32))`, the inverse of the
+    /// `.kcmac` parse branch above (which still hands back the undecoded `raw`
+    /// payload — decoding/validating the `role||mac` shape is the CONSUMER's
+    /// job, same "recognised-and-ignored at parse time" contract `.caps`/
+    /// `.hangup` already use, so a malformed peer payload here can never desync
+    /// the piggy-back parser itself). `role` is `0x01` (initiator) or `0x02`
+    /// (responder) — mirrors Android `WsCallSignaller`'s `KCMAC_PAYLOAD_PREFIX`
+    /// framing byte-for-byte.
+    public static func serializeKcMac(callId: String, role: UInt8, mac: Data) -> String {
+        precondition(mac.count == 32, "mac must be 32 bytes")
+        var payload = Data(capacity: 33)
+        payload.append(role)
+        payload.append(mac)
+        return "\(callId)|KCMAC:\(payload.base64EncodedString())"
+    }
 }
