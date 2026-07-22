@@ -161,6 +161,22 @@ jobs:
       - name: Install build tools
         run: |
           set -e
+          # The macOS runner image ships an `aws/tap` that Homebrew now
+          # refuses to trust, so EVERY brew command below prints a 12-line
+          # "the following taps are not trusted" block and the job carries a
+          # permanent yellow annotation. Nothing here installs anything from
+          # that tap, so drop it rather than silence the check with
+          # HOMEBREW_NO_REQUIRE_TAP_TRUST (which brew itself calls not
+          # recommended, and which would also mask a tap we DID care about).
+          #
+          # Guarded and non-fatal on purpose: this is the release path. A
+          # future runner image without that tap must not fail the build over
+          # a cosmetic cleanup, hence the `|| true` under `set -e`.
+          if brew tap 2>/dev/null | grep -qx "aws/tap"; then
+            echo "Untapping aws/tap (unused here, and untrusted by brew)"
+            brew untap aws/tap || true
+          fi
+
           # Install xcodegen if missing -- runners have it sometimes,
           # sometimes not, depending on image rotation.
           if command -v xcodegen >/dev/null 2>&1; then
