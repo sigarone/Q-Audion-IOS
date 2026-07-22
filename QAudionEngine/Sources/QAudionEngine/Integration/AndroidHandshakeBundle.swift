@@ -103,13 +103,25 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         /// sealer without breaking the signature.
         public let srtpDirKeyV1: Bool?
 
+        // PSK-mix ship-step-2 (parse-only) — capability bit for a future PSK
+        // mixing negotiation (multiple PSK candidates, including NFC-derived
+        // ones, folded into the session key). OPTIONAL, appended LAST, same
+        // "omit when not advertising" convention as `ratchetV4`/`srtpDirKeyV1`
+        // above: a peer that doesn't carry the field decodes to nil (treated
+        // as `false`), and `JSONEncoder` omits a nil key, so the OFFER/ACCEPT
+        // bytes stay byte-IDENTICAL to today's wire for every peer — nobody
+        // sets this `true` yet; that's a later ship step. Mirrors Android's
+        // `@EncodeDefault(NEVER) pskMixV1` field exactly.
+        public let pskMixV1: Bool?
+
         public init(
             ratchetV3: Bool?,
             sframeV1: Bool? = nil,
             vkeyV1: Bool? = nil,
             sessionKdfV3: Bool? = nil,
             ratchetV4: Bool? = nil,
-            srtpDirKeyV1: Bool? = nil
+            srtpDirKeyV1: Bool? = nil,
+            pskMixV1: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -117,6 +129,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.sessionKdfV3 = sessionKdfV3
             self.ratchetV4 = ratchetV4
             self.srtpDirKeyV1 = srtpDirKeyV1
+            self.pskMixV1 = pskMixV1
         }
     }
 
@@ -160,6 +173,14 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     public let pskFingerprints: [String]?
     public let selectedPskFingerprint: String?
 
+    // PSK-mix ship-step-2 (parse-only) — parallel array to `pskFingerprints`,
+    // same length/order: per-candidate key class, 0 = ordinary PSK,
+    // 1 = NFC-derived, 2 = QR-scan-derived. Absent/nil ⇒ treat as all-zero
+    // (ordinary) — nobody populates a non-zero value yet. OPTIONAL,
+    // JSONEncoder omits nil, so a bundle that doesn't carry it is byte-wire-
+    // identical to today.
+    public let pskRoles: [Int]?
+
     // Phase-10b handshake signing (§1 of HANDSHAKE-SIGNING-SPEC.md) — TWO OPTIONAL fields,
     // appended LAST to mirror Android's additive `HandshakeBundleCodec` change. Both default
     // to nil; `JSONEncoder` omits nil keys, so a bundle that doesn't carry them is byte-wire-
@@ -181,6 +202,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         capabilities: Capabilities? = nil,
         pskFingerprints: [String]? = nil,
         selectedPskFingerprint: String? = nil,
+        pskRoles: [Int]? = nil,
         signerIdentityKey: String? = nil,
         signature: String? = nil
     ) {
@@ -194,6 +216,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.capabilities = capabilities
         self.pskFingerprints = pskFingerprints
         self.selectedPskFingerprint = selectedPskFingerprint
+        self.pskRoles = pskRoles
         self.signerIdentityKey = signerIdentityKey
         self.signature = signature
     }
@@ -269,6 +292,13 @@ public enum AndroidHandshakeEnvelope {
 ///   - `HANGUP:<reason>` — peer hangup piggy-back (reserved, not
 ///     consumed by iOS yet — the regular `call_hangup` WS envelope is
 ///     authoritative; silently dropped).
+///   - `KCMAC:<payload>` — PSK-mix ship-step-2: reserved for a future
+///     key-confirmation MAC tied to PSK mixing. Recognised-and-ignored
+///     for now (logged, then dropped) — no handler logic yet. The point
+///     of recognising it HERE, before the JSON HandshakeBundle branch,
+///     is that a `"KCMAC:..."` payload must never fall through to
+///     `AndroidHandshakeEnvelope.parse` and corrupt/desync unrelated
+///     handshake-bundle parsing for the call.
 public enum CallPiggyBack: Equatable {
 
     /// `<callId>|SCREEN_SHARE:<state>` — peer toggled screen sharing.
@@ -303,6 +333,12 @@ public enum CallPiggyBack: Equatable {
     /// so each can compute neg_digest = SHA-256(fpSetInit || fpSetResp).
     /// If no earbud: fp_adv = 32 zero bytes (keyClass falls back to 0).
     case fpSet(callId: String, fpAdv: Data)
+
+    /// `<callId>|KCMAC:<payload>` — PSK-mix ship-step-2 reserved tag.
+    /// Recognised so it is consumed HERE (never reaching the JSON
+    /// HandshakeBundle decoder) but carries no logic yet beyond a log-
+    /// and-drop; `raw` is the undecoded payload after the tag.
+    case kcmac(callId: String, raw: String)
 
     /// Parse the literal `opaque_message.data` UTF-8 string.
     ///
@@ -350,6 +386,12 @@ public enum CallPiggyBack: Equatable {
         if let v = stripPrefix(payload, "FPSET:") {
             guard let bytes = Data(base64Encoded: v), bytes.count == 32 else { return nil }
             return .fpSet(callId: callId, fpAdv: bytes)
+        }
+        // KCMAC:<payload> — PSK-mix ship-step-2, recognised-and-ignored.
+        // Consuming it here (instead of falling through) is the whole point:
+        // it must never reach AndroidHandshakeEnvelope.parse.
+        if let v = stripPrefix(payload, "KCMAC:") {
+            return .kcmac(callId: callId, raw: v)
         }
         return nil
     }

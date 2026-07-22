@@ -7178,6 +7178,11 @@ final class AppState: ObservableObject {
                 return
             }
             print("[AppState] EARBUDMKD callId=\(callId.prefix(8))… \(pkg.count)B")
+        case .kcmac(let callId, let raw):
+            // PSK-mix ship-step-2 — reserved, not consumed by iOS yet.
+            // Log to confirm we're seeing it so the parser isn't a black
+            // hole once a later step starts sending real payloads.
+            print("[AppState] piggy-back KCMAC dropped (not consumed): callId=\(callId.prefix(8))… raw=\(raw)")
         }
     }
 

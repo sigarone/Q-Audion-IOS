@@ -249,6 +249,38 @@ final class EarbudCounterpartyTests: XCTestCase {
         XCTAssertNil(CallPiggyBack.parse("abc|EARBUDPDU:!!!notb64"))
     }
 
+    // MARK: - KCMAC piggy-back (PSK-mix ship-step-2, recognised-and-ignored)
+
+    func testKcmacPiggyBackRecognisedAndDropped() {
+        let wire = "abc-123|KCMAC:somePayload"
+        guard case .kcmac(let callId, let raw)? = CallPiggyBack.parse(wire) else {
+            return XCTFail("KCMAC piggy-back failed to parse")
+        }
+        XCTAssertEqual(callId, "abc-123")
+        XCTAssertEqual(raw, "somePayload")
+    }
+
+    /// The critical property: a `"KCMAC:..."` payload must be fully consumed
+    /// by `CallPiggyBack.parse` and MUST NOT be handed to
+    /// `AndroidHandshakeEnvelope.parse` (the JSON HandshakeBundle decoder) —
+    /// if it were, it would corrupt/desync unrelated handshake-bundle
+    /// parsing for that call. `AppState.dispatchInboundOpaque` tries
+    /// `CallPiggyBack.parse` BEFORE `AndroidHandshakeEnvelope.parse`, so this
+    /// asserts the piggy-back parser alone already claims the payload.
+    func testKcmacNeverReachesJsonHandshakeDecoder() {
+        let wire = "abc-123|KCMAC:not-json-and-not-base64!!"
+        // CallPiggyBack claims it...
+        guard case .kcmac? = CallPiggyBack.parse(wire) else {
+            return XCTFail("expected CallPiggyBack to consume the KCMAC payload")
+        }
+        // ...and the JSON envelope parser — which every real
+        // AndroidHandshakeBundle payload starts with `{` for — never even
+        // gets a shape it could parse: KCMAC's payload doesn't start with
+        // `{`, so this must fail too, confirming there is no shared prefix
+        // that could accidentally desync the JSON decoder.
+        XCTAssertNil(AndroidHandshakeEnvelope.parse(wire))
+    }
+
     // MARK: - FW-H7 counter allocator
 
     func testHsinitCounterAllocatorMonotonicAndExhaustion() {
