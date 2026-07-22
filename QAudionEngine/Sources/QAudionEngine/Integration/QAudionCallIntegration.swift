@@ -1592,8 +1592,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // WIRE_SPEC §5 P1 fix: look up PSK by fingerprint from SovereignKeyVault.
                 let vault = SovereignKeyVault()
                 let vaultPsk: Data? = {
-                    guard let name = vault.listPskNames().first(where: {
-                        vault.getFingerprint(name: $0) == selectedFpStr
+                    // PSK-mix ship-step-2 (parse-only): membership against
+                    // parseSelection(selectedFpStr) instead of a bare `==`
+                    // compare — for today's only real case (N=1, a single
+                    // 64-hex fp) this is byte-identical (`[selectedFpStr]`
+                    // contains == equals); it additionally tolerates a
+                    // future comma-joined selectedFpStr without hard-
+                    // rejecting the lookup. Still just a lookup, not new
+                    // multi-candidate selection logic.
+                    let selection = Self.parseSelection(selectedFpStr)
+                    guard let name = vault.listPskNames().first(where: { name in
+                        guard let fp = vault.getFingerprint(name: name) else { return false }
+                        return selection.contains(fp)
                     }) else { return nil }
                     let raw = (try? vault.loadPsk(name: name)) ?? nil
                     return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
@@ -1629,8 +1639,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 let fallbackPsk: Data? = {
                     guard !selectedFpStr.isEmpty else { return nil }
                     let vault = SovereignKeyVault()
-                    guard let name = vault.listPskNames().first(where: {
-                        vault.getFingerprint(name: $0) == selectedFpStr
+                    // Same membership-vs-bare-`==` widening as the V4 branch
+                    // above — byte-identical for today's N=1 case.
+                    let selection = Self.parseSelection(selectedFpStr)
+                    guard let name = vault.listPskNames().first(where: { name in
+                        guard let fp = vault.getFingerprint(name: name) else { return false }
+                        return selection.contains(fp)
                     }) else { return nil }
                     let raw = (try? vault.loadPsk(name: name)) ?? nil
                     return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
@@ -1886,6 +1900,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             capabilities: bundle.capabilities,
             pskFingerprints: bundle.pskFingerprints,
             selectedPskFingerprint: bundle.selectedPskFingerprint,
+            pskRoles: bundle.pskRoles,
             signerIdentityKey: idKey.base64EncodedString(),
             signature: sig.base64EncodedString()
         )
@@ -2075,7 +2090,56 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     static func pskIfFingerprintMatches(_ psk: Data?, _ fp: String?) -> Data? {
         guard let psk = psk, !psk.isEmpty, let fp = fp, !fp.isEmpty else { return nil }
         let h = SHA256.hash(data: psk).map { String(format: "%02x", $0) }.joined()
-        return h == fp ? psk : nil
+        // PSK-mix ship-step-2 (parse-only): `fp` may now be a single 64-hex
+        // fingerprint (today's only real case — `parseSelection` returns
+        // exactly `[fp]`, so membership is byte-for-byte the same test as
+        // the old `h == fp`) OR a comma-joined multi-selection (not yet
+        // emitted by any peer). A malformed `fp` parses to `[]`, so the
+        // gate fails closed exactly as it already does on a hash mismatch —
+        // no new acceptance path, only a wider (still exact) match set.
+        return parseSelection(fp).contains(h) ? psk : nil
+    }
+
+    /// Parse the wire `selectedPskFingerprint` value into the list of
+    /// fingerprints it names. Pure, side-effect free — mirrors the
+    /// Kotlin/TypeScript `parseSelection` equivalents landing on Android and
+    /// Desktop in this same ship step.
+    ///
+    /// - `nil` or `""` → `[]` (N=0, no PSK selected — today's other real
+    ///   case besides N=1, unchanged).
+    /// - a single well-formed 64-char lowercase-hex fingerprint → `[fp]`
+    ///   (N=1, today's only OTHER real case — byte-identical to the
+    ///   pre-existing bare `== fp` compare it replaces in the gate above).
+    /// - `"<fp1>,<fp2>[,<fp3>][,<fp4>]"` → the parsed list, ONLY when every
+    ///   entry is a well-formed 64-char lowercase-hex fingerprint, joined by
+    ///   exactly one `,` with no spaces and no empty/trailing entries, and
+    ///   the total count is between 2 and 4 inclusive (N>=2 — not emitted by
+    ///   any client yet; parsed here so a later ship step doesn't need a
+    ///   flag-day on this file).
+    /// - anything else — odd/empty entries (`"a,,b"`, `"a,b,"`), uppercase
+    ///   hex, wrong length, 5+ entries, or any other malformed shape — →
+    ///   `[]`. REJECTED, never silently truncated or half-parsed: an
+    ///   unparseable selection is treated exactly like "no PSK selected",
+    ///   the same fail-closed convergence the gate already falls back to on
+    ///   a hash mismatch.
+    static func parseSelection(_ raw: String?) -> [String] {
+        guard let raw = raw, !raw.isEmpty else { return [] }
+        func isFingerprint(_ s: Substring) -> Bool {
+            guard s.utf8.count == 64 else { return false }
+            return s.allSatisfy { c in
+                switch c {
+                case "0"..."9", "a"..."f": return true
+                default: return false
+                }
+            }
+        }
+        if !raw.contains(",") {
+            return isFingerprint(raw[...]) ? [raw] : []
+        }
+        let parts = raw.split(separator: ",", omittingEmptySubsequences: false)
+        guard parts.count >= 2, parts.count <= 4 else { return [] }
+        guard parts.allSatisfy(isFingerprint) else { return [] }
+        return parts.map(String.init)
     }
 
     // MARK: - Schema:3 session KDF primitives
