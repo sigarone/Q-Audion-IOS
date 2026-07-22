@@ -87,6 +87,18 @@ public enum PskOrigin: String {
         if name.hasPrefix("__") { return .deviceInternal }
         // Android's convention, mirrored by the message-PSK naming.
         if name.hasPrefix("call-") || name.hasPrefix("msg-psk") { return .callDerived }
+        // `AppState.installKmsPreBootstrapPsk` names the group-control-channel
+        // ratchet seed (RK_0) "auto:<peerPrefix8>:<peerId>" — byte-identical on
+        // both sender and receiver, installed via the 3-arg `storePsk` (no
+        // persisted origin), so THIS inference is what actually classifies it.
+        // It is call/control-channel-derived key material in the same sense as
+        // Android's `KeyCreationMethod.CALL_DERIVED` rows and Android's own
+        // `"call-"`-prefixed names: reusing it as a 1:1-call audio PSK would
+        // couple two independent crypto domains (a forward-secret ratchet seed
+        // vs. a statically-mixed call PSK) that were never meant to share
+        // material. `.callDerived` is already excluded from advertisement
+        // below, so this closes that path without a new origin case.
+        if name.hasPrefix("auto:") { return .callDerived }
         // A bare UUID account name is a KMS key id (`KmsPollerService` stores
         // `entry.keyId`), same test `resolvePskDisplayMeta` already uses.
         if UUID(uuidString: name) != nil { return .kms }

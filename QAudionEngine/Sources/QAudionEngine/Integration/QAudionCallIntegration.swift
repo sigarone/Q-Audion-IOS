@@ -705,6 +705,31 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // Build the Android JSON HandshakeBundle OFFER.
         let pqcRawPub = try PqcKeyExchange.extractRawPublicKey(pqcKp.publicKey)
         let x25519RawPub = Data(x25519Priv.publicKey.rawRepresentation)
+        // W-PSKMIX step 3 (iOS hygiene) — advertised list is filtered,
+        // ordered, and normalised (see `PskAdvertising`): device-internal
+        // bookkeeping entries (`__device.*`/`__kmsname.*`) are excluded
+        // (mirrors the filter `resolvePskDisplayMeta`/`resolvePskBytes`
+        // already apply — this call site previously had none), the order is
+        // now stable across repeated calls to the same peer instead of raw
+        // Keychain enumeration order, and every fingerprint is recomputed
+        // from the entry's raw key material rather than trusted from its
+        // Keychain label — so an entry mislabelled in the 16-hex or
+        // dotted-group display form (`AppState.installKmsPreBootstrapPsk`,
+        // `KeyRotationCoordinator`) is advertised in the WIRE_SPEC §3.3
+        // canonical 64-hex form instead of a value the responder's gate can
+        // never match.
+        let pskVault = SovereignKeyVault()
+        let advertisedPskFingerprints: [String] = PskAdvertising.fingerprintsForAdvertisement(
+            pskVault.listPskEntries().compactMap { entry in
+                guard let raw = (try? pskVault.loadPsk(name: entry.name)) ?? nil, !raw.isEmpty else { return nil }
+                return PskAdvertising.Entry(
+                    name: entry.name,
+                    origin: pskVault.origin(name: entry.name),
+                    material: raw,
+                    createdAt: entry.createdAt
+                )
+            }
+        )
         let offerBundle = AndroidHandshakeBundle(
             kind: .offer,
             callId: callId,
@@ -732,9 +757,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 ratchetV4: Self.advertisesRatchetV4 ? true : nil,
                 srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
             ),
-            pskFingerprints: SovereignKeyVault().listPskNames().compactMap {
-                SovereignKeyVault().getFingerprint(name: $0)
-            }
+            pskFingerprints: advertisedPskFingerprints
         )
 
         // Phase-10b (a) — SIGN the OFFER over the §3 transcript before serialize.
@@ -1602,6 +1625,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // multi-candidate selection logic.
                     let selection = Self.parseSelection(selectedFpStr)
                     guard let name = vault.listPskNames().first(where: { name in
+                        // W-PSKMIX step 5 — never match a `.callDerived` vault
+                        // entry (Android's "call-"/"msg-psk" rows, iOS's own
+                        // "auto:<prefix>:<peerId>" group-control-channel ratchet
+                        // seed) against a peer-echoed selectedPskFingerprint.
+                        // Mirrors the exclusion
+                        // `PskAdvertising.fingerprintsForAdvertisement` applies on
+                        // the advertise side (771f4c1); this is the matching gate
+                        // on the consuming side, which previously had no origin
+                        // check at all — a raw byte comparison would otherwise
+                        // happily select a `.callDerived` entry if its fingerprint
+                        // ever appeared in the peer's ACCEPT.
+                        guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return false }
                         guard let fp = vault.getFingerprint(name: name) else { return false }
                         return selection.contains(fp)
                     }) else { return nil }
@@ -1637,12 +1672,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // vault by the responder's selected fingerprint (same lookup the V4
                 // branch uses) so both sides mix the identical PSK.
                 let fallbackPsk: Data? = {
-                    guard !selectedFpStr.isEmpty else { return nil }
+                    guard !selectedFpStr.isEmpty else {
+                        // W-PSKMIX step 3 — bare log only (no UI notice: the
+                        // S7 AssuranceState this should eventually surface
+                        // through doesn't exist yet, later ship step). Makes
+                        // today's silent no-PSK downgrade visible in device
+                        // logs instead of leaving no trace at all.
+                        print("[QAudionCallIntegration] ACCEPT schema:2 — selectedPskFingerprint empty, session key mixes NO psk callId=\(callId.prefix(8))…")
+                        return nil
+                    }
                     let vault = SovereignKeyVault()
                     // Same membership-vs-bare-`==` widening as the V4 branch
                     // above — byte-identical for today's N=1 case.
                     let selection = Self.parseSelection(selectedFpStr)
                     guard let name = vault.listPskNames().first(where: { name in
+                        // W-PSKMIX step 5 — same `.callDerived` exclusion as the
+                        // V4 branch above; see its comment for the full rationale.
+                        guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return false }
                         guard let fp = vault.getFingerprint(name: name) else { return false }
                         return selection.contains(fp)
                     }) else { return nil }
@@ -2089,7 +2135,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// gate passes on both ends and the session key stays byte-identical to interop.
     static func pskIfFingerprintMatches(_ psk: Data?, _ fp: String?) -> Data? {
         guard let psk = psk, !psk.isEmpty, let fp = fp, !fp.isEmpty else { return nil }
-        let h = SHA256.hash(data: psk).map { String(format: "%02x", $0) }.joined()
+        // W-PSKMIX step 3 — reuse the same canonical-fingerprint computation
+        // the advert builder uses (`PskAdvertising.canonicalFingerprint`)
+        // instead of duplicating the inline SHA-256-hex here; byte-identical
+        // to the prior local computation.
+        let h = PskAdvertising.canonicalFingerprint(forPsk: psk)
         // PSK-mix ship-step-2 (parse-only): `fp` may now be a single 64-hex
         // fingerprint (today's only real case — `parseSelection` returns
         // exactly `[fp]`, so membership is byte-for-byte the same test as
