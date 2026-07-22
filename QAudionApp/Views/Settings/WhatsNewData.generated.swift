@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.833",
+              date: "2026-07-22",
+              title: "v1.0.833",
+              bullets: [
+                "feat(presence): real subscribe gating, honest labels, invalidation, resume fix (I1-I6)",
+                "fix(ios): keep Info.plist pure ASCII, as the file itself demands (W-NFCIOS)",
+              ]),
         .init(id: "v1.0.832",
               date: "2026-07-22",
               title: "v1.0.832",
               bullets: [
+                "chore: regenerate changelog for v1.0.832",
                 "fix(nfc): the AID list is an Info.plist key, not an entitlement (W-NFCIOS)",
               ]),
         .init(id: "v1.0.831",
@@ -144,13 +152,6 @@ extension ReleaseNote {
               title: "v1.0.814",
               bullets: [
                 "fix(groupcall): late joiner stuck with zero participants after socket rebuild",
-              ]),
-        .init(id: "v1.0.813",
-              date: "2026-07-19",
-              title: "v1.0.813",
-              bullets: [
-                "chore: regenerate changelog for v1.0.813",
-                "fix(groupcall): ship ctrl envelopes as raw JSON opaque payload",
               ]),
     ]
 }
