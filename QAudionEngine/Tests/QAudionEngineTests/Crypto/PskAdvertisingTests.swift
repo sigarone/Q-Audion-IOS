@@ -298,4 +298,50 @@ final class PskAdvertisingTests: XCTestCase {
         })
         XCTAssertEqual(matchedManual?.material, rk0)
     }
+
+    // MARK: - 5. resolvePskBytes video-HKDF-salt gate (W-PSKMIX step 6)
+
+    /// `AppState.resolvePskBytes` (`QAudionApp/AppState.swift`) does the same
+    /// `listPskNames().first(where:)` scan-by-fingerprint as the step-5 gates
+    /// above, but its return value is more severe if unfiltered: it feeds
+    /// directly into `QAudionCallIntegration.deriveVideoKey`'s HKDF *salt*
+    /// (`videoContactPsk`), not merely "which PSK gets selected/displayed".
+    /// This cannot `@testable import` `AppState` (QAudionApp depends on
+    /// QAudionEngine, not the reverse), so — same workaround the step-5 tests
+    /// above use for the AppState.swift closures — this mirrors the exact
+    /// filter-then-match shape added to `resolvePskBytes` (and its
+    /// display-only twin `resolvePskDisplayMeta`) as plain `Entry` values.
+    /// Proves a `.callDerived` entry's raw material is never returned even
+    /// when the peer echoes its exact fingerprint back.
+    func testCallDerivedEntryNeverReturnedAsVideoHkdfSaltMaterial() {
+        let ratchetSeed = Data(repeating: 0x5A, count: 32) // group-ctrl "auto:" ratchet seed
+        let autoName = "auto:a3f7c291:11111111-2222-3333-4444-555555555555"
+        let entries: [PskAdvertising.Entry] = [
+            PskAdvertising.Entry(name: autoName, origin: PskOrigin.inferred(fromAccountName: autoName), material: ratchetSeed, createdAt: nil)
+        ]
+        let peerEchoedFp = canonicalFp(ratchetSeed)
+
+        // Same shape as resolvePskBytes: find the first non-"__" name whose
+        // origin is an eligible match candidate AND whose fingerprint equals
+        // the peer-supplied value, then return its raw material (nil if none).
+        let resolvedBytes: Data? = entries.first(where: { entry in
+            guard !entry.name.hasPrefix("__") else { return false }
+            guard PskAdvertising.isEligibleMatchCandidate(origin: entry.origin) else { return false }
+            return canonicalFp(entry.material) == peerEchoedFp
+        })?.material
+        XCTAssertNil(resolvedBytes, "a .callDerived entry's raw bytes must never be returned as video HKDF salt material, even on an exact fingerprint echo")
+
+        // Sanity: an ordinary manual PSK with the same fingerprint IS resolved
+        // (nil is the safe "fall back to default video salt" case, not a
+        // side-effect of the guard rejecting everything).
+        let manualEntries: [PskAdvertising.Entry] = [
+            PskAdvertising.Entry(name: "peer.alice", origin: .manual, material: ratchetSeed, createdAt: nil)
+        ]
+        let resolvedManualBytes: Data? = manualEntries.first(where: { entry in
+            guard !entry.name.hasPrefix("__") else { return false }
+            guard PskAdvertising.isEligibleMatchCandidate(origin: entry.origin) else { return false }
+            return canonicalFp(entry.material) == peerEchoedFp
+        })?.material
+        XCTAssertEqual(resolvedManualBytes, ratchetSeed)
+    }
 }

@@ -6929,6 +6929,15 @@ final class AppState: ObservableObject {
         // 2. Match the fingerprint to a stored PSK account (skip sidecars).
         let matchedName: String? = vault.listPskNames().first { n in
             if n.hasPrefix("__") { return false }
+            // W-PSKMIX step 6 — same `.callDerived` exclusion the receive-side
+            // matching gates apply (step 5, 34d111d): a peer-echoed
+            // fingerprint must never resolve to the "auto:<prefix>:<peerId>"
+            // group-control-channel ratchet seed (or Android's "call-"/
+            // "msg-psk" rows) here either. This function is DISPLAY-only —
+            // exclusion here only ever changes what the in-call key panel
+            // shows for an unpatched/malicious peer's replayed fingerprint,
+            // never a real call (a fixed client never advertises one).
+            guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: n)) else { return false }
             return vault.getFingerprint(name: n) == fp
         }
         guard let name = matchedName else {
@@ -6972,6 +6981,24 @@ final class AppState: ObservableObject {
         let vault = SovereignKeyVault()
         let matchedName: String? = vault.listPskNames().first { n in
             if n.hasPrefix("__") { return false }
+            // W-PSKMIX step 6 — this is the SEVERE twin of step 5's receive-
+            // side exclusion: unlike the audio-PSK matching gates (which only
+            // decide WHICH stored PSK a call uses), this function's return
+            // value is fed directly into `deriveVideoKey`'s HKDF *salt*
+            // (`videoContactPsk` → `QAudionCallIntegration.deriveVideoKey`,
+            // salt = psk when non-nil/non-empty). Letting a `.callDerived`
+            // entry's raw bytes (the group-control-channel ratchet seed
+            // material) ever match here would mix that forward-secret
+            // ratchet's key material directly into a video-call key
+            // derivation — coupling two crypto domains that must stay
+            // independent. A fixed peer never advertises a `.callDerived`
+            // fingerprint (771f4c1), so this is defense-in-depth against an
+            // unpatched/malicious peer or a future advertise-side
+            // regression, exactly like step 5's audio-PSK gates — nil is
+            // already the documented safe fallback (both peers then use the
+            // default video salt, matching Android's `psk == null` branch),
+            // so excluding this candidate never breaks an ordinary call.
+            guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: n)) else { return false }
             return vault.getFingerprint(name: n) == fp
         }
         guard let name = matchedName else { return nil }
