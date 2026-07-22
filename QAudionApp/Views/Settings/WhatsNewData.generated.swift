@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.830",
+              date: "2026-07-22",
+              title: "v1.0.830",
+              bullets: [
+                "ci: drop the untrusted aws/tap so brew stops annotating every build",
+                "feat(contacts): hide peers whose account no longer exists on the server (W-ORPHANPEER)",
+              ]),
         .init(id: "v1.0.829",
               date: "2026-07-21",
               title: "v1.0.829",
               bullets: [
+                "chore: regenerate changelog for v1.0.829",
                 "fix(audio): iOS TX level staging -- dead headroom clamp, noise-adaptive ceiling, VP-IO retry",
               ]),
         .init(id: "v1.0.828",
@@ -142,13 +150,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.811",
                 "fix(groupcall): VP-IO engine race crash, key-pin video-zero, track/tile race, stuck join",
-              ]),
-        .init(id: "v1.0.810",
-              date: "2026-07-19",
-              title: "v1.0.810",
-              bullets: [
-                "chore: regenerate changelog for v1.0.810",
-                "fix(call): catch the ObjC NSException from setVoiceProcessingEnabled",
               ]),
     ]
 }
