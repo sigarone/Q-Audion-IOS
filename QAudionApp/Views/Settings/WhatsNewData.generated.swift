@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.832",
+              date: "2026-07-22",
+              title: "v1.0.832",
+              bullets: [
+                "fix(nfc): the AID list is an Info.plist key, not an entitlement (W-NFCIOS)",
+              ]),
         .init(id: "v1.0.831",
               date: "2026-07-22",
               title: "v1.0.831",
               bullets: [
+                "chore: regenerate changelog for v1.0.831",
                 "fix(nfc): the iPhone was never asking Android for our application (W-NFCIOS)",
                 "feat(vault): an NFC key can be seen but never copied off the phone (W-NFCBIND, iOS parity)",
               ]),
@@ -144,13 +151,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.813",
                 "fix(groupcall): ship ctrl envelopes as raw JSON opaque payload",
-              ]),
-        .init(id: "v1.0.812",
-              date: "2026-07-19",
-              title: "v1.0.812",
-              bullets: [
-                "chore: regenerate changelog for v1.0.812",
-                "fix(groupchat): stale group metadata never re-seals after member rekey",
               ]),
     ]
 }
