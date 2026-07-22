@@ -26,6 +26,33 @@
 	<string>Q-Audion uses your microphone for post-quantum encrypted voice calls and voice authentication.</string>
 	<key>NFCReaderUsageDescription</key>
 	<string>Q-Audion reads NFC tags to securely import encryption keys from Android devices.</string>
+	<!-- W-NFCIOS — the AID of the Android HCE service we tap against
+	     (NfcConstants.AID_HEX, apduservice.xml). Without this array CoreNFC
+	     never sends SELECT for our application, so it never surfaces an
+	     NFCISO7816Tag: the reader session finds nothing and dies on its own
+	     timeout. Confirmed live 2026-07-22 on an iPhone-to-S26 tap — the
+	     Android side logged the field arriving and SELECTs going to off-host
+	     (secure element) AIDs only, with zero HostEmulation dispatch to
+	     com.bcrypto.qaudion.nfc.NfcApduService.
+
+	     It belongs HERE and not in QAudion.entitlements, even though Apple
+	     files its documentation page under bundleresources/entitlements. Put
+	     in the entitlements file it fails the archive outright:
+	       "Entitlement com.apple.developer.nfc.readersession.iso7816.select-identifiers
+	        not found and could not be included in profile."
+	     The sibling `readersession.formats` key IS a real entitlement and
+	     stays there; only the AID list is read from Info.plist.
+
+	     This is also NOT the restricted card-emulation entitlement. That one
+	     is com.apple.developer.nfc.hce (the CardSession API, which Apple
+	     documents for payments / car keys / transit / badges / hotel keys /
+	     loyalty / event tickets in the EEA and requires applying for), and it
+	     is why an iPhone cannot be the card — which bounds iPhone-to-iPhone
+	     tapping, not this. -->
+	<key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+	<array>
+		<string>F0BCF1073A5100</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Q-Audion uses the camera to scan QR codes for key exchange.</string>
 	<key>NSContactsUsageDescription</key>
