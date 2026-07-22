@@ -4183,6 +4183,22 @@ final class AppState: ObservableObject {
     /// the controller never opens a camera. On the WS-relay path (no
     /// controller) the accept is an empty-SDP ack — the decode-only
     /// pipeline mounts when the SCREEN_SHARE:start announce arrives.
+    ///
+    /// W-SPKAEC fix (2026-07-22): an audio-only call carried on the
+    /// WS-relay path has NO `webRtcController` — the audio never built a
+    /// WebRTC PeerConnection. When Android starts screen share on such a
+    /// call it sends a REAL SDP re-offer expecting a REAL answer; this used
+    /// to fall straight through the guard above with `answerSdp` left at
+    /// `""` and reply `accepted:true, sdp:""` — silently. Android then threw
+    /// on `setRemoteDescription` (SessionDescription is NULL) and the
+    /// renegotiation aborted on both ends (black/purple video). Mirrors the
+    /// on-demand controller build `acceptPendingIncomingUpgrade` (camera
+    /// path) already does for the identical "no existing controller"
+    /// precondition — see the comment there. iOS is only the RECEIVE side
+    /// for a peer's screen share (no local capture to wire): building the
+    /// controller is enough to key the receiver FrameCryptor via the
+    /// onRemoteVideoTrack/onInboundVideoReady wiring already set up inside
+    /// `makeUpgradeResponderController`.
     @MainActor
     private func acceptIncomingScreenShareRenegotiation(
         callId: String, senderId: String, sdp: String
@@ -4190,13 +4206,28 @@ final class AppState: ObservableObject {
         guard let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl else { return }
         Task { @MainActor [weak self] in
             guard let self = self else { return }
+            var builtOnDemand = false
             do {
                 var answerSdp = ""
                 #if canImport(WebRTC)
-                if let controller = self.webRtcController as? QAudionWebRtcCallController,
-                   !sdp.isEmpty {
-                    controller.useExternalVideoSource = true
-                    answerSdp = try await controller.acceptUpgradeOffer(remoteSdp: sdp)
+                let hasExisting = self.webRtcController is QAudionWebRtcCallController
+                switch UpgradeFlowDecisions.resolveRenegotiationControllerStrategy(
+                    hasExistingController: hasExisting, sdp: sdp
+                ) {
+                case .noRenegotiation:
+                    break
+                case .useExisting:
+                    if let controller = self.webRtcController as? QAudionWebRtcCallController {
+                        controller.useExternalVideoSource = true
+                        answerSdp = try await controller.acceptUpgradeOffer(remoteSdp: sdp)
+                    }
+                case .buildOnDemand:
+                    if let controller = self.makeUpgradeResponderController() {
+                        builtOnDemand = true
+                        answerSdp = try await controller.acceptUpgradeOfferBuildingPeerConnection(
+                            callerId: senderId, remoteSdp: sdp,
+                            peerCapabilities: self.pendingPeerCapabilities)
+                    }
                 }
                 #endif
                 try await impl.sendCallUpgradeResponse(
@@ -4205,6 +4236,17 @@ final class AppState: ObservableObject {
                 RTLog.info("call", "screenshare accepted ev=ssok media_mode=p2p state=active")
             } catch {
                 RTLog.warn("call", "screenshare failed ev=ssfail detail=" + error.localizedDescription)
+                #if canImport(WebRTC)
+                if builtOnDemand {
+                    // Same reasoning as acceptPendingIncomingUpgrade's catch:
+                    // the on-demand controller was published to
+                    // webRtcController before this (failed) async build —
+                    // tear it down so a stale/half-built PC can't block a
+                    // later upgrade retry. The WS-relay audio leg is
+                    // untouched (signal-not-kill).
+                    self.rollbackUpgradeVideo()
+                }
+                #endif
                 try? await impl.sendCallUpgradeResponse(
                     callId: callId, recipientId: senderId, sdp: "", accepted: false)
             }
