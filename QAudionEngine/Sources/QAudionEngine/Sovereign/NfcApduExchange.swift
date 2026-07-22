@@ -189,8 +189,16 @@ public final class NfcApduExchange: NSObject {
         }
 
         // Step 2: GET_IDENTITY_KEY (0xC4) — receive peer's Ed25519 identity pub
+        //
+        // W-NFCIOS — CLA is 0x80, the proprietary class. Android checks it on
+        // every one of the three commands (NfcApduService.kt:399,411,423 against
+        // NfcConstants.CLA_PROPRIETARY) and answers SW_INS_NOT_SUPPORTED (0x6D00)
+        // to anything else, so the 0x00 we sent before died here — the very first
+        // command after SELECT. Only SELECT itself is class 0x00, because that is
+        // the ISO-standard header Android matches byte-for-byte
+        // (NfcConstants.SELECT_AID_HEADER = 00 A4 04 00).
         let getIdApdu = NFCISO7816APDU(
-            instructionClass: 0x00, instructionCode: 0xC4,
+            instructionClass: 0x80, instructionCode: 0xC4,
             p1Parameter: 0x00, p2Parameter: 0x00,
             data: Data(), expectedResponseLength: 32
         )
@@ -214,7 +222,7 @@ public final class NfcApduExchange: NSObject {
 
         // Step 3: PUSH_PEER_IDENTITY (0xC5) — send our Ed25519 identity pub
         let pushIdApdu = NFCISO7816APDU(
-            instructionClass: 0x00, instructionCode: 0xC5,
+            instructionClass: 0x80, instructionCode: 0xC5,
             p1Parameter: 0x00, p2Parameter: 0x00,
             data: Data(myIdPub), expectedResponseLength: -1
         )
@@ -223,45 +231,44 @@ public final class NfcApduExchange: NSObject {
             throw ExchangeError.apduFailed("PUSH_PEER_IDENTITY", sw1p, sw2p)
         }
 
-        // Step 4: KEY_EXCHANGE (0x01) — send ephemeral X25519 pub + 32B entropy
-        //         receive peer's ephemeral X25519 pub (32 bytes)
+        // Step 4: KEY_EXCHANGE (0x01) — send [ephemeral X25519 pub | 32B entropy],
+        //         receive the peer's [ephemeral X25519 pub | 32B entropy].
+        //
+        // W-NFCIOS — the response is 64 bytes, not 32. Android answers with the
+        // same payload shape it received (NfcApduService.kt:369 returns
+        // `ourPayload`, built by NfcProtocol.prepareCollaborativeExchange() =
+        // pubkey(32) ‖ entropy(32), NfcConstants.PAYLOAD_SIZE = 64). Guarding on
+        // 32 threw on a perfectly good reply.
         let myEphPriv = Curve25519.KeyAgreement.PrivateKey()
         let myEphPub = myEphPriv.publicKey.rawRepresentation
-        // SECURITY H-8 — this 32B `entropy` is transmitted on the
-        // wire but is NOT currently folded into the PSK KDF (see
-        // `deriveIdentityBoundPsk`, which derives only from the
-        // X25519 shared secret + sorted identity salt). It is
-        // therefore security theater today. We do NOT change the
-        // transmitted bytes here (Android also exchanges this field;
-        // altering its meaning or removing it is a wire-breaking
-        // change requiring a coordinated v2). Minimal hardening:
-        // generate it from the system CSPRNG (`SecRandomCopyBytes`)
-        // instead of `UInt8.random`, which is not guaranteed to be
-        // cryptographically secure for key material.
-        //
-        // TODO (SECURITY H-8 v2, coordinated with Android): fold
-        // `entropy` (both peers' values) into the HKDF IKM so the
-        // field actually contributes to the PSK:
-        //   ikm = sharedSecret ‖ myEntropy ‖ peerEntropy
+        // SECURITY H-8 is closed by this change: the entropy each side
+        // contributes is now folded into the KDF instead of being transmitted
+        // and ignored. Both halves matter — a peer that could bias only its own
+        // ephemeral key still cannot steer the result while the other side's
+        // 32 fresh CSPRNG bytes are in the IKM.
         let entropy = NfcApduExchange.secureRandomBytes(32)
         let kePayload = myEphPub + entropy   // 64 bytes
         let keyExchangeApdu = NFCISO7816APDU(
-            instructionClass: 0x00, instructionCode: 0x01,
+            instructionClass: 0x80, instructionCode: 0x01,
             p1Parameter: 0x00, p2Parameter: 0x00,
-            data: kePayload, expectedResponseLength: 32
+            data: kePayload, expectedResponseLength: 64
         )
-        let (peerEphPubBytes, sw1k, sw2k) = try await iso.sendCommand(apdu: keyExchangeApdu)
-        guard sw1k == 0x90, sw2k == 0x00, peerEphPubBytes.count == 32 else {
+        let (peerPayload, sw1k, sw2k) = try await iso.sendCommand(apdu: keyExchangeApdu)
+        guard sw1k == 0x90, sw2k == 0x00, peerPayload.count == 64 else {
             throw ExchangeError.apduFailed("KEY_EXCHANGE", sw1k, sw2k)
         }
+        let peerEphPubBytes = peerPayload.prefix(32)
+        let peerEntropy = peerPayload.suffix(32)
 
-        // Derive identity-bound PSK.
-        let peerEphPub = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerEphPubBytes)
-        let psk = try NfcApduExchange.deriveIdentityBoundPsk(
+        let peerEphPub = try Curve25519.KeyAgreement.PublicKey(
+            rawRepresentation: Data(peerEphPubBytes))
+        // This device is the APDU initiator (iOS can only ever be the reader),
+        // so our entropy is `entropy_a` and the card's is `entropy_b`.
+        let psk = try NfcApduExchange.deriveCollaborativePsk(
             myEphPriv: myEphPriv,
             peerEphPub: peerEphPub,
-            myIdPub: Data(myIdPub),
-            peerIdPub: peerIdentityPub
+            entropyA: entropy,
+            entropyB: Data(peerEntropy)
         )
 
         // Notify the integration layer.
@@ -284,26 +291,61 @@ public final class NfcApduExchange: NSObject {
 
     // MARK: - PSK derivation (platform-independent)
 
-    /// HKDF-SHA256 PSK with identity key binding.
+    /// W-NFCIOS — the collaborative PSK, byte-identical to the Android HCE peer.
     ///
-    /// Identical KDF to ``NfcPskDerivation/derivePsk`` but uses
-    /// `SHA256(sort(my_id_pub ∥ peer_id_pub))` as salt instead of the
-    /// ephemeral pubkeys alone, so the derived key is bound to both
-    /// long-term identities.
-    public static func deriveIdentityBoundPsk(
+    /// ```
+    /// ikm  = ecdh(32) ‖ entropy_a(32) ‖ entropy_b(32)            [96]
+    /// salt = SHA-256(sorted(myEphPub, peerEphPub))               [32]
+    /// info = "Q-Audion NFC Collaborative PSK v1"
+    /// psk  = HKDF-SHA256(ikm, salt, info, 32)
+    /// ```
+    /// `entropy_a` is the APDU initiator's, `entropy_b` the responder's. iOS can
+    /// only be the reader, so the caller always passes its own as `entropyA`.
+    /// Mirrors `NfcProtocol.deriveCollaborativePsk` (NfcProtocol.kt:291-321),
+    /// with no ML-KEM leg because the Android HCE service never runs one: its
+    /// APDU dispatch handles SELECT / 0xC4 / 0xC5 / 0x01 and nothing else
+    /// (NfcApduService.kt:141-153), so `pqcActive` is false on that side and the
+    /// info label stays `HKDF_INFO_COLLAB`.
+    ///
+    /// This REPLACES the previous identity-bound derivation, which salted over
+    /// the two long-term identity keys and dropped both entropies. That shape
+    /// could never agree with the only peer that exists, so nothing is being
+    /// migrated — there are no working iOS-derived NFC keys in the field to
+    /// invalidate. The identity binding it was reaching for is still worth
+    /// having, but it belongs in the stored metadata rather than in the KDF,
+    /// where changing it would mean moving both platforms in lockstep. Today the
+    /// peer's Ed25519 key is fetched over 0xC4 and survives only as the first 16
+    /// hex characters of the vault account name (`NfcExchangeView.persistPsk`);
+    /// recording it in full, so a call can prove it is talking to the peer that
+    /// was tapped, is a follow-up and is NOT done here.
+    ///
+    /// Note for whoever re-pins the cross-platform vector: `nfc_psk_v1` in
+    /// Tests/Resources/cross_platform_vectors.json still describes the old
+    /// ecdh-only shape and says "Android must confirm byte-identical output".
+    /// Android never did — there is no NFC KAT in that repo at all. Aligning iOS
+    /// to Android rather than the reverse is deliberate: real NFC keys exist on
+    /// Android phones today and none exist here.
+    public static func deriveCollaborativePsk(
         myEphPriv: Curve25519.KeyAgreement.PrivateKey,
         peerEphPub: Curve25519.KeyAgreement.PublicKey,
-        myIdPub: Data,
-        peerIdPub: Data
+        entropyA: Data,
+        entropyB: Data
     ) throws -> Data {
         let shared = try myEphPriv.sharedSecretFromKeyAgreement(with: peerEphPub)
-        let idSalt = sortedConcatSHA256(myIdPub, peerIdPub)
-        let key = shared.hkdfDerivedSymmetricKey(
-            using: SHA256.self,
-            salt: idSalt,
-            sharedInfo: HkdfLabels.nfcCollaborativePsk,
-            outputByteCount: 32
-        )
+        let salt = sortedConcatSHA256(myEphPriv.publicKey.rawRepresentation,
+                                      peerEphPub.rawRepresentation)
+        // CryptoKit's SharedSecret.hkdfDerivedSymmetricKey can only use the raw
+        // ECDH output as IKM, and Android concatenates the two entropies onto
+        // it, so the extract step is done explicitly here.
+        var ikm = Data()
+        shared.withUnsafeBytes { ikm.append(contentsOf: $0) }
+        ikm.append(entropyA)
+        ikm.append(entropyB)
+        let prk = HKDF<SHA256>.extract(inputKeyMaterial: SymmetricKey(data: ikm),
+                                       salt: salt)
+        let key = HKDF<SHA256>.expand(pseudoRandomKey: prk,
+                                      info: HkdfLabels.nfcCollaborativePsk,
+                                      outputByteCount: 32)
         return key.withUnsafeBytes { Data($0) }
     }
 

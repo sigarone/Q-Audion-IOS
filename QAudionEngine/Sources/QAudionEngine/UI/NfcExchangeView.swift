@@ -98,16 +98,32 @@ public struct NfcExchangeView: View {
 private final class NfcExchangeDriver: ObservableObject {
     @Published private(set) var state: NfcExchangeViewModel.State = .idle
 
-    // Phase 14c (identity-bound) or anonymous fallback.
+    // The only reader we can actually run. See init() for why the anonymous
+    // NfcCollaborativeExchange is no longer wired in as a fallback.
     private var apduExchange: NfcApduExchange?
-    private var anonExchange: NfcCollaborativeExchange?
 
     init() {
         let idManager = SovereignIdentityManager()
         if let identity = idManager.loadIdentity(), identity.signingPublic.count == 32 {
             setupApduExchange(identityPub: identity.signingPublic)
         } else {
-            setupAnonExchange()
+            // W-NFCIOS — the anonymous fallback used to run here. It cannot
+            // succeed against anything: its exchange step is INS 0xCA (GET DATA,
+            // NfcCollaborativeExchange.swift:164-168) and the only peer that
+            // exists, the Android HCE service, dispatches SELECT / 0xC4 / 0xC5 /
+            // 0x01 and answers SW_INS_NOT_SUPPORTED to everything else
+            // (NfcApduService.kt:141-153). iPhones cannot emulate a card, so
+            // there is no iOS peer either. Running it produced a tap that
+            // "did nothing" and then timed out, which reads as broken hardware
+            // rather than as a missing prerequisite.
+            //
+            // Failing here instead is also the honest answer: without a local
+            // identity there is nothing to bind the pairing to, and Android
+            // refuses the mirror-image case for the same reason — its HCE
+            // service returns SW_TECHNICAL_PROBLEM with "Identità non ancora
+            // inizializzata" when its own identity provider has nothing
+            // (NfcApduService.kt onGetIdentityKey).
+            state = .error(message: "Identità non ancora inizializzata: completa la configurazione prima di scambiare una chiave via NFC")
         }
     }
 
@@ -128,40 +144,19 @@ private final class NfcExchangeDriver: ObservableObject {
         apduExchange = exchange
     }
 
-    private func setupAnonExchange() {
-        let exchange = NfcCollaborativeExchange()
-        exchange.onPskDerivedDelegate = { psk, peerPub in
-            try Self.persistPsk(psk, peerIdPub: peerPub)
-        }
-        exchange.onStateChanged = { [weak self] newState in
-            Task { @MainActor [weak self] in
-                self?.state = newState
-            }
-        }
-        anonExchange = exchange
-    }
 
     // MARK: - Lifecycle
 
     func start() {
         state = .idle
-        if let ex = apduExchange {
-            ex.start()
-        } else if let ex = anonExchange {
-            ex.start()
-            state = ex.viewModel.state
-        }
+        guard let ex = apduExchange else { return }
+        ex.start()
     }
 
     func cancel() {
         apduExchange?.cancel()
-        if let ex = anonExchange {
-            ex.cancel()
-            state = ex.viewModel.state
-        } else {
-            if case .waiting = state { state = .idle }
-            if case .exchanging = state { state = .idle }
-        }
+        if case .waiting = state { state = .idle }
+        if case .exchanging = state { state = .idle }
     }
 
     func reset() {

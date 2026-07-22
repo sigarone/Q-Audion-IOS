@@ -6,6 +6,24 @@
 	<array>
 		<string>TAG</string>
 	</array>
+	<!-- W-NFCIOS — the AID of the Android HCE service we tap against
+	     (NfcConstants.AID_HEX, apduservice.xml). Without this array CoreNFC
+	     never sends SELECT for our application, so it never surfaces an
+	     NFCISO7816Tag to the app: the reader session finds nothing and dies on
+	     its own timeout. Confirmed live 2026-07-22 on an iPhone-to-S26 tap —
+	     the Android side logged the field arriving and SELECTs going to
+	     off-host (secure element) AIDs only, with zero HostEmulation dispatch
+	     to com.bcrypto.qaudion.nfc.NfcApduService.
+
+	     This is the ordinary reader-side capability, a sibling of the
+	     `formats` key above. It is NOT the restricted card-emulation
+	     entitlement (com.apple.developer.nfc.hce, the "card session API")
+	     that would be needed to make an iPhone act as the card — that one is
+	     why iPhone-to-iPhone tapping stays impossible. -->
+	<key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
+	<array>
+		<string>F0BCF1073A5100</string>
+	</array>
 	<key>aps-environment</key>
 	<string>production</string>
 	<!-- App Groups: one entry per feature-scoped extension.
