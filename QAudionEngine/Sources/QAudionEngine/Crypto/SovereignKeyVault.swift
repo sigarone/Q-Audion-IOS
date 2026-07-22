@@ -25,12 +25,58 @@ public final class SovereignKeyVault {
         case swOnly = "sw_only"
 
         /// Lenient parse: unknown / nil wire string → `.shared` (safe default).
+        ///
+        /// W-NFCBIND — the generic blob grew a second field (`"<class>;origin=<o>"`,
+        /// see `Blob`), so only the part before the first `;` is the class. A
+        /// legacy blob has no separator and is its own first field, which is why
+        /// the split is safe to apply unconditionally: without it a
+        /// class-plus-origin blob would fall through to `.shared` and silently
+        /// demote an hw_only contact, defeating the D4 policy that reads it.
         public static func parse(_ wire: String?) -> KeyClass {
-            switch wire {
+            switch wire?.split(separator: ";", maxSplits: 1).first.map(String.init) {
             case "hw_only": return .hwOnly
             case "sw_only": return .swOnly
             default:        return .shared
             }
+        }
+    }
+
+    /// W-NFCBIND — encoding of the `kSecAttrGeneric` byte blob, which now
+    /// carries two independent facts about an entry.
+    ///
+    /// Format: `"<class>"` (legacy, pre-W-NFCBIND) or `"<class>;origin=<origin>"`.
+    /// Both parse correctly in both directions: an old build reading a new blob
+    /// gets the class it expects because `KeyClass.parse` splits on `;`, and a
+    /// new build reading an old blob finds no origin field and falls back to
+    /// `PskOrigin.inferred(fromAccountName:)`.
+    ///
+    /// Keeping it in the existing attribute rather than adding a second Keychain
+    /// item matters for `migratePskProtection`, which deletes and re-adds every
+    /// entry when biometric protection is toggled: it already carries this blob
+    /// through that window, so the origin survives for free. A sidecar item
+    /// would have needed its own migration path and could desynchronise from the
+    /// key it describes.
+    private enum Blob {
+        static func encode(keyClass: KeyClass?, origin: PskOrigin?) -> Data? {
+            guard keyClass != nil || origin != nil else { return nil }
+            // A blob that carries only an origin still needs the class field
+            // present so the separator has a left-hand side; `.shared` is what
+            // an absent class already means.
+            var s = (keyClass ?? .shared).rawValue
+            if let origin { s += ";origin=" + origin.rawValue }
+            return Data(s.utf8)
+        }
+
+        /// The origin recorded in the blob, or nil for a legacy blob that has
+        /// none. Deliberately nil rather than a default, so the caller can tell
+        /// "no origin was ever written" apart from "the origin is manual" and
+        /// apply the name-based fallback only in the first case.
+        static func origin(_ data: Data?) -> PskOrigin? {
+            guard let data, let s = String(data: data, encoding: .utf8) else { return nil }
+            for field in s.split(separator: ";") where field.hasPrefix("origin=") {
+                return PskOrigin(rawValue: String(field.dropFirst("origin=".count)))
+            }
+            return nil
         }
     }
 
@@ -41,6 +87,21 @@ public final class SovereignKeyVault {
     /// legacy `storePsk(name:key:fingerprint:)` path (which now forwards here
     /// with `keyClass: nil`, leaving the generic slot empty → reads back as
     /// `.shared`).
+    /// W-NFCBIND overload — store a PSK with its key_class AND its provenance.
+    /// The two share the `kSecAttrGeneric` blob (see `Blob`). Callers that do
+    /// not know the provenance keep using the 4-arg form and the entry falls
+    /// back to the name-based inference on read.
+    public func storePsk(
+        name: String,
+        key: Data,
+        fingerprint: String,
+        keyClass: KeyClass?,
+        origin: PskOrigin?
+    ) throws {
+        try storeInternal(name: name, key: key, fingerprint: fingerprint,
+                          blob: Blob.encode(keyClass: keyClass, origin: origin))
+    }
+
     public func storePsk(name: String, key: Data, fingerprint: String, keyClass: KeyClass?) throws {
         // IOS-SE: fresh writes honor the current protection policy. When
         // biometric key protection is enabled, attach a `.userPresence`
@@ -50,7 +111,13 @@ public final class SovereignKeyVault {
         // SecItemUpdate cannot change an item's access-control class.
         // D1: the key_class string (if any) goes into kSecAttrGeneric — a raw
         // byte blob attribute that does NOT collide with the fingerprint label.
-        let classBlob: Data? = keyClass.map { Data($0.rawValue.utf8) }
+        // W-NFCBIND: with `origin: nil` this encodes to exactly the old bytes,
+        // so existing call sites write a byte-identical blob.
+        try storeInternal(name: name, key: key, fingerprint: fingerprint,
+                          blob: Blob.encode(keyClass: keyClass, origin: nil))
+    }
+
+    private func storeInternal(name: String, key: Data, fingerprint: String, blob classBlob: Data?) throws {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -117,6 +184,56 @@ public final class SovereignKeyVault {
         #else
         return .shared
         #endif
+    }
+
+    /// W-NFCBIND reader — where this entry came from.
+    ///
+    /// The persisted tag wins; a legacy entry that has none falls back to
+    /// `PskOrigin.inferred(fromAccountName:)`, which is why NFC keys already on
+    /// devices are covered without a migration step.
+    public func origin(name: String) -> PskOrigin {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: name,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess, let attrs = item as? [String: Any],
+           let recorded = Blob.origin(attrs[kSecAttrGeneric as String] as? Data) {
+            return recorded
+        }
+        #endif
+        return PskOrigin.inferred(fromAccountName: name)
+    }
+
+    /// W-NFCBIND — raw material for an entry that is about to LEAVE the device
+    /// (a QR export, a device-linking snapshot, a backup archive).
+    ///
+    /// Every egress path must call THIS, never `loadPsk`. The split is the
+    /// point: `loadPsk` is for using the key here — the handshake, message
+    /// decryption — and must keep working for NFC keys, while this is the one
+    /// door outward. Enforcing in the vault rather than in each caller means a
+    /// future export surface has to opt in explicitly instead of inheriting the
+    /// leak, which is exactly how Android ended up QR-exporting NFC secrets.
+    ///
+    /// - Throws: `KeyVaultError.notExportable` when the origin forbids it.
+    public func exportableMaterial(name: String) throws -> Data? {
+        let o = origin(name: name)
+        guard o.isExportable else {
+            throw KeyVaultError.notExportable(origin: o, name: name)
+        }
+        return try loadPsk(name: name)
+    }
+
+    /// The subset of `listPskNames()` whose material may leave the device.
+    /// For whoever builds an export or device-linking flow later, so the filter
+    /// is in place before the feature is.
+    public func exportablePskNames() -> [String] {
+        listPskNames().filter { origin(name: $0).isExportable }
     }
 
     public func loadPsk(name: String) throws -> Data? {
@@ -284,4 +401,9 @@ public enum KeyVaultError: Error {
     case storeFailed(OSStatus)
     case loadFailed(OSStatus)
     case deleteFailed(OSStatus)
+    /// W-NFCBIND — raw material was requested for an entry that may not leave
+    /// the device. Carries the origin so the UI can say *why*: "created by an
+    /// NFC tap, it cannot leave this device" is actionable, "export failed"
+    /// invites a retry.
+    case notExportable(origin: PskOrigin, name: String)
 }

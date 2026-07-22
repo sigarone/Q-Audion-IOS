@@ -6888,10 +6888,21 @@ final class AppState: ObservableObject {
         if isUuidName {
             method = "KMS"
         } else {
-            switch vault.getKeyClass(name: name) {
-            case .hwOnly: method = "HW"
-            case .swOnly: method = "SW"
-            case .shared: method = "PSK"
+            // W-NFCBIND — provenance first, storage class second. Before this,
+            // an NFC-derived key fell through `getKeyClass` to the generic
+            // "PSK" bucket, so the in-call security sheet could never tell the
+            // user that this call's secret came from a physical tap. The class
+            // is still what shows for everything else: it is the right label
+            // for a KMS/earbud key, and "HW" carries information "PSK" does not.
+            switch vault.origin(name: name) {
+            case .nfc:
+                method = "NFC"
+            case .qr, .manual, .kms, .callDerived, .deviceInternal:
+                switch vault.getKeyClass(name: name) {
+                case .hwOnly: method = "HW"
+                case .swOnly: method = "SW"
+                case .shared: method = "PSK"
+                }
             }
         }
         let displayName: String = isUuidName ? String(fp.prefix(9)) : name

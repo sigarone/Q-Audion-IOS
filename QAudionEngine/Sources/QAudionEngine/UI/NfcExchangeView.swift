@@ -191,7 +191,13 @@ private final class NfcExchangeDriver: ObservableObject {
         let prefix: Substring = fingerprint.prefix(16)
         let name: String = "nfc-" + prefix
         let vault = SovereignKeyVault()
-        try vault.storePsk(name: name, key: psk, fingerprint: fingerprint)
+        // W-NFCBIND — record the provenance at write time. Without it the entry
+        // relies on `PskOrigin.inferred`, which reads the "nfc-" prefix of this
+        // very name; that fallback exists for keys stored before the tag did,
+        // and a renamed convention should not be able to quietly turn an NFC
+        // key back into an exportable one.
+        try vault.storePsk(name: name, key: psk, fingerprint: fingerprint,
+                           keyClass: nil, origin: .nfc)
     }
 }
 
