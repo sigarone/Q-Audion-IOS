@@ -40,41 +40,36 @@ final class ServerSelector {
     }
 
     /// Hosts the client trusts as VoIP nodes. Every selection + failover path only
-    /// ever targets these — never an attacker-injected host.
+    /// ever targets these — never an attacker-injected host. fi1.bcrypto.com (the
+    /// Helsinki failover node) is already pinned by `CertPinningDelegate`, so this
+    /// is the app-layer allowlist that mirrors Android FAILOVER_HOSTS / Desktop
+    /// PINNED_HOSTNAMES.
     ///
     /// W-NODRFAILOVER (2026-07-23) — fi1.bcrypto.com is a dev/build box + DR
-    /// snapshot replica, NOT a live mirror of production: it has no real-time
-    /// user-data sync and no cross-node call routing. Root-caused on device
-    /// e1f5690b (call 9c490c46 and others, 2026-07-23): a refresh-token 401
-    /// blip at 08:46 UTC tripped `onNodeStalled` (3 consecutive failed WS
-    /// reconnects), the client failed over here per the old allowlist below,
-    /// and got stuck — the DR box happily authenticated the client's stale
-    /// session (its own snapshot still had the old refresh token) but had no
-    /// row for the user at all ("identity key mirror failed: user not
-    /// found"), so every call in or out silently died for the rest of the
-    /// day while the client believed it was fully connected (200s, WS auth).
-    /// A client that CANNOT reach production is better served by retrying
-    /// production (or falling through to the Reality censorship-bypass path,
-    /// which already exists for exactly this "every trusted clearnet node
-    /// unreachable" case — see `handleNodeStalled` in AppState.swift) than by
-    /// silently wandering onto a node that answers but cannot actually serve
-    /// it. Until fi-1 gets real cross-node user-data replication + call
-    /// routing, it must not be an automatic client failover target — pull it
-    /// from the allowlist entirely. (Android FAILOVER_HOSTS / Desktop
-    /// PINNED_HOSTNAMES carry the identical latent bug and need the same fix.)
-    private let trustedHosts: Set<String> = ["voip.bcrypto.com"]
+    /// snapshot replica: in NORMAL operation (no human-declared disaster) it
+    /// runs its own separate database with no real-time user-data sync. A
+    /// client CAN legitimately need it as a last resort (that's the whole
+    /// point of a DR node), but connectivity alone (200s, WS auth) cannot
+    /// prove it actually knows THIS user — root-caused on device e1f5690b
+    /// (call 9c490c46, 2026-07-23): a refresh-token 401 blip tripped
+    /// `onNodeStalled`, the client failed over here, authenticated fine (the
+    /// JWT signing secret is shared across nodes), and was stuck for hours
+    /// because nothing ever checked whether the node had a row for the user
+    /// at all ("identity key mirror failed: user not found"). Removing fi-1
+    /// from this list entirely (the first fix attempt) closed the trap but
+    /// also closed the legitimate "fi-1 becomes real during a declared de-1
+    /// outage" recovery path — wrong tradeoff. The right fix is
+    /// `candidateServesCurrentUser`: keep fi-1 trusted, but verify function
+    /// (does this node actually know me), not just connectivity, before
+    /// ever committing to a candidate. See its doc comment.
+    private let trustedHosts: Set<String> = ["voip.bcrypto.com", "fi1.bcrypto.com"]
 
     /// Hardcoded TRUSTED-HOSTNAME fallback node list. Used ONLY when the live
     /// /api/v1/servers list can't be fetched (the node serving it died). WS path
-    /// is /ws (the real route; /api/v1/ws 404s).
-    ///
-    /// W-NODRFAILOVER — fi-1 removed, see `trustedHosts` above. This now only
-    /// ever offers the single production node back to itself, which is
-    /// intentional: `reselectExcluding` filtering it out (it IS the dead node
-    /// being excluded) correctly yields zero candidates, so the caller falls
-    /// through to the Reality bypass path instead of a broken DR box.
+    /// is /ws (the real route; /api/v1/ws 404s). Mirrors Android/Desktop fallbackNodes.
     private let fallbackNodes: [[String: Any]] = [
         ["id": "eu-de-1", "https_url": "https://voip.bcrypto.com", "wss_url": "wss://voip.bcrypto.com/ws"],
+        ["id": "eu-fi-1", "https_url": "https://fi1.bcrypto.com", "wss_url": "wss://fi1.bcrypto.com/ws"],
     ]
 
     // MARK: - State
@@ -91,17 +86,19 @@ final class ServerSelector {
         guard let nodes = await fetchServers(provider: provider) else { return }
         guard !nodes.isEmpty else { return }
         let ranked = await probeAll(nodes: nodes)
-        guard let best = ranked.first else { return }
+        guard let best = await pickVerified(from: ranked, provider: provider) else { return }
         applyIfBetter(provider: provider, candidate: best.url, candidateRtt: best.rtt,
                       currentUrl: baseUrl)
     }
 
-    /// Fail OFF a dead node: re-select the best REACHABLE trusted node whose
-    /// wss_url is not `deadWssUrl`, and switch the provider to it. Tries the live
-    /// server list first; if that can't be fetched (the dead node was serving it)
-    /// falls back to `fallbackNodes`. Returns the new wss_url, or nil if nothing
-    /// reachable — caller must NOT switch (implicit network-gate: if nothing
-    /// probes, the local network is likely the problem, not the node).
+    /// Fail OFF a dead node: re-select the best REACHABLE, VERIFIED trusted
+    /// node whose wss_url is not `deadWssUrl`, and switch the provider to it.
+    /// Tries the live server list first; if that can't be fetched (the dead
+    /// node was serving it) falls back to `fallbackNodes`. Returns the new
+    /// wss_url, or nil if nothing reachable AND VERIFIED — caller must NOT
+    /// switch (implicit network-gate: if nothing probes/verifies, the local
+    /// network is likely the problem, or every candidate is a dead DR box,
+    /// not a "just needed to pick a nearer node" situation).
     /// SECURITY: candidates are restricted to trusted `wss://` hosts only.
     func reselectExcluding(deadWssUrl: String, provider: BCryptoBackendProvider) async -> String? {
         currentProvider = provider
@@ -118,13 +115,76 @@ final class ServerSelector {
             return nil
         }
         let ranked = await probeAll(nodes: candidates)
-        guard let best = ranked.first else {
-            os_log("ServerSelector: failover candidates unreachable — local net likely down, not switching")
+        guard let best = await pickVerified(from: ranked, provider: provider) else {
+            os_log("ServerSelector: failover candidates unreachable or none actually serve this user — not switching")
             return nil
         }
         os_log("ServerSelector: failover to %{public}@ (rtt=%.0fms)", best.url, best.rtt)
         provider.updateServerUrl(to: best.url)
         return best.wssUrl
+    }
+
+    /// W-NODESERVES (2026-07-23) — walk `ranked` (best RTT first) and return
+    /// the first candidate that ALSO actually serves the current user, not
+    /// merely the first that answers a health probe.
+    ///
+    /// THE GAP THIS CLOSES. A trusted node can be perfectly reachable (200 on
+    /// /health, valid TLS, valid WS auth — the JWT signing secret is shared
+    /// fleet-wide) while running on a completely different database that has
+    /// never heard of this account. Root-caused 2026-07-23 on fi1.bcrypto.com
+    /// (a dev/build box that is ALSO a legitimate DR node once a human
+    /// activates it — see `deployments/dr-replication/README.md` on
+    /// bcrypto-server): every connectivity check above passed, the client
+    /// believed it was fully connected, and every call silently died for
+    /// hours because nothing checked whether the node actually knew the
+    /// user. Removing the DR node from the trusted set entirely (the first
+    /// fix attempt) closed the trap but also closed the legitimate "fi-1
+    /// becomes real during a declared de-1 outage" recovery path. Verifying
+    /// FUNCTION, not just connectivity, keeps the DR node usable when it is
+    /// genuinely serving the user (declared DR mode: identical user data,
+    /// same signing secret, real reads) while refusing it the instant it
+    /// answers but doesn't actually know who we are.
+    private func pickVerified(from ranked: [NodeProbe], provider: BCryptoBackendProvider) async -> NodeProbe? {
+        for candidate in ranked {
+            if await candidateServesCurrentUser(httpsUrl: candidate.url, provider: provider) {
+                return candidate
+            }
+            os_log("ServerSelector: %{public}@ answered but does not serve this user — skipping", candidate.url)
+        }
+        return nil
+    }
+
+    /// GET /api/v1/profile against `httpsUrl` (NOT via `provider`, which would
+    /// mutate shared config before we've decided the candidate is any good)
+    /// using the CURRENT access token, and check the returned user_id matches
+    /// the account we actually are. A node with no row for this user 404s or
+    /// (worse, if it happens to share a differently-provisioned account under
+    /// the same JWT-valid session shape) returns a MISMATCHED id — both are
+    /// firm "do not trust this candidate" signals.
+    ///
+    /// Pre-login (no cached userId yet) there is nothing to verify against —
+    /// return true so the very first selection isn't blocked on a check that
+    /// cannot possibly run yet; every SUBSEQUENT reselect (the actual failover
+    /// path this exists for) has a real userId to check against.
+    private func candidateServesCurrentUser(httpsUrl: String, provider: BCryptoBackendProvider) async -> Bool {
+        guard let token = provider.config.accessToken, !token.isEmpty else { return true }
+        guard let expectedUserId = provider.config.userId, !expectedUserId.isEmpty else { return true }
+        guard let url = URL(string: httpsUrl.trimmingCharacters(in: .init(charactersIn: "/")) + "/api/v1/profile")
+        else { return false }
+        var req = URLRequest(url: url, timeoutInterval: probeTimeoutSec)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = probeTimeoutSec
+            let (data, resp) = try await URLSession(configuration: config).data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let returnedUserId = json["user_id"] as? String
+            else { return false }
+            return returnedUserId == expectedUserId
+        } catch {
+            return false
+        }
     }
 
     /// Start periodic re-probing in background. Idempotent.
@@ -168,7 +228,7 @@ final class ServerSelector {
                 }
                 guard let nodes = await self.fetchServers(provider: p) else { continue }
                 let ranked = await self.probeAll(nodes: nodes)
-                guard let best = ranked.first else { continue }
+                guard let best = await self.pickVerified(from: ranked, provider: p) else { continue }
                 let currentRtt = await self.measureRtt(url: baseUrl + "/api/v1/health") ?? Double.infinity
                 self.applyIfBetter(provider: p, candidate: best.url, candidateRtt: best.rtt,
                                    currentUrl: baseUrl, currentRtt: currentRtt)
