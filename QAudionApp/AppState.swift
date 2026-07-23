@@ -6801,7 +6801,33 @@ final class AppState: ObservableObject {
             // forwarded to the SE via GATT rather than attempting SW decryption.
             let relay = EarbudAckPopRelay(gatt: earbudGattProxy)
             let poller = KmsPollerService(kmsClient: provider.kmsClient, vault: vault, earbudRelay: relay)
-            let stats = try await poller.pollOnce(deviceKeys: keys)
+            // ROOT-CAUSE FIX (W-KMSV2CTX): this was the ONLY production call
+            // to pollOnce and never passed v2Context, so
+            // KmsPollerService.route(for:) sent EVERY non-legacy, non-earbud
+            // KMS delivery (protoVersion >= 2, keyType != "sovereign" — i.e.
+            // any modern phone-held key, which is the server's default today)
+            // down the .v2PhoneHeld branch, which immediately throws
+            // `missingV2Context` (KmsPollerService.swift:89) before ever
+            // decrypting/storing/acknowledging. Server-side this looks like
+            // "delivered" forever (GET marks delivered unconditionally) with
+            // no acknowledge — exactly the symptom reported: KMS key shows
+            // delivered, never acknowledged, never usable in a call. Building
+            // a real V2Context from the logged-in user + this device's own
+            // auth device_id (already used above for identity-key publish)
+            // unblocks the v2PhoneHeld path; entry.userId/entry.deviceId
+            // (server-authoritative) still win whenever the pending entry
+            // carries them, so this is only the fallback the guard needs to
+            // even attempt the branch.
+            var v2Context: KmsPollerService.V2Context? = nil
+            if let userIdStr = currentUserId, let userUuid = UUID(uuidString: userIdStr),
+               let deviceIdStr = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+               let deviceUuid = UUID(uuidString: deviceIdStr) {
+                v2Context = KmsPollerService.V2Context(
+                    userId: userUuid, deviceId: deviceUuid, serverId: CryptoConstants.kmsServerId())
+            } else {
+                print("[AppState] KMS sweep: missing userId/deviceId — v2PhoneHeld entries will fail closed this sweep")
+            }
+            let stats = try await poller.pollOnce(deviceKeys: keys, v2Context: v2Context)
             if stats.processed > 0 {
                 print("[AppState] KMS sweep: processed=\(stats.processed) stored=\(stats.stored) acked=\(stats.acknowledged) decryptFailed=\(stats.decryptFailed) ackFailed=\(stats.ackFailed)")
             }
