@@ -1444,29 +1444,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 )
             }
 
-            // W-TRANSCRIPTV2 (multi-PSK-mixing SYNTHESIS.md ship step 4) — advertise OUR
-            // OWN eligible PSK fingerprints on the ACCEPT too (previously OFFER-only), same
-            // order/source as the OFFER side's own advertised list
-            // (`onAndroidCallSetupStarted`'s `advertisedPskFingerprints`), so the v2 ACCEPT
-            // transcript can bind the responder's own advertised order
-            // (`HandshakeTranscript.acceptV2`'s `advEnc`) — mirrors Android
-            // `PqcHandshake.kt respond()`'s `pskFingerprints = myPsks.keys.toList()` /
-            // Desktop `AndroidBundleHandshake.ts processAndroidOffer`'s `pskFingerprints:
-            // [...catalogue.keys()]`. Omitted (nil) when we hold no PSKs — wire-equivalent
-            // to the pre-step-4 ACCEPT. Nothing consumes this for PSK selection (still
-            // single-selection via `selectedPskFingerprint`).
-            let responderPskVault = SovereignKeyVault()
-            let responderAdvertisedPskFingerprints: [String] = PskAdvertising.fingerprintsForAdvertisement(
-                responderPskVault.listPskEntries().compactMap { entry in
-                    guard let raw = (try? responderPskVault.loadPsk(name: entry.name)) ?? nil, !raw.isEmpty else { return nil }
-                    return PskAdvertising.Entry(
-                        name: entry.name,
-                        origin: responderPskVault.origin(name: entry.name),
-                        material: raw,
-                        createdAt: entry.createdAt
-                    )
-                }
-            )
+            // W-TRANSCRIPTV2 — advertising our own eligible PSK fingerprints on the
+            // ACCEPT (a live Keychain scan of every stored PSK, done synchronously
+            // in the responder's OFFER-handling path) was REMOVED: it added
+            // unnecessary Keychain I/O to the hot path of answering an incoming
+            // call for a value nothing actually consumes (PSK selection stays
+            // single-selection via `selectedPskFingerprint` either way). Wire
+            // shape reverts to pre-step-4: `pskFingerprints` stays nil on the
+            // ACCEPT, byte-identical to before this feature existed.
 
             // 7. Build ACCEPT JSON.
             // W527: Android's kotlinx.serialization HandshakeBundle data
@@ -1504,7 +1489,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     ratchetV4: Self.advertisesRatchetV4 ? true : nil,
                     srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
                 ),
-                pskFingerprints: responderAdvertisedPskFingerprints.isEmpty ? nil : responderAdvertisedPskFingerprints,
+                pskFingerprints: nil,
                 selectedPskFingerprint: selectedFp
             )
 
@@ -1649,13 +1634,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                let ikResp = localSignerIdentityKey, let ikInit = v4PeerSik, ikInit.count == 32 {
                 // initAdvert = the OFFER's OWN advert (the initiator's, in the
                 // exact order it arrived on the wire). respAdvert = OUR OWN ACCEPT
-                // advert (`responderAdvertisedPskFingerprints`, built above) —
-                // `pskRoles: nil` since nothing sets a non-zero ACCEPT-side role yet.
+                // advert — always empty now that the ACCEPT no longer advertises
+                // (see the removed Keychain-scan block above); `pskRoles: nil`
+                // since nothing sets a non-zero ACCEPT-side role yet either.
                 let initEntries = KeyConfirmation.pskAdvertEntries(
                     fingerprintsHex: bundle.pskFingerprints, roles: bundle.pskRoles)
                 let respEntries = KeyConfirmation.pskAdvertEntries(
-                    fingerprintsHex: responderAdvertisedPskFingerprints.isEmpty ? nil : responderAdvertisedPskFingerprints,
-                    roles: nil)
+                    fingerprintsHex: nil, roles: nil)
                 if let t = KeyConfirmation.transcript(
                     offerBinding: verifiedOfferBindingV2,
                     acceptBinding: acceptBindingV2ForKc,
