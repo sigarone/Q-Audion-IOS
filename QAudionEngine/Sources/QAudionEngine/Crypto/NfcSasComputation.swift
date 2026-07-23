@@ -65,10 +65,13 @@ public enum NfcSasComputation {
         return computeSasUnchecked(selfIkEdPub: selfIkEdPub, peerIkEdPub: peerIkEdPub)
     }
 
-    /// Internal derivation without input validation — used only by the KAT
-    /// self-check below (Android pins its KAT through byte patterns that are NOT
-    /// real Ed25519 points, so validation must be bypassable for the KAT itself).
-    private static func computeSasUnchecked(selfIkEdPub: Data, peerIkEdPub: Data) -> String {
+    /// Internal derivation without input validation — used only by
+    /// `NfcSasComputationKatTests`, which (like Android's own KAT self-check)
+    /// pins the two frozen vectors through byte patterns (all-zeros, all-0xFF,
+    /// counted bytes) that are deliberately NOT real Ed25519 points, so the
+    /// public, validating `computeSas` cannot be used to exercise them —
+    /// `internal` (not `private`) so `@testable import` can reach it.
+    static func computeSasUnchecked(selfIkEdPub: Data, peerIkEdPub: Data) -> String {
         let first: Data
         let second: Data
         if compareUnsigned(selfIkEdPub, peerIkEdPub) <= 0 {

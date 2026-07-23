@@ -270,13 +270,18 @@ public enum AssuranceState: Equatable {
         verifiedPeerIdentityKey: Data?,
         priorPresenceAuth: (peerIdentityKey: Data, witnessTier: String)?
     ) -> (mixRoles: [MixSecretRole], nfcBound: Bool, witnessOk: Bool) {
-        guard selectedIsNfcOrigin,
-              let fpHex = selectedFingerprintHex,
+        guard selectedIsNfcOrigin else {
+            return (n >= 1 ? [.psk] : [], false, false)
+        }
+        guard let fpHex = selectedFingerprintHex,
               let capturedIdentity = DeviceRenewBlob.hexDecode(fpHex),
               capturedIdentity.count == 32,
               let verified = verifiedPeerIdentityKey
         else {
-            return (n >= 1 ? [.psk] : [], false, false)
+            // NFC-origin key, but nothing to verify its binding against yet
+            // (e.g. no verified peer identity on this call) — still an NFC
+            // secret, just not (yet) provably bound to this call's peer.
+            return ([.nfc], false, false)
         }
 
         let nfcBound = (capturedIdentity == verified)

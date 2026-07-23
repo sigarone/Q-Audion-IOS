@@ -10,18 +10,24 @@ import CryptoKit
 /// discipline (never hand-copy a derived value without an independent re-check).
 final class NfcSasComputationKatTests: XCTestCase {
 
-    func testVectorA_zerosVsFFs() throws {
+    // Both vectors use byte patterns (all-zeros, all-0xFF, counted bytes) that are
+    // deliberately NOT real Ed25519 points — same reasoning as Android's own KAT
+    // self-check — so these go through the unvalidated internal derivation, not
+    // the public `computeSas` (which would correctly reject them as small-order /
+    // non-canonical points, since that's exactly what they are).
+
+    func testVectorA_zerosVsFFs() {
         let a = Data(repeating: 0x00, count: 32)
         let b = Data(repeating: 0xFF, count: 32)
-        XCTAssertEqual(try NfcSasComputation.computeSas(selfIkEdPub: a, peerIkEdPub: b), "759936")
-        XCTAssertEqual(try NfcSasComputation.computeSas(selfIkEdPub: b, peerIkEdPub: a), "759936",
+        XCTAssertEqual(NfcSasComputation.computeSasUnchecked(selfIkEdPub: a, peerIkEdPub: b), "759936")
+        XCTAssertEqual(NfcSasComputation.computeSasUnchecked(selfIkEdPub: b, peerIkEdPub: a), "759936",
                        "must be commutative — sort_lex makes tap order irrelevant")
     }
 
-    func testVectorB_countedBytes() throws {
+    func testVectorB_countedBytes() {
         let a = Data((0..<32).map { UInt8($0) })
         let b = Data((32..<64).map { UInt8($0) })
-        XCTAssertEqual(try NfcSasComputation.computeSas(selfIkEdPub: a, peerIkEdPub: b), "360896")
+        XCTAssertEqual(NfcSasComputation.computeSasUnchecked(selfIkEdPub: a, peerIkEdPub: b), "360896")
     }
 
     func testRejectsWrongLength() {

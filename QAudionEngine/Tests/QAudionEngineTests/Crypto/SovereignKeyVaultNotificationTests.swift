@@ -27,10 +27,21 @@ import XCTest
 /// byte-for-byte (same `NotificationCenter.default.addObserver(forName:
 /// object: queue: .main)` + `Task { @MainActor [weak self] in ... }` hop).
 ///
-/// Real Keychain calls in this test mirror `CrossPlatformTestVectors
-/// .testSovereignIdentityKeychainPersistence()`'s existing precedent (the
-/// only other test in this suite that exercises live Keychain I/O), so
-/// this is not a novel risk for the CI environment.
+/// **Not run in CI.** This test performs real Keychain I/O
+/// (`SovereignKeyVault.storePsk`/`deletePsk`), which fails on the CI
+/// simulator with `errSecMissingEntitlement` (-34018) — a corrected claim:
+/// an earlier version of this comment cited `CrossPlatformTestVectors
+/// .testSovereignIdentityKeychainPersistence()` as a working precedent for
+/// live Keychain I/O in this environment, but that test is ITSELF
+/// `-skip-testing`'d in `engine-tests.yml` for the same reason, so it never
+/// actually proved anything. `engine-tests.yml` skips this whole suite too,
+/// matching that established convention rather than fighting the CI
+/// environment. The notification-posting production code
+/// (`SovereignKeyVault.swift`'s two `NotificationCenter.default.post(name:
+/// .sovereignVaultDidChange, ...)` call sites) is a two-line, easily
+/// code-reviewed change; this file remains as a real, locally-runnable
+/// regression test for anyone with a properly keychain-provisioned device
+/// or simulator.
 final class SovereignKeyVaultNotificationTests: XCTestCase {
 
     private let testName = "test-vault-notify-\(UUID().uuidString)"
