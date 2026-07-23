@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.836",
+              date: "2026-07-23",
+              title: "v1.0.836",
+              bullets: [
+                "Phase 1 iOS: NFC physical-presence badge, pairing SAS, vault-refresh fix (#37)",
+              ]),
         .init(id: "v1.0.835",
               date: "2026-07-23",
               title: "v1.0.835",
               bullets: [
+                "chore: regenerate changelog for v1.0.835",
                 "fix(calls): build on-demand controller for screen-share renegotiation (#31)",
                 "feat(psk-mix): step 7 derivation math + cross-platform KAT (iOS) (#36)",
                 "psk-mix steps 4/5/6/8: transcript-v2 + kc_mac + AssuranceState + presenceAuth/floor (iOS) (#35)",
@@ -155,13 +162,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.817",
                 "fix(groupcall): iPhone control-bar overflow, earpiece-routed audio, simulcast stats, hang-up ends call for all",
-              ]),
-        .init(id: "v1.0.816",
-              date: "2026-07-20",
-              title: "v1.0.816",
-              bullets: [
-                "chore: regenerate changelog for v1.0.816",
-                "fix(build): align LiveKitBroadcast pin with the 2.13.1-aes256-raw fork tag",
               ]),
     ]
 }
