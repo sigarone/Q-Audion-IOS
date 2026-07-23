@@ -843,7 +843,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // off for us (its `safePeer.ratchetV4` default). NOT in the signed
                 // CAPS triplet, so the OFFER signature is unaffected.
                 ratchetV4: Self.advertisesRatchetV4 ? true : nil,
-                srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
+                srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil,
+                // W-NFCVISIBLE go-live — Pavel: AssuranceState/kc_mac has been fully
+                // wired since W-NFCBADGE but stayed permanently inert because nobody
+                // ever advertised this bit (see this field's own doc a few lines
+                // above: "nobody sets this true yet; that's a later ship step").
+                // N stays capped at <=1 (nothing in this codebase drives it higher
+                // yet), so flipping this is additive/safe — an unflipped peer simply
+                // omits the bit and both sides keep computing S0 exactly as before.
+                // Mirrored in Android's SELF_CAPABILITIES in the same commit series.
+                pskMixV1: true
             ),
             pskFingerprints: advertisedPskFingerprints
         )
@@ -1487,7 +1496,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // negotiation): nil when this build can't do v4 → wire unchanged.
                     // Not part of the signed CAPS triplet → ACCEPT signature intact.
                     ratchetV4: Self.advertisesRatchetV4 ? true : nil,
-                    srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil
+                    srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil,
+                    // W-NFCVISIBLE go-live — same flip as the OFFER above, see its
+                    // comment for the full rationale.
+                    pskMixV1: true
                 ),
                 pskFingerprints: nil,
                 selectedPskFingerprint: selectedFp

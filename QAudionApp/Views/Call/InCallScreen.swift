@@ -885,6 +885,23 @@ struct InCallScreen: View {
                     filled: true
                 )
             }
+            // W-NFCVISIBLE follow-up — Pavel: not NFC-specific — a KMS-provisioned
+            // key confirmed by kc_mac (S8, `.pskConfirmed`) is also a real shared
+            // secret both sides hold, just not physical-presence-proven. KMS
+            // outranks NFC in the vault's selection priority, so a device holding
+            // BOTH mixes the KMS one — that call correctly lands on S8, not S2,
+            // and deserves its own always-on chip rather than silence. Mutually
+            // exclusive with the NFC chip above (decide() never returns both for
+            // the same call).
+            if let style = assurancePresentation?.style, case .badge = style,
+               assurancePresentation?.isPhysicalPresenceProof != true {
+                trustChip(
+                    icon: "checkmark",
+                    label: "PSK ✓",
+                    color: extras.success,
+                    filled: true
+                )
+            }
             if sasVerified {
                 trustChip(
                     icon: "checkmark",
