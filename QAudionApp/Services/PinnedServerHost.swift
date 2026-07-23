@@ -75,6 +75,23 @@ public enum PinnedServerHost {
         // Purely additive; matches Desktop + Android (which pin the SPKI form).
         "7l96vWmBuwJVYyzY9JKDRRtLGIRNEgQLRO4A8HuP4sY=",  // ISRG Root X2 (durable anchor)
         "ojctBkMelxY2Xu7UfsAgNRSX0YL8wDjkV+WBaKA8rAc=",  // Let's Encrypt YE1 (intermediate)
+        // W-CERTPIN-YE2 (2026-07-23) — SECOND LE hierarchy rotation since the
+        // YE1 pins above were added. THE ROOT CAUSE of "133 makes zero
+        // requests, ever, even with a confirmed-perfect network connection":
+        // live chain fetched today from voip.bcrypto.com:443 is
+        // leaf(bcrypto.com) <- YE2 <- "ISRG Root YE" (cross-signed by ISRG
+        // Root X2, but a DISTINCT cert with its own DER hash — X2's own pin
+        // above does NOT match it). None of the 4 existing pins matched any
+        // cert in that chain, so CertPinningDelegate rejected the TLS
+        // handshake before a single HTTP byte was sent — the server-side
+        // access log showed literally nothing, indistinguishable from "the
+        // app never tried," because from the server's perspective it never
+        // did. Any client with an already-live WS from before this rotation
+        // was unaffected (no fresh handshake, no re-validation); only a
+        // client forced into a FRESH connection (e.g. after a node failover)
+        // hit this. Purely additive, same pattern as the 2026-07-10 rotation.
+        "l2WN6MaN+pis4eUCimPVShqukRs+IUcQdsaFDNCMurQ=",  // Let's Encrypt YE2 (intermediate)
+        "D8CQHMorrp6f27AtUNAvEJT3s2ZyCGmRueiXYm3EhfA=",  // ISRG Root YE (cross-signed by X2)
     ].joined(separator: ",")
 
     /// Host portion of `url`. Returns `voip.bcrypto.com`.
