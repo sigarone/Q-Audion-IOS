@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.835",
+              date: "2026-07-23",
+              title: "v1.0.835",
+              bullets: [
+                "fix(calls): build on-demand controller for screen-share renegotiation (#31)",
+                "feat(psk-mix): step 7 derivation math + cross-platform KAT (iOS) (#36)",
+                "psk-mix steps 4/5/6/8: transcript-v2 + kc_mac + AssuranceState + presenceAuth/floor (iOS) (#35)",
+                "chore(deps): bump grpc to v1.82.1 in RealityCore (Dependabot #1)",
+              ]),
         .init(id: "v1.0.834",
               date: "2026-07-22",
               title: "v1.0.834",
               bullets: [
+                "chore: regenerate changelog for v1.0.834",
                 "fix(psk): exclude call-derived PSKs from video-HKDF-salt resolution (W-PSKMIX step 6)",
                 "fix(tests): two W-IOSECHO test bugs caught by CI (not production bugs)",
                 "fix(psk): exclude call-derived PSKs from receive-side matching gates (W-PSKMIX step 5)",
@@ -152,14 +162,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.816",
                 "fix(build): align LiveKitBroadcast pin with the 2.13.1-aes256-raw fork tag",
-              ]),
-        .init(id: "v1.0.815",
-              date: "2026-07-20",
-              title: "v1.0.815",
-              bullets: [
-                "chore: regenerate changelog for v1.0.815",
-                "feat(groupcall): true AES-256-GCM frame crypto — raw 32-byte SK_0 via fork overload (flag-day)",
-                "chore: regenerate changelog for v1.0.814",
               ]),
     ]
 }
