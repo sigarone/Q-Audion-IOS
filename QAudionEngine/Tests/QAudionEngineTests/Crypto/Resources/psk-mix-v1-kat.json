@@ -1,0 +1,72 @@
+{
+  "comment": "PskMix v1 KAT -- multi-secret mixing for shipOrder step 7 (SYNTHESIS.md keySchedule sections 1-2). N=1 is the identity (K_mix := s_1, byte-identical to today). N>=2 aggregates via HMAC-then-Expand: PRK_mix = HMAC-SHA256(key=s_1, msg=ikm_mix); K_mix = HKDF-Expand(PRK_mix, info, 32). All secrets/fingerprints/K_mix are raw 32 bytes. Generated with a Python hashlib/hmac reference -- same discipline as handshake-sig-kat.json. Written directly by this script, never hand-copied.",
+  "domain_mixid": "qa-psk-mix-id-v1",
+  "domain_ikm": "qa-psk-mix-v1",
+  "info_label": "qa-psk-mix-key-v1",
+  "vectors": {
+    "mix_n1_identity": {
+      "secrets_hex": [
+        "f933390e65ef449b9e0166dd31ce93a2df4894980d858007b2234fc99ea2bfff"
+      ],
+      "expected_K_mix_hex": "f933390e65ef449b9e0166dd31ce93a2df4894980d858007b2234fc99ea2bfff",
+      "assert": "N=1 => K_mix == s_1 byte-for-byte, no HMAC/Expand executed"
+    },
+    "mix_n2_basic": {
+      "secrets_hex": [
+        "f933390e65ef449b9e0166dd31ce93a2df4894980d858007b2234fc99ea2bfff",
+        "6cf572ab12447d909ebc008082a09bf0290982a23395a383925d14164f220fd7"
+      ],
+      "expected_ikm_mix_hex": "71612d70736b2d6d69782d763102311dda911047bbaa57e89e73e0c04c3f103a1355e32b63edabed7c3a0153268ff554de200f1a5cc98d83fd8547354185a52f99af66ea42c9593bd2d5edcac3e400206cf572ab12447d909ebc008082a09bf0290982a23395a383925d14164f220fd7",
+      "expected_ikm_mix_len": 112,
+      "expected_mix_id_hex": "e69e8556e4f1163a346b5b11557c9f292d1987301c3348cd4337b16ff2f8f8bc",
+      "expected_PRK_mix_hex": "7d7e9f2e678c8df04640f18b7d4f50b9a7dc7361e2b29d1a9add6f1ef7986467",
+      "expected_K_mix_hex": "d94eea4feac26d769f9ad37f1cfe0cc540ae054f8a4293eab3b08cabbd847ee6",
+      "assert": "pins ikm_mix hex (112 B), PRK_mix, mix_id, K_mix for the canonical [s_1, s_2] ordered input"
+    },
+    "mix_swap_role": {
+      "secrets_hex_forward": [
+        "f933390e65ef449b9e0166dd31ce93a2df4894980d858007b2234fc99ea2bfff",
+        "6cf572ab12447d909ebc008082a09bf0290982a23395a383925d14164f220fd7"
+      ],
+      "secrets_hex_swapped": [
+        "6cf572ab12447d909ebc008082a09bf0290982a23395a383925d14164f220fd7",
+        "f933390e65ef449b9e0166dd31ce93a2df4894980d858007b2234fc99ea2bfff"
+      ],
+      "expected_K_mix_forward_hex": "d94eea4feac26d769f9ad37f1cfe0cc540ae054f8a4293eab3b08cabbd847ee6",
+      "expected_K_mix_swapped_hex": "02e7cbf78ea5d77519c499ece38452058aa9b7188460ea05cfa54e0a65432754",
+      "assert": "s_1 and s_2 exchanged between the HMAC-key slot and the message slot MUST produce a DIFFERENT K_mix"
+    },
+    "mix_n3": {
+      "secrets_hex": [
+        "f933390e65ef449b9e0166dd31ce93a2df4894980d858007b2234fc99ea2bfff",
+        "6cf572ab12447d909ebc008082a09bf0290982a23395a383925d14164f220fd7",
+        "654b729a8ecaafdd121ee63cf30948457b50cc60e51831cddbea3d7b92c0425e"
+      ],
+      "expected_ikm_mix_len": 178,
+      "expected_mix_id_hex": "b590bbf97f98b207cc36cf505537d0fc9138bd40fe626cbdf23bc6a54b9ba483",
+      "expected_K_mix_hex": "2840485a74b25d1296ff4c400177141a416340eeaaac150b9919b12194495cfd",
+      "assert": "178-byte-length coverage + u8(N)=3 binding"
+    },
+    "mix_n4": {
+      "secrets_hex": [
+        "f933390e65ef449b9e0166dd31ce93a2df4894980d858007b2234fc99ea2bfff",
+        "6cf572ab12447d909ebc008082a09bf0290982a23395a383925d14164f220fd7",
+        "654b729a8ecaafdd121ee63cf30948457b50cc60e51831cddbea3d7b92c0425e",
+        "fd36a59cb1d1f1c2dbe4439ffb084cc1ae3f9d29d2030bf31ac57f3770452a98"
+      ],
+      "expected_ikm_mix_len": 244,
+      "expected_mix_id_hex": "70f2f85697d7e53a29230c50dc433debb24e3262bb86d591a1e20d658688758c",
+      "expected_K_mix_hex": "b5999e842411c51e340f0481fdc0b157f3e7204bc124d5abf0f09ad32bd858b2",
+      "assert": "244-byte-length coverage + u8(N)=4 binding, N capped at 4"
+    },
+    "mix_len_disjoint": {
+      "ikm_mix_lengths": {
+        "2": 112,
+        "3": 178,
+        "4": 244
+      },
+      "earbud_ikm_pp_len": 121,
+      "assert": "112/178/244 all != 121 (firmware's EE_IKM_PP_LEN) so ikm_mix can never be confused with the earbud's ikm''"
+    }
+  }
+}
