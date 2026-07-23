@@ -7126,7 +7126,17 @@ final class AppState: ObservableObject {
             // shows for an unpatched/malicious peer's replayed fingerprint,
             // never a real call (a fixed client never advertises one).
             guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: n)) else { return false }
-            return vault.getFingerprint(name: n) == fp
+            // W-STALEFP — recompute fresh from the raw material, never trust
+            // `vault.getFingerprint(name:)` (the cached Keychain label) for a
+            // wire match: an entry written before `PskAdvertising.canonicalFingerprint`
+            // became the label at write time (any pre-1f336b3 NFC import, and
+            // every non-NFC path that never persisted an origin/label
+            // deliberately) can carry a label that is NOT SHA-256(material) —
+            // e.g. an NFC entry's label used to be `hex(peerIdPub)`. Matching
+            // against that stale label silently fails to find an entry whose
+            // real bytes DO match the peer's fingerprint.
+            guard let raw = (try? vault.loadPsk(name: n)) ?? nil, !raw.isEmpty else { return false }
+            return PskAdvertising.canonicalFingerprint(forPsk: raw) == fp
         }
         guard let name = matchedName else {
             // W-PSKMIX — bare log only (this stays a pure, never-throwing UI
@@ -7197,7 +7207,9 @@ final class AppState: ObservableObject {
             // default video salt, matching Android's `psk == null` branch),
             // so excluding this candidate never breaks an ordinary call.
             guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: n)) else { return false }
-            return vault.getFingerprint(name: n) == fp
+            // W-STALEFP — see resolvePskDisplayMeta's identical comment above.
+            guard let raw = (try? vault.loadPsk(name: n)) ?? nil, !raw.isEmpty else { return false }
+            return PskAdvertising.canonicalFingerprint(forPsk: raw) == fp
         }
         guard let name = matchedName else { return nil }
         return (try? vault.loadPsk(name: name)) ?? nil
@@ -7272,9 +7284,20 @@ final class AppState: ObservableObject {
                         // independently refuse to treat it as eligible rather than
                         // trust the sender to withhold it.
                         guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return nil }
-                        guard let fp = vault.getFingerprint(name: name),
-                              let raw = (try? vault.loadPsk(name: name)) ?? nil,
+                        // W-STALEFP — the fingerprint that keys this catalogue MUST be
+                        // recomputed fresh from the raw material, never read from
+                        // `vault.getFingerprint(name:)` (the cached Keychain label): an
+                        // entry whose label predates `PskAdvertising.canonicalFingerprint`
+                        // becoming the write-time label (any pre-1f336b3 NFC import) can
+                        // carry a label that is NOT SHA-256(material) — e.g. an NFC
+                        // entry's label used to be `hex(peerIdPub)`. Keying this
+                        // dictionary by that stale label means the peer's true
+                        // fingerprint never hits, so a genuinely shared NFC PSK is
+                        // silently dropped and the call converges to no-PSK instead of
+                        // actually mixing the secret both devices hold.
+                        guard let raw = (try? vault.loadPsk(name: name)) ?? nil,
                               !raw.isEmpty else { return nil }
+                        let fp = PskAdvertising.canonicalFingerprint(forPsk: raw)
                         return (fp, raw)
                     },
                     // Belt-and-suspenders: tolerate any future duplicate fingerprint
@@ -7359,9 +7382,14 @@ final class AppState: ObservableObject {
                         // independently refuse to treat it as eligible rather than
                         // trust the sender to withhold it.
                         guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return nil }
-                        guard let fp = vault.getFingerprint(name: name),
-                              let raw = (try? vault.loadPsk(name: name)) ?? nil,
+                        // W-STALEFP — same fresh-recompute fix as routeInboundAndroidOffer's
+                        // identical catalogue above; see that comment for the full
+                        // rationale (a cached Keychain label can predate
+                        // PskAdvertising.canonicalFingerprint becoming the write-time
+                        // label and so not equal SHA-256(material)).
+                        guard let raw = (try? vault.loadPsk(name: name)) ?? nil,
                               !raw.isEmpty else { return nil }
+                        let fp = PskAdvertising.canonicalFingerprint(forPsk: raw)
                         return (fp, raw)
                     },
                     // Belt-and-suspenders: tolerate any future duplicate fingerprint

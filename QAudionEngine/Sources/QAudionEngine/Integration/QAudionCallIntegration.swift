@@ -1882,8 +1882,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                         // happily select a `.callDerived` entry if its fingerprint
                         // ever appeared in the peer's ACCEPT.
                         guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return false }
-                        guard let fp = vault.getFingerprint(name: name) else { return false }
-                        return selection.contains(fp)
+                        // W-STALEFP — recompute fresh from raw material; never trust
+                        // `vault.getFingerprint(name:)` (the cached Keychain label),
+                        // which can predate `PskAdvertising.canonicalFingerprint`
+                        // becoming the write-time label and so not equal
+                        // SHA-256(material) — the exact bug that silently derived
+                        // psk:nil on this device while the peer (fresh-computed)
+                        // genuinely mixed the shared PSK, diverging the session key.
+                        guard let raw = (try? vault.loadPsk(name: name)) ?? nil, !raw.isEmpty else { return false }
+                        return selection.contains(PskAdvertising.canonicalFingerprint(forPsk: raw))
                     }) else { return nil }
                     let raw = (try? vault.loadPsk(name: name)) ?? nil
                     return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
@@ -1934,8 +1941,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                         // W-PSKMIX step 5 — same `.callDerived` exclusion as the
                         // V4 branch above; see its comment for the full rationale.
                         guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return false }
-                        guard let fp = vault.getFingerprint(name: name) else { return false }
-                        return selection.contains(fp)
+                        // W-STALEFP — same fresh-recompute fix as the V4 branch above.
+                        guard let raw = (try? vault.loadPsk(name: name)) ?? nil, !raw.isEmpty else { return false }
+                        return selection.contains(PskAdvertising.canonicalFingerprint(forPsk: raw))
                     }) else { return nil }
                     let raw = (try? vault.loadPsk(name: name)) ?? nil
                     return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
@@ -2085,7 +2093,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let kcCallerLocalFingerprints: Set<String> = Set(
                 kcCallerVault.listPskNames().compactMap { name -> String? in
                     guard PskAdvertising.isEligibleMatchCandidate(origin: kcCallerVault.origin(name: name)) else { return nil }
-                    return kcCallerVault.getFingerprint(name: name)
+                    // W-STALEFP — same fresh-recompute fix as the PSK-selection
+                    // lookups above: `getFingerprint(name:)` is a cached Keychain
+                    // label that can predate `PskAdvertising.canonicalFingerprint`
+                    // becoming the write-time label, so it must never be trusted
+                    // for a set this side's own assurance/badge logic compares
+                    // against the peer's wire-advertised fingerprints.
+                    guard let raw = (try? kcCallerVault.loadPsk(name: name)) ?? nil, !raw.isEmpty else { return nil }
+                    return PskAdvertising.canonicalFingerprint(forPsk: raw)
                 }
             )
             let kcCallerPeerAdvertisedRoles = AssuranceState.mutualPeerAdvertisedRoles(
