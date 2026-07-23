@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.837",
+              date: "2026-07-23",
+              title: "v1.0.837",
+              bullets: [
+                "fix(call): remove unused Keychain scan from ACCEPT-building hot path",
+              ]),
         .init(id: "v1.0.836",
               date: "2026-07-23",
               title: "v1.0.836",
               bullets: [
+                "chore: regenerate changelog for v1.0.836",
                 "Phase 1 iOS: NFC physical-presence badge, pairing SAS, vault-refresh fix (#37)",
               ]),
         .init(id: "v1.0.835",
@@ -155,13 +162,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.818",
                 "fix(ui): never show raw UUIDs anywhere — central DisplayName resolver + sweep (W-UUIDSWEEP)",
-              ]),
-        .init(id: "v1.0.817",
-              date: "2026-07-20",
-              title: "v1.0.817",
-              bullets: [
-                "chore: regenerate changelog for v1.0.817",
-                "fix(groupcall): iPhone control-bar overflow, earpiece-routed audio, simulcast stats, hang-up ends call for all",
               ]),
     ]
 }
