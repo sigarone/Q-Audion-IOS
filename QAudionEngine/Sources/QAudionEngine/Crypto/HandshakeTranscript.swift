@@ -42,6 +42,19 @@ public enum HandshakeTranscript {
     private static let roleOffer: UInt8 = 0x01
     private static let roleAccept: UInt8 = 0x02
 
+    /// W-TRANSCRIPTV2 (multi-PSK-mixing SYNTHESIS.md ship step 4) — the v1 domain string
+    /// with its trailing "v1" changed to "v2", SAME LENGTH (24 bytes — self-verified below).
+    /// Used ONLY by `offerV2`/`acceptV2` — `domain`/`offer`/`accept` above are completely
+    /// UNTOUCHED by this addition, so every existing signed call keeps verifying byte-for-
+    /// byte identically. Mirrors the Android reference
+    /// (`HandshakeTranscript.kt` `DOMAIN_V2`, commit d3244418) and Desktop
+    /// (`HandshakeTranscript.ts` `DOMAIN_V2`, commit c6bf155) byte-for-byte.
+    private static let domainV2: Data = {
+        let d = Data("qaudion-handshake-sig-v2".utf8)
+        precondition(d.count == domain.count, "domainV2 length \(d.count) != domain length \(domain.count)")
+        return d
+    }()
+
     // MARK: - Low-level encoders
 
     /// `LP(x) = u16_BE(len(x)) || x`. Absent field => `LP(empty) = 0x0000`.
@@ -63,6 +76,75 @@ public enum HandshakeTranscript {
     private static func pskJoin(_ fps: [String]?) -> Data {
         let joined = (fps ?? []).sorted().joined(separator: ",")
         return Data(joined.utf8)
+    }
+
+    /// W-TRANSCRIPTV2 — v2-only replacement for `pskJoin` in the OFFER/ACCEPT PSK-list
+    /// binding. `advEnc(list) = u8(m) || CONCAT_{j=1..m}( u8(role_j) || fp32_j )` — length
+    /// `1 + 33*m`: RAW 32-byte fingerprints (NOT 64-hex strings) in the order actually
+    /// ADVERTISED ON THE WIRE (not sorted), each paired with its 1-byte `roles` entry (0
+    /// when the parallel roles array is shorter/absent — same "absent means all-zero/
+    /// ordinary" convention `AndroidHandshakeBundle.pskRoles` already documents). Closes a
+    /// real, independent defect `pskJoin` left open: the v1 signature binds the SORTED SET
+    /// of fingerprints while actual PSK selection is driven by the wire ORDER (the responder
+    /// picks the first match in the OFFER's advertised order) — a relay could permute that
+    /// order without invalidating the v1 signature and steer which PSK gets selected. Binding
+    /// the real order closes it, v2-only. Mirrors Android `HandshakeTranscript.kt advEnc` /
+    /// Desktop `HandshakeTranscript.ts advEnc` byte-for-byte.
+    ///
+    /// Returns `nil` only for a pathological `fingerprintsHex.count > 255` (the `u8(m)` count
+    /// prefix cannot represent it). This rebuild runs on EVERY inbound bundle regardless of
+    /// whether it is even signed (`QAudionCallIntegration.evaluateVerdict` always calls the
+    /// transcript builder), so it must never abort the process on adversarial peer input.
+    /// Unlike Android's `require`/Desktop's `throw RangeError` (both caught by the caller's
+    /// `runCatching`/`try-catch`), a Swift `precondition` here CANNOT be caught — it traps
+    /// the whole process — so this returns `nil` instead, propagated the same way a base64-
+    /// decode failure already is elsewhere in this file (the caller degrades to "transcript
+    /// unavailable", never a crash).
+    ///
+    /// A per-entry fingerprint that is not well-formed 64-char hex (reachable pre-auth — this
+    /// build's own `pskFingerprints` are always well-formed, but a peer's JSON is parsed
+    /// before any signature is checked) decodes to a deterministic 32-zero-byte placeholder
+    /// instead of failing the whole encode — mirrors Desktop's `hexFpToRaw32` never-throw
+    /// discipline. A malformed peer-controlled fingerprint can therefore only ever make a
+    /// genuine peer's `sigV2` fail to verify (non-fatal `sig_invalid`), never crash.
+    private static func advEnc(_ fingerprintsHex: [String]?, _ roles: [Int]?) -> Data? {
+        let fps = fingerprintsHex ?? []
+        guard fps.count <= 0xFF else { return nil }
+        var out = Data()
+        out.append(UInt8(fps.count))
+        for (idx, fpHex) in fps.enumerated() {
+            let role = (roles != nil && idx < roles!.count) ? roles![idx] : 0
+            out.append(UInt8(truncatingIfNeeded: role))
+            out.append(hexFpToRaw32(fpHex))
+        }
+        return out
+    }
+
+    /// Decode a peer-advertised PSK fingerprint hex string to its RAW 32-byte form for
+    /// `advEnc`. Not well-formed (not exactly 64 hex chars, case-insensitive) => a
+    /// deterministic 32-zero-byte placeholder — see `advEnc`'s doc for why this never throws.
+    private static func hexFpToRaw32(_ hex: String) -> Data {
+        let chars = Array(hex.utf8)
+        guard chars.count == 64 else { return Data(count: 32) }
+        var out = Data(capacity: 32)
+        var i = 0
+        while i < 64 {
+            guard let hi = hexNibble(chars[i]), let lo = hexNibble(chars[i + 1]) else {
+                return Data(count: 32)
+            }
+            out.append(UInt8((hi << 4) | lo))
+            i += 2
+        }
+        return out
+    }
+
+    private static func hexNibble(_ c: UInt8) -> UInt8? {
+        switch c {
+        case 0x30...0x39: return c - 0x30          // '0'-'9'
+        case 0x61...0x66: return c - 0x61 + 10     // 'a'-'f'
+        case 0x41...0x46: return c - 0x41 + 10     // 'A'-'F'
+        default: return nil
+        }
     }
 
     // MARK: - Transcript builders
@@ -121,6 +203,62 @@ public enum HandshakeTranscript {
         return Data(SHA256.hash(data: offerTranscript))
     }
 
+    /// W-TRANSCRIPTV2 (multi-PSK-mixing SYNTHESIS.md ship step 4) — transcript v2 of the
+    /// OFFER: SAME shape as `offer` except `domainV2` instead of `domain`, a 7th SIGNED CAPS
+    /// byte (`pskMixV1`) appended after the existing 6, and `advEnc` (raw fp bytes bound in
+    /// ADVERTISED ORDER, with a role byte each) instead of `pskJoin` (sorted, comma-joined)
+    /// for the PSK-list binding. `offer` above is NOT touched by this addition — a call site
+    /// emits/verifies BOTH transcripts side by side (dual-signature rollout; v1 stays exactly
+    /// what every already-deployed peer verifies). Mirrors Android
+    /// `HandshakeTranscript.kt offerV2` / Desktop `HandshakeTranscript.ts
+    /// buildOfferTranscriptV2` byte-for-byte.
+    ///
+    /// Returns `nil` only when `advEnc` does (a pathological `pskFingerprints.count > 255`
+    /// — see its doc).
+    public static func offerV2(
+        callId: String,
+        signerIdentityKey: Data,
+        epochId: Data,
+        pqcPublicKey: Data,
+        x25519PublicKey: Data,
+        strongBoxPublicKey: Data?,
+        dualCurvePublicKey: Data?,
+        ratchetV3: Bool,
+        sframeV1: Bool,
+        vkeyV1: Bool,
+        sessionKdfV3: Bool,
+        ratchetV4: Bool,
+        srtpDirKeyV1: Bool,
+        pskMixV1: Bool,
+        ratchetV: UInt8,
+        suiteId: UInt8,
+        pskFingerprints: [String]?,
+        pskRoles: [Int]?
+    ) -> Data? {
+        guard let adv = advEnc(pskFingerprints, pskRoles) else { return nil }
+        var out = Data()
+        out.append(domainV2)
+        out.append(roleOffer)
+        appendLP(&out, Data(callId.utf8))
+        appendLP(&out, signerIdentityKey)
+        appendLP(&out, epochId)
+        appendLP(&out, pqcPublicKey)
+        appendLP(&out, x25519PublicKey)
+        appendLP(&out, strongBoxPublicKey)
+        appendLP(&out, dualCurvePublicKey)
+        out.append(capByte(ratchetV3))
+        out.append(capByte(sframeV1))
+        out.append(capByte(vkeyV1))
+        out.append(capByte(sessionKdfV3))
+        out.append(capByte(ratchetV4))
+        out.append(capByte(srtpDirKeyV1))
+        out.append(capByte(pskMixV1))  // W-TRANSCRIPTV2: 7th CAPS byte, v2-only
+        out.append(ratchetV)
+        out.append(suiteId)
+        appendLP(&out, adv)
+        return out
+    }
+
     /// Build the ACCEPT transcript over RAW (already base64-decoded) bytes.
     ///
     /// - Parameters:
@@ -170,6 +308,67 @@ public enum HandshakeTranscript {
         out.append(suiteId)
         appendLP(&out, Data((selectedPskFingerprint ?? "").utf8))
         appendLP(&out, offerBinding)
+        return out
+    }
+
+    /// W-TRANSCRIPTV2 (multi-PSK-mixing SYNTHESIS.md ship step 4) — transcript v2 of the
+    /// ACCEPT: SAME shape as `accept` (`domainV2`/the 7-byte CAPS instead of `domain`/6-byte
+    /// CAPS; `LP(selectedPskFingerprint)` and `LP(offerBinding)` RETAINED UNCHANGED, same
+    /// layout/position as v1) PLUS one v2-only ADDITIONAL field appended last:
+    /// `LP(advEnc(responderPskFingerprints, responderPskRoles))` — the RESPONDER's own
+    /// advertised PSK list (the ACCEPT-side mirror of `offerV2`'s `advEnc` binding), so both
+    /// sides' advertised orders end up signed. `offerBinding` here MUST be `SHA-256` of the
+    /// OFFER's **v2** transcript (from `offerV2`/`offerBinding`) — distinct from the v1
+    /// `accept`'s `offerBinding` param, which binds the v1 OFFER transcript. `accept` above
+    /// is NOT touched by this addition. Mirrors Android `HandshakeTranscript.kt acceptV2` /
+    /// Desktop `HandshakeTranscript.ts buildAcceptTranscriptV2` byte-for-byte.
+    ///
+    /// Returns `nil` only when `advEnc` does.
+    public static func acceptV2(
+        callId: String,
+        signerIdentityKey: Data,
+        epochId: Data,
+        ctPqc: Data,
+        ctX25519: Data,
+        ctStrongBox: Data?,
+        ctDualCurve: Data?,
+        ratchetV3: Bool,
+        sframeV1: Bool,
+        vkeyV1: Bool,
+        sessionKdfV3: Bool,
+        ratchetV4: Bool,
+        srtpDirKeyV1: Bool,
+        pskMixV1: Bool,
+        ratchetV: UInt8,
+        suiteId: UInt8,
+        selectedPskFingerprint: String?,
+        offerBinding: Data,
+        responderPskFingerprints: [String]?,
+        responderPskRoles: [Int]?
+    ) -> Data? {
+        guard let adv = advEnc(responderPskFingerprints, responderPskRoles) else { return nil }
+        var out = Data()
+        out.append(domainV2)
+        out.append(roleAccept)
+        appendLP(&out, Data(callId.utf8))
+        appendLP(&out, signerIdentityKey)
+        appendLP(&out, epochId)
+        appendLP(&out, ctPqc)
+        appendLP(&out, ctX25519)
+        appendLP(&out, ctStrongBox)
+        appendLP(&out, ctDualCurve)
+        out.append(capByte(ratchetV3))
+        out.append(capByte(sframeV1))
+        out.append(capByte(vkeyV1))
+        out.append(capByte(sessionKdfV3))
+        out.append(capByte(ratchetV4))
+        out.append(capByte(srtpDirKeyV1))
+        out.append(capByte(pskMixV1))
+        out.append(ratchetV)
+        out.append(suiteId)
+        appendLP(&out, Data((selectedPskFingerprint ?? "").utf8))
+        appendLP(&out, offerBinding)
+        appendLP(&out, adv)
         return out
     }
 

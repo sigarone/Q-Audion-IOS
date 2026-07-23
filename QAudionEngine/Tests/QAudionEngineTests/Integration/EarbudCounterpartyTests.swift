@@ -281,6 +281,23 @@ final class EarbudCounterpartyTests: XCTestCase {
         XCTAssertNil(AndroidHandshakeEnvelope.parse(wire))
     }
 
+    /// W-KCMAC (ship step 5) — `serializeKcMac`'s wire framing round-trips
+    /// through `CallPiggyBack.parse` back to the exact `role || mac` bytes
+    /// AppState's `handleInboundKcMac` decodes at the consumption site.
+    func testSerializeKcMacRoundTripsThroughPiggyBackParse() {
+        let mac = Data((0..<32).map { UInt8($0) })
+        let wire = CallPiggyBack.serializeKcMac(callId: "abc-123", role: 0x01, mac: mac)
+        guard case .kcmac(let callId, let raw)? = CallPiggyBack.parse(wire) else {
+            return XCTFail("KCMAC serialize/parse round-trip failed")
+        }
+        XCTAssertEqual(callId, "abc-123")
+        guard let decoded = Data(base64Encoded: raw), decoded.count == 33 else {
+            return XCTFail("expected a 33-byte base64 payload (role[1] || mac[32])")
+        }
+        XCTAssertEqual(decoded[decoded.startIndex], 0x01)
+        XCTAssertEqual(Data(decoded.suffix(from: decoded.index(after: decoded.startIndex))), mac)
+    }
+
     // MARK: - FW-H7 counter allocator
 
     func testHsinitCounterAllocatorMonotonicAndExhaustion() {

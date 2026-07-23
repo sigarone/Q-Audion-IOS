@@ -208,6 +208,29 @@ jobs:
           # since `msg.isViewOnce` reads back nil after any DB round-trip).
           # Fixed by adding both columns to encode(to:)/init(row:) -- un-
           # skipping this test now that the underlying bug is fixed.
+          #
+          # 2026-07-22: HandshakeTranscriptKatTests was permanently skipped
+          # here with no root cause ever found -- confirmed via a real run
+          # of THIS job (PR #34, commit 5a8b0b0) that
+          # testHandshakeSigKatMatchesCrossPlatformContract failed on the
+          # signature byte-equality assertion for both OFFER and ACCEPT
+          # vectors while the transcript SHA-256/length assertions passed.
+          # Root cause: not a bug. Apple's own doc for
+          # `Curve25519.Signing.PrivateKey.signature(for:)` states CryptoKit
+          # "employs randomization to generate a different signature on
+          # every call, even for the same data and key, to guard against
+          # side-channel attacks" -- confirmed independently by re-deriving
+          # the golden signatures with an OpenSSL/`cryptography`-backed
+          # Python reference from the exact seed + transcript bytes (dumped
+          # via Android's HandshakeTranscript.offer()/accept(), the same
+          # functions Android's own KAT test consumes): they match the
+          # golden byte-for-byte, so BouncyCastle/OpenSSL are deterministic
+          # and the golden vector is correct -- CryptoKit alone isn't. Test
+          # fixed to assert the actual cross-platform contract instead
+          # (iOS verifies the golden, and iOS's own signature verifies
+          # under its own key) rather than byte-equality CryptoKit was
+          # never going to satisfy. Un-skipping now that it asserts the
+          # right thing.
           xcodebuild test \
             -scheme "QAudionEngine" \
             -configuration Release \
@@ -219,7 +242,6 @@ jobs:
             -skip-testing "QAudionEngineTests/BackupCipherTests/test_aeadDecrypt_tampered_throws" \
             -skip-testing "QAudionEngineTests/CrossPlatformTestVectors" \
             -skip-testing "QAudionEngineTests/FrameEncoderTests" \
-            -skip-testing "QAudionEngineTests/HandshakeTranscriptKatTests" \
             -skip-testing "QAudionEngineTests/IdentityQrCodeTests" \
             -skip-testing "QAudionEngineTests/KatVectorsTests" \
             -skip-testing "QAudionEngineTests/MessageRatchetWireFuzzTests/testMutatedRealFrameFailsSoft" \

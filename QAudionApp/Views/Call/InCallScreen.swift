@@ -224,6 +224,19 @@ struct InCallScreen: View {
     /// server-published per-device set). Drives a NON-BLOCKING advisory banner
     /// only; it MUST NOT gate audio/video. SAS remains the terminal gate.
     let identityUnauthenticatedChange: Bool
+    /// W-ASSURANCE (ship step 6) — THIS call's LIVE `AssuranceState.decide()`
+    /// verdict, mapped to display copy by `AssuranceStateUI.present(...)`.
+    /// nil ⇒ no key-confirmation attempt has resolved yet (rendered as no
+    /// section at all, never a fabricated placeholder verdict).
+    ///
+    /// **NEVER the same widget as a contact's historical badge**
+    /// (`ContactDetailScreen`'s `PresenceAuth`-driven badge) — this is
+    /// computed FRESH from THIS handshake every time and rendered in its own
+    /// security-sheet section, never merged into `keyInfoPanel`/`trustChip`
+    /// (the static handshake-parameter display) or into any contact-level
+    /// widget. See this project's "two things that must never share a
+    /// widget" rule.
+    let assurancePresentation: AssuranceStateUI.Presentation?
     let onAddParticipant: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
@@ -261,6 +274,7 @@ struct InCallScreen: View {
          onToggleScreenShare: @escaping () -> Void = {},
          peerScreenSharing: Bool = false,
          identityUnauthenticatedChange: Bool = false,
+         assurancePresentation: AssuranceStateUI.Presentation? = nil,
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
@@ -297,6 +311,7 @@ struct InCallScreen: View {
         self.onToggleScreenShare = onToggleScreenShare
         self.peerScreenSharing = peerScreenSharing
         self.identityUnauthenticatedChange = identityUnauthenticatedChange
+        self.assurancePresentation = assurancePresentation
         self.onAddParticipant = onAddParticipant
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
@@ -399,6 +414,56 @@ struct InCallScreen: View {
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Avviso di sicurezza: la chiave identità del contatto è cambiata e non è pubblicata dal server. Verifica le parole SAS.")
+    }
+
+    // MARK: - W-ASSURANCE (ship step 6) — live per-call verdict section body
+
+    /// Renders `AssuranceStateUI.present(...)`'s output — the visual
+    /// treatment (`.badge`/`.warning`/`.info`) is `AssuranceStateUI.Style`,
+    /// decided entirely OUTSIDE this view. This function ONLY picks colours/
+    /// iconography per style; it never re-derives trust logic from the raw
+    /// `AssuranceState` case, so a future new state needs only a
+    /// `AssuranceStateUI.present` mapping, not a new SwiftUI branch here.
+    ///
+    /// W-NOBRICK: purely informational — no button here can drop the call;
+    /// the existing SAS/hangup controls elsewhere on screen are untouched.
+    @ViewBuilder
+    private func assuranceSectionBody(_ presentation: AssuranceStateUI.Presentation) -> some View {
+        let tint: Color = {
+            switch presentation.style {
+            case .badge: return extras.success
+            case .warning: return extras.warning
+            case .info: return scheme.onSurfaceVariant
+            }
+        }()
+        let icon: String = {
+            switch presentation.style {
+            case .badge: return "checkmark.shield.fill"
+            case .warning: return "exclamationmark.shield.fill"
+            case .info: return "info.circle.fill"
+            }
+        }()
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tint)
+            Text(presentation.message)
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scheme.surfaceVariant)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(tint.opacity(presentation.style == .info ? 0.25 : 0.55), lineWidth: 1)
+                )
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(presentation.message)
     }
 
     // MARK: - Scroll content (everything above the pinned action row)
@@ -1732,6 +1797,17 @@ struct InCallScreen: View {
                 Divider().background(scheme.outline.opacity(0.35))
 
                 VStack(alignment: .leading, spacing: 0) {
+                    // W-ASSURANCE (ship step 6) — the LIVE per-call verdict,
+                    // rendered FIRST (most important live signal) and as its
+                    // OWN section — never merged into the "Handshake ·
+                    // post-quantum" section below, which shows the static
+                    // handshake parameters (keyInfo), not a trust verdict.
+                    if let assurancePresentation {
+                        securitySection(title: "Verifica di questa chiamata") {
+                            assuranceSectionBody(assurancePresentation)
+                        }
+                    }
+
                     if sasWords.count == 6 {
                         securitySection(title: "SAS · leggi ad alta voce per verificare \(peerDisplayName)") {
                             sasPanel

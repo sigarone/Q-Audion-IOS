@@ -65,6 +65,7 @@ struct ContactDetailScreen: View {
                     actionRow.padding(.horizontal, 16).padding(.top, 4)
                     trustVerificationCard.padding(.horizontal, 16)
                     safetyNumberSection.padding(.horizontal, 16)
+                    presenceAuthCard.padding(.horizontal, 16)
                     metadataCard.padding(.horizontal, 16)
                     securityLogCard.padding(.horizontal, 16)
                     Spacer().frame(height: 32)
@@ -528,6 +529,95 @@ struct ContactDetailScreen: View {
         let eval = await PeerTrustEvaluator.evaluate(peerUserId: item.userId, provider: appState.liveProvider)
         trustEval = eval
         lastPeerIkEdPub = eval.peerIkEdPub
+    }
+
+    // MARK: - Presence-auth card (W-ASSURANCE ship step 6/8)
+
+    /// The persisted "this contact has been authenticated in person before"
+    /// record (`ContactsStore.PresenceAuth`). A synchronous local read (no
+    /// network — unlike `trustEval` above), so this is a plain computed
+    /// property rather than `@State` populated by a `.task`.
+    ///
+    /// **THIS IS A DIFFERENT WIDGET from any live in-call verdict**
+    /// (`InCallScreen`'s `assurancePresentation`, driven by
+    /// `AssuranceStateUI.present`) — there is no live call context on this
+    /// screen at all, and this card renders ONLY the persisted history
+    /// record. Never let this speak for a live call, and never let a live
+    /// call's banner render on this screen as if it were this badge. See
+    /// this project's "two things that must never share a widget" rule.
+    private var presenceAuth: ContactsStore.PresenceAuth? {
+        ContactsStore().load().first(where: { $0.userId == item.userId })?.presenceAuth
+    }
+
+    /// `nil` while this contact has never reached `AssuranceState
+    /// .nfcAuthenticated` (S2) — which is EVERY contact today, since S2 is
+    /// unreachable until ship step 7 wires real NFC mixing. Renders no card
+    /// at all in that case, never a fabricated "not yet verified" state (the
+    /// existing `trustVerificationCard`/`safetyNumberSection` above already
+    /// cover the SAS/manual-verify tier — this card is additive, only for
+    /// contacts that actually have an NFC presence record).
+    @ViewBuilder
+    private var presenceAuthCard: some View {
+        if let auth = presenceAuth {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("PRESENZA FISICA (NFC)")
+                        .qaudionStyle(type.labelSmall)
+                        .tracking(1.2)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                    Spacer()
+                    TrustChip(presenceAuthStatusLabel(auth.status), accent: presenceAuthStatusTint(auth.status))
+                }
+                .padding(.bottom, 4)
+                Text(presenceAuthSummary(auth))
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 4).fill(scheme.surfaceVariant.opacity(0.6)))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(scheme.outline.opacity(0.5), lineWidth: 1))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Presenza fisica NFC: \(presenceAuthStatusLabel(auth.status)). \(presenceAuthSummary(auth))")
+        }
+    }
+
+    private func presenceAuthStatusLabel(_ status: ContactsStore.PresenceAuth.Status) -> String {
+        switch status {
+        case .active: return "ATTIVA"
+        case .suspended: return "SOSPESA"
+        case .revoked: return "REVOCATA"
+        }
+    }
+
+    private func presenceAuthStatusTint(_ status: ContactsStore.PresenceAuth.Status) -> Color {
+        switch status {
+        case .active: return extras.success
+        case .suspended: return extras.warning
+        case .revoked: return extras.riskHigh
+        }
+    }
+
+    /// `firstConfirmedCallId` is DELIBERATELY never rendered here (standing
+    /// project rule: no raw UUIDs in any user-facing UI) — only the
+    /// human-relevant date/count.
+    private func presenceAuthSummary(_ auth: ContactsStore.PresenceAuth) -> String {
+        let date = Date(timeIntervalSince1970: Double(auth.firstConfirmedAt) / 1000)
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        let dateStr = formatter.string(from: date)
+        let times = auth.confirmedCallCount == 1 ? "1 volta" : "\(auth.confirmedCallCount) volte"
+        switch auth.status {
+        case .active:
+            return "Confermata di persona la prima volta il \(dateStr) · \(times) in totale."
+        case .suspended:
+            // VERBATIM wording family (design brief, S1/S7's persisted-record
+            // description): "non usata nell'ultima chiamata".
+            return "Non usata nell'ultima chiamata — la cronologia resta valida (confermata dal \(dateStr))."
+        case .revoked:
+            return "Revocata: questa chiave NFC risultava associata a un'altra identità."
+        }
     }
 
     // MARK: - Metadata card
