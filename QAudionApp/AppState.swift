@@ -5432,7 +5432,7 @@ final class AppState: ObservableObject {
         // GroupChatScreen isn't the one currently on screen (harmless —
         // the receiving screen filters by groupHex before updating UI).
         ws.registerHandler(type: "group_typing") { [weak self] _, data in
-            guard let self = self else { return }
+            guard self != nil else { return }
             guard let rawGroupId = data["group_id"] as? String, !rawGroupId.isEmpty,
                   let senderId = data["sender_id"] as? String, !senderId.isEmpty,
                   let isTyping = data["is_typing"] as? Bool else { return }
@@ -7165,7 +7165,7 @@ final class AppState: ObservableObject {
             switch vault.origin(name: name) {
             case .nfc:
                 method = "NFC"
-            case .qr, .manual, .kms, .callDerived, .deviceInternal:
+            case .qr, .manual, .kms, .callDerived, .deviceInternal, .identityKey:
                 switch vault.getKeyClass(name: name) {
                 case .hwOnly: method = "HW"
                 case .swOnly: method = "SW"
@@ -11936,7 +11936,7 @@ extension AppState {
             return
         }
 
-        guard let entry = existing else {
+        guard existing != nil else {
             // Unknown group. If the server says we ARE a member, this is the
             // add that onboards us (no preceding iOS `group_invite` envelope —
             // e.g. an Android/Desktop admin added us). Bootstrap exactly like

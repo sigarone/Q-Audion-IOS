@@ -72,9 +72,7 @@ final class NameResolutionService: @unchecked Sendable {
     /// A no-op before `configure(orphanSink:)` has run, which is correct: at
     /// that point no list is on screen to hide anything from.
     private static func recordOrphanOutcome(id: String, outcome: ProfileLookupOutcome) async {
-        sinkLock.lock()
-        let sink = orphanSink
-        sinkLock.unlock()
+        let sink = sinkLock.withLock { orphanSink }
         guard let sink else { return }
         await MainActor.run { sink(id, outcome) }
     }
@@ -109,9 +107,7 @@ final class NameResolutionService: @unchecked Sendable {
         Task { [weak self] in
             guard let self else { return }
             defer {
-                self.lock.lock()
-                self.inFlight.remove(id)
-                self.lock.unlock()
+                self.lock.withLock { self.inFlight.remove(id) }
             }
             // Re-check the rubrica inside the task: another path (QR scan,
             // discover refresh, InCallContainer's own W444 fetch) may have

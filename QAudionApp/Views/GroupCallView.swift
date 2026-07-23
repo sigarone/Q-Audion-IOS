@@ -1596,10 +1596,10 @@ class GroupCallViewModel: ObservableObject {
         guard let controller = controller else { return }
         let target = !isVideoEnabled
         isVideoEnabled = target
-        Task { [weak self] in
+        Task {
             let ok = await controller.setVideoEnabled(target)
             if !ok {
-                await MainActor.run { self?.isVideoEnabled = !target }
+                await MainActor.run { [weak self] in self?.isVideoEnabled = !target }
             }
         }
     }
