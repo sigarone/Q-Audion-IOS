@@ -40,19 +40,41 @@ final class ServerSelector {
     }
 
     /// Hosts the client trusts as VoIP nodes. Every selection + failover path only
-    /// ever targets these — never an attacker-injected host. fi1.bcrypto.com (the
-    /// Helsinki failover node) is already pinned by `CertPinningDelegate` (it pins
-    /// the LE chain for any host whose standard trust eval passes), so this is the
-    /// app-layer allowlist that mirrors Android FAILOVER_HOSTS / Desktop
-    /// PINNED_HOSTNAMES.
-    private let trustedHosts: Set<String> = ["voip.bcrypto.com", "fi1.bcrypto.com"]
+    /// ever targets these — never an attacker-injected host.
+    ///
+    /// W-NODRFAILOVER (2026-07-23) — fi1.bcrypto.com is a dev/build box + DR
+    /// snapshot replica, NOT a live mirror of production: it has no real-time
+    /// user-data sync and no cross-node call routing. Root-caused on device
+    /// e1f5690b (call 9c490c46 and others, 2026-07-23): a refresh-token 401
+    /// blip at 08:46 UTC tripped `onNodeStalled` (3 consecutive failed WS
+    /// reconnects), the client failed over here per the old allowlist below,
+    /// and got stuck — the DR box happily authenticated the client's stale
+    /// session (its own snapshot still had the old refresh token) but had no
+    /// row for the user at all ("identity key mirror failed: user not
+    /// found"), so every call in or out silently died for the rest of the
+    /// day while the client believed it was fully connected (200s, WS auth).
+    /// A client that CANNOT reach production is better served by retrying
+    /// production (or falling through to the Reality censorship-bypass path,
+    /// which already exists for exactly this "every trusted clearnet node
+    /// unreachable" case — see `handleNodeStalled` in AppState.swift) than by
+    /// silently wandering onto a node that answers but cannot actually serve
+    /// it. Until fi-1 gets real cross-node user-data replication + call
+    /// routing, it must not be an automatic client failover target — pull it
+    /// from the allowlist entirely. (Android FAILOVER_HOSTS / Desktop
+    /// PINNED_HOSTNAMES carry the identical latent bug and need the same fix.)
+    private let trustedHosts: Set<String> = ["voip.bcrypto.com"]
 
     /// Hardcoded TRUSTED-HOSTNAME fallback node list. Used ONLY when the live
     /// /api/v1/servers list can't be fetched (the node serving it died). WS path
-    /// is /ws (the real route; /api/v1/ws 404s). Mirrors Android/Desktop fallbackNodes.
+    /// is /ws (the real route; /api/v1/ws 404s).
+    ///
+    /// W-NODRFAILOVER — fi-1 removed, see `trustedHosts` above. This now only
+    /// ever offers the single production node back to itself, which is
+    /// intentional: `reselectExcluding` filtering it out (it IS the dead node
+    /// being excluded) correctly yields zero candidates, so the caller falls
+    /// through to the Reality bypass path instead of a broken DR box.
     private let fallbackNodes: [[String: Any]] = [
         ["id": "eu-de-1", "https_url": "https://voip.bcrypto.com", "wss_url": "wss://voip.bcrypto.com/ws"],
-        ["id": "eu-fi-1", "https_url": "https://fi1.bcrypto.com", "wss_url": "wss://fi1.bcrypto.com/ws"],
     ]
 
     // MARK: - State
@@ -118,6 +140,32 @@ final class ServerSelector {
                 guard !Task.isCancelled else { break }
                 guard let p = self.currentProvider else { break }
                 let baseUrl = p.config.serverUrl
+                // W-PRIMARYSNAP — a client parked on a failover node (via
+                // reselectExcluding, e.g. after 3 stalled reconnects) must not
+                // stay there just because its RTT looks fine. fi1.bcrypto.com
+                // is a dev/DR box, not a peer of voip.bcrypto.com — it can
+                // authenticate an old session (stale snapshot) while missing
+                // the live user row entirely, so the client "works" (200s,
+                // WS auth) but every call it originates or is offered dies:
+                // the real production node sees it as offline the whole time.
+                // Root-caused 2026-07-23 (call 9c490c46 and others): device
+                // failed over off voip.bcrypto.com during a refresh-token
+                // blip at 08:46 UTC and never came back — the RTT-gated
+                // applyIfBetter below only switches when a candidate beats
+                // the current node by 1.5x AND the current RTT exceeds
+                // 300ms, which a merely-slow-but-alive failover node can
+                // dodge indefinitely. So: if we are NOT on the pinned
+                // primary, probe it directly and snap back unconditionally
+                // the moment it answers at all — no RTT contest. The primary
+                // is home; every other trusted host is a last resort.
+                if URL(string: baseUrl)?.host?.lowercased() != URL(string: PinnedServerHost.url)?.host?.lowercased() {
+                    if let primaryRtt = await self.measureRtt(url: PinnedServerHost.url + "/api/v1/health") {
+                        os_log("ServerSelector: W-PRIMARYSNAP — off primary (%{public}@), primary reachable (rtt=%.0fms) — snapping back",
+                               baseUrl, primaryRtt)
+                        p.updateServerUrl(to: PinnedServerHost.url)
+                        continue
+                    }
+                }
                 guard let nodes = await self.fetchServers(provider: p) else { continue }
                 let ranked = await self.probeAll(nodes: nodes)
                 guard let best = ranked.first else { continue }
