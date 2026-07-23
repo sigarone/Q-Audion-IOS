@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.841",
+              date: "2026-07-23",
+              title: "v1.0.841",
+              bullets: [
+                "fix(net): restore fi-1 as a real failover, verify function not just RTT (W-NODESERVES)",
+              ]),
         .init(id: "v1.0.840",
               date: "2026-07-23",
               title: "v1.0.840",
               bullets: [
+                "chore: regenerate changelog for v1.0.840",
                 "fix(net): pin the current Let's Encrypt YE2/Root-YE chain (W-CERTPIN-YE2)",
               ]),
         .init(id: "v1.0.839",
@@ -173,13 +180,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.822",
                 "feat(groupcall): signal AES-256 raw-key version-skew instead of silent decrypt failure (W-GRPVERSIONSKEW)",
-              ]),
-        .init(id: "v1.0.821",
-              date: "2026-07-20",
-              title: "v1.0.821",
-              bullets: [
-                "chore: regenerate changelog for v1.0.821",
-                "fix(groupcall,ui): reconcile SFU roster with WS roster, close CallKit-title UUID gap (W-GRPSFUGHOST, W-GRPTITLE-UUIDGAP)",
               ]),
     ]
 }
