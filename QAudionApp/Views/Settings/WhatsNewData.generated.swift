@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.840",
+              date: "2026-07-23",
+              title: "v1.0.840",
+              bullets: [
+                "fix(net): pin the current Let's Encrypt YE2/Root-YE chain (W-CERTPIN-YE2)",
+              ]),
         .init(id: "v1.0.839",
               date: "2026-07-23",
               title: "v1.0.839",
               bullets: [
+                "chore: regenerate changelog for v1.0.839",
                 "fix(net): stop auto-failover onto fi-1's non-production DR node (W-NODRFAILOVER)",
                 "fix(concurrency): use NSLock.withLock in async contexts (Swift 6 readiness)",
                 "chore: regenerate changelog for v1.0.837",
@@ -173,13 +180,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.821",
                 "fix(groupcall,ui): reconcile SFU roster with WS roster, close CallKit-title UUID gap (W-GRPSFUGHOST, W-GRPTITLE-UUIDGAP)",
-              ]),
-        .init(id: "v1.0.820",
-              date: "2026-07-20",
-              title: "v1.0.820",
-              bullets: [
-                "chore: regenerate changelog for v1.0.820",
-                "feat(groupcall,ui): ctrl-recipe parity, rejoin on reconnect, extension-first names (W-GRPCTRL-PARITY, W-GRPREJOIN, W-EXTCHAIN)",
               ]),
     ]
 }
