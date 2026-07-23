@@ -250,15 +250,23 @@ private final class NfcExchangeDriver: ObservableObject {
         }
     }
 
-    /// Persist the derived PSK into SovereignKeyVault under the peer pubkey fingerprint.
+    /// Persist the derived PSK into SovereignKeyVault. The Keychain entry
+    /// NAME still keys off the peer pubkey (unique per-peer, unrelated to
+    /// the wire protocol) — but the stored `fingerprint` label MUST be
+    /// `PskAdvertising.canonicalFingerprint(forPsk: psk)` (`lc_hex(SHA-256(psk))`),
+    /// the same value `pskIfFingerprintMatches`/the OFFER advertiser compute
+    /// fresh from the raw material and the ONLY form Android/Desktop ever
+    /// show for the same key. Storing `hex(peerIdPub)` here instead (the
+    /// prior bug) meant the Settings vault list displayed the PEER'S
+    /// IDENTITY PUBKEY hex as if it were the PSK's fingerprint — never equal
+    /// to the SHA-256(psk) shown on the other platform for the byte-identical
+    /// shared secret, even when the handshake itself matched correctly (the
+    /// real matching path never reads this label, so the bug was display-only,
+    /// but it made a correct NFC pairing look broken to the user).
     private static func persistPsk(_ psk: Data, peerIdPub: Data) throws {
-        let hexChars: [String] = peerIdPub.map { byte in
-            let s: String = String(format: "%02x", byte)
-            return s
-        }
-        let fingerprint: String = hexChars.joined()
-        let prefix: Substring = fingerprint.prefix(16)
-        let name: String = "nfc-" + prefix
+        let peerHex: String = peerIdPub.map { String(format: "%02x", $0) }.joined()
+        let name: String = "nfc-" + peerHex.prefix(16)
+        let fingerprint: String = PskAdvertising.canonicalFingerprint(forPsk: psk)
         let vault = SovereignKeyVault()
         // W-NFCBIND — record the provenance at write time. Without it the entry
         // relies on `PskOrigin.inferred`, which reads the "nfc-" prefix of this
