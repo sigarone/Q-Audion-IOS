@@ -43,10 +43,12 @@ import CoreNFC
 /// `NfcSasConfirmGate`'s SAS step (below) has a real per-call proximity
 /// ceremony independent of the KDF's own inputs.
 ///
-/// **W-NFCSAS:** after the PSK is derived, a 6-word SAS
-/// (``ComputeSasUseCase``) is shown and the user must confirm it matches the
-/// other device (``State/sasConfirm(sas:peerDeviceName:)``) before anything
-/// is persisted — see ``confirmSas()``/``rejectSas()``.
+/// **W-NFCSAS:** after the PSK is derived, a 6-digit SAS
+/// (``NfcSasComputation``, over the two Ed25519 identity keys — byte-exact
+/// with Android's `nfc/SasComputation.kt`) is shown and the user must
+/// confirm it matches the other device
+/// (``State/sasConfirm(sas:peerDeviceName:)``) before anything is
+/// persisted — see ``confirmSas()``/``rejectSas()``.
 ///
 /// **Superseded fallback (removed):** an anonymous, non-identity-bound
 /// single-round X25519 exchange used to exist as a fallback for this class
@@ -67,13 +69,16 @@ public final class NfcApduExchange: NSObject {
         case waiting
         case exchanging
         /// W-NFCSAS — the raw PSK is derived and the ephemeral keys/entropy
-        /// exchanged, but nothing is persisted yet. `sas` is the 6-word
-        /// Short-Authentication-String (`ComputeSasUseCase`, the SAME
-        /// utility the in-call ceremony uses) derived from that PSK; the
-        /// user must read it against the other device before the ceremony
-        /// can proceed. See `NfcApduExchange`'s own doc for the honest
-        /// cross-platform caveat this reuse choice carries.
-        case sasConfirm(sas: [String], peerDeviceName: String)
+        /// exchanged, but nothing is persisted yet. `sas` is the 6-digit
+        /// Short-Authentication-String (`NfcSasComputation`, a byte-exact
+        /// port of Android's `nfc/SasComputation.kt`) derived from the two
+        /// peers' Ed25519 IDENTITY keys — NOT `ComputeSasUseCase` (that one
+        /// is for the in-call ceremony, derived from the session key into 6
+        /// PGP words; a different construction entirely). The user must
+        /// read this code against the other device before the ceremony can
+        /// proceed — both platforms now derive the identical 6 digits for
+        /// the same tap.
+        case sasConfirm(sas: String, peerDeviceName: String)
         case success(peerDeviceName: String)
         case error(String)
 
@@ -330,26 +335,21 @@ public final class NfcApduExchange: NSObject {
         // reached ONLY on the `true` branch below; a reject (or a cancel())
         // throws first, so nothing is ever written for a rejected tap.
         //
-        // Reuses `ComputeSasUseCase` — the SAME utility the in-call SAS
-        // ceremony already uses — rather than inventing a new derivation,
-        // per this ship's explicit instruction. HONEST CAVEAT (flagged, not
-        // silently papered over): Android's NFC-pairing ceremony
-        // (`SasComputation.kt`) derives ITS SAS differently — from the two
-        // Ed25519 IDENTITY keys via HKDF-Extract into 6 DECIMAL digits, not
-        // from the shared PSK into 6 PGP words. Both sides here derive the
-        // identical 32-byte `psk` (pinned by `NfcCollaborativePskKatTests
-        // .testBothSidesOfTheSameTapAgree`), so THIS value is internally
-        // correct and reproducible — but it will not match what Android's
-        // current NFC screen shows for the SAME tap (different algorithm,
-        // different output shape entirely). True cross-platform SAS parity
-        // for this ceremony needs a product decision (port digit-scheme to
-        // iOS, or move Android onto `ComputeSasUseCase` too) that is out of
-        // scope here — this closes the "iOS shows no SAS at all" bug
-        // without silently pretending format parity already exists.
-        let sas = try ComputeSasUseCase.invoke(sessionKey: psk)
+        // Uses `NfcSasComputation` — a byte-exact port of Android's
+        // `nfc/SasComputation.kt` — over the two Ed25519 IDENTITY keys
+        // (`myIdPub`/`peerIdentityPub`, already exchanged above), NOT
+        // `ComputeSasUseCase` (that one derives from the session/call key
+        // into 6 PGP words, for the in-call ceremony — a different
+        // construction). Both platforms now derive the identical 6-digit
+        // code for the same tap (pinned by the shared KAT vectors:
+        // all-zero vs all-0xFF -> "759936"; 0..31 vs 32..63 -> "360896").
+        let sas = try NfcSasComputation.computeSas(
+            selfIkEdPub: Data(myIdPub),
+            peerIkEdPub: Data(peerIdentityPub)
+        )
         let gate = NfcSasConfirmGate()
         sasGate = gate
-        state = .sasConfirm(sas: sas.words, peerDeviceName: "Android peer")
+        state = .sasConfirm(sas: sas, peerDeviceName: "Android peer")
         let confirmed = await gate.awaitConfirmation()
         sasGate = nil
         guard confirmed else {

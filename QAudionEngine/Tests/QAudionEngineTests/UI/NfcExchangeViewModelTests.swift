@@ -42,7 +42,7 @@ final class NfcExchangeViewModelTests: XCTestCase {
         var vm = NfcExchangeViewModel.mock
         vm.transition(to: .waiting)
         vm.transition(to: .exchanging)
-        vm.transition(to: .sasConfirm(sas: ["ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT"], peerDeviceName: "Pixel 7"))
+        vm.transition(to: .sasConfirm(sas: "482917", peerDeviceName: "Pixel 7"))
         if case .sasConfirm(let sas, let peer) = vm.state {
             XCTAssertEqual(sas.count, 6)
             XCTAssertEqual(peer, "Pixel 7")
@@ -61,7 +61,7 @@ final class NfcExchangeViewModelTests: XCTestCase {
         var vm = NfcExchangeViewModel.mock
         vm.transition(to: .waiting)
         vm.transition(to: .exchanging)
-        vm.transition(to: .sasConfirm(sas: ["ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT"], peerDeviceName: "Pixel 7"))
+        vm.transition(to: .sasConfirm(sas: "482917", peerDeviceName: "Pixel 7"))
         vm.transition(to: .error(message: "SAS non confermato — scambio annullato"))
         if case .error(let msg) = vm.state {
             XCTAssertEqual(msg, "SAS non confermato — scambio annullato")
@@ -82,14 +82,14 @@ final class NfcExchangeViewModelTests: XCTestCase {
         var beforeSas = NfcExchangeViewModel.mock
         beforeSas.transition(to: .waiting)
         beforeSas.transition(to: .exchanging)
-        beforeSas.transition(to: .sasConfirm(sas: [], peerDeviceName: "x"))
-        XCTAssertEqual(beforeSas.state, .sasConfirm(sas: [], peerDeviceName: "x"),
+        beforeSas.transition(to: .sasConfirm(sas: "000000", peerDeviceName: "x"))
+        XCTAssertEqual(beforeSas.state, .sasConfirm(sas: "000000", peerDeviceName: "x"),
                        "exchanging -> sasConfirm must be a legal forward hop")
 
         var afterSas = NfcExchangeViewModel.mock
         afterSas.transition(to: .waiting)
         afterSas.transition(to: .exchanging)
-        afterSas.transition(to: .sasConfirm(sas: [], peerDeviceName: "x"))
+        afterSas.transition(to: .sasConfirm(sas: "000000", peerDeviceName: "x"))
         afterSas.transition(to: .success(peerDeviceName: "x"))
         XCTAssertEqual(afterSas.state, .success(peerDeviceName: "x"),
                        "sasConfirm -> success must be a legal forward hop")

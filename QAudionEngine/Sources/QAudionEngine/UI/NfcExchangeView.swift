@@ -13,7 +13,7 @@ public struct NfcExchangeView: View {
             stateIcon
             stateLabel
             if case .sasConfirm(let sas, _) = driver.state {
-                sasWordsGrid(sas)
+                sasDigitsCode(sas)
             } else {
                 stateHelp
             }
@@ -59,7 +59,7 @@ public struct NfcExchangeView: View {
         case .idle: return "Ready to pair"
         case .waiting: return "Hold your iPhone near the Android device"
         case .exchanging: return "Exchanging keys\u{2026}"
-        case .sasConfirm(_, let peer): return "Confronta queste parole con \(peer)"
+        case .sasConfirm(_, let peer): return "Confronta questo codice con \(peer)"
         case .success(let peer): return "Paired with \(peer)"
         case .error(let msg): return "Error: \(msg)"
         }
@@ -73,28 +73,26 @@ public struct NfcExchangeView: View {
             .padding(.horizontal)
     }
 
-    /// W-NFCSAS — the tap-time SAS confirm screen. Same word-grid vocabulary
-    /// as the in-call SAS ceremony (`InCallScreen.sasPanel`'s 2-row/3-column
-    /// layout, all-caps words) — this module has no access to the app's
-    /// design-system environment values, so it uses plain SwiftUI styling
-    /// consistent with this view's OWN existing conventions rather than
-    /// importing app-specific tokens.
-    private func sasWordsGrid(_ sas: [String]) -> some View {
-        VStack(spacing: 14) {
-            Text("CONFRONTA QUESTE PAROLE")
+    /// W-NFCSAS — the tap-time SAS confirm screen. Shows the 6-digit code
+    /// (`NfcSasComputation`, byte-exact with Android's `SasComputation.kt`)
+    /// grouped in pairs for readability — this module has no access to the
+    /// app's design-system environment values, so it uses plain SwiftUI
+    /// styling consistent with this view's OWN existing conventions rather
+    /// than importing app-specific tokens.
+    private func sasDigitsCode(_ sas: String) -> some View {
+        let grouped = stride(from: 0, to: sas.count, by: 2).map { i -> String in
+            let start = sas.index(sas.startIndex, offsetBy: i)
+            let end = sas.index(start, offsetBy: 2, limitedBy: sas.endIndex) ?? sas.endIndex
+            return String(sas[start..<end])
+        }.joined(separator: " ")
+        return VStack(spacing: 14) {
+            Text("CONFRONTA QUESTO CODICE")
                 .font(.caption.weight(.semibold))
                 .tracking(1.2)
                 .foregroundStyle(.orange)
-            VStack(spacing: 10) {
-                ForEach(Array(stride(from: 0, to: sas.count, by: 3)), id: \.self) { row in
-                    HStack(spacing: 16) {
-                        ForEach(row..<min(row + 3, sas.count), id: \.self) { idx in
-                            Text(sas[idx].uppercased())
-                                .font(.system(.body, design: .monospaced).weight(.semibold))
-                        }
-                    }
-                }
-            }
+            Text(grouped)
+                .font(.system(.largeTitle, design: .monospaced).weight(.bold))
+                .tracking(4)
             Text("Leggi ad alta voce e confronta con lo schermo dell\u{2019}altro dispositivo prima di confermare.")
                 .font(.caption)
                 .multilineTextAlignment(.center)
