@@ -149,6 +149,17 @@ public final class SovereignKeyVault {
         } else if status != errSecSuccess {
             throw KeyVaultError.storeFailed(status)
         }
+        // W-VAULTREFRESH — mirrors `ContactsStore.save()`'s own
+        // `.contactsDidChange` post: every write funnels through here (both
+        // `storePsk` overloads), so this is the ONE place that needs to
+        // notify for a listing UI (`KeyManagementScreen`'s
+        // `KeyRotationCoordinator.vaultKeys`) to refresh reactively instead
+        // of only at its own one-shot `init()`. Fixes: a PSK written by a
+        // path that doesn't itself know about that coordinator (e.g.
+        // `NfcExchangeView.persistPsk` after an NFC tap) previously left the
+        // vault list stale until the whole screen was torn down and
+        // recreated (leave/re-enter) — see that coordinator's doc.
+        NotificationCenter.default.post(name: .sovereignVaultDidChange, object: nil)
     }
 
     /// Legacy 3-arg overload — preserves the EXACT pre-Phase-1 call sites
@@ -266,6 +277,9 @@ public final class SovereignKeyVault {
         ]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeyVaultError.deleteFailed(status) }
+        // W-VAULTREFRESH — see `storeInternal`'s matching post; a deletion
+        // changes vault membership exactly as much as a write does.
+        NotificationCenter.default.post(name: .sovereignVaultDidChange, object: nil)
     }
 
     public func listPskNames() -> [String] {
@@ -430,4 +444,17 @@ public enum KeyVaultError: Error {
     /// NFC tap, it cannot leave this device" is actionable, "export failed"
     /// invites a retry.
     case notExportable(origin: PskOrigin, name: String)
+}
+
+// MARK: - Notification names
+
+public extension Notification.Name {
+    /// W-VAULTREFRESH — posted by `SovereignKeyVault.storePsk`/`deletePsk`
+    /// (every write/delete path) whenever the vault's PSK membership may have
+    /// changed. Mirrors `ContactsStore`'s own `.contactsDidChange` convention
+    /// exactly, for the same reason: a listing UI (`KeyRotationCoordinator
+    /// .vaultKeys`) needs to refresh reactively instead of only once at
+    /// `init()`, regardless of WHICH code path wrote the new entry (QR
+    /// import, NFC pairing, KMS delivery, rotation, …).
+    static let sovereignVaultDidChange = Notification.Name("qaudion.sovereignVault.didChange")
 }
