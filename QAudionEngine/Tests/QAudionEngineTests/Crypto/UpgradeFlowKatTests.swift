@@ -628,6 +628,43 @@ final class UpgradeFlowKatTests: XCTestCase {
         XCTAssertEqual(UpgradeFlowDecisions.resolveMediaConsent(media: ""), .requireConsent)
     }
 
+    /// W-SPKAEC regression guard — pure `RenegotiationControllerStrategy`
+    /// decision that `acceptPendingIncomingUpgrade` (camera) and
+    /// `acceptIncomingScreenShareRenegotiation` (screen) both drive. Before
+    /// this fix, the screen handler had no branch matching
+    /// `(hasExistingController: false, sdp: non-empty)` — it silently fell
+    /// through and answered Android's real screen-share re-offer with an
+    /// empty SDP, aborting the renegotiation on both ends (black video).
+    func testRenegotiationControllerStrategy() {
+        // No SDP at all (e.g. the iOS↔iOS WS-relay accept) → never touch a
+        // controller, regardless of whether one exists.
+        XCTAssertEqual(
+            UpgradeFlowDecisions.resolveRenegotiationControllerStrategy(
+                hasExistingController: false, sdp: ""),
+            .noRenegotiation
+        )
+        XCTAssertEqual(
+            UpgradeFlowDecisions.resolveRenegotiationControllerStrategy(
+                hasExistingController: true, sdp: ""),
+            .noRenegotiation
+        )
+        // Real SDP + a live controller already exists → renegotiate on it
+        // directly (no rebuild).
+        XCTAssertEqual(
+            UpgradeFlowDecisions.resolveRenegotiationControllerStrategy(
+                hasExistingController: true, sdp: "v=0..."),
+            .useExisting
+        )
+        // Real SDP + NO controller yet (audio-only call on the WS-relay
+        // path, camera OR screen upgrade) → MUST build one on-demand. This
+        // is exactly the case the screen-share handler used to miss.
+        XCTAssertEqual(
+            UpgradeFlowDecisions.resolveRenegotiationControllerStrategy(
+                hasExistingController: false, sdp: "v=0..."),
+            .buildOnDemand
+        )
+    }
+
     func testGlarePolitenessByOriginalRole() {
         XCTAssertEqual(UpgradeFlowDecisions.glareResolution(callRole: .callee), .politeAcceptPeer)
         XCTAssertEqual(UpgradeFlowDecisions.glareResolution(callRole: .caller), .impoliteIgnorePeer)

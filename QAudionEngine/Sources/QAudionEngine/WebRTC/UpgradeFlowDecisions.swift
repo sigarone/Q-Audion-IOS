@@ -39,6 +39,43 @@ public enum UpgradeFlowDecisions {
         return media == "screen" ? .autoAccept : .requireConsent
     }
 
+    // MARK: - Renegotiation controller strategy (WIRE_SPEC §8.7, W-SPKAEC)
+
+    /// Which controller-side action to take when a mid-call media
+    /// renegotiation (`call_upgrade_request`, camera OR screen) is being
+    /// answered. Both `acceptPendingIncomingUpgrade` (camera) and
+    /// `acceptIncomingScreenShareRenegotiation` (screen) drive this same
+    /// decision from the same two inputs: whether a live WebRTC controller
+    /// already exists, and whether the peer actually sent SDP.
+    public enum RenegotiationControllerStrategy: Equatable {
+        /// `sdp` is empty — no real WebRTC renegotiation is in flight for
+        /// this accept (e.g. the iOS↔iOS WS-relay path, where the peer's
+        /// own controller build/announce carries the video). Answer with
+        /// the empty-SDP "accept without renegotiation" escape hatch; do
+        /// NOT touch any controller.
+        case noRenegotiation
+        /// A live PeerConnection controller already exists — renegotiate on
+        /// it directly (`acceptUpgradeOffer`).
+        case useExisting
+        /// `sdp` is non-empty but no controller exists yet — typical for an
+        /// audio-only call carried on the WS-relay path (its audio never
+        /// built a WebRTC PeerConnection). One must be built on-demand
+        /// BEFORE answering (`acceptUpgradeOfferBuildingPeerConnection`);
+        /// falling through to the empty-SDP escape hatch here is the bug
+        /// this case exists to prevent — the peer sent a REAL offer
+        /// expecting a REAL answer, and an empty answer makes the peer's
+        /// libwebrtc throw on `setRemoteDescription` and abort the
+        /// renegotiation on both ends.
+        case buildOnDemand
+    }
+
+    public static func resolveRenegotiationControllerStrategy(
+        hasExistingController: Bool, sdp: String
+    ) -> RenegotiationControllerStrategy {
+        guard !sdp.isEmpty else { return .noRenegotiation }
+        return hasExistingController ? .useExisting : .buildOnDemand
+    }
+
     // MARK: - Glare resolution (WIRE_SPEC §8.3)
 
     /// Which side of the call the local endpoint originally was. Politeness
