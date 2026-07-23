@@ -186,7 +186,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
     // a 3-/4-field transition away from the S2 baseline — not a single flip. Documented
     // honestly as compounds rather than mis-labelled as single flips.
     func testExhaustiveness_compound_yieldsS8() {
-        let result = s2Baseline(mixRoles: [], expectedNfc: false, peerAdvertisedRoles: [])
+        let result = s2Baseline(mixRoles: [], peerAdvertisedRoles: [], expectedNfc: false)
         XCTAssertEqual(result, .pskConfirmed)
     }
 
