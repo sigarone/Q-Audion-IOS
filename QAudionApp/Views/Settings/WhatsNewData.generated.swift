@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.843",
+              date: "2026-07-23",
+              title: "v1.0.843",
+              bullets: [
+                "fix(build): exhaustive PskOrigin switch + clean up Swift 6 concurrency warnings",
+              ]),
         .init(id: "v1.0.842",
               date: "2026-07-23",
               title: "v1.0.842",
               bullets: [
+                "chore: regenerate changelog for v1.0.842",
                 "fix(psk): stop matching wire fingerprints against cached Keychain labels (W-STALEFP)",
                 "fix(psk): exclude identity pubkeys from call-PSK match eligibility (W-IDKEYEXCL)",
                 "fix(kms): wire V2Context into the production pollOnce() call (W-KMSV2CTX)",
@@ -176,13 +183,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.824",
                 "fix(call): callee-path telemetry wiring + speaker-route re-assertion (W-TELEMPARITY, W-CALLSPKR)",
-              ]),
-        .init(id: "v1.0.823",
-              date: "2026-07-20",
-              title: "v1.0.823",
-              bullets: [
-                "chore: regenerate changelog for v1.0.823",
-                "fix(groupcall): self video in unified grid, self-vs-remote e2ee guard (W-GRPSELFGRID, W-GRPE2EESELF)",
               ]),
     ]
 }
