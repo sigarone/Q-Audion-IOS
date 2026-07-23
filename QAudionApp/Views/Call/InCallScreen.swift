@@ -869,6 +869,22 @@ struct InCallScreen: View {
     /// scroll content.
     private var trustBar: some View {
         HStack(spacing: 7) {
+            // W-NFCVISIBLE — Pavel: the NFC-authenticated seal must be visible
+            // on the always-on trust bar, not only inside the tap-to-open
+            // security sheet (`physicalPresenceBadge`, still shown there too).
+            // Same `isPhysicalPresenceProof` signal (S2), same "wave.3.right.circle"
+            // glyph `NfcExchangeView` already uses for NFC elsewhere in this app.
+            // Placed FIRST — ahead of the SAS chip — since this is a stronger,
+            // automatically-verified signal that does not require the user to
+            // read/compare SAS words first.
+            if assurancePresentation?.isPhysicalPresenceProof == true {
+                trustChip(
+                    icon: "wave.3.right.circle.fill",
+                    label: "NFC ✓",
+                    color: extras.success,
+                    filled: true
+                )
+            }
             if sasVerified {
                 trustChip(
                     icon: "checkmark",
