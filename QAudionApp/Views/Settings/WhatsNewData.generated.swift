@@ -9,10 +9,42 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.839",
+              date: "2026-07-23",
+              title: "v1.0.839",
+              bullets: [
+                "fix(net): stop auto-failover onto fi-1's non-production DR node (W-NODRFAILOVER)",
+                "fix(concurrency): use NSLock.withLock in async contexts (Swift 6 readiness)",
+                "chore: regenerate changelog for v1.0.837",
+                "fix(call): remove unused Keychain scan from ACCEPT-building hot path",
+                "chore: regenerate changelog for v1.0.836",
+                "Phase 1 iOS: NFC physical-presence badge, pairing SAS, vault-refresh fix (#37)",
+                "chore: regenerate changelog for v1.0.835",
+                "fix(calls): build on-demand controller for screen-share renegotiation (#31)",
+                "feat(psk-mix): step 7 derivation math + cross-platform KAT (iOS) (#36)",
+                "psk-mix steps 4/5/6/8: transcript-v2 + kc_mac + AssuranceState + presenceAuth/floor (iOS) (#35)",
+                "chore(deps): bump grpc to v1.82.1 in RealityCore (Dependabot #1)",
+                "chore: regenerate changelog for v1.0.834",
+                "fix(psk): exclude call-derived PSKs from video-HKDF-salt resolution (W-PSKMIX step 6)",
+                "fix(tests): two W-IOSECHO test bugs caught by CI (not production bugs)",
+                "fix(psk): exclude call-derived PSKs from receive-side matching gates (W-PSKMIX step 5)",
+                "feat(audio): echo-cancellation effectiveness telemetry (W-IOSECHO)",
+                "fix(psk): exclude auto: group-ctrl ratchet seed from call-PSK advertisement (W-PSKMIX step 4)",
+                "feat(psk): iOS advert hygiene — filter, stable order, fp normalisation (W-PSKMIX step 3)",
+                "fix(psk): unwrap getFingerprint's String? before Array<String>.contains",
+                "feat(psk): parse-only support for multi-PSK selection (W-PSKMIX step 2)",
+              ]),
+        .init(id: "v1.0.838",
+              date: "2026-07-23",
+              title: "v1.0.838",
+              bullets: [
+                "chore: regenerate changelog for v1.0.838",
+              ]),
         .init(id: "v1.0.837",
               date: "2026-07-23",
               title: "v1.0.837",
               bullets: [
+                "chore: regenerate changelog for v1.0.837",
                 "fix(call): remove unused Keychain scan from ACCEPT-building hot path",
               ]),
         .init(id: "v1.0.836",
@@ -148,20 +180,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.820",
                 "feat(groupcall,ui): ctrl-recipe parity, rejoin on reconnect, extension-first names (W-GRPCTRL-PARITY, W-GRPREJOIN, W-EXTCHAIN)",
-              ]),
-        .init(id: "v1.0.819",
-              date: "2026-07-20",
-              title: "v1.0.819",
-              bullets: [
-                "chore: regenerate changelog for v1.0.819",
-                "fix(ui): resolve PERSISTED UUID-shaped conversation titles at render (W-UUIDSWEEP-2)",
-              ]),
-        .init(id: "v1.0.818",
-              date: "2026-07-20",
-              title: "v1.0.818",
-              bullets: [
-                "chore: regenerate changelog for v1.0.818",
-                "fix(ui): never show raw UUIDs anywhere — central DisplayName resolver + sweep (W-UUIDSWEEP)",
               ]),
     ]
 }
