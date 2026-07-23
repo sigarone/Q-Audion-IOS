@@ -810,10 +810,10 @@ public final class GroupCallController: @unchecked Sendable {
                 self.resendMediaKeysToSfu()
             } catch {
                 print("[GroupCallController] LiveKit connect failed, falling back to WS-relay mesh: \(error)")
-                self.lock.lock()
-                self.usingSfu = false
-                self.sfuRoom = nil
-                self.lock.unlock()
+                self.lock.withLock {
+                    self.usingSfu = false
+                    self.sfuRoom = nil
+                }
                 await room.disconnect()
                 do { try self.startAudioPipeline() }
                 catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
@@ -859,9 +859,7 @@ public final class GroupCallController: @unchecked Sendable {
     /// that method's kdoc for the SDK-source verification.
     @discardableResult
     public func setVideoEnabled(_ enabled: Bool) async -> Bool {
-        lock.lock()
-        let room = sfuRoom
-        lock.unlock()
+        let room = lock.withLock { sfuRoom }
         guard let room = room else { return false }
         do {
             try await room.setCameraEnabled(enabled)
@@ -883,9 +881,7 @@ public final class GroupCallController: @unchecked Sendable {
     /// for the bug this closes).
     @discardableResult
     public func setMicrophoneEnabled(_ enabled: Bool) async -> Bool {
-        lock.lock()
-        let room = sfuRoom
-        lock.unlock()
+        let room = lock.withLock { sfuRoom }
         guard let room = room else { return false }
         do {
             try await room.setMicrophoneEnabled(enabled)
@@ -907,9 +903,7 @@ public final class GroupCallController: @unchecked Sendable {
     /// is `onLocalScreenShareChanged`, wired above.
     @discardableResult
     public func setScreenShareEnabled(_ enabled: Bool) async -> Bool {
-        lock.lock()
-        let room = sfuRoom
-        lock.unlock()
+        let room = lock.withLock { sfuRoom }
         guard let room = room else { return false }
         do {
             try await room.setScreenShareEnabled(enabled)
@@ -1221,7 +1215,7 @@ public final class GroupCallController: @unchecked Sendable {
               let onSend = onSendControlEnvelope else { return }
         Task {
             if await onSend(peer, selfId, json) {
-                lock.lock(); initSentTo.insert(peer); lock.unlock()
+                lock.withLock { initSentTo.insert(peer) }
             }
         }
     }

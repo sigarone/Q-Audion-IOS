@@ -514,10 +514,10 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     }
 
     public func disconnect() async {
-        lock.lock()
-        for w in graceWorkItems { w.cancel() }
-        graceWorkItems.removeAll()
-        lock.unlock()
+        lock.withLock {
+            for w in graceWorkItems { w.cancel() }
+            graceWorkItems.removeAll()
+        }
         await room?.disconnect()
         room = nil
         keyProvider = nil
