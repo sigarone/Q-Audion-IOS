@@ -6,6 +6,9 @@ public struct NfcExchangeViewModel: ViewModelProtocol {
         case idle
         case waiting              // user has tapped "Start", phone listening for tag
         case exchanging           // tag detected, APDU + payload exchange in flight
+        /// W-NFCSAS — PSK derived, nothing persisted yet; user must confirm
+        /// the SAS words match the other device before this can advance.
+        case sasConfirm(sas: [String], peerDeviceName: String)
         case success(peerDeviceName: String)
         case error(message: String)
 
@@ -14,7 +17,8 @@ public struct NfcExchangeViewModel: ViewModelProtocol {
             case .idle: return 0
             case .waiting: return 1
             case .exchanging: return 2
-            case .success, .error: return 3
+            case .sasConfirm: return 3
+            case .success, .error: return 4
             }
         }
     }
