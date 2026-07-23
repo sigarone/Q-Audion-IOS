@@ -424,46 +424,92 @@ struct InCallScreen: View {
     /// iconography per style; it never re-derives trust logic from the raw
     /// `AssuranceState` case, so a future new state needs only a
     /// `AssuranceStateUI.present` mapping, not a new SwiftUI branch here.
+    /// W-NFCBADGE: the one exception is `presentation.isPhysicalPresenceProof`
+    /// (itself a `Presentation` field, not a raw enum switch — see that
+    /// property's doc) which selects a visually-distinct, more prominent
+    /// treatment for S2 specifically, vs every other `.badge`-style state
+    /// (e.g. S8's ordinary PSK confirmation).
     ///
     /// W-NOBRICK: purely informational — no button here can drop the call;
     /// the existing SAS/hangup controls elsewhere on screen are untouched.
     @ViewBuilder
     private func assuranceSectionBody(_ presentation: AssuranceStateUI.Presentation) -> some View {
-        let tint: Color = {
-            switch presentation.style {
-            case .badge: return extras.success
-            case .warning: return extras.warning
-            case .info: return scheme.onSurfaceVariant
+        if presentation.isPhysicalPresenceProof {
+            physicalPresenceBadge(presentation)
+        } else {
+            let tint: Color = {
+                switch presentation.style {
+                case .badge: return extras.success
+                case .warning: return extras.warning
+                case .info: return scheme.onSurfaceVariant
+                }
+            }()
+            let icon: String = {
+                switch presentation.style {
+                case .badge: return "checkmark.shield.fill"
+                case .warning: return "exclamationmark.shield.fill"
+                case .info: return "info.circle.fill"
+                }
+            }()
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(presentation.message)
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
-        }()
-        let icon: String = {
-            switch presentation.style {
-            case .badge: return "checkmark.shield.fill"
-            case .warning: return "exclamationmark.shield.fill"
-            case .info: return "info.circle.fill"
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(scheme.surfaceVariant)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(tint.opacity(presentation.style == .info ? 0.25 : 0.55), lineWidth: 1)
+                    )
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(presentation.message)
+        }
+    }
+
+    /// W-NFCBADGE — S2's (`.nfcAuthenticated`) extra-prominent treatment:
+    /// bigger/bolder icon, an ALL-CAPS eyebrow label (same convention as
+    /// `identityChangeBanner`'s title above, and `sasPanel`'s own header
+    /// below — this app's existing pattern for "this line matters more than
+    /// body copy"), and a tinted fill instead of the flat `surfaceVariant`
+    /// every other assurance state renders on. Still purely informational
+    /// (W-NOBRICK) — no control here, same as the generic branch.
+    private func physicalPresenceBadge(_ presentation: AssuranceStateUI.Presentation) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 26, weight: .bold))
+                .foregroundStyle(extras.success)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("PRESENZA FISICA VERIFICATA")
+                    .qaudionStyle(type.labelSmall)
+                    .tracking(1.0)
+                    .foregroundStyle(extras.success)
+                Text(presentation.message)
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurface)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        }()
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(tint)
-            Text(presentation.message)
-                .qaudionStyle(type.labelMedium)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(scheme.surfaceVariant)
+                .fill(extras.success.opacity(0.14))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(tint.opacity(presentation.style == .info ? 0.25 : 0.55), lineWidth: 1)
+                        .stroke(extras.success.opacity(0.8), lineWidth: 1.5)
                 )
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(presentation.message)
+        .accessibilityLabel("Presenza fisica verificata. \(presentation.message)")
     }
 
     // MARK: - Scroll content (everything above the pinned action row)
@@ -673,8 +719,27 @@ struct InCallScreen: View {
 
     // MARK: - SAS panel
 
+    /// W-NFCBADGE — when S2 (`.nfcAuthenticated`) is this call's live verdict,
+    /// the SAS ceremony is redundant (physical NFC proximity already exceeds
+    /// what a verbal compare proves — see `AssuranceStateUI.Presentation
+    /// .sasRequired`'s own doc, `false` for exactly this state) but stays
+    /// FULLY visible and functional: same words, same button, same
+    /// `onConfirmSas`/persistence behavior, completely untouched. Only the
+    /// visual WEIGHT changes (a de-emphasizing opacity + a small explanatory
+    /// hint), never the availability.
+    private var sasCeremonyRedundant: Bool {
+        assurancePresentation?.isPhysicalPresenceProof == true
+    }
+
+    @ViewBuilder
     private var sasPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if sasCeremonyRedundant {
+                Text("Non necessario: già autenticato via NFC")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant.opacity(0.85))
+            }
+
             HStack(spacing: 6) {
                 Image(systemName: sasVerified ? "checkmark.seal.fill" : "lock.fill")
                     .font(.system(size: 14, weight: .semibold))
@@ -722,9 +787,16 @@ struct InCallScreen: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke((sasVerified ? extras.success : scheme.primary).opacity(0.6),
+                .stroke((sasVerified ? extras.success : scheme.primary).opacity(sasCeremonyRedundant ? 0.3 : 0.6),
                         lineWidth: 1)
         )
+        // Reduced visual weight ONLY — every control above stays fully
+        // interactive at this opacity (SwiftUI does not gate hit-testing on
+        // `.opacity`), so tapping "CONFERMA COINCIDONO" still calls
+        // `onConfirmSas` -> `handleConfirmSas` -> `SasVerificationStore
+        // .recordVerified` exactly as it does when S2 is not active. This is
+        // a pure presentation change.
+        .opacity(sasCeremonyRedundant ? 0.6 : 1.0)
     }
 
     private func sasWordView(_ word: String) -> some View {

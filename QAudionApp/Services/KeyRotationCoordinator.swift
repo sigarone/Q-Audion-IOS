@@ -37,6 +37,25 @@ final class KeyRotationCoordinator: ObservableObject {
     private let appState: AppState
     private var currentKeyPair: Curve25519.KeyAgreement.PrivateKey
 
+    /// W-VAULTREFRESH — real root cause of "vault doesn't show the new key
+    /// immediately, has to leave/re-enter the screen": `vaultKeys` used to
+    /// be populated ONLY here in `init()` plus after this coordinator's OWN
+    /// `importPeerIdentity`/`deletePsk` calls. The NFC-pairing path
+    /// (`NfcExchangeView.persistPsk`) writes directly to `SovereignKeyVault`
+    /// and has no reference to this coordinator at all, so a key paired via
+    /// NFC never triggered a refresh — `KeyManagementScreen`'s `@StateObject`
+    /// keeps the SAME coordinator instance alive across the
+    /// `NavigationLink` push/pop into `NfcExchangeView`, so returning to the
+    /// screen showed the same stale array. Only tearing down
+    /// `KeyManagementScreen` entirely (leaving Settings and re-entering)
+    /// allocated a FRESH coordinator, whose `init()` re-ran `loadVaultKeys()`
+    /// — which is exactly the "leave/re-enter fixes it" symptom reported.
+    /// Fix: observe `SovereignKeyVault`'s own `.sovereignVaultDidChange`
+    /// (posted by every `storePsk`/`deletePsk` call, mirroring
+    /// `ContactsStore.contactsDidChange`) so ANY vault-mutating code path —
+    /// not just this coordinator's own two methods — refreshes the list.
+    private var vaultObserver: NSObjectProtocol?
+
     init(appState: AppState) {
         self.appState = appState
         let keyPair = Curve25519.KeyAgreement.PrivateKey()
@@ -47,6 +66,24 @@ final class KeyRotationCoordinator: ObservableObject {
         let identity = IdentityQrCode.Identity(userId: userId, pubkey: pubBytes)
         self.currentIdentityQr = try? IdentityQrCode.encode(identity: identity)
         loadVaultKeys()
+        vaultObserver = NotificationCenter.default.addObserver(
+            forName: .sovereignVaultDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // NotificationCenter callbacks are @Sendable in iOS 18+ — hop to
+            // MainActor to satisfy this class's own @MainActor isolation,
+            // same convention as AppState's .contactsDidChange observer.
+            Task { @MainActor [weak self] in
+                self?.loadVaultKeys()
+            }
+        }
+    }
+
+    deinit {
+        if let token = vaultObserver {
+            NotificationCenter.default.removeObserver(token)
+        }
     }
 
     /// Reload the PSK list from SovereignKeyVault (call after import or delete).

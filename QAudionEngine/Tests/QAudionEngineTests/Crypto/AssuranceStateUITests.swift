@@ -38,6 +38,7 @@ final class AssuranceStateUITests: XCTestCase {
         XCTAssertEqual(p.style, .badge)
         XCTAssertFalse(p.sasRequired, "S2 is the highest trust tier -- no SAS demand on top of it")
         XCTAssertTrue(p.message.contains("Alice"))
+        XCTAssertTrue(p.isPhysicalPresenceProof, "S2 is the ONLY state the view should render with extra prominence")
     }
 
     func testS3NfcIdentityMismatch_warningStyle_neverABadge() {
@@ -125,6 +126,27 @@ final class AssuranceStateUITests: XCTestCase {
             XCTAssertFalse(p.message.isEmpty, "\(state) produced an empty message")
         }
         XCTAssertEqual(allStates.count, 11, "one entry per S0..S10 -- keep this list in sync with AssuranceState")
+    }
+
+    /// W-NFCBADGE — `isPhysicalPresenceProof` must be `true` for S2 and ONLY S2.
+    /// The view uses this flag (not a raw `AssuranceState` switch) to decide
+    /// whether to render the extra-prominent NFC badge treatment, so a false
+    /// positive on any other state would make an ordinary PSK/PQC call look
+    /// like it proved physical presence.
+    func testIsPhysicalPresenceProof_trueOnlyForS2() {
+        let allStates: [AssuranceState] = [
+            .peerLegacy, .kcFailed, .nfcAuthenticated, .nfcIdentityMismatch, .nfcUnattestable,
+            .identityUnverified, .nfcPresentUnconfirmed, .expectedNfcStripped, .pskConfirmed,
+            .pskUnconfirmed, .pqcOnly,
+        ]
+        for state in allStates {
+            let p = AssuranceStateUI.present(state: state)
+            if state == .nfcAuthenticated {
+                XCTAssertTrue(p.isPhysicalPresenceProof, "\(state) must set isPhysicalPresenceProof")
+            } else {
+                XCTAssertFalse(p.isPhysicalPresenceProof, "\(state) must NOT set isPhysicalPresenceProof")
+            }
+        }
     }
 
     /// W-NOBRICK structural pin: `Presentation` carries no throwing/void

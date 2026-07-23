@@ -25,20 +25,37 @@ import CoreNFC
 ///   <── [32B X25519_eph_pub] 9000 ───────  ← Android's ephemeral X25519 pub
 /// ```
 ///
-/// Both sides then independently derive the PSK via:
+/// Both sides then independently derive the PSK via (see
+/// ``deriveCollaborativePsk(myEphPriv:peerEphPub:entropyA:entropyB:)`` for the
+/// exact, current construction — this summary intentionally does not repeat
+/// its full derivation, which salts over the two EPHEMERAL pubkeys plus both
+/// sides' entropy, not the long-term identity keys):
 /// ```
-/// shared  = X25519(my_eph_priv, peer_eph_pub)
-/// id_salt = SHA256(sort(ios_id_pub ∥ android_id_pub))
-/// PSK     = HKDF-SHA256(ikm=shared, salt=id_salt, info="Q-Audion NFC Collaborative PSK v1")
+/// shared = X25519(my_eph_priv, peer_eph_pub)
+/// PSK    = HKDF-SHA256(ikm=shared‖entropy_a‖entropy_b,
+///                       salt=SHA256(sort(my_eph_pub, peer_eph_pub)),
+///                       info="Q-Audion NFC Collaborative PSK v1")
 /// ```
+/// The two IDENTITY keys exchanged in steps 2/3 above (`GET_IDENTITY_KEY`/
+/// `PUSH_PEER_IDENTITY`) are NOT mixed into this KDF — they exist so `S2`
+/// (`AssuranceState.nfcAuthenticated`) can later prove which peer the tapped
+/// PSK is bound to (see `AssuranceState.resolveNfcMixInputs`), and so
+/// `NfcSasConfirmGate`'s SAS step (below) has a real per-call proximity
+/// ceremony independent of the KDF's own inputs.
 ///
-/// This is the identity-bound variant of ``NfcCollaborativeExchange``.
-/// ``NfcCollaborativeExchange`` uses a single-round anonymous X25519 exchange
-/// (compatible with NDEF tags). This class targets live Android HCE pairing.
+/// **W-NFCSAS:** after the PSK is derived, a 6-digit SAS
+/// (``NfcSasComputation``, over the two Ed25519 identity keys — byte-exact
+/// with Android's `nfc/SasComputation.kt`) is shown and the user must
+/// confirm it matches the other device
+/// (``State/sasConfirm(sas:peerDeviceName:)``) before anything is
+/// persisted — see ``confirmSas()``/``rejectSas()``.
 ///
-/// **Compatibility note:** Android Phase 14c introduced this protocol; older
-/// Android builds that only write NDEF tags should still be served by
-/// ``NfcCollaborativeExchange``. Use this class when tapping two live phones.
+/// **Superseded fallback (removed):** an anonymous, non-identity-bound
+/// single-round X25519 exchange used to exist as a fallback for this class
+/// (`NfcCollaborativeExchange`) — deleted (confirmed dead: zero production
+/// call sites once this identity-required path replaced it; the only peer
+/// that exists, Android's HCE service, never spoke that exchange's protocol
+/// either). `NfcApduExchange` is the ONLY NFC pairing path on iOS today.
 ///
 /// **Platform note:** `NFCTagReaderSession` is iOS-only; this class is a no-op
 /// on macOS. The ``State`` type and ``start()``/``cancel()`` entry points are
@@ -51,6 +68,17 @@ public final class NfcApduExchange: NSObject {
         case idle
         case waiting
         case exchanging
+        /// W-NFCSAS — the raw PSK is derived and the ephemeral keys/entropy
+        /// exchanged, but nothing is persisted yet. `sas` is the 6-digit
+        /// Short-Authentication-String (`NfcSasComputation`, a byte-exact
+        /// port of Android's `nfc/SasComputation.kt`) derived from the two
+        /// peers' Ed25519 IDENTITY keys — NOT `ComputeSasUseCase` (that one
+        /// is for the in-call ceremony, derived from the session key into 6
+        /// PGP words; a different construction entirely). The user must
+        /// read this code against the other device before the ceremony can
+        /// proceed — both platforms now derive the identical 6 digits for
+        /// the same tap.
+        case sasConfirm(sas: String, peerDeviceName: String)
         case success(peerDeviceName: String)
         case error(String)
 
@@ -58,6 +86,8 @@ public final class NfcApduExchange: NSObject {
             switch (lhs, rhs) {
             case (.idle, .idle), (.waiting, .waiting), (.exchanging, .exchanging):
                 return true
+            case (.sasConfirm(let sasA, let peerA), .sasConfirm(let sasB, let peerB)):
+                return sasA == sasB && peerA == peerB
             case (.success(let a), .success(let b)):
                 return a == b
             case (.error(let a), .error(let b)):
@@ -77,9 +107,31 @@ public final class NfcApduExchange: NSObject {
     /// Called whenever ``state`` changes.
     public var onStateChanged: ((State) -> Void)?
 
-    /// Called when the PSK exchange completes successfully.
+    /// Called when the PSK exchange completes successfully — i.e. AFTER the
+    /// user has confirmed the SAS (`.sasConfirm` state, see `confirmSas()`).
     /// Parameters: `(psk: 32B, peerIdentityPub: 32B Ed25519)`.
     public var onPskDerived: ((Data, Data) async throws -> Void)?
+
+    /// W-NFCSAS — the post-derivation confirm gate. `nil` whenever no
+    /// ceremony is currently paused at `.sasConfirm` (before the first tap,
+    /// after a completed/failed/cancelled one).
+    private var sasGate: NfcSasConfirmGate?
+
+    /// User confirmed the SAS words match what the other device shows.
+    /// No-op if not currently at `.sasConfirm` (nothing to confirm).
+    public func confirmSas() {
+        sasGate?.confirm()
+        sasGate = nil
+    }
+
+    /// User rejected the SAS (words did not match, or they backed out).
+    /// The ceremony throws before `onPskDerived` is ever called — no
+    /// key material is persisted for a rejected tap. No-op if not
+    /// currently at `.sasConfirm`.
+    public func rejectSas() {
+        sasGate?.reject()
+        sasGate = nil
+    }
 
     /// Local Ed25519 identity public key (32 bytes). Must be set before ``start()``.
     /// Typically sourced from ``SovereignIdentityManager``.
@@ -143,13 +195,18 @@ public final class NfcApduExchange: NSObject {
         #endif
     }
 
-    /// Cancel any running session.
+    /// Cancel any running session — including one paused at `.sasConfirm`
+    /// awaiting the user's decision (rejects it, same as `rejectSas()`, so
+    /// the suspended `runPhase14cExchange` Task unwinds instead of leaking).
     public func cancel() {
         #if canImport(CoreNFC) && os(iOS)
         endSessionIfActive()
         #endif
+        sasGate?.reject()
+        sasGate = nil
         if case .waiting = state { state = .idle }
         if case .exchanging = state { state = .idle }
+        if case .sasConfirm = state { state = .idle }
     }
 
     // MARK: - CoreNFC internals (iOS-only)
@@ -271,6 +328,34 @@ public final class NfcApduExchange: NSObject {
             entropyB: Data(peerEntropy)
         )
 
+        // W-NFCSAS — pause here and make the user compare/confirm BEFORE the
+        // key is ever handed to the integration layer. `onPskDerived` (the
+        // ONLY call in this type that persists anything — `NfcExchangeView
+        // .persistPsk` writes to `SovereignKeyVault` from inside it) is
+        // reached ONLY on the `true` branch below; a reject (or a cancel())
+        // throws first, so nothing is ever written for a rejected tap.
+        //
+        // Uses `NfcSasComputation` — a byte-exact port of Android's
+        // `nfc/SasComputation.kt` — over the two Ed25519 IDENTITY keys
+        // (`myIdPub`/`peerIdentityPub`, already exchanged above), NOT
+        // `ComputeSasUseCase` (that one derives from the session/call key
+        // into 6 PGP words, for the in-call ceremony — a different
+        // construction). Both platforms now derive the identical 6-digit
+        // code for the same tap (pinned by the shared KAT vectors:
+        // all-zero vs all-0xFF -> "759936"; 0..31 vs 32..63 -> "360896").
+        let sas = try NfcSasComputation.computeSas(
+            selfIkEdPub: Data(myIdPub),
+            peerIkEdPub: Data(peerIdentityPub)
+        )
+        let gate = NfcSasConfirmGate()
+        sasGate = gate
+        state = .sasConfirm(sas: sas, peerDeviceName: "Android peer")
+        let confirmed = await gate.awaitConfirmation()
+        sasGate = nil
+        guard confirmed else {
+            throw ExchangeError.sasRejected
+        }
+
         // Notify the integration layer.
         try await onPskDerived?(psk, peerIdentityPub)
 
@@ -378,6 +463,10 @@ public final class NfcApduExchange: NSObject {
         /// SECURITY M-6 — re-pair presented a different peer identity
         /// key than the pinned one.
         case peerIdentityMismatch
+        /// W-NFCSAS — the user rejected the SAS confirm step (or cancelled
+        /// while it was showing). Thrown BEFORE `onPskDerived` is ever
+        /// called, so no key material is persisted.
+        case sasRejected
 
         public var errorDescription: String? {
             switch self {
@@ -389,7 +478,37 @@ public final class NfcApduExchange: NSObject {
                 return "Invalid APDU response: \(msg)"
             case .peerIdentityMismatch:
                 return "Peer identity key changed since last pairing — aborting (possible attack)"
+            case .sasRejected:
+                return "SAS non confermato — scambio annullato"
             }
+        }
+    }
+
+    /// W-NFCSAS — the post-derivation confirm gate `runPhase14cExchange`
+    /// awaits, extracted as a plain, CoreNFC-free async barrier so it is
+    /// unit-testable without real NFC hardware (CoreNFC tag sessions cannot
+    /// run in CI/simulator — see `NfcCollaborativePskKatTests`'s own note on
+    /// this same constraint). `awaitConfirmation()` suspends until EITHER
+    /// `confirm()` (resumes `true`) or `reject()` (resumes `false`) is
+    /// called — there is no third path and no timeout, matching every other
+    /// NFC state transition in this file (user-driven, not time-boxed).
+    final class NfcSasConfirmGate {
+        private var continuation: CheckedContinuation<Bool, Never>?
+
+        func awaitConfirmation() async -> Bool {
+            await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                self.continuation = cont
+            }
+        }
+
+        func confirm() {
+            continuation?.resume(returning: true)
+            continuation = nil
+        }
+
+        func reject() {
+            continuation?.resume(returning: false)
+            continuation = nil
         }
     }
 

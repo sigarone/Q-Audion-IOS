@@ -52,6 +52,21 @@ public enum AssuranceStateUI {
         public let style: Style
         public let message: String
         public let sasRequired: Bool
+        /// W-NFCBADGE — `true` ONLY for `S2` (`.nfcAuthenticated`). Lets the view
+        /// give S2 extra visual prominence (bigger/bolder, distinct from every
+        /// other `.badge`-style state such as `S8`) WITHOUT switching on the raw
+        /// `AssuranceState` case itself — `InCallScreen.assuranceSectionBody`'s own
+        /// doc says it must only ever consume `Presentation`, never re-derive
+        /// trust logic from the enum, so a future new state needs only a mapping
+        /// here, not a new SwiftUI branch. Same pattern as `sasRequired`.
+        public let isPhysicalPresenceProof: Bool
+
+        public init(style: Style, message: String, sasRequired: Bool, isPhysicalPresenceProof: Bool = false) {
+            self.style = style
+            self.message = message
+            self.sasRequired = sasRequired
+            self.isPhysicalPresenceProof = isPhysicalPresenceProof
+        }
     }
 
     /// - Parameters:
@@ -91,11 +106,12 @@ public enum AssuranceStateUI {
                 sasRequired: true
             )
 
-        case .nfcAuthenticated: // S2 — unreachable this step (N<=1 everywhere).
+        case .nfcAuthenticated: // S2 — reachable since W-NFCBADGE (2026-07-23).
             return Presentation(
                 style: .badge,
                 message: "Autenticato di persona (tap NFC) + chiave pre-condivisa: \(secretLabel)",
-                sasRequired: false
+                sasRequired: false,
+                isPhysicalPresenceProof: true
             )
 
         case .nfcIdentityMismatch: // S3

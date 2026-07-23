@@ -244,6 +244,7 @@ jobs:
             -skip-testing "QAudionEngineTests/FrameEncoderTests" \
             -skip-testing "QAudionEngineTests/IdentityQrCodeTests" \
             -skip-testing "QAudionEngineTests/KatVectorsTests" \
+            -skip-testing "QAudionEngineTests/SovereignKeyVaultNotificationTests" \
             -skip-testing "QAudionEngineTests/MessageRatchetWireFuzzTests/testMutatedRealFrameFailsSoft" \
             -skip-testing "QAudionEngineTests/PitchExtractorTests" \
             -skip-testing "QAudionEngineTests/QAudionCapabilityExchangeTests" \

@@ -304,11 +304,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         /// `peerAdvertisedRoles` input — this function does the fp-matching so
         /// `decide()` itself stays a pure function with no vault access).
         public let peerAdvertisedRoles: [Int]
+        /// W-NFCBADGE — the hex fingerprint of the ONE PSK actually selected
+        /// for this call's session-key mix (`selectedFp`/`selectedFpStr` at
+        /// the two call sites below), `nil` when `n == 0`. This is the SAME
+        /// string `AppState.resolvePskDisplayMeta(fingerprint:)` already
+        /// resolves to a vault entry — carried here so the app layer can look
+        /// up that entry's `PskOrigin` (NFC vs everything else) without a
+        /// second, divergent selection computation. Local-only: never
+        /// serialized to the wire, no capability flag.
+        public let selectedFp: String?
 
         public init(
             peerId: String, callId: String, isInitiator: Bool, sessionKey: Data,
             kcKey: Data?, transcript: Data?, n: Int, peerSupportsMix: Bool,
-            sigOk: Bool, peerAdvertisedRoles: [Int]
+            sigOk: Bool, peerAdvertisedRoles: [Int], selectedFp: String? = nil
         ) {
             self.peerId = peerId
             self.callId = callId
@@ -320,6 +329,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             self.peerSupportsMix = peerSupportsMix
             self.sigOk = sigOk
             self.peerAdvertisedRoles = peerAdvertisedRoles
+            self.selectedFp = selectedFp
         }
     }
     public var onKcMacReady: ((KcMacReadyEvent) -> Void)?
@@ -1335,6 +1345,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // the no-PSK key (fixes the iOS↔desktop sealed-audio AEAD mismatch).
                     selectedFp = first
                     selectedPsk = gated
+                } else if !advertised.isEmpty {
+                    // W-PSKMIX — bare log only, mirroring the ACCEPT (caller) path's
+                    // own "no local PSK for fp" print below: previously this branch
+                    // left selectedFp/selectedPsk nil with NO trace anywhere. The
+                    // user-facing side of this silent downgrade is NOT this print —
+                    // it is AssuranceState.decide()'s S7 (`expectedNfcStripped`)
+                    // branch, which `emitKeyConfirmationTelemetry` already reaches
+                    // automatically from this call's real n=0/mixRoles=[] outcome
+                    // (fed by `onKcMacReady` unconditionally, whether or not a PSK
+                    // was found) whenever this contact's `presenceFloor` or the
+                    // peer's advertised roles say an NFC/PSK secret was expected —
+                    // this print just makes the underlying cause visible in device
+                    // logs instead of leaving no trace at all.
+                    print("[QAudionCallIntegration] OFFER: peer advertised \(advertised.count) PSK fp(s), none held locally or SHA-256 gate failed — session key mixes NO psk callId=\(callId.prefix(8))…")
                 }
             }
 
@@ -1653,7 +1677,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 peerId: callerId, callId: callId, isInitiator: false, sessionKey: combined,
                 kcKey: kcKeyForEvent, transcript: kcTranscriptForEvent, n: kcN,
                 peerSupportsMix: kcPeerSupportsMix, sigOk: offerSigOk,
-                peerAdvertisedRoles: kcPeerAdvertisedRoles
+                peerAdvertisedRoles: kcPeerAdvertisedRoles, selectedFp: selectedFp
             ))
 
             // Pre-negotiation parity (mirror of the QUAD .offer branch):
@@ -2086,7 +2110,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 peerId: callerId, callId: callId, isInitiator: true, sessionKey: combined,
                 kcKey: kcCallerKeyForEvent, transcript: kcCallerTranscriptForEvent, n: kcCallerN,
                 peerSupportsMix: kcCallerPeerSupportsMix, sigOk: acceptSigOk,
-                peerAdvertisedRoles: kcCallerPeerAdvertisedRoles
+                peerAdvertisedRoles: kcCallerPeerAdvertisedRoles,
+                selectedFp: selectedFpStr.isEmpty ? nil : selectedFpStr
             ))
 
             // W529: caller's ACCEPT decapsulation succeeded → cancel
