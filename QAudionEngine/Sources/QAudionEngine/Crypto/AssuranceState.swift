@@ -275,12 +275,18 @@ public enum AssuranceState: Equatable {
         }
         guard let fpHex = selectedFingerprintHex,
               let capturedIdentity = DeviceRenewBlob.hexDecode(fpHex),
-              capturedIdentity.count == 32,
-              let verified = verifiedPeerIdentityKey
+              capturedIdentity.count == 32
         else {
-            // NFC-origin key, but nothing to verify its binding against yet
-            // (e.g. no verified peer identity on this call) — still an NFC
-            // secret, just not (yet) provably bound to this call's peer.
+            // The vault entry's OWN recorded identity is missing or
+            // malformed — this can never be trusted as an NFC-authenticated
+            // secret at all, so degrade fully to plain PSK rather than
+            // claim NFC with an unbound/unverifiable identity.
+            return (n >= 1 ? [.psk] : [], false, false)
+        }
+        guard let verified = verifiedPeerIdentityKey else {
+            // Well-formed NFC-origin key, but nothing to verify its binding
+            // against yet (e.g. no verified peer identity on this call) —
+            // still an NFC secret, just not (yet) provably bound.
             return ([.nfc], false, false)
         }
 
