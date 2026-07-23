@@ -9,10 +9,49 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.837",
+              date: "2026-07-23",
+              title: "v1.0.837",
+              bullets: [
+                "chore: regenerate changelog for v1.0.837",
+                "fix(call): remove unused Keychain scan from ACCEPT-building hot path",
+              ]),
+        .init(id: "v1.0.836",
+              date: "2026-07-23",
+              title: "v1.0.836",
+              bullets: [
+                "chore: regenerate changelog for v1.0.836",
+                "Phase 1 iOS: NFC physical-presence badge, pairing SAS, vault-refresh fix (#37)",
+              ]),
+        .init(id: "v1.0.835",
+              date: "2026-07-23",
+              title: "v1.0.835",
+              bullets: [
+                "chore: regenerate changelog for v1.0.835",
+                "fix(calls): build on-demand controller for screen-share renegotiation (#31)",
+                "feat(psk-mix): step 7 derivation math + cross-platform KAT (iOS) (#36)",
+                "psk-mix steps 4/5/6/8: transcript-v2 + kc_mac + AssuranceState + presenceAuth/floor (iOS) (#35)",
+                "chore(deps): bump grpc to v1.82.1 in RealityCore (Dependabot #1)",
+              ]),
+        .init(id: "v1.0.834",
+              date: "2026-07-22",
+              title: "v1.0.834",
+              bullets: [
+                "chore: regenerate changelog for v1.0.834",
+                "fix(psk): exclude call-derived PSKs from video-HKDF-salt resolution (W-PSKMIX step 6)",
+                "fix(tests): two W-IOSECHO test bugs caught by CI (not production bugs)",
+                "fix(psk): exclude call-derived PSKs from receive-side matching gates (W-PSKMIX step 5)",
+                "feat(audio): echo-cancellation effectiveness telemetry (W-IOSECHO)",
+                "fix(psk): exclude auto: group-ctrl ratchet seed from call-PSK advertisement (W-PSKMIX step 4)",
+                "feat(psk): iOS advert hygiene — filter, stable order, fp normalisation (W-PSKMIX step 3)",
+                "fix(psk): unwrap getFingerprint's String? before Array<String>.contains",
+                "feat(psk): parse-only support for multi-PSK selection (W-PSKMIX step 2)",
+              ]),
         .init(id: "v1.0.833",
               date: "2026-07-22",
               title: "v1.0.833",
               bullets: [
+                "chore: regenerate changelog for v1.0.833",
                 "feat(presence): real subscribe gating, honest labels, invalidation, resume fix (I1-I6)",
                 "fix(ios): keep Info.plist pure ASCII, as the file itself demands (W-NFCIOS)",
               ]),
@@ -124,34 +163,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.818",
                 "fix(ui): never show raw UUIDs anywhere — central DisplayName resolver + sweep (W-UUIDSWEEP)",
-              ]),
-        .init(id: "v1.0.817",
-              date: "2026-07-20",
-              title: "v1.0.817",
-              bullets: [
-                "chore: regenerate changelog for v1.0.817",
-                "fix(groupcall): iPhone control-bar overflow, earpiece-routed audio, simulcast stats, hang-up ends call for all",
-              ]),
-        .init(id: "v1.0.816",
-              date: "2026-07-20",
-              title: "v1.0.816",
-              bullets: [
-                "chore: regenerate changelog for v1.0.816",
-                "fix(build): align LiveKitBroadcast pin with the 2.13.1-aes256-raw fork tag",
-              ]),
-        .init(id: "v1.0.815",
-              date: "2026-07-20",
-              title: "v1.0.815",
-              bullets: [
-                "chore: regenerate changelog for v1.0.815",
-                "feat(groupcall): true AES-256-GCM frame crypto — raw 32-byte SK_0 via fork overload (flag-day)",
-                "chore: regenerate changelog for v1.0.814",
-              ]),
-        .init(id: "v1.0.814",
-              date: "2026-07-19",
-              title: "v1.0.814",
-              bullets: [
-                "fix(groupcall): late joiner stuck with zero participants after socket rebuild",
               ]),
     ]
 }
