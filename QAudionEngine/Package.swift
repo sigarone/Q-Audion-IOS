@@ -266,6 +266,7 @@ let package = Package(
                 .copy("../Resources/cross_platform_vectors.json"),
                 .copy("Video/Resources/sframe-video-kat.json"),
                 .copy("Crypto/Resources/handshake-sig-kat.json"),
+                .copy("Crypto/Resources/psk-mix-v1-kat.json"),
                 .copy("Resources/kat/kms-psk-v2-kat.json"),
                 .copy("Resources/kat/kms-pop-v1-kat.json"),
                 // kms-rotation-v2 Phase-1 frozen KATs (byte-copies of
