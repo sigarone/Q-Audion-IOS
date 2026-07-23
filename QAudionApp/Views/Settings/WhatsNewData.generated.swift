@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.844",
+              date: "2026-07-24",
+              title: "v1.0.844",
+              bullets: [
+                "feat(call): show NFC-authenticated seal on the always-visible trust bar (W-NFCVISIBLE)",
+              ]),
         .init(id: "v1.0.843",
               date: "2026-07-23",
               title: "v1.0.843",
               bullets: [
+                "chore: regenerate changelog for v1.0.843",
                 "fix(build): exhaustive PskOrigin switch + clean up Swift 6 concurrency warnings",
               ]),
         .init(id: "v1.0.842",
@@ -176,13 +183,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.825",
                 "fix(call): restore VP-IO make-up AGC + mid-call video-tx telemetry gap",
-              ]),
-        .init(id: "v1.0.824",
-              date: "2026-07-20",
-              title: "v1.0.824",
-              bullets: [
-                "chore: regenerate changelog for v1.0.824",
-                "fix(call): callee-path telemetry wiring + speaker-route re-assertion (W-TELEMPARITY, W-CALLSPKR)",
               ]),
     ]
 }
