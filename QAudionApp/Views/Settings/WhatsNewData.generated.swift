@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.842",
+              date: "2026-07-23",
+              title: "v1.0.842",
+              bullets: [
+                "fix(psk): stop matching wire fingerprints against cached Keychain labels (W-STALEFP)",
+                "fix(psk): exclude identity pubkeys from call-PSK match eligibility (W-IDKEYEXCL)",
+                "fix(kms): wire V2Context into the production pollOnce() call (W-KMSV2CTX)",
+                "fix(nfc): store real SHA-256(psk) fingerprint label, not hex(peerIdPub)",
+              ]),
         .init(id: "v1.0.841",
               date: "2026-07-23",
               title: "v1.0.841",
               bullets: [
+                "chore: regenerate changelog for v1.0.841",
                 "fix(net): restore fi-1 as a real failover, verify function not just RTT (W-NODESERVES)",
               ]),
         .init(id: "v1.0.840",
@@ -173,13 +183,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.823",
                 "fix(groupcall): self video in unified grid, self-vs-remote e2ee guard (W-GRPSELFGRID, W-GRPE2EESELF)",
-              ]),
-        .init(id: "v1.0.822",
-              date: "2026-07-20",
-              title: "v1.0.822",
-              bullets: [
-                "chore: regenerate changelog for v1.0.822",
-                "feat(groupcall): signal AES-256 raw-key version-skew instead of silent decrypt failure (W-GRPVERSIONSKEW)",
               ]),
     ]
 }
