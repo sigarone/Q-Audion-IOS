@@ -842,6 +842,12 @@ final class AppState: ObservableObject {
         let peerSupportsMix: Bool
         let sigOk: Bool
         let peerAdvertisedRoles: [Int]
+        /// W-NFCBADGE — the hex fingerprint of the ONE PSK selected for this
+        /// call (`KcMacReadyEvent.selectedFp`), `nil` when `n == 0`. Used by
+        /// `emitKeyConfirmationTelemetry` to look up the vault entry's
+        /// `PskOrigin` and (for an NFC-origin entry) the peer identity it was
+        /// bound to at tap time.
+        let selectedFp: String?
         var kcStatus: KeyConfirmation.Status = .absent
         /// Set once the FINAL verdict (verified / wrong / timed-out-absent) is
         /// recorded, so a late-arriving duplicate KCMAC or a race between the
@@ -868,6 +874,7 @@ final class AppState: ObservableObject {
             peerSupportsMix = event.peerSupportsMix
             sigOk = event.sigOk
             peerAdvertisedRoles = event.peerAdvertisedRoles
+            selectedFp = event.selectedFp
         }
     }
     private var kcCallStates: [String: KeyConfirmationCallState] = [:]
@@ -889,7 +896,12 @@ final class AppState: ObservableObject {
     /// `emitKeyConfirmationTelemetry` call that fills
     /// `keyConfirmationTelemetryByCall` above, a few seconds into the call;
     /// consumed later, at teardown.
-    private var finalAssuranceByCall: [String: (state: AssuranceState, peerId: String)] = [:]
+    /// W-NFCBADGE — `witnessOk`/`selectedFp` ride alongside so
+    /// `applyPresenceAuthOutcomeIfAny` persists the SAME witness verdict
+    /// `emitKeyConfirmationTelemetry` fed `decide()` (rather than a second,
+    /// independently-hardcoded value) and the real NFC fingerprint instead
+    /// of an empty placeholder.
+    private var finalAssuranceByCall: [String: (state: AssuranceState, peerId: String, selectedFp: String?, witnessOk: Bool)] = [:]
 
     /// W372: NotificationCenter observer guard — only register the
     /// group-chat fan-out listener once per AppState lifetime.
@@ -7091,6 +7103,16 @@ final class AppState: ObservableObject {
             return vault.getFingerprint(name: n) == fp
         }
         guard let name = matchedName else {
+            // W-PSKMIX — bare log only (this stays a pure, never-throwing UI
+            // helper — no behavior change). Previously silent: a non-empty
+            // fingerprint with no matching vault entry fell straight through
+            // to the short-fingerprint-prefix/nil-method fallback below with
+            // no trace anywhere. Worth a log because this is the same shape
+            // as an unpatched/malicious peer's replayed fingerprint (see the
+            // `.callDerived` exclusion note above) or a genuine local-vault
+            // miss — either way, "PSK negotiated but nothing to show/reuse
+            // for it" deserves to be visible in device logs.
+            print("[AppState] resolvePskDisplayMeta: no local vault entry matches fp=\(fp.prefix(16))… — falling back to short-fingerprint display")
             return (String(fp.prefix(9)), nil)
         }
         let isUuidName: Bool = (UUID(uuidString: name) != nil)
@@ -7498,12 +7520,12 @@ final class AppState: ObservableObject {
         emitKeyConfirmationTelemetry(callId: callId, state: state)
     }
 
-    /// W-KCMAC/W-ASSURANCE/W-FLOOR (ship steps 5/6/8) — compute
-    /// `AssuranceState.decide()`'s best-honest-effort inputs from what THIS
-    /// step actually wires (no NFC ceremony exists yet — that's step 7) and
-    /// record the four counters for `CallService.getKeyConfirmationTelemetry`
-    /// to pick up at teardown. Idempotent to call more than once for the same
-    /// callId (overwrites with the latest verdict).
+    /// W-KCMAC/W-ASSURANCE/W-FLOOR/W-NFCBADGE — compute `AssuranceState.decide()`'s
+    /// real inputs (including, as of W-NFCBADGE, the ONE selected PSK's genuine NFC
+    /// origin when applicable — see `AssuranceState.resolveNfcMixInputs`) and record
+    /// the four counters for `CallService.getKeyConfirmationTelemetry` to pick up at
+    /// teardown. Idempotent to call more than once for the same callId (overwrites
+    /// with the latest verdict).
     @MainActor
     private func emitKeyConfirmationTelemetry(callId: String, state: KeyConfirmationCallState) {
         let kcResultStr: String
@@ -7512,10 +7534,6 @@ final class AppState: ObservableObject {
         case .absent: kcResultStr = "absent"
         case .wrong: kcResultStr = "wrong"
         }
-        // No NFC ceremony reaches this call path yet (step 7) — mixRoles is
-        // only ever `[.psk]` (n>=1) or `[]` (n==0), so `nfcMixed` inside
-        // `decide()` is always false today. `nfcBound`/`witnessOk` are
-        // correspondingly the documented "not consulted" inert defaults.
         // `mediaDwellMs: 0` here is correct for THIS specific call (decide()
         // is invoked seconds into the call, long before any dwell floor could
         // matter for S8/S9/S10's own logic, which never reads it) — the
@@ -7523,13 +7541,32 @@ final class AppState: ObservableObject {
         // (`clearKeyConfirmationState`), with a real elapsed duration.
         //
         // W-FLOOR (ship step 8): `expectedNfc` is fed from this contact's
-        // persisted `presenceFloor` — the ONE input this step wires for real,
-        // since S7's escalation is genuinely reachable today (a floor could
-        // already be true from a prior S2 call, even though a real call
-        // cannot yet PRODUCE a fresh S2 verdict until step 7 ships NFC
-        // mixing). `false` when the peer has no stored contact row at all.
-        let expectedNfc = ContactsStore().load().first(where: { $0.userId == state.peerId })?.presenceFloor ?? false
-        let mixRoles: [AssuranceState.MixSecretRole] = state.n >= 1 ? [.psk] : []
+        // persisted `presenceFloor`. `false` when the peer has no stored
+        // contact row at all.
+        let existingContact = ContactsStore().load().first(where: { $0.userId == state.peerId })
+        let expectedNfc = existingContact?.presenceFloor ?? false
+
+        // W-NFCBADGE — the ONE selected PSK's real origin now reaches
+        // `decide()`: previously `mixRoles` was always `[.psk]`/`[]` and
+        // `nfcBound`/`witnessOk` were hardcoded `false` because no NFC
+        // ceremony existed anywhere in this codebase. `resolvePskDisplayMeta`
+        // is the SAME vault lookup the in-call key panel already uses to
+        // label a fingerprint "NFC" — reused, not re-derived.
+        // `PeerIdentityPinStore.pinnedKey` is the SAME verified-peer-identity
+        // notion `sigOk`'s own verdict is anchored to elsewhere in
+        // `QAudionCallIntegration`. See `AssuranceState.resolveNfcMixInputs`
+        // for the pure decision logic (unit-tested).
+        let selectedIsNfc = AppState.resolvePskDisplayMeta(fingerprint: state.selectedFp).method == "NFC"
+        let verifiedPeerIdentityKey = PeerIdentityPinStore().pinnedKey(contactId: state.peerId)
+        let priorPresenceAuth = existingContact?.presenceAuth
+            .map { (peerIdentityKey: $0.peerIdentityKey, witnessTier: $0.witnessTier) }
+        let (mixRoles, nfcBound, nfcWitnessOk) = AssuranceState.resolveNfcMixInputs(
+            n: state.n,
+            selectedIsNfcOrigin: selectedIsNfc,
+            selectedFingerprintHex: state.selectedFp,
+            verifiedPeerIdentityKey: verifiedPeerIdentityKey,
+            priorPresenceAuth: priorPresenceAuth
+        )
         let assurance = AssuranceState.decide(
             peerSupportsMix: state.peerSupportsMix,
             n: state.n,
@@ -7538,8 +7575,8 @@ final class AppState: ObservableObject {
             expectedNfc: expectedNfc,
             kcStatus: state.kcStatus,
             sigOk: state.sigOk,
-            nfcBound: false,
-            witnessOk: false,
+            nfcBound: nfcBound,
+            witnessOk: nfcWitnessOk,
             floorRecorded: expectedNfc,
             mediaDwellMs: 0
         )
@@ -7559,8 +7596,13 @@ final class AppState: ObservableObject {
         // W-FLOOR — stash the raw verdict + peerId for `clearKeyConfirmationState`
         // to hand to `ContactsStore.applyAssuranceOutcome` once the call is
         // actually tearing down (see that function's doc for why teardown,
-        // not here, is the right moment to know `mediaDwellMs`).
-        finalAssuranceByCall[callId.lowercased()] = (state: assurance, peerId: state.peerId)
+        // not here, is the right moment to know `mediaDwellMs`). W-NFCBADGE:
+        // `selectedFp`/`nfcWitnessOk` ride along so the teardown write uses
+        // the SAME NFC fingerprint/witness verdict computed above, not a
+        // second hardcoded placeholder.
+        finalAssuranceByCall[callId.lowercased()] = (
+            state: assurance, peerId: state.peerId, selectedFp: state.selectedFp, witnessOk: nfcWitnessOk
+        )
 
         // W-ASSURANCE UI — publish the LIVE verdict for LiveInCallScreen. Same
         // "only surface for the active call's peer" guard as
@@ -7623,15 +7665,13 @@ final class AppState: ObservableObject {
     /// No-op if this call never reached a final verdict (`finalAssuranceByCall`
     /// has no entry — e.g. torn down before `onKcMacReady` ever fired) or if
     /// the peer has no `PeerIdentityPinStore` TOFU pin yet (nothing to bind a
-    /// presence record to). Both `keyFingerprint`/`witnessOk` are honestly
-    /// empty/false placeholders THIS step — no NFC ceremony exists anywhere in
-    /// this codebase yet (that's step 7), so `AssuranceState.decide()` can
-    /// never actually RETURN `.nfcAuthenticated` in production, meaning
-    /// `ContactsStore.applyAssuranceOutcome`'s S2 branch (the only branch that
-    /// reads either value) never actually consumes them today — see
-    /// `AssuranceState.qualifiesForPresenceAuthWrite`'s doc. Wired correctly
-    /// now so step 7 needs no changes at this call site, exactly like
-    /// `emitKeyConfirmationTelemetry`'s own "unreachable this step" branches.
+    /// presence record to). W-NFCBADGE: `keyFingerprint`/`witnessOk` now carry
+    /// the SAME `selectedFp`/witness verdict `emitKeyConfirmationTelemetry`
+    /// already computed and fed to `decide()` (stashed on `finalAssuranceByCall`)
+    /// — not a second, independently-hardcoded value. Using a different value
+    /// here than the one `decide()` saw would let a live S2 verdict persist a
+    /// contradictory `witnessTier`, silently downgrading every later call for
+    /// this contact to S4.
     @MainActor
     private func applyPresenceAuthOutcomeIfAny(callId: String) {
         guard let final = finalAssuranceByCall[callId] else { return }
@@ -7641,10 +7681,10 @@ final class AppState: ObservableObject {
         ContactsStore().applyAssuranceOutcome(
             peerUserId: final.peerId,
             peerIdentityKey: peerIdentityKey,
-            keyFingerprint: "",
+            keyFingerprint: final.selectedFp ?? "",
             callId: callId,
             state: final.state,
-            witnessOk: false,
+            witnessOk: final.witnessOk,
             mediaDwellMs: mediaDwellMs
         )
     }

@@ -9,11 +9,19 @@ import Foundation
 /// discipline (W-NOBRICK: every branch below leaves the call running; a security
 /// finding is signaled, never used to drop/block a connection).
 ///
-/// **What's reachable THIS step.** `N` stays capped at ≤1 everywhere and no capability
-/// flag is flipped (see `KeyConfirmation`'s doc) — `S2` therefore cannot fire from any
-/// real call today (`mixRoles` can never contain `.nfc` while `N<=1`). `S0`, `S1`,
-/// `S3`–`S10` ARE reachable today and MUST render correctly; `S2` is implemented and
-/// exercised by tests as a pure-function branch, not yet reachable in production.
+/// **What's reachable.** `N` stays capped at ≤1 everywhere and no capability flag is
+/// flipped (see `KeyConfirmation`'s doc) — this function does NOT implement N>=2
+/// PSK-mixing (that plan, `canonicalOrder`/`K_mix` aggregation, was proposed and then
+/// explicitly rejected as too risky/unnecessary). What DID ship (W-NFCBADGE,
+/// 2026-07-23): the app layer (`AppState.emitKeyConfirmationTelemetry`, via
+/// `resolveNfcMixInputs` below) now feeds `mixRoles = [.nfc]` — instead of the old
+/// hardcoded `[.psk]`/`[]` placeholder — whenever the SINGLE selected PSK's vault entry
+/// actually came from a live NFC tap (`PskOrigin.nfc`, `SovereignKeyVault.origin(name:)`).
+/// So for a real call whose one selected key is NFC-derived, `S2`–`S6` ARE reachable in
+/// production, exactly like `S0`/`S1`/`S7`–`S10` always were — `mixRoles` containing
+/// `.nfc` no longer requires `N>=2`, it only requires the one key iOS already selects to
+/// be NFC-origin. See `iosOriginatesS2Witness`'s doc below for the narrower claim that
+/// DOES still hold (iOS cannot itself be read as the HCE/witness side of a tap).
 ///
 /// **Never share a widget.** The value this function returns is the LIVE, per-call
 /// verdict (computed fresh from THIS handshake). A contact's history record ("this
@@ -69,24 +77,30 @@ public enum AssuranceState: Equatable {
     }
 
     /// R6 (multi-PSK-mixing design doc, authoritative per this feature's own spec):
-    /// no NFC ceremony on iOS reaches the witness trust level `S2`
-    /// (`.nfcAuthenticated`) depends on. Corroborating evidence already in this
-    /// codebase: `NfcCollaborativeExchange` is documented as "Drives an **iOS-reader**
-    /// NFC collaborative pairing session" — CoreNFC on iOS exposes reader-mode
-    /// (`NFCTagReaderSession`) only, with no public host-card-emulation API (unlike
-    /// Android's `HostApduService`), so this device can never independently attest
-    /// the witness role `S2`'s origination requires.
+    /// iOS never ORIGINATES (hosts/emulates) the witness side of an NFC tap — it is
+    /// always the READER. Corroborating evidence already in this codebase:
+    /// `NfcCollaborativeExchange` is documented as "Drives an **iOS-reader** NFC
+    /// collaborative pairing session", and `NfcApduExchange` (the live-pairing path)
+    /// is the ISO-7816 READER against an Android `HostApduService` card — CoreNFC on
+    /// iOS exposes reader-mode (`NFCTagReaderSession`) only, with no public
+    /// host-card-emulation API, so this device can never be the one an Android peer
+    /// taps to attest ITS OWN presence. This is a statement about iOS's structural
+    /// ROLE in the exchange (reader vs. card), not about whether `decide()` can
+    /// return `S2` for an iOS call — see below.
     ///
-    /// `decide()` itself stays a total, platform-agnostic pure function — `S2` is
-    /// fully implemented and reachable given the right synthetic inputs (see
+    /// `decide()` itself stays a total, platform-agnostic pure function — `S2` was
+    /// always fully implemented and reachable given the right synthetic inputs (see
     /// `AssuranceStatePolicyTests.testS2ReachableGivenSyntheticInputsPureFunctionOnly`).
-    /// This constant documents that iOS's OWN call-handling code is never expected to
-    /// construct those inputs from a real ceremony. **Scope note:** the wiring that
-    /// would prove this end-to-end (iOS's actual NFC-mix call-integration code, not
-    /// yet built — deferred to the phase that wires `AssuranceState` into
-    /// `QAudionCallIntegration`/`AppState`) does not exist yet, so this is a pinned
-    /// architectural fact carried over from the design brief, corroborated by — but
-    /// not independently re-derived from — Apple's CoreNFC capability surface.
+    /// **As of W-NFCBADGE (2026-07-23) that reachability is real, not just synthetic:**
+    /// `AppState.emitKeyConfirmationTelemetry` (via `resolveNfcMixInputs` below) wires
+    /// a genuine NFC-tap-derived PSK's selection into `decide()`'s `mixRoles`/
+    /// `nfcBound`/`witnessOk` for a live call, so `S2` fires for real once a user has
+    /// paired via `NfcExchangeView` and then calls that peer. That does not contradict
+    /// this constant: iOS reaches `S2` as the READER consuming a witness event an
+    /// Android HCE card originated — it still never originates that witness itself
+    /// (the asymmetry this constant documents), which is why the constant's value
+    /// stays `false` even though the call-site wiring it used to say "does not exist
+    /// yet" now does.
     public static let iosOriginatesS2Witness = false
 
     /// TOTAL decision function — first match wins, exactly the order documented on
@@ -194,6 +208,87 @@ public enum AssuranceState: Equatable {
             out.append(role)
         }
         return out
+    }
+
+    // MARK: - W-NFCBADGE — wiring helper for `decide()`'s NFC-specific inputs
+    // (mechanism/keychain access lives at the call site, AppState.swift's
+    // `emitKeyConfirmationTelemetry`; this stays a pure function so it is
+    // unit-testable without a Keychain).
+
+    /// Design pivot (2026-07-23, Pavel): the earlier N>=2 PSK-mixing plan
+    /// (`canonicalOrder`, `K_mix` aggregation) was rejected. Session-key
+    /// derivation stays exactly as it is today — always exactly ONE selected
+    /// PSK. The only new idea this function wires: if THAT one selected key
+    /// was created via an NFC tap, treat it as `AssuranceState.decide()`'s
+    /// `.nfc` mix role instead of the generic `.psk` one, so S2-S7's
+    /// NFC-specific branches can finally discriminate for real (previously
+    /// every call site hardcoded `mixRoles: [.psk]` / `nfcBound: false` /
+    /// `witnessOk: false`, which is why the doc on `decide()` used to say S2
+    /// was unreachable "this step").
+    ///
+    /// - Parameters:
+    ///   - n: same `n` `decide()` takes — `0` or `1` today (unchanged cap).
+    ///   - selectedIsNfcOrigin: whether the vault entry backing the selected
+    ///     PSK has `PskOrigin.nfc` (i.e. `SovereignKeyVault.origin(name:)`,
+    ///     surfaced to the app layer via `AppState.resolvePskDisplayMeta`'s
+    ///     `method == "NFC"` — reused, not re-derived).
+    ///   - selectedFingerprintHex: `KcMacReadyEvent.selectedFp` — for an
+    ///     `nfc-` vault entry this hex string IS the peer's raw 32-byte
+    ///     Ed25519 identity pubkey captured at the tap itself
+    ///     (`NfcApduExchange`'s `peerIdentityPub`, persisted verbatim as the
+    ///     Keychain label by `NfcExchangeView.persistPsk`) — see that type's
+    ///     doc. `nil`/malformed ⇒ cannot establish binding, same as no NFC.
+    ///   - verifiedPeerIdentityKey: this call's own verified peer identity
+    ///     key — the SAME value `sigOk`'s own verdict is anchored to
+    ///     elsewhere in `QAudionCallIntegration`, surfaced via
+    ///     `PeerIdentityPinStore.pinnedKey(contactId:)`. Reused, never
+    ///     re-derived, so there is exactly one notion of "the verified peer
+    ///     identity for this call".
+    ///   - priorPresenceAuth: this contact's persisted
+    ///     `ContactsStore.PresenceAuth` (`peerIdentityKey`/`witnessTier`
+    ///     only), when one exists for the SAME identity key as
+    ///     `verifiedPeerIdentityKey`. `nil` on the very first confirming call
+    ///     for a fresh tap (nothing persisted yet) or when an existing record
+    ///     belongs to a DIFFERENT (stale/rotated) identity — never read a
+    ///     record that doesn't pertain to THIS identity.
+    /// - Returns: `mixRoles`/`nfcBound`/`witnessOk` ready to feed `decide()`
+    ///   verbatim.
+    ///
+    /// `nfcBound` logic: bound iff the identity captured at tap time equals
+    /// this call's verified identity. `witnessOk` logic: when bound, honor a
+    /// PRIOR persisted downgrade (`witnessTier == "backup_restore"`) if one
+    /// exists for this same identity so a recorded downgrade sticks across
+    /// calls; otherwise default to attestable — an `nfc`-origin vault entry
+    /// cannot exist on this device except via a live tap on THIS device
+    /// (`PskOrigin.nfc.isExportable == false`, no import surface — see that
+    /// enum's doc), so "restored from an un-attestable backup" is not a
+    /// reachable case for a first-time confirmation.
+    public static func resolveNfcMixInputs(
+        n: Int,
+        selectedIsNfcOrigin: Bool,
+        selectedFingerprintHex: String?,
+        verifiedPeerIdentityKey: Data?,
+        priorPresenceAuth: (peerIdentityKey: Data, witnessTier: String)?
+    ) -> (mixRoles: [MixSecretRole], nfcBound: Bool, witnessOk: Bool) {
+        guard selectedIsNfcOrigin,
+              let fpHex = selectedFingerprintHex,
+              let capturedIdentity = DeviceRenewBlob.hexDecode(fpHex),
+              capturedIdentity.count == 32,
+              let verified = verifiedPeerIdentityKey
+        else {
+            return (n >= 1 ? [.psk] : [], false, false)
+        }
+
+        let nfcBound = (capturedIdentity == verified)
+        var witnessOk = false
+        if nfcBound {
+            if let prior = priorPresenceAuth, prior.peerIdentityKey == verified {
+                witnessOk = prior.witnessTier != "backup_restore"
+            } else {
+                witnessOk = true
+            }
+        }
+        return ([.nfc], nfcBound, witnessOk)
     }
 
     // MARK: - W-ASSURANCE/W-FLOOR (ship steps 6/8) — persistence-write POLICY

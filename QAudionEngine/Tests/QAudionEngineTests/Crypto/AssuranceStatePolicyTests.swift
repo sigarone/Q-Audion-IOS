@@ -5,11 +5,14 @@ import XCTest
 /// vectors for `AssuranceState.decide(...)`, shared byte-for-byte in SHAPE (not hex,
 /// this is a policy table not a crypto KAT) with the Android/Desktop ports.
 ///
-/// `S2` requires `mixRoles` to contain `.nfc` as an actually-mixed secret, which
-/// requires `N>=2` (step 7, not shipped this step — `N` is capped at ≤1 in production
-/// today). The branch is implemented and exercised here as a pure-function test only;
-/// it will not fire from any real call until step 7 flips `pskMixV1` and wires
-/// `PskMix.deriveKMix` for `N>=2`.
+/// `S2` requires `mixRoles` to contain `.nfc` as an actually-mixed secret. The earlier
+/// plan for this to require `N>=2` (step 7's `canonicalOrder`/`K_mix` aggregation) was
+/// proposed and then explicitly REJECTED (2026-07-23) as too risky/unnecessary — `N`
+/// stays capped at ≤1 in production, unchanged. What shipped instead (W-NFCBADGE):
+/// `mixRoles` contains `.nfc` whenever the SINGLE selected PSK's vault entry is itself
+/// NFC-origin (`AssuranceState.resolveNfcMixInputs`, wired at
+/// `AppState.emitKeyConfirmationTelemetry`) — so `S2`(-`S6`) are reachable from a real
+/// call today, not just via this suite's synthetic `decide()` inputs.
 ///
 /// `peerAdvertisedRoles`' `S7` semantics ("peer advertised role 1 for a fp I hold") is
 /// modelled as `1 in peerAdvertisedRoles` — `decide()` does no fp-matching itself; the
@@ -114,9 +117,11 @@ final class AssuranceStatePolicyTests: XCTestCase {
         XCTAssertEqual(result, .pqcOnly)
     }
 
-    /// S2 is unreachable from any real call this step (see type doc), but `decide()`
-    /// must still be a TOTAL function that implements the branch — this is the one
-    /// place this suite deliberately exercises it via synthetic inputs only.
+    /// `decide()` must be a TOTAL function that implements the S2 branch regardless of
+    /// what any real call site ever feeds it — this is the synthetic-inputs pin for
+    /// that (`n: 2` here specifically, which no real call site produces; see
+    /// `testEndToEnd_nfcSelectedKey_matchingIdentity_witnessed_reachesS2` below for the
+    /// REAL `n: 1` pipeline `AppState.emitKeyConfirmationTelemetry` actually runs).
     func testS2ReachableGivenSyntheticInputsPureFunctionOnly() {
         let result = AssuranceState.decide(
             peerSupportsMix: true, n: 2, mixRoles: [.nfc], peerAdvertisedRoles: [1],
@@ -331,6 +336,167 @@ final class AssuranceStatePolicyTests: XCTestCase {
             witnessOk: false, floorRecorded: false, mediaDwellMs: 0
         )
         XCTAssertEqual(result, .expectedNfcStripped, "peer advertised an NFC-tier (role=1) fp we both hold, but no NFC was mixed => S7")
+    }
+
+    // MARK: - resolveNfcMixInputs (W-NFCBADGE — wires the ONE selected PSK's
+    // real NFC origin into decide()'s mixRoles/nfcBound/witnessOk; no N>=2
+    // mixing, no wire change — see that function's doc for the full
+    // design-pivot context)
+
+    private func hex(_ data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    func testResolveNfcMixInputs_nonNfcOrigin_nOneOrMore_yieldsPskRole() {
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: false, selectedFingerprintHex: "deadbeef",
+            verifiedPeerIdentityKey: nil, priorPresenceAuth: nil
+        )
+        XCTAssertEqual(result.mixRoles, [.psk])
+        XCTAssertFalse(result.nfcBound)
+        XCTAssertFalse(result.witnessOk)
+    }
+
+    func testResolveNfcMixInputs_nonNfcOrigin_nZero_yieldsNoRoles() {
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 0, selectedIsNfcOrigin: false, selectedFingerprintHex: nil,
+            verifiedPeerIdentityKey: nil, priorPresenceAuth: nil
+        )
+        XCTAssertEqual(result.mixRoles, [])
+    }
+
+    func testResolveNfcMixInputs_nfcOrigin_matchingIdentity_noPriorRecord_boundAndWitnessed() {
+        let identity = Data(repeating: 0xAB, count: 32)
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            verifiedPeerIdentityKey: identity, priorPresenceAuth: nil
+        )
+        XCTAssertEqual(result.mixRoles, [.nfc])
+        XCTAssertTrue(result.nfcBound)
+        XCTAssertTrue(result.witnessOk, "first confirming call for a fresh tap has nothing to contradict attestability")
+    }
+
+    func testResolveNfcMixInputs_nfcOrigin_mismatchedIdentity_yieldsUnbound() {
+        let capturedAtTap = Data(repeating: 0xAB, count: 32)
+        let verifiedNow = Data(repeating: 0xCD, count: 32)
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(capturedAtTap),
+            verifiedPeerIdentityKey: verifiedNow, priorPresenceAuth: nil
+        )
+        XCTAssertEqual(result.mixRoles, [.nfc], "still NFC-origin -- decide() itself must see nfcMixed to route to S3, not silently fall back to PSK")
+        XCTAssertFalse(result.nfcBound)
+        XCTAssertFalse(result.witnessOk)
+    }
+
+    func testResolveNfcMixInputs_nfcOrigin_priorBackupRestoreDowngrade_sticks() {
+        let identity = Data(repeating: 0xAB, count: 32)
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            verifiedPeerIdentityKey: identity,
+            priorPresenceAuth: (peerIdentityKey: identity, witnessTier: "backup_restore")
+        )
+        XCTAssertTrue(result.nfcBound)
+        XCTAssertFalse(result.witnessOk, "a persisted backup_restore downgrade must stick across calls")
+    }
+
+    func testResolveNfcMixInputs_nfcOrigin_priorSecureElement_staysWitnessed() {
+        let identity = Data(repeating: 0xAB, count: 32)
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            verifiedPeerIdentityKey: identity,
+            priorPresenceAuth: (peerIdentityKey: identity, witnessTier: "secure_element")
+        )
+        XCTAssertTrue(result.witnessOk)
+    }
+
+    func testResolveNfcMixInputs_nfcOrigin_priorRecordForDifferentIdentity_notReadAsThisContactsHistory() {
+        // Defence in depth: even if a caller accidentally passed a
+        // priorPresenceAuth tuple bound to a DIFFERENT identity than
+        // verifiedPeerIdentityKey (a stale/rotated record it should have
+        // filtered out itself), this function must not let that stale
+        // "backup_restore" downgrade a fresh, correctly-bound confirmation.
+        let identity = Data(repeating: 0xAB, count: 32)
+        let staleIdentity = Data(repeating: 0xEF, count: 32)
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            verifiedPeerIdentityKey: identity,
+            priorPresenceAuth: (peerIdentityKey: staleIdentity, witnessTier: "backup_restore")
+        )
+        XCTAssertTrue(result.witnessOk, "a presenceAuth record bound to a DIFFERENT identity must not downgrade this one")
+    }
+
+    func testResolveNfcMixInputs_nfcOrigin_noVerifiedIdentityYet_treatsAsUnbound() {
+        let identity = Data(repeating: 0xAB, count: 32)
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            verifiedPeerIdentityKey: nil, priorPresenceAuth: nil
+        )
+        XCTAssertEqual(result.mixRoles, [.nfc])
+        XCTAssertFalse(result.nfcBound)
+        XCTAssertFalse(result.witnessOk)
+    }
+
+    func testResolveNfcMixInputs_nfcOrigin_malformedFingerprint_fallsBackLikeNonNfc() {
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: "not-hex!!",
+            verifiedPeerIdentityKey: Data(repeating: 0xAB, count: 32), priorPresenceAuth: nil
+        )
+        XCTAssertEqual(
+            result.mixRoles, [.psk],
+            "a malformed/undecodable fingerprint can't establish NFC binding -- degrade to plain PSK, never claim NFC"
+        )
+    }
+
+    // MARK: - End-to-end: resolveNfcMixInputs -> decide(), the ACTUAL pipeline
+    // AppState.emitKeyConfirmationTelemetry runs at its call site
+
+    func testEndToEnd_nfcSelectedKey_matchingIdentity_witnessed_reachesS2() {
+        let identity = Data(repeating: 0x11, count: 32)
+        let (mixRoles, nfcBound, witnessOk) = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            verifiedPeerIdentityKey: identity, priorPresenceAuth: nil
+        )
+        let result = AssuranceState.decide(
+            peerSupportsMix: true, n: 1, mixRoles: mixRoles, peerAdvertisedRoles: [],
+            expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: nfcBound,
+            witnessOk: witnessOk, floorRecorded: false, mediaDwellMs: 15_000
+        )
+        XCTAssertEqual(
+            result, .nfcAuthenticated,
+            "the real call-site pipeline (resolveNfcMixInputs -> decide()) must reach S2 for an NFC-sourced " +
+            "selected key + matching identity + witness, not just via synthetic decide() inputs"
+        )
+    }
+
+    func testEndToEnd_ordinaryPsk_regressionUnchanged() {
+        // Regression guard: an ordinary (non-NFC) selected PSK behaves EXACTLY
+        // as before this wiring -- mixRoles == [.psk], nfcBound/witnessOk
+        // false, decide() reaches S8 exactly like today.
+        let (mixRoles, nfcBound, witnessOk) = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: false, selectedFingerprintHex: "aabbccdd",
+            verifiedPeerIdentityKey: Data(repeating: 0x22, count: 32), priorPresenceAuth: nil
+        )
+        let result = AssuranceState.decide(
+            peerSupportsMix: true, n: 1, mixRoles: mixRoles, peerAdvertisedRoles: [],
+            expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: nfcBound,
+            witnessOk: witnessOk, floorRecorded: false, mediaDwellMs: 0
+        )
+        XCTAssertEqual(result, .pskConfirmed)
+    }
+
+    func testEndToEnd_nfcSelectedKey_identityMismatch_reachesS3() {
+        let capturedAtTap = Data(repeating: 0x11, count: 32)
+        let verifiedNow = Data(repeating: 0x99, count: 32)
+        let (mixRoles, nfcBound, witnessOk) = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(capturedAtTap),
+            verifiedPeerIdentityKey: verifiedNow, priorPresenceAuth: nil
+        )
+        let result = AssuranceState.decide(
+            peerSupportsMix: true, n: 1, mixRoles: mixRoles, peerAdvertisedRoles: [],
+            expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: nfcBound,
+            witnessOk: witnessOk, floorRecorded: false, mediaDwellMs: 0
+        )
+        XCTAssertEqual(result, .nfcIdentityMismatch)
     }
 
     // MARK: - qualifiesForPresenceAuthWrite (ship step 6/8 persistence gate —
