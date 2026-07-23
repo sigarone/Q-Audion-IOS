@@ -73,9 +73,23 @@ final class KeyExportPolicyTests: XCTestCase {
     /// which would break a future export feature for legitimate keys and be
     /// blamed on the wrong commit.
     func testUnrecognisedNamesFallBackToManual() {
-        XCTAssertEqual(PskOrigin.inferred(fromAccountName: "peer.u-12345"), .manual)
         XCTAssertEqual(PskOrigin.inferred(fromAccountName: "chiave ufficio"), .manual)
         XCTAssertTrue(PskOrigin.inferred(fromAccountName: "chiave ufficio").isExportable)
+    }
+
+    /// W-IDKEYEXCL — `KeyRotationCoordinator.importPeerIdentity`/`rotate()` name
+    /// their entries "peer.<userId>" / "rotated_ephemeral.<ts>" and share this
+    /// vault's storage, but store X25519 IDENTITY public keys, not PSKs. Before
+    /// this classification existed they fell to `.manual`, which
+    /// `PskAdvertising.isEligibleMatchCandidate` never excluded — reachable, in
+    /// principle, as a call-PSK candidate.
+    func testPeerAndRotatedEphemeralNamesAreClassifiedIdentityKey() {
+        XCTAssertEqual(PskOrigin.inferred(fromAccountName: "peer.u-12345"), .identityKey)
+        XCTAssertEqual(PskOrigin.inferred(fromAccountName: "rotated_ephemeral.1784800000"), .identityKey)
+    }
+
+    func testIdentityKeyNeverLeavesTheDevice() {
+        XCTAssertFalse(PskOrigin.identityKey.isExportable)
     }
 
     /// A near-miss must NOT be treated as NFC: the prefix is "nfc-" with the
@@ -119,6 +133,7 @@ final class KeyExportPolicyTests: XCTestCase {
         XCTAssertEqual(PskOrigin.kms.rawValue, "kms")
         XCTAssertEqual(PskOrigin.callDerived.rawValue, "call_derived")
         XCTAssertEqual(PskOrigin.deviceInternal.rawValue, "device_internal")
+        XCTAssertEqual(PskOrigin.identityKey.rawValue, "identity_key")
     }
 
     // MARK: - Blob compatibility

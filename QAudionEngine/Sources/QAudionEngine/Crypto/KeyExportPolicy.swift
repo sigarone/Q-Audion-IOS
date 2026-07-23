@@ -46,13 +46,25 @@ public enum PskOrigin: String {
     /// correct answer.
     case deviceInternal = "device_internal"
 
+    /// An X25519 IDENTITY public key — this device's own rotated identity
+    /// (`KeyRotationCoordinator.rotate()`, `"rotated_ephemeral.<ts>"`) or a
+    /// peer's imported identity (`KeyRotationCoordinator.importPeerIdentity`,
+    /// `"peer.<userId>"`). Not a shared secret with anyone: it is asymmetric,
+    /// public by design, and carries none of the "both radios were in
+    /// contact" evidence a real PSK does. Both call sites share this
+    /// vault's storage (a pre-existing design choice this policy doesn't
+    /// change) but must never be eligible as call-PSK material — an
+    /// identity pubkey accidentally advertised/matched as a PSK fingerprint
+    /// would mix public, non-secret bytes into the session key's HKDF salt.
+    case identityKey = "identity_key"
+
     /// Whether the raw bytes behind this entry may cross the device boundary.
     ///
     /// Matched exhaustively with no `default`, so adding an origin forces a
     /// decision here rather than inheriting "exportable" by silence.
     public var isExportable: Bool {
         switch self {
-        case .nfc, .callDerived, .deviceInternal:
+        case .nfc, .callDerived, .deviceInternal, .identityKey:
             return false
         case .qr, .manual, .kms:
             // Transferable by design: a QR or manual key was carried in from
@@ -99,6 +111,16 @@ public enum PskOrigin: String {
         // material. `.callDerived` is already excluded from advertisement
         // below, so this closes that path without a new origin case.
         if name.hasPrefix("auto:") { return .callDerived }
+        // `KeyRotationCoordinator.importPeerIdentity`/`rotate()` name their
+        // entries "peer.<userId>" / "rotated_ephemeral.<ts>" — X25519 IDENTITY
+        // public keys sharing this vault's storage, not PSKs. Without this
+        // branch they fell through to `.manual`, which `fingerprintsForAdvertisement`/
+        // `isEligibleMatchCandidate` never exclude — reachable, in principle,
+        // as call-PSK candidates. (Never actually selected in practice because
+        // their cached Keychain label is `Fingerprint.format(pubkey:)`'s dotted
+        // display form, which can never string-equal a peer's 64-hex canonical
+        // fingerprint — but that was an accident of formatting, not a rule.)
+        if name.hasPrefix("peer.") || name.hasPrefix("rotated_ephemeral.") { return .identityKey }
         // A bare UUID account name is a KMS key id (`KmsPollerService` stores
         // `entry.keyId`), same test `resolvePskDisplayMeta` already uses.
         if UUID(uuidString: name) != nil { return .kms }

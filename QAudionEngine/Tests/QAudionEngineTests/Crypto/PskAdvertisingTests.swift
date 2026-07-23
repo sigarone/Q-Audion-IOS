@@ -214,17 +214,20 @@ final class PskAdvertisingTests: XCTestCase {
         XCTAssertFalse(PskAdvertising.isEligibleMatchCandidate(origin: .callDerived))
     }
 
-    func testNonCallDerivedOriginsRemainEligibleMatchCandidates() {
+    func testNonExcludedOriginsRemainEligibleMatchCandidates() {
         XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .manual))
         XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .nfc))
         XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .qr))
         XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .kms))
-        // .deviceInternal is out of scope for this predicate — these
-        // matching-gate call sites already refuse `__device.`-prefixed
-        // names by a separate, pre-existing prefix guard (AppState.swift's
-        // W574m check); `isEligibleMatchCandidate` only ever encodes the
-        // `.callDerived` exclusion this step adds.
-        XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .deviceInternal))
+    }
+
+    /// W-IDKEYEXCL — `.deviceInternal` (this device's own long-term keys) and
+    /// `.identityKey` (this device's rotated identity, or an imported peer's)
+    /// are neither of them shared secrets and must never be a call-PSK match
+    /// candidate, same reasoning as `.callDerived`.
+    func testDeviceInternalAndIdentityKeyAreNeverEligibleMatchCandidates() {
+        XCTAssertFalse(PskAdvertising.isEligibleMatchCandidate(origin: .deviceInternal))
+        XCTAssertFalse(PskAdvertising.isEligibleMatchCandidate(origin: .identityKey))
     }
 
     /// Mirrors `AppState.routeInboundAndroidOffer`/`routeInboundAndroidAccept`

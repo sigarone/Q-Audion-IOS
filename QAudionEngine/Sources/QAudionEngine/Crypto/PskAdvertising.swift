@@ -65,7 +65,7 @@ public enum PskAdvertising {
     /// `Entry` fixtures.
     public static func fingerprintsForAdvertisement(_ entries: [Entry]) -> [String] {
         entries
-            .filter { $0.origin != .deviceInternal && $0.origin != .callDerived }
+            .filter { isEligibleMatchCandidate(origin: $0.origin) }
             .sorted(by: isOrderedBefore)
             .map { canonicalFingerprint(forPsk: $0.material) }
     }
@@ -94,7 +94,12 @@ public enum PskAdvertising {
     /// it is unit-testable without touching the real `SovereignKeyVault`,
     /// same as `fingerprintsForAdvertisement` above.
     public static func isEligibleMatchCandidate(origin: PskOrigin) -> Bool {
-        origin != .callDerived
+        // W-IDKEYEXCL — `.identityKey` added alongside `.deviceInternal`: an
+        // X25519 identity pubkey (this device's own rotated identity, or an
+        // imported peer's) shares this vault's storage but is not a shared
+        // secret and must never be treated as call-PSK material, same
+        // reasoning as `.callDerived`.
+        origin != .callDerived && origin != .deviceInternal && origin != .identityKey
     }
 
     /// Stable-order comparator: earliest `createdAt` first; entries with no
