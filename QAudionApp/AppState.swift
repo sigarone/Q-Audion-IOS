@@ -5049,7 +5049,14 @@ final class AppState: ObservableObject {
     /// Derives `stall_kind` from the hop counters + cryptor-keyed state:
     ///   purple_unkeyed         — cryptor not keyed ⇒ decoder emits garbage (purple/green)
     ///   black_no_decode        — frames arrive but the decoder produces nothing
-    ///   black_detached_renderer— frames decode but never reach the UI renderer
+    ///   black_detached       — frames decode but never reach the UI renderer
+///                          (kept under 20 chars ON PURPOSE: the fail-closed
+///                          egress redactor in RuntimeLogSink scrubs any run of
+///                          20+ chars from [A-Za-z0-9+/=_-], so the previous
+///                          `black_detached_renderer` shipped as ***REDACTED***
+///                          and this — the most diagnostic kind — was unreadable
+///                          server-side. Weakening the redactor was rejected:
+///                          an allowlist there is a bypass in a security control.
     /// Additive; rides the existing TelemetryService (call_id auto-added).
     @MainActor
     private func emitVideoStallTelemetry(event: String, snap: VideoPathDiag.Snapshot,
@@ -5068,7 +5075,7 @@ final class AppState: ObservableObject {
         } else if snap.rxVideoFramesArrived > 0 && snap.rxFramesDecoded == 0 {
             stallKind = "black_no_decode"
         } else if snap.rxFramesDecoded > snap.rxFramesRendered {
-            stallKind = "black_detached_renderer"
+            stallKind = "black_detached"
         } else {
             stallKind = "black_unknown"
         }
