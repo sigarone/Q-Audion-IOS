@@ -309,7 +309,7 @@ final class AppState: ObservableObject {
 
     // MARK: - Call state
     @Published var isInCall: Bool = false
-    @Published var isVideoCall: Bool = false
+    @Published var isVideoCall: Bool = false { didSet { noteVideoLaneChanged() } }
     @Published var callState: CallState = .idle
     @Published var callContactId: String?
     /// W-CALLSPKR (2026-07-20) — the user's live loudspeaker preference for
@@ -405,13 +405,78 @@ final class AppState: ObservableObject {
     /// fields above). Drives the "peer paused their video" badge and,
     /// combined with the local camera-off state, the auto-fallback to
     /// the audio-only call screen (ContentView.inCallStack).
-    @Published var remoteVideoPaused: Bool = false
+    @Published var remoteVideoPaused: Bool = false { didSet { noteVideoLaneChanged() } }
     /// WIRE_SPEC §8.1 — mirrors VideoCallView's local `isCameraOn` toggle
     /// (true = camera off) so `ContentView.inCallStack` can decide the
     /// audio-only-screen fallback without VideoCallView's private @State.
     /// Set by `videoSetCameraEnabled`; same reset lifecycle as
     /// `remoteVideoPaused` above.
-    @Published var localVideoPaused: Bool = false
+    @Published var localVideoPaused: Bool = false { didSet { noteVideoLaneChanged() } }
+
+    // MARK: - W-VIDTRANS (2026-07-24) — video-lane transition telemetry
+    //
+    // The "va in video, torna a voce, va in video, si blocca" report was
+    // undiagnosable from the server: we shipped periodic `video.stats` and
+    // on-detection `video.stall`, but nothing recording WHEN the call changed
+    // lane or in which direction — so a peer left stuck in the wrong lane was
+    // only visible with a cable attached. Android writes its lane through one
+    // choke point (`CallController.setVideoState`); iOS's lane is DERIVED from
+    // three independently-written published flags with ~20 write sites between
+    // them, so instead of refactoring every writer this observes the derived
+    // value. Every present and FUTURE writer is covered by construction.
+    //
+    // `videoTransitionCause` is a best-effort hint the intentional writers set
+    // just before flipping a flag; it defaults back to "derived" after each
+    // emission so a stale label can never be attributed to an unrelated flip.
+
+    /// The four lane names Android's `VideoLaneTransitions` and Desktop's
+    /// `videoLaneName()` use — identical vocabulary so ONE server-side query
+    /// answers "which side got stuck" across all three platforms.
+    private var videoLaneName: String {
+        guard isVideoCall else { return "Off" }
+        let localSending = !localVideoPaused
+        let peerSending = !remoteVideoPaused
+        if localSending && peerSending { return "Both" }
+        if localSending { return "LocalOnly" }
+        if peerSending { return "RemoteOnly" }
+        return "Off"
+    }
+
+    /// Hint for the NEXT lane flip, consumed and reset on emission.
+    var videoTransitionCause: String = "derived"
+    private var lastVideoLaneName: String = "Off"
+    private var lastVideoTransitionAtMs: Int64 = 0
+
+    private func noteVideoLaneChanged() {
+        let next = videoLaneName
+        let prev = lastVideoLaneName
+        guard prev != next else { return }
+        lastVideoLaneName = next
+        let cause = videoTransitionCause
+        videoTransitionCause = "derived"
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let sincePrev = lastVideoTransitionAtMs == 0 ? -1 : nowMs - lastVideoTransitionAtMs
+        lastVideoTransitionAtMs = nowMs
+        let callId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+        let c = callService.liveAudioCounters
+        TelemetryService.shared.emit(
+            kind: "call.video.transition",
+            callId: callId,
+            attrs: [
+                "from": prev,
+                "to": next,
+                "cause": cause,
+                "local_sending": isVideoCall && !localVideoPaused,
+                "peer_sending": isVideoCall && !remoteVideoPaused,
+                "since_prev_ms": sincePrev,
+                // Audio liveness AT the flip — a transition after which
+                // tx_enc/rx_dec stop climbing is the audio-death signature.
+                "tx_enc": c.txEnc,
+                "rx_recv": c.rxRecv,
+                "rx_dec": c.rxDec,
+            ]
+        )
+    }
     /// D11 / W-NOBRICK — true when the active call's peer presented an
     /// UNAUTHENTICATED identity-key change (the handshake signer key is ∉ the
     /// server-published per-device set). Drives a NON-BLOCKING advisory banner in
@@ -3864,6 +3929,7 @@ final class AppState: ObservableObject {
                       let activeCallId = impl.getActiveCallId(),
                       callId.caseInsensitiveCompare(activeCallId) == .orderedSame
                 else { return }
+                self.videoTransitionCause = paused ? "peer-camera-stop" : "peer-camera-start"
                 self.remoteVideoPaused = paused
             }
         }
@@ -13143,6 +13209,7 @@ extension AppState {
     @MainActor
     func videoSetCameraEnabled(_ enabled: Bool) {
         videoPipeline?.setCameraEnabled(enabled)
+        videoTransitionCause = enabled ? "local-camera-start" : "local-camera-stop"
         localVideoPaused = !enabled
         if let peerId = callContactId,
            let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,

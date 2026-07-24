@@ -88,6 +88,16 @@ final class CallService: @unchecked Sendable {
     public private(set) var framesEncryptedTx: Int64 = 0
     public private(set) var framesDecryptedRx: Int64 = 0
 
+    /// W-VIDTRANS (2026-07-24) — live read of the same three counters that
+    /// `call.audio.counts` ships at teardown, so `call.video.transition` can
+    /// carry audio liveness AT the moment of a lane flip. Teardown-only
+    /// counters answer "was audio alive during this call"; these answer "was
+    /// audio alive at this instant", which is what distinguishes a transition
+    /// that killed audio from one that merely preceded an unrelated failure.
+    public var liveAudioCounters: (txEnc: Int64, rxRecv: Int64, rxDec: Int64) {
+        (framesEncryptedTx, framesReceivedRx, framesDecryptedRx)
+    }
+
     // MARK: - W466 — audio-pipeline diagnostics
     //
     // The user reported "call connects but no voice/video" and asked for
