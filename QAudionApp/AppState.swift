@@ -438,6 +438,15 @@ final class AppState: ObservableObject {
     /// always-on "NFC ✓" chip, additive to (never gated by) whichever
     /// `AssuranceStateUI.Presentation` `callAssuranceState` renders as.
     @Published var callMutualNfcInCommon: Bool = false
+    /// W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a pre-shared key of ANY
+    /// origin (KMS/NFC/QR/manual) is mixed into this call's session key", i.e. `n>=1`.
+    /// Deliberately independent of `callAssuranceState`: Pavel's explicit choice is
+    /// that the trust bar's "PSK ✓" chip shows in EVERY state a PSK was mixed —
+    /// including the warning states (S1 active-attack-signature, S7 NFC-downgrade-
+    /// regression). The chip answers only "does a shared secret exist for this
+    /// call", never "is everything about it fine" — that second question is what
+    /// the warning banner is for. `false` only for genuine PQC-only (S10, n==0).
+    @Published var callPskMixedThisCall: Bool = false
     /// D11 — `sender_device_id` (server-stamped) captured from the most recent
     /// `call_incoming` envelope, keyed by `sender_id`. The OFFER/ACCEPT bundles
     /// arrive over `opaque_message`, which the server relays WITHOUT a device id
@@ -3378,6 +3387,7 @@ final class AppState: ObservableObject {
             self.callAssuranceState = nil
             self.callAssuranceExpectedNfc = false
             self.callMutualNfcInCommon = false
+            self.callPskMixedThisCall = false
             // WIRE_SPEC §8.1: a fresh incoming call clears any stale
             // "peer paused their camera" state from a previous call.
             self.remoteVideoPaused = false
@@ -7667,6 +7677,10 @@ final class AppState: ObservableObject {
         // when NFC WAS mixed (S2), this is trivially also true, which is correct: the
         // trust bar's "NFC ✓" chip should light in that case too, same as before.
         let mutualNfcInCommon = state.peerAdvertisedRoles.contains(1)
+        // W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a pre-shared key of ANY
+        // origin was mixed into this call", independent of `assurance`'s single-select
+        // verdict: shows in EVERY state a PSK was mixed, including warning states.
+        let pskMixedThisCall = state.n >= 1
         keyConfirmationTelemetryByCall[callId.lowercased()] = (
             pskMixN: state.n,
             kcMacResult: kcResultStr,
@@ -7693,6 +7707,7 @@ final class AppState: ObservableObject {
             callAssuranceState = assurance
             callAssuranceExpectedNfc = expectedNfc
             callMutualNfcInCommon = mutualNfcInCommon
+            callPskMixedThisCall = pskMixedThisCall
         }
     }
 
@@ -8999,6 +9014,7 @@ final class AppState: ObservableObject {
         callAssuranceState = nil
         callAssuranceExpectedNfc = false
         callMutualNfcInCommon = false
+        callPskMixedThisCall = false
         // WIRE_SPEC §8.1: a fresh outgoing call clears any stale "peer
         // paused their camera" state from a previous call.
         remoteVideoPaused = false

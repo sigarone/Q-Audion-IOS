@@ -243,6 +243,12 @@ struct InCallScreen: View {
     /// key actually mixed). Drives the trust bar's own always-on "NFC ✓" chip,
     /// additive to — never gated by — whatever [assurancePresentation] shows.
     let mutualNfcInCommon: Bool
+    /// W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a pre-shared key of
+    /// ANY origin (KMS/NFC/QR/manual) is mixed into this call's session key",
+    /// independent of [assurancePresentation]. Deliberately shows in EVERY state
+    /// a PSK was mixed, INCLUDING warning states — see the property's doc on
+    /// `AppState.callPskMixedThisCall` for the full rationale.
+    let pskMixedThisCall: Bool
     let onAddParticipant: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
@@ -282,6 +288,7 @@ struct InCallScreen: View {
          identityUnauthenticatedChange: Bool = false,
          assurancePresentation: AssuranceStateUI.Presentation? = nil,
          mutualNfcInCommon: Bool = false,
+         pskMixedThisCall: Bool = false,
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
@@ -320,6 +327,7 @@ struct InCallScreen: View {
         self.identityUnauthenticatedChange = identityUnauthenticatedChange
         self.assurancePresentation = assurancePresentation
         self.mutualNfcInCommon = mutualNfcInCommon
+        self.pskMixedThisCall = pskMixedThisCall
         self.onAddParticipant = onAddParticipant
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
@@ -900,16 +908,16 @@ struct InCallScreen: View {
                     filled: true
                 )
             }
-            // W-NFCVISIBLE / W-NFCCOMMON follow-up (2026-07-24, Pavel correction) — "PSK
-            // confirmed" means a pre-shared key was kc_mac-verified THIS session,
-            // regardless of tier: `.badge` style covers BOTH S2 (the confirmed secret IS
-            // the NFC one) and S8 (ordinary KMS/plain PSK) — see `AssuranceStateUI.Style`'s
-            // own doc. Previously excluded S2 via `isPhysicalPresenceProof != true` to
-            // avoid "redundancy" with the NFC chip above — WRONG: "a PSK is confirmed" and
-            // "we hold a matching NFC secret" are different claims that are BOTH true when
-            // S2 fires, and must both render. WHICH tier was actually mixed (NFC/KMS/other)
-            // is what `KeyInfoPanel`'s detail row is for, not this compact chip.
-            if let style = assurancePresentation?.style, case .badge = style {
+            // W-NFCVISIBLE / W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a
+            // pre-shared key of ANY origin (KMS/NFC/QR/manual) is mixed into this call's
+            // session key", driven directly by `pskMixedThisCall` (n>=1) — no longer by
+            // `assurancePresentation` at all. Pavel's explicit choice: this chip shows
+            // in EVERY state a PSK was mixed, INCLUDING warning states (S1 active-attack,
+            // S3-S7 NFC-specific problems) — it answers only "does a shared secret exist
+            // for this call", never "is everything about it fine" (the warning banner's
+            // job). WHICH tier was actually mixed (NFC/KMS/other) is what
+            // `KeyInfoPanel`'s detail row is for, not this compact chip.
+            if pskMixedThisCall {
                 trustChip(
                     icon: "checkmark",
                     label: "PSK ✓",

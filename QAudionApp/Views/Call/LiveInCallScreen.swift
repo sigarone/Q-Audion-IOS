@@ -252,6 +252,9 @@ struct LiveInCallScreen: View {
                 // W-NFCCOMMON — independent of assurancePresentation above (see
                 // AppState.callMutualNfcInCommon's own doc).
                 mutualNfcInCommon: appState.callMutualNfcInCommon,
+                // W-NFCCOMMON follow-up (Pavel decision) — independent of
+                // assurancePresentation too (see AppState.callPskMixedThisCall's doc).
+                pskMixedThisCall: appState.callPskMixedThisCall,
                 onAddParticipant: {},
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
