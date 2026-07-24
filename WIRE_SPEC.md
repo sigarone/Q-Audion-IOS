@@ -373,6 +373,82 @@ Implemented on Android via `armHandshakeHangupListener`; iOS uses
 the same `call_hangup` signal as a fail-fast when it detects an
 incompatible wire format (Path B in `wireOpaqueMessageHandler`).
 
+### 3.5 Call acceptance gate (`call_accepted`)
+
+`call_answer` signals that the callee's transport/media stack is ready
+("the network is ready"); it MAY be sent automatically by a client ahead
+of any real user action, as an optimization to reduce P2P setup latency.
+`call_accepted` is a distinct, additive message that a client MUST send
+if and only if a real user (or an equivalent human-input surface: system
+Answer UI, notification action, hardware/watch button) explicitly
+accepted the call. It carries no SDP or crypto material — `{call_id}`
+only; the server stamps `sender_id`/`recipient_id` before relaying,
+exactly like `call_media_ready`. The **caller** MUST NOT show the SAS
+or mark the call fully active until BOTH (a) its local handshake has
+completed AND (b) it has received `call_accepted` from the callee for
+this `call_id` — whichever of the two happens first must be latched and
+the finalization performed on the second. The server treats
+`call_accepted` as a stateless, party-gated relay (`resolveCallPeer`),
+with no per-call singleton/dedup enforcement (unlike `call_answer`'s
+`TryMarkAnswered`) — the message is idempotent by construction;
+duplicates are harmless.
+
+---
+
+### 3.6 Base WebRTC SDP exchange (`call_offer` / `call_answer`) — CROSS-PLATFORM CONTRACT
+
+This is a SEPARATE concern from §3's PQC/E2EE handshake above: even
+after the crypto handshake completes, the real WebRTC `RTCPeerConnection`
+(ICE/DTLS/SRTP — the actual media transport) still needs a real SDP
+offer/answer exchange to come up. **This section did not exist before
+2026-07-08** — its absence is exactly what let the bug below ship and
+stay hidden behind a defensive guard for over a month instead of being
+caught by inspection. Two dialects coexist, same shape as §3.2/§3.1:
+
+| type | data | Android dialect | Desktop/iOS (QUAD) dialect |
+|---|---|---|---|
+| `call_offer` | `{call_id, recipient_id, sdp, capabilities}` | REAL `v=0...` SDP inline in `sdp` | `sdp:''` (vestigial) — real offer rides QUAD `0x03 DC_SDP_OFFER` (§3.2) via `opaque_message` |
+| `call_answer` | `{call_id, sdp, capabilities}` | REAL `v=0...` SDP inline in `sdp` — **the ONLY channel Android reads the answer from; it has no QUAD `DC_SDP_ANSWER` parser** | `sdp:''` (control-only) — real answer rides QUAD `0x04 DC_SDP_ANSWER` via `opaque_message` |
+
+**Discriminator (how a responder tells which dialect an incoming offer used):**
+a real inline `call_offer.sdp` always starts with `v=0` (mandatory first
+line of any SDP body per RFC 8866) — an empty/vestigial `sdp:''` never
+does. Check `/^v=0[\r\n]/`, not merely truthiness (an offer WS envelope
+always has an `sdp` field present, dialect is what's IN it).
+
+**Server dedup constraint (load-bearing — do not violate):** the server
+relays only the FIRST `call_answer` per call (`TryMarkAnswered`, so a
+callee's real answer never races a stale duplicate and freezes the
+caller's WebRTC state machine). This means an Android-dialect responder
+MUST NOT send an empty placeholder `call_answer` and then a second one
+with the real SDP later — the real one gets silently dropped, the
+answer-side DTLS fingerprint/setup role never reaches the caller, and
+its `RTCPeerConnection` sits dead for the entire call (media falls back
+to the WS-relay rail, live but never true P2P). **There is exactly ONE
+`call_answer` per call; for an Android-dialect peer it MUST already
+carry the real SDP.** Since the real answer SDP is only produced later
+— asynchronously, by the renderer's actual `RTCPeerConnection`, after
+mic/cam + ICE start — the responder MUST defer sending `call_answer`
+until that SDP exists, not send a placeholder first "to be safe."
+
+**Historical bug (found 2026-07-08 via live cross-device DTLS transport
+stats — `bytesSent` climbing every poll, `bytesRecv=0` for the entire
+call, on every single Android↔Desktop test call):** Desktop's responder
+path sent `call_answer` with a hardcoded `sdp:''` immediately, on the
+mistaken belief that "there is no WebRTC SDP exchange for E2EE calls"
+(conflating this section with §3's crypto handshake, which is a real but
+SEPARATE concern). Android's `PeerConnectionHolder.applyRemoteAnswer`
+correctly discarded the blank SDP (`isBlank()` guard, added 2026-05-26
+specifically because of this recurring symptom) rather than crash — but
+nobody had wired the real value through, so the guard silently masked a
+structural gap for over a month. Fixed in `CallController.ts` by
+deferring `call_answer` until the renderer's real SDP answer exists
+(mirrors the already-proven `initialOfferSdpSentCallId` pattern used on
+the offer side). **Lesson for future message types:** any new WS message
+type MUST have its per-dialect field-population contract documented HERE
+before shipping — "peer X sends blank, guard against it" is a workaround
+for a bug, not a specification.
+
 ---
 
 ## 4. Short Authentication String (SAS)
@@ -603,10 +679,95 @@ offerer-side only, per-platform, months apart; iOS never had it.)
   parties; a party-gate miss drops the FRAME (advisory
   `call_relay_reject {call_id, media, reason}`) and MUST NOT tear the
   call down.
+- When an `audio_frame` relay fails because the recipient has zero
+  registered devices locally (peer's WS connection is down/flapping),
+  the server sends the SENDER an advisory
+  `audio_relay_degraded {call_id, peer_id, recipient_online}` (added
+  2026-07-13), at the same sampled cadence as the server-side warn log
+  (frame 1-3, then every ~500 frames — never more than ~1 per 10s per
+  call). No client currently consumes this type (per the general
+  unknown-WS-type-is-ignored rule, sending it ahead of a consumer is
+  safe); a future client MAY use it to show a "peer connection
+  unstable" indicator instead of silent one-way audio loss.
+
+### 8.9 Video-state BEACON (`call_video_state`) — v1.2, 2026-07-24
+
+`call_video_state` was edge-triggered: each side announced its camera the
+moment it toggled, once, and never again. That makes the peer's video lane a
+value both sides must derive from a stream of edges, and every way of losing
+one edge is unrecoverable for the rest of the call:
+
+- the announcement is sent while the peer's WS is stale — the edge is gone;
+- the peer reconnects mid-call — it starts knowing nothing about our camera
+  and nothing ever tells it;
+- two toggles arrive reordered — the older one wins and pins the lane wrong.
+
+All three end with the two sides disagreeing permanently, which is the
+observed "voice → video → voice → video, and then it will not go back to
+voice on both sides".
+
+**The message is now state-triggered.** Each side MUST re-announce its
+CURRENT state:
+
+1. on change (camera on/off, screen-share start/stop),
+2. every **3000 ms** while the call is active — including an audio-only call,
+   where it announces `sending: false`,
+3. on WS (re)connect.
+
+A missed announcement therefore self-heals within one heartbeat instead of
+lasting the call.
+
+**Additive fields** (the server relays this message verbatim — no server
+change; all three are OPTIONAL and MUST be omitted entirely when unset):
+
+| field | type | meaning |
+|---|---|---|
+| `seq` | int | monotonic per `(call_id, sender)`, first value 1. Orders repeats. |
+| `sending` | bool | positive restatement of `!paused`. `paused` alone is ambiguous between "camera off" and "no video in this call at all". |
+| `screen` | bool | the video being sent is a screen share, not a camera. |
+
+**Receive rule — last-writer-wins.** Repeats need ordering or a delayed
+repeat could overwrite a newer toggle, i.e. the heartbeat would become a new
+way to strand a lane:
+
+- `seq` absent → **accept** (the peer predates this section and only sends
+  edges; dropping one would strand the lane, the failure this prevents);
+- `seq` ≤ highest accepted for this call → **drop**;
+- otherwise → accept and store. The stored value MUST NOT move backwards, so
+  a seq-less announcement interleaved with numbered ones cannot reset the
+  window and re-admit an already-superseded repeat.
+
+**Lane vocabulary.** All three clients derive and report exactly four lane
+names — `Off`, `LocalOnly` (we send), `RemoteOnly` (peer sends), `Both` — in
+the `call.video.transition` telemetry event, so one server-side query answers
+"which side got stuck" regardless of platform. Two legs of the same call MUST
+end in mirrored lanes (`Both`/`Both`, `Off`/`Off`, `LocalOnly`/`RemoteOnly`);
+anything else is a stuck lane and `tools/tune-report.py` prints it as
+`!! MISMATCHED LANES`.
+
+**A peer's announcement MUST only ever change the PEER's lane.** Applying a
+remote event to the local lane is precisely what made audio-only unreachable
+(a closed `RemoteOnly ↔ Both` 2-cycle whose only exit was hangup). Reference
+implementations of both the lane table and the receive rule are pure and
+tested in each client: `VideoLaneTransitions` + `VideoStateBeacon` (Kotlin /
+TypeScript / Swift, same rules).
+
+**Interop.** A client that ships this section talking to one that does not is
+never worse off: the new client's extra fields are ignored by the old one,
+and the old one's seq-less announcements are always accepted. The ordering
+protection switches itself on once both sides ship.
+
 
 ---
 
-Last reviewed: 2026-07-03 (added §8 mid-call upgrade state machine, glare,
+Last reviewed: 2026-07-24 (§8.9 video-state beacon; §3.5/§3.6 de-collided —
+the four repo copies had drifted so that `### 3.5` meant "call acceptance
+gate" in the server copy and "base WebRTC SDP exchange" in the Desktop copy,
+while EVERY code reference to §3.5 in all four repos means the acceptance
+gate. The SDP-exchange section keeps its content under §3.6, which nothing
+cited. All four copies are now byte-identical and CI-enforced.)
+Previous: 2026-07-13 (§8.8 documented `audio_relay_degraded`).
+Previous: 2026-07-03 (added §8 mid-call upgrade state machine, glare,
 DTLS/mid invariants, media-readiness + keyframe wire, rail/key-custody
 rules). Previous: 2026-06-27 (realignment: §1.1 SRTP labels, §2.7 KMS v2
 AAD-bound wire, §3.3 caller-priority PSK, §4 uint24 SAS, §7 earbud GATT

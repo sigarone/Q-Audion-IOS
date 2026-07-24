@@ -1,0 +1,49 @@
+# WIRE_SPEC drift lock
+#
+# WIRE_SPEC.md is duplicated in four repos (bcrypto-server, qaudion-android-new,
+# qaudion-ios, qaudion-desktop) because each client must be able to read the
+# contract it implements without cloning the others. Nothing enforced that the
+# four copies stayed equal, and they did not: as of 2026-07-24 the Desktop copy
+# defined `### 3.5` as "Base WebRTC SDP exchange" while the server copy defined
+# the SAME number as "Call acceptance gate" -- and every single code reference
+# to §3.5 across all four repos meant the acceptance gate. Desktop's own code
+# cited a section its own spec copy no longer contained. Android and iOS had
+# neither section at all.
+#
+# A spec that means different things depending on which checkout you read is
+# worse than no spec: it produces confident, wrong implementations. This job
+# fails the build if this repo's copy stops matching the canonical hash.
+#
+# To change WIRE_SPEC.md: edit it, copy the SAME bytes into all four repos,
+# update WIRE_SPEC_SHA256 below in all four, and push together.
+
+name: WIRE_SPEC drift lock
+
+on:
+  pull_request:
+    branches: [main, release/*]
+    paths: ['WIRE_SPEC.md', '.github/workflows/wire-spec-lock.yml']
+  push:
+    branches: [main]
+    paths: ['WIRE_SPEC.md', '.github/workflows/wire-spec-lock.yml']
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify WIRE_SPEC.md matches the canonical hash
+        run: |
+          EXPECTED=8ae3618509144730509dffca4d56a7db1405b4dea8a4bf9498bcbcec9cfa54ed
+          ACTUAL=$(sha256sum WIRE_SPEC.md | cut -d' ' -f1)
+          echo "expected $EXPECTED"
+          echo "actual   $ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error file=WIRE_SPEC.md::WIRE_SPEC.md diverged from the canonical copy."
+            echo "The four repo copies MUST be byte-identical. Either revert this edit, or"
+            echo "apply the same bytes to bcrypto-server, qaudion-android-new, qaudion-ios"
+            echo "and qaudion-desktop and update WIRE_SPEC_SHA256 in all four workflows."
+            exit 1
+          fi
+          echo "WIRE_SPEC.md is in sync."
