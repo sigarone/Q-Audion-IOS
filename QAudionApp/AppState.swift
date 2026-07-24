@@ -442,13 +442,31 @@ final class AppState: ObservableObject {
     /// The four lane names Android's `VideoLaneTransitions` and Desktop's
     /// `videoLaneName()` use — identical vocabulary so ONE server-side query
     /// answers "which side got stuck" across all three platforms.
+    /// W-CAMBTNSRC (2026-07-24) — THE authoritative "is MY camera sending"
+    /// signal, and the only one any UI may render a camera control from.
+    ///
+    /// Three in-call surfaces each had their own formula for this one fact:
+    /// `InCallView` and `LiveInCallScreen` seeded from `isVideoCall` ("does
+    /// this call have video AT ALL"), so while only the PEER was sending the
+    /// local camera button displayed as ON in what was, for that user, a
+    /// voice call; `VideoCallView` used `!localVideoPaused`, whose default
+    /// `false` is ambiguous between "not paused" and "never started" — the
+    /// same ambiguity WIRE_SPEC §8.9 calls out for the `paused` wire field.
+    /// Confirmed live on call fec3decc.
+    ///
+    /// `isVideoCall` is "this call has video on at least one lane"; it is NOT
+    /// a statement about our own camera. Both conditions are required.
+    var localCameraSending: Bool { isVideoCall && !localVideoPaused }
+
+    /// Mirror for the peer's lane, so a "peer is sending" badge never has to
+    /// re-derive it either.
+    var peerCameraSending: Bool { isVideoCall && !remoteVideoPaused }
+
     private var videoLaneName: String {
         guard isVideoCall else { return "Off" }
-        let localSending = !localVideoPaused
-        let peerSending = !remoteVideoPaused
-        if localSending && peerSending { return "Both" }
-        if localSending { return "LocalOnly" }
-        if peerSending { return "RemoteOnly" }
+        if localCameraSending && peerCameraSending { return "Both" }
+        if localCameraSending { return "LocalOnly" }
+        if peerCameraSending { return "RemoteOnly" }
         return "Off"
     }
 
@@ -478,7 +496,7 @@ final class AppState: ObservableObject {
     /// Best-effort throughout (signal-not-kill): a failed send is retried by
     /// the next heartbeat, never surfaced into the call.
     func announceVideoState(force: Bool) {
-        let sending = isVideoCall && !localVideoPaused
+        let sending = localCameraSending
         guard VideoStateBeacon.shouldAnnounce(
             lastAnnouncedSending: videoBeaconLastSent, sending: sending, force: force) else { return }
         guard let peerId = callContactId,
@@ -547,8 +565,8 @@ final class AppState: ObservableObject {
                 "from": prev,
                 "to": next,
                 "cause": cause,
-                "local_sending": isVideoCall && !localVideoPaused,
-                "peer_sending": isVideoCall && !remoteVideoPaused,
+                "local_sending": localCameraSending,
+                "peer_sending": peerCameraSending,
                 "since_prev_ms": sincePrev,
                 // Audio liveness AT the flip — a transition after which
                 // tx_enc/rx_dec stop climbing is the audio-death signature.

@@ -19,10 +19,14 @@ struct InCallView: View {
 
     private var vm: InCallViewModel { container.viewModel }
 
-    /// W439: local camera-on state that mirrors appState.isVideoCall on appear
-    /// and lets the user toggle the camera mid-call without waiting for the full
-    /// isVideoCall publish cycle (setCamera doesn't write isVideoCall back).
-    @State private var cameraOn: Bool = false
+    /// W-CAMBTNSRC (2026-07-24) — read LIVE from the ONE authoritative signal.
+    /// This used to be an `@State` seeded on appear from `appState.isVideoCall`,
+    /// i.e. "does this call have video AT ALL": while only the PEER was sending,
+    /// the local camera button rendered as ON in what was, for this user, a
+    /// voice call (confirmed on call fec3decc). `videoSetCameraEnabled` writes
+    /// `localVideoPaused`, which this derives from, so the button now follows
+    /// the real pipeline state instead of a copy that only local taps updated.
+    private var cameraOn: Bool { appState.localCameraSending }
 
     /// 2026-05-03 — local dismiss flag for the SAS verification banner.
     /// Per user requirement: "sas verification deve essere una cosa
@@ -93,7 +97,6 @@ struct InCallView: View {
             }
         }
         // (6) Video PiP — hidden in audio-only A.4 scope; vm.showVideoPip drives this.
-        .onAppear { cameraOn = appState.isVideoCall }
     }
 
     // MARK: - SAS banner (non-blocking)
@@ -216,12 +219,12 @@ struct InCallView: View {
                 label: cameraOn ? "Video On" : "Video",
                 isActive: cameraOn,
                 action: {
-                    cameraOn.toggle()
+                    let next = !cameraOn
                     // W-CAMSILENT (2026-07-24) — same fix as LiveInCallScreen's
                     // handleToggleCamera: `setCamera` only flips the local pipeline,
                     // leaving `localVideoPaused` stale and never telling the peer,
                     // so the far end kept believing our camera was live.
-                    appState.videoSetCameraEnabled(cameraOn)
+                    appState.videoSetCameraEnabled(next)
                 }
             )
             .frame(maxWidth: .infinity)

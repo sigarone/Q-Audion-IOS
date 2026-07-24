@@ -50,7 +50,14 @@ struct LiveInCallScreen: View {
     @State private var voiceEnhancement: Bool = false
     /// Camera on/off state for video calls. Starts ON when the call
     /// is a video call; user can mute/unmute the camera mid-call.
-    @State private var cameraOn: Bool = false
+    /// W-CAMBTNSRC (2026-07-24) — read LIVE from the ONE authoritative signal,
+    /// never a local copy. This used to be an `@State` seeded once from
+    /// `appState.isVideoCall`, which is "does this call have video AT ALL": while
+    /// only the PEER was sending, the local camera button rendered as ON in what
+    /// was, for this user, a voice call (confirmed on call fec3decc). Being a
+    /// seeded copy it also drifted from truth for the rest of the call, since
+    /// this surface is remounted mid-call and only local taps updated it.
+    private var cameraOn: Bool { appState.localCameraSending }
 
     /// W502: whether the network diagnostics overlay is visible.
     @State private var showDiagnostics: Bool = false
@@ -108,15 +115,13 @@ struct LiveInCallScreen: View {
             ScreenshotLockService.lock()
             resolvePeerDisplayName()
             rekeyAnchorEpoch = Date().timeIntervalSince1970
-            // Seed camera state from the call type: video calls start
-            // with camera ON; audio calls hide the button entirely.
-            cameraOn = appState.isVideoCall
             // W-AUDIOUILIE (2026-07-24) — this surface is REMOUNTED mid-call
             // every time the pair transitions to/from both-paused, and both
             // toggles used to reopen at a hardcoded `false`. So a call muted
             // before a video round trip came back showing an un-muted mic, and
-            // the next tap muted an already-muted call. Seed from live truth,
-            // mirroring the camera seed above and VideoCallView's.
+            // the next tap muted an already-muted call. Seed from live truth.
+            // (The camera has no seed any more — it is derived live from
+            // appState.localCameraSending, W-CAMBTNSRC.)
             muted = appState.callService.isMuted
             speakerOn = appState.callSpeakerOn
         }
@@ -139,7 +144,6 @@ struct LiveInCallScreen: View {
             isPresented: incomingUpgradeAlertBinding
         ) {
             Button("Attiva video") {
-                cameraOn = true
                 appState.acceptIncomingUpgrade()
             }
             Button("Rifiuta", role: .cancel) {
@@ -290,7 +294,7 @@ struct LiveInCallScreen: View {
     }
 
     private func handleToggleCamera() {
-        cameraOn.toggle()
+        let next = !cameraOn
         // W-CAMSILENT (2026-07-24) — was `appState.setCamera(...)`, which only
         // flips the LOCAL pipeline: it neither updates `localVideoPaused` nor
         // sends `call_video_state`. So turning the camera off on THIS surface
@@ -298,11 +302,12 @@ struct LiveInCallScreen: View {
         // call, and left our own paused-state flag lying to every other reader.
         // `videoSetCameraEnabled` is the complete operation (pipeline + flag +
         // peer notification) and is what the other camera controls already use.
-        appState.videoSetCameraEnabled(cameraOn)
+        appState.videoSetCameraEnabled(next)
     }
 
     private func handleUpgradeToVideo() {
-        cameraOn = true
+        // `cameraOn` follows `appState.localCameraSending`; upgradeToVideo is
+        // what actually turns the camera on, so there is nothing to pre-set.
         appState.upgradeToVideo()
     }
 

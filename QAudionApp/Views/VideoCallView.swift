@@ -16,7 +16,14 @@ struct VideoCallView: View {
     @EnvironmentObject var appState: AppState
 
     @State private var isMuted = false
-    @State private var isCameraOn = true
+    /// W-CAMBTNSRC (2026-07-24) — read LIVE from the ONE authoritative signal.
+    /// This was an `@State` defaulting to `true` and re-synced on remount from
+    /// `!appState.localVideoPaused`, whose default `false` is ambiguous between
+    /// "not paused" and "never started" — the same ambiguity WIRE_SPEC §8.9
+    /// calls out for the `paused` wire field. `localCameraSending` also requires
+    /// `isVideoCall`, so it cannot claim the camera is live outside a video call,
+    /// and being derived it needs no remount re-sync at all.
+    private var isCameraOn: Bool { appState.localCameraSending }
     @State private var isSpeaker = true
     @State private var showControls = true
     @State private var showSas = false
@@ -125,15 +132,9 @@ struct VideoCallView: View {
         .onAppear {
             ScreenshotLockService.lock()
             resolveDisplayName()
-            // WIRE_SPEC §8.1 — this view can remount after ContentView
-            // swaps back from LiveInCallScreen (both-paused → one side
-            // resumes). Re-sync the local toggle's @State from AppState's
-            // published mirror so "Cam ON/OFF" reflects the camera's
-            // actual current state instead of resetting to the `true`
-            // default on every remount.
-            isCameraOn = !appState.localVideoPaused
-            // W-AUDIOUILIE (2026-07-24) — mute/speaker need the EXACT same
-            // remount treatment the camera got above, and never received: they
+            // W-AUDIOUILIE (2026-07-24) — mute/speaker are still local @State and
+            // so still need a remount re-sync (the camera no longer does: it is
+            // derived from appState.localCameraSending — W-CAMBTNSRC). They
             // opened at hardcoded `false` / `true` on every remount, so after a
             // single video toggle round trip the mic button could read "live"
             // while the mic was muted, and the speaker button could read "on"
@@ -490,8 +491,7 @@ struct VideoCallView: View {
                 label: isCameraOn ? "Cam ON" : "Cam OFF",
                 isActive: !isCameraOn
             ) {
-                isCameraOn.toggle()
-                appState.videoSetCameraEnabled(isCameraOn)
+                appState.videoSetCameraEnabled(!isCameraOn)
             }
             videoButton(icon: "camera.rotate.fill", label: "Inverti") {
                 appState.videoFlipCamera()
