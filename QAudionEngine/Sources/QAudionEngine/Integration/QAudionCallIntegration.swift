@@ -590,11 +590,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// CALLER leg can later rebuild `KeyConfirmation`'s `initAdvert` (its own
     /// advertised order) once the matching ACCEPT arrives — mirrors
     /// `sentOfferTranscriptByCall`'s stash-at-send/consume-at-receive shape.
-    /// `pskRoles` is not stashed alongside: nobody sets a non-zero role yet (see
-    /// `AndroidHandshakeBundle.pskRoles` doc), so `KeyConfirmation.pskAdvertEntries`
-    /// is called with `roles: nil` (⇒ all-zero) on both legs, matching what was
-    /// actually signed. Cleared with the rest of the per-call state in `onCallEnded`.
+    /// Cleared with the rest of the per-call state in `onCallEnded`.
     private var sentOfferPskFingerprintsByCall: [String: [String]] = [:]
+
+    /// W-KCMACROLES (2026-07-24) — the PARALLEL role list WE advertised in that
+    /// same OFFER (`advertisedPskRoles`). Stashed for the SAME reason as the
+    /// fingerprints above, and it is NOT optional: `KeyConfirmation.advEnc`
+    /// length-prefixes `(role, fingerprint)` PAIRS, so the role bytes are part of
+    /// the MAC'd transcript. The peer reconstructs `initAdvert` from the OFFER it
+    /// RECEIVED — i.e. with our REAL roles — so rebuilding our own side with
+    /// `roles: nil` (⇒ all-zero) silently diverges the transcript the moment any
+    /// advertised key is NFC-origin (role=1), producing `kc_mac result=wrong` and
+    /// a FALSE `S1_KC_FAILED` "active attack" verdict on an otherwise healthy
+    /// call. Device-confirmed on call db4e5b20 (2026-07-24): iOS-initiator ↔
+    /// Android-responder, one NFC key advertised, MAC mismatch on every such call.
+    /// The old "nobody sets a non-zero role yet" assumption stopped being true
+    /// when the OFFER started carrying real `pskRoles` (commit e3bd816).
+    private var sentOfferPskRolesByCall: [String: [Int]] = [:]
 
     public init() {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
@@ -866,8 +878,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // `signingEnabled`): harmless to stash even when the KCMAC gate later finds
         // no offer_binding to pair it with (empty ⇒ no KCMAC attempted, see
         // `onKcMacReady`'s doc).
+        // W-KCMACROLES — the roles ride along in the SAME stash operation: they are
+        // part of the MAC'd `advEnc` pairs, so losing them here is exactly as fatal
+        // as losing the fingerprints (see `sentOfferPskRolesByCall`'s own doc).
         lock.withLock {
             sentOfferPskFingerprintsByCall[callId.lowercased()] = advertisedPskFingerprints
+            sentOfferPskRolesByCall[callId.lowercased()] = advertisedPskRoles
         }
 
         // Phase-10b (a) — SIGN the OFFER over the §3 transcript before serialize.
@@ -1670,13 +1686,21 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                let ikResp = localSignerIdentityKey, let ikInit = v4PeerSik, ikInit.count == 32 {
                 // initAdvert = the OFFER's OWN advert (the initiator's, in the
                 // exact order it arrived on the wire). respAdvert = OUR OWN ACCEPT
-                // advert — always empty now that the ACCEPT no longer advertises
-                // (see the removed Keychain-scan block above); `pskRoles: nil`
-                // since nothing sets a non-zero ACCEPT-side role yet either.
+                // advert, rebuilt from the SAME values we just put on the wire.
+                //
+                // W-KCMACROLES (2026-07-24) — this used to hardcode BOTH to nil with a
+                // comment saying the ACCEPT "no longer advertises". That became false in
+                // the same session the ACCEPT started advertising again (W-NFCCOMMON):
+                // the peer rebuilds `respAdvert` from the ACCEPT it RECEIVED (non-empty),
+                // so leaving ours empty diverges the `advEnc` bytes and fails kc_mac with
+                // a FALSE S1_KC_FAILED verdict — the exact mirror of the initiator-side
+                // bug fixed at the other transcript site. Both sides of the transcript
+                // must always be rebuilt from what was ACTUALLY sent.
                 let initEntries = KeyConfirmation.pskAdvertEntries(
                     fingerprintsHex: bundle.pskFingerprints, roles: bundle.pskRoles)
                 let respEntries = KeyConfirmation.pskAdvertEntries(
-                    fingerprintsHex: nil, roles: nil)
+                    fingerprintsHex: acceptAdvertisedPskFingerprints.isEmpty ? nil : acceptAdvertisedPskFingerprints,
+                    roles: acceptAdvertisedPskRoles.isEmpty ? nil : acceptAdvertisedPskRoles)
                 if let t = KeyConfirmation.transcript(
                     offerBinding: verifiedOfferBindingV2,
                     acceptBinding: acceptBindingV2ForKc,
@@ -2100,13 +2124,27 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                    from: bundle, callId: callId, signerKeyRaw: ikResp, offerBindingV2: offerBindingV2ForKc) {
                 let acceptBindingV2ForKc = HandshakeTranscript.offerBinding(acceptTV2ForKc)
                 // initAdvert = OUR OWN OFFER's advert (stashed at send time, step
-                // (a)'s `sentOfferPskFingerprintsByCall`); `roles: nil` mirrors the
-                // OFFER bundle itself never carrying a `pskRoles` array today.
+                // (a)'s `sentOfferPskFingerprintsByCall` + `sentOfferPskRolesByCall`),
+                // rebuilt with the REAL roles we put on the wire.
                 // respAdvert = the ACCEPT's OWN advert (the responder's, exactly as
                 // received on the wire).
-                let sentInitFps = lock.withLock { sentOfferPskFingerprintsByCall[callId.lowercased()] }
+                //
+                // W-KCMACROLES (2026-07-24) — `roles:` was hardcoded `nil` here, with a
+                // comment claiming "the OFFER bundle itself never carr[ies] a pskRoles
+                // array today". That stopped being true when the OFFER started sending
+                // real roles (commit e3bd816): the peer rebuilds `initAdvert` from the
+                // received OFFER (real roles) while we rebuilt ours all-zero, so the
+                // `advEnc` pair bytes diverged and every call advertising an NFC-origin
+                // key (role=1) failed kc_mac -> FALSE S1_KC_FAILED "active attack"
+                // verdict + a persisted suspended-badge security event on the contact.
+                // Device-confirmed on call db4e5b20.
+                let (sentInitFps, sentInitRoles) = lock.withLock {
+                    (sentOfferPskFingerprintsByCall[callId.lowercased()],
+                     sentOfferPskRolesByCall[callId.lowercased()])
+                }
                 let initEntries = KeyConfirmation.pskAdvertEntries(
-                    fingerprintsHex: (sentInitFps?.isEmpty ?? true) ? nil : sentInitFps, roles: nil)
+                    fingerprintsHex: (sentInitFps?.isEmpty ?? true) ? nil : sentInitFps,
+                    roles: (sentInitRoles?.isEmpty ?? true) ? nil : sentInitRoles)
                 let respEntries = KeyConfirmation.pskAdvertEntries(
                     fingerprintsHex: bundle.pskFingerprints, roles: bundle.pskRoles)
                 if let t = KeyConfirmation.transcript(
@@ -2986,6 +3024,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         sentOfferTranscriptV2ByCall.removeAll()
         // W-KCMAC — same reasoning, the stashed sent-OFFER PSK advert list.
         sentOfferPskFingerprintsByCall.removeAll()
+        // W-KCMACROLES — the parallel role list is stashed and cleared in lockstep
+        // with the fingerprints above; a stale role array would mis-MAC the next call
+        // exactly like a stale fingerprint array would.
+        sentOfferPskRolesByCall.removeAll()
         // Phase B: drain any pending FPSET continuations with zeros so
         // awaiting tasks don't leak across call teardown.
         for (_, cont) in fpSetContinuationByCall {

@@ -269,4 +269,127 @@ final class KeyConfirmationKatTests: XCTestCase {
     func testPskAdvertEntriesEmptyFingerprintsIsEmptyEntries() {
         XCTAssertEqual(KeyConfirmation.pskAdvertEntries(fingerprintsHex: [], roles: nil), [])
     }
+
+    // MARK: - W-KCMACROLES (2026-07-24) — regression guards for the class of bug that
+    // produced a FALSE `S1_KC_FAILED` "active attack" verdict on live call db4e5b20.
+    //
+    // Root cause shape: iOS is the ONLY platform that rebuilds a transcript advert from
+    // a SEPARATE source of truth (a stash, or a hardcoded `nil`) instead of from the
+    // bundle object that actually went on the wire — Android
+    // (`PqcHandshake.toKcAdverts(signedOffer.pskFingerprints, signedOffer.pskRoles)`)
+    // and Desktop (`advertEntriesFromWire(offerBundle…, acceptBundle…)`) are immune by
+    // construction. So iOS needs these explicit guards instead.
+
+    /// The exact live failure: our OFFER carried real roles (an NFC key ⇒ role 1) but our
+    /// own transcript was rebuilt with `roles: nil` (⇒ all-zero). The peer rebuilds from
+    /// the OFFER it RECEIVED, i.e. with the real roles — so the two transcripts diverge
+    /// and every MAC comparison fails, which `AssuranceState` then reports as an active
+    /// attack (S1) on a completely healthy call.
+    func testDroppingRealRolesDivergesTranscript_theFalseS1Bug() {
+        let sessionKey = data(sessionKeyHex)
+        let ikInit = data(ikInitHex)
+        let ikResp = data(ikRespHex)
+        let offerBinding = data(offerBindingHex)
+        let acceptBinding = data(acceptBindingHex)
+        let sentFps = [fp1Hex]
+        let sentRoles = [1] // NFC-origin — exactly what triggered the live failure
+
+        // What the PEER computes: rebuilt from the wire it received (real roles).
+        let peerSide = KeyConfirmation.transcript(
+            offerBinding: offerBinding, acceptBinding: acceptBinding,
+            initAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: sentFps, roles: sentRoles),
+            respAdvert: [], mixFingerprints: [], mixId: Data(),
+            ikInit: ikInit, ikResp: ikResp)
+
+        // What the BUGGY local side computed: same fingerprints, roles dropped to nil.
+        let buggyLocal = KeyConfirmation.transcript(
+            offerBinding: offerBinding, acceptBinding: acceptBinding,
+            initAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: sentFps, roles: nil),
+            respAdvert: [], mixFingerprints: [], mixId: Data(),
+            ikInit: ikInit, ikResp: ikResp)
+
+        XCTAssertNotNil(peerSide)
+        XCTAssertNotNil(buggyLocal)
+        XCTAssertNotEqual(peerSide, buggyLocal,
+                          "dropping real role bytes MUST change the transcript — this is why the bug was silent-but-fatal")
+
+        // And therefore the MACs never verify: the false-S1 mechanism, end to end.
+        let kKc = KeyConfirmation.deriveKcKey(sessionKey: sessionKey)
+        let peerMac = KeyConfirmation.macInit(kcKey: kKc, transcript: peerSide!)
+        XCTAssertFalse(
+            KeyConfirmation.verify(received: peerMac, kcKey: kKc, asInitiator: true, transcript: buggyLocal!),
+            "the peer's MAC must NOT verify against the role-stripped transcript")
+
+        // The fix: rebuild with the roles we actually sent ⇒ byte-identical ⇒ verifies.
+        let fixedLocal = KeyConfirmation.transcript(
+            offerBinding: offerBinding, acceptBinding: acceptBinding,
+            initAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: sentFps, roles: sentRoles),
+            respAdvert: [], mixFingerprints: [], mixId: Data(),
+            ikInit: ikInit, ikResp: ikResp)
+        XCTAssertEqual(fixedLocal, peerSide)
+        XCTAssertTrue(
+            KeyConfirmation.verify(received: peerMac, kcKey: kKc, asInitiator: true, transcript: fixedLocal!))
+    }
+
+    /// The mirror case on the responder leg: our ACCEPT advertises fingerprints/roles,
+    /// but the local transcript rebuilt `respAdvert` as empty. Same divergence, same
+    /// false S1 — just in the other direction. (Both sites existed simultaneously.)
+    func testDroppingOwnAcceptAdvertDivergesTranscript_theMirrorBug() {
+        let ikInit = data(ikInitHex)
+        let ikResp = data(ikRespHex)
+        let offerBinding = data(offerBindingHex)
+        let acceptBinding = data(acceptBindingHex)
+        let ourAcceptFps = [fp1Hex]
+        let ourAcceptRoles = [1]
+
+        let peerSide = KeyConfirmation.transcript(
+            offerBinding: offerBinding, acceptBinding: acceptBinding,
+            initAdvert: [],
+            respAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: ourAcceptFps, roles: ourAcceptRoles),
+            mixFingerprints: [], mixId: Data(), ikInit: ikInit, ikResp: ikResp)
+
+        let buggyLocal = KeyConfirmation.transcript(
+            offerBinding: offerBinding, acceptBinding: acceptBinding,
+            initAdvert: [],
+            respAdvert: [], // the old hardcoded "the ACCEPT no longer advertises" assumption
+            mixFingerprints: [], mixId: Data(), ikInit: ikInit, ikResp: ikResp)
+
+        XCTAssertNotEqual(peerSide, buggyLocal,
+                          "an ACCEPT that advertises on the wire but rebuilds its own advert as empty MUST diverge")
+    }
+
+    /// Guards the invariant directly, independent of any one call site: a transcript is
+    /// only reproducible when BOTH adverts are rebuilt from what was ACTUALLY sent. Any
+    /// future refactor that re-introduces a separate/derived source for either side
+    /// fails here rather than in production as a phantom "active attack".
+    func testTranscriptIsReproducibleOnlyFromWhatWasActuallySent() {
+        let ikInit = data(ikInitHex)
+        let ikResp = data(ikRespHex)
+        let offerBinding = data(offerBindingHex)
+        let acceptBinding = data(acceptBindingHex)
+        let initFps = [fp1Hex], initRoles = [1]
+        let respFps = [fp1Hex], respRoles = [0]
+
+        let onTheWire = KeyConfirmation.transcript(
+            offerBinding: offerBinding, acceptBinding: acceptBinding,
+            initAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: initFps, roles: initRoles),
+            respAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: respFps, roles: respRoles),
+            mixFingerprints: [], mixId: Data(), ikInit: ikInit, ikResp: ikResp)
+        XCTAssertNotNil(onTheWire)
+
+        // Every "lossy" rebuild of either side must be detectably different.
+        let lossyVariants: [(String, [Int]?, [Int]?)] = [
+            ("init roles dropped", nil, respRoles),
+            ("resp roles dropped", initRoles, nil),
+            ("both roles dropped", nil, nil),
+        ]
+        for (label, iR, rR) in lossyVariants {
+            let variant = KeyConfirmation.transcript(
+                offerBinding: offerBinding, acceptBinding: acceptBinding,
+                initAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: initFps, roles: iR),
+                respAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: respFps, roles: rR),
+                mixFingerprints: [], mixId: Data(), ikInit: ikInit, ikResp: ikResp)
+            XCTAssertNotEqual(onTheWire, variant, "\(label) must not silently reproduce the wire transcript")
+        }
+    }
 }
