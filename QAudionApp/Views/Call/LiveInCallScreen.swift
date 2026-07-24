@@ -111,6 +111,14 @@ struct LiveInCallScreen: View {
             // Seed camera state from the call type: video calls start
             // with camera ON; audio calls hide the button entirely.
             cameraOn = appState.isVideoCall
+            // W-AUDIOUILIE (2026-07-24) — this surface is REMOUNTED mid-call
+            // every time the pair transitions to/from both-paused, and both
+            // toggles used to reopen at a hardcoded `false`. So a call muted
+            // before a video round trip came back showing an un-muted mic, and
+            // the next tap muted an already-muted call. Seed from live truth,
+            // mirroring the camera seed above and VideoCallView's.
+            muted = appState.callService.isMuted
+            speakerOn = appState.callSpeakerOn
         }
         .onDisappear {
             // SECURITY F-3: release the secure window when the call

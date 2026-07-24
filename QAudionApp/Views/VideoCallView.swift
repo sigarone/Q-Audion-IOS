@@ -132,6 +132,17 @@ struct VideoCallView: View {
             // actual current state instead of resetting to the `true`
             // default on every remount.
             isCameraOn = !appState.localVideoPaused
+            // W-AUDIOUILIE (2026-07-24) — mute/speaker need the EXACT same
+            // remount treatment the camera got above, and never received: they
+            // opened at hardcoded `false` / `true` on every remount, so after a
+            // single video toggle round trip the mic button could read "live"
+            // while the mic was muted, and the speaker button could read "on"
+            // while audio was on the receiver. Worse than cosmetic — the next
+            // tap toggles from the fabricated value and applies the inverse of
+            // what the user intended. Seeded from the live truth
+            // (`CallService.isMuted` / `AppState.callSpeakerOn`), same pattern.
+            isMuted = appState.callService.isMuted
+            isSpeaker = appState.callSpeakerOn
         }
         .onDisappear {
             ScreenshotLockService.unlock()

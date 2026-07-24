@@ -1326,9 +1326,19 @@ public final class AudioCapture {
         // PCM and the latent format mismatch crashed the iPad on answer.
         // Reading the bus format here (and converting the decoded Int16 mono
         // PCM into it) keeps scheduleBuffer valid on every device/route.
+        // W-AUDIODEATH (2026-07-24) — count what this guard throws away. A decoded
+        // frame reaching here and being binned because the engine is not running is
+        // the EXACT signature of "audio decrypts fine but the user hears nothing",
+        // and it was previously invisible: the drop is silent, and every counter we
+        // shipped (rx_recv/rx_dec) still looked perfect because they are incremented
+        // upstream of this point. Non-zero `playout_dropped` next to a healthy
+        // `rx_dec` now names the fault instead of leaving it to inference.
         guard isRunning,
               let player = playerNode,
-              let engine = engine, engine.isRunning else { return }
+              let engine = engine, engine.isRunning else {
+            audioPipeline.notePlayoutDropped()
+            return
+        }
         let outFmt = player.outputFormat(forBus: 0)
         let frames = pcmData.count / 2  // decoded PCM is Int16 mono
         guard frames > 0,
@@ -1513,8 +1523,77 @@ public final class AudioCapture {
         if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
         engine?.stop()
         engine = nil; playerNode = nil; playFormat = nil; inputSink = nil; isRunning = false
-        do { try start() }
-        catch { print("[AudioCapture] restart after route change failed: \(error.localizedDescription)") }
+        restartEngineWithRecovery(attempt: 0)
+    }
+
+    /// W-AUDIODEATH (2026-07-24, call db4e5b20) — restart the torn-down engine,
+    /// and DO NOT give up silently if it refuses to come back.
+    ///
+    /// This used to be `do { try start() } catch { print(...) }`. That single
+    /// swallowed error is a total, permanent, silent loss of audio for the rest
+    /// of the call: the engine has ALREADY been destroyed by the caller and
+    /// `isRunning` set to `false`, so once `start()` throws, `playFrame`'s
+    /// `guard isRunning, …, engine.isRunning` discards every decrypted frame
+    /// forever after. Nothing retried, nothing watched, nothing counted, and
+    /// the user's only symptom is "the call went quiet" — which looks
+    /// identical to a network fault from every log we ship. The only accidental
+    /// way out was an OS interruption ending with `shouldResume`.
+    ///
+    /// It matches the live report exactly: iOS `rx_recv/rx_dec = 3594/3594`
+    /// (every frame arrived AND decrypted, right up to hangup) with nothing
+    /// audible — i.e. the loss is strictly downstream of decryption, which is
+    /// where this function sits.
+    ///
+    /// Recovery ladder, cheapest and most likely first:
+    ///  1. plain retry — most `AVAudioEngine.start()` failures right after a
+    ///     route flip are transient (the route is still settling).
+    ///  2. retry WITHOUT voice processing — `setVoiceProcessingEnabled` is the
+    ///     single most failure-prone step on iOS (it is what
+    ///     `forceDisableVoiceProcessing`/`voiceProcessingBypassCount` already
+    ///     exist to work around elsewhere in this file). Degraded audio (no
+    ///     AEC/NS/AGC) beats no audio, and the existing VP-IO retry latch
+    ///     re-arms it on the next genuine route change.
+    ///  3. keep a bounded backoff watchdog running so a route that is still
+    ///     mid-flip (or a transient HAL error) still recovers seconds later
+    ///     instead of never.
+    ///
+    /// Every failed attempt increments `engine_restart_fail` so the next
+    /// incident is visible in telemetry instead of being a `print` on a device
+    /// nobody is attached to.
+    private func restartEngineWithRecovery(attempt: Int) {
+        // Bound the ladder. 0,1 = plain retries; 2+ = retries with VP-IO forced
+        // off; stop after `maxAttempts` so a genuinely dead audio subsystem
+        // cannot spin a timer for the whole call.
+        let maxAttempts = 5
+        guard attempt < maxAttempts else {
+            print("[AudioCapture] W-AUDIODEATH: engine restart gave up after \(maxAttempts) attempts — audio is DOWN for this call")
+            return
+        }
+        // From the 3rd attempt on, drop voice processing: it is the most common
+        // reason start() keeps failing, and audio without AEC is still audio.
+        if attempt >= 2, !audioPipeline.forceDisableVoiceProcessing {
+            print("[AudioCapture] W-AUDIODEATH: restart attempt \(attempt) — disabling Voice-Processing and retrying (degraded audio beats no audio)")
+            audioPipeline.forceDisableVoiceProcessing = true
+        }
+        do {
+            try start()
+            if attempt > 0 {
+                print("[AudioCapture] W-AUDIODEATH: engine recovered on attempt \(attempt)")
+            }
+            return
+        } catch {
+            audioPipeline.noteEngineRestartFailed()
+            print("[AudioCapture] W-AUDIODEATH: engine restart attempt \(attempt) failed: \(error.localizedDescription)")
+        }
+        // Backoff: 150ms, 300ms, 600ms, 1.2s — bounded by `maxAttempts` above.
+        let delay = 0.15 * pow(2.0, Double(attempt))
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            // Someone else (interruption resume, a fresh call, teardown) may have
+            // already rebuilt or stopped the engine — never fight them.
+            guard !self.isRunning else { return }
+            self.restartEngineWithRecovery(attempt: attempt + 1)
+        }
     }
 
     private func handleInterruption(_ note: Notification) {
@@ -1565,6 +1644,12 @@ public final class AudioCapture {
     }
 
     public func stop() {
+        // W-AUDIODEATH (2026-07-24) — latch whether the engine was still alive at
+        // teardown, BEFORE we tear it down ourselves. `false` here on a call that
+        // reported healthy rx_dec counts is the fingerprint of a dead-playout call
+        // (see `restartEngineWithRecovery`); it is the one fact the live incident
+        // could not establish from any log or telemetry record we shipped.
+        audioPipeline.noteEngineRunningAtEnd(isRunning && (engine?.isRunning ?? false))
         // W-SPKFIX — cancel any pending debounced route restart so it cannot
         // fire after the call has torn down the engine.
         pendingRouteRestart?.cancel()

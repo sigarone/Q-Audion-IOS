@@ -322,7 +322,16 @@ final class AppState: ObservableObject {
     /// never asked for speaker" from "CallKit just downgraded us out of
     /// it"). Reset to `false` on every call teardown (endCall) so a stale
     /// preference never leaks into the next call.
-    private var callSpeakerOn: Bool = false
+    /// W-AUDIOUILIE (2026-07-24) — published read-only so a call surface that is
+    /// REMOUNTED mid-call (every video upgrade/downgrade swaps `VideoCallView` /
+    /// `LiveInCallScreen`) can seed its controls from the live truth instead of a
+    /// hardcoded default. Both views used to open with fabricated values
+    /// (`VideoCallView`: muted=false + speaker=ON; `LiveInCallScreen`: both false),
+    /// so after a single video toggle the buttons could claim the opposite of the
+    /// real routing — and the user's next tap then applied the inverse of what they
+    /// intended. Setter stays internal: every write is inside AppState
+    /// (`endCall` reset and the speaker toggle), so `private(set)` is exact.
+    @Published private(set) var callSpeakerOn: Bool = false
     /// W-ICEGRACE (2026-07-21) — pending "ICE went `.disconnected`, give it a
     /// chance to recover before tearing the call down" countdown. Mirrors
     /// Android's `DISCONNECT_GRACE_MS` (CallTransportFactory.kt:821). Non-nil

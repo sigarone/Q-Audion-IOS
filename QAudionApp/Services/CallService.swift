@@ -1291,6 +1291,19 @@ final class CallService: @unchecked Sendable {
                     // never got VP-IO back.
                     "vpio_bypass_count":  diag.vpioBypassCount,
                     "vpio_retry_count":   diag.vpioRetryCount,
+                    // W-AUDIODEATH (2026-07-24, call db4e5b20) — the three fields that
+                    // would have named the "iOS went silent" fault instead of leaving
+                    // it to inference. On that call rx_recv/rx_dec were a perfect
+                    // 3594/3594 (everything arrived AND decrypted) with nothing
+                    // audible, i.e. the loss was strictly downstream of decryption —
+                    // exactly what these measure. engine_restart_fail > 0 means a
+                    // torn-down engine never came back (audio dead from that moment);
+                    // playout_dropped > 0 with healthy rx_dec is the direct signature
+                    // of decoded frames being binned at the playout guard;
+                    // engine_running_at_end = false confirms it lasted to hangup.
+                    "engine_restart_fail":  diag.engineRestartFailures,
+                    "playout_dropped":      diag.playoutDropped,
+                    "engine_running_at_end": diag.engineRunningAtEnd,
                     // W-AGCNOISE (2026-07-21) — the make-up loop's actual behaviour,
                     // which agc_gain alone cannot show. agc_gain is a call-MAX and has
                     // the same blind spot as peak_pct: 5.89 reads the same whether the

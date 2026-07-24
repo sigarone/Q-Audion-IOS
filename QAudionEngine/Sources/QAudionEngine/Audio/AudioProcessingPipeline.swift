@@ -324,6 +324,12 @@ public final class AudioProcessingPipeline {
     private var lastTapSampleRate: Double = 0
     private var lastTapChannels: Int = 0
     private var engineRestartsThisCall: Int = 0
+    // W-AUDIODEATH (2026-07-24) — see the note* functions below for why each
+    // exists. All three answer the question the live incident could not:
+    // "was the audio engine actually alive, and did we silently bin frames?"
+    private var engineRestartFailuresThisCall: Int = 0
+    private var playoutDroppedThisCall: Int = 0
+    private var engineRunningAtEndThisCall: Bool = false
     private var vpioBypassedEverThisCall = false
     // W-VPIORETRY (2026-07-21) — how many engine starts this call actually ran
     // WITHOUT VP-IO because of a bypass, and how many times VP-IO was re-armed
@@ -377,6 +383,31 @@ public final class AudioProcessingPipeline {
     /// W-CANONICAL — AudioCapture counts mid-call engine rebuilds (route flips).
     public func noteEngineRestart() {
         engineRestartsThisCall += 1
+    }
+
+    /// W-AUDIODEATH (2026-07-24) — a `start()` after an engine teardown FAILED.
+    /// This is the single most important audio counter we did not have: the
+    /// engine is torn down before the restart attempt, so a failed restart
+    /// leaves `isRunning == false` and `playFrame`'s guard silently discards
+    /// every decrypted frame for the rest of the call. Before this, that state
+    /// was indistinguishable from "the peer sent nothing" in every log and
+    /// every telemetry record — the failure was only ever a `print`.
+    public func noteEngineRestartFailed() {
+        engineRestartFailuresThisCall += 1
+    }
+
+    /// W-AUDIODEATH — a decoded frame reached `playFrame` and was dropped
+    /// because the engine/player was not running. Non-zero here, with healthy
+    /// `rx_dec` counts, is the exact signature of "audio decrypts fine but the
+    /// user hears nothing", and distinguishes it from a network/crypto fault.
+    public func notePlayoutDropped() {
+        playoutDroppedThisCall += 1
+    }
+
+    /// W-AUDIODEATH — latched at teardown by `AudioCapture`, so the tuning card
+    /// can say whether the audio engine was still alive when the call ended.
+    public func noteEngineRunningAtEnd(_ running: Bool) {
+        engineRunningAtEndThisCall = running
     }
 
     /// W-IOSECHO — AudioCapture.restartEngineForRoute reports here ONLY when
@@ -468,6 +499,10 @@ public final class AudioProcessingPipeline {
         // W-IOSECHO — see the backing fields' note above `latchAudioDiag`.
         public let routeChanges: Int64
         public let speakerMs: Int64
+        // W-AUDIODEATH — the "is the engine actually alive" triple.
+        public let engineRestartFailures: Int
+        public let playoutDropped: Int
+        public let engineRunningAtEnd: Bool
     }
 
     /// Read the per-call audio diagnostics and reset them for the next call.
@@ -497,7 +532,10 @@ public final class AudioProcessingPipeline {
             vpioBypassCount:     vpioBypassCountThisCall,
             vpioRetryCount:      vpioRetryCountThisCall,
             routeChanges:        routeChangesThisCall,
-            speakerMs:           speakerMsAccumulatedThisCall
+            speakerMs:           speakerMsAccumulatedThisCall,
+            engineRestartFailures: engineRestartFailuresThisCall,
+            playoutDropped:      playoutDroppedThisCall,
+            engineRunningAtEnd:  engineRunningAtEndThisCall
         )
         agcEverActiveThisCall = false
         speakerRouteEverThisCall = false
@@ -514,6 +552,9 @@ public final class AudioProcessingPipeline {
         vpioRetryCountThisCall = 0
         routeChangesThisCall = 0
         speakerMsAccumulatedThisCall = 0
+        engineRestartFailuresThisCall = 0
+        playoutDroppedThisCall = 0
+        engineRunningAtEndThisCall = false
         return stats
     }
 
