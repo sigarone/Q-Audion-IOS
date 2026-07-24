@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.846",
+              date: "2026-07-24",
+              title: "v1.0.846",
+              bullets: [
+                "feat(call): canonical cross-platform KeyInfo/trust-bar spec + mutual-NFC advertising (W-UNIFORMKEYINFO)",
+              ]),
         .init(id: "v1.0.845",
               date: "2026-07-24",
               title: "v1.0.845",
               bullets: [
+                "chore: regenerate changelog for v1.0.845",
                 "feat(call): PSK-confirmed trust-bar chip + go-live pskMixV1 (W-NFCVISIBLE)",
               ]),
         .init(id: "v1.0.844",
@@ -175,14 +182,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.827",
                 "fix(call): don't kill the call on a transient ICE disconnect (W-ICEGRACE)",
-              ]),
-        .init(id: "v1.0.826",
-              date: "2026-07-21",
-              title: "v1.0.826",
-              bullets: [
-                "chore: regenerate changelog for v1.0.826",
-                "fix(call): add DataChannel backpressure guard to sealed audio (W-DCBACKPRESSURE)",
-                "test(audio): extract selectMakeUpAgcMaxGain + regression test (W-TUNEGAP)",
               ]),
     ]
 }
