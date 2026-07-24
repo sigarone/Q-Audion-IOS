@@ -1456,14 +1456,34 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 )
             }
 
-            // W-TRANSCRIPTV2 — advertising our own eligible PSK fingerprints on the
-            // ACCEPT (a live Keychain scan of every stored PSK, done synchronously
-            // in the responder's OFFER-handling path) was REMOVED: it added
-            // unnecessary Keychain I/O to the hot path of answering an incoming
-            // call for a value nothing actually consumes (PSK selection stays
-            // single-selection via `selectedPskFingerprint` either way). Wire
-            // shape reverts to pre-step-4: `pskFingerprints` stays nil on the
-            // ACCEPT, byte-identical to before this feature existed.
+            // W-NFCCOMMON (2026-07-24, Pavel correction, device-confirmed bug) —
+            // REINSTATED after being removed at W-TRANSCRIPTV2 (the old comment here
+            // said "nothing actually consumes it", which stopped being true the
+            // moment the mutual-NFC-in-common signal shipped: the INITIATOR's own
+            // `mutualPeerAdvertisedRoles` computation reads THIS side's advertised
+            // `pskFingerprints`/`pskRoles` from the peer's ACCEPT bundle exactly like
+            // it reads the OFFER's — an ACCEPT that omits them makes the initiator's
+            // "do we hold a matching NFC secret" signal go permanently false whenever
+            // iOS is the RESPONDER, even though the secret genuinely exists on both
+            // sides. Confirmed live 2026-07-24: Android-initiator↔iOS-responder call
+            // reached S2 on iOS (which reads Android's OFFER advert fine) but S8 with
+            // no mutual-NFC signal on Android (whose peer advert — this ACCEPT — was
+            // empty). Same `pskAdvertEntries`/`fingerprintsForAdvertisement`/
+            // `rolesForAdvertisement` computation the OFFER above uses (see that call
+            // site's comment) — PSK selection is UNCHANGED (still single-selection via
+            // `selectedPskFingerprint`), this is advert metadata only.
+            let acceptPskVault = SovereignKeyVault()
+            let acceptPskAdvertEntries: [PskAdvertising.Entry] = acceptPskVault.listPskEntries().compactMap { entry in
+                guard let raw = (try? acceptPskVault.loadPsk(name: entry.name)) ?? nil, !raw.isEmpty else { return nil }
+                return PskAdvertising.Entry(
+                    name: entry.name,
+                    origin: acceptPskVault.origin(name: entry.name),
+                    material: raw,
+                    createdAt: entry.createdAt
+                )
+            }
+            let acceptAdvertisedPskFingerprints: [String] = PskAdvertising.fingerprintsForAdvertisement(acceptPskAdvertEntries)
+            let acceptAdvertisedPskRoles: [Int] = PskAdvertising.rolesForAdvertisement(acceptPskAdvertEntries)
 
             // 7. Build ACCEPT JSON.
             // W527: Android's kotlinx.serialization HandshakeBundle data
@@ -1504,8 +1524,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // comment for the full rationale.
                     pskMixV1: true
                 ),
-                pskFingerprints: nil,
-                selectedPskFingerprint: selectedFp
+                pskFingerprints: acceptAdvertisedPskFingerprints,
+                selectedPskFingerprint: selectedFp,
+                pskRoles: acceptAdvertisedPskRoles
             )
 
             // Phase-10b (c) — SIGN the ACCEPT, binding it to the verified OFFER

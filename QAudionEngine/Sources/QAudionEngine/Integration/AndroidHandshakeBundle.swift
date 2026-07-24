@@ -35,7 +35,9 @@ import Foundation
 /// - `dualCurvePublicKey`: B64 X448 pub  — OPTIONAL, OFFER only
 /// - `kind`: "OFFER" | "ACCEPT"
 /// - `pqcPublicKey`: B64 ML-KEM-1024 pub (1568 bytes raw) — OFFER only
-/// - `pskFingerprints`: [String]?  — OFFER only, full SHA-256 hex (64 chars)
+/// - `pskFingerprints`: [String]?  — OFFER and ACCEPT (W-NFCCOMMON, 2026-07-24: the
+///   ACCEPT side is what the OFFER-side's mutual-NFC-in-common signal reads), full
+///   SHA-256 hex (64 chars)
 /// - `selectedPskFingerprint`: String?  — ACCEPT only
 /// - `sigV2`: String?  — W-TRANSCRIPTV2 (ship step 4), b64 Ed25519 sig over transcript v2
 /// - `strongBoxPublicKey`: B64?  — OFFER only, Android StrongBox-bound P-256
@@ -174,12 +176,15 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     public let pskFingerprints: [String]?
     public let selectedPskFingerprint: String?
 
-    // PSK-mix ship-step-2 (parse-only) — parallel array to `pskFingerprints`,
-    // same length/order: per-candidate key class, 0 = ordinary PSK,
-    // 1 = NFC-derived, 2 = QR-scan-derived. Absent/nil ⇒ treat as all-zero
-    // (ordinary) — nobody populates a non-zero value yet. OPTIONAL,
-    // JSONEncoder omits nil, so a bundle that doesn't carry it is byte-wire-
-    // identical to today.
+    // PSK-mix ship-step-2 — parallel array to `pskFingerprints`, same
+    // length/order: per-candidate key class, 0 = ordinary PSK, 1 =
+    // NFC-derived, 2 = QR-scan-derived. Absent/nil ⇒ treat as all-zero
+    // (ordinary). Populated on BOTH OFFER and ACCEPT (W-NFCVISIBLE go-live +
+    // W-NFCCOMMON, 2026-07-24 — the ACCEPT side was a real gap: an ACCEPT
+    // that omits it makes the OFFER-side's mutual-NFC-in-common signal go
+    // permanently false whenever iOS answers, even when the NFC secret is
+    // genuinely held by both sides). OPTIONAL, JSONEncoder omits nil, so a
+    // legacy peer's bundle stays byte-wire-identical.
     public let pskRoles: [Int]?
 
     // Phase-10b handshake signing (§1 of HANDSHAKE-SIGNING-SPEC.md) — TWO OPTIONAL fields,
