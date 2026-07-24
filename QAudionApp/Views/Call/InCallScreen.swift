@@ -900,18 +900,16 @@ struct InCallScreen: View {
                     filled: true
                 )
             }
-            // W-NFCVISIBLE follow-up — not NFC-specific — a KMS-provisioned key
-            // confirmed by kc_mac (S8, `.pskConfirmed`) is also a real shared
-            // secret both sides hold, just not physical-presence-proven THIS
-            // session. `isPhysicalPresenceProof != true` here excludes ONLY S2
-            // (whose mixed secret IS the NFC one — that case already gets the
-            // "NFC ✓" chip above and would be redundant with this one); it has
-            // NOTHING to do with `mutualNfcInCommon` above, which is an
-            // orthogonal fact and may legitimately be true here too (peer holds
-            // a matching NFC secret we simply didn't mix this call, e.g. KMS won
-            // priority) — both chips render together in that case, by design.
-            if let style = assurancePresentation?.style, case .badge = style,
-               assurancePresentation?.isPhysicalPresenceProof != true {
+            // W-NFCVISIBLE / W-NFCCOMMON follow-up (2026-07-24, Pavel correction) — "PSK
+            // confirmed" means a pre-shared key was kc_mac-verified THIS session,
+            // regardless of tier: `.badge` style covers BOTH S2 (the confirmed secret IS
+            // the NFC one) and S8 (ordinary KMS/plain PSK) — see `AssuranceStateUI.Style`'s
+            // own doc. Previously excluded S2 via `isPhysicalPresenceProof != true` to
+            // avoid "redundancy" with the NFC chip above — WRONG: "a PSK is confirmed" and
+            // "we hold a matching NFC secret" are different claims that are BOTH true when
+            // S2 fires, and must both render. WHICH tier was actually mixed (NFC/KMS/other)
+            // is what `KeyInfoPanel`'s detail row is for, not this compact chip.
+            if let style = assurancePresentation?.style, case .badge = style {
                 trustChip(
                     icon: "checkmark",
                     label: "PSK ✓",
