@@ -291,7 +291,14 @@ struct LiveInCallScreen: View {
 
     private func handleToggleCamera() {
         cameraOn.toggle()
-        appState.setCamera(cameraOn)
+        // W-CAMSILENT (2026-07-24) — was `appState.setCamera(...)`, which only
+        // flips the LOCAL pipeline: it neither updates `localVideoPaused` nor
+        // sends `call_video_state`. So turning the camera off on THIS surface
+        // left the peer believing we were still transmitting for the rest of the
+        // call, and left our own paused-state flag lying to every other reader.
+        // `videoSetCameraEnabled` is the complete operation (pipeline + flag +
+        // peer notification) and is what the other camera controls already use.
+        appState.videoSetCameraEnabled(cameraOn)
     }
 
     private func handleUpgradeToVideo() {

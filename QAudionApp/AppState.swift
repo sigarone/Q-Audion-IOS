@@ -4262,8 +4262,28 @@ final class AppState: ObservableObject {
                     accepted: true)
                 self.videoConsentGranted = true
                 self.isVideoCall = true
-                self.setCamera(true)
-                await self.startVideoPipeline(for: pending.senderId)
+                // W-CAMREVIVE (2026-07-24) — do NOT force the camera back on if the
+                // user had paused it. This path is reached WITHOUT a consent prompt
+                // whenever `videoConsentGranted || isVideoCall` (see
+                // onCallUpgradeRequest's auto-accept), so a peer that simply re-sends
+                // `call_upgrade_request` used to silently re-enable a camera the user
+                // had deliberately turned off — one consent tap early in the call
+                // bought the peer the ability to revive our camera for the rest of it.
+                // Consent is for "may video exist on this call", never for "you may
+                // turn my camera back on".
+                let userHadPausedCamera = self.localVideoPaused
+                if !userHadPausedCamera { self.setCamera(true) }
+                // Idempotent: if a live pipeline already exists for a call that is
+                // already in video, a re-offer must not tear it down and rebuild it
+                // (the rebuild is what resurrected the camera, and it also restarts
+                // capture/encode for no reason mid-call). When a rebuild genuinely is
+                // needed, it inherits the user's pause state instead of overriding it.
+                if self.isVideoCall, self.videoPipeline != nil {
+                    RTLog.info("call", "acceptPendingIncomingUpgrade: pipeline already live — not rebuilding (paused=\(userHadPausedCamera))")
+                } else {
+                    await self.startVideoPipeline(for: pending.senderId,
+                                                  startPaused: userHadPausedCamera)
+                }
                 // W-VIDTX: feed the camera into the WebRTC RTCVideoSource on the
                 // RESPONDER upgrade too. The caller side already wires this in
                 // startCall; without it here, iOS camera frames go ONLY to the

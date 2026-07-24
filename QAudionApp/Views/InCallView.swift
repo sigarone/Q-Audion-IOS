@@ -217,7 +217,11 @@ struct InCallView: View {
                 isActive: cameraOn,
                 action: {
                     cameraOn.toggle()
-                    appState.setCamera(cameraOn)
+                    // W-CAMSILENT (2026-07-24) — same fix as LiveInCallScreen's
+                    // handleToggleCamera: `setCamera` only flips the local pipeline,
+                    // leaving `localVideoPaused` stale and never telling the peer,
+                    // so the far end kept believing our camera was live.
+                    appState.videoSetCameraEnabled(cameraOn)
                 }
             )
             .frame(maxWidth: .infinity)
