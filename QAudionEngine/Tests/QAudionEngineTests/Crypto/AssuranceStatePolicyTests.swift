@@ -324,9 +324,15 @@ final class AssuranceStatePolicyTests: XCTestCase {
 
     // MARK: - Integration shape: mutualPeerAdvertisedRoles feeding decide() end-to-end
 
-    func testMutualRoleOneFeedsS7WhenNfcNotMixed() {
-        // The exact composition `handleKcMacReady`/`emitKeyConfirmationTelemetry`
-        // (AppState, ship step 5) perform: filter, then feed into decide().
+    /// W-NFCCOMMON (2026-07-24, Pavel correction) — RENAMED from
+    /// `testMutualRoleOneFeedsS7WhenNfcNotMixed`, expectation FLIPPED. A mutual NFC-tier
+    /// advert alone (no persisted `expectedNfc` floor) is the routine "vault priority picked
+    /// a different secret (e.g. KMS) over an available NFC one" outcome — NOT a downgrade.
+    /// `decide()` must resolve normally to S8 here; the mutual fact is surfaced by the caller
+    /// as its OWN independent "NFC in comune" UI signal (still exactly `filtered.contains(1)`),
+    /// never by hijacking this single-select verdict into S7 (which would wrongly persist a
+    /// suspended-badge security event for an everyday priority choice).
+    func testMutualRoleAloneWithoutFloorDoesNotStripS7_surfacesAsIndependentSignalInstead() {
         let filtered = AssuranceState.mutualPeerAdvertisedRoles(
             peerFingerprints: ["fp-held-by-both"], peerRoles: [1], localFingerprints: ["fp-held-by-both"]
         )
@@ -335,7 +341,19 @@ final class AssuranceStatePolicyTests: XCTestCase {
             expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: false,
             witnessOk: false, floorRecorded: false, mediaDwellMs: 0
         )
-        XCTAssertEqual(result, .expectedNfcStripped, "peer advertised an NFC-tier (role=1) fp we both hold, but no NFC was mixed => S7")
+        XCTAssertEqual(result, .pskConfirmed, "mutual NFC advert alone (no floor) must NOT strip to S7 — decide() ignores peerAdvertisedRoles now")
+        XCTAssertTrue(filtered.contains(1), "the independent 'NFC in comune' signal is still true from this same filtered result")
+    }
+
+    /// The genuine S7 case is unchanged: a persisted per-contact floor (`expectedNfc`) that
+    /// this call fails to re-confirm still strips, regardless of what the peer advertises.
+    func testExpectedNfcAloneStillFeedsS7WhenNfcNotMixed() {
+        let result = AssuranceState.decide(
+            peerSupportsMix: true, n: 1, mixRoles: [.psk], peerAdvertisedRoles: [],
+            expectedNfc: true, kcStatus: .verified, sigOk: true, nfcBound: false,
+            witnessOk: false, floorRecorded: true, mediaDwellMs: 0
+        )
+        XCTAssertEqual(result, .expectedNfcStripped, "a genuine presence-floor regression still fires S7 off expectedNfc alone")
     }
 
     // MARK: - resolveNfcMixInputs (W-NFCBADGE — wires the ONE selected PSK's

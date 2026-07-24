@@ -237,6 +237,12 @@ struct InCallScreen: View {
     /// widget. See this project's "two things that must never share a
     /// widget" rule.
     let assurancePresentation: AssuranceStateUI.Presentation?
+    /// W-NFCCOMMON (2026-07-24, Pavel correction) — "this device and the peer
+    /// both hold a matching NFC-tap secret", independent of
+    /// [assurancePresentation] above (which reflects what THIS call's session
+    /// key actually mixed). Drives the trust bar's own always-on "NFC ✓" chip,
+    /// additive to — never gated by — whatever [assurancePresentation] shows.
+    let mutualNfcInCommon: Bool
     let onAddParticipant: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
@@ -275,6 +281,7 @@ struct InCallScreen: View {
          peerScreenSharing: Bool = false,
          identityUnauthenticatedChange: Bool = false,
          assurancePresentation: AssuranceStateUI.Presentation? = nil,
+         mutualNfcInCommon: Bool = false,
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
@@ -312,6 +319,7 @@ struct InCallScreen: View {
         self.peerScreenSharing = peerScreenSharing
         self.identityUnauthenticatedChange = identityUnauthenticatedChange
         self.assurancePresentation = assurancePresentation
+        self.mutualNfcInCommon = mutualNfcInCommon
         self.onAddParticipant = onAddParticipant
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
@@ -874,15 +882,17 @@ struct InCallScreen: View {
     /// scroll content.
     private var trustBar: some View {
         HStack(spacing: 7) {
-            // W-NFCVISIBLE — Pavel: the NFC-authenticated seal must be visible
-            // on the always-on trust bar, not only inside the tap-to-open
-            // security sheet (`physicalPresenceBadge`, still shown there too).
-            // Same `isPhysicalPresenceProof` signal (S2), same "wave.3.right.circle"
+            // W-NFCVISIBLE / W-NFCCOMMON — Pavel: an NFC key held in common with
+            // this peer must be visible on the always-on trust bar, not only
+            // inside the tap-to-open security sheet. Same "wave.3.right.circle"
             // glyph `NfcExchangeView` already uses for NFC elsewhere in this app.
-            // Placed FIRST — ahead of the SAS chip — since this is a stronger,
-            // automatically-verified signal that does not require the user to
-            // read/compare SAS words first.
-            if assurancePresentation?.isPhysicalPresenceProof == true {
+            // Placed FIRST — ahead of the SAS chip. Independent fact
+            // (`mutualNfcInCommon`, NOT `assurancePresentation?.isPhysicalPresenceProof`
+            // anymore): true whenever the peer's OFFER/ACCEPT key-list exchange shows
+            // a mutual NFC-tier fingerprint, regardless of which secret THIS call's
+            // session key ends up mixing (could be KMS/QR/plain PSK). Never implies
+            // nor requires the "PSK ✓" chip below — both render independently.
+            if mutualNfcInCommon {
                 trustChip(
                     icon: "wave.3.right.circle.fill",
                     label: "NFC ✓",
@@ -890,14 +900,16 @@ struct InCallScreen: View {
                     filled: true
                 )
             }
-            // W-NFCVISIBLE follow-up — Pavel: not NFC-specific — a KMS-provisioned
-            // key confirmed by kc_mac (S8, `.pskConfirmed`) is also a real shared
-            // secret both sides hold, just not physical-presence-proven. KMS
-            // outranks NFC in the vault's selection priority, so a device holding
-            // BOTH mixes the KMS one — that call correctly lands on S8, not S2,
-            // and deserves its own always-on chip rather than silence. Mutually
-            // exclusive with the NFC chip above (decide() never returns both for
-            // the same call).
+            // W-NFCVISIBLE follow-up — not NFC-specific — a KMS-provisioned key
+            // confirmed by kc_mac (S8, `.pskConfirmed`) is also a real shared
+            // secret both sides hold, just not physical-presence-proven THIS
+            // session. `isPhysicalPresenceProof != true` here excludes ONLY S2
+            // (whose mixed secret IS the NFC one — that case already gets the
+            // "NFC ✓" chip above and would be redundant with this one); it has
+            // NOTHING to do with `mutualNfcInCommon` above, which is an
+            // orthogonal fact and may legitimately be true here too (peer holds
+            // a matching NFC secret we simply didn't mix this call, e.g. KMS won
+            // priority) — both chips render together in that case, by design.
             if let style = assurancePresentation?.style, case .badge = style,
                assurancePresentation?.isPhysicalPresenceProof != true {
                 trustChip(

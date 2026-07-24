@@ -56,9 +56,17 @@ public enum AssuranceState: Equatable {
     /// S6 — NFC genuinely mixed this call but the peer's `kc_mac` never arrived
     /// (5000ms deadline elapsed, or the peer doesn't support key confirmation).
     case nfcPresentUnconfirmed
-    /// S7 — this contact's NFC secret was expected (previously reached this trust
-    /// level, or the peer still advertises a matching role-1 fingerprint) but this
-    /// call fell back to plain PSK (or no PSK at all) without it.
+    /// S7 — this contact's NFC secret was expected (a PAST call previously reached
+    /// `S2`) but this call fell back to plain PSK (or no PSK at all) without it — a
+    /// genuine per-contact regression.
+    ///
+    /// W-NFCCOMMON (2026-07-24, Pavel correction): no longer ALSO fires merely because
+    /// the peer advertises a mutual NFC-tier fingerprint this call didn't mix — that is
+    /// a routine outcome (vault-selection priority picked a different secret, e.g. KMS)
+    /// and not a downgrade worth a suspended-badge security event. That fact is instead
+    /// exposed as its own independent, always-on "NFC in comune" signal (see
+    /// `mutualPeerAdvertisedRoles`), additive to whichever of `S2`/`S8`/`S9`/`S10`
+    /// actually fires — never folded into this single-select verdict.
     case expectedNfcStripped
     /// S8 — ordinary `N>=1` pre-shared-key call, no NFC involved, `kc_mac` verified.
     case pskConfirmed
@@ -116,7 +124,11 @@ public enum AssuranceState: Equatable {
     ///   - peerAdvertisedRoles: the peer's advertised per-fingerprint PSK roles for
     ///     fingerprints THIS side also holds (caller pre-filters to mutually-held
     ///     fingerprints before calling `decide` — this function does no fp-matching
-    ///     itself). `1` denotes an NFC-tier fingerprint in the peer's advert.
+    ///     itself). NOT consulted by `decide()` as of W-NFCCOMMON (kept for cross-
+    ///     platform signature parity) — `1` denotes an NFC-tier fingerprint in the
+    ///     peer's advert, and the caller uses `peerAdvertisedRoles.contains(1)` as its
+    ///     OWN independent "NFC in comune" UI signal instead, rendered alongside
+    ///     whatever this function returns.
     ///   - expectedNfc: this contact previously reached `S2` (the persisted
     ///     `presenceFloor`), so an NFC secret is expected on every subsequent call.
     ///   - kcStatus: this call's key-confirmation outcome (`KeyConfirmation.Status`).
@@ -176,7 +188,9 @@ public enum AssuranceState: Equatable {
             return .nfcPresentUnconfirmed // S6
         }
 
-        if (expectedNfc || peerAdvertisedRoles.contains(1)) && !nfcMixed {
+        // W-NFCCOMMON: deliberately `expectedNfc` alone now — see `.expectedNfcStripped`'s
+        // doc for why a mere mutual-advert-without-floor must not hijack this branch.
+        if expectedNfc && !nfcMixed {
             return .expectedNfcStripped // S7
         }
 

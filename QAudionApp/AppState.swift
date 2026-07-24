@@ -430,6 +430,14 @@ final class AppState: ObservableObject {
     /// alongside `callAssuranceState` because `AssuranceStateUI.present`'s S0
     /// copy is a compound of BOTH.
     @Published var callAssuranceExpectedNfc: Bool = false
+    /// W-NFCCOMMON (2026-07-24, Pavel correction) — "this device and the peer
+    /// BOTH hold a matching NFC-tap secret", independent of whether THIS
+    /// call's session key actually mixes it (`callAssuranceState` above can
+    /// legitimately be S8/S9/S10 with this still `true` — vault priority
+    /// picked a different secret, e.g. KMS). Drives the trust bar's OWN
+    /// always-on "NFC ✓" chip, additive to (never gated by) whichever
+    /// `AssuranceStateUI.Presentation` `callAssuranceState` renders as.
+    @Published var callMutualNfcInCommon: Bool = false
     /// D11 — `sender_device_id` (server-stamped) captured from the most recent
     /// `call_incoming` envelope, keyed by `sender_id`. The OFFER/ACCEPT bundles
     /// arrive over `opaque_message`, which the server relays WITHOUT a device id
@@ -3369,6 +3377,7 @@ final class AppState: ObservableObject {
             // stale live-assurance verdict from a previous call.
             self.callAssuranceState = nil
             self.callAssuranceExpectedNfc = false
+            self.callMutualNfcInCommon = false
             // WIRE_SPEC §8.1: a fresh incoming call clears any stale
             // "peer paused their camera" state from a previous call.
             self.remoteVideoPaused = false
@@ -7651,6 +7660,13 @@ final class AppState: ObservableObject {
         // `AndroidHandshakeBundle.pskRoles`'s doc) until step 7 ships role
         // advertisement for real.
         let expectedButMissing = state.peerAdvertisedRoles.contains(1) && !mixRoles.contains(.nfc)
+        // W-NFCCOMMON — the independent "NFC in comune" fact: true whenever the peer's
+        // OFFER/ACCEPT advert shows a mutual NFC-tier fingerprint, regardless of whether
+        // THIS call's mixRoles/decide() verdict actually used it. Same underlying set as
+        // expectedButMissing above, without the `!mixRoles.contains(.nfc)` restriction —
+        // when NFC WAS mixed (S2), this is trivially also true, which is correct: the
+        // trust bar's "NFC ✓" chip should light in that case too, same as before.
+        let mutualNfcInCommon = state.peerAdvertisedRoles.contains(1)
         keyConfirmationTelemetryByCall[callId.lowercased()] = (
             pskMixN: state.n,
             kcMacResult: kcResultStr,
@@ -7676,6 +7692,7 @@ final class AppState: ObservableObject {
         if callContactId == nil || callContactId == state.peerId {
             callAssuranceState = assurance
             callAssuranceExpectedNfc = expectedNfc
+            callMutualNfcInCommon = mutualNfcInCommon
         }
     }
 
@@ -8981,6 +8998,7 @@ final class AppState: ObservableObject {
         // W-ASSURANCE: same reset for the fresh outgoing call.
         callAssuranceState = nil
         callAssuranceExpectedNfc = false
+        callMutualNfcInCommon = false
         // WIRE_SPEC §8.1: a fresh outgoing call clears any stale "peer
         // paused their camera" state from a previous call.
         remoteVideoPaused = false

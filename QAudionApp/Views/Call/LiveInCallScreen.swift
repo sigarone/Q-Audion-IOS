@@ -249,6 +249,9 @@ struct LiveInCallScreen: View {
                         secretLabel: cachedPeerDisplayName
                     )
                 },
+                // W-NFCCOMMON — independent of assurancePresentation above (see
+                // AppState.callMutualNfcInCommon's own doc).
+                mutualNfcInCommon: appState.callMutualNfcInCommon,
                 onAddParticipant: {},
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
