@@ -362,34 +362,45 @@ final class KeyConfirmationKatTests: XCTestCase {
     /// only reproducible when BOTH adverts are rebuilt from what was ACTUALLY sent. Any
     /// future refactor that re-introduces a separate/derived source for either side
     /// fails here rather than in production as a phantom "active attack".
-    func testTranscriptIsReproducibleOnlyFromWhatWasActuallySent() {
+    /// Pins the EXACT boundary of the bug, which is also the reason it stayed dormant
+    /// for weeks: dropping role bytes is undetectable when every role is 0 (absent and
+    /// all-zero encode identically, by `advEnc`'s documented default), and fatal the
+    /// moment ONE role is non-zero. So the moment `pskRoles` started carrying a 1 for
+    /// an NFC-origin key, a rebuild path that had been "harmlessly wrong" since it was
+    /// written turned into a hard kc_mac failure on exactly the calls that mattered
+    /// most. Any future refactor that re-introduces a lossy rebuild fails the non-zero
+    /// half here instead of shipping another phantom active-attack alarm.
+    func testRoleLossIsInvisibleWhenAllZeroAndFatalWhenNonZero() {
         let ikInit = data(ikInitHex)
         let ikResp = data(ikRespHex)
         let offerBinding = data(offerBindingHex)
         let acceptBinding = data(acceptBindingHex)
-        let initFps = [fp1Hex], initRoles = [1]
-        let respFps = [fp1Hex], respRoles = [0]
+        let fps = [fp1Hex]
 
-        let onTheWire = KeyConfirmation.transcript(
-            offerBinding: offerBinding, acceptBinding: acceptBinding,
-            initAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: initFps, roles: initRoles),
-            respAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: respFps, roles: respRoles),
-            mixFingerprints: [], mixId: Data(), ikInit: ikInit, ikResp: ikResp)
-        XCTAssertNotNil(onTheWire)
-
-        // Every "lossy" rebuild of either side must be detectably different.
-        let lossyVariants: [(String, [Int]?, [Int]?)] = [
-            ("init roles dropped", nil, respRoles),
-            ("resp roles dropped", initRoles, nil),
-            ("both roles dropped", nil, nil),
-        ]
-        for (label, iR, rR) in lossyVariants {
-            let variant = KeyConfirmation.transcript(
+        func build(initRoles: [Int]?, respRoles: [Int]?) -> Data? {
+            KeyConfirmation.transcript(
                 offerBinding: offerBinding, acceptBinding: acceptBinding,
-                initAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: initFps, roles: iR),
-                respAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: respFps, roles: rR),
+                initAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: fps, roles: initRoles),
+                respAdvert: KeyConfirmation.pskAdvertEntries(fingerprintsHex: fps, roles: respRoles),
                 mixFingerprints: [], mixId: Data(), ikInit: ikInit, ikResp: ikResp)
-            XCTAssertNotEqual(onTheWire, variant, "\(label) must not silently reproduce the wire transcript")
+        }
+
+        // DORMANT half — an ordinary (role 0) key: dropping the roles is a no-op, which
+        // is precisely why nobody noticed the rebuild sites were lossy.
+        let allZeroSent = build(initRoles: [0], respRoles: [0])
+        XCTAssertNotNil(allZeroSent)
+        XCTAssertEqual(allZeroSent, build(initRoles: nil, respRoles: nil),
+                       "all-zero roles and absent roles MUST encode identically — this is why the bug lay dormant")
+
+        // FATAL half — one NFC-origin key (role 1) on either side: every lossy rebuild
+        // must now be detectably different.
+        let nonZeroSent = build(initRoles: [1], respRoles: [1])
+        XCTAssertNotNil(nonZeroSent)
+        for (label, iR, rR) in [("init roles dropped", nil as [Int]?, [1] as [Int]?),
+                                ("resp roles dropped", [1] as [Int]?, nil as [Int]?),
+                                ("both roles dropped", nil as [Int]?, nil as [Int]?)] {
+            XCTAssertNotEqual(nonZeroSent, build(initRoles: iR, respRoles: rR),
+                              "\(label) must not silently reproduce the wire transcript when a role is non-zero")
         }
     }
 }
