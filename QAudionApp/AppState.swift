@@ -342,6 +342,21 @@ final class AppState: ObservableObject {
     /// intended. Setter stays internal: every write is inside AppState
     /// (`endCall` reset and the speaker toggle), so `private(set)` is exact.
     @Published private(set) var callSpeakerOn: Bool = false
+
+    /// W-MUTEBTNSRC (2026-07-24) — the observable mirror of `CallService.isMuted`,
+    /// the same shape `callSpeakerOn` already has for the route.
+    ///
+    /// `CallService` is not an `ObservableObject` and `isMuted` is not
+    /// `@Published`, so a view reading it directly never re-renders when it
+    /// changes. The two call surfaces worked around that differently:
+    /// `LiveInCallScreen` re-reads it on every TimelineView tick, while
+    /// `VideoCallView` kept a local `@State` seeded once in `onAppear`. The
+    /// second is wrong for a reason that is not cosmetic: CallKit's
+    /// `CXSetMutedCallAction` (the system call UI, the lock screen, a headset
+    /// button) reaches `setMuted` without going through the button, so the mic
+    /// could be genuinely muted while the button still read "live" — and the
+    /// next tap would then unmute-then-mute rather than unmute.
+    @Published private(set) var callMuted: Bool = false
     /// W-ICEGRACE (2026-07-21) — pending "ICE went `.disconnected`, give it a
     /// chance to recover before tearing the call down" countdown. Mirrors
     /// Android's `DISCONNECT_GRACE_MS` (CallTransportFactory.kt:821). Non-nil
@@ -10382,6 +10397,9 @@ final class AppState: ObservableObject {
         // W-CALLSPKR — drop the latched speaker preference alongside the
         // route reset above so it can't leak into the next call.
         callSpeakerOn = false
+        // W-MUTEBTNSRC — same lifetime: a mute latched at the end of one call
+        // must not open the next one showing a muted mic.
+        callMuted = false
         // W-ICEGRACE — kill any pending ICE-disconnect countdown for the call
         // being torn down here. Without this a grace armed at the very end of
         // one call could fire 3s later, find the NEXT call live in
@@ -10498,6 +10516,9 @@ final class AppState: ObservableObject {
     func setMuted(_ muted: Bool) {
         // Forward to CallService which gates outgoing PCM before encryption.
         callService.setMuted(muted)
+        // W-MUTEBTNSRC — publish it so every surface follows, including when the
+        // change came from CallKit rather than from one of our buttons.
+        callMuted = muted
     }
 
     func setSpeaker(_ enabled: Bool) {

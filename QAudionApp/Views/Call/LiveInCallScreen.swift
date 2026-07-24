@@ -18,7 +18,8 @@ import QAudionEngine
 ///                              (refreshed once per second via TimelineView)
 ///   - `confidence`          ← `appState.confidenceScore` (@Published, live
 ///                              feed from deepfake detector)
-///   - `muted`               ← local @State mirror, set + read by button tap
+///   - `muted`               ← `appState.callMuted` (@Published mirror of
+///                              CallService.isMuted; no local copy — W-MUTEBTNSRC)
 ///   - `transportMode`       ← maps live `backendType` ("p2p"/"turn"/"relay")
 ///                              to the corresponding TransportMode case
 ///                              (see `liveTransportMode`) — FIXED: this used
@@ -45,7 +46,6 @@ struct LiveInCallScreen: View {
     // as a one-shot lookup helper, not as reactive state.
     private let contactsStore = ContactsStore()
 
-    @State private var muted: Bool = false
     @State private var speakerOn: Bool = false
     @State private var voiceEnhancement: Bool = false
     /// Camera on/off state for video calls. Starts ON when the call
@@ -119,10 +119,11 @@ struct LiveInCallScreen: View {
             // every time the pair transitions to/from both-paused, and both
             // toggles used to reopen at a hardcoded `false`. So a call muted
             // before a video round trip came back showing an un-muted mic, and
-            // the next tap muted an already-muted call. Seed from live truth.
+            // the next tap muted an already-muted call. Speaker still seeds from
+            // live truth here; mute no longer needs to (W-MUTEBTNSRC — it reads
+            // the published `callMuted` mirror directly).
             // (The camera has no seed any more — it is derived live from
             // appState.localCameraSending, W-CAMBTNSRC.)
-            muted = appState.callService.isMuted
             speakerOn = appState.callSpeakerOn
         }
         .onDisappear {
@@ -279,9 +280,7 @@ struct LiveInCallScreen: View {
     //         methods prevent type-checker timeout inside @ViewBuilder).
 
     private func handleToggleMute() {
-        let next = !appState.callService.isMuted
-        muted = next
-        appState.setMuted(next)
+        appState.setMuted(!appState.callMuted)
     }
 
     private func handleToggleSpeaker() {
@@ -458,12 +457,11 @@ struct LiveInCallScreen: View {
 
     // MARK: - Derived state
 
-    /// Always re-reads `CallService.isMuted` so external mute changes
-    /// (Bluetooth headset, programmatic) propagate to the UI on each
-    /// TimelineView tick. The local `@State muted` mirror is still
-    /// updated on tap to avoid a one-frame flicker.
+    /// W-MUTEBTNSRC (2026-07-24) — reads the published mirror, so the value
+    /// updates the moment it changes instead of on the next TimelineView tick,
+    /// and no local `@State` copy has to be kept in step with it.
     private var liveMuted: Bool {
-        appState.callService.isMuted
+        appState.callMuted
     }
 
     /// W368: live SAS verification flag. Returns true iff the

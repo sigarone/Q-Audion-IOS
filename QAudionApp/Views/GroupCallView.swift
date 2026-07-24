@@ -186,6 +186,7 @@ struct GroupCallView: View {
                         participant: speaker,
                         isPinned: true,
                         isSelf: speaker.id == viewModel.selfUserId,
+                        localMuted: viewModel.isMuted,
                         reactionEmoji: viewModel.latestReactionEmoji(for: speaker.id),
                         onRequestMute: { viewModel.requestMute(participantId: speaker.id) }
                     )
@@ -236,6 +237,7 @@ struct GroupCallView: View {
                                             ParticipantTile(
                                                 participant: participant,
                                                 isSelf: participant.id == viewModel.selfUserId,
+                                                localMuted: viewModel.isMuted,
                                                 reactionEmoji: viewModel.latestReactionEmoji(for: participant.id),
                                                 onRequestMute: { viewModel.requestMute(participantId: participant.id) },
                                                 tileSize: CGSize(width: layout.tileW, height: layout.tileH)
@@ -832,6 +834,14 @@ struct ParticipantTile: View {
     /// `false`; a preview/call site that never passes it simply never
     /// shows the menu, which is the safe default.
     var isSelf: Bool = false
+    /// W-GRPSELFMUTE (2026-07-24) — the LOCAL mic authority, for the self tile
+    /// only. `participant.isMuted` comes from the WS roster, which moves only
+    /// when WE call `manager.toggleMute()`; a mute applied because ANOTHER
+    /// participant requested it deliberately does not touch the roster (see
+    /// `onMuteRequested`), so our own tile kept showing an un-muted mic while
+    /// the mic was genuinely muted. Remote tiles keep using the roster: it is
+    /// the only thing we know about them.
+    var localMuted: Bool = false
     /// Item 3: the freshest still-live reaction for this participant, or
     /// nil — `GroupCallViewModel.latestReactionEmoji(for:)` already only
     /// ever returns a not-yet-2s-expired entry, so this view just renders
@@ -913,7 +923,7 @@ struct ParticipantTile: View {
                 .font(isPinned ? .body : .caption).foregroundColor(.white)
                 .lineLimit(1)
 
-            if participant.isMuted {
+            if isSelf ? localMuted : participant.isMuted {
                 Image(systemName: "mic.slash.fill")
                     .font(.caption2).foregroundColor(.red)
             }
@@ -1046,7 +1056,19 @@ class GroupCallViewModel: ObservableObject {
     /// seeded from the call's `callType` on the `.active` transition
     /// (`GroupCallController.wantsVideo`, surfaced via `callWantsVideo`),
     /// then flipped by `toggleVideo()`.
-    @Published var isVideoEnabled = false
+    /// W-GRPCAMSRC (2026-07-24) — DERIVED from the camera track LiveKit is
+    /// actually publishing for us, never from "was this call created as a video
+    /// call". It used to be seeded on `.active` from `controller.callWantsVideo`
+    /// and thereafter moved only by our own button, so joining a video-typed
+    /// group call painted the camera button ON before (or without) any capture
+    /// ever being published — the group-call twin of the 1:1 `isVideoCall`
+    /// defect fixed the same day (W-CAMBTNSRC).
+    ///
+    /// `selfVideoTrack` is written by `controller.onLocalVideoTrack`, which
+    /// LiveKit feeds from `room.localParticipant.firstCameraVideoTrack` — nil
+    /// exactly when the camera is off. Deriving costs one lag: the button
+    /// follows the track landing rather than the tap. That is the point.
+    var isVideoEnabled: Bool { selfVideoTrack != nil }
     /// W-GRPVIDEO: whether the call is riding the LiveKit SFU right now —
     /// gates the camera-toggle button (the WS-relay mesh fallback has no
     /// video pipeline).
@@ -1251,7 +1273,9 @@ class GroupCallViewModel: ObservableObject {
                 self.callState = state
                 if state == .active {
                     self.isSfuActive = controller?.isUsingSfu ?? false
-                    self.isVideoEnabled = controller?.callWantsVideo ?? false
+                    // W-GRPCAMSRC — `isVideoEnabled` is derived from
+                    // `selfVideoTrack` now; nothing to seed. `callWantsVideo`
+                    // only ever said what the call was CREATED as.
                 }
             }
             if state == .active { self?.startTimer() }
@@ -1594,14 +1618,12 @@ class GroupCallViewModel: ObservableObject {
     /// LiveKit call actually fails.
     func toggleVideo() {
         guard let controller = controller else { return }
+        // W-GRPCAMSRC — no optimistic flip and no rollback any more: the button
+        // renders `selfVideoTrack != nil`, so a failed `setVideoEnabled` simply
+        // never moves it. The old optimistic write could also be left stranded
+        // by a camera that stopped publishing for a reason other than this call.
         let target = !isVideoEnabled
-        isVideoEnabled = target
-        Task {
-            let ok = await controller.setVideoEnabled(target)
-            if !ok {
-                await MainActor.run { [weak self] in self?.isVideoEnabled = !target }
-            }
-        }
+        Task { _ = await controller.setVideoEnabled(target) }
     }
 
     /// W-GRPSCREENSHARE: toggle screen sharing. Unlike `toggleVideo()`, this

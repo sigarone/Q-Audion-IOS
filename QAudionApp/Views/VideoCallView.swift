@@ -15,7 +15,11 @@ import WebRTC
 struct VideoCallView: View {
     @EnvironmentObject var appState: AppState
 
-    @State private var isMuted = false
+    /// W-MUTEBTNSRC (2026-07-24) — read LIVE from the published mirror. This was
+    /// an `@State` seeded once in `onAppear`, so a mute arriving from CallKit
+    /// (system call UI, lock screen, headset button) left the button reading
+    /// "live" while the mic was muted, and the next tap unmuted-then-muted.
+    private var isMuted: Bool { appState.callMuted }
     /// W-CAMBTNSRC (2026-07-24) — read LIVE from the ONE authoritative signal.
     /// This was an `@State` defaulting to `true` and re-synced on remount from
     /// `!appState.localVideoPaused`, whose default `false` is ambiguous between
@@ -142,7 +146,6 @@ struct VideoCallView: View {
             // tap toggles from the fabricated value and applies the inverse of
             // what the user intended. Seeded from the live truth
             // (`CallService.isMuted` / `AppState.callSpeakerOn`), same pattern.
-            isMuted = appState.callService.isMuted
             isSpeaker = appState.callSpeakerOn
         }
         .onDisappear {
@@ -475,8 +478,7 @@ struct VideoCallView: View {
                 label: isMuted ? "Riattiva" : "Muto",
                 isActive: isMuted
             ) {
-                isMuted.toggle()
-                appState.setMuted(isMuted)
+                appState.setMuted(!isMuted)
             }
             videoButton(
                 icon: isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
