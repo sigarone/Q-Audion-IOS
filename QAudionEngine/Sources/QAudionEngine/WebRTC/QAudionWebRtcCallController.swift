@@ -1765,6 +1765,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             var inFreezeCount = -1, inFramesRendered = -1, inFramesDropped = -1
             var inTotalFreezesDur = -1.0
             var inCodecId = "", outCodecId = ""
+            // W-VIDTELFPS (2026-07-24) — see the read sites below. `-1` sentinel
+            // keeps the "never fabricate a value we did not measure" contract:
+            // a stats report without framesPerSecond ships -1, which the reader
+            // renders as "X" rather than as a fake 0 fps.
+            var outFps = -1, inFps = -1
             for (_, s) in report.statistics {
                 guard let kind = s.values["kind"] as? String, kind == "video" else { continue }
                 if s.type == "outbound-rtp" {
@@ -1783,6 +1788,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     outEncoderImpl = (s.values["encoderImplementation"] as? String) ?? outEncoderImpl
                     outQualityLimit = (s.values["qualityLimitationReason"] as? String) ?? outQualityLimit
                     outCodecId = (s.values["codecId"] as? String) ?? outCodecId
+                    // W-VIDTELFPS (2026-07-24, call db4e5b20) — framesPerSecond was
+                    // never read, so iOS shipped NO fps at all and the tuning card
+                    // rendered "X" for both tx and rx fps while Android showed 30/30.
+                    // WebRTC-Stats exposes it on BOTH rtp directions; the poll simply
+                    // ignored it. Real client gap (distinct from the reader-side
+                    // attribution/alias gaps fixed in tune-report.py W-VIDTELATTR).
+                    outFps = (s.values["framesPerSecond"] as? NSNumber)?.intValue ?? outFps
                 } else if s.type == "inbound-rtp" {
                     inFramesDec = (s.values["framesDecoded"] as? NSNumber)?.intValue ?? inFramesDec
                     inFramesRec = (s.values["framesReceived"] as? NSNumber)?.intValue ?? inFramesRec
@@ -1794,6 +1806,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     inFramesRendered = (s.values["framesRendered"] as? NSNumber)?.intValue ?? inFramesRendered
                     inFramesDropped = (s.values["framesDropped"] as? NSNumber)?.intValue ?? inFramesDropped
                     inCodecId = (s.values["codecId"] as? String) ?? inCodecId
+                    // W-VIDTELFPS — receiver-side counterpart, same rationale.
+                    inFps = (s.values["framesPerSecond"] as? NSNumber)?.intValue ?? inFps
                 }
             }
             // Resolve codec mimeType + the ACTIVE sdpFmtpLine from the
@@ -1809,7 +1823,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 guard !id.isEmpty, let c = report.statistics[id] else { return "?" }
                 return (c.values["sdpFmtpLine"] as? String) ?? "?"
             }
-            sink("video.stats", [
+            // W-VIDTELATTR (2026-07-24, call db4e5b20) — carry the call_id. Android's
+            // video.stats has always had one; iOS's had NONE anywhere in the record,
+            // so the server-side tuning card could not find these events by call at
+            // all (its primary lookup greps the jsonl for the call id) and fell back
+            // to a session_id pass that then discarded them. Net effect: 23 real iOS
+            // video.stats records per call were invisible and the card printed
+            // "! video rx/tx: ios blind" — reading as "iOS never touched the camera"
+            // when iOS had in fact encoded 948 frames. Matches how `video.stall`
+            // already ships its call_id (inside attrs), so it is greppable exactly
+            // like every other per-call video event. Emitted only when non-empty:
+            // never fabricate an id we do not have.
+            var statsAttrs: [String: Any] = [
                 "out_frames_enc": outFramesEnc,
                 "out_key_frames_enc": outKeyFramesEnc,
                 "out_bytes": outBytes,
@@ -1830,7 +1855,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 "in_frames_dropped": inFramesDropped,
                 "in_codec": mime(inCodecId),
                 "in_fmtp": fmtp(inCodecId),
-            ])
+                // W-VIDTELFPS — real measured fps on both directions (was never read).
+                "out_fps": outFps,
+                "in_fps": inFps,
+            ]
+            let cid = self.pqcCallId
+            if !cid.isEmpty { statsAttrs["call_id"] = cid }
+            sink("video.stats", statsAttrs)
             // WIRE_SPEC §8.7 (INT-4a) — receiver decode-stall detection. Runs
             // on the stats callback thread; the controller is @unchecked
             // Sendable and these fields are touched ONLY here + on close (the
