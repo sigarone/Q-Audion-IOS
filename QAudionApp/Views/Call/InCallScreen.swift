@@ -820,8 +820,13 @@ struct InCallScreen: View {
             }
             keyInfoRow("PQC",      info.pqcAlgorithm)
             keyInfoRow("SESSIONE", info.sessionFingerprint)
-            if let method = info.pskMethodLabel,
-               let name = info.pskName {
+            // W-UNIFORMKEYINFO — canonical spec: the row shows whenever a
+            // method resolved, even if no human name did (e.g. a KMS key the
+            // server sent with no key_name) — "(unnamed key)" is the shared
+            // honest placeholder every platform uses, never a fingerprint
+            // fragment disguised as a name.
+            if let method = info.pskMethodLabel {
+                let name = info.pskName ?? "(unnamed key)"
                 keyInfoRow("PSK", "\(method) · \(name)")
             }
             if let fp = info.pskFingerprint {
@@ -902,12 +907,20 @@ struct InCallScreen: View {
                     filled: true
                 )
             }
-            if sasVerified {
+            // W-UNIFORMKEYINFO — canonical spec (2026-07-24, cross-platform audit):
+            // the SAS chip must be visible as soon as the 6-word code EXISTS
+            // (mirrors Android's `hasSas = sasWords.size == 6` gate and Desktop's
+            // TrustBar.svelte, both of which always render it), with only the
+            // color/label toggling on verification — showing it early is what
+            // invites the user to actually go verify. Gating the whole chip on
+            // `sasVerified` (previous behavior) hid it entirely pre-verification,
+            // a real cross-platform divergence, not a timing artifact.
+            if sasWords.count == 6 {
                 trustChip(
-                    icon: "checkmark",
-                    label: "SAS ✓",
-                    color: extras.success,
-                    filled: true
+                    icon: sasVerified ? "checkmark" : nil,
+                    label: sasVerified ? "SAS ✓" : "SAS",
+                    color: sasVerified ? extras.success : scheme.onSurfaceVariant,
+                    filled: sasVerified
                 )
             }
             if pqcActive {

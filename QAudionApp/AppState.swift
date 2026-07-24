@@ -7148,8 +7148,12 @@ final class AppState: ObservableObject {
             // `.callDerived` exclusion note above) or a genuine local-vault
             // miss — either way, "PSK negotiated but nothing to show/reuse
             // for it" deserves to be visible in device logs.
-            print("[AppState] resolvePskDisplayMeta: no local vault entry matches fp=\(fp.prefix(16))… — falling back to short-fingerprint display")
-            return (String(fp.prefix(9)), nil)
+            print("[AppState] resolvePskDisplayMeta: no local vault entry matches fp=\(fp.prefix(16))… — no name/method to show")
+            // W-UNIFORMKEYINFO — canonical spec: never synthesize a display name
+            // from fingerprint bytes. `name: nil` makes the UI show the shared
+            // "(unnamed key)" placeholder (matches Android's/Desktop's honest
+            // last-resort), instead of a hex fragment that looks like a name.
+            return (nil, nil)
         }
         let isUuidName: Bool = (UUID(uuidString: name) != nil)
         let method: String
@@ -7173,7 +7177,13 @@ final class AppState: ObservableObject {
                 }
             }
         }
-        let displayName: String = isUuidName ? String(fp.prefix(9)) : name
+        // W-UNIFORMKEYINFO — canonical spec: a UUID-named (KMS) entry that
+        // reaches here means the `__kmsname.<fp>` sidecar lookup above (the
+        // server's real human key_name) already missed — never fall back to
+        // a fingerprint slice disguised as a name. `nil` -> UI shows the
+        // shared "(unnamed key)" placeholder, same as Android/Desktop's
+        // honest last-resort when the server sent no name.
+        let displayName: String? = isUuidName ? nil : name
         return (displayName, method)
     }
 

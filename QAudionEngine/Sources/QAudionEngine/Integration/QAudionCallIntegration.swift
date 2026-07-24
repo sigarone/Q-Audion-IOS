@@ -807,17 +807,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // canonical 64-hex form instead of a value the responder's gate can
         // never match.
         let pskVault = SovereignKeyVault()
-        let advertisedPskFingerprints: [String] = PskAdvertising.fingerprintsForAdvertisement(
-            pskVault.listPskEntries().compactMap { entry in
-                guard let raw = (try? pskVault.loadPsk(name: entry.name)) ?? nil, !raw.isEmpty else { return nil }
-                return PskAdvertising.Entry(
-                    name: entry.name,
-                    origin: pskVault.origin(name: entry.name),
-                    material: raw,
-                    createdAt: entry.createdAt
-                )
-            }
-        )
+        let pskAdvertEntries: [PskAdvertising.Entry] = pskVault.listPskEntries().compactMap { entry in
+            guard let raw = (try? pskVault.loadPsk(name: entry.name)) ?? nil, !raw.isEmpty else { return nil }
+            return PskAdvertising.Entry(
+                name: entry.name,
+                origin: pskVault.origin(name: entry.name),
+                material: raw,
+                createdAt: entry.createdAt
+            )
+        }
+        let advertisedPskFingerprints: [String] = PskAdvertising.fingerprintsForAdvertisement(pskAdvertEntries)
+        // W-NFCVISIBLE — parallel role array, same order (both derive from the
+        // same `pskAdvertEntries`, see PskAdvertising.rolesForAdvertisement).
+        let advertisedPskRoles: [Int] = PskAdvertising.rolesForAdvertisement(pskAdvertEntries)
         let offerBundle = AndroidHandshakeBundle(
             kind: .offer,
             callId: callId,
@@ -854,7 +856,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // Mirrored in Android's SELF_CAPABILITIES in the same commit series.
                 pskMixV1: true
             ),
-            pskFingerprints: advertisedPskFingerprints
+            pskFingerprints: advertisedPskFingerprints,
+            pskRoles: advertisedPskRoles
         )
 
         // W-KCMAC (ship step 5) — stash the advert list itself (not just the

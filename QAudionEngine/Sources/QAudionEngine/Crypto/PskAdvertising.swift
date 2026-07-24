@@ -64,10 +64,31 @@ public enum PskAdvertising {
     /// Pure — no Keychain access — so it is unit-testable with plain
     /// `Entry` fixtures.
     public static func fingerprintsForAdvertisement(_ entries: [Entry]) -> [String] {
+        eligibleSortedEntries(entries).map { canonicalFingerprint(forPsk: $0.material) }
+    }
+
+    /// W-NFCVISIBLE (2026-07-24, cross-platform audit) — the SAME filter+order
+    /// `fingerprintsForAdvertisement` applies, extracted so both it and
+    /// `rolesForAdvertisement` derive from ONE deterministic computation —
+    /// two independent re-filters/re-sorts of the same input would still be
+    /// order-identical (both pure functions), but sharing this avoids ever
+    /// needing to keep two copies of the filter/sort logic in sync by hand.
+    private static func eligibleSortedEntries(_ entries: [Entry]) -> [Entry] {
         entries
             .filter { isEligibleMatchCandidate(origin: $0.origin) }
             .sorted(by: isOrderedBefore)
-            .map { canonicalFingerprint(forPsk: $0.material) }
+    }
+
+    /// W-NFCVISIBLE — parallel array to `fingerprintsForAdvertisement`, same
+    /// order: `1` marks an NFC-origin fingerprint in this advert, else `0`.
+    /// Lets a peer that ALSO holds this same fingerprint recognise "we share
+    /// an NFC secret" independent of whether THIS call's session key ends up
+    /// mixing a different (e.g. KMS) secret due to vault selection priority
+    /// (`AssuranceState` S7's `peerAdvertisedRoles.contains(1)`). Mirrors
+    /// Android's `PqcHandshake.kt` OFFER/ACCEPT role computation and Desktop's
+    /// `AndroidBundleHandshake.ts` equivalent, shipped in the same commit series.
+    public static func rolesForAdvertisement(_ entries: [Entry]) -> [Int] {
+        eligibleSortedEntries(entries).map { $0.origin == .nfc ? 1 : 0 }
     }
 
     /// W-PSKMIX step 5 — the RECEIVE-side twin of the exclusion above.
