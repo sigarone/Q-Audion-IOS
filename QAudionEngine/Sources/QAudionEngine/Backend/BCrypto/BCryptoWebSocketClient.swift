@@ -110,7 +110,11 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// PeerConnection and m=video line stay untouched). Same envelope
     /// class as call_media_ready / video_keyframe_request: the server
     /// stamps `sender_id` and relays transparently.
-    public var onCallVideoState: ((_ callId: String, _ paused: Bool) -> Void)?
+    ///
+    /// WIRE_SPEC §8.9 — `seq` is the beacon's ordering token: nil from a peer
+    /// that predates it, which the receive rule treats as "always accept"
+    /// (see ``VideoStateBeacon``).
+    public var onCallVideoState: ((_ callId: String, _ paused: Bool, _ seq: Int?) -> Void)?
 
     private var webSocketTask: URLSessionWebSocketTask?
     /// SECURITY C-6 / H-5 — strong ref to the session delegate so it
@@ -443,7 +447,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             // the AppState wiring) only needs callId + paused — the
             // active-call filter happens downstream via getActiveCallId().
             let paused = (data["paused"] as? Bool) ?? false
-            self.onCallVideoState?(callId, paused)
+            // WIRE_SPEC §8.9 — nil when the peer predates the beacon.
+            let seq = data["seq"] as? Int
+            self.onCallVideoState?(callId, paused, seq)
         }
     }
 

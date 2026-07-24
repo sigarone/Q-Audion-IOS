@@ -308,7 +308,17 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - Call state
-    @Published var isInCall: Bool = false
+    /// WIRE_SPEC §8.9 — arm/disarm the video-state beacon with the call, from
+    /// the ONE flag every call path already flips. There are a dozen
+    /// `isInCall = ...` sites; hooking them individually would leave the next
+    /// one added silently un-beaconed, which is the same drift that produced
+    /// the bug the beacon exists to fix.
+    @Published var isInCall: Bool = false {
+        didSet {
+            guard oldValue != isInCall else { return }
+            if isInCall { startVideoBeacon() } else { stopVideoBeacon() }
+        }
+    }
     @Published var isVideoCall: Bool = false { didSet { noteVideoLaneChanged() } }
     @Published var callState: CallState = .idle
     @Published var callContactId: String?
@@ -444,6 +454,77 @@ final class AppState: ObservableObject {
 
     /// Hint for the NEXT lane flip, consumed and reset on emission.
     var videoTransitionCause: String = "derived"
+
+    // MARK: - WIRE_SPEC §8.9 video-state beacon
+    //
+    // Edge-triggered signalling made the peer's view of our camera depend on
+    // receiving every single toggle: one announcement lost to a stale WS, a
+    // mid-call reconnect, or a reordered pair, and the two sides disagreed for
+    // the rest of the call with no path back. Unlike the lane-table defect
+    // fixed alongside it, no amount of correct local logic recovers from an
+    // edge that never arrived — hence a state-triggered beacon that re-states
+    // the CURRENT value on change and on a timer.
+
+    /// Our outbound announcement counter for the ACTIVE call (reset per call).
+    private var videoBeaconSeq: Int = 0
+    /// What we last told the peer, so the on-change trigger stays cheap.
+    private var videoBeaconLastSent: Bool?
+    /// Highest seq accepted from the peer — the last-writer-wins window.
+    fileprivate var videoBeaconPeerSeq: Int?
+    private var videoBeaconTimer: Timer?
+
+    /// Announce OUR current video-send state. `force` is used by the heartbeat
+    /// to REPEAT an unchanged value — that repetition is the whole point.
+    /// Best-effort throughout (signal-not-kill): a failed send is retried by
+    /// the next heartbeat, never surfaced into the call.
+    func announceVideoState(force: Bool) {
+        let sending = isVideoCall && !localVideoPaused
+        guard VideoStateBeacon.shouldAnnounce(
+            lastAnnouncedSending: videoBeaconLastSent, sending: sending, force: force) else { return }
+        guard let peerId = callContactId,
+              let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId() else { return }
+        videoBeaconSeq = VideoStateBeacon.advance(videoBeaconSeq)
+        videoBeaconLastSent = sending
+        let seq = videoBeaconSeq
+        let screen = isScreenSharing
+        Task { [weak self] in
+            do {
+                try await impl.sendVideoState(
+                    callId: callId, recipientId: peerId,
+                    paused: !sending, seq: seq, screen: screen)
+            } catch {
+                // Let the next heartbeat re-send: clearing the memo makes the
+                // on-change trigger fire again even if the state has not moved.
+                await MainActor.run { self?.videoBeaconLastSent = nil }
+            }
+        }
+    }
+
+    /// Start the §8.9 heartbeat for the active call. Idempotent.
+    func startVideoBeacon() {
+        stopVideoBeacon()
+        let t = Timer.scheduledTimer(
+            withTimeInterval: Double(VideoStateBeacon.heartbeatMs) / 1000.0, repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in self?.announceVideoState(force: true) }
+        }
+        // The call UI drives the run loop in .common during scrolling/animation;
+        // .default alone would silently stall the heartbeat there.
+        RunLoop.main.add(t, forMode: .common)
+        videoBeaconTimer = t
+        announceVideoState(force: true)
+    }
+
+    /// Stop beaconing and reset the window, so the next call cannot inherit a
+    /// seq high enough to reject its own first announcements.
+    func stopVideoBeacon() {
+        videoBeaconTimer?.invalidate()
+        videoBeaconTimer = nil
+        videoBeaconSeq = 0
+        videoBeaconLastSent = nil
+        videoBeaconPeerSeq = nil
+    }
     private var lastVideoLaneName: String = "Off"
     private var lastVideoTransitionAtMs: Int64 = 0
 
@@ -3922,13 +4003,23 @@ final class AppState: ObservableObject {
         // only: filter to the active call (same getActiveCallId() live-getter
         // pattern as registerInboundVideoHandler above) and publish the flag
         // so VideoCallView / ContentView react — no PeerConnection/SDP touch.
-        ws.onCallVideoState = { [weak self] callId, paused in
+        ws.onCallVideoState = { [weak self] callId, paused, seq in
             DispatchQueue.main.async {
                 guard let self = self,
                       let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
                       let activeCallId = impl.getActiveCallId(),
                       callId.caseInsensitiveCompare(activeCallId) == .orderedSame
                 else { return }
+                // WIRE_SPEC §8.9 — last-writer-wins. The peer now REPEATS its
+                // state every heartbeat, so without an ordering rule a delayed
+                // repeat could overwrite a newer toggle and pin the lane to a
+                // stale value: the heartbeat would become a new way to produce
+                // the very hang it exists to heal. A peer that predates the
+                // beacon sends no `seq` and is always accepted, i.e. exactly
+                // the pre-beacon behaviour.
+                guard VideoStateBeacon.shouldAccept(lastSeq: self.videoBeaconPeerSeq, incomingSeq: seq) else { return }
+                self.videoBeaconPeerSeq = VideoStateBeacon.nextStoredSeq(
+                    lastSeq: self.videoBeaconPeerSeq, acceptedSeq: seq)
                 self.videoTransitionCause = paused ? "peer-camera-stop" : "peer-camera-start"
                 self.remoteVideoPaused = paused
             }
@@ -13211,14 +13302,9 @@ extension AppState {
         videoPipeline?.setCameraEnabled(enabled)
         videoTransitionCause = enabled ? "local-camera-start" : "local-camera-stop"
         localVideoPaused = !enabled
-        if let peerId = callContactId,
-           let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
-           let callId = impl.getActiveCallId() {
-            Task {
-                try? await impl.sendVideoState(
-                    callId: callId, recipientId: peerId, paused: !enabled)
-            }
-        }
+        // WIRE_SPEC §8.9 — on-change trigger; the heartbeat re-states it so a
+        // lost frame is not permanent.
+        announceVideoState(force: false)
     }
 }
 

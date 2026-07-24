@@ -437,16 +437,33 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// or auto-fall-back to the audio-only call screen. Never touches the
     /// PeerConnection/SDP — the m=video line and transceiver direction
     /// stay exactly as negotiated.
+    ///
+    /// WIRE_SPEC §8.9 — `seq`/`screen` carry the beacon. Both default to nil so
+    /// every existing caller keeps emitting exactly the pre-beacon frame; the
+    /// 1:1 call path passes them so repeated announcements can be ordered by
+    /// the receiver (see ``VideoStateBeacon``). Omitted from the payload
+    /// entirely when nil — the frame stays byte-identical for a non-beacon
+    /// caller.
     public func sendVideoState(
         callId: String,
         recipientId: String,
-        paused: Bool
+        paused: Bool,
+        seq: Int? = nil,
+        screen: Bool? = nil
     ) async throws {
-        ws.send(type: "call_video_state", data: [
+        var payload: [String: Any] = [
             "call_id":      callId,
             "recipient_id": recipientId,
             "paused":       paused,
-        ])
+        ]
+        if let seq {
+            payload["seq"] = seq
+            // Positive restatement of the same fact, so a receiver never has to
+            // guess whether `paused=false` means "sending" or "no video at all".
+            payload["sending"] = !paused
+        }
+        if let screen { payload["screen"] = screen }
+        ws.send(type: "call_video_state", data: payload)
     }
 
     public func getRelays() async throws -> [RelayServer] {
