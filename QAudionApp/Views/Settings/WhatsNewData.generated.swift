@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.852",
+              date: "2026-07-25",
+              title: "v1.0.852",
+              bullets: [
+                "fix(call): three more controls rendering from the wrong signal (iOS)",
+                "fix(telemetry): a lane collapse after the call ended is always teardown",
+                "fix(call): the camera button must read \"is MY camera on\", not \"does this call have video\"",
+                "fix(telemetry): stall_kind was being eaten by the egress redactor",
+              ]),
         .init(id: "v1.0.851",
               date: "2026-07-24",
               title: "v1.0.851",
               bullets: [
+                "chore: regenerate changelog for v1.0.851",
                 "docs(wire): one canonical WIRE_SPEC, de-collided 3.5/3.6, new 8.9 beacon",
                 "feat(call): video state is a beacon, not an edge (WIRE_SPEC 8.9)",
                 "feat(telemetry): record every video-lane transition (W-VIDTRANS)",
@@ -179,13 +189,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.833",
                 "feat(presence): real subscribe gating, honest labels, invalidation, resume fix (I1-I6)",
                 "fix(ios): keep Info.plist pure ASCII, as the file itself demands (W-NFCIOS)",
-              ]),
-        .init(id: "v1.0.832",
-              date: "2026-07-22",
-              title: "v1.0.832",
-              bullets: [
-                "chore: regenerate changelog for v1.0.832",
-                "fix(nfc): the AID list is an Info.plist key, not an entitlement (W-NFCIOS)",
               ]),
     ]
 }
