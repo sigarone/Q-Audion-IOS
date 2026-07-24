@@ -9,10 +9,24 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.851",
+              date: "2026-07-24",
+              title: "v1.0.851",
+              bullets: [
+                "docs(wire): one canonical WIRE_SPEC, de-collided 3.5/3.6, new 8.9 beacon",
+                "feat(call): video state is a beacon, not an edge (WIRE_SPEC 8.9)",
+                "feat(telemetry): record every video-lane transition (W-VIDTRANS)",
+                "fix(call): camera toggle must tell the peer; a re-offer must not revive it (W-CAMSILENT/W-CAMREVIVE)",
+                "fix(audio): iOS audio can no longer die silently on an engine restart (W-AUDIODEATH/W-AUDIOUILIE)",
+                "test(kcmac): fix over-broad role-loss assertion, pin the real boundary",
+                "feat(telemetry): iOS video.stats carries call_id + real fps (W-VIDTELATTR/W-VIDTELFPS)",
+                "fix(call): rebuild kc_mac adverts from what was ACTUALLY sent (W-KCMACROLES)",
+              ]),
         .init(id: "v1.0.850",
               date: "2026-07-24",
               title: "v1.0.850",
               bullets: [
+                "chore: regenerate changelog for v1.0.850",
                 "feat(call): PSK ✓ chip shows whenever n>=1, independent of assurance state (Pavel decision)",
               ]),
         .init(id: "v1.0.849",
@@ -172,14 +186,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.832",
                 "fix(nfc): the AID list is an Info.plist key, not an entitlement (W-NFCIOS)",
-              ]),
-        .init(id: "v1.0.831",
-              date: "2026-07-22",
-              title: "v1.0.831",
-              bullets: [
-                "chore: regenerate changelog for v1.0.831",
-                "fix(nfc): the iPhone was never asking Android for our application (W-NFCIOS)",
-                "feat(vault): an NFC key can be seen but never copied off the phone (W-NFCBIND, iOS parity)",
               ]),
     ]
 }
