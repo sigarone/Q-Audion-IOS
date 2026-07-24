@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.848",
+              date: "2026-07-24",
+              title: "v1.0.848",
+              bullets: [
+                "fix(call): PSK-confirmed chip also shows on S2, not just S8",
+              ]),
         .init(id: "v1.0.847",
               date: "2026-07-24",
               title: "v1.0.847",
               bullets: [
+                "chore: regenerate changelog for v1.0.847",
                 "fix(call): decouple mutual-NFC-in-common signal from AssuranceState S7 (W-NFCCOMMON)",
               ]),
         .init(id: "v1.0.846",
@@ -174,14 +181,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.829",
                 "fix(audio): iOS TX level staging -- dead headroom clamp, noise-adaptive ceiling, VP-IO retry",
-              ]),
-        .init(id: "v1.0.828",
-              date: "2026-07-21",
-              title: "v1.0.828",
-              bullets: [
-                "chore: regenerate changelog for v1.0.828",
-                "test(analysis): fix Float rounding in the legacy-stress-formula fence",
-                "fix(audio): stop the make-up AGC overdriving the limiter; fix voice gauges stuck at 0",
               ]),
     ]
 }
