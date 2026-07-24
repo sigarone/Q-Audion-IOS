@@ -551,7 +551,13 @@ final class AppState: ObservableObject {
         let prev = lastVideoLaneName
         guard prev != next else { return }
         lastVideoLaneName = next
-        let cause = videoTransitionCause
+        // A lane collapse while the call is already gone is ALWAYS teardown,
+        // whatever hint happened to be left over. Without this the last row of
+        // call fec3decc read `Both -> Off (peer-camera-start)` — a stale hint
+        // from the previous flip attributed to the hangup, which is exactly the
+        // kind of confident-but-wrong record that sends a future reader chasing
+        // a bug that never happened.
+        let cause = isInCall ? videoTransitionCause : "call-teardown"
         videoTransitionCause = "derived"
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let sincePrev = lastVideoTransitionAtMs == 0 ? -1 : nowMs - lastVideoTransitionAtMs
