@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.849",
+              date: "2026-07-24",
+              title: "v1.0.849",
+              bullets: [
+                "fix(call): iOS ACCEPT never advertised own pskFingerprints/pskRoles (W-NFCCOMMON root cause)",
+              ]),
         .init(id: "v1.0.848",
               date: "2026-07-24",
               title: "v1.0.848",
               bullets: [
+                "chore: regenerate changelog for v1.0.848",
                 "fix(call): PSK-confirmed chip also shows on S2, not just S8",
               ]),
         .init(id: "v1.0.847",
@@ -174,13 +181,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.830",
                 "ci: drop the untrusted aws/tap so brew stops annotating every build",
                 "feat(contacts): hide peers whose account no longer exists on the server (W-ORPHANPEER)",
-              ]),
-        .init(id: "v1.0.829",
-              date: "2026-07-21",
-              title: "v1.0.829",
-              bullets: [
-                "chore: regenerate changelog for v1.0.829",
-                "fix(audio): iOS TX level staging -- dead headroom clamp, noise-adaptive ceiling, VP-IO retry",
               ]),
     ]
 }
