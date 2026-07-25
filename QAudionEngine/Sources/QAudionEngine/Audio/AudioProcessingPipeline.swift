@@ -330,6 +330,30 @@ public final class AudioProcessingPipeline {
     private var engineRestartFailuresThisCall: Int = 0
     private var playoutDroppedThisCall: Int = 0
     private var engineRunningAtEndThisCall: Bool = false
+    // W-IOSPLAYOUT (2026-07-25) — the player-node queue, which nothing measured.
+    //
+    // `playoutDropped` above covers the frame that never reached the player because the
+    // engine was dead. It says nothing about the frames that DID reach it, and there is a
+    // second elastic store downstream that no counter observed: `AVAudioPlayerNode` keeps
+    // its own queue of scheduled buffers. A queue that grows is standing latency the user
+    // hears as delay; a queue that empties is the gap they hear as a dropout. Both were
+    // invisible.
+    //
+    // Deliberately a LEDGER and not a control input: the completion handler is the only
+    // signal that a buffer was consumed, and if it never fires the cost is a wrong number,
+    // never a stalled call. `playoutLedgerAnomalies` is the ledger reporting its own
+    // untrustworthiness — a route flip can fire pending handlers in a burst, and a
+    // decrement with nothing in flight lands there instead of silently going negative and
+    // making the depth read low forever.
+    private var playoutWritesThisCall: Int = 0
+    private var playoutInFlightMaxThisCall: Int = 0
+    private var playoutLedgerAnomaliesThisCall: Int = 0
+    // Two paths in `playFrame` bail out AFTER the engine check and before scheduling: a
+    // failed buffer allocation, and a bus format that is neither Int16 nor Float32. Both
+    // `return` silently today, and neither is a `playoutDropped` — the engine was alive
+    // and willing. A non-zero value here with a healthy `rx_dec` means the frames were
+    // decoded and then thrown away by our own scheduling code.
+    private var playoutSchedFailThisCall: Int = 0
     private var vpioBypassedEverThisCall = false
     // W-VPIORETRY (2026-07-21) — how many engine starts this call actually ran
     // WITHOUT VP-IO because of a bypass, and how many times VP-IO was re-armed
@@ -408,6 +432,30 @@ public final class AudioProcessingPipeline {
     /// can say whether the audio engine was still alive when the call ended.
     public func noteEngineRunningAtEnd(_ running: Bool) {
         engineRunningAtEndThisCall = running
+    }
+
+    /// W-IOSPLAYOUT — a buffer was handed to the player node, with the resulting queue
+    /// depth. `inFlightAfter` is a MAX because a mean over a call would average away the
+    /// backlog that matters; a single excursion to 15 buffers is 300 ms of standing delay
+    /// and is exactly the complaint worth explaining.
+    public func notePlayoutScheduled(inFlightAfter: Int) {
+        playoutWritesThisCall += 1
+        if inFlightAfter > playoutInFlightMaxThisCall {
+            playoutInFlightMaxThisCall = inFlightAfter
+        }
+    }
+
+    /// W-IOSPLAYOUT — a decoded frame the engine was willing to take, discarded by our own
+    /// scheduling code (allocation failure, or an output bus in a format we do not fill).
+    public func notePlayoutSchedFail() {
+        playoutSchedFailThisCall += 1
+    }
+
+    /// W-IOSPLAYOUT — a completion fired with nothing recorded as in flight. Counting it
+    /// rather than clamping silently is what keeps `playout_inflight_max` readable: a
+    /// non-zero anomaly count says "treat the depth as a lower bound".
+    public func notePlayoutLedgerAnomaly() {
+        playoutLedgerAnomaliesThisCall += 1
     }
 
     /// W-IOSECHO — AudioCapture.restartEngineForRoute reports here ONLY when
@@ -503,6 +551,11 @@ public final class AudioProcessingPipeline {
         public let engineRestartFailures: Int
         public let playoutDropped: Int
         public let engineRunningAtEnd: Bool
+        // W-IOSPLAYOUT — the player-node queue and the scheduling failures.
+        public let playoutWrites: Int
+        public let playoutInFlightMax: Int
+        public let playoutSchedFail: Int
+        public let playoutLedgerAnomalies: Int
     }
 
     /// Read the per-call audio diagnostics and reset them for the next call.
@@ -535,7 +588,11 @@ public final class AudioProcessingPipeline {
             speakerMs:           speakerMsAccumulatedThisCall,
             engineRestartFailures: engineRestartFailuresThisCall,
             playoutDropped:      playoutDroppedThisCall,
-            engineRunningAtEnd:  engineRunningAtEndThisCall
+            engineRunningAtEnd:  engineRunningAtEndThisCall,
+            playoutWrites:          playoutWritesThisCall,
+            playoutInFlightMax:     playoutInFlightMaxThisCall,
+            playoutSchedFail:       playoutSchedFailThisCall,
+            playoutLedgerAnomalies: playoutLedgerAnomaliesThisCall
         )
         agcEverActiveThisCall = false
         speakerRouteEverThisCall = false
@@ -555,6 +612,10 @@ public final class AudioProcessingPipeline {
         engineRestartFailuresThisCall = 0
         playoutDroppedThisCall = 0
         engineRunningAtEndThisCall = false
+        playoutWritesThisCall = 0
+        playoutInFlightMaxThisCall = 0
+        playoutSchedFailThisCall = 0
+        playoutLedgerAnomaliesThisCall = 0
         return stats
     }
 

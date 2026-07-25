@@ -17,6 +17,12 @@ public final class AudioCapture {
     // node fixes it — and lets VP-IO's AEC reference the playback for echo
     // cancellation, the canonical VoIP graph.
     private var playerNode: AVAudioPlayerNode?
+    /// W-IOSPLAYOUT (2026-07-25) — buffers handed to `playerNode` whose completion has not
+    /// fired yet, i.e. the player's own queue depth. Main-queue only (both sides of the
+    /// ledger hop there), so no lock. Reset wherever the player is stopped: `stop()`
+    /// discards its queued buffers WITHOUT firing their handlers on every documented path,
+    /// so a stale count would make the depth read high for the rest of the call.
+    private var playoutInFlight: Int = 0
     private var playFormat: AVAudioFormat?
     private var isRunning = false
     // W-AEC-FIX — VP-IO input-pull sink: when Voice-Processing I/O is active the
@@ -1343,7 +1349,14 @@ public final class AudioCapture {
         let frames = pcmData.count / 2  // decoded PCM is Int16 mono
         guard frames > 0,
               let buffer = AVAudioPCMBuffer(pcmFormat: outFmt,
-                                            frameCapacity: AVAudioFrameCount(frames)) else { return }
+                                            frameCapacity: AVAudioFrameCount(frames)) else {
+            // W-IOSPLAYOUT (2026-07-25) — the engine was alive and willing and we threw
+            // the frame away anyway. Counted separately from `playoutDropped`, which means
+            // "the engine was dead": these two look identical to the user and have
+            // completely different causes.
+            audioPipeline.notePlayoutSchedFail()
+            return
+        }
         buffer.frameLength = AVAudioFrameCount(frames)
         let ch = Int(outFmt.channelCount)
         let scale: Float = 1.0 / 32768.0
@@ -1368,8 +1381,42 @@ public final class AudioCapture {
             }
             return false  // unsupported bus format → skip frame (never crash)
         }
-        guard filled else { return }
-        player.scheduleBuffer(buffer, completionHandler: nil)
+        guard filled else {
+            // The other silent bail-out: an output bus in a format we do not fill.
+            audioPipeline.notePlayoutSchedFail()
+            return
+        }
+        // W-IOSPLAYOUT (2026-07-25) — measure the player node's OWN queue.
+        //
+        // `AVAudioPlayerNode` is a second elastic store downstream of everything else, and
+        // nothing observed it. A queue that grows is standing latency the user hears as
+        // delay; a queue that empties is the gap they hear as a dropout. The completion
+        // handler slot was sitting unused, and it is the only signal that a buffer was
+        // actually consumed.
+        //
+        // Deliberately a pure LEDGER with no control authority: if a handler never fires,
+        // the cost is a wrong number and never a stalled call. Both sides of the ledger hop
+        // to the main queue — the handler runs on an engine-internal thread, and this
+        // serialises the two mutations without adding a lock or assuming which thread
+        // `playFrame` was called on.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.playoutInFlight += 1
+            self.audioPipeline.notePlayoutScheduled(inFlightAfter: self.playoutInFlight)
+        }
+        player.scheduleBuffer(buffer) { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if self.playoutInFlight > 0 {
+                    self.playoutInFlight -= 1
+                } else {
+                    // A route flip can fire pending handlers in a burst. Counting that
+                    // instead of clamping in silence is what keeps the depth readable: a
+                    // non-zero anomaly count means treat the max as a lower bound.
+                    self.audioPipeline.notePlayoutLedgerAnomaly()
+                }
+            }
+        }
     }
 
     private func registerInterruptionObserver() {
@@ -1520,6 +1567,7 @@ public final class AudioCapture {
         restartSuppressUntil = Date().addingTimeInterval(0.6)
         engine?.inputNode.removeTap(onBus: 0)
         playerNode?.stop()
+        playoutInFlight = 0  // W-IOSPLAYOUT — stop() discards the queue; the ledger must follow
         if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
         engine?.stop()
         engine = nil; playerNode = nil; playFormat = nil; inputSink = nil; isRunning = false
@@ -1610,6 +1658,7 @@ public final class AudioCapture {
             wasInterrupted = true
             engine?.inputNode.removeTap(onBus: 0)
             playerNode?.stop()
+            playoutInFlight = 0  // W-IOSPLAYOUT — stop() discards the queue; the ledger must follow
             if let engine = engine {
                 audioPipeline.disableVoiceProcessing(on: engine)
             }
@@ -1664,6 +1713,7 @@ public final class AudioCapture {
         }
         engine?.inputNode.removeTap(onBus: 0)
         playerNode?.stop()
+        playoutInFlight = 0  // W-IOSPLAYOUT — stop() discards the queue; the ledger must follow
         if let engine = engine {
             audioPipeline.disableVoiceProcessing(on: engine)
         }

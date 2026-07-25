@@ -1314,6 +1314,26 @@ final class CallService: @unchecked Sendable {
                     "engine_restart_fail":  diag.engineRestartFailures,
                     "playout_dropped":      diag.playoutDropped,
                     "engine_running_at_end": diag.engineRunningAtEnd,
+                    // W-IOSPLAYOUT (2026-07-25) — the player node's OWN queue, which no
+                    // counter observed. `playout_dropped` above covers frames that never
+                    // reached the player; these cover what happened to the ones that did.
+                    // A depth that grows is standing latency heard as delay, a depth that
+                    // empties is the gap heard as a dropout, and until now the two were
+                    // indistinguishable from each other and from a network problem.
+                    //
+                    // `playout_sched_fail` is the third distinct way a decoded frame dies:
+                    // the engine was alive and willing, and our own scheduling code threw
+                    // the frame away (allocation failure, or an output bus format we do not
+                    // fill). Both of those paths returned in silence before this.
+                    //
+                    // `playout_ledger_anomalies` is the measurement declaring its own
+                    // reliability: a route flip can fire pending completion handlers in a
+                    // burst, and rather than clamp that away, a non-zero count here means
+                    // read `playout_inflight_max` as a lower bound.
+                    "playout_writes":         diag.playoutWrites,
+                    "playout_inflight_max":   diag.playoutInFlightMax,
+                    "playout_sched_fail":     diag.playoutSchedFail,
+                    "playout_ledger_anomalies": diag.playoutLedgerAnomalies,
                     // W-AGCNOISE (2026-07-21) — the make-up loop's actual behaviour,
                     // which agc_gain alone cannot show. agc_gain is a call-MAX and has
                     // the same blind spot as peak_pct: 5.89 reads the same whether the
