@@ -9,10 +9,23 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.854",
+              date: "2026-07-25",
+              title: "v1.0.854",
+              bullets: [
+                "feat(psk-advert): phase B — the OFFER now emits blinded tags (W-PSKBLIND)",
+                "test(psk-advert): the namespace assertion failed on its own explanation (W-PSKBLIND)",
+                "feat(psk-advert): per-contact latch closes the forceable downgrade (W-PSKBLIND)",
+                "feat(psk-advert): refuse the static fallback behind a caller-owned latch (W-PSKBLIND)",
+                "docs(wire-spec): §3.3.1.1 — the static fallback is forceable (phase-B blocker)",
+                "feat(psk-advert): phase A — dual-dialect PSK advertisement resolution (W-PSKBLIND)",
+                "feat(psk-advert): PskAdvertV3 blinded advertisement module + KAT (W-PSKBLIND)",
+              ]),
         .init(id: "v1.0.853",
               date: "2026-07-25",
               title: "v1.0.853",
               bullets: [
+                "chore: regenerate changelog for v1.0.853",
                 "fix(audio): iOS never decoded the audio it received (W-IOSFECFLAG)",
                 "feat(audio): the playout jitter buffer iOS did not have (W-IOSJITTER)",
                 "fix(call): video consent is per SESSION, not per call (W-CONSENTSESSION)",
@@ -176,20 +189,6 @@ extension ReleaseNote {
                 "feat(psk-mix): step 7 derivation math + cross-platform KAT (iOS) (#36)",
                 "psk-mix steps 4/5/6/8: transcript-v2 + kc_mac + AssuranceState + presenceAuth/floor (iOS) (#35)",
                 "chore(deps): bump grpc to v1.82.1 in RealityCore (Dependabot #1)",
-              ]),
-        .init(id: "v1.0.834",
-              date: "2026-07-22",
-              title: "v1.0.834",
-              bullets: [
-                "chore: regenerate changelog for v1.0.834",
-                "fix(psk): exclude call-derived PSKs from video-HKDF-salt resolution (W-PSKMIX step 6)",
-                "fix(tests): two W-IOSECHO test bugs caught by CI (not production bugs)",
-                "fix(psk): exclude call-derived PSKs from receive-side matching gates (W-PSKMIX step 5)",
-                "feat(audio): echo-cancellation effectiveness telemetry (W-IOSECHO)",
-                "fix(psk): exclude auto: group-ctrl ratchet seed from call-PSK advertisement (W-PSKMIX step 4)",
-                "feat(psk): iOS advert hygiene — filter, stable order, fp normalisation (W-PSKMIX step 3)",
-                "fix(psk): unwrap getFingerprint's String? before Array<String>.contains",
-                "feat(psk): parse-only support for multi-PSK selection (W-PSKMIX step 2)",
               ]),
     ]
 }
