@@ -532,6 +532,25 @@ latch is sound because phase A is universal before phase B, so a pair that has
 completed one v3 call has no legitimate reason to speak static again. Same shape
 as the existing per-contact presence floor, and it belongs in the same store.
 
+### 3.3.1.2 Scope: the QUAD binary transport is NOT covered
+
+§3.3.1 blinds the advertisement in the JSON handshake-bundle dialect (the
+`"<callId>|<json>"` `opaque_message` payload) — the one every cross-platform call
+uses. The QUAD binary dialect has its own PSK-fingerprint section and its own
+selection code, and that code still does a bare static-fingerprint match. Nothing
+here changes it.
+
+Reach of the gap, as of 2026-07-25: iOS has a QUAD encoder/decoder for the section
+but never populates it (its single production QUAD OFFER emitter passes an empty
+list), and Android does not speak QUAD at all. So this is **Desktop↔Desktop calls
+only** — and on those, the constant per-relationship correlator remains, whatever
+phase the JSON dialect is in.
+
+Closing it means porting the same construction into the QUAD advertisement.
+Deliberately out of scope here: the derived nonce needs a signed sender ephemeral
+to bind to, so the QUAD port has to establish its own equivalent rather than
+inherit this one, and that is a separate change with its own vectors.
+
 **Honest limits.** v3 does not hide how many secrets a pair shares (the list
 length is still visible; pad to a fixed length if that matters), and it does not
 stop a peer who already holds key X from testing whether you also hold X — that

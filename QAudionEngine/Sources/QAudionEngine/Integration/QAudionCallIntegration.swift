@@ -1419,8 +1419,29 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // intermittent one.
                 candidates: eligiblePsks.keys.sorted().map {
                     PskAdvertResolver.Candidate(staticFp: $0, psk: eligiblePsks[$0] ?? Data(), localRole: 0)
-                }
+                },
+                // §3.3.1.1 — THE decisive read. This resolve is what admits a
+                // static-dialect PSK into the session key on this leg, so this is where
+                // the forceable downgrade is actually denied.
+                refuseStaticFallback: Self.pskDialectLatch.hasSpokenBlindedAdvert(contactId: callerId)
             )
+            // The peer's OWN advertisement resolved under the peer's OWN ephemeral key, so
+            // a v3 result here is a fact about THEIR build and is safe to latch.
+            if resolvedAdvert.dialect == .v3Blinded {
+                Self.pskDialectLatch.rememberSpokeBlindedAdvert(contactId: callerId)
+            }
+            if resolvedAdvert.dialect == .v2StaticRefused {
+                // §3.3.1.1 — loud on purpose. This is the ONLY signature of the forceable
+                // downgrade: a contact known to speak the blinded advertisement has sent a
+                // static one. The call proceeds without a PSK (W-NOBRICK: never dropped)
+                // and n=0 carries it into the assurance state and the trust bar exactly as
+                // any other no-PSK call.
+                print("[QAudionCallIntegration] REFUSED static PSK advertisement from "
+                    + "\(callerId.prefix(8))… — this contact has spoken the blinded advertisement "
+                    + "before, so a static one is a downgrade (relay substituting logged "
+                    + "fingerprints, or a genuine rollback). Session key derives WITHOUT a PSK; "
+                    + "call NOT dropped. WIRE_SPEC §3.3.1.1")
+            }
             if let advertised = bundle.pskFingerprints {
                 if let staticFp = resolvedAdvert.staticFp,
                    let gated = Self.pskIfFingerprintMatches(eligiblePsks[staticFp], staticFp) {
@@ -2237,15 +2258,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                         localRole: 0
                     )
                 }
-            let kcCallerPeerAdvertisedRoles = Array(
-                PskAdvertResolver.resolve(
-                    receivedAdvert: bundle.pskFingerprints,
-                    receivedRoles: bundle.pskRoles,
-                    callId: callId,
-                    senderEphemeralX25519Pub: x25519EphPub,
-                    candidates: kcCallerCandidates
-                ).mutualPeerRoles
+            let kcCallerResolved = PskAdvertResolver.resolve(
+                receivedAdvert: bundle.pskFingerprints,
+                receivedRoles: bundle.pskRoles,
+                callId: callId,
+                senderEphemeralX25519Pub: x25519EphPub,
+                candidates: kcCallerCandidates,
+                // §3.3.1.1 — the responder's own advertisement is subject to the same
+                // refusal. Its selection is not used on this leg (the echo is), but its
+                // MUTUAL set feeds the §D4 gate and the NFC-in-common chip, and those must
+                // not act on an advertisement we would have refused.
+                refuseStaticFallback: Self.pskDialectLatch.hasSpokenBlindedAdvert(contactId: callerId)
             )
+            // Same reasoning as the responder leg: this is the RESPONDER's own advert under
+            // the RESPONDER's own ephemeral key, so a v3 result is a fact about their build.
+            if kcCallerResolved.dialect == .v3Blinded {
+                Self.pskDialectLatch.rememberSpokeBlindedAdvert(contactId: callerId)
+            }
+            let kcCallerPeerAdvertisedRoles = Array(kcCallerResolved.mutualPeerRoles)
             onKcMacReady?(KcMacReadyEvent(
                 peerId: callerId, callId: callId, isInitiator: true, sessionKey: combined,
                 kcKey: kcCallerKeyForEvent, transcript: kcCallerTranscriptForEvent, n: kcCallerN,
@@ -2736,6 +2766,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// why the responder path logs that case explicitly rather than in silence.
     static let offerAdvertDialect: PskAdvertResolver.Dialect = .v2Static
 
+    /// W-PSKBLIND (§3.3.1.1) — the per-contact blinded-advertisement latch. See
+    /// [PskAdvertDialectLatchStore] for why it is its own Keychain namespace and for the
+    /// accepted limits (keyed by contact not device; not restored to a new device).
+    private static let pskDialectLatch = PskAdvertDialectLatchStore()
+
     /// W-PSKBLIND — resolve the responder's echoed `selectedPskFingerprint` back to
     /// the local PSK material, in EITHER dialect.
     ///
@@ -2781,6 +2816,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
         // parseSelection keeps tolerating a future comma-joined multi-selection; only
         // the first entry is acted on, exactly as before.
+        //
+        // §3.3.1.1 is deliberately NOT applied here, and this must never latch. The value
+        // being resolved is OUR OWN advertised element under OUR OWN ephemeral key, so its
+        // dialect reports what THIS build emitted, not what the peer can speak. Refusing
+        // here would reject our own static advertisement back to ourselves; latching here
+        // would arm every contact the instant `offerAdvertDialect` flips, including peers
+        // that only ever spoke static, which we would then refuse forever. This function
+        // deliberately takes no contactId, which is what makes both mistakes impossible
+        // rather than merely discouraged — do not add one.
         let selection = Self.parseSelection(echo)
         let resolved = PskAdvertResolver.resolve(
             receivedAdvert: selection,
