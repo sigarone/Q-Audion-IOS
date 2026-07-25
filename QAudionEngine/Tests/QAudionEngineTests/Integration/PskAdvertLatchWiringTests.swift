@@ -58,9 +58,19 @@ final class PskAdvertLatchWiringTests: XCTestCase {
     func testTheLatchLivesInItsOwnKeychainNamespace() throws {
         let store = try source(named: "PskAdvertDialectLatchStore.swift", under: "Persistence")
         // Distinct from the peer-identity pins and from this device's own identity, so
-        // the three can never collide.
-        XCTAssertTrue(store.contains("\"com.bcrypto.qaudion.pskdialect\""))
-        XCTAssertFalse(store.contains("com.bcrypto.qaudion.peerpins"))
+        // the three can never collide. Asserted on the CONSTANT rather than on the file
+        // text: the doc comment names the other namespaces precisely to say it is not
+        // them, so a whole-file substring check fails on its own explanation.
+        XCTAssertTrue(
+            store.contains("keychainService = \"com.bcrypto.qaudion.pskdialect\""),
+            "the service constant must be the dedicated namespace"
+        )
+        for foreign in ["com.bcrypto.qaudion.peerpins", "com.bcrypto.qaudion.sovereign"] {
+            XCTAssertFalse(
+                store.contains("keychainService = \"\(foreign)\""),
+                "must not share \(foreign)'s namespace"
+            )
+        }
         // Per-device, never synced, never in an iCloud or iTunes backup.
         XCTAssertTrue(store.contains("kSecAttrAccessibleWhenUnlockedThisDeviceOnly"))
         // There is no unset path on the handshake side — `forget` exists for contact
