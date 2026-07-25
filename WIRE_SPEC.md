@@ -491,12 +491,56 @@ needing a decision:
   "PSK not used this call" notice, never as a session key silently derived
   without the PSK.
 
+### 3.3.1.1 Known downgrade: the static fallback is forceable (PHASE-B BLOCKER)
+
+Found by adversarial review during implementation (2026-07-25), confirmed by
+walking the code. It does not affect phase A, where nobody emits v3, but it MUST
+be closed before phase B.
+
+Attacker: the relay, or anyone on path. Prerequisite: it logged this pair's
+**old** static fingerprints from any call they made before v3 — those values are
+constant for the life of the key, which is the very leak §3.3.1 exists to fix, so
+assume any long-lived observer has them.
+
+1. The relay intercepts a v3 OFFER, replaces `pskFingerprints` with the logged
+   static fingerprints, and strips the Ed25519 signature. Client policy is
+   warn-and-proceed on an absent/bad handshake signature and never to drop the
+   call (W-NOBRICK; the SAS is the anti-MITM gate), so the call continues.
+2. The responder's v3 match fails, its static match succeeds, and it records the
+   peer as speaking the static dialect.
+3. It mirrors that dialect, so BOTH sides spend the call on static fingerprints.
+
+The PSK still ends up in the session key on both sides, so this is not a break.
+What the relay gets is two things:
+
+* **v3 is switched off for that pair, on demand.** It cannot learn a correlator it
+  did not already have, but it can keep confirming the pair on every future call
+  rather than losing them to blinding. So v3's unlinkability is NOT robust against
+  an active on-path attacker for any pair that ever completed a pre-v3 call.
+* **Selection steering.** With the signature stripped and a substituted list, it
+  reorders or truncates to choose WHICH shared secret gets selected. This is not
+  introduced here — the static dialect has always had it against a warn-only
+  peer, and binding the real order in `advEnc` (§3.2) is what closes it — but the
+  fallback keeps that door open for pairs whose v3 would otherwise have shut it.
+
+**Required mitigation before phase B: a per-contact "v3 seen" latch.** Once a
+contact's advertisement has resolved as v3 even once, refuse the static fallback
+for that contact: treat a static advertisement from them as no-match, log it, and
+raise the explicit "PSK not used this call" notice. Do NOT drop the call
+(W-NOBRICK) — the point is to make the downgrade loud instead of invisible. The
+latch is sound because phase A is universal before phase B, so a pair that has
+completed one v3 call has no legitimate reason to speak static again. Same shape
+as the existing per-contact presence floor, and it belongs in the same store.
+
 **Honest limits.** v3 does not hide how many secrets a pair shares (the list
 length is still visible; pad to a fixed length if that matters), and it does not
 stop a peer who already holds key X from testing whether you also hold X — that
 is inherent to any matchable advertisement, and the knowledge gained is nil since
-they already have the key. It says nothing about the server knowing who calls
-whom; that is a different layer.
+they already have the key. The tag is not password-hardened, so a LOW-ENTROPY psk
+stays confirmable offline by computing the tag for a guess and comparing; that is
+equally true of the static `SHA-256(psk)` it replaces, and is why psks are 32
+random bytes. It says nothing about the server knowing who calls whom; that is a
+different layer.
 
 KAT: `bcrypto-server/tools/kat/psk-advert-v3/psk-advert-v3-kat.json`, generated
 and self-verified by `tools/kat/gen_psk_advert_v3_kat.py`, which writes every
