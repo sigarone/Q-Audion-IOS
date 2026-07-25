@@ -49,6 +49,23 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// 4 frames = 80 ms, enough to absorb a 20 ms spike without underrunning.
     static let nominalWatermark = 4
 
+    /// W-TRIMFLOOR (2026-07-26) — the depth below which the catch-up tier does not
+    /// arm AT ALL, distinct from `nominalWatermark`, which is the depth it must
+    /// never leave the queue under.
+    ///
+    /// Those two were the same number, and that was the bug. A firing removes two
+    /// frames — it discards the silent head, then polls again to deliver — so
+    /// entering at nominal+1 handed back nominal-1. The buffer starved, concealed,
+    /// refilled to nominal+1 and trimmed again: a treadmill it powered itself.
+    /// Measured on Android, which is where this file was ported from and which
+    /// therefore carried the identical defect: 515 and 96 silence drops against 38
+    /// and 42 stalls, on links with 2.0% and 0% real loss.
+    ///
+    /// 7 is nominal + one firing + one frame of margin. Trimming a 5-frame queue
+    /// buys 20 ms of latency and costs a concealment later; that is not a trade
+    /// worth making.
+    static let trimWatermark = 7
+
     /// Tier 2. Above this the buffer may discard SILENT frames to work down a
     /// backlog, scanning further and dropping more per tick than tier 1.
     static let highWatermark = 8
@@ -124,8 +141,16 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let d = queue.count
 
-        // Tier 0 — nothing to work down.
-        if d <= Self.nominalWatermark {
+        // Tier 0 — nothing worth working down.
+        //
+        // W-TRIMFLOOR — the boundary is `trimWatermark`, not `nominalWatermark`.
+        //
+        // `&& !emergencyDraining` is load-bearing. Without it, raising the boundary
+        // to 7 lets tier 0 preempt an ACTIVE latched drain: tier 3 engages at 15,
+        // works down to 7, and then tier 0 claims every subsequent pop and the queue
+        // parks at 5 forever with the latch still set. On Android this was caught by
+        // the drain-budget test, not by reading the diff.
+        if d <= Self.trimWatermark && !emergencyDraining {
             return popLocked()
         }
 
@@ -160,7 +185,12 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
                 return nil
             }
             let head = queue.removeFirst()
-            if dropsRemaining > 0, Self.isSilent(head) {
+            // W-TRIMFLOOR — gate on the depth this firing will LEAVE, not the depth
+            // it entered with. `queue.count` here is already post-removal, so it is
+            // exactly what the queue is left holding if we discard this head and
+            // deliver the next frame. The entry threshold alone cannot hold the floor
+            // once a firing removes more than one frame, which is the whole defect.
+            if dropsRemaining > 0, queue.count >= Self.nominalWatermark, Self.isSilent(head) {
                 _silenceDrops += 1
                 dropsRemaining -= 1
                 anyDropped = true

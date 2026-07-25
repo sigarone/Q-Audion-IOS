@@ -108,6 +108,72 @@ final class PlayoutJitterBufferTests: XCTestCase {
         XCTAssertEqual(0, jb.hardDrops)
     }
 
+    // MARK: - W-TRIMFLOOR — the buffer must not trim itself below the depth it defends
+
+    /// The treadmill, ported here before it could ever run.
+    ///
+    /// This class was a verbatim port of Android's `JitterBuffer`, constant for
+    /// constant, so it inherited the defect along with everything else: the tier armed
+    /// at `depth > nominalWatermark` and each firing removed two frames, so entering at
+    /// nominal+1 left the queue at nominal-1 — starve, conceal, refill, trim again.
+    ///
+    /// It never reached a user on iOS only because `PlayoutJitterBuffer` is not yet
+    /// wired into the playout path. That is not a defence, it is a deadline: the day it
+    /// is wired, this is what would have shipped.
+    func testAShallowQueueIsNeverTrimmedBelowTheDepthTheBufferDefends() {
+        let jb = PlayoutJitterBuffer()
+        // The old Android fixture exactly: barely above nominal, and pure silence, i.e.
+        // the most droppable input this buffer can be handed.
+        for _ in 0..<5 { jb.push(silent()) }
+        XCTAssertNotNil(jb.popWithDriftCatchup(), "pop must still deliver")
+        XCTAssertEqual(0, jb.silenceDrops,
+                       "at this depth the tier must not arm — trimming buys 20 ms and costs a hole")
+        XCTAssertGreaterThanOrEqual(jb.depth, PlayoutJitterBuffer.nominalWatermark,
+                                    "and the queue must be left at the depth this class calls sufficient")
+    }
+
+    /// One scenario cannot catch an off-by-one in an arming threshold; the whole entry
+    /// range can. Below tier 3 the rule is unconditional: if we trimmed, we are still
+    /// at or above nominal afterwards.
+    func testTheFloorHoldsAtEveryEntryDepth() {
+        for entryDepth in 1...14 {
+            let jb = PlayoutJitterBuffer()
+            for _ in 0..<entryDepth { jb.push(silent()) }
+            _ = jb.popWithDriftCatchup()
+            if jb.silenceDrops > 0 {
+                XCTAssertGreaterThanOrEqual(
+                    jb.depth, PlayoutJitterBuffer.nominalWatermark,
+                    "entryDepth \(entryDepth): trimmed \(jb.silenceDrops) and left the queue at \(jb.depth)")
+            }
+        }
+    }
+
+    /// The floor must not be satisfied by never trimming at all — that would trade the
+    /// holes for unbounded standing delay, which is the failure this tier exists to stop.
+    func testAGenuinelyDeepQueueIsStillTrimmed() {
+        let jb = PlayoutJitterBuffer()
+        for _ in 0..<12 { jb.push(silent()) }
+        XCTAssertNotNil(jb.popWithDriftCatchup())
+        XCTAssertGreaterThan(jb.silenceDrops, 0,
+                             "the tier still has to reclaim genuine accumulated latency")
+    }
+
+    /// Tier 0's new boundary must not preempt an ACTIVE latched drain. Raising it to 7
+    /// without the `!emergencyDraining` guard let tier 0 claim every pop once the drain
+    /// had worked down to 7, parking the queue at 5 with the latch still set. Android
+    /// caught this in its drain-budget test rather than in review.
+    func testTheRaisedTierZeroBoundaryDoesNotPreemptTheDrain() {
+        let jb = PlayoutJitterBuffer()
+        for _ in 0..<20 { jb.push(loud()) }
+        var ticks = 0
+        while jb.depth > PlayoutJitterBuffer.emergencyDrainTarget && ticks < 60 {
+            _ = jb.popWithDriftCatchup()
+            ticks += 1
+        }
+        XCTAssertLessThanOrEqual(jb.depth, PlayoutJitterBuffer.emergencyDrainTarget,
+                                 "drain parked at depth \(jb.depth) — tier 0 preempted the latch")
+    }
+
     func testSilenceDetectionMatchesTheThreshold() {
         XCTAssertTrue(PlayoutJitterBuffer.isSilent(silent()))
         XCTAssertFalse(PlayoutJitterBuffer.isSilent(loud()))
