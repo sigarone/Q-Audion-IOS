@@ -561,7 +561,45 @@ latch is sound because phase A is universal before phase B, so a pair that has
 completed one v3 call has no legitimate reason to speak static again. Same shape
 as the existing per-contact presence floor, and it belongs in the same store.
 
-### 3.3.1.2 The QUAD binary transport: advert RETIRED, not ported
+### 3.3.1.2 The QUAD 1:1 handshake dialect is RETIRED (advert and all)
+
+**Superseded 2026-07-25 (W-QUADRETIRE).** The section below explains why the blinded advert
+was not ported to QUAD, and that reasoning still stands. It has been overtaken by a larger
+decision: the QUAD 1:1 handshake dialect is gone entirely. Desktop no longer generates,
+sends, or accepts a QUAD OFFER or ACCEPT, and both consume paths are deleted rather than
+guarded.
+
+Why the advert fix was not enough. The advert was one field on a dialect that is unsigned,
+ML-KEM-only (no X25519 leg), and has no ciphertext binding, no transcript and no key
+confirmation. Emptying the advert removed a correlator and left the authentication hole. And
+the hole did not need our cooperation: a QUAD OFFER is an unsigned ML-KEM public key and
+nothing else, so a relay does not have to intercept one — it can FABRICATE one and send it,
+and the responder would have run that unauthenticated handshake against the attacker while
+the UI showed an ordinary secure call. Stopping our own emission alone would therefore have
+closed nothing; the consume side was the half that mattered.
+
+ML-KEM's implicit rejection is what makes it undetectable from the inside: a substituted
+ciphertext yields a valid-looking DIFFERENT shared secret, with no error for any code to act
+on.
+
+The dialect had no legitimate user left. Pavel confirmed (2026-07-25) that no Desktop
+installs predating the JSON handshake path of 2026-05-26 remain in the fleet; iOS retired its
+own QUAD OFFER emitter on 2026-07-12 for a sibling reason; Android's QUAD codec only ever
+served the `KEY_EXCHANGE_*` opcodes. Every real caller sends the signed JSON bundle.
+
+Unaffected, and deliberately kept: the `DC_SDP_OFFER` / `DC_SDP_ANSWER` / `DC_ICE` /
+`CALL_HANGUP` / `KEY_EXCHANGE_*` opcodes and the QUAD codec itself. Those are the live media,
+SDP and first-contact transport. The codec must keep DECODING so a stray or fabricated frame
+is recognised and dropped on purpose rather than misparsed.
+
+Sending only one handshake envelope is itself the security property. The old dual-send
+reasoning — "we cannot know the peer's platform up front, so send both and let the receiver
+pick" — was sound about interop and wrong about trust: the party that picks is the relay,
+because it decides which envelope to deliver.
+
+---
+
+### 3.3.1.2 (historical) The QUAD binary transport: advert retired, not ported
 
 §3.3.1 blinds the advertisement in the JSON handshake-bundle dialect (the
 `"<callId>|<json>"` `opaque_message` payload) — the one every cross-platform call
