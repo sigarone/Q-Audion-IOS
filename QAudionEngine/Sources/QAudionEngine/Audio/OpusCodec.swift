@@ -120,7 +120,37 @@ public final class OpusCodec {
                     Int32(opusFrame.count),
                     outBuf.baseAddress!.assumingMemoryBound(to: Int16.self),
                     Int32(AudioConstants.samplesPerFrame),
-                    1)  // use FEC data when available in the frame
+                    // W-IOSFECFLAG (2026-07-25) — MUST be 0. This is libopus'
+                    // `decode_fec`, and it does NOT mean "use FEC if the frame
+                    // happens to carry it". Set to 1 it decodes the packet's LBRR
+                    // redundancy layer — a low-bitrate copy of the PREVIOUS frame —
+                    // and does not decode the current primary frame at all; the
+                    // CELT high band comes back as concealment because
+                    // opus_decode_frame passes NULL for the payload. opus.h is
+                    // explicit: "If no such data is available, the frame is decoded
+                    // as if it were lost."
+                    //
+                    // So with 1, EVERY frame iOS rendered was the loss-recovery
+                    // layer plus concealment instead of the transmitted signal:
+                    // band-limited, quieter, one frame (20 ms) late, and degrading
+                    // to pure PLC on any frame the sender did not protect. The
+                    // decoder's SILK/CELT history never tracked the real signal
+                    // either, so it compounded.
+                    //
+                    // Introduced by 8def381, "fix(compat): align iOS wire format
+                    // and audio quality with Android" — which changed `0) // no FEC`
+                    // to `1)` for parity, while Android passes 0 on both of its
+                    // decode paths (opus_jni.c:408 and :424) and Desktop passes no
+                    // FEC argument at all. It was a misreading of the opus.h
+                    // contract, and it is the likeliest cause of the long-running
+                    // "Android -> iOS audio sounds muffled/wrong" reports that were
+                    // chased into the AGC and route layers instead.
+                    //
+                    // Real FEC recovery is a DIFFERENT operation: on a detected gap,
+                    // recover frame N from packet N+1 with decode_fec=1, then decode
+                    // N+1 normally with 0. That needs sequence-gap detection, which
+                    // arrives with the playout jitter buffer (W-IOSJITTER).
+                    0)
             }
         }
 
