@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.853",
+              date: "2026-07-25",
+              title: "v1.0.853",
+              bullets: [
+                "fix(audio): iOS never decoded the audio it received (W-IOSFECFLAG)",
+                "feat(audio): the playout jitter buffer iOS did not have (W-IOSJITTER)",
+                "fix(call): video consent is per SESSION, not per call (W-CONSENTSESSION)",
+              ]),
         .init(id: "v1.0.852",
               date: "2026-07-25",
               title: "v1.0.852",
               bullets: [
+                "chore: regenerate changelog for v1.0.852",
                 "fix(call): three more controls rendering from the wrong signal (iOS)",
                 "fix(telemetry): a lane collapse after the call ended is always teardown",
                 "fix(call): the camera button must read \"is MY camera on\", not \"does this call have video\"",
@@ -181,14 +190,6 @@ extension ReleaseNote {
                 "feat(psk): iOS advert hygiene — filter, stable order, fp normalisation (W-PSKMIX step 3)",
                 "fix(psk): unwrap getFingerprint's String? before Array<String>.contains",
                 "feat(psk): parse-only support for multi-PSK selection (W-PSKMIX step 2)",
-              ]),
-        .init(id: "v1.0.833",
-              date: "2026-07-22",
-              title: "v1.0.833",
-              bullets: [
-                "chore: regenerate changelog for v1.0.833",
-                "feat(presence): real subscribe gating, honest labels, invalidation, resume fix (I1-I6)",
-                "fix(ios): keep Info.plist pure ASCII, as the file itself demands (W-NFCIOS)",
               ]),
     ]
 }
