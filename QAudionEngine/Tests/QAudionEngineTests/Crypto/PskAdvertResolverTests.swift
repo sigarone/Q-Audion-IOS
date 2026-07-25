@@ -294,6 +294,119 @@ final class PskAdvertResolverTests: XCTestCase {
         XCTAssertEqual([0], out.roles)
     }
 
+    // MARK: - §3.3.1.1 the forceable-downgrade refusal
+
+    /// THE attack, reproduced. A relay logged this pair's static fingerprints from a
+    /// pre-v3 call, substitutes them into a v3 OFFER and strips the signature (policy
+    /// is warn-and-proceed, never drop). Without the latch the static branch matches and
+    /// both sides spend the call on the correlatable dialect. With it, the match is
+    /// discarded.
+    func testASubstitutedStaticAdvertIsRefusedOnceTheContactHasSpokenV3() {
+        let c = cand(30, PskAdvertV3.roleNfc)
+        let substituted = [c.staticFp] // exactly what a long-lived relay logged
+
+        let permissive = PskAdvertResolver.resolve(
+            receivedAdvert: substituted, receivedRoles: [PskAdvertV3.roleNfc], callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [c]
+        )
+        XCTAssertEqual(
+            .v2Static, permissive.dialect,
+            "sanity: without the latch this is precisely the downgrade"
+        )
+        XCTAssertEqual(c.staticFp, permissive.staticFp)
+
+        let latched = PskAdvertResolver.resolve(
+            receivedAdvert: substituted, receivedRoles: [PskAdvertV3.roleNfc], callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [c], refuseStaticFallback: true
+        )
+        XCTAssertEqual(.v2StaticRefused, latched.dialect)
+        XCTAssertNil(latched.psk, "the refused secret must not reach the session key")
+        XCTAssertNil(latched.staticFp)
+        XCTAssertNil(latched.wireValue)
+    }
+
+    /// The refusal is DISTINGUISHABLE from "we share nothing". Folding it into
+    /// `.unknown` would make the downgrade invisible again, which is the whole failure
+    /// mode being closed here.
+    func testRefusalIsNotConfusedWithNothingShared() {
+        let ours = cand(31)
+        let theirs = cand(32)
+        XCTAssertEqual(
+            .unknown,
+            PskAdvertResolver.resolve(
+                receivedAdvert: [theirs.staticFp], receivedRoles: nil, callId: callId,
+                senderEphemeralX25519Pub: initiatorPub, candidates: [ours],
+                refuseStaticFallback: true
+            ).dialect,
+            "no shared secret is routine and must stay .unknown even under the latch"
+        )
+        XCTAssertEqual(
+            .v2StaticRefused,
+            PskAdvertResolver.resolve(
+                receivedAdvert: [ours.staticFp], receivedRoles: nil, callId: callId,
+                senderEphemeralX25519Pub: initiatorPub, candidates: [ours],
+                refuseStaticFallback: true
+            ).dialect
+        )
+    }
+
+    /// The latch must not touch v3. It is a refusal of the FALLBACK, nothing else.
+    func testTheLatchDoesNotAffectAGenuineV3Advert() {
+        let c = cand(33, PskAdvertV3.roleQr)
+        let advert = PskAdvertV3.buildAdvertisement(
+            callId: callId, ownEphemeralX25519Pub: initiatorPub,
+            orderedEntries: [PskAdvertV3.Entry(psk: c.psk, role: PskAdvertV3.roleQr)]
+        )!
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: advert, receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [c], refuseStaticFallback: true
+        )
+        XCTAssertEqual(.v3Blinded, r.dialect)
+        XCTAssertEqual(c.staticFp, r.staticFp)
+        XCTAssertEqual(PskAdvertV3.roleQr, r.peerRole)
+    }
+
+    /// A refusal must not silently answer in the dialect we just rejected. We refuse
+    /// only because the contact is KNOWN v3-capable, so v3 is what our own
+    /// advertisement should be — a legitimate peer whose OFFER was tampered with still
+    /// gets an ACCEPT it can read.
+    func testARefusalMirrorsAsV3NotAsStatic() {
+        let c = cand(34, PskAdvertV3.roleNfc)
+        let out = PskAdvertResolver.buildAdvertisement(
+            dialect: .v2StaticRefused, callId: callId,
+            ownEphemeralX25519Pub: responderPub, candidates: [c]
+        )
+        XCTAssertNil(out.roles, "mirroring a refusal must not emit the roles array")
+        XCTAssertNotEqual(c.staticFp, out.fingerprints[0], "nor the fingerprint we just refused")
+        XCTAssertEqual(
+            PskAdvertV3.Match(receivedIndex: 0, localIndex: 0, role: PskAdvertV3.roleNfc),
+            PskAdvertV3.matchAgainstPeer(
+                receivedTagsHex: out.fingerprints, callId: callId,
+                peerEphemeralX25519Pub: responderPub, localPsks: [c.psk])
+        )
+    }
+
+    /// A refused advertisement must not feed the §D4 hw_only intersect or the
+    /// NFC-in-common chip. Acting on a mutual set derived from bytes we just decided
+    /// not to trust would hand the attacker back some of what the refusal took away.
+    func testARefusalReportsNoMutualSet() {
+        let a = cand(35, PskAdvertV3.roleNfc)
+        let b = cand(36)
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: [a.staticFp, b.staticFp],
+            receivedRoles: [PskAdvertV3.roleNfc, 0],
+            callId: callId, senderEphemeralX25519Pub: initiatorPub, candidates: [a, b],
+            refuseStaticFallback: true
+        )
+        XCTAssertEqual(.v2StaticRefused, r.dialect)
+        XCTAssertTrue(r.mutual.isEmpty)
+        XCTAssertTrue(r.mutualStaticFps.isEmpty)
+        XCTAssertTrue(
+            r.mutualPeerRoles.isEmpty,
+            "an NFC role from a refused advert must not light the chip"
+        )
+    }
+
     /// End to end: an initiator blinds, the responder resolves and mirrors, and the
     /// initiator resolves the mirror back to the SAME static fingerprint. Both legs
     /// agreeing on that value is what keeps kc_mac and the session KDF byte-equal.

@@ -56,6 +56,17 @@ public enum PskAdvertResolver {
         /// §3.3 `lc_hex(SHA-256(psk))`.
         case v2Static
 
+        /// §3.3.1.1 — a static advertisement DID match, and was refused because this
+        /// contact has spoken v3 before (`refuseStaticFallback`). Deliberately its own
+        /// case and not `.unknown`: "we share no secret" is routine and silent, while
+        /// "this peer went backwards" is the signature of the forceable downgrade and
+        /// has to be surfaced loudly.
+        ///
+        /// The selection fields are nil, exactly as in `.unknown` — the whole point is
+        /// that the refused secret does NOT enter the session key. The call still
+        /// proceeds (W-NOBRICK); it proceeds without a PSK, and says so.
+        case v2StaticRefused
+
         /// Nothing matched. NOT an error: the overwhelmingly common cause is that
         /// the two sides share no secret at all. A responder mirroring this falls
         /// back to static, which loses nothing — with no shared secret there is no
@@ -126,6 +137,12 @@ public enum PskAdvertResolver {
     ///     the v3 attempt entirely and goes straight to static, which is what a
     ///     legacy/unsigned path wants.
     ///   - candidates: locally-held eligible secrets IN LOCAL PRIORITY ORDER.
+    ///   - refuseStaticFallback: §3.3.1.1 — the caller's per-contact "this peer has
+    ///     spoken v3 before" latch. When true, a static advertisement that WOULD have
+    ///     matched resolves to `.v2StaticRefused` with no selection instead, closing the
+    ///     forceable downgrade in which a relay substitutes the pair's logged static
+    ///     fingerprints and strips the signature. The policy is the caller's (it owns
+    ///     the persistence); this function stays pure and only applies it.
     ///
     /// SELECTION IS FIRST-MATCH IN THE PEER'S ADVERTISED ORDER, in both dialects. The
     /// advertiser ranks its list by priority and the receiver is required to honour
@@ -136,7 +153,8 @@ public enum PskAdvertResolver {
         receivedRoles: [Int]?,
         callId: String,
         senderEphemeralX25519Pub: Data?,
-        candidates: [Candidate]
+        candidates: [Candidate],
+        refuseStaticFallback: Bool = false
     ) -> Resolution {
         // Deliberately NOT filtered. `pskRoles` is a PARALLEL array indexed by
         // advertised position, so dropping malformed entries here would shift every
@@ -172,6 +190,14 @@ public enum PskAdvertResolver {
         }
 
         // ── §3.3 static fallback ──
+        //
+        // §3.3.1.1: refused when this contact has already spoken v3. A relay that logged
+        // the pair's old static fingerprints can substitute them into a v3 OFFER and
+        // strip the signature; warn-and-proceed policy (W-NOBRICK) means the call
+        // continues, the v3 match above fails, this branch matches, and the blinding is
+        // switched off on demand. The refusal is reported as its own dialect rather than
+        // folded into `.unknown` so the caller can tell "this peer went backwards" from
+        // the routine "we share nothing".
         var byFp: [String: Candidate] = [:]
         for c in candidates where byFp[c.staticFp] == nil { byFp[c.staticFp] = c }
         var mutual: [(String, Int)] = []
@@ -182,6 +208,16 @@ public enum PskAdvertResolver {
             if firstIdx < 0 { firstIdx = i }
         }
         guard firstIdx >= 0, let chosen = byFp[advert[firstIdx]] else { return .none }
+        if refuseStaticFallback {
+            // A match WAS found and is being discarded. `mutual` is dropped with it:
+            // reporting a mutual set from a refused advertisement would let the §D4
+            // hw_only gate and the NFC-in-common chip act on exactly the bytes we just
+            // decided not to trust.
+            return Resolution(
+                dialect: .v2StaticRefused, wireValue: nil, staticFp: nil,
+                psk: nil, peerRole: nil, mutual: []
+            )
+        }
         return Resolution(
             dialect: .v2Static,
             wireValue: advert[firstIdx],
@@ -207,7 +243,12 @@ public enum PskAdvertResolver {
         ownEphemeralX25519Pub: Data?,
         candidates: [Candidate]
     ) -> (fingerprints: [String], roles: [Int]?) {
-        if dialect == .v3Blinded, let pub = ownEphemeralX25519Pub,
+        // `.v2StaticRefused` mirrors as v3, not as static. We only refuse because this
+        // contact is KNOWN v3-capable, so v3 is what it should be able to read: a
+        // legitimate peer whose OFFER was tampered with still gets an ACCEPT it can
+        // match, and a peer that genuinely went backwards gets one it cannot — which is
+        // the refusal, correctly expressed on the wire instead of only locally.
+        if (dialect == .v3Blinded || dialect == .v2StaticRefused), let pub = ownEphemeralX25519Pub,
            pub.count == PskAdvertV3.x25519PubBytes,
            let tags = PskAdvertV3.buildAdvertisement(
                callId: callId,
