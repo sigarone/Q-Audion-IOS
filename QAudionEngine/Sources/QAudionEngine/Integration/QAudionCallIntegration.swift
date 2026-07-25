@@ -2764,7 +2764,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Desktop. Against a peer that predates phase A the OFFER's tags match nothing,
     /// the session key derives without a PSK, and the call still connects — which is
     /// why the responder path logs that case explicitly rather than in silence.
-    static let offerAdvertDialect: PskAdvertResolver.Dialect = .v2Static
+    static let offerAdvertDialect: PskAdvertResolver.Dialect = .v3Blinded
 
     /// W-PSKBLIND (§3.3.1.1) — the per-contact blinded-advertisement latch. See
     /// [PskAdvertDialectLatchStore] for why it is its own Keychain namespace and for the

@@ -480,22 +480,28 @@ RECEIVED element verbatim in both dialects. The initiator knows which dialect it
 sent and resolves the echo through the corresponding map (tag→secret for v3,
 fingerprint→secret for static).
 
-Rollout is therefore two-phase and per-platform, with only the OFFER emitter
-needing a decision:
+Rollout was two-phase and per-platform, with only the OFFER emitter needing a
+decision. **Both phases are now live on Android, iOS and Desktop (2026-07-25).**
 
-* Phase A — implement dual-dialect matching and dialect mirroring, while the
-  OFFER still emits §3.3 static fingerprints. No wire change; a peer of any
-  vintage is unaffected.
-* Phase B — the OFFER emits v3 tags. Safe once phase A is live everywhere. A
-  peer predating phase A will find no match, which MUST surface as an explicit
-  "PSK not used this call" notice, never as a session key silently derived
-  without the PSK.
+* Phase A — dual-dialect matching and dialect mirroring, while the OFFER still
+  emitted §3.3 static fingerprints. No wire change; a peer of any vintage
+  unaffected.
+* Phase B — the OFFER emits v3 tags. Gated on §3.3.1.1's per-contact latch being
+  live everywhere first, which it is.
 
-### 3.3.1.1 Known downgrade: the static fallback is forceable (PHASE-B BLOCKER)
+Consequence of phase B being live, stated so it is not mistaken for a bug: a peer
+running a build that predates phase A cannot match a v3 advertisement, so that
+call derives WITHOUT a PSK. It still connects, and it MUST say so — an explicit
+"PSK not used this call" notice, never a silent derivation. Both legs log it (the
+`UNKNOWN with a non-empty peer advert while we hold candidates` branch). The
+window closes as each install updates; it does not need a coordinated release,
+because the responder mirrors whatever dialect it received.
+
+### 3.3.1.1 Known downgrade: the static fallback is forceable (MITIGATED)
 
 Found by adversarial review during implementation (2026-07-25), confirmed by
-walking the code. It does not affect phase A, where nobody emits v3, but it MUST
-be closed before phase B.
+walking the code. The mitigation described at the end of this section is
+IMPLEMENTED on all three platforms, which is what made phase B safe to enable.
 
 Attacker: the relay, or anyone on path. Prerequisite: it logged this pair's
 **old** static fingerprints from any call they made before v3 — those values are
@@ -523,7 +529,7 @@ What the relay gets is two things:
   peer, and binding the real order in `advEnc` (§3.2) is what closes it — but the
   fallback keeps that door open for pairs whose v3 would otherwise have shut it.
 
-**Required mitigation before phase B: a per-contact "v3 seen" latch.** Once a
+**Mitigation, now implemented: a per-contact "v3 seen" latch.** Once a
 contact's advertisement has resolved as v3 even once, refuse the static fallback
 for that contact: treat a static advertisement from them as no-match, log it, and
 raise the explicit "PSK not used this call" notice. Do NOT drop the call

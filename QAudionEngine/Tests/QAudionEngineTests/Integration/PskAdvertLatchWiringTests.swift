@@ -149,14 +149,17 @@ final class PskAdvertLatchWiringTests: XCTestCase {
         XCTAssertFalse(block.contains("fatalError"), "nor abort")
     }
 
-    /// Phase A must still be phase A. If this fails the OFFER dialect was flipped, which
-    /// is only safe once the latch is live on Android, iOS and Desktop — a decision to
-    /// make deliberately, not to discover from a test.
-    func testTheOfferDialectIsStillTheStaticOne() throws {
+    /// Phase B is live: the OFFER emits blinded tags. This now guards the opposite
+    /// direction — an accidental REVERT to the static dialect, which would silently put
+    /// the constant per-relationship correlator back on the wire for every call. It would
+    /// be invisible in behaviour: calls keep working, the PSK keeps being mixed, and only
+    /// a relay sees the difference.
+    func testTheOfferDialectIsTheBlindedOne() throws {
         let src = try integrationSource()
         XCTAssertTrue(
-            src.contains("static let offerAdvertDialect: PskAdvertResolver.Dialect = .v2Static"),
-            "offerAdvertDialect changed — see WIRE_SPEC §3.3.1 Rollout before flipping it"
+            src.contains("static let offerAdvertDialect: PskAdvertResolver.Dialect = .v3Blinded"),
+            "offerAdvertDialect reverted to the static dialect — that re-exposes the constant "
+                + "per-relationship correlator on every call. See WIRE_SPEC §3.3.1."
         )
     }
 
