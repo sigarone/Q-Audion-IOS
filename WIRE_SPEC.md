@@ -363,6 +363,114 @@ mutually-held priority. The choice is platform-independent because every
 responder picks from the OFFER's order, not its own local order, and the
 initiator honors the echoed fingerprint.)
 
+### 3.3.1 Blinded PSK advertisement (v3)
+
+§3.3's advertisement leaks two things to the relay and to anyone passively
+logging signalling:
+
+1. `lowercase_hex(SHA-256(psk))` is a **constant**. Two devices advertise the
+   identical string on every call for the life of the key — a permanent
+   per-relationship correlator. A signalling log alone partitions the user base
+   into "who shares a secret with whom", no key material required.
+2. The parallel `pskRoles` array marks which entries came from an NFC tap, i.e.
+   **which pairs of users have physically met**.
+
+v3 replaces the advertised value with a per-call HMAC tag. `pskFingerprints`
+keeps its type and its 64-lowercase-hex width; only the meaning changes.
+
+```
+tag_j = HMAC-SHA256( key = psk_j, msg = tag_preimage_j )[0:32]
+
+tag_preimage_j = "qa-psk-advert-v3"                16 B ASCII, no NUL
+              || u8( len(callId_utf8) ) || callId_utf8
+              || nonce_sender                      32 B
+              || u8( role_j )                       1 B
+
+pskFingerprints[j] = lowercase_hex( tag_j )        64 chars
+pskRoles           = OMITTED (null)
+```
+
+The label is exactly 16 bytes so the preimage is length-unambiguous with no
+separator. `callId` is length-prefixed because the field is free-form; joining a
+variable-length value without its length is how `("ab","c")` and `("a","bc")`
+collide.
+
+**The nonce is DERIVED, never transmitted:**
+
+```
+nonce_sender = SHA-256( "qa-psk-advert-nonce-v3"          22 B ASCII
+                      || u8( len(callId_utf8) ) || callId_utf8
+                      || sender_ephemeral_x25519_pub )    32 B, fixed width, last
+```
+
+`sender_ephemeral_x25519_pub` is the **sender's own** ephemeral X25519 public key
+as it appears in the SIGNED bundle: `x25519PublicKey` on the OFFER leg,
+`ciphertext.x25519` on the ACCEPT leg. Both are already bound by the §3.2 v2
+transcript (`offerV2` binds `lp(x25519PublicKey)`; `acceptV2` binds
+`lp(ctX25519)`).
+
+This is normative and it is the reason there is no new wire field. A nonce sent
+as a plain unsigned field would be a **silent PSK-downgrade oracle**: a relay
+flips one byte, the receiver derives different candidate tags, nothing matches,
+the PSK drops out of the session key, and both users still see a connected call
+with no warning. Deriving it from an already-signed value makes tampering
+invalidate the signature instead — at zero new wire bytes and zero transcript
+change. Freshness is free: the ephemeral key is per call, so the tag is per call.
+
+**The role is recovered, not read.** The sender folds its own `role_j` into the
+preimage and sends `pskRoles` as null. The receiver computes each local secret's
+tag under **every** role value `0..255` and looks each up among the received
+tags; the value that matches IS the sender's recorded role. The full byte range,
+not just the defined roles (`0` ordinary / `1` NFC / `2` QR), for two reasons: a
+role disagreement between the two sides must not cost the PSK, and a role added
+later must interoperate with an older build without a lockstep release. Cost is
+`256 * m` HMAC-SHA256 for `m` local secrets — the tag's secrecy rests on the psk,
+not on the role, so a 256-wide search is intended behaviour.
+
+**Selection.** Unchanged in rule, changed in value: the responder picks the
+first RECEIVED tag it can reproduce (received order in the outer loop, so the
+advertiser keeps its priority) and echoes **that tag verbatim** in
+`selectedPskFingerprint`. It MUST NOT echo the static `SHA-256(psk)` — doing so
+would put the selected key's permanent correlator back on the wire on every
+call and defeat the whole section. The initiator resolves the echoed tag through
+the tag→secret map it built when it composed its own advertisement, and MUST
+honour it verbatim without recomputing, exactly as in §3.3.
+
+**`advEnc` is unchanged.** `advEnc(list) = u8(m) || (u8(role) || 32B)*m`. A
+32-byte tag occupies the slot the 32-byte fingerprint had, and an omitted
+`pskRoles` already encodes as all-zero role bytes, so the §3.2 signature covers
+the advertisement byte-for-byte with no format change.
+
+**The static fingerprint remains the LOCAL identifier.**
+`lowercase_hex(SHA-256(psk))` still keys the vault, `kc_mac`'s
+`mixedFingerprints`, the PSK-mix `mix_id`, the UI, and the hw_only §D4 intersect.
+Only the wire changes. A receiver MUST translate a matched tag back to its own
+static fingerprint before handing it to any of those; skipping the translation
+leaves the §D4 hw_only intersect empty and quietly stops enforcing a requirement.
+
+**Capability and rollout.** A peer advertises `pskAdvertV3` in `capabilities`
+when it can CONSUME v3 tags. Rollout is two-phase and per-platform:
+
+* Phase A — advertise the capability and implement matching, while still
+  emitting §3.3 static fingerprints. No wire change.
+* Phase B — emit v3 tags. The responder gates its own ACCEPT advertisement on
+  `offer.capabilities.pskAdvertV3`, so that leg has no mixed window at all. The
+  OFFER cannot know the peer in advance: against a peer that predates phase A it
+  will find no match, which MUST surface as an explicit "PSK not used this call"
+  notice, never as a session key silently derived without the PSK.
+
+**Honest limits.** v3 does not hide how many secrets a pair shares (the list
+length is still visible; pad to a fixed length if that matters), and it does not
+stop a peer who already holds key X from testing whether you also hold X — that
+is inherent to any matchable advertisement, and the knowledge gained is nil since
+they already have the key. It says nothing about the server knowing who calls
+whom; that is a different layer.
+
+KAT: `bcrypto-server/tools/kat/psk-advert-v3/psk-advert-v3-kat.json`, generated
+and self-verified by `tools/kat/gen_psk_advert_v3_kat.py`, which writes every
+fleet copy in one run. Consumers: `PskAdvertV3KatTest.kt`,
+`PskAdvertV3KatTests.swift`, `pskAdvertV3.kat.spec.ts`.
+
 ### 3.4 Mid-handshake hangup
 
 A peer-initiated `call_hangup` arriving while the controller is in

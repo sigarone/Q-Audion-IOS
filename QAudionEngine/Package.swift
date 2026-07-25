@@ -267,6 +267,10 @@ let package = Package(
                 .copy("Video/Resources/sframe-video-kat.json"),
                 .copy("Crypto/Resources/handshake-sig-kat.json"),
                 .copy("Crypto/Resources/psk-mix-v1-kat.json"),
+                // WIRE_SPEC §3.3.1 blinded PSK advertisement. Written here by
+                // bcrypto-server/tools/kat/gen_psk_advert_v3_kat.py, which emits all
+                // six fleet copies in one run so they cannot drift apart.
+                .copy("Crypto/Resources/psk-advert-v3-kat.json"),
                 .copy("Resources/kat/kms-psk-v2-kat.json"),
                 .copy("Resources/kat/kms-pop-v1-kat.json"),
                 // kms-rotation-v2 Phase-1 frozen KATs (byte-copies of
