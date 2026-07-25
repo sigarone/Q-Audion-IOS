@@ -538,24 +538,57 @@ latch is sound because phase A is universal before phase B, so a pair that has
 completed one v3 call has no legitimate reason to speak static again. Same shape
 as the existing per-contact presence floor, and it belongs in the same store.
 
-### 3.3.1.2 Scope: the QUAD binary transport is NOT covered
+### 3.3.1.2 The QUAD binary transport: advert RETIRED, not ported
 
 §3.3.1 blinds the advertisement in the JSON handshake-bundle dialect (the
 `"<callId>|<json>"` `opaque_message` payload) — the one every cross-platform call
-uses. The QUAD binary dialect has its own PSK-fingerprint section and its own
-selection code, and that code still does a bare static-fingerprint match. Nothing
-here changes it.
+uses. The QUAD binary dialect has its own PSK-fingerprint section, its own
+selection code, and no dialect of its own: what it carries is static
+`SHA-256(psk)`.
 
-Reach of the gap, as of 2026-07-25: iOS has a QUAD encoder/decoder for the section
-but never populates it (its single production QUAD OFFER emitter passes an empty
-list), and Android does not speak QUAD at all. So this is **Desktop↔Desktop calls
-only** — and on those, the constant per-relationship correlator remains, whatever
-phase the JSON dialect is in.
+**The advertisement there is now empty, and the blinded construction was NOT
+ported.** Resolved 2026-07-25 (W-QUADADVERT). Two corrections to the earlier text
+in this section, both material:
 
-Closing it means porting the same construction into the QUAD advertisement.
-Deliberately out of scope here: the derived nonce needs a signed sender ephemeral
-to bind to, so the QUAD port has to establish its own equivalent rather than
-inherit this one, and that is a separate change with its own vectors.
+Reach. Desktop sends BOTH envelopes on EVERY outgoing call — it cannot know the
+peer's platform up front — so as long as this list was populated, the constant
+correlator shipped on every call to every platform, not on "Desktop↔Desktop only".
+Blinding the JSON envelope while this one kept shipping bought nothing on the wire.
+(iOS emits no production QUAD OFFER at all, having removed it 2026-07-12; Android
+has a QUAD codec but only for the `KEY_EXCHANGE_*` opcodes.)
+
+Why the port was rejected. A derived nonce is only as good as the material it binds
+to, and QUAD has no signature, no transcript and no key confirmation — the JSON
+path's fail-closed OFFER signature is exactly what makes the same construction safe
+there. Binding to the ML-KEM encapsulation key instead was examined and is a
+REGRESSION, not a compromise: substituting that key is the one thing a MITM must do
+to MITM at all, and after substituting it the recomputed nonce matches nothing, so
+both peers complete a working call with no advert-negotiated PSK. The static advert
+it would replace makes the same attacker end up with two sessions it cannot read.
+
+"Tampering fails loud" does not hold here either, at the primitive level: ML-KEM
+uses implicit rejection, so a substituted key or ciphertext yields a valid-looking
+but different shared secret. Any design whose safety rests on a mismatch being
+detected is unimplementable on this transport as it stands. Do not re-propose it.
+
+What retirement costs, stated honestly: both QUAD legs also mix an UNADVERTISED
+per-contact PSK, loaded separately from the advert, and that is where the UI's
+negotiated fingerprint already comes from. So a paired contact keeps its PSK. What
+is lost is negotiating a non-contact-bound shared PSK over QUAD specifically, on a
+path that loses to the JSON envelope on every modern call.
+
+The consume side is latched, and this closed a live hole. §3.3.1.1's per-contact
+latch was wired only into the JSON responder branch, and which branch runs depends
+on whether a JSON OFFER arrived — a choice belonging to the RELAY, since it delivers
+both envelopes. A relay could therefore force the QUAD branch on demand and have
+logged static fingerprints accepted as a plain match: the §3.3.1.1 attack, through
+the one door the latch did not cover. Both QUAD consume sites now take the latch. A
+refusal is loud and never drops the call (W-NOBRICK), and the responder echoes no
+selection when it refuses, so the initiator cannot be left mixing a PSK the
+responder did not.
+
+The QUAD codec still DECODES a list — a genuinely old peer has to interoperate. Only
+the production emitter is empty.
 
 **Honest limits.** v3 does not hide how many secrets a pair shares (the list
 length is still visible; pad to a fixed length if that matters), and it does not
