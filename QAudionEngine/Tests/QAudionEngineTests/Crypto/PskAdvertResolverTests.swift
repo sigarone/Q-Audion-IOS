@@ -270,16 +270,48 @@ final class PskAdvertResolverTests: XCTestCase {
         XCTAssertEqual([PskAdvertV3.roleNfc], out.roles)
     }
 
-    /// `.unknown` means we found no shared secret, so falling back to static costs
-    /// nothing: there is no PSK for the correlatable form to expose.
-    func testUnknownMirrorsAsStatic() {
-        let c = cand(20)
+    /// W-UNKNOWNMIRROR (2026-07-25) — THE regression this file exists to prevent, and it
+    /// shipped once. This test asserted the OPPOSITE, with the reasoning "`.unknown` means we
+    /// found no shared secret, so falling back to static costs nothing".
+    ///
+    /// The wrong version is the plausible-looking one, which is why the history stays
+    /// attached: `.unknown` means nothing matched THE PEER'S ADVERTISEMENT, not that we hold
+    /// nothing. Mirroring statically shipped `lc_hex(SHA-256(psk))` for every key we hold
+    /// plus the role byte marking which came from a physical NFC tap — both of the things
+    /// §3.3.1 exists to remove, emitted by the responder, on the routine "no shared secret"
+    /// path the spec itself calls the common case. A relay could force it against a pair that
+    /// DOES share a secret by simply DELETING the OFFER's advert field: no key material, no
+    /// forgery required.
+    func testUnknownMirrorsAsBlindedNotStatic() {
+        let c = cand(20, PskAdvertV3.roleNfc)
         let out = PskAdvertResolver.buildAdvertisement(
             dialect: .unknown, callId: callId,
             ownEphemeralX25519Pub: responderPub, candidates: [c]
         )
+        XCTAssertNil(out.roles, "the role array names the NFC-tapped keys and must not go out")
+        XCTAssertEqual(1, out.fingerprints.count)
+        XCTAssertNotEqual(c.staticFp, out.fingerprints[0],
+                          "the static fingerprint IS the correlator")
+        // Still a usable advertisement for a peer holding the same secret.
+        XCTAssertEqual(
+            PskAdvertV3.Match(receivedIndex: 0, localIndex: 0, role: PskAdvertV3.roleNfc),
+            PskAdvertV3.matchAgainstPeer(
+                receivedTagsHex: out.fingerprints, callId: callId,
+                peerEphemeralX25519Pub: responderPub, localPsks: [c.psk])
+        )
+    }
+
+    /// The one dialect that must still mirror static: a genuine legacy peer. Reached only by
+    /// a real `.v2Static` resolution — a legacy peer sends static fingerprints, we match
+    /// them, and the dialect is `.v2Static`, never `.unknown`.
+    func testOnlyARealLegacyPeerStillGetsTheStaticMirror() {
+        let c = cand(23, PskAdvertV3.roleNfc)
+        let out = PskAdvertResolver.buildAdvertisement(
+            dialect: .v2Static, callId: callId,
+            ownEphemeralX25519Pub: responderPub, candidates: [c]
+        )
         XCTAssertEqual([c.staticFp], out.fingerprints)
-        XCTAssertEqual([0], out.roles)
+        XCTAssertEqual([PskAdvertV3.roleNfc], out.roles)
     }
 
     /// Asking for v3 with no usable ephemeral key must degrade to static rather than

@@ -468,12 +468,35 @@ advertisement — v3 if it matched v3, otherwise static. Consequences:
 
 * The ACCEPT leg has **no mixed window at all**, and needs no negotiation: the
   OFFER's advertisement already says which dialect the initiator speaks.
-* There is no field for a relay to strip. Downgrading the ACCEPT leg would mean
-  rewriting the initiator's advertisement, which is covered by the §3.2
-  signature — and a relay cannot produce static fingerprints anyway, not holding
-  the keys.
-* `dialect = unknown` (no shared secret found) falls back to static. Nothing is
-  lost: with no shared secret there is no PSK to protect.
+* **CORRECTED 2026-07-25 (W-UNKNOWNMIRROR).** This section used to claim "there is
+  no field for a relay to strip… and a relay cannot produce static fingerprints
+  anyway, not holding the keys". That was wrong, and the error was load-bearing:
+  DELETING the OFFER's `pskFingerprints` field produces nothing and needs no key
+  material. An absent advertisement resolved to `unknown`, and `unknown` used to
+  mirror STATIC — so one deleted field made the responder emit the static
+  fingerprint of every eligible key it held, plus `pskRoles` marking which of them
+  came from a physical NFC tap. Both of the things this section exists to remove,
+  from the responder, forced on demand.
+* Worse, that path was not attacker-only. `unknown` is the routine outcome whenever
+  two peers share no secret — the overwhelmingly common case named below — so the
+  static set went out on ordinary untampered traffic and a passive relay could
+  harvest it.
+* The rule now: the responder mirrors **v3 for every dialect except a real legacy
+  peer** (`v2Static`), and falls back to static only when it has no ephemeral of its
+  own to blind with, which is a local failure no remote party can induce. A genuine
+  legacy peer never reaches the `unknown` branch — it sends static fingerprints, they
+  match, and the dialect is `v2Static`.
+* Mirroring v3 under `unknown` costs nothing in key agreement: the ACCEPT's
+  advertisement is never consumed for PSK selection (the echoed SELECTION is). The
+  only thing given up is a pre-phase-A initiator's mutual/NFC-in-common indicator
+  going dark.
+* Rewriting the initiator's advertisement in place IS covered by the §3.2 signature —
+  but note that verification is advisory under W-NOBRICK, so that coverage detects
+  and reports rather than prevents.
+* Every platform now also reports the degraded outcome. Where the notice was
+  previously gated on a NON-EMPTY advertisement — making the stripped-field case
+  completely silent — it now fires whenever candidates are held and no PSK results,
+  and distinguishes ABSENT (possible strip) from EMPTY from unmatched.
 
 `selectedPskFingerprint` is dialect-agnostic because the responder echoes the
 RECEIVED element verbatim in both dialects. The initiator knows which dialect it

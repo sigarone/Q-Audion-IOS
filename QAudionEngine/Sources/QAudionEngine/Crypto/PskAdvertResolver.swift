@@ -243,12 +243,30 @@ public enum PskAdvertResolver {
         ownEphemeralX25519Pub: Data?,
         candidates: [Candidate]
     ) -> (fingerprints: [String], roles: [Int]?) {
-        // `.v2StaticRefused` mirrors as v3, not as static. We only refuse because this
-        // contact is KNOWN v3-capable, so v3 is what it should be able to read: a
-        // legitimate peer whose OFFER was tampered with still gets an ACCEPT it can
-        // match, and a peer that genuinely went backwards gets one it cannot — which is
-        // the refusal, correctly expressed on the wire instead of only locally.
-        if (dialect == .v3Blinded || dialect == .v2StaticRefused), let pub = ownEphemeralX25519Pub,
+        // Everything EXCEPT a real legacy peer mirrors as v3.
+        //
+        // W-UNKNOWNMIRROR (2026-07-25) — this used to exclude `.unknown`, on the stated
+        // reasoning that "`.unknown` means we found no shared secret, so there is no PSK
+        // for the static form to expose". That reasoning is wrong, and it was the largest
+        // hole left in §3.3.1: `.unknown` means no secret matched THE PEER'S
+        // ADVERTISEMENT, not that we hold none. Mirroring statically therefore shipped
+        // `lc_hex(SHA-256(psk))` for every eligible key we hold — including the one shared
+        // with this very peer — plus the role array marking which of them came from a
+        // physical NFC tap. Both are exactly what the blinded advert exists to remove.
+        //
+        // And `.unknown` is not an edge case: it is the routine outcome whenever two peers
+        // share no secret, which the spec itself calls the overwhelmingly common cause, so
+        // the static set went out on ordinary traffic with no tampering at all. A relay
+        // could also FORCE it for a pair that DOES share a secret by deleting the OFFER's
+        // `pskFingerprints` field — deletion needs no key material and forges nothing.
+        //
+        // Mirroring v3 costs nothing in key agreement: the ACCEPT's advert is never
+        // consumed for PSK selection (the echoed SELECTION is). A real legacy peer never
+        // lands here — it sends static fingerprints, we match them, dialect is `.v2Static`.
+        //
+        // A nil ephemeral still falls through to static: better an advert the peer can
+        // read than one nobody can match, which would read as "we hold no keys".
+        if dialect != .v2Static, let pub = ownEphemeralX25519Pub,
            pub.count == PskAdvertV3.x25519PubBytes,
            let tags = PskAdvertV3.buildAdvertisement(
                callId: callId,
@@ -259,10 +277,6 @@ public enum PskAdvertResolver {
            ) {
             return (tags, nil)
         }
-        // .unknown mirrors as static: nothing is lost, because .unknown means we found
-        // no shared secret, so there is no PSK for the static form to expose. A nil
-        // ephemeral under .v3Blinded lands here too — better static than an
-        // advertisement nobody can match, which would read as "we hold no keys".
         return (candidates.map { $0.staticFp }, candidates.map { $0.localRole })
     }
 

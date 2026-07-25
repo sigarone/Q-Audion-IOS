@@ -1582,9 +1582,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             // W-PSKBLIND — MIRROR the dialect the OFFER used. That is what gives this
             // leg no mixed window at all: whatever the initiator speaks, we answer in.
-            // `.unknown` (no shared secret found) mirrors as static and loses nothing,
-            // since with no shared secret there is no PSK for the static form to
-            // expose.
+            //
+            // W-UNKNOWNMIRROR (2026-07-25) — `.unknown` used to mirror as STATIC on the
+            // reasoning that "with no shared secret there is no PSK for the static form to
+            // expose". That was wrong: `.unknown` means nothing matched THE PEER'S
+            // ADVERTISEMENT, not that we hold nothing, so this leg shipped the static
+            // fingerprint of every key we hold plus the role array marking the NFC-tapped
+            // ones. It is now blinded for every dialect except a real legacy peer — see
+            // `PskAdvertResolver.buildAdvertisement`.
             let acceptAdvert = PskAdvertResolver.buildAdvertisement(
                 dialect: resolvedAdvert.dialect,
                 callId: callId,
@@ -1596,6 +1601,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             )
             let acceptAdvertisedPskFingerprints: [String] = acceptAdvert.fingerprints
             let acceptAdvertisedPskRoles: [Int]? = acceptAdvert.roles
+
+            // W-UNKNOWNMIRROR — the notice iOS never had. Android and Desktop both warn
+            // when they hold candidates and still end up with no PSK; this leg degraded in
+            // total silence. ABSENT is the case that matters most: deleting the OFFER's
+            // advert field needs no key material and forges nothing, so it is the cheapest
+            // move a relay has. Signal only — nothing here touches the call (W-NOBRICK).
+            if resolvedAdvert.dialect == .unknown,
+               !PskAdvertising.candidatesForAdvertisement(acceptPskAdvertEntries).isEmpty {
+                let n = bundle.pskFingerprints?.count
+                let shape = n == nil ? "ABSENT" : (n == 0 ? "EMPTY" : "\(n!) entries in neither dialect")
+                print("[QAudionCallIntegration] no PSK this call: peer advert \(shape) "
+                    + "while we hold keys — session key derives WITHOUT a PSK. ABSENT can "
+                    + "mean a relay stripped the field. WIRE_SPEC §3.3.1")
+            }
 
             // 7. Build ACCEPT JSON.
             // W527: Android's kotlinx.serialization HandshakeBundle data
