@@ -574,6 +574,19 @@ final class AppState: ObservableObject {
         // a bug that never happened.
         let cause = isInCall ? videoTransitionCause : "call-teardown"
         videoTransitionCause = "derived"
+        // W-CONSENTSESSION (2026-07-25) — consent is for THIS video session, not
+        // for the rest of the call. It was cleared only at call end, so after one
+        // accepted upgrade the auto-accept branch (`videoConsentGranted ||
+        // isVideoCall`) fired on every later request: go to video, both sides
+        // downgrade to audio, upgrade again, and both cameras opened with no
+        // prompt. Reaching `Off` means neither side is sending, so the session is
+        // over. NOT cleared on Both -> LocalOnly/RemoteOnly, where video is still
+        // live on one lane and a re-offer is the benign renegotiation the latch
+        // legitimately exists for.
+        if next == "Off" && videoConsentGranted {
+            RTLog.info("call", "video consent cleared — call is back to audio (was \(prev))")
+            videoConsentGranted = false
+        }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let sincePrev = lastVideoTransitionAtMs == 0 ? -1 : nowMs - lastVideoTransitionAtMs
         lastVideoTransitionAtMs = nowMs
