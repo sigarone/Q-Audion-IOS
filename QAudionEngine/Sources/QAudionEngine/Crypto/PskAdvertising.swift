@@ -91,6 +91,25 @@ public enum PskAdvertising {
         eligibleSortedEntries(entries).map { $0.origin == .nfc ? 1 : 0 }
     }
 
+    /// W-PSKBLIND (2026-07-25) — the same eligible entries, in the same order, as
+    /// `fingerprintsForAdvertisement`/`rolesForAdvertisement`, but carrying the raw
+    /// MATERIAL the §3.3.1 blinded tags need.
+    ///
+    /// Deriving all three from `eligibleSortedEntries` is the point: a v3 tag list and
+    /// a static fingerprint list then describe the same secrets in the same priority
+    /// positions, which the responder is required to honour. Two independently
+    /// filtered/sorted lists would be a silent way for the advertised order to drift
+    /// from the order the wire signature bound.
+    public static func candidatesForAdvertisement(_ entries: [Entry]) -> [PskAdvertResolver.Candidate] {
+        eligibleSortedEntries(entries).map {
+            PskAdvertResolver.Candidate(
+                staticFp: canonicalFingerprint(forPsk: $0.material),
+                psk: $0.material,
+                localRole: $0.origin == .nfc ? PskAdvertV3.roleNfc : PskAdvertV3.roleOrdinary
+            )
+        }
+    }
+
     /// W-PSKMIX step 5 — the RECEIVE-side twin of the exclusion above.
     ///
     /// `fingerprintsForAdvertisement` keeps a `.callDerived` entry off the

@@ -250,7 +250,32 @@ public enum PskAdvertV3 {
         senderNonce: Data,
         localPsks: [Data]
     ) -> Match? {
-        guard !receivedTagsHex.isEmpty, !localPsks.isEmpty else { return nil }
+        matchAll(
+            receivedTagsHex: receivedTagsHex, callId: callId,
+            senderNonce: senderNonce, localPsks: localPsks
+        ).first
+    }
+
+    /// Every peer-advertised tag any local secret reproduces, in RECEIVED order.
+    ///
+    /// `match` is this with `.first`, so there is one implementation of the matching
+    /// rule rather than two that can drift.
+    ///
+    /// The full set is what the callers downstream of selection need: the §D4 hw_only
+    /// gate intersects the peer's advertised set with ours, and the NFC-in-common
+    /// signal asks whether ANY shared secret is NFC-origin. Stopping at the first hit
+    /// would silently under-report both.
+    ///
+    /// The candidate table is built ONCE here — the reason this exists as its own
+    /// function rather than a loop over `match`, which would rebuild
+    /// `roleSearchSpace * m` tags per advertised entry.
+    public static func matchAll(
+        receivedTagsHex: [String],
+        callId: String,
+        senderNonce: Data,
+        localPsks: [Data]
+    ) -> [Match] {
+        guard !receivedTagsHex.isEmpty, !localPsks.isEmpty else { return [] }
 
         var candidateTags: [Data] = []
         var candidateLocalIndex: [Int] = []
@@ -264,8 +289,9 @@ public enum PskAdvertV3 {
                 candidateRole.append(role)
             }
         }
-        guard !candidateTags.isEmpty else { return nil }
+        guard !candidateTags.isEmpty else { return [] }
 
+        var out: [Match] = []
         for (ri, hexTag) in receivedTagsHex.enumerated() {
             // A malformed entry from the peer is a miss, never a throw: a relay must
             // not be able to abort a handshake by corrupting one list element.
@@ -276,10 +302,10 @@ public enum PskAdvertV3 {
                 if constantTimeEqual(candidateTags[i], received), hit < 0 { hit = i }
             }
             if hit >= 0 {
-                return Match(receivedIndex: ri, localIndex: candidateLocalIndex[hit], role: candidateRole[hit])
+                out.append(Match(receivedIndex: ri, localIndex: candidateLocalIndex[hit], role: candidateRole[hit]))
             }
         }
-        return nil
+        return out
     }
 
     /// `match` with the nonce derived for you from the peer's ephemeral key. The

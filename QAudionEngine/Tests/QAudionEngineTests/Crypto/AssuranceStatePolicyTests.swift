@@ -281,48 +281,12 @@ final class AssuranceStatePolicyTests: XCTestCase {
         XCTAssertEqual(result, .kcFailed)
     }
 
-    // MARK: - mutualPeerAdvertisedRoles (ship step 5 wiring helper: decide()'s own
-    // doc says the caller must pre-filter to mutually-held fingerprints; this is
-    // that filter)
+    // W-PSKBLIND (2026-07-25) — the `mutualPeerAdvertisedRoles` cases moved out with
+    // the function. Its replacement, `PskAdvertResolver.resolve`, is covered by
+    // `PskAdvertResolverTests` in both dialects, which is strictly more than these
+    // five static-only cases proved.
 
-    func testMutualPeerAdvertisedRolesFiltersToLocalFingerprintsOnly() {
-        let result = AssuranceState.mutualPeerAdvertisedRoles(
-            peerFingerprints: ["a", "b", "c"],
-            peerRoles: [1, 0, 1],
-            localFingerprints: ["a", "c"]
-        )
-        XCTAssertEqual(result, [1, 1], "must drop the role for 'b' (not locally held) but keep 'a'/'c' in order")
-    }
-
-    func testMutualPeerAdvertisedRolesNilFingerprintsIsEmpty() {
-        XCTAssertEqual(
-            AssuranceState.mutualPeerAdvertisedRoles(peerFingerprints: nil, peerRoles: [1], localFingerprints: ["a"]),
-            []
-        )
-    }
-
-    func testMutualPeerAdvertisedRolesNilRolesDefaultToZero() {
-        let result = AssuranceState.mutualPeerAdvertisedRoles(
-            peerFingerprints: ["a", "b"], peerRoles: nil, localFingerprints: ["a", "b"]
-        )
-        XCTAssertEqual(result, [0, 0])
-    }
-
-    func testMutualPeerAdvertisedRolesShorterRolesArrayDefaultsTrailingToZero() {
-        let result = AssuranceState.mutualPeerAdvertisedRoles(
-            peerFingerprints: ["a", "b", "c"], peerRoles: [9], localFingerprints: ["a", "b", "c"]
-        )
-        XCTAssertEqual(result, [9, 0, 0])
-    }
-
-    func testMutualPeerAdvertisedRolesNoOverlapIsEmpty() {
-        let result = AssuranceState.mutualPeerAdvertisedRoles(
-            peerFingerprints: ["x", "y"], peerRoles: [1, 1], localFingerprints: ["a", "b"]
-        )
-        XCTAssertEqual(result, [], "no mutually-held fingerprint => S7's role-1 signal must never fire from this alone")
-    }
-
-    // MARK: - Integration shape: mutualPeerAdvertisedRoles feeding decide() end-to-end
+    // MARK: - Integration shape: the mutual-role signal feeding decide() end-to-end
 
     /// W-NFCCOMMON (2026-07-24, Pavel correction) — RENAMED from
     /// `testMutualRoleOneFeedsS7WhenNfcNotMixed`, expectation FLIPPED. A mutual NFC-tier
@@ -333,9 +297,12 @@ final class AssuranceStatePolicyTests: XCTestCase {
     /// never by hijacking this single-select verdict into S7 (which would wrongly persist a
     /// suspended-badge security event for an everyday priority choice).
     func testMutualRoleAloneWithoutFloorDoesNotStripS7_surfacesAsIndependentSignalInstead() {
-        let filtered = AssuranceState.mutualPeerAdvertisedRoles(
-            peerFingerprints: ["fp-held-by-both"], peerRoles: [1], localFingerprints: ["fp-held-by-both"]
-        )
+        // W-PSKBLIND — the mutual set now arrives from `PskAdvertResolver`, which is
+        // tested against both dialects on its own. What THIS test pins is the
+        // downstream contract: `decide()` must ignore it, and the caller surfaces it as
+        // an independent signal. That contract is dialect-agnostic, so the input is a
+        // literal here rather than a re-derivation.
+        let filtered = [1]
         let result = AssuranceState.decide(
             peerSupportsMix: true, n: 1, mixRoles: [.psk], peerAdvertisedRoles: filtered,
             expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: false,

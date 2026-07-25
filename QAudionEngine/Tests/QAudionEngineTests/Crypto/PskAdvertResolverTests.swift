@@ -1,0 +1,329 @@
+import XCTest
+import CryptoKit
+@testable import QAudionEngine
+
+/// The dual-dialect selection rule (WIRE_SPEC §3.3 + §3.3.1), pinned.
+///
+/// Mirrors Android's `PskAdvertResolverTest.kt` and Desktop's
+/// `pskAdvertResolver.spec.ts` case for case. Every one is a way the rollout could
+/// silently lose a PSK or silently mislabel one. None of them crash — they degrade
+/// quietly and both users still see a connected call — which is why they get a test
+/// rather than a comment.
+final class PskAdvertResolverTests: XCTestCase {
+
+    private let callId = "3f2b7c10-9a4d-4e11-8b62-0c5d7e91a204"
+    private let initiatorPub = Data((0..<32).map { UInt8(($0 + 1) & 0xFF) })
+    private let responderPub = Data((0..<32).map { UInt8(($0 + 200) & 0xFF) })
+
+    private func psk(_ seed: Int) -> Data {
+        Data((0..<32).map { UInt8((($0 * 31) + seed) & 0xFF) })
+    }
+
+    private func staticFp(_ p: Data) -> String {
+        SHA256.hash(data: p).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func cand(_ seed: Int, _ role: Int = PskAdvertV3.roleOrdinary) -> PskAdvertResolver.Candidate {
+        PskAdvertResolver.Candidate(staticFp: staticFp(psk(seed)), psk: psk(seed), localRole: role)
+    }
+
+    // MARK: - v3
+
+    func testResolvesABlindedAdvertAndReportsTheV3Dialect() {
+        let c = cand(1, PskAdvertV3.roleNfc)
+        let advert = PskAdvertV3.buildAdvertisement(
+            callId: callId, ownEphemeralX25519Pub: initiatorPub,
+            orderedEntries: [PskAdvertV3.Entry(psk: c.psk, role: PskAdvertV3.roleNfc)]
+        )!
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: advert, receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [c]
+        )
+        XCTAssertEqual(.v3Blinded, r.dialect)
+        // The echo goes back as the RECEIVED value, never as our static fingerprint —
+        // echoing the static form would put the selected key's permanent correlator
+        // back on the wire on every call and defeat the whole point.
+        XCTAssertEqual(advert[0], r.wireValue)
+        // Everything downstream gets the STATIC fingerprint instead.
+        XCTAssertEqual(c.staticFp, r.staticFp)
+        XCTAssertEqual(PskAdvertV3.roleNfc, r.peerRole)
+        XCTAssertEqual(Set([c.staticFp]), r.mutualStaticFps)
+        XCTAssertEqual(Set([PskAdvertV3.roleNfc]), r.mutualPeerRoles)
+    }
+
+    /// The role the peer recorded, not the one WE recorded. Under v3 this is the only
+    /// way that fact survives, since `pskRoles` is omitted from the wire.
+    func testRecoversThePeersRoleEvenWhenOursDisagrees() {
+        // We hold it as KMS-origin (0); the peer tapped it over NFC (1).
+        let local = cand(2, PskAdvertV3.roleOrdinary)
+        let advert = PskAdvertV3.buildAdvertisement(
+            callId: callId, ownEphemeralX25519Pub: initiatorPub,
+            orderedEntries: [PskAdvertV3.Entry(psk: local.psk, role: PskAdvertV3.roleNfc)]
+        )!
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: advert, receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [local]
+        )
+        XCTAssertEqual(.v3Blinded, r.dialect)
+        XCTAssertEqual(
+            PskAdvertV3.roleNfc, r.peerRole,
+            "a role disagreement must not cost the PSK — this is why the receiver walks all 256"
+        )
+    }
+
+    func testKeepsTheAdvertisersPriorityUnderV3() {
+        let a = cand(3)
+        let b = cand(4)
+        // The peer advertises b FIRST. We hold both, and our own order puts a first.
+        let advert = PskAdvertV3.buildAdvertisement(
+            callId: callId, ownEphemeralX25519Pub: initiatorPub,
+            orderedEntries: [
+                PskAdvertV3.Entry(psk: b.psk, role: 0),
+                PskAdvertV3.Entry(psk: a.psk, role: 0),
+            ]
+        )!
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: advert, receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [a, b]
+        )
+        XCTAssertEqual(b.staticFp, r.staticFp, "scanning our own list first would move the priority to us")
+        XCTAssertEqual([b.staticFp, a.staticFp], r.mutual.map { $0.0 })
+    }
+
+    /// The full mutual set, not just the selection. The §D4 hw_only intersect and the
+    /// NFC-in-common signal both read it; a set truncated at the first hit would stop
+    /// enforcing a requirement and blank a trust chip.
+    func testReportsEverySharedSecretNotOnlyTheSelectedOne() {
+        let a = cand(5)
+        let b = cand(6)
+        let advert = PskAdvertV3.buildAdvertisement(
+            callId: callId, ownEphemeralX25519Pub: initiatorPub,
+            orderedEntries: [
+                PskAdvertV3.Entry(psk: a.psk, role: PskAdvertV3.roleOrdinary),
+                PskAdvertV3.Entry(psk: b.psk, role: PskAdvertV3.roleNfc),
+            ]
+        )!
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: advert, receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [a, b]
+        )
+        XCTAssertEqual(a.staticFp, r.staticFp)
+        XCTAssertEqual(Set([a.staticFp, b.staticFp]), r.mutualStaticFps)
+        XCTAssertTrue(r.mutualPeerRoles.contains(PskAdvertV3.roleNfc))
+    }
+
+    /// The nonce is the sender's. Matching a blinded advert with our OWN ephemeral key
+    /// finds nothing, which is exactly the silent no-match the explicit argument exists
+    /// to prevent.
+    func testTheWrongEphemeralKeyFindsNothing() {
+        let c = cand(7)
+        let advert = PskAdvertV3.buildAdvertisement(
+            callId: callId, ownEphemeralX25519Pub: initiatorPub,
+            orderedEntries: [PskAdvertV3.Entry(psk: c.psk, role: 0)]
+        )!
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: advert, receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: responderPub, candidates: [c]
+        )
+        XCTAssertEqual(.unknown, r.dialect)
+        XCTAssertNil(r.staticFp)
+    }
+
+    // MARK: - §3.3 static fallback
+
+    func testResolvesALegacyStaticAdvertAndReportsTheV2Dialect() {
+        let c = cand(8)
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: [c.staticFp], receivedRoles: [PskAdvertV3.roleNfc], callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [c]
+        )
+        XCTAssertEqual(.v2Static, r.dialect)
+        XCTAssertEqual(c.staticFp, r.wireValue)
+        XCTAssertEqual(c.staticFp, r.staticFp)
+        // Under the static dialect the role DOES come off the wire.
+        XCTAssertEqual(PskAdvertV3.roleNfc, r.peerRole)
+    }
+
+    /// The whole reason there is no capability bit: a pre-v3 peer keeps working with no
+    /// negotiation, because the dialect is inferred from what arrived.
+    func testALegacyPeerIsNotBrokenByTheV3Attempt() {
+        let a = cand(9)
+        let b = cand(10)
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: [b.staticFp, a.staticFp], receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [a, b]
+        )
+        XCTAssertEqual(.v2Static, r.dialect)
+        XCTAssertEqual(b.staticFp, r.staticFp, "the advertiser's priority holds in the static dialect too")
+        XCTAssertEqual(Set([a.staticFp, b.staticFp]), r.mutualStaticFps)
+    }
+
+    /// `pskRoles` is a PARALLEL array. If a malformed advertised entry were dropped
+    /// instead of skipped in place, every later role would shift by one and an NFC
+    /// secret would be reported as ordinary — a wrong trust chip, not a crash.
+    func testAMalformedEntryDoesNotShiftTheParallelRolesArray() {
+        let c = cand(11)
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: ["", "not-hex", c.staticFp],
+            receivedRoles: [0, 0, PskAdvertV3.roleNfc],
+            callId: callId, senderEphemeralX25519Pub: initiatorPub, candidates: [c]
+        )
+        XCTAssertEqual(.v2Static, r.dialect)
+        XCTAssertEqual(c.staticFp, r.staticFp)
+        XCTAssertEqual(
+            PskAdvertV3.roleNfc, r.peerRole,
+            "the role must come from index 2, not from a re-indexed filtered list"
+        )
+    }
+
+    func testAnAbsentRolesArrayReadsAsOrdinary() {
+        let c = cand(12)
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: [c.staticFp], receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [c]
+        )
+        XCTAssertEqual(PskAdvertV3.roleOrdinary, r.peerRole)
+    }
+
+    // MARK: - nothing shared
+
+    func testNoSharedSecretIsUnknownNotAWrongMatch() {
+        let theirs = cand(13)
+        let ours = cand(14)
+        let blinded = PskAdvertV3.buildAdvertisement(
+            callId: callId, ownEphemeralX25519Pub: initiatorPub,
+            orderedEntries: [PskAdvertV3.Entry(psk: theirs.psk, role: 0)]
+        )!
+        for advert in [blinded, [theirs.staticFp]] {
+            let r = PskAdvertResolver.resolve(
+                receivedAdvert: advert, receivedRoles: nil, callId: callId,
+                senderEphemeralX25519Pub: initiatorPub, candidates: [ours]
+            )
+            XCTAssertEqual(.unknown, r.dialect)
+            XCTAssertNil(r.wireValue)
+            XCTAssertNil(r.psk)
+            XCTAssertTrue(r.mutual.isEmpty)
+        }
+    }
+
+    func testEmptyAndNilInputsAreHandledWithoutCrashing() {
+        let c = cand(15)
+        XCTAssertEqual(.unknown, PskAdvertResolver.resolve(
+            receivedAdvert: nil, receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [c]).dialect)
+        XCTAssertEqual(.unknown, PskAdvertResolver.resolve(
+            receivedAdvert: [], receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [c]).dialect)
+        XCTAssertEqual(.unknown, PskAdvertResolver.resolve(
+            receivedAdvert: [c.staticFp], receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: []).dialect)
+    }
+
+    /// A legacy/unsigned leg has no ephemeral key to hand us. That must skip the v3
+    /// attempt and still resolve a static advert, not fail outright.
+    func testAMissingEphemeralKeySkipsV3AndStillResolvesStatic() {
+        let c = cand(16)
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: [c.staticFp], receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: nil, candidates: [c]
+        )
+        XCTAssertEqual(.v2Static, r.dialect)
+        XCTAssertEqual(c.staticFp, r.staticFp)
+    }
+
+    func testAWrongWidthEphemeralKeyIsTreatedAsMissingRatherThanCrashing() {
+        let c = cand(17)
+        let r = PskAdvertResolver.resolve(
+            receivedAdvert: [c.staticFp], receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: Data(repeating: 1, count: 31), candidates: [c]
+        )
+        XCTAssertEqual(.v2Static, r.dialect)
+    }
+
+    // MARK: - mirroring
+
+    func testMirroringV3EmitsTagsAndOmitsTheRolesArray() {
+        let c = cand(18, PskAdvertV3.roleNfc)
+        let out = PskAdvertResolver.buildAdvertisement(
+            dialect: .v3Blinded, callId: callId,
+            ownEphemeralX25519Pub: responderPub, candidates: [c]
+        )
+        XCTAssertNil(out.roles, "roles must be omitted under v3 — they are inside the tags")
+        XCTAssertEqual(1, out.fingerprints.count)
+        XCTAssertEqual(64, out.fingerprints[0].count)
+        XCTAssertNotEqual(c.staticFp, out.fingerprints[0])
+        XCTAssertEqual(
+            PskAdvertV3.Match(receivedIndex: 0, localIndex: 0, role: PskAdvertV3.roleNfc),
+            PskAdvertV3.matchAgainstPeer(
+                receivedTagsHex: out.fingerprints, callId: callId,
+                peerEphemeralX25519Pub: responderPub, localPsks: [c.psk])
+        )
+    }
+
+    func testMirroringStaticEmitsFingerprintsAndTheRolesArray() {
+        let c = cand(19, PskAdvertV3.roleNfc)
+        let out = PskAdvertResolver.buildAdvertisement(
+            dialect: .v2Static, callId: callId,
+            ownEphemeralX25519Pub: responderPub, candidates: [c]
+        )
+        XCTAssertEqual([c.staticFp], out.fingerprints)
+        XCTAssertEqual([PskAdvertV3.roleNfc], out.roles)
+    }
+
+    /// `.unknown` means we found no shared secret, so falling back to static costs
+    /// nothing: there is no PSK for the correlatable form to expose.
+    func testUnknownMirrorsAsStatic() {
+        let c = cand(20)
+        let out = PskAdvertResolver.buildAdvertisement(
+            dialect: .unknown, callId: callId,
+            ownEphemeralX25519Pub: responderPub, candidates: [c]
+        )
+        XCTAssertEqual([c.staticFp], out.fingerprints)
+        XCTAssertEqual([0], out.roles)
+    }
+
+    /// Asking for v3 with no usable ephemeral key must degrade to static rather than
+    /// emit an advertisement nobody can match — that would look like "we hold no keys"
+    /// and silently drop the PSK.
+    func testV3WithoutAnEphemeralKeyDegradesToStaticRatherThanEmittingGarbage() {
+        let c = cand(21)
+        let out = PskAdvertResolver.buildAdvertisement(
+            dialect: .v3Blinded, callId: callId, ownEphemeralX25519Pub: nil, candidates: [c]
+        )
+        XCTAssertEqual([c.staticFp], out.fingerprints)
+        XCTAssertEqual([0], out.roles)
+    }
+
+    /// End to end: an initiator blinds, the responder resolves and mirrors, and the
+    /// initiator resolves the mirror back to the SAME static fingerprint. Both legs
+    /// agreeing on that value is what keeps kc_mac and the session KDF byte-equal.
+    func testBothLegsConvergeOnTheSameStaticFingerprint() {
+        let shared = cand(22, PskAdvertV3.roleNfc)
+        let offerAdvert = PskAdvertV3.buildAdvertisement(
+            callId: callId, ownEphemeralX25519Pub: initiatorPub,
+            orderedEntries: [PskAdvertV3.Entry(psk: shared.psk, role: shared.localRole)]
+        )!
+
+        let resp = PskAdvertResolver.resolve(
+            receivedAdvert: offerAdvert, receivedRoles: nil, callId: callId,
+            senderEphemeralX25519Pub: initiatorPub, candidates: [shared]
+        )
+        XCTAssertEqual(.v3Blinded, resp.dialect)
+        let mirror = PskAdvertResolver.buildAdvertisement(
+            dialect: resp.dialect, callId: callId,
+            ownEphemeralX25519Pub: responderPub, candidates: [shared]
+        )
+        XCTAssertNil(mirror.roles)
+
+        let initLeg = PskAdvertResolver.resolve(
+            receivedAdvert: mirror.fingerprints, receivedRoles: mirror.roles, callId: callId,
+            senderEphemeralX25519Pub: responderPub, candidates: [shared]
+        )
+        XCTAssertEqual(.v3Blinded, initLeg.dialect)
+        XCTAssertEqual(resp.staticFp, initLeg.staticFp)
+        XCTAssertEqual(shared.staticFp, initLeg.staticFp)
+        // And the two legs' wire values genuinely differ, which is the per-leg freshness
+        // the derived nonce buys.
+        XCTAssertNotEqual(resp.wireValue, initLeg.wireValue)
+    }
+}

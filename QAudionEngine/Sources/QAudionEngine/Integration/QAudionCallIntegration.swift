@@ -828,10 +828,33 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 createdAt: entry.createdAt
             )
         }
-        let advertisedPskFingerprints: [String] = PskAdvertising.fingerprintsForAdvertisement(pskAdvertEntries)
+        // W-PSKBLIND — the OFFER's dialect. Phase A keeps `offerAdvertDialect` at
+        // `.v2Static`, so these bytes are byte-identical to before this change; the
+        // responder detects whichever dialect arrives and mirrors it, so no
+        // negotiation and no capability bit is involved. Flipping that constant to
+        // `.v3Blinded` is phase B and is the ONLY edit that changes the wire.
+        //
+        // `PskAdvertising.candidatesForAdvertisement` applies the SAME eligibility
+        // filter and order as `fingerprintsForAdvertisement`, so a v3 tag list and a
+        // static fingerprint list describe the same secrets in the same priority
+        // positions — which the responder is required to honour.
+        let advert = PskAdvertResolver.buildAdvertisement(
+            dialect: Self.offerAdvertDialect,
+            callId: callId,
+            ownEphemeralX25519Pub: x25519RawPub,
+            candidates: PskAdvertising.candidatesForAdvertisement(pskAdvertEntries)
+        )
+        let advertisedPskFingerprints: [String] = advert.fingerprints
         // W-NFCVISIBLE — parallel role array, same order (both derive from the
-        // same `pskAdvertEntries`, see PskAdvertising.rolesForAdvertisement).
-        let advertisedPskRoles: [Int] = PskAdvertising.rolesForAdvertisement(pskAdvertEntries)
+        // same `pskAdvertEntries`).
+        // W-PSKBLIND — nil under v3, where the roles live inside the tags. `advEnc`
+        // already treats an absent array as all-zero, so the signed transcript bytes
+        // are the same either way.
+        // Kept OPTIONAL rather than defaulted to `[]`: under v3 the field must be
+        // ABSENT on the wire, matching Android and Desktop byte for byte. `[]` would
+        // decode to the same all-zero meaning but is not the same JSON, and wire
+        // parity across the three clients is not a thing to leave to chance.
+        let advertisedPskRoles: [Int]? = advert.roles
         let offerBundle = AndroidHandshakeBundle(
             kind: .offer,
             callId: callId,
@@ -883,7 +906,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // as losing the fingerprints (see `sentOfferPskRolesByCall`'s own doc).
         lock.withLock {
             sentOfferPskFingerprintsByCall[callId.lowercased()] = advertisedPskFingerprints
-            sentOfferPskRolesByCall[callId.lowercased()] = advertisedPskRoles
+            // nil (v3) stashes as empty — `toKcAdverts` reads a missing role as 0,
+            // which is exactly what `advEnc` bound for an absent wire array.
+            sentOfferPskRolesByCall[callId.lowercased()] = advertisedPskRoles ?? []
         }
 
         // Phase-10b (a) — SIGN the OFFER over the §3 transcript before serialize.
@@ -1362,16 +1387,52 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // order, NOT the local catalogue order. Selected BEFORE deriving
             // the session key: the PSK is the HKDF Extract salt of the single
             // corrected derivation (schema :2).
+            //
+            // W-PSKBLIND: the rule above is UNCHANGED, but the advertised values may
+            // now be per-call blinded tags (§3.3.1) instead of static fingerprints.
+            // `PskAdvertResolver.resolve` tries v3 first, then static, and reports
+            // which dialect matched — no capability bit and no negotiation, because
+            // the advertisement describes its own dialect. Three distinct values come
+            // out of it and they must not be confused:
+            //   * `wireValue` → echoed VERBATIM in selectedPskFingerprint. Echoing the
+            //     static form under v3 would put the selected key's permanent
+            //     correlator back on the wire every call and defeat the whole section.
+            //   * `staticFp`  → everything downstream (§D4 intersect, kc_mac
+            //     mixedFingerprints, the session-KDF selected_fp, the UI).
+            //   * `dialect`   → mirrored in our OWN ACCEPT advertisement, which is what
+            //     removes any mixed window on this leg.
             var selectedFp: String? = nil
             var selectedPsk: Data? = nil
+            let resolvedAdvert = PskAdvertResolver.resolve(
+                receivedAdvert: bundle.pskFingerprints,
+                receivedRoles: bundle.pskRoles,
+                callId: callId,
+                // The INITIATOR's ephemeral — the sender of the advertisement we are
+                // matching. Using our own key here is the mistake that makes two v3
+                // peers silently fail to find a secret they both hold.
+                senderEphemeralX25519Pub: x25519Pub,
+                // Sorted, because `eligiblePsks` is a Dictionary and Swift does not
+                // specify its iteration order. Selection itself is driven by the
+                // RECEIVED order so it is deterministic either way, but an unordered
+                // candidate list makes `localIndex` and the mutual-set order vary
+                // between runs — the kind of nondeterminism that turns a bug into an
+                // intermittent one.
+                candidates: eligiblePsks.keys.sorted().map {
+                    PskAdvertResolver.Candidate(staticFp: $0, psk: eligiblePsks[$0] ?? Data(), localRole: 0)
+                }
+            )
             if let advertised = bundle.pskFingerprints {
-                if let first = advertised.first(where: { eligiblePsks[$0] != nil }),
-                   let gated = Self.pskIfFingerprintMatches(eligiblePsks[first], first) {
-                    // Symmetric-null convergence: select + echo the fingerprint ONLY
-                    // when SHA-256(rawPsk)==fp, so the initiator never mixes a PSK we
+                if let staticFp = resolvedAdvert.staticFp,
+                   let gated = Self.pskIfFingerprintMatches(eligiblePsks[staticFp], staticFp) {
+                    // Symmetric-null convergence: select + echo ONLY when
+                    // SHA-256(rawPsk)==staticFp, so the initiator never mixes a PSK we
                     // dropped — both ends mix the byte-equal PSK or both fall back to
                     // the no-PSK key (fixes the iOS↔desktop sealed-audio AEAD mismatch).
-                    selectedFp = first
+                    // W-PSKBLIND: the gate is applied to the STATIC fingerprint, which
+                    // is dialect-independent. Checking it against a per-call tag would
+                    // be a category error — the tag is an HMAC over the key, not a hash
+                    // of it, so the gate would reject every v3 selection.
+                    selectedFp = staticFp
                     selectedPsk = gated
                 } else if !advertised.isEmpty {
                     // W-PSKMIX — bare log only, mirroring the ACCEPT (caller) path's
@@ -1498,8 +1559,22 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     createdAt: entry.createdAt
                 )
             }
-            let acceptAdvertisedPskFingerprints: [String] = PskAdvertising.fingerprintsForAdvertisement(acceptPskAdvertEntries)
-            let acceptAdvertisedPskRoles: [Int] = PskAdvertising.rolesForAdvertisement(acceptPskAdvertEntries)
+            // W-PSKBLIND — MIRROR the dialect the OFFER used. That is what gives this
+            // leg no mixed window at all: whatever the initiator speaks, we answer in.
+            // `.unknown` (no shared secret found) mirrors as static and loses nothing,
+            // since with no shared secret there is no PSK for the static form to
+            // expose.
+            let acceptAdvert = PskAdvertResolver.buildAdvertisement(
+                dialect: resolvedAdvert.dialect,
+                callId: callId,
+                // OUR ephemeral for this leg — the one that goes out in
+                // `ciphertext.x25519`, which is what the peer will derive our nonce
+                // from. Anything else here and the initiator matches nothing.
+                ownEphemeralX25519Pub: x25519Result.ephemeralPublicKey,
+                candidates: PskAdvertising.candidatesForAdvertisement(acceptPskAdvertEntries)
+            )
+            let acceptAdvertisedPskFingerprints: [String] = acceptAdvert.fingerprints
+            let acceptAdvertisedPskRoles: [Int]? = acceptAdvert.roles
 
             // 7. Build ACCEPT JSON.
             // W527: Android's kotlinx.serialization HandshakeBundle data
@@ -1541,7 +1616,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     pskMixV1: true
                 ),
                 pskFingerprints: acceptAdvertisedPskFingerprints,
-                selectedPskFingerprint: selectedFp,
+                // W-PSKBLIND — the RECEIVED wire value, verbatim, not our static
+                // fingerprint. Dialect-agnostic: the initiator resolves it through the
+                // advertisement it composed. `selectedFp` (the static form) stays the
+                // value everything downstream uses.
+                selectedPskFingerprint: selectedPsk != nil ? resolvedAdvert.wireValue : nil,
                 pskRoles: acceptAdvertisedPskRoles
             )
 
@@ -1700,7 +1779,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     fingerprintsHex: bundle.pskFingerprints, roles: bundle.pskRoles)
                 let respEntries = KeyConfirmation.pskAdvertEntries(
                     fingerprintsHex: acceptAdvertisedPskFingerprints.isEmpty ? nil : acceptAdvertisedPskFingerprints,
-                    roles: acceptAdvertisedPskRoles.isEmpty ? nil : acceptAdvertisedPskRoles)
+                    roles: (acceptAdvertisedPskRoles?.isEmpty ?? true) ? nil : acceptAdvertisedPskRoles)
                 if let t = KeyConfirmation.transcript(
                     offerBinding: verifiedOfferBindingV2,
                     acceptBinding: acceptBindingV2ForKc,
@@ -1715,9 +1794,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     kcKeyForEvent = KeyConfirmation.deriveKcKey(sessionKey: combined)
                 }
             }
-            let kcPeerAdvertisedRoles = AssuranceState.mutualPeerAdvertisedRoles(
-                peerFingerprints: bundle.pskFingerprints, peerRoles: bundle.pskRoles,
-                localFingerprints: Set(eligiblePsks.keys))
+            // W-PSKBLIND — read the ALREADY-RESOLVED mutual set instead of re-deriving
+            // it from the wire. `mutualPeerAdvertisedRoles` intersected the peer's
+            // advertised fingerprints with ours, which is only correct while the wire
+            // carries static fingerprints: under §3.3.1 those values are per-call HMAC
+            // tags, the intersection empties, and the "NFC in comune" chip goes dark on
+            // precisely the calls it describes — silently, call still connected. The
+            // roles here are the PEER's, recovered from which preimage reproduced its
+            // tag rather than read off an array v3 does not send.
+            let kcPeerAdvertisedRoles = Array(resolvedAdvert.mutualPeerRoles)
             onKcMacReady?(KcMacReadyEvent(
                 peerId: callerId, callId: callId, isInitiator: false, sessionKey: combined,
                 kcKey: kcKeyForEvent, transcript: kcTranscriptForEvent, n: kcN,
@@ -1918,43 +2003,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if keyClassAccept != 0 {
                 let nd = Self.negDigest(fpSetInit: fpSetInitAccept, fpSetResp: fpSetRespAccept)
                 // WIRE_SPEC §5 P1 fix: look up PSK by fingerprint from SovereignKeyVault.
-                let vault = SovereignKeyVault()
-                let vaultPsk: Data? = {
-                    // PSK-mix ship-step-2 (parse-only): membership against
-                    // parseSelection(selectedFpStr) instead of a bare `==`
-                    // compare — for today's only real case (N=1, a single
-                    // 64-hex fp) this is byte-identical (`[selectedFpStr]`
-                    // contains == equals); it additionally tolerates a
-                    // future comma-joined selectedFpStr without hard-
-                    // rejecting the lookup. Still just a lookup, not new
-                    // multi-candidate selection logic.
-                    let selection = Self.parseSelection(selectedFpStr)
-                    guard let name = vault.listPskNames().first(where: { name in
-                        // W-PSKMIX step 5 — never match a `.callDerived` vault
-                        // entry (Android's "call-"/"msg-psk" rows, iOS's own
-                        // "auto:<prefix>:<peerId>" group-control-channel ratchet
-                        // seed) against a peer-echoed selectedPskFingerprint.
-                        // Mirrors the exclusion
-                        // `PskAdvertising.fingerprintsForAdvertisement` applies on
-                        // the advertise side (771f4c1); this is the matching gate
-                        // on the consuming side, which previously had no origin
-                        // check at all — a raw byte comparison would otherwise
-                        // happily select a `.callDerived` entry if its fingerprint
-                        // ever appeared in the peer's ACCEPT.
-                        guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return false }
-                        // W-STALEFP — recompute fresh from raw material; never trust
-                        // `vault.getFingerprint(name:)` (the cached Keychain label),
-                        // which can predate `PskAdvertising.canonicalFingerprint`
-                        // becoming the write-time label and so not equal
-                        // SHA-256(material) — the exact bug that silently derived
-                        // psk:nil on this device while the peer (fresh-computed)
-                        // genuinely mixed the shared PSK, diverging the session key.
-                        guard let raw = (try? vault.loadPsk(name: name)) ?? nil, !raw.isEmpty else { return false }
-                        return selection.contains(PskAdvertising.canonicalFingerprint(forPsk: raw))
-                    }) else { return nil }
-                    let raw = (try? vault.loadPsk(name: name)) ?? nil
-                    return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
-                }()
+                let vaultPsk: Data? = Self.pskForEchoedSelection(
+                    echo: selectedFpStr,
+                    callId: callId,
+                    ownEphemeralX25519Pub: local.x25519Priv.publicKey.rawRepresentation
+                )
                 let selFpRaw: Data
                 if let psk = vaultPsk, !psk.isEmpty {
                     selFpRaw = Data(SHA256.hash(data: psk))
@@ -1993,20 +2046,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                         print("[QAudionCallIntegration] ACCEPT schema:2 — selectedPskFingerprint empty, session key mixes NO psk callId=\(callId.prefix(8))…")
                         return nil
                     }
-                    let vault = SovereignKeyVault()
-                    // Same membership-vs-bare-`==` widening as the V4 branch
-                    // above — byte-identical for today's N=1 case.
-                    let selection = Self.parseSelection(selectedFpStr)
-                    guard let name = vault.listPskNames().first(where: { name in
-                        // W-PSKMIX step 5 — same `.callDerived` exclusion as the
-                        // V4 branch above; see its comment for the full rationale.
-                        guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)) else { return false }
-                        // W-STALEFP — same fresh-recompute fix as the V4 branch above.
-                        guard let raw = (try? vault.loadPsk(name: name)) ?? nil, !raw.isEmpty else { return false }
-                        return selection.contains(PskAdvertising.canonicalFingerprint(forPsk: raw))
-                    }) else { return nil }
-                    let raw = (try? vault.loadPsk(name: name)) ?? nil
-                    return Self.pskIfFingerprintMatches(raw, selectedFpStr)  // convergence gate
+                    // Same resolution as the V4 branch above — one helper, so the two
+                    // derivation paths cannot disagree about which PSK the responder
+                    // picked. They disagreeing is not a cosmetic bug: the responder
+                    // already derived WITH the PSK, so a miss here diverges the session
+                    // key and every RX frame fails to unseal.
+                    return Self.pskForEchoedSelection(
+                        echo: selectedFpStr,
+                        callId: callId,
+                        ownEphemeralX25519Pub: local.x25519Priv.publicKey.rawRepresentation
+                    )
                 }()
                 combined = Self.deriveHybridSessionKey(
                     pqcSs: pqcSs,
@@ -2161,25 +2210,42 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     kcCallerKeyForEvent = KeyConfirmation.deriveKcKey(sessionKey: combined)
                 }
             }
-            // "Fingerprints this side holds" — same vault-eligibility filter the
-            // PSK-selection lookups above already apply (`.callDerived` excluded).
+            // W-PSKBLIND — the RESPONDER's own advertised list, resolved in whichever
+            // dialect it used, so the "NFC in comune" signal survives the blinded
+            // advertisement. This used to intersect the peer's wire fingerprints with a
+            // locally-rebuilt fingerprint set; under §3.3.1 those wire values are
+            // per-call tags and the intersection empties, blanking the chip silently.
+            //
+            // Preserved from the set it replaces: `.callDerived` rows are excluded, and
+            // fingerprints are recomputed FRESH from the raw material rather than read
+            // from the cached Keychain label (W-STALEFP), which can predate
+            // `canonicalFingerprint` becoming the write-time label.
+            //
+            // The responder's ephemeral for ITS leg is the one inside the ciphertext,
+            // NOT `bundle.x25519PublicKey` (empty on an ACCEPT) — the wrong one here
+            // yields a silently empty result.
             let kcCallerVault = SovereignKeyVault()
-            let kcCallerLocalFingerprints: Set<String> = Set(
-                kcCallerVault.listPskNames().compactMap { name -> String? in
-                    guard PskAdvertising.isEligibleMatchCandidate(origin: kcCallerVault.origin(name: name)) else { return nil }
-                    // W-STALEFP — same fresh-recompute fix as the PSK-selection
-                    // lookups above: `getFingerprint(name:)` is a cached Keychain
-                    // label that can predate `PskAdvertising.canonicalFingerprint`
-                    // becoming the write-time label, so it must never be trusted
-                    // for a set this side's own assurance/badge logic compares
-                    // against the peer's wire-advertised fingerprints.
-                    guard let raw = (try? kcCallerVault.loadPsk(name: name)) ?? nil, !raw.isEmpty else { return nil }
-                    return PskAdvertising.canonicalFingerprint(forPsk: raw)
+            let kcCallerCandidates: [PskAdvertResolver.Candidate] = kcCallerVault.listPskNames()
+                .sorted()
+                .compactMap { name in
+                    guard PskAdvertising.isEligibleMatchCandidate(origin: kcCallerVault.origin(name: name)),
+                          let raw = (try? kcCallerVault.loadPsk(name: name)) ?? nil, !raw.isEmpty
+                    else { return nil }
+                    return PskAdvertResolver.Candidate(
+                        staticFp: PskAdvertising.canonicalFingerprint(forPsk: raw),
+                        psk: raw,
+                        localRole: 0
+                    )
                 }
+            let kcCallerPeerAdvertisedRoles = Array(
+                PskAdvertResolver.resolve(
+                    receivedAdvert: bundle.pskFingerprints,
+                    receivedRoles: bundle.pskRoles,
+                    callId: callId,
+                    senderEphemeralX25519Pub: x25519EphPub,
+                    candidates: kcCallerCandidates
+                ).mutualPeerRoles
             )
-            let kcCallerPeerAdvertisedRoles = AssuranceState.mutualPeerAdvertisedRoles(
-                peerFingerprints: bundle.pskFingerprints, peerRoles: bundle.pskRoles,
-                localFingerprints: kcCallerLocalFingerprints)
             onKcMacReady?(KcMacReadyEvent(
                 peerId: callerId, callId: callId, isInitiator: true, sessionKey: combined,
                 kcKey: kcCallerKeyForEvent, transcript: kcCallerTranscriptForEvent, n: kcCallerN,
@@ -2654,6 +2720,82 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// mixing divergent salts (which makes every relay-audio frame fail AES-GCM auth).
     /// Android is unaffected: it always holds the byte-equal established PSK, so the
     /// gate passes on both ends and the session key stays byte-identical to interop.
+    /// W-PSKBLIND — the dialect THIS build's OFFER advertises (WIRE_SPEC §3.3.1
+    /// "Rollout"). The single switch for phase B, and the only thing here that
+    /// changes what goes on the wire.
+    ///
+    /// Phase A (this value) emits §3.3 static fingerprints, so the OFFER is
+    /// byte-identical to every build before the blinded advertisement landed. The
+    /// RECEIVE side is already dual-dialect on both legs, and the responder mirrors
+    /// whatever dialect it detected — so a peer of any vintage keeps working and this
+    /// constant is the whole of the risk.
+    ///
+    /// Flipping it to `.v3Blinded` is safe once phase A is live on Android, iOS and
+    /// Desktop. Against a peer that predates phase A the OFFER's tags match nothing,
+    /// the session key derives without a PSK, and the call still connects — which is
+    /// why the responder path logs that case explicitly rather than in silence.
+    static let offerAdvertDialect: PskAdvertResolver.Dialect = .v2Static
+
+    /// W-PSKBLIND — resolve the responder's echoed `selectedPskFingerprint` back to
+    /// the local PSK material, in EITHER dialect.
+    ///
+    /// The echo is a WIRE value in whatever dialect WE advertised. Under §3.3 it is a
+    /// static fingerprint and this is the vault lookup it always was; under §3.3.1 it
+    /// is OUR OWN per-call tag, so it is resolved by handing it BACK to the resolver
+    /// as a one-element advertisement under our own ephemeral key — we sent the
+    /// advertisement it was picked from, so our key is the right nonce source. Same
+    /// mechanism on Android and Desktop.
+    ///
+    /// Getting this wrong is not a downgrade, it is a BREAK: the responder already
+    /// derived WITH the PSK, so failing to resolve it here diverges the session key
+    /// and every received frame fails to unseal while the call still shows connected.
+    /// That is why the two derivation branches (V4 and schema:2) share this one
+    /// function instead of each carrying its own copy of the lookup.
+    ///
+    /// Preserved from the two copies it replaces:
+    ///  * `.callDerived` vault rows are never match candidates (W-PSKMIX step 5) —
+    ///    the consuming-side twin of the advertise-side exclusion.
+    ///  * fingerprints are recomputed fresh from the raw material, never read from
+    ///    the cached Keychain label (W-STALEFP), which can predate
+    ///    `canonicalFingerprint` becoming the write-time label.
+    ///  * the `pskIfFingerprintMatches` convergence gate still has the last word, so
+    ///    a drifted entry whose bytes no longer hash to its fingerprint is rejected.
+    static func pskForEchoedSelection(
+        echo: String,
+        callId: String,
+        ownEphemeralX25519Pub: Data
+    ) -> Data? {
+        guard !echo.isEmpty else { return nil }
+        let vault = SovereignKeyVault()
+        let candidates: [PskAdvertResolver.Candidate] = vault.listPskNames()
+            .sorted()
+            .compactMap { name in
+                guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: name)),
+                      let raw = (try? vault.loadPsk(name: name)) ?? nil, !raw.isEmpty
+                else { return nil }
+                return PskAdvertResolver.Candidate(
+                    staticFp: PskAdvertising.canonicalFingerprint(forPsk: raw),
+                    psk: raw,
+                    localRole: 0
+                )
+            }
+        // parseSelection keeps tolerating a future comma-joined multi-selection; only
+        // the first entry is acted on, exactly as before.
+        let selection = Self.parseSelection(echo)
+        let resolved = PskAdvertResolver.resolve(
+            receivedAdvert: selection,
+            receivedRoles: nil,
+            callId: callId,
+            senderEphemeralX25519Pub: ownEphemeralX25519Pub,
+            candidates: candidates
+        )
+        guard let staticFp = resolved.staticFp else {
+            print("[QAudionCallIntegration] echoed selection \(echo.prefix(16))… resolves to no local PSK in either dialect — session key mixes NO psk callId=\(callId.prefix(8))…")
+            return nil
+        }
+        return Self.pskIfFingerprintMatches(resolved.psk, staticFp)
+    }
+
     static func pskIfFingerprintMatches(_ psk: Data?, _ fp: String?) -> Data? {
         guard let psk = psk, !psk.isEmpty, let fp = fp, !fp.isEmpty else { return nil }
         // W-PSKMIX step 3 — reuse the same canonical-fingerprint computation

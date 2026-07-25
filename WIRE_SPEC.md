@@ -448,16 +448,48 @@ Only the wire changes. A receiver MUST translate a matched tag back to its own
 static fingerprint before handing it to any of those; skipping the translation
 leaves the §D4 hw_only intersect empty and quietly stops enforcing a requirement.
 
-**Capability and rollout.** A peer advertises `pskAdvertV3` in `capabilities`
-when it can CONSUME v3 tags. Rollout is two-phase and per-platform:
+**No capability bit. The dialect is self-describing.**
 
-* Phase A — advertise the capability and implement matching, while still
-  emitting §3.3 static fingerprints. No wire change.
-* Phase B — emit v3 tags. The responder gates its own ACCEPT advertisement on
-  `offer.capabilities.pskAdvertV3`, so that leg has no mixed window at all. The
-  OFFER cannot know the peer in advance: against a peer that predates phase A it
-  will find no match, which MUST surface as an explicit "PSK not used this call"
-  notice, never as a session key silently derived without the PSK.
+A receiver MUST attempt BOTH dialects against a received advertisement, v3 first
+then §3.3 static, and remember which one produced the match:
+
+```
+dialect = v3      if a v3 tag match was found
+        = v2      else if a static-fingerprint match was found
+        = unknown if neither matched
+```
+
+Both attempts are cheap and cannot conflict: a 32-byte HMAC tag equals a
+`SHA-256(psk)` only with negligible probability, so trying v2 after v3 widens
+what can be matched without ever producing a wrong match.
+
+The responder then **mirrors the dialect it detected** in its own ACCEPT
+advertisement — v3 if it matched v3, otherwise static. Consequences:
+
+* The ACCEPT leg has **no mixed window at all**, and needs no negotiation: the
+  OFFER's advertisement already says which dialect the initiator speaks.
+* There is no field for a relay to strip. Downgrading the ACCEPT leg would mean
+  rewriting the initiator's advertisement, which is covered by the §3.2
+  signature — and a relay cannot produce static fingerprints anyway, not holding
+  the keys.
+* `dialect = unknown` (no shared secret found) falls back to static. Nothing is
+  lost: with no shared secret there is no PSK to protect.
+
+`selectedPskFingerprint` is dialect-agnostic because the responder echoes the
+RECEIVED element verbatim in both dialects. The initiator knows which dialect it
+sent and resolves the echo through the corresponding map (tag→secret for v3,
+fingerprint→secret for static).
+
+Rollout is therefore two-phase and per-platform, with only the OFFER emitter
+needing a decision:
+
+* Phase A — implement dual-dialect matching and dialect mirroring, while the
+  OFFER still emits §3.3 static fingerprints. No wire change; a peer of any
+  vintage is unaffected.
+* Phase B — the OFFER emits v3 tags. Safe once phase A is live everywhere. A
+  peer predating phase A will find no match, which MUST surface as an explicit
+  "PSK not used this call" notice, never as a session key silently derived
+  without the PSK.
 
 **Honest limits.** v3 does not hide how many secrets a pair shares (the list
 length is still visible; pad to a fixed length if that matters), and it does not
