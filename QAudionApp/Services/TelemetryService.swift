@@ -273,11 +273,17 @@ public final class TelemetryService {
                 }
             } else if let http = resp as? HTTPURLResponse, http.statusCode == 401 {
                 // JWT expired or unauthorised — drop the pubkey so
-                // we re-fetch on next try.
+                // we re-fetch on next try. Batch was never removed
+                // from `buffer`, so it retries automatically.
                 serverPubKey = nil
+            } else if let http = resp as? HTTPURLResponse, (500..<600).contains(http.statusCode) {
+                // W-TELEDROP: transient server-side failure — not the
+                // batch's fault. Leave it in `buffer` for the next
+                // periodic retry instead of losing it.
             } else {
-                // 4xx/5xx — drop batch to avoid stuck loop on
-                // malformed events.
+                // Other 4xx — the batch itself is rejected
+                // (malformed/etc). Retrying it would burn requests
+                // forever, so drop it here.
                 if batchEvents.count <= buffer.count {
                     buffer.removeFirst(batchEvents.count)
                 }
