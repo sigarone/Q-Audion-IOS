@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.860",
+              date: "2026-07-26",
+              title: "v1.0.860",
+              bullets: [
+                "chore(guardian): delete dead combinedThreatScore fusion method",
+              ]),
         .init(id: "v1.0.859",
               date: "2026-07-26",
               title: "v1.0.859",
               bullets: [
+                "chore: regenerate changelog for v1.0.859",
                 "fix(telemetry): 5xx flush response silently dropped the whole batch",
               ]),
         .init(id: "v1.0.858",
@@ -167,13 +174,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.841",
                 "fix(net): restore fi-1 as a real failover, verify function not just RTT (W-NODESERVES)",
-              ]),
-        .init(id: "v1.0.840",
-              date: "2026-07-23",
-              title: "v1.0.840",
-              bullets: [
-                "chore: regenerate changelog for v1.0.840",
-                "fix(net): pin the current Let's Encrypt YE2/Root-YE chain (W-CERTPIN-YE2)",
               ]),
     ]
 }
