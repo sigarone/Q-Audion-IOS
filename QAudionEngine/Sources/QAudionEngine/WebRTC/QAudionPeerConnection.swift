@@ -505,8 +505,62 @@ public final class QAudionPeerConnection: NSObject {
     }
 
     public func setVideoMuted(_ muted: Bool) {
+        // F-02 — an un-mute must not re-open a lane we closed for lack of
+        // frame-level E2EE. Without this the latch is decorative: the user taps
+        // the camera button and the plaintext video we refused to send goes out.
+        if !muted && videoFailClosed {
+            print("[WebRTC] setVideoMuted(false) refused — video is fail-closed (no frame E2EE)")
+            return
+        }
         localVideoTrack?.isEnabled = !muted
     }
+
+    /// F-02 (2026-07-26) — refuse to carry video that is not frame-encrypted.
+    ///
+    /// `sframe-v1` is a PLAINTEXT capability string the server relays. Strip it
+    /// from both legs and iOS used to latch `.legacy` and keep sending: video left
+    /// the device wrapped in DTLS-SRTP alone, terminated by whoever supplied the
+    /// fingerprint the server passed on. Android has refused this since
+    /// 2026-05-31; this is that behaviour.
+    ///
+    /// VIDEO only, never the call — audio is sealed on its own path and keeps
+    /// flowing. That is what keeps this inside W-NOBRICK.
+    public func failClosedVideo(reason: String) {
+        if videoFailClosed { return }
+        videoFailClosed = true
+        localVideoTrack?.isEnabled = false
+        for sender in peerConnection?.senders ?? [] {
+            (sender.track as? RTCVideoTrack)?.isEnabled = false
+        }
+        for receiver in peerConnection?.receivers ?? [] {
+            (receiver.track as? RTCVideoTrack)?.isEnabled = false
+        }
+        print("[WebRTC] VIDEO FAIL-CLOSED — \(reason)")
+    }
+
+    /// Lift the latch once the peer's capabilities turn out to include
+    /// `sframe-v1` after all — UPWARD only.
+    ///
+    /// This is not symmetry for its own sake. A caps-less duplicate envelope can
+    /// negotiate an EMPTY tag set first and the real capabilities arrive a moment
+    /// later; the `.legacy` latch used to survive that and produced permanent black
+    /// video, which is exactly the bug `acceptPeerCapabilities` was changed to fix.
+    /// The cryptor must already be installed when this is called.
+    public func reopenVideoAfterE2eeAgreed() {
+        guard videoFailClosed else { return }
+        videoFailClosed = false
+        localVideoTrack?.isEnabled = true
+        for sender in peerConnection?.senders ?? [] {
+            (sender.track as? RTCVideoTrack)?.isEnabled = true
+        }
+        for receiver in peerConnection?.receivers ?? [] {
+            (receiver.track as? RTCVideoTrack)?.isEnabled = true
+        }
+        print("[WebRTC] video fail-close LIFTED — peer capabilities now include sframe-v1")
+    }
+
+    /// True while video is disabled for lack of frame-level E2EE.
+    public private(set) var videoFailClosed = false
 
     /// W536 — true once `addLocalVideoTrack` has installed a track.
     /// Used by QAudionWebRtcCallController.upgradeToVideo to short-

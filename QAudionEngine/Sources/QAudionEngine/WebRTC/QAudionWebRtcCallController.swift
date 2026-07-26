@@ -1216,6 +1216,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // cryptor now. On the caller path the key arrives later
         // via the pqcSessionKey didSet which also calls this.
         _ = ensureVideoSealerInternal()
+        // F-02 — the re-run above may have installed the native cryptor after an
+        // earlier evaluation fail-closed the lane. Lift the latch only once the
+        // pick actually landed on `.native`: reopening on the strength of the caps
+        // alone would send the frames before the cryptor exists.
+        if case .native = videoSealer {
+            peerConnection?.reopenVideoAfterE2eeAgreed()
+        }
     }
 
     /// Read the current peer-negotiated capability set. Returns `nil`
@@ -1381,7 +1388,35 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return videoSealer
         }
         if let existing = videoSealer { return existing }
-        guard let negotiated = peerNegotiated() else { return nil }
+        let negotiated = peerNegotiated()
+
+        // F-02 — the three-way decision now lives in [VideoE2eeGate], shared verbatim
+        // with Android and Desktop. It was an inline `if` on each platform and two of
+        // the three drifted into a silent plaintext degrade; the drift WAS the finding.
+        //
+        // The key check stays below (the all-zero earbud placeholder has to be rejected
+        // too), so `hasSessionKey` is passed conservatively as "the peer agreed" — the
+        // gate's job here is to separate DEFER from FAIL_CLOSED, which is the
+        // distinction that was missing.
+        switch VideoE2eeGate.decide(
+            hasSessionKey: true,
+            peerHeardFrom: negotiated != nil,
+            useSFrame: negotiated?.useSFrame ?? false
+        ) {
+        case .defer_:
+            return nil
+        case .failClosed:
+            if let n = negotiated {
+                peerConnection?.failClosedVideo(reason: "peer did not advertise sframe-v1")
+                videoSealer = .legacy
+                print("[WebRtcCallController] video pipeline → FAIL-CLOSED (peerCaps=\(n.agreedTags), useSFrame=false)")
+                return videoSealer
+            }
+            return nil
+        case .install:
+            break
+        }
+        guard let negotiated else { return nil }
 
         // When the peer advertised `sframe-v1` we install the NATIVE
         // RTCFrameCryptor (cross-platform-compatible, H265-safe). Until the PQC
@@ -1403,7 +1438,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // Android, which disables the video track outright. Reached only
             // against a legacy peer (all current clients advertise the tag).
             if CallCapabilities.v4SFrameAes256Enabled && !negotiated.useSFrameAes256 {
-                print("[WebRtcCallController] sframe-aes256-v1 not advertised by peer (agreed=\(negotiated.agreedTags)); video DEGRADED to DTLS-SRTP only (no frame-level E2EE)")
+                // F-02 (2026-07-26) — this used to DEGRADE to DTLS-SRTP and keep
+                // sending. The comment even said so: "video still flows, without
+                // frame-level E2EE ... unlike Android, which disables the video
+                // track outright". That asymmetry was the whole attack: strip one
+                // plaintext capability string from the relayed caps and iOS is the
+                // leg that keeps emitting readable video.
+                print("[WebRtcCallController] sframe-aes256-v1 not advertised by peer (agreed=\(negotiated.agreedTags)); video FAIL-CLOSED")
+                peerConnection?.failClosedVideo(reason: "peer did not advertise sframe-aes256-v1")
                 videoSealer = .legacy
                 return videoSealer
             }
@@ -1426,10 +1468,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return videoSealer
         }
 
-        // Peer is legacy / didn't advertise sframe-v1 → no E2EE on video,
-        // DTLS-SRTP only. Latch this so we don't keep re-checking.
+        // Unreachable: the gate above already returned for every non-`useSFrame`
+        // case. Kept as an assertion rather than deleted, because "the peer declined
+        // and we fell through to here" is precisely the state that must never send.
+        peerConnection?.failClosedVideo(reason: "unreachable fallthrough — refusing video")
         videoSealer = .legacy
-        print("[WebRtcCallController] video pipeline → legacy (peerCaps=\(negotiated.agreedTags), useSFrame=false)")
+        print("[WebRtcCallController] video pipeline → FAIL-CLOSED (unreachable fallthrough, peerCaps=\(negotiated.agreedTags))")
         return videoSealer
     }
 
