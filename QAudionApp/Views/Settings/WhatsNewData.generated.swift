@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.858",
+              date: "2026-07-26",
+              title: "v1.0.858",
+              bullets: [
+                "fix(audio): a route-change race in the jitter-buffer pump froze the phone on speaker tap (W-PLAYOUTRACE)",
+              ]),
         .init(id: "v1.0.857",
               date: "2026-07-26",
               title: "v1.0.857",
               bullets: [
+                "chore: regenerate changelog for v1.0.857",
                 "feat(audio): wire the playout jitter buffer into the live iOS path (W-IOSJITTER)",
                 "fix(telemetry): call.end shipped the wrong identifier, so \"how the call died\" was never joinable (W-ENDCALLID)",
               ]),
@@ -186,12 +193,6 @@ extension ReleaseNote {
                 "feat(psk): iOS advert hygiene — filter, stable order, fp normalisation (W-PSKMIX step 3)",
                 "fix(psk): unwrap getFingerprint's String? before Array<String>.contains",
                 "feat(psk): parse-only support for multi-PSK selection (W-PSKMIX step 2)",
-              ]),
-        .init(id: "v1.0.838",
-              date: "2026-07-23",
-              title: "v1.0.838",
-              bullets: [
-                "chore: regenerate changelog for v1.0.838",
               ]),
     ]
 }
