@@ -8201,6 +8201,41 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// W-GRPDIAG-4 (2026-07-26) — Android (`PqcHandshake.persistMessagePsk`)
+    /// and Desktop (`CallController` "call-${callId.slice(0,8)}") both derive
+    /// and persist a per-contact message PSK from every completed 1:1 call's
+    /// session key: `HKDF-SHA256(ikm: sessionKey, salt: callId, info:
+    /// "q-audion-msg-psk-v1", 32)`, stored under the name `"call-<callId
+    /// prefix8>"`. Group-call control envelopes (sender_key_init/_rotate) use
+    /// exactly this PSK for their v3 wire tier — both sides derive it
+    /// independently from a session key they already share, no extra
+    /// exchange needed. iOS never implemented this half: its receive path
+    /// (`lookupGroupCtrlPskByEpoch`, below) already knows how to find and use
+    /// such an entry, but nothing here ever wrote one, so it always missed —
+    /// root cause of the deterministic sender_key_init nack loop against iOS
+    /// documented in the W-GRPDIAG-4 investigation (Android/Desktop send v3,
+    /// iOS's vault has no matching "call-<epoch>" entry, v3 open fails,
+    /// LiveKit reports MISSING_KEY, iOS nacks — every retry, since resending
+    /// identical correct bytes cannot fix a receive-side PSK that was never
+    /// persisted). Call this once the 1:1 handshake's session key is final.
+    private func persistMessagePsk(sessionKey: Data, callId: String, peerContactId: String) {
+        guard sessionKey.count == 32, callId.count >= 8 else { return }
+        let msgPsk = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: sessionKey),
+            salt: Data(callId.utf8),
+            info: Data("q-audion-msg-psk-v1".utf8),
+            outputByteCount: 32
+        ).withUnsafeBytes { Data($0) }
+        let name = "call-" + String(callId.prefix(8))
+        let fp = SHA256.hash(data: msgPsk).map { String(format: "%02x", $0) }.joined().prefix(16)
+        do {
+            try SovereignKeyVault().storePsk(name: name, key: msgPsk, fingerprint: String(fp), keyClass: .shared)
+            print("[AppState] persistMessagePsk: stored call-derived PSK name=\(name) contact=\(peerContactId.prefix(8))…")
+        } catch {
+            print("[AppState] persistMessagePsk failed contact=\(peerContactId.prefix(8))…: \(error)")
+        }
+    }
+
     /// W396 — lazy-create the responder integration the first time we
     /// see an inbound PQC envelope from this caller. Idempotent: a
     /// subsequent call returns the cached instance. Wires the same
@@ -8232,6 +8267,8 @@ final class AppState: ObservableObject {
                 self.callService.installRelaySealers(
                     sessionKey: sessionKey, callId: cid,
                     srtpDirKeyV1: useDir, selfIsRoleA: roleA)
+                // W-GRPDIAG-4 — see persistMessagePsk doc above.
+                self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
                 // Cold-start answer race — the relay session key is now live, so
                 // engine + integration + contactId are all ready. If the user
                 // already answered during the PushKit cold-start gap, replay it.
@@ -9605,6 +9642,8 @@ final class AppState: ObservableObject {
                         self.callService.installRelaySealers(
                             sessionKey: sessionKey, callId: cid,
                             srtpDirKeyV1: useDir, selfIsRoleA: roleA)
+                        // W-GRPDIAG-4 — see persistMessagePsk doc above.
+                        self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
                     }
                 }
                 integration.onPqcSessionKeyEstablished = { [weak self] sharedSecret in
