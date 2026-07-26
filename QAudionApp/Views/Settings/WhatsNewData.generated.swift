@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.861",
+              date: "2026-07-26",
+              title: "v1.0.861",
+              bullets: [
+                "fix(group-call): iOS never persisted the call-derived message PSK",
+              ]),
         .init(id: "v1.0.860",
               date: "2026-07-26",
               title: "v1.0.860",
               bullets: [
+                "chore: regenerate changelog for v1.0.860",
                 "chore(guardian): delete dead combinedThreatScore fusion method",
               ]),
         .init(id: "v1.0.859",
@@ -167,13 +174,6 @@ extension ReleaseNote {
                 "fix(psk): exclude identity pubkeys from call-PSK match eligibility (W-IDKEYEXCL)",
                 "fix(kms): wire V2Context into the production pollOnce() call (W-KMSV2CTX)",
                 "fix(nfc): store real SHA-256(psk) fingerprint label, not hex(peerIdPub)",
-              ]),
-        .init(id: "v1.0.841",
-              date: "2026-07-23",
-              title: "v1.0.841",
-              bullets: [
-                "chore: regenerate changelog for v1.0.841",
-                "fix(net): restore fi-1 as a real failover, verify function not just RTT (W-NODESERVES)",
               ]),
     ]
 }
