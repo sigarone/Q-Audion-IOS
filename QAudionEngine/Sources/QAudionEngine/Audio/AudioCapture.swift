@@ -22,6 +22,24 @@ public final class AudioCapture {
     /// ledger hop there), so no lock. Reset wherever the player is stopped: `stop()`
     /// discards its queued buffers WITHOUT firing their handlers on every documented path,
     /// so a stale count would make the depth read high for the rest of the call.
+    // ── W-IOSJITTER wiring (2026-07-26) ────────────────────────────────────────
+    /// The playout buffer the sealed-audio path never had. See `playFrame`.
+    private let playoutJitter = PlayoutJitterBuffer()
+    /// Mirror of `playoutInFlight` readable from the thread `playFrame` runs on.
+    ///
+    /// `playoutInFlight` is mutated only on the main queue (that serialisation is
+    /// what makes the ledger correct without a lock), so the pump cannot read it
+    /// synchronously. This counter is incremented/decremented at the same two points
+    /// on whatever thread is there, and it is the pump's gate. Being approximate is
+    /// acceptable: it decides how many buffers sit on the node, and the jitter
+    /// buffer's own tiers bound the consequence of being off by one.
+    private var playoutInFlightApprox = 0
+    /// Last frame actually delivered, for repeat-based concealment on underrun.
+    private var lastDeliveredPlayoutFrame: Data?
+    private var playoutConcealBudget = 6
+    /// Concealed frames this call — the number that makes an underrun visible.
+    private var playoutConcealed = 0
+
     private var playoutInFlight: Int = 0
     private var playFormat: AVAudioFormat?
     private var isRunning = false
@@ -1321,6 +1339,77 @@ public final class AudioCapture {
                 lastLoudPlayoutAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             }
         }
+        // W-IOSJITTER wiring (2026-07-26) — from here the frame goes into the
+        // playout jitter buffer instead of straight onto the player node.
+        //
+        // What it replaces: `playFrame` scheduled EVERY arriving frame immediately.
+        // `AVAudioPlayerNode` accepts them all, so frames arriving faster than
+        // realtime became unbounded standing latency, frames arriving slower left the
+        // node with nothing and the hole was plain silence, and nothing counted
+        // either way. That is why every iOS leg on the tuning card shows `X` for
+        // stalls, drops, PLC and playout rate while the Android leg on the SAME call
+        // reports real numbers — iOS was not healthy, it was unmeasured.
+        //
+        // The pump below is self-clocking off the buffer-consumed completion handler,
+        // which the in-flight ledger already had wired. Nothing here has control
+        // authority over the engine: if a handler never fires, the pump stalls at the
+        // in-flight target and frames queue in OUR buffer, where the emergency tier
+        // bounds the backlog — the failure mode is bounded latency, not a dead call.
+        playoutJitter.push(pcmData)
+        pumpPlayout()
+    }
+
+    /// The in-flight target: how many 20 ms buffers may sit on the player node at
+    /// once. Two is 40 ms — enough that a late pump does not underrun the node,
+    /// small enough that the node stops being a hidden elastic store. Depth beyond
+    /// this lives in [PlayoutJitterBuffer], where the catch-up tiers can see it.
+    private static let playoutInFlightTarget = 2
+
+    /// Drain the jitter buffer onto the player node up to the in-flight target.
+    ///
+    /// Called on every arrival and again from the completion handler, so the rate is
+    /// the node's real consumption rate rather than a timer we would have to keep in
+    /// sync with the hardware clock.
+    private func pumpPlayout() {
+        while playoutInFlightApprox < Self.playoutInFlightTarget {
+            guard let frame = playoutJitter.popWithDriftCatchup() else {
+                // Underrun. Conceal rather than leave a hole: a repeat of the last
+                // delivered frame at -6 dB is crude, but the alternative here is
+                // literal silence, and a 20 ms silence is far more audible than a
+                // 20 ms attenuated repeat. Counted so the concealment shows up in
+                // telemetry instead of looking like a healthy call.
+                if let last = lastDeliveredPlayoutFrame, playoutConcealBudget > 0 {
+                    playoutConcealBudget -= 1
+                    playoutConcealed += 1
+                    scheduleForPlayout(Self.attenuated(last, by: 0.5))
+                }
+                return
+            }
+            // Budget re-arms on every real frame: concealment is for a gap, not a
+            // substitute for a stream that has stopped arriving.
+            playoutConcealBudget = Self.playoutConcealMax
+            lastDeliveredPlayoutFrame = frame
+            scheduleForPlayout(frame)
+        }
+    }
+
+    /// Halve every sample. `Int16` stays in range by construction, so no clamping.
+    private static func attenuated(_ pcm: Data, by factor: Float) -> Data {
+        var out = pcm
+        out.withUnsafeMutableBytes { raw in
+            guard let p = raw.bindMemory(to: Int16.self).baseAddress else { return }
+            let n = raw.count / 2
+            for i in 0..<n { p[i] = Int16(Float(p[i]) * factor) }
+        }
+        return out
+    }
+
+    /// At most this many consecutive concealed frames (=120 ms) before we stop and
+    /// let the gap be a gap. Repeating one frame indefinitely turns a dropout into a
+    /// buzz, which is worse than the silence it replaced.
+    private static let playoutConcealMax = 6
+
+    private func scheduleForPlayout(_ pcmData: Data) {
         // W574j — build the playback buffer in the player node's LIVE output
         // format, not the cached `playFormat`. On iPad, enabling Voice
         // Processing I/O reconfigures the player→mixer bus to the hardware
@@ -1399,12 +1488,20 @@ public final class AudioCapture {
         // to the main queue — the handler runs on an engine-internal thread, and this
         // serialises the two mutations without adding a lock or assuming which thread
         // `playFrame` was called on.
+        playoutInFlightApprox += 1
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.playoutInFlight += 1
             self.audioPipeline.notePlayoutScheduled(inFlightAfter: self.playoutInFlight)
         }
         player.scheduleBuffer(buffer) { [weak self] in
+            // W-IOSJITTER — a consumed buffer is the pump's clock. Doing this on the
+            // handler's own thread rather than after the main hop keeps the node fed
+            // at the hardware rate; the ledger below stays on main as before.
+            if let self {
+                if self.playoutInFlightApprox > 0 { self.playoutInFlightApprox -= 1 }
+                self.pumpPlayout()
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 if self.playoutInFlight > 0 {
