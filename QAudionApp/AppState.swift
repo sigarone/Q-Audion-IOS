@@ -10275,13 +10275,35 @@ final class AppState: ObservableObject {
         // avoid leaking the social graph through auto-uploaded VPS telemetry.
         let callLogId: String = activeOutgoingRecordId ?? "none"
         RTLog.info("call", "endCall — callId=" + callLogId + " state=\(callState)")
+
+        // W-ENDCALLID (2026-07-26) — `call.end` was shipping the LOCAL persistent
+        // record id, not the wire call id, and un-lowercased. Measured on the box:
+        // every `call.end` landed in an orphan call of its own — `8B392E49` next to
+        // the real `8b392e49`, `498AAF5A` and `A778B3BE` matching nothing at all —
+        // so `terminal_state` and `end_reason`, the two fields that say HOW a call
+        // died, were never joinable to the call that died. 122 of 138 events had an
+        // id and not one of them was usable.
+        //
+        // The wire id is `callingApi.getActiveCallId()`, the same value every other
+        // event on this leg uses, and it is read BEFORE the teardown below clears
+        // the provider. Lowercased for the same reason line ~10164 already does it:
+        // Swift's `UUID.uuidString` is uppercase and the wire id is not, which is
+        // why this file is littered with `caseInsensitiveCompare` workarounds.
+        // The record id stays as the fallback — losing the event entirely would be
+        // worse than an id that at least ties to the local call record.
+        // The downcast mirrors every other reader of this value in this file (see the
+        // `onCallVideoState` handler): `getActiveCallId()` lives on the concrete impl,
+        // not on the `CallingApi` protocol.
+        let wireCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+        let endCallId = (wireCallId ?? (callLogId == "none" ? nil : callLogId))?.lowercased()
+
         // W541-3: telemetry event for call end. callState carries the
         // terminal state which the maintainer correlates with peer's
         // own endCall event to detect "iPhone went encrypted but S24
         // gave up at ringing" patterns.
         TelemetryService.shared.emit(
             kind: "call.end",
-            callId: callLogId == "none" ? nil : callLogId,
+            callId: endCallId,
             attrs: [
                 "terminal_state": String(describing: callState),
                 "is_video": isVideoCall
