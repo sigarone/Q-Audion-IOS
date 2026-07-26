@@ -25,15 +25,6 @@ public final class AudioCapture {
     // ── W-IOSJITTER wiring (2026-07-26) ────────────────────────────────────────
     /// The playout buffer the sealed-audio path never had. See `playFrame`.
     private let playoutJitter = PlayoutJitterBuffer()
-    /// Mirror of `playoutInFlight` readable from the thread `playFrame` runs on.
-    ///
-    /// `playoutInFlight` is mutated only on the main queue (that serialisation is
-    /// what makes the ledger correct without a lock), so the pump cannot read it
-    /// synchronously. This counter is incremented/decremented at the same two points
-    /// on whatever thread is there, and it is the pump's gate. Being approximate is
-    /// acceptable: it decides how many buffers sit on the node, and the jitter
-    /// buffer's own tiers bound the consequence of being off by one.
-    private var playoutInFlightApprox = 0
     /// Last frame actually delivered, for repeat-based concealment on underrun.
     private var lastDeliveredPlayoutFrame: Data?
     private var playoutConcealBudget = 6
@@ -1356,7 +1347,32 @@ public final class AudioCapture {
         // in-flight target and frames queue in OUR buffer, where the emergency tier
         // bounds the backlog — the failure mode is bounded latency, not a dead call.
         playoutJitter.push(pcmData)
-        pumpPlayout()
+        // W-PLAYOUTRACE (2026-07-26) — hop to main BEFORE touching the engine.
+        //
+        // Live incident, first call on a build carrying this pump: user tapped the
+        // in-call speaker button and the phone froze. Root cause, found by reading
+        // rather than guessing: `pumpPlayout` was called from TWO places on two
+        // DIFFERENT, unsynchronized threads — inline here (whatever thread decrypts
+        // network audio) and again inline inside `scheduleBuffer`'s OWN completion
+        // handler, which AVFoundation fires on an internal thread that is neither
+        // this one nor main. Both paths read/wrote `self.engine`/`self.playerNode`
+        // with zero lock. `restartEngineForRoute` — which a speaker tap triggers via
+        // `.override` — tears the SAME two properties down and rebuilds them, also
+        // unsynchronized, on the main queue (`scheduleDebouncedRouteRestart`'s
+        // `DispatchQueue.main.asyncAfter`). A teardown landing mid-schedule raced an
+        // AVAudioEngine object that Apple does not document as safe for concurrent
+        // configuration and scheduling from different threads — and it also meant
+        // `scheduleBuffer` could be called REENTRANTLY, from inside its own
+        // completion callback, which is its own known hazard independent of the race.
+        //
+        // The fix is not a lock. It is giving `engine`/`playerNode` exactly ONE
+        // owning thread — main, since that is where `restartEngineForRoute` already
+        // runs on its primary (debounced, i.e. every real route flip including this
+        // one) path — and moving every entry point into the pump onto it. See the
+        // completion handler below for the other half.
+        DispatchQueue.main.async { [weak self] in
+            self?.pumpPlayout()
+        }
     }
 
     /// The in-flight target: how many 20 ms buffers may sit on the player node at
@@ -1370,8 +1386,12 @@ public final class AudioCapture {
     /// Called on every arrival and again from the completion handler, so the rate is
     /// the node's real consumption rate rather than a timer we would have to keep in
     /// sync with the hardware clock.
+    /// Main-thread only — see the W-PLAYOUTRACE note at the `playFrame` call site.
+    /// One thread owns `playoutInFlight`/`engine`/`playerNode` now, so there is
+    /// nothing left to keep in sync across threads.
     private func pumpPlayout() {
-        while playoutInFlightApprox < Self.playoutInFlightTarget {
+        dispatchPrecondition(condition: .onQueue(.main))
+        while playoutInFlight < Self.playoutInFlightTarget {
             guard let frame = playoutJitter.popWithDriftCatchup() else {
                 // Underrun. Conceal rather than leave a hole: a repeat of the last
                 // delivered frame at -6 dB is crude, but the alternative here is
@@ -1484,24 +1504,20 @@ public final class AudioCapture {
         // actually consumed.
         //
         // Deliberately a pure LEDGER with no control authority: if a handler never fires,
-        // the cost is a wrong number and never a stalled call. Both sides of the ledger hop
-        // to the main queue — the handler runs on an engine-internal thread, and this
-        // serialises the two mutations without adding a lock or assuming which thread
-        // `playFrame` was called on.
-        playoutInFlightApprox += 1
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.playoutInFlight += 1
-            self.audioPipeline.notePlayoutScheduled(inFlightAfter: self.playoutInFlight)
-        }
+        // the cost is a wrong number and never a stalled call. Both increment and
+        // decrement now happen on main by construction (see W-PLAYOUTRACE) rather
+        // than by hopping to reconcile two different calling threads.
+        dispatchPrecondition(condition: .onQueue(.main))
+        playoutInFlight += 1
+        audioPipeline.notePlayoutScheduled(inFlightAfter: playoutInFlight)
         player.scheduleBuffer(buffer) { [weak self] in
-            // W-IOSJITTER — a consumed buffer is the pump's clock. Doing this on the
-            // handler's own thread rather than after the main hop keeps the node fed
-            // at the hardware rate; the ledger below stays on main as before.
-            if let self {
-                if self.playoutInFlightApprox > 0 { self.playoutInFlightApprox -= 1 }
-                self.pumpPlayout()
-            }
+            // W-PLAYOUTRACE — do NOT touch engine/playerNode on this thread. This
+            // completion callback fires on an AVFoundation-internal thread, which is
+            // exactly the thread that raced `restartEngineForRoute`'s main-queue
+            // teardown and froze the app on a real device the first time this pump
+            // shipped. Hop to main — the pipeline's one and only owning thread — and
+            // do every bit of work there, including the pump call that used to run
+            // inline right here.
             DispatchQueue.main.async {
                 guard let self else { return }
                 if self.playoutInFlight > 0 {
@@ -1512,6 +1528,13 @@ public final class AudioCapture {
                     // non-zero anomaly count means treat the max as a lower bound.
                     self.audioPipeline.notePlayoutLedgerAnomaly()
                 }
+                // W-PLAYOUTRACE — the pump call that used to run inline in this
+                // handler, moved here rather than dropped: a consumed buffer is
+                // still the pump's clock (self-clocking off the node's real
+                // consumption rate, not off network arrival cadence, is the whole
+                // reason this handler exists). After the ledger decrement so
+                // `pumpPlayout`'s target check reads the up-to-date count.
+                self.pumpPlayout()
             }
         }
     }
