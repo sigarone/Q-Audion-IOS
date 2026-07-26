@@ -8508,12 +8508,24 @@ final class AppState: ObservableObject {
                 UserDefaults.standard.set(set, forKey: srtpDirKeyV1Key)
             }
         }
-        // Verified-channel = the user has confirmed the SAS at least once for
-        // this peer (existing SAS-verification state). A stored fingerprint is
-        // the proxy for trust ≥ VERIFIED_CHANNEL. `SasVerificationStore.shared`
-        // is a Keychain-backed singleton — safe to read off-main.
+        // Verified-channel = the user has confirmed the SAS for this peer AND that
+        // confirmation still applies to the identity key currently pinned.
+        //
+        // C-3 (2026-07-26) — the second half is new. "A stored fingerprint is the
+        // proxy for trust >= VERIFIED_CHANNEL" was the old rule and it survived key
+        // rotation: a server-substituted identity inherited the user's in-person
+        // verification with nothing to notice. Now the record is bound to the pinned
+        // key, so a rotation drops this back to unverified by construction.
+        //
+        // No pin (never contacted / wiped) => not verified. `SasVerificationStore.shared`
+        // and `PeerIdentityPinStore` are both Keychain-backed — safe to read off-main.
         integration.isPeerVerifiedChannel = { peerId in
-            SasVerificationStore.shared.storedFingerprint(peerUserId: peerId) != nil
+            guard let pinned = PeerIdentityPinStore().pinnedKey(contactId: peerId) else {
+                return false
+            }
+            return SasVerificationStore.shared.hasVerifiedBinding(
+                peerUserId: peerId,
+                currentIdentityTag: SasVerificationStore.identityTag(forPinnedKey: pinned))
         }
         // Global enforcement flag: the integration default is `true` (Gate #16,
         // enabled 2026-06-18 — see QAudionCallIntegration.requireSignedHandshakeFlag).

@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import QAudionEngine
 import Security
 
 /// W368 — persistence for the in-call SAS ceremony.
@@ -45,11 +46,45 @@ public final class SasVerificationStore {
     // MARK: - Public API (stable)
 
     /// Persist that `peerUserId` confirmed SAS coincidence under
-    /// `fingerprint`. Replaces any previous fingerprint for the
-    /// same peer (e.g. after a key rotation that produces a new SAS).
-    public func recordVerified(peerUserId: String, fingerprint: String) {
-        Self.keychainSet(account: prefix + peerUserId,
-                         value: fingerprint)
+    /// `fingerprint`, BOUND to the identity key it was compared against.
+    ///
+    /// C-3 (2026-07-26) — the binding is the fix. The record used to be the SAS
+    /// fingerprint alone, and two callers then treated its mere PRESENCE as
+    /// "user verified" without comparing anything. So after the server rotated a
+    /// contact's identity key, the stale record kept rendering the contact as
+    /// verified: the user's most durable trust signal vouching for a key they had
+    /// never seen. `PeerTrustEvaluator` even documented the hole — "we can only
+    /// check 'was ANY SAS ever confirmed for this peer'".
+    ///
+    /// `identityTag` closes it without needing a live session key: it is derived
+    /// from the PINNED identity key, so a rotation changes it and the record stops
+    /// matching by construction rather than by anyone remembering to invalidate it.
+    public func recordVerified(peerUserId: String, fingerprint: String, identityTag: String) {
+        let binding = SasBinding(sasFingerprint: fingerprint, identityTag: identityTag)
+        Self.keychainSet(account: prefix + peerUserId, value: binding.encoded)
+    }
+
+    /// The identity binding for a pinned Ed25519 key. Forwards to [SasBinding] —
+    /// the format and the comparisons live in the ENGINE target, because that is
+    /// the one CI compiles on every push.
+    public static func identityTag(forPinnedKey key: Data) -> String {
+        SasBinding.identityTag(forPinnedKey: key)
+    }
+
+    /// The stored record, or nil when there is none — including a value written
+    /// before the binding existed (see [SasBinding.decode] for why that counts as
+    /// absent rather than valid).
+    public func storedBinding(peerUserId: String) -> SasBinding? {
+        guard let raw = storedFingerprint(peerUserId: peerUserId) else { return nil }
+        return SasBinding.decode(raw)
+    }
+
+    /// C-3 — is there a SAS verification that still applies to the identity key
+    /// currently pinned for this peer?
+    ///
+    /// This is what the two presence-only call sites needed and did not have.
+    public func hasVerifiedBinding(peerUserId: String, currentIdentityTag: String) -> Bool {
+        storedBinding(peerUserId: peerUserId)?.appliesTo(currentIdentityTag: currentIdentityTag) ?? false
     }
 
     /// Returns the previously-stored fingerprint, or nil if the user
@@ -77,12 +112,14 @@ public final class SasVerificationStore {
     /// last verified fingerprint for the peer. Used to render the
     /// "SAS VERIFICATO" badge on InCallScreen at call start without
     /// requiring the user to re-confirm.
-    public func isVerified(peerUserId: String, currentFingerprint: String) -> Bool {
-        guard let stored = storedFingerprint(peerUserId: peerUserId) else {
-            return false
-        }
-        // SECURITY M-7: constant-time comparison (no early exit).
-        return Self.constantTimeEquals(stored, currentFingerprint)
+    /// C-3 — BOTH halves must match: the SAS words of this call, and the identity
+    /// key the ceremony was performed against. The second half is what stops a
+    /// rotated key from inheriting an old confirmation.
+    public func isVerified(peerUserId: String, currentFingerprint: String,
+                           currentIdentityTag: String) -> Bool {
+        // SECURITY M-7's constant-time comparison now lives in [SasBinding.matches].
+        storedBinding(peerUserId: peerUserId)?
+            .matches(sasFingerprint: currentFingerprint, identityTag: currentIdentityTag) ?? false
     }
 
     /// Forget the verification for a peer — used when the user
@@ -107,21 +144,11 @@ public final class SasVerificationStore {
         return truncated.map { String(format: "%02x", $0) }.joined()
     }
 
-    // MARK: - Constant-time comparison
-
-    /// Byte-wise comparison with no data-dependent early return.
-    /// Length mismatch still short-circuits (lengths are not secret —
-    /// both inputs are hex of a fixed-size hash).
-    private static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
-        let ab = Array(a.utf8)
-        let bb = Array(b.utf8)
-        if ab.count != bb.count { return false }
-        var diff: UInt8 = 0
-        for i in 0..<ab.count {
-            diff |= ab[i] ^ bb[i]
-        }
-        return diff == 0
-    }
+    // The constant-time comparator that used to live here moved to
+    // `SasBinding.constantTimeEquals` along with the format it guards — one copy,
+    // in the target CI actually compiles. Deleted rather than left as a private
+    // duplicate: two implementations of a timing-sensitive compare is how one of
+    // them quietly stops being constant-time.
 
     // MARK: - Keychain helpers (M-7)
 

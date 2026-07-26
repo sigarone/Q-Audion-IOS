@@ -87,10 +87,21 @@ public enum PeerTrustEvaluator {
         }
 
         // Fall back to the real in-call anti-replay SAS ceremony (LiveInCallScreen).
-        // No live session key here (this screen is never shown mid-call), so we
-        // can only check "was ANY SAS ever confirmed for this peer" rather than
-        // compare against the current call's fingerprint.
-        if SasVerificationStore.shared.storedFingerprint(peerUserId: peerUserId) != nil {
+        //
+        // C-3 (2026-07-26) — this used to be `storedFingerprint(...) != nil`, i.e.
+        // "was ANY SAS ever confirmed for this peer", and the comment that stood
+        // here said so as if it were a limitation rather than a hole: once the
+        // server rotated a contact's identity key, the stale record kept returning
+        // `.userVerified` forever. The user's most durable trust signal vouched for
+        // a key they had never compared.
+        //
+        // There are no SAS words outside a call, but there does not need to be: the
+        // record now carries the identity key the ceremony was performed against, so
+        // the question that CAN be answered here — "does this confirmation still
+        // apply to the key I have pinned?" — is the one that a rotation invalidates.
+        let currentIdentityTag = SasVerificationStore.identityTag(forPinnedKey: peerIkEdPub)
+        if SasVerificationStore.shared.hasVerifiedBinding(
+            peerUserId: peerUserId, currentIdentityTag: currentIdentityTag) {
             return Evaluation(state: .userVerified, safetyNumber: safetyNumber, verifiedAt: nil, verificationMethod: .antiReplay, peerIkEdPub: peerIkEdPub)
         }
 

@@ -329,10 +329,22 @@ struct LiveInCallScreen: View {
     private func handleConfirmSas() {
         let words = appState.callSasWords
         guard !words.isEmpty,
-              let peer = appState.callContactId else { return }
+              let peer = appState.callContactId,
+              let identityTag = sasIdentityTag(for: peer) else { return }
         let fp = SasVerificationStore.fingerprint(forWords: words)
-        SasVerificationStore.shared.recordVerified(peerUserId: peer, fingerprint: fp)
+        SasVerificationStore.shared.recordVerified(
+            peerUserId: peer, fingerprint: fp, identityTag: identityTag)
     }
+
+    /// C-3 — the identity binding for the SAS record, from the key currently
+    /// pinned for the call's peer. `nil` when there is no pin, in which case
+    /// nothing may be recorded or trusted: a confirmation with no identity to bind
+    /// to is the state this finding was about.
+    private func sasIdentityTag(for peerId: String) -> String? {
+        guard let pinned = PeerIdentityPinStore().pinnedKey(contactId: peerId) else { return nil }
+        return SasVerificationStore.identityTag(forPinnedKey: pinned)
+    }
+
 
     private func handleToggleDiagnostics() {
         showDiagnostics.toggle()
@@ -472,9 +484,10 @@ struct LiveInCallScreen: View {
         let words = appState.callSasWords
         guard !words.isEmpty,
               let peer = appState.callContactId else { return false }
+        guard let identityTag = sasIdentityTag(for: peer) else { return false }
         let fp = SasVerificationStore.fingerprint(forWords: words)
         return SasVerificationStore.shared.isVerified(
-            peerUserId: peer, currentFingerprint: fp)
+            peerUserId: peer, currentFingerprint: fp, currentIdentityTag: identityTag)
     }
 
     /// W502: build a `KeyInfo` panel from the live ML-KEM session key.

@@ -676,15 +676,25 @@ struct VideoCallView: View {
     private var sasVerified: Bool {
         let words = appState.callSasWords
         guard !words.isEmpty, let peer = appState.callContactId else { return false }
+        guard let pinned = PeerIdentityPinStore().pinnedKey(contactId: peer) else { return false }
         let fp = SasVerificationStore.fingerprint(forWords: words)
-        return SasVerificationStore.shared.isVerified(peerUserId: peer, currentFingerprint: fp)
+        // C-3 — the SAS words alone are not enough: they must still belong to the
+        // identity key the ceremony was performed against.
+        return SasVerificationStore.shared.isVerified(
+            peerUserId: peer, currentFingerprint: fp,
+            currentIdentityTag: SasVerificationStore.identityTag(forPinnedKey: pinned))
     }
 
     private func confirmSas() {
         let words = appState.callSasWords
-        guard !words.isEmpty, let peer = appState.callContactId else { return }
+        // C-3 — a confirmation with no pinned identity to bind it to is exactly the
+        // record this finding was about, so refuse to write one.
+        guard !words.isEmpty, let peer = appState.callContactId,
+              let pinned = PeerIdentityPinStore().pinnedKey(contactId: peer) else { return }
         let fp = SasVerificationStore.fingerprint(forWords: words)
-        SasVerificationStore.shared.recordVerified(peerUserId: peer, fingerprint: fp)
+        SasVerificationStore.shared.recordVerified(
+            peerUserId: peer, fingerprint: fp,
+            identityTag: SasVerificationStore.identityTag(forPinnedKey: pinned))
     }
 
     private func resolveDisplayName() {
