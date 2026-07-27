@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.863",
+              date: "2026-07-27",
+              title: "v1.0.863",
+              bullets: [
+                "fix(bugreport): port iOS bug reports to the E2EE ticketing pipeline",
+              ]),
         .init(id: "v1.0.862",
               date: "2026-07-27",
               title: "v1.0.862",
               bullets: [
+                "chore: regenerate changelog for v1.0.862",
                 "fix(group-call): await previous SFU room disconnect before rejoining",
               ]),
         .init(id: "v1.0.861",
@@ -164,13 +171,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.844",
                 "feat(call): show NFC-authenticated seal on the always-visible trust bar (W-NFCVISIBLE)",
-              ]),
-        .init(id: "v1.0.843",
-              date: "2026-07-23",
-              title: "v1.0.843",
-              bullets: [
-                "chore: regenerate changelog for v1.0.843",
-                "fix(build): exhaustive PskOrigin switch + clean up Swift 6 concurrency warnings",
               ]),
     ]
 }
