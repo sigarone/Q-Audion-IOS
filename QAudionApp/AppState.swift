@@ -379,6 +379,24 @@ final class AppState: ObservableObject {
     /// W-ICEGRACE — grace window length. Byte-for-byte the same 3000 ms
     /// Android has used since its own fix; keep the two in lockstep.
     private static let iceDisconnectGraceMs: Int = 3_000
+    /// W-UPGRADEICEWATCHDOG (2026-07-28) — the on-demand PeerConnection built
+    /// by `makeUpgradeResponderController()` for a video upgrade on a
+    /// WS-relay-only (audio-only) call has NO proactive timeout: `onIceConnectionState`
+    /// only rolls the video back on an explicit `.failed`/`.disconnected`/`.closed`
+    /// callback. Live-reproduced: on a restrictive NAT this fresh ICE can sit in
+    /// `.checking` forever without ever reaching a terminal state, so the callback
+    /// never fires — the peer (Android) sees SDP negotiated fine, zero video ever
+    /// arrives, and the call is stuck black until the user manually hangs up
+    /// (observed live: 90+ s). Arms alongside the ICE grace/disconnect handling
+    /// above but is its own independent watchdog since this PC is a distinct
+    /// object from the call's primary controller.
+    private var upgradeResponderIceConnectTask: Task<Void, Never>?
+    /// W-UPGRADEICEWATCHDOG — how long the on-demand upgrade responder PC gets
+    /// to reach `.connected`/`.completed` before we treat it as failed and roll
+    /// the video back ourselves. Generous relative to a normal P2P/TURN connect
+    /// (which completes in low single-digit seconds) without leaving the user
+    /// staring at a black video anywhere near as long as the un-timed-out case.
+    private static let upgradeResponderIceConnectTimeoutMs: Int = 10_000
     /// W-OFFERBUFFER (2026-07-12) — OFFER messages (PQC or Android-JSON)
     /// that arrived while `callContactId` was still nil. Desktop/Android
     /// ship the opaque OFFER BEFORE the `call_offer` envelope that sets
@@ -4490,6 +4508,11 @@ final class AppState: ObservableObject {
     /// handleIceTermination()/endCall(). Idempotent.
     @MainActor
     private func rollbackUpgradeVideo() {
+        // W-UPGRADEICEWATCHDOG — cancel so a rollback triggered another way
+        // (explicit ICE failure, hangup, teardown) can't leave the watchdog
+        // pending to fire later against a since-rebuilt controller.
+        upgradeResponderIceConnectTask?.cancel()
+        upgradeResponderIceConnectTask = nil
         if let c = self.webRtcController as? QAudionWebRtcCallController {
             c.closeSynchronously()
         }
@@ -4573,7 +4596,14 @@ final class AppState: ObservableObject {
                 Task { @MainActor [weak self] in self?.rollbackUpgradeVideo() }
             case .connected, .completed:
                 let isRelayForced = TransportGate.forcesRelay
-                Task { @MainActor [weak self] in self?.backendType = isRelayForced ? "turn" : "p2p" }
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    // W-UPGRADEICEWATCHDOG — ICE reached a working state on its
+                    // own; the proactive timeout armed below is no longer needed.
+                    self.upgradeResponderIceConnectTask?.cancel()
+                    self.upgradeResponderIceConnectTask = nil
+                    self.backendType = isRelayForced ? "turn" : "p2p"
+                }
             default:
                 break
             }
@@ -4588,6 +4618,22 @@ final class AppState: ObservableObject {
         // ONLY for video. Outbound voice stays on the relay (see
         // sendAudioOverDataChannel pin); video rides this WebRTC PC.
         self.audioPinnedToWsRelay = true
+        // W-UPGRADEICEWATCHDOG — proactive fallback for the case where this
+        // fresh ICE never reaches ANY terminal state (stuck in `.checking`
+        // forever) rather than cleanly failing — `onIceConnectionState`'s
+        // `.failed`/`.disconnected`/`.closed` branch above would never fire.
+        // `weak controller` so a rollback/rebuild that replaces
+        // `webRtcController` before the deadline can't roll back the WRONG
+        // (newer) controller — the identity check below is the real guard,
+        // this is belt-and-suspenders against a retained closure outliving it.
+        upgradeResponderIceConnectTask?.cancel()
+        upgradeResponderIceConnectTask = Task { @MainActor [weak self, weak controller] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.upgradeResponderIceConnectTimeoutMs) * 1_000_000)
+            guard !Task.isCancelled, let self = self, let controller = controller,
+                  self.webRtcController === controller else { return }
+            RTLog.warn("call", "video upgrade ICE-connect watchdog fired after \(Self.upgradeResponderIceConnectTimeoutMs)ms — never reached connected/completed, rolling back")
+            self.rollbackUpgradeVideo()
+        }
         return controller
     }
 #endif
