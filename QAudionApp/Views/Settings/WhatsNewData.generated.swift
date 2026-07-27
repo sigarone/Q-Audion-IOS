@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.870",
+              date: "2026-07-27",
+              title: "v1.0.870",
+              bullets: [
+                "fix(call): 1:1 ring screen unreachable, GroupCallView always won (CRITICAL)",
+              ]),
         .init(id: "v1.0.869",
               date: "2026-07-27",
               title: "v1.0.869",
               bullets: [
+                "chore: regenerate changelog for v1.0.869",
                 "fix(call): group-call accept silently no-ops after CallKit UI release (CRITICAL regression)",
               ]),
         .init(id: "v1.0.868",
@@ -164,13 +171,6 @@ extension ReleaseNote {
                 "test(kcmac): fix over-broad role-loss assertion, pin the real boundary",
                 "feat(telemetry): iOS video.stats carries call_id + real fps (W-VIDTELATTR/W-VIDTELFPS)",
                 "fix(call): rebuild kc_mac adverts from what was ACTUALLY sent (W-KCMACROLES)",
-              ]),
-        .init(id: "v1.0.850",
-              date: "2026-07-24",
-              title: "v1.0.850",
-              bullets: [
-                "chore: regenerate changelog for v1.0.850",
-                "feat(call): PSK ✓ chip shows whenever n>=1, independent of assurance state (Pavel decision)",
               ]),
     ]
 }
