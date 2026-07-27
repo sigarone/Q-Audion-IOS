@@ -2287,9 +2287,11 @@ final class AppState: ObservableObject {
                     // that would build a responder integration for a peer that
                     // doesn't exist. Route to the group join instead.
                     if self.groupCallKitId == uuid {
+                        RTLog.info("call", "W-CALLFG-DIAG onAnswerCall uuid=\(uuid) — routing to performAcceptIncomingGroupCall (group)")
                         self.performAcceptIncomingGroupCall()
                         return
                     }
+                    RTLog.info("call", "W-CALLFG-DIAG onAnswerCall uuid=\(uuid) — routing to performAcceptIncoming (1:1)")
                     // CallKit answered → run the shared accept path + dismiss the
                     // native CallKit UI. The same accept body is reused by the
                     // CallKit-FREE path (answerIncomingCall when callKitFreeMode).
@@ -8777,7 +8779,11 @@ final class AppState: ObservableObject {
         // Q-Audion icon on the native call screen (standard iOS, same as Signal).
         // Kept behind the flag so it can be force-ON for experiments, but OFF by
         // default restores the standard native call UI.
-        guard FeatureFlags.bool("ios_callkit_wake_only", false) else { return }
+        guard FeatureFlags.bool("ios_callkit_wake_only", false) else {
+            RTLog.info("call", "W-CALLFG-DIAG dismissNativeCallUIAfterAnswer uuid=\(uuid) — ios_callkit_wake_only OFF, native CallKit UI left as-is (expected default)")
+            return
+        }
+        RTLog.info("call", "W-CALLFG-DIAG dismissNativeCallUIAfterAnswer uuid=\(uuid) — ios_callkit_wake_only ON, will attempt release in 0.6s")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self = self,
                   let provider = self.callKit as? CallKitProvider else { return }
@@ -10245,6 +10251,7 @@ final class AppState: ObservableObject {
     /// signalling are unchanged — only WHO triggers the accept differs.
     @MainActor
     private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) {
+        RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming ENTER uuid=\(uuid) dismissNativeUI=\(dismissNativeUI) alreadyAnswered=\(self.answeredCallKitId == uuid)")
         // Bug A — idempotent answer (CallKit/in-app/notification may all target
         // the same call). A repeat would re-enter activateIncomingCallAudio
         // mid-start → uncatchable NSException.
@@ -10254,6 +10261,7 @@ final class AppState: ObservableObject {
         }
         self.answeredCallKitId = uuid
         self.isInCall = true
+        RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming — isInCall=true set for uuid=\(uuid)")
         // W-1TO1RING — the ring screen has done its job, tear it down. All
         // accept entry points (CallKit native/in-app/notification) converge
         // here, so this is the single place to clear it.
@@ -13151,7 +13159,11 @@ extension AppState {
     /// (the invite is nil after the first pass).
     @MainActor
     func performAcceptIncomingGroupCall() {
-        guard let invite = incomingGroupCallInvite else { return }
+        guard let invite = incomingGroupCallInvite else {
+            RTLog.info("call", "W-CALLFG-DIAG performAcceptIncomingGroupCall — no incomingGroupCallInvite, no-op (already handled?)")
+            return
+        }
+        RTLog.info("call", "W-CALLFG-DIAG performAcceptIncomingGroupCall ENTER callId=\(invite.callId.prefix(8))")
         stopInAppRingtone()
         markGroupCallHandled(invite.callId)
         incomingGroupCallInvite = nil

@@ -38,6 +38,7 @@ final class AppLockService: ObservableObject {
         // relaunch still sees a background timestamp.
         UserDefaults.standard.set(Date().timeIntervalSince1970,
                                   forKey: Self.backgroundedAtKey)
+        RTLog.info("call", "W-CALLFG-DIAG AppLockService.handleBackground — timestamp persisted")
     }
 
     func handleForeground() {
@@ -45,6 +46,7 @@ final class AppLockService: ObservableObject {
             isLocked = false
             // Consume any stale timestamp so a later enable starts clean.
             UserDefaults.standard.removeObject(forKey: Self.backgroundedAtKey)
+            RTLog.info("call", "W-CALLFG-DIAG AppLockService.handleForeground — appLock disabled, isLocked=false")
             return
         }
         let graceMs = PrivacyGate.appLockTimeoutMs
@@ -67,9 +69,11 @@ final class AppLockService: ObservableObject {
         let elapsed = Date().timeIntervalSince(backgroundedAt)
         if elapsed < graceSec {
             // Within grace window — don't lock (e.g. quick task switch).
+            RTLog.info("call", "W-CALLFG-DIAG AppLockService.handleForeground — within grace (elapsed=\(String(format: "%.1f", elapsed))s < \(String(format: "%.1f", graceSec))s), staying unlocked")
             return
         }
         isLocked = true
+        RTLog.warn("call", "W-CALLFG-DIAG AppLockService.handleForeground — LOCKING (elapsed=\(String(format: "%.1f", elapsed))s >= grace=\(String(format: "%.1f", graceSec))s), triggering biometric prompt")
         Task { await evaluatePolicy() }
     }
 
@@ -77,6 +81,7 @@ final class AppLockService: ObservableObject {
 
     /// Present the system authentication prompt. On success, clears isLocked.
     func evaluatePolicy() async {
+        RTLog.info("call", "W-CALLFG-DIAG AppLockService.evaluatePolicy — presenting biometric/passcode prompt")
         let context = LAContext()
         var nsError: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &nsError) else {
@@ -85,6 +90,7 @@ final class AppLockService: ObservableObject {
             // any user without a device passcode). Stay locked and tell
             // the UI so it can advise the user to set a passcode.
             isLocked = true
+            RTLog.warn("call", "W-CALLFG-DIAG AppLockService.evaluatePolicy — canEvaluatePolicy failed: \(nsError?.localizedDescription ?? "?")")
             NotificationCenter.default.post(name: .appLockUnavailable, object: nil)
             return
         }
@@ -93,11 +99,13 @@ final class AppLockService: ObservableObject {
                 .deviceOwnerAuthentication,
                 localizedReason: "Sblocca Q-Audion"
             )
+            RTLog.info("call", "W-CALLFG-DIAG AppLockService.evaluatePolicy — result success=\(success)")
             if success {
                 isLocked = false
             }
         } catch {
             // User cancelled or failed — remain locked; they can tap "Sblocca" again.
+            RTLog.warn("call", "W-CALLFG-DIAG AppLockService.evaluatePolicy — threw: \(error.localizedDescription)")
         }
     }
 
@@ -118,7 +126,26 @@ final class AppLockService: ObservableObject {
     /// - Parameter callState: the current `AppState.callState`. Pass it
     ///   from the scene-phase handler. `nil` = caller couldn't supply
     ///   state (legacy path, see TODO below).
-    func bypassForCall(callState: CallState? = nil, answered: Bool = false) {
+    /// - Parameter groupCallActive: W-CALLFG (2026-07-27) — true when
+    ///   `AppState.groupCallControllerState` is `.connecting` or `.active`.
+    ///   Group calls never set `isInCall` (a SEPARATE, parallel signal —
+    ///   see `AppState`'s own busy-check `isInCall || callState != .idle ||
+    ///   groupCallControllerState != .idle`, which treats them as
+    ///   independent), so before this parameter existed a live GROUP call
+    ///   had NO path to this function at all — QAudionApp's scenePhase
+    ///   handler only ever called `bypassForCall` when `appState.isInCall`
+    ///   was true, which is 1:1-only. Every foreground during an active
+    ///   group call hit the plain `handleForeground()` grace-window path
+    ///   instead, so the in-app Face ID/passcode gate could fire mid-group-
+    ///   call — same class of friction `answered`/`callState` already
+    ///   solve for 1:1, just never extended to the other call type. Both
+    ///   `.connecting` and `.active` are safe to bypass on: unlike 1:1's
+    ///   `.ringing` (received but NOT yet accepted), group's `.connecting`
+    ///   already implies the user (or the creator) chose to join/create —
+    ///   there is no pre-accept "ringing-only" case that maps to
+    ///   `.connecting`.
+    func bypassForCall(callState: CallState? = nil, answered: Bool = false, groupCallActive: Bool = false) {
+        RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall called — answered=\(answered) callState=\(String(describing: callState)) groupCallActive=\(groupCallActive) isLocked(before)=\(isLocked)")
         // An EXPLICIT CallKit answer (user accepted) may suppress the lock even
         // before the handshake reaches .active/.encrypted, so a PushKit-woken,
         // just-answered call surfaces the Q-Audion in-call screen (securing →
@@ -126,14 +153,19 @@ final class AppLockService: ObservableObject {
         // AppState.callWasAnswered (answeredCallKitId), set ONLY in onAnswerCall —
         // a mere incoming ring never trips it, so an unanswered call still holds
         // the lock (SECURITY M-25/L-7 preserved).
-        if answered {
+        if answered || groupCallActive {
             isLocked = false
+            RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall — bypassed (answered=\(answered) groupCallActive=\(groupCallActive)), isLocked=false")
             return
         }
         if let callState = callState {
             // Only an answered/established call may suppress the lock.
-            guard callState == .active || callState == .encrypted else { return }
+            guard callState == .active || callState == .encrypted else {
+                RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall — NOT bypassed, callState=\(callState) is pre-answer, lock stays as-is (isLocked=\(isLocked))")
+                return
+            }
             isLocked = false
+            RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall — bypassed via callState=\(callState), isLocked=false")
             return
         }
         // Legacy/defensive fallback: only reached if a caller passes
@@ -141,5 +173,6 @@ final class AppLockService: ObservableObject {
         // `appState.callState`, so the `guard` above is the live
         // enforcement — `.ringing` no longer bypasses the lock.
         isLocked = false
+        RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall — legacy fallback (no callState/groupCallActive supplied), isLocked=false")
     }
 }

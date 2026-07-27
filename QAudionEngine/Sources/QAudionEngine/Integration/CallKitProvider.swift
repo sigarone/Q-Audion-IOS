@@ -295,9 +295,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     }
 
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+        print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) ENTER uuid=\(action.callUUID)")
         Task {
             await onAnswerCall?(action.callUUID)
             action.fulfill()
+            print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID)")
             // W556-fix — guarantee the engine starts even if CallKit never
             // calls provider(_:didActivate:) (the foreground-answer case). Safe
             // to self-activate AFTER fulfill: the answer transaction is closed,

@@ -114,6 +114,7 @@ struct QAudionApp: App {
     // MARK: - Scene phase
 
     private func handleScenePhase(_ phase: ScenePhase) {
+        RTLog.info("call", "W-CALLFG-DIAG handleScenePhase(\(phase)) — isInCall=\(appState.isInCall) callState=\(appState.callState) callWasAnswered=\(appState.callWasAnswered) groupCallControllerState=\(appState.groupCallControllerState) isLocked=\(lockService.isLocked)")
         switch phase {
         case .background:
             lockService.handleBackground()
@@ -124,10 +125,25 @@ struct QAudionApp: App {
             // NOT a mere .ringing (pre-answer) state — otherwise anyone
             // holding the device could dismiss the lock by triggering an
             // incoming call without answering it.
-            if appState.isInCall {
+            //
+            // W-CALLFG (2026-07-27) — `isInCall` is 1:1-only (group calls use
+            // the SEPARATE `groupCallControllerState` signal, never `isInCall`
+            // — see AppState's own busy-check that treats them as parallel
+            // conditions). Before this fix, a live GROUP call never reached
+            // `bypassForCall` at all, so `handleForeground()`'s grace-window
+            // path could re-lock the app (biometric prompt) mid-group-call —
+            // the same friction already solved for 1:1, just never extended.
+            let groupActive: Bool = {
+                switch appState.groupCallControllerState {
+                case .connecting, .active: return true
+                case .idle, .failed: return false
+                }
+            }()
+            if appState.isInCall || groupActive {
                 lockService.bypassForCall(
                     callState: appState.callState,
-                    answered: appState.callWasAnswered
+                    answered: appState.callWasAnswered,
+                    groupCallActive: groupActive
                 )
             } else {
                 lockService.handleForeground()
