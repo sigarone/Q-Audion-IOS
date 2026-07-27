@@ -61,15 +61,12 @@ struct HomeView: View {
         // anche al sidebar selection highlight su iPad.
         .tint(scheme.primary)
         .overlay(alignment: .top) {
-            // W478 — two-tier call overlay:
-            //   1. incomingCallBanner: shown when state == .ringing (before answer).
-            //      Fallback for when CallKit's system UI is suppressed (Focus mode,
-            //      Silence Unknown Callers, DnD). Always visible in foreground.
-            //   2. inCallBanner: shown when isInCall (after answer, mid-call).
-            //      Allows navigating back to the in-call screen.
-            if appState.callState == .ringing && !appState.isInCall {
-                incomingCallBanner
-            } else if appState.isInCall && !presentingInCall {
+            // W-1TO1RING (2026-07-27) — the thin incomingCallBanner is retired:
+            // ContentView's fullScreenCover now shows the full IncomingCallScreen
+            // for 1:1 calls too (same screen already used for group calls),
+            // driven by appState.incomingCallRingVisible. Only inCallBanner
+            // (post-answer, mid-call) remains here.
+            if appState.isInCall && !presentingInCall {
                 inCallBanner
             }
         }
@@ -289,61 +286,6 @@ struct HomeView: View {
             SettingsScreen()
                 .toolbar { vpnToolbarItem() }
         }
-    }
-
-    // MARK: - Incoming call banner (W478 fallback when CallKit UI is suppressed)
-
-    /// Shown when `callState == .ringing` — i.e. a call_incoming has been
-    /// processed but the user has not yet answered. This banner fires even
-    /// when the CallKit system sheet is suppressed by Focus mode, Silence
-    /// Unknown Callers, or Do Not Disturb so the user can still answer from
-    /// within the foreground app.
-    private var incomingCallBanner: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "phone.fill")
-                .foregroundStyle(.white)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Chiamata in arrivo")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-                // Use incomingCallerName if resolved; truncate UUID to
-                // prefix8…suffix4 if it's the raw peer ID (same style as
-                // CallHistoryView). Never show 36-char UUID in the banner.
-                let name: String = {
-                    if !appState.incomingCallerName.isEmpty { return appState.incomingCallerName }
-                    let cid = appState.callContactId ?? ""
-                    guard !cid.isEmpty else { return "Sconosciuto" }
-                    return DisplayName.forUser(cid, contacts: appState.cachedContacts)
-                }()
-                Text(name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-            }
-            Spacer()
-            // Decline button
-            Button(action: { appState.declineIncomingCall() }) {
-                Image(systemName: "phone.down.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(Circle().fill(Color.red))
-            }
-            .buttonStyle(.plain)
-            // Answer button
-            Button(action: { appState.answerIncomingCall() }) {
-                Image(systemName: "phone.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(Circle().fill(Color.green))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity)
-        .background(Color.black.opacity(0.85))
     }
 
     // MARK: - Active call banner

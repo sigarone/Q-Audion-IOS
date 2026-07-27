@@ -665,6 +665,17 @@ final class AppState: ObservableObject {
     /// is processed. Shown in the in-app ringing banner as a fallback when
     /// CallKit's system UI is suppressed (Focus / Silence Unknown Callers).
     @Published var incomingCallerName: String = ""
+    /// W-1TO1RING (2026-07-27) — mirrors `incomingGroupCallInvite`: set
+    /// unconditionally whenever a 1:1 call arrives (push or WS), regardless
+    /// of whether CallKit's native UI also owns the ring. Drives the same
+    /// rich `IncomingCallScreen` already used for group calls, replacing
+    /// the old thin `HomeView.incomingCallBanner`. While the device is
+    /// genuinely locked, CallKit's native UI is still the only thing
+    /// visible (Apple platform constraint — no SwiftUI view can render
+    /// over the lock screen) — this flag only matters once the app can
+    /// actually draw (foreground at arrival, or becomes active after a
+    /// CallKit-mediated wake), exactly like the group-call ring.
+    @Published var incomingCallRingVisible: Bool = false
     /// H-6 — re-entrancy guard for endCall(). A second endCall() (e.g.
     /// CallKit onEndCall + remote call_hangup racing) while teardown is
     /// already running would double-hangup and leak the
@@ -3852,6 +3863,11 @@ final class AppState: ObservableObject {
                         self.originalCallRole = .callee
                         self.incomingCallerName = resolvedCallerName
                         self.isVideoCall = (callType == "video")
+                        // W-1TO1RING — set unconditionally, same as the group-call
+                        // invite: this is what makes IncomingCallScreen appear the
+                        // instant the app can draw, independent of whether CallKit
+                        // also owns the ring (see ContentView's fullScreenCover).
+                        self.incomingCallRingVisible = true
                         // W450-fix: when PushKit woke the device first, CallKit's
                         // native phone UI is already visible. Setting .ringing here
                         // would also trigger Q-Audion's in-app ringing banner →
@@ -8820,7 +8836,14 @@ final class AppState: ObservableObject {
         // WIRE_SPEC §8.3 — PushKit-woken incoming call: we answered → polite.
         originalCallRole = .callee
         isVideoCall = hasVideo
-        return callKitDisplayName(callerId: callerId, fallback: fallbackName)
+        let display = callKitDisplayName(callerId: callerId, fallback: fallbackName)
+        // W-1TO1RING — set here too (not just the WS path) so a call that
+        // wakes the device via PushKit alone (no WS call_incoming yet, or
+        // ever) still has a resolved name/ring-visible flag the instant the
+        // app becomes active — same reasoning as the WS site above.
+        incomingCallerName = display
+        incomingCallRingVisible = true
+        return display
     }
 
     @MainActor
@@ -10231,6 +10254,10 @@ final class AppState: ObservableObject {
         }
         self.answeredCallKitId = uuid
         self.isInCall = true
+        // W-1TO1RING — the ring screen has done its job, tear it down. All
+        // accept entry points (CallKit native/in-app/notification) converge
+        // here, so this is the single place to clear it.
+        self.incomingCallRingVisible = false
         // Unified call UI — arm the 1 Hz crypto-engine sampler for this call.
         self.startCryptoMeter()
         self.activeCallKitId = uuid
@@ -10355,6 +10382,10 @@ final class AppState: ObservableObject {
         // call_hangup) must be a no-op, otherwise we double-hangup the
         // controller and leak the RTCPeerConnection.
         stopInAppRingtone()
+        // W-1TO1RING — covers decline (declineIncomingCall → endCall),
+        // caller hangup before answer, and any other teardown path: the
+        // ring screen must never outlive the call it was ringing for.
+        incomingCallRingVisible = false
         guard !isEndingCall else { return }
         isEndingCall = true
 

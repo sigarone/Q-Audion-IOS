@@ -132,10 +132,16 @@ struct ContentView: View {
         // content in place (ring → live call) with no second presentation.
         // Uses the SAME persistent `groupCallViewModel` built once in
         // `connectPersistentSocket()` rather than a fresh one per presentation.
+        // W-1TO1RING (2026-07-27) — same cover, now also driving the 1:1
+        // ring via `incomingCallRingVisible` (mirrors incomingGroupCallInvite
+        // exactly). Was: a thin HomeView banner for 1:1, full IncomingCallScreen
+        // for group only. Pavel wants informational parity with Android's
+        // incoming-call screen for 1:1 too — same screen, same content, always.
         .fullScreenCover(isPresented: Binding(
             get: {
                 appState.incomingGroupCallInvite != nil
                     || appState.groupCallControllerState != .idle
+                    || appState.incomingCallRingVisible
             },
             set: { _ in }
         )) {
@@ -149,6 +155,8 @@ struct ContentView: View {
                 // used a few lines up for `GroupInviteSheet`.
                 GroupCallView(viewModel: vm)
                     .environmentObject(appState)
+            } else if appState.incomingCallRingVisible {
+                incoming1to1CallScreen()
             }
         }
         // W403: cross-platform auto-join — when a Desktop or Android
@@ -235,6 +243,30 @@ struct ContentView: View {
             showReplyAction: false,
             onAccept: { appState.answerIncomingGroupCall() },
             onReject: { appState.declineIncomingGroupCall() }
+        )
+    }
+
+    /// W-1TO1RING — the incoming 1:1 ring. Reuses the exact same
+    /// `IncomingCallScreen` as the group ring (informational parity with
+    /// Android's incoming-call screen, per Pavel). `outgoingDisplayName`/
+    /// `outgoingShortNumber` are the SAME `@State` resolved by
+    /// `resolveOutgoingName(appState.callContactId)` (already wired via
+    /// `.onChange`/`.onAppear` above) that the connecting/active screen
+    /// shows a moment later on accept — reusing them means the ring shows
+    /// the identical name/number, no separate resolution path to keep in
+    /// sync. `avatarUrl` is nil (falls back to the initials bubble) for
+    /// the same reason `OutgoingCallScreen` never fetches a photo either —
+    /// no 1:1 call surface on iOS shows a real avatar photo today.
+    private func incoming1to1CallScreen() -> some View {
+        let name = outgoingDisplayName.isEmpty
+            ? appState.incomingCallerName
+            : outgoingDisplayName
+        return IncomingCallScreen(
+            peerDisplayName: name.isEmpty ? "Sconosciuto" : name,
+            callType: appState.isVideoCall ? .video : .audio,
+            peerShortNumber: outgoingShortNumber,
+            onAccept: { appState.answerIncomingCall() },
+            onReject: { appState.declineIncomingCall() }
         )
     }
 
