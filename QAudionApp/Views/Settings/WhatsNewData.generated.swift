@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.871",
+              date: "2026-07-27",
+              title: "v1.0.871",
+              bullets: [
+                "feat(call): force CXCallUpdate.hasVideo=true on all 1:1 incoming calls",
+              ]),
         .init(id: "v1.0.870",
               date: "2026-07-27",
               title: "v1.0.870",
               bullets: [
+                "chore: regenerate changelog for v1.0.870",
                 "fix(call): 1:1 ring screen unreachable, GroupCallView always won (CRITICAL)",
               ]),
         .init(id: "v1.0.869",
@@ -157,20 +164,6 @@ extension ReleaseNote {
                 "fix(telemetry): a lane collapse after the call ended is always teardown",
                 "fix(call): the camera button must read \"is MY camera on\", not \"does this call have video\"",
                 "fix(telemetry): stall_kind was being eaten by the egress redactor",
-              ]),
-        .init(id: "v1.0.851",
-              date: "2026-07-24",
-              title: "v1.0.851",
-              bullets: [
-                "chore: regenerate changelog for v1.0.851",
-                "docs(wire): one canonical WIRE_SPEC, de-collided 3.5/3.6, new 8.9 beacon",
-                "feat(call): video state is a beacon, not an edge (WIRE_SPEC 8.9)",
-                "feat(telemetry): record every video-lane transition (W-VIDTRANS)",
-                "fix(call): camera toggle must tell the peer; a re-offer must not revive it (W-CAMSILENT/W-CAMREVIVE)",
-                "fix(audio): iOS audio can no longer die silently on an engine restart (W-AUDIODEATH/W-AUDIOUILIE)",
-                "test(kcmac): fix over-broad role-loss assertion, pin the real boundary",
-                "feat(telemetry): iOS video.stats carries call_id + real fps (W-VIDTELATTR/W-VIDTELFPS)",
-                "fix(call): rebuild kc_mac adverts from what was ACTUALLY sent (W-KCMACROLES)",
               ]),
     ]
 }
