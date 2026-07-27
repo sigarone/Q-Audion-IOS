@@ -86,6 +86,27 @@ public final class GroupCallController: @unchecked Sendable {
     // `usingSfu`/`groupState`/`emitSelfMediaKey`/`emitRemoteMediaKey`.
     private var usingSfu = true
     private var sfuRoom: LiveKitGroupCallRoom?
+    /// W-GRPSFUDISCONNECTRACE (2026-07-27, live-confirmed: iOS published a
+    /// "local audio track" with 0 actual tx frames the whole call) —
+    /// `teardown()` clears `sfuRoom` SYNCHRONOUSLY but fires the real
+    /// `room.disconnect()` in a detached, un-awaited `Task {}` (see its
+    /// kdoc). `disconnect()` tears down LiveKit's underlying `RTCAudioSession`
+    /// / `AudioManager` — a PROCESS-WIDE singleton shared by every
+    /// `LiveKitGroupCallRoom` instance, old and new alike (this is standard
+    /// WebRTC/LiveKit-iOS behavior, not app-specific). If the call is
+    /// rejoined fast enough — a dropped SFU connection auto-retrying, or the
+    /// user tapping back in — `handleSfuToken` constructs a BRAND NEW room
+    /// and calls `connect()`/`setMicrophone(enabled:true)` on it while the
+    /// OLD room's disconnect is still deactivating that SAME shared audio
+    /// session. Nothing throws on either side (both are just async SDK
+    /// calls racing each other), so the new room's mic/camera publish
+    /// "succeeds" (a track exists, gets subscribed by remote peers) while
+    /// the actual hardware capture the old room's teardown just tore down
+    /// never comes back — the exact 0-tx-frames-all-call symptom this
+    /// tracks. Guarded here so `handleSfuToken` can await the PREVIOUS
+    /// room's real disconnect before activating a new one, closing the
+    /// race instead of guessing at a delay.
+    private var pendingSfuDisconnect: Task<Void, Never>?
     private static let livekitKeyringSize: UInt32 = 16
     /// W-GRPVIDEO: true when THIS call was created/joined as a video call
     /// (the creator's `callType` on `createCall`, or the invite's
@@ -796,6 +817,20 @@ public final class GroupCallController: @unchecked Sendable {
 
         Task { [weak self] in
             guard let self = self else { return }
+            // W-GRPSFUDISCONNECTRACE — wait for the PREVIOUS room's real
+            // teardown (LiveKit's shared RTCAudioSession/AudioManager
+            // deactivation) to finish before this new room activates the
+            // same shared audio session. Without this, a fast rejoin races
+            // the old room's async disconnect() and can leave the new
+            // room's mic/camera publish looking successful at the SDK/SFU-
+            // signaling level while zero real frames ever get captured —
+            // see `pendingSfuDisconnect`'s kdoc. Not cleared afterward:
+            // awaiting an already-completed Task's `.value` returns
+            // immediately, and `teardown()` overwrites the slot itself the
+            // next time it fires, so there is nothing to clean up here.
+            if let previousDisconnect = self.lock.withLock({ self.pendingSfuDisconnect }) {
+                await previousDisconnect.value
+            }
             do {
                 // W-GRPKEYPIN: pass our OWN current send-chain key so
                 // `LiveKitGroupCallRoom.connect` seeds it into the
@@ -1298,7 +1333,12 @@ public final class GroupCallController: @unchecked Sendable {
             groupTelemetry?("call.media.ended", cid, ["reason": reason])
         }
         if let room = room {
-            Task { await room.disconnect() }
+            // W-GRPSFUDISCONNECTRACE — stored so a fast rejoin's
+            // `handleSfuToken` can await this exact disconnect completing
+            // before activating a new room's audio session. See
+            // `pendingSfuDisconnect`'s kdoc for the full race this closes.
+            let disconnectTask = Task { await room.disconnect() }
+            lock.withLock { pendingSfuDisconnect = disconnectTask }
         }
         setState(.idle)
         onReactionEventsChanged?([])
