@@ -259,6 +259,10 @@ final class AppState: ObservableObject {
     private var contactsCacheObserver: NSObjectProtocol?
     /// I1-RESUME — see `.presenceVisibilityDidChange`'s declaration.
     private var presenceVisibilityObserver: NSObjectProtocol?
+    /// W-EARTOUCH (2026-07-27) — re-evaluates proximity monitoring on every
+    /// route change (Bluetooth/wired connect or disconnect), not just the
+    /// manual speaker toggle. See `updateProximityMonitoring()`.
+    private var audioRouteChangeObserver: NSObjectProtocol?
 
     /// W-ORPHANPEER — peers the server has answered a definitive 404 for:
     /// accounts that no longer exist. Hidden from the address book and from
@@ -320,7 +324,16 @@ final class AppState: ObservableObject {
         }
     }
     @Published var isVideoCall: Bool = false { didSet { noteVideoLaneChanged() } }
-    @Published var callState: CallState = .idle
+    /// W-EARTOUCH (2026-07-27) — every callState transition re-evaluates
+    /// proximity monitoring (see `updateProximityMonitoring()`), the same
+    /// "one flag every call path already flips" choke point `isInCall`'s own
+    /// didSet above uses for the video beacon.
+    @Published var callState: CallState = .idle {
+        didSet {
+            guard oldValue != callState else { return }
+            updateProximityMonitoring()
+        }
+    }
     @Published var callContactId: String?
     /// W-CALLSPKR (2026-07-20) — the user's live loudspeaker preference for
     /// the CURRENT 1:1 call, set by `setSpeaker(_:)` and consulted by the
@@ -1865,6 +1878,21 @@ final class AppState: ObservableObject {
         // anything can publish a presence update. `lazy` means touching it
         // here is a no-op on every call after the first.
         _ = presenceServiceForwarding
+        // W-EARTOUCH — re-evaluate proximity monitoring on every audio route
+        // change (Bluetooth/wired headset connect or disconnect mid-call),
+        // not just the manual speaker toggle already covered in setSpeaker().
+        // A separate, independent observer — AudioCapture's own
+        // routeChangeNotification handler (engine rebuild) is unrelated and
+        // untouched; multiple observers on the same notification are fine.
+        audioRouteChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateProximityMonitoring()
+            }
+        }
         // W-CC: warm the contacts cache immediately so incoming-call and
         // message-receive paths have fresh data without a synchronous disk
         // decode. The notification observer keeps it current across the session.
@@ -10750,6 +10778,50 @@ final class AppState: ObservableObject {
         } catch {
             let msg: String = error.localizedDescription
             RTLog.warn("call", "setSpeaker failed: " + msg)
+        }
+        updateProximityMonitoring()
+    }
+
+    /// W-EARTOUCH (2026-07-27) — 1:1-call parity with Android's
+    /// `ProximityScreenLock`/`ProximityScreenPolicy` (W-EARTOUCH there too):
+    /// while a call is genuinely up (`.active`/`.encrypted` — never merely
+    /// `.ringing`/`.connecting`, so an unanswered call can't blank the
+    /// screen) AND the live audio route is the built-in earpiece (not
+    /// speaker/Bluetooth/wired — same route-based rule Android uses),
+    /// enable `UIDevice.isProximityMonitoringEnabled`. iOS then handles the
+    /// screen-off (and, as an inherent side effect, touch-suppression) and
+    /// the automatic restore the moment the sensor clears — no separate
+    /// notification observer needed for the base behavior, unlike Android's
+    /// wake-lock object there is no manual acquire/release here, just the
+    /// one flag. Self-gating exactly like Android: this never dims
+    /// anything unless something is genuinely close to the sensor.
+    ///
+    /// Deliberately 1:1-only. Group calls are hands-free-only by design
+    /// (`routeGroupCallAudioToSpeaker()` forces speaker unconditionally,
+    /// W-GRPSPKR) — there is no "held to the ear" UX to protect there, so
+    /// nothing calls this for a group call and `isProximityMonitoringEnabled`
+    /// simply stays at its default `false`.
+    ///
+    /// Called from every `callState` transition (its own `didSet` above)
+    /// and from `setSpeaker(_:)` (a route change that does NOT change
+    /// `callState`) — together these cover every way the "are we at the
+    /// ear" answer can change: answer/end, and manual/automatic route
+    /// switches.
+    @MainActor
+    private func updateProximityMonitoring() {
+        guard callState == .active || callState == .encrypted else {
+            if UIDevice.current.isProximityMonitoringEnabled {
+                UIDevice.current.isProximityMonitoringEnabled = false
+                RTLog.info("call", "W-EARTOUCH updateProximityMonitoring — call not active (state=\(callState)), disabled")
+            }
+            return
+        }
+        let onEarpiece = AVAudioSession.sharedInstance().currentRoute.outputs.contains {
+            $0.portType == .builtInReceiver
+        }
+        if UIDevice.current.isProximityMonitoringEnabled != onEarpiece {
+            UIDevice.current.isProximityMonitoringEnabled = onEarpiece
+            RTLog.info("call", "W-EARTOUCH updateProximityMonitoring — onEarpiece=\(onEarpiece), isProximityMonitoringEnabled=\(onEarpiece)")
         }
     }
 
