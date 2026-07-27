@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.876",
+              date: "2026-07-28",
+              title: "v1.0.876",
+              bullets: [
+                "fix(build): drop MainActor-isolated sourceMode from nonisolated log line",
+              ]),
         .init(id: "v1.0.875",
               date: "2026-07-28",
               title: "v1.0.875",
               bullets: [
+                "chore: regenerate changelog for v1.0.875",
                 "diag(video): throttled capture-pipeline + WebRTC-bridge frame logging",
               ]),
         .init(id: "v1.0.874",
@@ -141,15 +148,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.857",
                 "feat(audio): wire the playout jitter buffer into the live iOS path (W-IOSJITTER)",
                 "fix(telemetry): call.end shipped the wrong identifier, so \"how the call died\" was never joinable (W-ENDCALLID)",
-              ]),
-        .init(id: "v1.0.856",
-              date: "2026-07-26",
-              title: "v1.0.856",
-              bullets: [
-                "chore: regenerate changelog for v1.0.856",
-                "fix(trust): a stored SAS verification outlived the identity it verified on iOS (C-3)",
-                "fix(video): iOS refused nothing — one stripped capability string turned off video E2EE (F-02)",
-                "fix(audio): port the jitter-buffer trim floor to iOS before it can ship (W-TRIMFLOOR)",
               ]),
     ]
 }
