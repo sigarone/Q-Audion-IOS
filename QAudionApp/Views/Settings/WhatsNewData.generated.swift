@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.872",
+              date: "2026-07-27",
+              title: "v1.0.872",
+              bullets: [
+                "feat(call): force CXCallUpdate.hasVideo=true for group calls too",
+              ]),
         .init(id: "v1.0.871",
               date: "2026-07-27",
               title: "v1.0.871",
               bullets: [
+                "chore: regenerate changelog for v1.0.871",
                 "feat(call): force CXCallUpdate.hasVideo=true on all 1:1 incoming calls",
               ]),
         .init(id: "v1.0.870",
@@ -154,16 +161,6 @@ extension ReleaseNote {
                 "fix(audio): iOS never decoded the audio it received (W-IOSFECFLAG)",
                 "feat(audio): the playout jitter buffer iOS did not have (W-IOSJITTER)",
                 "fix(call): video consent is per SESSION, not per call (W-CONSENTSESSION)",
-              ]),
-        .init(id: "v1.0.852",
-              date: "2026-07-25",
-              title: "v1.0.852",
-              bullets: [
-                "chore: regenerate changelog for v1.0.852",
-                "fix(call): three more controls rendering from the wrong signal (iOS)",
-                "fix(telemetry): a lane collapse after the call ended is always teardown",
-                "fix(call): the camera button must read \"is MY camera on\", not \"does this call have video\"",
-                "fix(telemetry): stall_kind was being eaten by the egress redactor",
               ]),
     ]
 }
