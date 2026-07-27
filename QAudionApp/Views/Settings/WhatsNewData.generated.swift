@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.869",
+              date: "2026-07-27",
+              title: "v1.0.869",
+              bullets: [
+                "fix(call): group-call accept silently no-ops after CallKit UI release (CRITICAL regression)",
+              ]),
         .init(id: "v1.0.868",
               date: "2026-07-27",
               title: "v1.0.868",
               bullets: [
+                "chore: regenerate changelog for v1.0.868",
                 "fix(groupcall): disable adaptiveStream/dynacast — zero video for whole call (W-GRPADAPTIVEDEADLOCK)",
               ]),
         .init(id: "v1.0.867",
@@ -164,13 +171,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.850",
                 "feat(call): PSK ✓ chip shows whenever n>=1, independent of assurance state (Pavel decision)",
-              ]),
-        .init(id: "v1.0.849",
-              date: "2026-07-24",
-              title: "v1.0.849",
-              bullets: [
-                "chore: regenerate changelog for v1.0.849",
-                "fix(call): iOS ACCEPT never advertised own pskFingerprints/pskRoles (W-NFCCOMMON root cause)",
               ]),
     ]
 }
