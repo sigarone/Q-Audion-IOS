@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.874",
+              date: "2026-07-28",
+              title: "v1.0.874",
+              bullets: [
+                "fix(build): cast webRtcController before identity comparison",
+              ]),
         .init(id: "v1.0.873",
               date: "2026-07-28",
               title: "v1.0.873",
               bullets: [
+                "chore: regenerate changelog for v1.0.873",
                 "fix(call): watchdog timeout for on-demand video-upgrade PeerConnection ICE",
               ]),
         .init(id: "v1.0.872",
@@ -146,19 +153,6 @@ extension ReleaseNote {
                 "fix(psk-advert): UNKNOWN mirrored as STATIC, undoing most of §3.3.1 (W-UNKNOWNMIRROR)",
                 "feat(audio-diag): measure the iOS player-node queue before restructuring anything (W-IOSPLAYOUT)",
                 "docs(wire-spec): §3.3.1.2 — the QUAD advert is retired, and the KEM-bound nonce is rejected",
-              ]),
-        .init(id: "v1.0.854",
-              date: "2026-07-25",
-              title: "v1.0.854",
-              bullets: [
-                "chore: regenerate changelog for v1.0.854",
-                "feat(psk-advert): phase B — the OFFER now emits blinded tags (W-PSKBLIND)",
-                "test(psk-advert): the namespace assertion failed on its own explanation (W-PSKBLIND)",
-                "feat(psk-advert): per-contact latch closes the forceable downgrade (W-PSKBLIND)",
-                "feat(psk-advert): refuse the static fallback behind a caller-owned latch (W-PSKBLIND)",
-                "docs(wire-spec): §3.3.1.1 — the static fallback is forceable (phase-B blocker)",
-                "feat(psk-advert): phase A — dual-dialect PSK advertisement resolution (W-PSKBLIND)",
-                "feat(psk-advert): PskAdvertV3 blinded advertisement module + KAT (W-PSKBLIND)",
               ]),
     ]
 }
