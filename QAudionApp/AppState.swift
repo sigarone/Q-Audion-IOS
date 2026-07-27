@@ -2546,10 +2546,15 @@ final class AppState: ObservableObject {
                 let grpPresented: String = String(describing: prepared.presented)
                 let grpDiag: String = "[AppState] W-GRPRING PushKit→report group uuid=" + grpUuid + " presented=" + grpPresented
                 print(grpDiag)
+                // W-CALLKITVIDEOFORCE — same rationale as the 1:1 branch
+                // above: force hasVideo=true so answering a group call at
+                // screen-off auto-dismisses CallKit's native UI into the
+                // app. Real call type (payload.hasVideo) still drives
+                // everything else.
                 await self.callKit?.reportIncomingCall(
                     uuid: prepared.uuid,
                     callerName: prepared.display,
-                    hasVideo: payload.hasVideo
+                    hasVideo: true
                 )
                 guard prepared.presented else {
                     // The PushKit contract is satisfied (we reported), but there
@@ -13211,10 +13216,12 @@ extension AppState {
         let uuid = Self.callKitUUID(forGroupCallId: invite.callId)
         groupCallKitId = uuid
         let name = invite.displayTitle
-        let video = invite.hasVideo
         Task { [weak self] in
+            // W-CALLKITVIDEOFORCE — force hasVideo=true (see the PushKit
+            // group branch above for the full rationale); `invite.hasVideo`
+            // still drives the real group-call UI/behavior elsewhere.
             await self?.callKit?.reportIncomingCall(
-                uuid: uuid, callerName: name, hasVideo: video)
+                uuid: uuid, callerName: name, hasVideo: true)
         }
     }
 
