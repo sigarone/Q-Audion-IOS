@@ -4630,7 +4630,7 @@ final class AppState: ObservableObject {
         upgradeResponderIceConnectTask = Task { @MainActor [weak self, weak controller] in
             try? await Task.sleep(nanoseconds: UInt64(Self.upgradeResponderIceConnectTimeoutMs) * 1_000_000)
             guard !Task.isCancelled, let self = self, let controller = controller,
-                  self.webRtcController === controller else { return }
+                  (self.webRtcController as? QAudionWebRtcCallController) === controller else { return }
             RTLog.warn("call", "video upgrade ICE-connect watchdog fired after \(Self.upgradeResponderIceConnectTimeoutMs)ms — never reached connected/completed, rolling back")
             self.rollbackUpgradeVideo()
         }
