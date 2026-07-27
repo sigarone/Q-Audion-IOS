@@ -147,7 +147,16 @@ struct ContentView: View {
         )) {
             if let invite = appState.incomingGroupCallInvite {
                 incomingGroupCallScreen(invite)
-            } else if let vm = appState.groupCallViewModel {
+            } else if appState.groupCallControllerState != .idle, let vm = appState.groupCallViewModel {
+                // W-GRPVMLEAK (2026-07-27) — `groupCallViewModel` is a
+                // persistent VM built once in connectPersistentSocket() and
+                // NEVER nilled, so checking only its non-nilness here made
+                // this branch win unconditionally over the 1:1 ring below
+                // (a plain `let vm = appState.groupCallViewModel` is true
+                // from app launch onward) — the 1:1 ring branch was dead
+                // code, always showing "Chiamata di gruppo / 0 partecipanti"
+                // instead. Must gate on the actual controller state.
+                //
                 // GroupSecuritySheet (unified call UI — group-call
                 // adaptation) reads `appState.liveProvider` for its
                 // per-member `PeerTrustEvaluator` lookups. Explicit
