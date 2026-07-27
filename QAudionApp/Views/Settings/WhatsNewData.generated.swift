@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.873",
+              date: "2026-07-28",
+              title: "v1.0.873",
+              bullets: [
+                "fix(call): watchdog timeout for on-demand video-upgrade PeerConnection ICE",
+              ]),
         .init(id: "v1.0.872",
               date: "2026-07-27",
               title: "v1.0.872",
               bullets: [
+                "chore: regenerate changelog for v1.0.872",
                 "feat(call): force CXCallUpdate.hasVideo=true for group calls too",
               ]),
         .init(id: "v1.0.871",
@@ -152,15 +159,6 @@ extension ReleaseNote {
                 "docs(wire-spec): §3.3.1.1 — the static fallback is forceable (phase-B blocker)",
                 "feat(psk-advert): phase A — dual-dialect PSK advertisement resolution (W-PSKBLIND)",
                 "feat(psk-advert): PskAdvertV3 blinded advertisement module + KAT (W-PSKBLIND)",
-              ]),
-        .init(id: "v1.0.853",
-              date: "2026-07-25",
-              title: "v1.0.853",
-              bullets: [
-                "chore: regenerate changelog for v1.0.853",
-                "fix(audio): iOS never decoded the audio it received (W-IOSFECFLAG)",
-                "feat(audio): the playout jitter buffer iOS did not have (W-IOSJITTER)",
-                "fix(call): video consent is per SESSION, not per call (W-CONSENTSESSION)",
               ]),
     ]
 }
