@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.875",
+              date: "2026-07-28",
+              title: "v1.0.875",
+              bullets: [
+                "diag(video): throttled capture-pipeline + WebRTC-bridge frame logging",
+              ]),
         .init(id: "v1.0.874",
               date: "2026-07-28",
               title: "v1.0.874",
               bullets: [
+                "chore: regenerate changelog for v1.0.874",
                 "fix(build): cast webRtcController before identity comparison",
               ]),
         .init(id: "v1.0.873",
@@ -143,16 +150,6 @@ extension ReleaseNote {
                 "fix(trust): a stored SAS verification outlived the identity it verified on iOS (C-3)",
                 "fix(video): iOS refused nothing — one stripped capability string turned off video E2EE (F-02)",
                 "fix(audio): port the jitter-buffer trim floor to iOS before it can ship (W-TRIMFLOOR)",
-              ]),
-        .init(id: "v1.0.855",
-              date: "2026-07-25",
-              title: "v1.0.855",
-              bullets: [
-                "chore: regenerate changelog for v1.0.855",
-                "docs(wire-spec): §3.3.1.2 — the QUAD 1:1 dialect is retired, not just its advert (W-QUADRETIRE)",
-                "fix(psk-advert): UNKNOWN mirrored as STATIC, undoing most of §3.3.1 (W-UNKNOWNMIRROR)",
-                "feat(audio-diag): measure the iOS player-node queue before restructuring anything (W-IOSPLAYOUT)",
-                "docs(wire-spec): §3.3.1.2 — the QUAD advert is retired, and the KEM-bound nonce is rejected",
               ]),
     ]
 }
