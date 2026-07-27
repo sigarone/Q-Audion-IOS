@@ -13248,10 +13248,36 @@ extension AppState {
     /// through CXAnswerCallAction so the system UI resolves; the provider's
     /// `onAnswerCall` then lands back on `performAcceptIncomingGroupCall()`.
     /// Mirrors `answerIncomingCall()`.
+    ///
+    /// W-GRPDOUBLEDIALER FOLLOW-UP (2026-07-27, CRITICAL — live-confirmed
+    /// regression): `presentIncomingGroupCall`'s foreground push case calls
+    /// `releaseFromSystemUI(prepared.uuid)` to hide the redundant native
+    /// banner, but does NOT (and must not — see below) clear
+    /// `groupCallKitId`. Before this fix, tapping "Accetta" on our own
+    /// screen in exactly that case silently did NOTHING: `try?` swallowed
+    /// `CXAnswerCallAction`'s failure (CallKit has no record of a call we
+    /// already told it had ended) and `performAcceptIncomingGroupCall()`
+    /// never ran. Root-caused from Pavel's live device report + screenshot
+    /// showing the accept button doing nothing. Falling back to the direct
+    /// accept path on ANY CallKit answerCall failure — not just this one
+    /// case — makes "Accetta" unconditionally work regardless of whatever
+    /// state CallKit's own registration is in. `groupCallKitId` itself is
+    /// deliberately left untouched by the release (busy/dedup guards
+    /// elsewhere key off it meaning "a group call is ringing/active",
+    /// which is still true here — only CallKit's OWN bookkeeping for that
+    /// uuid was released, not our call state).
     @MainActor
     func answerIncomingGroupCall() {
         if let uuid = groupCallKitId, !CallsGate.callKitFreeMode {
-            Task { [weak self] in try? await self?.callKit?.answerCall(uuid: uuid) }
+            Task { [weak self] in
+                guard let self = self else { return }
+                do {
+                    try await self.callKit?.answerCall(uuid: uuid)
+                } catch {
+                    RTLog.warn("call", "W-GRPDOUBLEDIALER answerIncomingGroupCall: CXAnswerCallAction failed (\(error.localizedDescription)) — falling back to direct accept so the button always works")
+                    await MainActor.run { self.performAcceptIncomingGroupCall() }
+                }
+            }
             return
         }
         performAcceptIncomingGroupCall()
