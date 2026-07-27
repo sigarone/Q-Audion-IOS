@@ -739,7 +739,7 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         // W-CAPTUREDIAG — see the property doc: first frame + ~1/s after.
         self.captureDiagFrameCount += 1
         if self.captureDiagFrameCount == 1 || self.captureDiagFrameCount % 30 == 0 {
-            print("[VideoCallPipeline] W-CAPTUREDIAG frame=\(self.captureDiagFrameCount) paused=\(self.paused) externalFeedActive=\(self.externalFeedActive) bridgeSet=\(self.onCapturedPixelBuffer != nil) sourceMode=\(self.sourceMode)")
+            print("[VideoCallPipeline] W-CAPTUREDIAG frame=\(self.captureDiagFrameCount) paused=\(self.paused) externalFeedActive=\(self.externalFeedActive) bridgeSet=\(self.onCapturedPixelBuffer != nil)")
         }
         // W524: ABR layer 4 — video paused under extreme network
         // conditions. Skip BOTH the WebRTC bridge and the HEVC
