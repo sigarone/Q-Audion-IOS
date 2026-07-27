@@ -318,8 +318,37 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // has no such guard (AudioPublishOptions.red defaults true), so the
         // app must. Covers both the setMicrophone(enabled:) publish below
         // and the preconnect path via the room default.
+        // W-GRPADAPTIVEDEADLOCK (2026-07-27) — ported from Desktop's own fix
+        // for the IDENTICAL symptom (GroupCallRoom.ts, 2026-07-26): `adaptiveStream`/
+        // `dynacast` throttle a track down to (and eventually pause it at) its
+        // lowest layer, or stop sending it altogether, based on LiveKit's OWN
+        // heuristic for whether a remote video is actually being watched. That
+        // heuristic depends on the SDK's real attach/visibility signal being
+        // wired correctly on EVERY subscriber watching this track — if even one
+        // client in the call has a rendering path the SDK can't see (as Desktop's
+        // did — confirmed live there: `call.video.counts` showed `in_dec: 0` for
+        // an entire call while audio decoded fine the whole time), adaptiveStream
+        // can starve that peer's view of this track down to nothing while every
+        // OTHER properly-signaling peer looks fine — exactly the asymmetric
+        // "some peers see my video, iOS doesn't" / "iOS's own video is a 180x320
+        // thumbnail" pattern measured live on call a0e7c431 (tune-report.py:
+        // iOS rx video 0/0/0 frames the entire 162s call, iOS tx video capped at
+        // 180x320@15fps with qualityLimitationReason=bandwidth, despite Android/
+        // Desktop exchanging full 720p video with each other in the SAME call).
+        // Disabling both removes the guesswork: every layer is always sent,
+        // nothing is paused based on a visibility signal this app's rendering
+        // path may not be feeding correctly either.
+        // RoomOptions is a class with `let`-only properties (no post-init
+        // mutation possible) — verified against the actual pinned fork
+        // source (Types/Options/RoomOptions.swift), which also confirms
+        // this exact argument order (defaultAudioPublishOptions <
+        // adaptiveStream < dynacast < encryptionOptions in the declared
+        // initializer — all params defaulted, but Swift still requires
+        // whichever ones are specified to appear in that order).
         let roomOptions = RoomOptions(
             defaultAudioPublishOptions: AudioPublishOptions(red: false),
+            adaptiveStream: false,
+            dynacast: false,
             encryptionOptions: encryptionOptions
         )
         let room = Room(delegate: self, roomOptions: roomOptions)
