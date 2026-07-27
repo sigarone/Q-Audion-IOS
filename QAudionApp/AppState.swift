@@ -2497,12 +2497,25 @@ final class AppState: ObservableObject {
                         fallbackName: payload.callerName
                     )
                 }
-                let pkDiag: String = "[AppState] W-CALLDIAG PushKit→report uuid=\(payload.callId) hasVideo=\(payload.hasVideo)"
+                let pkDiag: String = "[AppState] W-CALLDIAG PushKit→report uuid=\(payload.callId) hasVideo=\(payload.hasVideo) reportedHasVideo=true(forced)"
                 print(pkDiag)
+                // W-CALLKITVIDEOFORCE (2026-07-27, Pavel) — always report
+                // hasVideo=true to CallKit regardless of the real call type.
+                // iOS only auto-foregrounds the app on answer when the
+                // CXCallUpdate says the call carries video (CallKit's native
+                // chrome can't render video, so it must hand off); a pure
+                // voice call left the user stuck on the native screen with
+                // no way back except a hard swipe + manual relaunch. The
+                // REAL call type (payload.hasVideo, above) still drives
+                // everything that matters — isVideoCall, the offer/answer
+                // negotiation, the UI the user actually sees — only what
+                // CallKit itself is told is forced. Deliberate deviation
+                // from Apple's documented hasVideo semantics ("indicates
+                // whether the call includes video"); accepted knowingly.
                 await self.callKit?.reportIncomingCall(
                     uuid: payload.callId,
                     callerName: display,
-                    hasVideo: payload.hasVideo
+                    hasVideo: true
                 )
                 // CRITICAL: bring the signalling WS up NOW so the buffered
                 // call_offer redelivery + PQC handshake can flow (see
@@ -3909,10 +3922,16 @@ final class AppState: ObservableObject {
                                 (self.callKit as? CallKitProvider)?.registerSuppressedCall(callUUID)
                             }
                         } else if let ck = self.callKit {
+                            // W-CALLKITVIDEOFORCE — see the PushKit branch's
+                            // kdoc above for the full rationale. Real call
+                            // type (wsDiagVideo) still drives isVideoCall /
+                            // the actual offer below; only CallKit's own
+                            // hasVideo is forced so answering always
+                            // auto-dismisses the native UI into the app.
                             await ck.reportIncomingCall(
                                 uuid: callUUID,
                                 callerName: resolvedCallerName,
-                                hasVideo: wsDiagVideo
+                                hasVideo: true
                             )
                         }
                     }
