@@ -787,6 +787,70 @@ final class AppState: ObservableObject {
     /// unless the view separately observes that nested object).
     @Published var groupCallControllerState: GroupCallController.State = .idle
 
+    /// W561 — the callId of whatever call is active right now (group takes
+    /// priority since `callState`/`BCryptoCallingApiImpl` don't expose a 1:1
+    /// call id when idle). Feeds `BugReporter`'s `call_id` form field — see
+    /// that class's `ActiveCallIdProvider` kdoc for why this field existing
+    /// server-side but never being populated by ANY client was the actual
+    /// gap.
+    func activeCallIdForReport() -> String? {
+        switch groupCallControllerState {
+        case .connecting(let callId), .active(let callId, _):
+            return callId
+        case .idle, .failed:
+            break
+        }
+        return (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+    }
+
+    /// W561 — compact JSON snapshot of call/network state at trigger time,
+    /// folded into the bug report's encrypted body (see `BugReporter`'s
+    /// `DiagSnapshotProvider` kdoc). Primitives-only across the AppState/
+    /// BugReporter boundary per CLAUDE.md rule #16 — this method does all
+    /// the type-aware work and returns a plain String.
+    ///
+    /// Deliberately NOT redacting participant UUIDs here (unlike
+    /// user-facing UI, which never shows a raw UUID): this JSON is only ever
+    /// decrypted by the admin/maintainer, and full UUIDs are what make a
+    /// report directly correlatable against `qa-logs.ps1`/`tune-report.py`
+    /// without the reporter having to separately state which peers were
+    /// involved.
+    func buildDiagSnapshotJSON() -> String {
+        var call: [String: Any] = ["one_to_one_state": callState.rawValue]
+        switch groupCallControllerState {
+        case .idle:
+            call["group_state"] = "idle"
+        case .connecting(let callId):
+            call["group_state"] = "connecting"
+            call["group_call_id"] = callId
+        case .active(let callId, let participants):
+            call["group_state"] = "active"
+            call["group_call_id"] = callId
+            call["group_participant_count"] = participants.count
+            call["group_participants"] = participants
+        case .failed(let reason):
+            call["group_state"] = "failed"
+            call["group_failed_reason"] = reason
+        }
+        if let oneToOneCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() {
+            call["one_to_one_call_id"] = oneToOneCallId
+        }
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let snapshot: [String: Any] = [
+            "schema": 1,
+            "captured_at": iso.string(from: Date()),
+            "ws_state": wsConnectionState.rawValue,
+            "call": call,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return json
+    }
+
     /// W-GRPRING — one pending INCOMING group call (ring state).
     struct IncomingGroupCallInvite: Equatable {
         let callId: String
@@ -1929,11 +1993,15 @@ final class AppState: ObservableObject {
             getToken: { [weak self] in self?.authService.loadToken() }
         )
 
-        // W559 — cross-platform bug report service. Volume-gesture trigger +
-        // auto-detection hook. Primitives-only API per CLAUDE.md rule #16.
+        // W559/W561 — cross-platform bug report service. Volume-gesture
+        // trigger + auto-detection hook. Primitives-only API per CLAUDE.md
+        // rule #16 — `getActiveCallId`/`getDiagSnapshot` do all the
+        // AppState-type-aware work here and hand BugReporter plain Strings.
         BugReporter.shared.configure(
             getToken: { [weak self] in self?.authService.loadToken() },
-            getServerUrl: { [weak self] in self?.serverUrl ?? "" }
+            getServerUrl: { [weak self] in self?.serverUrl ?? "" },
+            getActiveCallId: { [weak self] in self?.activeCallIdForReport() },
+            getDiagSnapshot: { [weak self] in self?.buildDiagSnapshotJSON() ?? "{}" }
         )
         BugReporter.shared.startVolumeObserver()
 

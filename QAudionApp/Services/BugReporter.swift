@@ -19,6 +19,20 @@ public final class BugReporter: ObservableObject {
 
     public typealias TokenProvider = @MainActor () -> String?
     public typealias ServerUrlProvider = () -> String
+    /// W561 — the callId of whatever call (1:1 or group) is active right now,
+    /// or nil. Populates the server's `call_id` form field (already accepted
+    /// by `reports.SubmitInput` — previously never populated by ANY client,
+    /// so a report never self-identified which call it was about) — lets a
+    /// report be correlated against `qa-logs.ps1`/`tune-report.py` without
+    /// the user having to separately state which call they mean.
+    public typealias ActiveCallIdProvider = @MainActor () -> String?
+    /// W561 — a compact JSON snapshot (call state, roster, WS connection
+    /// state) built entirely inside AppState (primitives across the
+    /// boundary — a String, per CLAUDE.md rule #16) and folded into the
+    /// report's encrypted body so the report is self-contained: readable
+    /// evidence of what the app's OWN state was at trigger time, not just a
+    /// screenshot + free-text log tail. See `AppState.buildDiagSnapshotJSON`.
+    public typealias DiagSnapshotProvider = @MainActor () -> String
 
     // MARK: - Published state (SwiftUI overlay observes these)
 
@@ -38,6 +52,13 @@ public final class BugReporter: ObservableObject {
 
     private var getToken: TokenProvider?
     private var getServerUrl: ServerUrlProvider?
+    private var getActiveCallId: ActiveCallIdProvider?
+    private var getDiagSnapshot: DiagSnapshotProvider?
+
+    /// W561 — admin X25519 pubkey cache (fetched once, reused for the
+    /// process lifetime). Mirrors Android's `cachedAdminPubKey`. No
+    /// `@Volatile`/lock needed — this whole class is `@MainActor`.
+    private var cachedAdminPubKeyHex: String?
 
     /// KVO observation token for AVAudioSession.outputVolume.
     private var volumeObservation: NSKeyValueObservation?
@@ -58,10 +79,14 @@ public final class BugReporter: ObservableObject {
 
     public func configure(
         getToken: @escaping TokenProvider,
-        getServerUrl: @escaping ServerUrlProvider
+        getServerUrl: @escaping ServerUrlProvider,
+        getActiveCallId: @escaping ActiveCallIdProvider,
+        getDiagSnapshot: @escaping DiagSnapshotProvider
     ) {
         self.getToken = getToken
         self.getServerUrl = getServerUrl
+        self.getActiveCallId = getActiveCallId
+        self.getDiagSnapshot = getDiagSnapshot
     }
 
     // MARK: - Volume Observer
@@ -197,6 +222,47 @@ public final class BugReporter: ObservableObject {
 
     // MARK: - Upload
 
+    /// W561 — fetch the admin X25519 pubkey (lazy, cached for the process
+    /// lifetime). Mirrors Android's `BugReporter.fetchAdminPubKey`. Returns
+    /// nil on any failure — the caller aborts rather than falling back to
+    /// plaintext (this is the fix for the exact gap that used to exist:
+    /// this class previously had NO E2EE path at all, always plaintext, to
+    /// the legacy `/api/v1/bugreport` endpoint).
+    private func fetchAdminPubKey(serverUrl: String, token: String) async -> String? {
+        if let cached = cachedAdminPubKeyHex { return cached }
+        guard let url = URL(string: serverUrl + "/api/v1/report-pubkey") else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                RTLog.warn("bugreport", "report-pubkey fetch failed")
+                return nil
+            }
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let hex = obj["public_key"] as? String, !hex.isEmpty else {
+                RTLog.warn("bugreport", "report-pubkey response unparseable")
+                return nil
+            }
+            cachedAdminPubKeyHex = hex
+            return hex
+        } catch {
+            RTLog.warn("bugreport", "report-pubkey fetch exception: " + error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// W561 — E2EE upload to `/api/v1/report`, replacing the old plaintext
+    /// POST to `/api/v1/bugreport`. Same per-field-ephemeral-key scheme as
+    /// Android's `BugReporter.kt.uploadReport` (see `ReportCrypto`'s kdoc):
+    /// body/logs/screenshot are each encrypted independently, so a
+    /// compromised ephemeral key for one field never exposes another.
+    ///
+    /// The "body" plaintext folds in BOTH the user's free-text note AND a
+    /// structured diagnostic JSON snapshot (call id/state/roster, WS
+    /// connection state — see `DiagSnapshotProvider`'s kdoc) so a report is
+    /// self-contained evidence of app state at trigger time, not just a
+    /// screenshot the reader has to interpret cold.
     private func uploadReport(report: PendingReport, note: String) async {
         guard let getServerUrl = getServerUrl,
               let getToken = getToken else { return }
@@ -205,8 +271,11 @@ public final class BugReporter: ObservableObject {
         guard let token = getToken() else { return }
         guard !token.isEmpty else { return }
 
-        let endpoint = serverUrl + "/api/v1/bugreport"
-        guard let url = URL(string: endpoint) else { return }
+        guard let adminPubKey = await fetchAdminPubKey(serverUrl: serverUrl, token: token) else {
+            // Admin pubkey unavailable — abort rather than send plaintext.
+            RTLog.warn("bugreport", "admin pubkey unavailable — report aborted (no plaintext fallback)")
+            return
+        }
 
         let appVersion = resolveAppVersion()
         let osVersion = UIDevice.current.systemVersion
@@ -215,14 +284,44 @@ public final class BugReporter: ObservableObject {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let timestamp = iso.string(from: report.capturedAt)
+        let callId = getActiveCallId?() ?? ""
+        let diagSnapshot = getDiagSnapshot?() ?? ""
+
+        let bodyPlaintext: String
+        if note.isEmpty {
+            bodyPlaintext = diagSnapshot
+        } else if diagSnapshot.isEmpty {
+            bodyPlaintext = note
+        } else {
+            bodyPlaintext = note + "\n\n---DIAG---\n" + diagSnapshot
+        }
+
+        let diagSummary = ReportCrypto.buildDiagSummary(logs: report.logs, note: note, trigger: report.trigger)
+
+        guard let bodyEnc = try? ReportCrypto.encrypt(
+            adminPubKeyHex: adminPubKey, plaintext: Data(bodyPlaintext.utf8)
+        ) else {
+            RTLog.warn("bugreport", "ReportCrypto.encrypt(body) failed — report aborted")
+            return
+        }
+        guard let logsEnc = try? ReportCrypto.encrypt(
+            adminPubKeyHex: adminPubKey, plaintext: Data(report.logs.utf8)
+        ) else {
+            RTLog.warn("bugreport", "ReportCrypto.encrypt(logs) failed — report aborted")
+            return
+        }
+        let screenshotEnc: ReportCrypto.EncryptedPayload? = report.screenshot
+            .flatMap { $0.pngData() }
+            .flatMap { try? ReportCrypto.encrypt(adminPubKeyHex: adminPubKey, plaintext: $0) }
+
+        let endpoint = serverUrl + "/api/v1/report"
+        guard let url = URL(string: endpoint) else { return }
 
         let boundary = "BugReportBoundary" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        let contentType = "multipart/form-data; boundary=" + boundary
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        let authHeader = "Bearer " + token
-        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=" + boundary, forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
 
         var body = Data()
         appendField(&body, boundary: boundary, name: "platform", value: "ios")
@@ -232,14 +331,22 @@ public final class BugReporter: ObservableObject {
         appendField(&body, boundary: boundary, name: "device_model", value: deviceModel)
         appendField(&body, boundary: boundary, name: "user_id", value: userPrefix)
         appendField(&body, boundary: boundary, name: "timestamp", value: timestamp)
-        if !note.isEmpty {
-            appendField(&body, boundary: boundary, name: "note", value: note)
+        if !callId.isEmpty {
+            appendField(&body, boundary: boundary, name: "call_id", value: callId)
         }
-        appendField(&body, boundary: boundary, name: "logs", value: report.logs)
-        if let screenshot = report.screenshot,
-           let pngData = screenshot.pngData() {
-            appendFilePart(&body, boundary: boundary, name: "screenshot",
-                           filename: "screenshot.png", mimeType: "image/png", data: pngData)
+        appendField(&body, boundary: boundary, name: "diag_summary", value: diagSummary)
+        appendField(&body, boundary: boundary, name: "ephemeral_pub", value: bodyEnc.ephemeralPubHex)
+        appendField(&body, boundary: boundary, name: "logs_ephemeral_pub", value: logsEnc.ephemeralPubHex)
+        appendFilePart(&body, boundary: boundary, name: "body_enc",
+                       filename: "body.enc", mimeType: "application/octet-stream", data: bodyEnc.ciphertext)
+        appendFilePart(&body, boundary: boundary, name: "logs_enc",
+                       filename: "logs.enc", mimeType: "application/octet-stream", data: logsEnc.ciphertext)
+        if let screenshotEnc = screenshotEnc {
+            appendField(&body, boundary: boundary, name: "screenshot_ephemeral_pub",
+                        value: screenshotEnc.ephemeralPubHex)
+            appendFilePart(&body, boundary: boundary, name: "screenshot_enc",
+                           filename: "screenshot.enc", mimeType: "application/octet-stream",
+                           data: screenshotEnc.ciphertext)
         }
         let closingBoundary = "--" + boundary + "--\r\n"
         if let closingData = closingBoundary.data(using: .utf8) {
@@ -250,14 +357,10 @@ public final class BugReporter: ObservableObject {
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse {
-                let code = http.statusCode
-                let codeStr = String(describing: code)
-                let logLine = "[BugReporter] upload status=" + codeStr
-                RTLog.info("bugreport", logLine)
+                RTLog.info("bugreport", "E2EE upload status=" + String(describing: http.statusCode))
             }
         } catch {
-            let desc = error.localizedDescription
-            RTLog.warn("bugreport", "upload failed: " + desc)
+            RTLog.warn("bugreport", "upload failed: " + error.localizedDescription)
         }
     }
 
