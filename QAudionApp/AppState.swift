@@ -2548,6 +2548,37 @@ final class AppState: ObservableObject {
                         uuid: prepared.uuid, reason: .failed("group-call-not-presentable"))
                     return
                 }
+                // W-GRPDOUBLEDIALER (2026-07-27, live-confirmed via screenshot) —
+                // `prepareIncomingPushGroupCall` above already called
+                // `presentIncomingGroupCall`, which sets `incomingGroupCallInvite`
+                // UNCONDITIONALLY regardless of source — so our own full-screen
+                // `IncomingCallScreen` is already primed BEFORE the CallKit report
+                // above even runs. If the app is already foreground (VoIP pushes
+                // still deliver to a foregrounded app), iOS shows CallKit's native
+                // UI as a compact TOP BANNER (not full-screen, since the app is
+                // already frontmost) — visibly on top of our own screen at the same
+                // time (confirmed: the banner's "<name> · 🔒 Cifrata" text is
+                // exactly `CallKitProvider.reportIncomingCall`'s
+                // `localizedCallerName`). The 1:1 path avoids this via
+                // `registerSuppressedCall` (skips the report entirely for a
+                // foreground WS call) — not available here since this is a push,
+                // and the mandate to report was already satisfied above. Instead,
+                // release the native UI immediately: unlike
+                // `dismissNativeCallUIAfterAnswer` (which failed because the
+                // device was genuinely LOCKED and iOS has no API to foreground an
+                // app from there), the app is ALREADY frontmost here — nothing
+                // needs foregrounding, only hiding, which `releaseFromSystemUI`
+                // does safely (ends only CallKit's own administrative call
+                // record; does not touch `incomingGroupCallInvite`, the ring
+                // timers, or trigger `onEndCall`/`endCall()` — it's a one-way
+                // notification, not a `CXEndCallAction`).
+                let releasedNativeUI: Bool = await MainActor.run {
+                    guard UIApplication.shared.applicationState == .active else { return false }
+                    return (self.callKit as? CallKitProvider)?.releaseFromSystemUI(prepared.uuid) ?? false
+                }
+                if releasedNativeUI {
+                    RTLog.info("call", "W-GRPDOUBLEDIALER foreground push-sourced group call — released native CallKit UI, our own IncomingCallScreen is the ring")
+                }
                 // CRITICAL (same as the 1:1 branch): bring the signalling WS up
                 // NOW so the `group_call_join` fired on accept — and the
                 // sender-key control envelopes — have a live socket.
