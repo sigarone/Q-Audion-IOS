@@ -138,6 +138,19 @@ public final class VideoCallPipeline: NSObject {
     /// arm64 so the worst-case race is one stale frame emitted right
     /// at toggle time.
     private nonisolated(unsafe) var paused: Bool = false
+    /// W-CAPTUREDIAG (2026-07-28) — throttled counter for the one-shot
+    /// diagnostic log in `captureOutput`, root-causing a black-video
+    /// upgrade where the peer's transport connects fine (ICE/DTLS healthy
+    /// the whole call) yet zero video frames ever arrive: is iOS's own
+    /// capture pipeline actually delivering frames at all, and if so, is
+    /// `onCapturedPixelBuffer` set by the time they arrive? Logs the
+    /// FIRST captured frame (paused/closure-nil state included, so a
+    /// silent early-return above is visible too) then every ~30th frame
+    /// (~1/s) afterward — never removed once the mechanism is confirmed
+    /// isn't worth a permanent log line, but needed now to stop guessing
+    /// blind at Swift code that can't be run locally (no Mac toolchain
+    /// on the box making this fix).
+    private nonisolated(unsafe) var captureDiagFrameCount: Int = 0
     /// media-consent v1 — while a screen share is feeding the encoder via
     /// [submitExternalFrame], camera frames from the capture session are
     /// dropped (one producer at a time; interleaving two sources corrupts
@@ -723,6 +736,11 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         from connection: AVCaptureConnection
     ) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        // W-CAPTUREDIAG — see the property doc: first frame + ~1/s after.
+        self.captureDiagFrameCount += 1
+        if self.captureDiagFrameCount == 1 || self.captureDiagFrameCount % 30 == 0 {
+            print("[VideoCallPipeline] W-CAPTUREDIAG frame=\(self.captureDiagFrameCount) paused=\(self.paused) externalFeedActive=\(self.externalFeedActive) bridgeSet=\(self.onCapturedPixelBuffer != nil) sourceMode=\(self.sourceMode)")
+        }
         // W524: ABR layer 4 — video paused under extreme network
         // conditions. Skip BOTH the WebRTC bridge and the HEVC
         // encoder so the peer sees a clean stall, not garbled
