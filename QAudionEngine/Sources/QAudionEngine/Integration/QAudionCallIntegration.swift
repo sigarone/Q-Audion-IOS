@@ -2236,7 +2236,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let kcCallerPeerSupportsMix = bundle.capabilities?.pskMixV1 ?? false
             let kcCallerN: Int
             let kcCallerMixFingerprints: [Data]
-            if !selectedFpStr.isEmpty, let raw = DeviceRenewBlob.hexDecode(selectedFpStr), raw.count == 32 {
+            // W-KCMACBLIND — same defect class as the K_video salt fix above,
+            // same file, found by the follow-up sweep for other consumers of
+            // `selectedFpStr`. The RESPONDER'S mirror of this block (:1817-1819)
+            // hex-decodes `selectedFp`, the STATIC form; using the raw wire echo
+            // here made the two legs hash different `kc_mac` transcripts on
+            // every PSK call iOS placed — a false S1 KC_FAILED "active attack"
+            // verdict, which `ContactsStore.applyAssuranceOutcome` then persists
+            // as a suspended contact. `establishedPskFp` (:2177) is the same
+            // already-resolved static fingerprint the K_video salt now uses —
+            // reusing it here is also what makes `kcCallerN` agree with whether
+            // a PSK actually entered the session key, instead of reporting 1
+            // whenever the echo was merely non-empty.
+            if let fp = establishedPskFp, let raw = DeviceRenewBlob.hexDecode(fp), raw.count == 32 {
                 kcCallerN = 1
                 kcCallerMixFingerprints = [raw]
             } else {
@@ -2342,7 +2354,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 kcKey: kcCallerKeyForEvent, transcript: kcCallerTranscriptForEvent, n: kcCallerN,
                 peerSupportsMix: kcCallerPeerSupportsMix, sigOk: acceptSigOk,
                 peerAdvertisedRoles: kcCallerPeerAdvertisedRoles,
-                selectedFp: selectedFpStr.isEmpty ? nil : selectedFpStr
+                // W-KCMACBLIND — static form, matching the responder leg (:1872)
+                // and what AppState.resolvePskDisplayMeta/resolveNfcMixInputs
+                // actually match against. The raw wire echo (`selectedFpStr`)
+                // never resolves there, which silently forced the NFC-in-common
+                // branch of AssuranceState.decide() unreachable whenever iOS
+                // placed the call — see establishedPskFp's derivation at :2177.
+                selectedFp: establishedPskFp
             ))
 
             // W529: caller's ACCEPT decapsulation succeeded → cancel
