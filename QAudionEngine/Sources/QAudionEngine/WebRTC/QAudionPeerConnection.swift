@@ -377,6 +377,35 @@ public final class QAudionPeerConnection: NSObject {
         let source = factory.videoSource()
         let track = factory.videoTrack(with: source, trackId: videoTrackId)
         track.isEnabled = true
+        // W-DUPETRANSCEIVER (2026-07-28) — createOffer() pre-allocates a
+        // sendrecv video transceiver on every call's INITIAL offer (BUG2 fix,
+        // see its own kdoc there) specifically so a LATER mid-call
+        // `upgradeToVideo()` reuses that already-negotiated mid instead of
+        // adding a brand-new m-line to the live BUNDLE. `pc.add(track:
+        // streamIds:)` (`RTCPeerConnection.addTrack`) is supposed to find and
+        // reuse a transceiver whose sender has no track per the WebRTC
+        // addTrack algorithm — live-reproduced 2026-07-28 (call
+        // 562fc6de..., iOS-caller + iOS-initiated upgrade) it did NOT: iOS's
+        // own logs showed the pre-allocated mid=0 orphaned and a fresh mid=3
+        // negotiated instead, while Android (still bound to ITS OWN mid=0,
+        // matching iOS's original transceiver) never saw the peer's real
+        // video at all — SDP negotiates, ICE/DTLS connect, zero video ever
+        // arrives, exactly the recurring "purple on upgrade" signature.
+        // Rather than trust the implicit matching, explicitly find the
+        // existing video transceiver (if the pre-allocation already put one
+        // there) and bind the track directly to ITS sender — unambiguous,
+        // guaranteed to keep the same mid.
+        if let existing = pc.transceivers.first(where: { $0.mediaType == .video }) {
+            if existing.direction != .sendRecv { existing.direction = .sendRecv }
+            existing.sender.track = track
+            localVideoTrack = track
+            videoSender = existing.sender
+            if let capturer = capturer {
+                capturer.delegate = source
+            }
+            print("[WebRTC] local VIDEO track bound to EXISTING transceiver mid=\(existing.mid) (W-DUPETRANSCEIVER)")
+            return source
+        }
         pc.add(track, streamIds: [stableStreamId])
         localVideoTrack = track
         // Capture the RTP sender for the native FrameCryptor attach (Android
