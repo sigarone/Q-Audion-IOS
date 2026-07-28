@@ -284,7 +284,13 @@ final class PskAdvertisingTests: XCTestCase {
         let entries: [PskAdvertising.Entry] = [
             PskAdvertising.Entry(name: callDerivedName, origin: PskOrigin.inferred(fromAccountName: callDerivedName), material: rk0, createdAt: nil)
         ]
-        let selectedFp = canonicalFp(rk0) // the peer echoed exactly this fingerprint back
+        // The value reaching this matcher is the STATIC fingerprint. Since
+        // W-PSKBLIND phase B (bb8affd) the peer echoes a per-call BLINDED tag on
+        // the wire, which the caller must resolve to a PSK first — see
+        // `testBlindedWireTagIsNeverAcceptedByTheStaticFingerprintMatcher`. This
+        // test covers the origin filter, and deliberately starts from the
+        // already-resolved static form.
+        let selectedFp = canonicalFp(rk0)
 
         // Same filter-then-match shape as the two QAudionCallIntegration
         // closures: `vault.listPskNames().first(where: { origin-check &&
@@ -326,6 +332,8 @@ final class PskAdvertisingTests: XCTestCase {
         let entries: [PskAdvertising.Entry] = [
             PskAdvertising.Entry(name: autoName, origin: PskOrigin.inferred(fromAccountName: autoName), material: ratchetSeed, createdAt: nil)
         ]
+        // Static form, already resolved from the wire's blinded tag — see the
+        // note in `testCallDerivedEntryNeverSelectedInInitiatorPostAcceptLookup`.
         let peerEchoedFp = canonicalFp(ratchetSeed)
 
         // Same shape as resolvePskBytes: find the first non-"__" name whose
@@ -350,5 +358,80 @@ final class PskAdvertisingTests: XCTestCase {
             return canonicalFp(entry.material) == peerEchoedFp
         })?.material
         XCTAssertEqual(resolvedManualBytes, ratchetSeed)
+    }
+
+    // MARK: - 6. W-PSKBLIND wire-form vs static-form (K_video salt regression)
+
+    /// Regression pin for the week-long "purple remote video" bug.
+    ///
+    /// W-PSKBLIND phase B (`bb8affd`) changed what travels in the wire field
+    /// `selectedPskFingerprint`: it used to be the static SHA-256(psk)
+    /// fingerprint, it is now a per-call blinded HMAC tag. Every consumer that
+    /// *matches* — `AppState.resolvePskBytes`, `resolvePskDisplayMeta`, the
+    /// responder eligible-PSK gates — still compares against
+    /// `PskAdvertising.canonicalFingerprint(forPsk:)`.
+    ///
+    /// `QAudionCallIntegration` (initiator ACCEPT path) forwarded the raw wire
+    /// value straight to that matcher. It never matched, so `videoContactPsk`
+    /// resolved nil and `deriveVideoKey` silently salted with the literal
+    /// `Q-AUDION-PHONE-VIDEO-SALT-V1` while the peer salted with the raw PSK.
+    /// Same session key, same capability digest, different salt — the only
+    /// symptom was undecodable remote video. Nothing failed loudly, and the
+    /// existing tests above did not catch it because they start from the
+    /// already-resolved static form.
+    ///
+    /// This pins the three facts that make that confusion a bug rather than a
+    /// naming preference, so a future edit that re-swaps the forms fails here
+    /// instead of in a live call.
+    func testBlindedWireTagIsNeverAcceptedByTheStaticFingerprintMatcher() {
+        let psk = Data(repeating: 0xA7, count: PskAdvertV3.pskBytes)
+        let senderEphemeralPub = Data(repeating: 0x11, count: PskAdvertV3.x25519PubBytes)
+        let callId = "87d7e37a-b84d-4c6e-bceb-7a601b88e314"
+
+        guard let nonce = PskAdvertV3.deriveNonce(callId: callId,
+                                                  senderEphemeralX25519Pub: senderEphemeralPub),
+              let blinded = PskAdvertV3.tag(psk: psk, callId: callId, nonce: nonce,
+                                            role: PskAdvertV3.roleOrdinary) else {
+            return XCTFail("PskAdvertV3 could not build the blinded advert tag")
+        }
+        let blindedHex = blinded.map { String(format: "%02x", $0) }.joined()
+        let staticFp = PskAdvertising.canonicalFingerprint(forPsk: psk)
+
+        // (1) The two forms are genuinely different values. If this ever holds,
+        //     the whole blinding scheme is broken and the rest is moot.
+        XCTAssertNotEqual(blindedHex, staticFp,
+                          "the blinded per-call tag must not equal the static fingerprint")
+
+        // (2) Feeding the wire value to a canonicalFingerprint-based matcher
+        //     finds NOTHING. This is the exact silent-divergence the bug hit:
+        //     nil here means "no PSK", which downstream means "use the literal
+        //     video salt" — a wrong answer that looks like a legitimate one.
+        let entries: [PskAdvertising.Entry] = [
+            PskAdvertising.Entry(name: "peer.alice", origin: .manual, material: psk, createdAt: nil)
+        ]
+        let matchOnWireValue = entries.first { PskAdvertising.canonicalFingerprint(forPsk: $0.material) == blindedHex }
+        XCTAssertNil(matchOnWireValue,
+                     "handing the raw blinded wire value to a static-fingerprint matcher must not resolve — callers MUST resolve the echo to a PSK first")
+
+        // (3) The static form, which is what the fixed initiator path emits,
+        //     does resolve. Without this, (2) passing would prove nothing —
+        //     a matcher that rejects everything would also satisfy it.
+        let matchOnStaticFp = entries.first { PskAdvertising.canonicalFingerprint(forPsk: $0.material) == staticFp }
+        XCTAssertEqual(matchOnStaticFp?.material, psk,
+                       "the resolved static fingerprint must still select the PSK")
+
+        // (4) The tag is per-CALL: the same PSK blinds to a different value in a
+        //     different call. So it can never be persisted, cached, or compared
+        //     as a stable identity for a PSK — which is what makes (2) permanent
+        //     rather than an accident of these particular test bytes.
+        let otherCallId = "5ec6cc1d-0000-4000-8000-000000000000"
+        guard let otherNonce = PskAdvertV3.deriveNonce(callId: otherCallId,
+                                                       senderEphemeralX25519Pub: senderEphemeralPub),
+              let otherBlinded = PskAdvertV3.tag(psk: psk, callId: otherCallId, nonce: otherNonce,
+                                                 role: PskAdvertV3.roleOrdinary) else {
+            return XCTFail("PskAdvertV3 could not build the second blinded advert tag")
+        }
+        XCTAssertNotEqual(otherBlinded, blinded,
+                          "the blinded tag must differ per call — it is not a stable PSK identity")
     }
 }
