@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.887",
+              date: "2026-07-28",
+              title: "v1.0.887",
+              bullets: [
+                "fix(call): handshake budget must outlast the ring window (was 30s vs 45s ring)",
+              ]),
         .init(id: "v1.0.886",
               date: "2026-07-28",
               title: "v1.0.886",
               bullets: [
+                "chore: regenerate changelog for v1.0.886",
                 "fix(groupcall): iOS never transmitted ANY media in group calls (E2EE keyIndex never pinned)",
               ]),
         .init(id: "v1.0.885",
@@ -170,13 +177,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.868",
                 "fix(groupcall): disable adaptiveStream/dynacast — zero video for whole call (W-GRPADAPTIVEDEADLOCK)",
-              ]),
-        .init(id: "v1.0.867",
-              date: "2026-07-27",
-              title: "v1.0.867",
-              bullets: [
-                "chore: regenerate changelog for v1.0.867",
-                "fix(call): release native CallKit banner over foreground group-call ring (W-GRPDOUBLEDIALER)",
               ]),
     ]
 }
