@@ -16,8 +16,8 @@ public final class AudioPlayback {
         let player = AVAudioPlayerNode()
         // force-unwrap safe: only nil for an invalid sample-rate/channel
         // combo; AudioConstants.sampleRate/channels are fixed (48kHz mono).
-        // swiftlint:disable:next force_unwrapping
         let fmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: Double(AudioConstants.sampleRate),
+            // swiftlint:disable:next force_unwrapping
             channels: AVAudioChannelCount(AudioConstants.channels), interleaved: true)!
         engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: fmt)
         try engine.start(); player.play()

@@ -344,8 +344,8 @@ public enum KmsTransport {
             // force-unwrap safe: same as decryptHybrid above — parseHeader
             // called with kemCtBytes: ML_KEM_CT_BYTES (1568) guarantees
             // parts.kemCt is non-nil.
-            // swiftlint:disable:next force_unwrapping
             kemSs = try PqcKeyExchange().decapsulate(
+                // swiftlint:disable:next force_unwrapping
                 ciphertext: parts.kemCt!,
                 privateKey: mlkemPriv
             )

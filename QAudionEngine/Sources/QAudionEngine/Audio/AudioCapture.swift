@@ -854,12 +854,12 @@ public final class AudioCapture {
         // interleaved:) only returns nil for an invalid sample-rate/channel
         // combination. AudioConstants.sampleRate/channels are fixed app
         // constants (48kHz mono) — a thoroughly standard, always-valid combo.
-        // swiftlint:disable:next force_unwrapping
         let format = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
             sampleRate: Double(AudioConstants.sampleRate),
             channels: AVAudioChannelCount(AudioConstants.channels),
             interleaved: true
+            // swiftlint:disable:next force_unwrapping
         )!
 
         // SINGLE-ENGINE FIX — attach + connect the PLAYBACK player node on the
