@@ -364,15 +364,45 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // publish then hard-times-out 30s later ("publish time out") — no
         // other participant ever sees iOS's video. Other platforms don't
         // hit this because they already declare an explicit preferredCodec.
-        // VP8 matches both the SFU's own fallback choice and every other
-        // platform's already-working codec in that same test call — H265
-        // was considered and rejected here: LiveKit does not transcode, so
-        // whatever iOS publishes must be directly decodable by every other
-        // participant, and WebRTC-level H265 decode support outside Apple
-        // platforms is not established for this SFU path (the existing 1:1
-        // H265 pipeline is a separate SFrame-based path, not this one).
+        // W-GRPH265 (2026-07-28) — PRIMARY is now H265, with VP8 kept as the
+        // declared BACKUP codec. The earlier note here (kept in history) chose
+        // plain VP8 on the grounds that "H265 decode outside Apple is not
+        // established for this SFU path". That reasoning has since been
+        // checked against the actual sources rather than assumed, and the
+        // three things it depended on all hold:
+        //   1. The E2EE FrameCryptor genuinely understands H265 on BOTH rails.
+        //      Native (iOS+Android share webrtc-sdk's frame_crypto_transformer.cc,
+        //      branch m144_release): an explicit `kVideoCodecH265` case runs
+        //      H265::FindNaluIndices + ParseNaluType and leaves
+        //      `payload_start_offset + H265::kNaluHeaderSize` bytes in the clear
+        //      — the correct 2-byte HEVC NAL header, mirroring the H264 case.
+        //      Desktop (livekit-client e2ee worker): a real `codec === 'h265'`
+        //      branch in findSliceNALUUnencryptedBytes + isH265SliceNALU
+        //      detection. H265 is NOT in the worker's unsupported list (only
+        //      av1/vp9 throw). This was the one blocker that could have turned
+        //      "iOS is purple" into "everyone is purple"; it is refuted.
+        //   2. The SFU accepts and forwards H265 for real, not just on paper:
+        //      fi-1 livekit.yaml enabled_codecs lists video/H265, the media
+        //      engine registers it at PT 116 (+rtx 117), the server's own SDP
+        //      offers carry `a=rtpmap:116 H265/90000`, and pkg/sfu/forwarder.go
+        //      brackets MimeTypeH265 with H264 on the simulcast layer selector.
+        //      No server-side change is needed — nor possible: enabled_codecs
+        //      is an on/off filter, and setupEnabledCodecs force-inserts VP8 at
+        //      index 0 regardless of declared order.
+        //   3. `.h265` is the real spelling in the pinned fork (VideoCodec is a
+        //      class of static members: .h264/.h265/.vp8/.vp9/.av1), and
+        //      `preferredBackupCodec` only accepts a codec with isBackup==true,
+        //      which is exactly [.h264, .vp8] — so .vp8 is a legal backup.
+        // The backup is load-bearing, not decoration: LiveKit never transcodes,
+        // so a subscriber that cannot decode HEVC needs a second, VP8 stream to
+        // fall back to. If the local encoder factory has no H265 at all, the
+        // SDK degrades quietly (RTCRtpTransceiver logs "Preferred codec is not
+        // first of codecPreferences" and reorders) rather than throwing.
         let roomOptions = RoomOptions(
-            defaultVideoPublishOptions: VideoPublishOptions(preferredCodec: .vp8),
+            defaultVideoPublishOptions: VideoPublishOptions(
+                preferredCodec: .h265,
+                preferredBackupCodec: .vp8
+            ),
             defaultAudioPublishOptions: AudioPublishOptions(red: false),
             adaptiveStream: false,
             dynacast: false,
