@@ -205,7 +205,11 @@ public enum KmsPreBootstrap {
 
         // 1) Per-envelope nonce + ephemeral X25519.
         var nonce = Data(count: nonceBytes)
+        // force-unwrap safe: nonce is Data(count: nonceBytes) with
+        // nonceBytes == 16, always non-empty — baseAddress nil only for
+        // an empty buffer.
         nonce.withUnsafeMutableBytes { ptr in
+            // swiftlint:disable:next force_unwrapping
             _ = SecRandomCopyBytes(kSecRandomDefault, nonceBytes, ptr.baseAddress!)
         }
         let ephPriv = Curve25519.KeyAgreement.PrivateKey()

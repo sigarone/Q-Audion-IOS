@@ -131,11 +131,16 @@ public enum NfcSasComputation {
 }
 
 private extension Data {
+    // force-unwrap safe: this init is `private` (file-scoped) and, within
+    // this file, only ever called with the 8 hardcoded literal hex strings
+    // above (each verified even-length, valid hex) — never with network/
+    // peer-controlled input. Not a general-purpose hex decoder.
     init(hex: String) {
         var out = Data(capacity: hex.count / 2)
         var idx = hex.startIndex
         while idx < hex.endIndex {
             let next = hex.index(idx, offsetBy: 2)
+            // swiftlint:disable:next force_unwrapping
             out.append(UInt8(hex[idx..<next], radix: 16)!)
             idx = next
         }

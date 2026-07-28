@@ -99,13 +99,18 @@ public struct ZeroKnowledgeAuth {
                                outputByteCount: 32)
     }
 
+    // force-unwraps below are safe: `secureRandom` is `private` and both
+    // call sites in this file pass a fixed `count: 32` — buf.baseAddress
+    // is only nil for an empty buffer, which never happens here.
     private func secureRandom(count: Int) -> Data {
         var data = Data(count: count)
         data.withUnsafeMutableBytes { buf in
             #if canImport(Security)
+            // swiftlint:disable:next force_unwrapping
             _ = SecRandomCopyBytes(kSecRandomDefault, count, buf.baseAddress!)
             #else
             let fd = open("/dev/urandom", O_RDONLY)
+            // swiftlint:disable:next force_unwrapping
             if fd >= 0 { _ = read(fd, buf.baseAddress!, count); close(fd) }
             #endif
         }

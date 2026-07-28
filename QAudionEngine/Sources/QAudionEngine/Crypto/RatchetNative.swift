@@ -324,6 +324,9 @@ public enum RatchetNative {
     /// Read a fixed 32-byte secret out-param (the SS_xwing). `op(out32) -> QaStatus`; `nil` on error.
     private static func braidSecret(_ op: (UnsafeMutablePointer<UInt8>) -> Int32) -> Data? {
         var out = [UInt8](repeating: 0, count: 32)
+        // force-unwrap safe: out is a fixed 32-byte array, always non-empty —
+        // baseAddress is only nil for an empty buffer.
+        // swiftlint:disable:next force_unwrapping
         let st = out.withUnsafeMutableBufferPointer { mb -> Int32 in op(mb.baseAddress!) }
         guard st == 0 else { return nil }
         return Data(out)

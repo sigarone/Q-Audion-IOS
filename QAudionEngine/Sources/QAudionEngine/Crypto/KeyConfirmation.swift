@@ -115,6 +115,9 @@ public enum KeyConfirmation {
     ) -> [PskAdvertEntry] {
         guard let fps = fingerprintsHex else { return [] }
         return fps.enumerated().map { idx, fp in
+            // force-unwraps safe: short-circuit `&&` only evaluates
+            // `roles!.count`/`roles![idx]` once `roles != nil` is true.
+            // swiftlint:disable:next force_unwrapping
             let role = (roles != nil && idx < roles!.count) ? roles![idx] : 0
             return PskAdvertEntry(role: role, fingerprintHex: fp)
         }

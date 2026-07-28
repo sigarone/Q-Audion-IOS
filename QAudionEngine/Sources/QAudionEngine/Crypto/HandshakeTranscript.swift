@@ -113,6 +113,9 @@ public enum HandshakeTranscript {
         var out = Data()
         out.append(UInt8(fps.count))
         for (idx, fpHex) in fps.enumerated() {
+            // force-unwraps safe: short-circuit `&&` only evaluates
+            // `roles!.count`/`roles![idx]` once `roles != nil` is true.
+            // swiftlint:disable:next force_unwrapping
             let role = (roles != nil && idx < roles!.count) ? roles![idx] : 0
             out.append(UInt8(truncatingIfNeeded: role))
             out.append(hexFpToRaw32(fpHex))

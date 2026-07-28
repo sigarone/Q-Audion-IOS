@@ -164,6 +164,10 @@ public enum KmsTransport {
             var dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
             var ssPq: Data
             do {
+                // force-unwrap safe: parseHeader was called with
+                // kemCtBytes: ML_KEM_CT_BYTES (1568, > 0), which makes
+                // parts.kemCt guaranteed non-nil (see parseHeader's ternary).
+                // swiftlint:disable:next force_unwrapping
                 ssPq = try PqcKeyExchange().decapsulate(ciphertext: parts.kemCt!, privateKey: priv)
             } catch {
                 CryptoConstants.zeroize(&dh)
@@ -337,6 +341,10 @@ public enum KmsTransport {
         var dh = try ecdh(priv: x25519Priv, peerPub: parts.ephPub)
         var kemSs: Data
         do {
+            // force-unwrap safe: same as decryptHybrid above — parseHeader
+            // called with kemCtBytes: ML_KEM_CT_BYTES (1568) guarantees
+            // parts.kemCt is non-nil.
+            // swiftlint:disable:next force_unwrapping
             kemSs = try PqcKeyExchange().decapsulate(
                 ciphertext: parts.kemCt!,
                 privateKey: mlkemPriv

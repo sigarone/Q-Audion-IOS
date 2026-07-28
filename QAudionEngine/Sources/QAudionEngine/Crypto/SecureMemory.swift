@@ -34,8 +34,12 @@ public final class SecureBytes: @unchecked Sendable {
     public init(data: Data) {
         byteCount = data.count
         pointer = UnsafeMutableRawPointer.allocate(byteCount: byteCount, alignment: 1)
-        data.withUnsafeBytes { src in
-            pointer.copyMemory(from: src.baseAddress!, byteCount: byteCount)
+        // `src.baseAddress` is nil for an empty buffer — guard rather than
+        // force-unwrap so a zero-length `data` (this is a public API; a
+        // future caller isn't guaranteed to pass fixed-length key material)
+        // degrades to a zero-byte SecureBytes instead of crashing.
+        if let base = data.withUnsafeBytes({ $0.baseAddress }) {
+            pointer.copyMemory(from: base, byteCount: byteCount)
         }
         lockMemory()
     }

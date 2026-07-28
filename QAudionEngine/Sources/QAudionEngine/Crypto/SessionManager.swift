@@ -42,11 +42,16 @@ public final class SessionManager: @unchecked Sendable {
         let chainKeyData = chainKey.withUnsafeBytes { Data($0) }
 
         var sessionId = Data(count: 32)
+        // force-unwraps below are safe: sessionId is a fixed 32-byte
+        // buffer, always non-empty — baseAddress is only nil for an
+        // empty buffer.
         sessionId.withUnsafeMutableBytes { buffer in
             #if canImport(Security)
+            // swiftlint:disable:next force_unwrapping
             _ = SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
             #else
             let fd = open("/dev/urandom", O_RDONLY)
+            // swiftlint:disable:next force_unwrapping
             if fd >= 0 { _ = read(fd, buffer.baseAddress!, 32); close(fd) }
             #endif
         }

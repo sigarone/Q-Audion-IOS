@@ -850,6 +850,11 @@ public final class AudioCapture {
         // 2. Create the audio engine
         let engine = AVAudioEngine()
 
+        // force-unwrap safe: AVAudioFormat(commonFormat:sampleRate:channels:
+        // interleaved:) only returns nil for an invalid sample-rate/channel
+        // combination. AudioConstants.sampleRate/channels are fixed app
+        // constants (48kHz mono) — a thoroughly standard, always-valid combo.
+        // swiftlint:disable:next force_unwrapping
         let format = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
             sampleRate: Double(AudioConstants.sampleRate),

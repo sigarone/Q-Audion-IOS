@@ -300,7 +300,10 @@ public enum RecoveryMnemonic {
         var words: [String] = []
         let count = wordList.count
         var randomBuffer = [UInt8](repeating: 0, count: 12 * 2)
+        // force-unwrap safe: randomBuffer is a fixed 24-byte array, always
+        // non-empty — baseAddress is only nil for an empty buffer.
         _ = randomBuffer.withUnsafeMutableBufferPointer { buf in
+            // swiftlint:disable:next force_unwrapping
             SecRandomCopyBytes(kSecRandomDefault, buf.count, buf.baseAddress!)
         }
         for i in 0..<12 {

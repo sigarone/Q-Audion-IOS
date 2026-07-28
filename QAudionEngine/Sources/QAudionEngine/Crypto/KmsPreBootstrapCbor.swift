@@ -406,9 +406,16 @@ public enum KmsPreBootstrapCbor {
         return out
     }
 
+    // force-unwraps below are safe: `"0"`/`"a"` are literal ASCII
+    // characters (.asciiValue always non-nil), and the `"0"..."9"` /
+    // `"a"..."f"` case ranges only match `c` when it is itself a
+    // single ASCII scalar in that range, so `c.asciiValue` is
+    // guaranteed non-nil too.
     private static func hexNibble(_ c: Character) -> Int? {
         switch c {
+        // swiftlint:disable:next force_unwrapping
         case "0"..."9": return Int(c.asciiValue! - Character("0").asciiValue!)
+        // swiftlint:disable:next force_unwrapping
         case "a"..."f": return Int(c.asciiValue! - Character("a").asciiValue!) + 10
         default: return nil
         }

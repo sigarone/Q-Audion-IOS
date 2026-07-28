@@ -154,6 +154,10 @@ public enum HandshakeSigningPolicy {
             return .abort(code: "sig_invalid")
         }
         let effectiveSignatureB64 = sigV2Present ? sigV2B64 : signatureB64
+        // force-unwrap safe: line 153 already aborts when sigV2Present &&
+        // transcriptV2 == nil, so reaching here with sigV2Present == true
+        // guarantees transcriptV2 is non-nil.
+        // swiftlint:disable:next force_unwrapping
         let effectiveTranscript = sigV2Present ? transcriptV2! : transcript
 
         // --- Signature ABSENT -------------------------------------------------
