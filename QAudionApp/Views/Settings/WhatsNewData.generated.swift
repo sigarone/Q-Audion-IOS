@@ -9,10 +9,21 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.880",
+              date: "2026-07-28",
+              title: "v1.0.880",
+              bullets: [
+                "fix(calling): don't kill camera/track on glare rollback before accepting peer's video upgrade",
+                "chore(engine): bump GRDB 6.29.3 -> 7.11.0 now that CI runs Xcode 26.6",
+                "fix(ci): update ios-simulator-tests destination for Xcode 26 device list",
+                "chore(ci): upgrade every Xcode pin to 26.x, not just the release pipeline",
+                "fix(livekit): qualify ConnectionState so RoomDelegate telemetry actually fires",
+              ]),
         .init(id: "v1.0.879",
               date: "2026-07-28",
               title: "v1.0.879",
               bullets: [
+                "chore: regenerate changelog for v1.0.879",
                 "fix(build): drop read-only direction clamp on existing RTCRtpTransceiver",
               ]),
         .init(id: "v1.0.878",
@@ -143,13 +154,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.861",
                 "fix(group-call): iOS never persisted the call-derived message PSK",
-              ]),
-        .init(id: "v1.0.860",
-              date: "2026-07-26",
-              title: "v1.0.860",
-              bullets: [
-                "chore: regenerate changelog for v1.0.860",
-                "chore(guardian): delete dead combinedThreatScore fusion method",
               ]),
     ]
 }
