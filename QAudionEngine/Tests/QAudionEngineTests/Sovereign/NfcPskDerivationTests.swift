@@ -41,7 +41,7 @@ final class NfcPskDerivationTests: XCTestCase {
     // MARK: - Exact hkdfInfo bytes
 
     func testHkdfInfoBytes() {
-        let expected = "Q-Audion NFC Collaborative PSK v1".data(using: .utf8)!
+        let expected = Data("Q-Audion NFC Collaborative PSK v1".utf8)
         XCTAssertEqual(NfcPskDerivation.hkdfInfo, expected,
                        "hkdfInfo must be the UTF-8 encoding of 'Q-Audion NFC Collaborative PSK v1'")
     }

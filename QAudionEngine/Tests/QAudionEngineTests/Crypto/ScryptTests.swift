@@ -23,8 +23,8 @@ final class ScryptTests: XCTestCase {
                       "Slow scrypt KAT — set FAST_TESTS=0 to run")
 
         let key = try Scrypt.deriveKey(
-            password: "password".data(using: .utf8)!,
-            salt: "NaCl".data(using: .utf8)!,
+            password: Data("password".utf8),
+            salt: Data("NaCl".utf8),
             n: 1024, r: 8, p: 16, dkLen: 64
         )
         let expected: [UInt8] = [

@@ -73,7 +73,7 @@ final class RelayCredentialsProviderTests: XCTestCase {
 
     func testRelayServerOptionalCredentialsDecode() throws {
         // STUN-only server: no username / credential.
-        let json = "{\"urls\":[\"stun:stun.example.com\"]}".data(using: .utf8)!
+        let json = Data("{\"urls\":[\"stun:stun.example.com\"]}".utf8)
         let server = try JSONDecoder().decode(RelayServer.self, from: json)
         XCTAssertEqual(server.urls, ["stun:stun.example.com"])
         XCTAssertNil(server.username)
@@ -82,13 +82,13 @@ final class RelayCredentialsProviderTests: XCTestCase {
     }
 
     func testRelayResponseSnakeCaseDecode() throws {
-        let json = """
+        let json = Data("""
         {
           "relays": [{"urls": ["turn:r.example:3478"], "username": "u", "credential": "c", "ttl_seconds": 1800}],
           "wss_turn_url": "wss://wss-turn.example",
           "onion_address": "abc.onion"
         }
-        """.data(using: .utf8)!
+        """.utf8)
         let resp = try JSONDecoder().decode(RelayResponse.self, from: json)
         XCTAssertEqual(resp.relays.count, 1)
         XCTAssertEqual(resp.relays[0].ttl, 1800)

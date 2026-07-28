@@ -25,7 +25,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     // MARK: - register
 
     func testRegisterSendsHashUnderPhoneNumberKey() async throws {
-        StubURLProtocol.stubResponse = (200, #"{"user_id":"u-123"}"#.data(using: .utf8)!)
+        StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
         let rest = BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"))
         let api = BCryptoAccountApiImpl(rest: rest)
 
@@ -55,7 +55,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     }
 
     func testRegisterOmitsOptionalFieldsWhenNil() async throws {
-        StubURLProtocol.stubResponse = (200, #"{"user_id":"u-123"}"#.data(using: .utf8)!)
+        StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
         let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
 
         _ = try await api.register(phoneNumber: "+14155552671", password: "pw", inviteCode: nil, displayName: nil)
@@ -67,7 +67,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     }
 
     func testRegisterIncludesInviteCodeAndDisplayNameWhenProvided() async throws {
-        StubURLProtocol.stubResponse = (200, #"{"user_id":"u-123"}"#.data(using: .utf8)!)
+        StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
         let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
 
         _ = try await api.register(
@@ -88,7 +88,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         let credsJson = #"""
         {"access_token":"a","refresh_token":"r","expires_in":900,"user_id":"u","device_id":"d"}
         """#
-        StubURLProtocol.stubResponse = (200, credsJson.data(using: .utf8)!)
+        StubURLProtocol.stubResponse = (200, Data(credsJson.utf8))
         let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
 
         let hash = try PhoneHash.hash("+14155552671")

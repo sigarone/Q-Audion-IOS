@@ -8,7 +8,7 @@ import XCTest
 /// still decode, with `proto_version` defaulting to 1.
 final class KmsPendingV2DecodeTests: XCTestCase {
     func testDecodesV2Entry() throws {
-        let json = """
+        let json = Data("""
         {"keys":[{
           "key_id":"11111111-1111-1111-1111-111111111111",
           "key_name":"slot-a","fingerprint":"ab","status":"delivered",
@@ -24,7 +24,7 @@ final class KmsPendingV2DecodeTests: XCTestCase {
           "device_id":"77777777-7777-7777-7777-777777777777",
           "proto_version":2
         }]}
-        """.data(using: .utf8)!
+        """.utf8)
         let resp = try JSONDecoder().decode(PendingKeysResponse_TestProxy.self, from: json)
         let k = resp.keys[0]
         XCTAssertEqual(k.keyType, "sovereign")
@@ -41,13 +41,13 @@ final class KmsPendingV2DecodeTests: XCTestCase {
     }
 
     func testDecodesLegacyV1EntryWithDefaults() throws {
-        let json = """
+        let json = Data("""
         {"keys":[{
           "key_id":"11111111-1111-1111-1111-111111111111",
           "key_name":"slot-a","fingerprint":"ab","status":"pending",
           "encrypted_package":"AAAA","ephemeral_pubkey":"","nonce":""
         }]}
-        """.data(using: .utf8)!
+        """.utf8)
         let resp = try JSONDecoder().decode(PendingKeysResponse_TestProxy.self, from: json)
         let k = resp.keys[0]
         XCTAssertNil(k.keyClass)

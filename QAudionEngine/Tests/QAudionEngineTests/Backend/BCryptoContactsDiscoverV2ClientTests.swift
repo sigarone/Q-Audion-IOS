@@ -22,7 +22,7 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
         let pepperB64 = Data("global-pepper-xyz".utf8).base64EncodedString()
         StubProtocol.responseHandler = { _ in
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-             "{\"pepper\":\"\(pepperB64)\"}".data(using: .utf8))
+             Data("{\"pepper\":\"\(pepperB64)\"}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
             baseUrl: URL(string: "https://test")!,
@@ -37,7 +37,7 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
     func test_fetchPepper_emptyPepperThrows() async {
         StubProtocol.responseHandler = { _ in
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-             "{\"pepper\":\"\"}".data(using: .utf8))
+             Data("{\"pepper\":\"\"}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
             baseUrl: URL(string: "https://test")!,
@@ -57,7 +57,7 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
     func test_discover_decodesWrappedShape() async throws {
         StubProtocol.responseHandler = { _ in
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-             "{\"results\":[{\"hash\":\"abc\",\"user_id\":\"u-1\"},{\"hash\":\"def\"}]}".data(using: .utf8))
+             Data("{\"results\":[{\"hash\":\"abc\",\"user_id\":\"u-1\"},{\"hash\":\"def\"}]}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
             baseUrl: URL(string: "https://test")!,
@@ -73,7 +73,7 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
     func test_discover_decodesBareArray() async throws {
         StubProtocol.responseHandler = { _ in
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-             "[{\"hash\":\"x\",\"user_id\":\"u-x\"}]".data(using: .utf8))
+             Data("[{\"hash\":\"x\",\"user_id\":\"u-x\"}]".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
             baseUrl: URL(string: "https://test")!,

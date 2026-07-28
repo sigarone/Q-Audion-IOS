@@ -25,7 +25,7 @@ final class KmsAckPopEncodeTests: XCTestCase {
 
     func testAckPopResponseDecode() throws {
         // Server returns epoch as a decimal STRING too.
-        let json = #"{"verified":true,"commit":true,"epoch":"42"}"#.data(using: .utf8)!
+        let json = Data(#"{"verified":true,"commit":true,"epoch":"42"}"#.utf8)
         let r = try JSONDecoder().decode(BCryptoKmsClient.AckPopResponse.self, from: json)
         XCTAssertTrue(r.verified); XCTAssertTrue(r.commit)
         XCTAssertEqual(r.epoch, "42")

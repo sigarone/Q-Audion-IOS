@@ -42,8 +42,8 @@ public enum CryptoConstants {
     // Match qaudion-desktop/src/main/crypto/MessageCrypto.ts and pairwise PSK derivation.
     public static let HKDF_INFO_MSG_KEY: Data = HkdfLabels.messageKey
     public static let HKDF_INFO_FILE_KEY: Data = HkdfLabels.fileKey
-    public static let HKDF_SALT_PAIRWISE = "qaudion-pairwise-v1".data(using: .utf8)!
-    public static let HKDF_INFO_PAIRWISE = "psk-first-contact".data(using: .utf8)!
+    public static let HKDF_SALT_PAIRWISE = Data("qaudion-pairwise-v1".utf8)
+    public static let HKDF_INFO_PAIRWISE = Data("psk-first-contact".utf8)
 
     // MARK: - Opaque Envelope
     /// HKDF salt for envelope key derivation (must match Android exactly).

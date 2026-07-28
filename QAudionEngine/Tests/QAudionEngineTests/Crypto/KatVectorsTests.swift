@@ -171,7 +171,7 @@ final class KatVectorsTests: XCTestCase {
         // Verify HKDF info label byte-for-byte
         XCTAssertEqual(
             NfcPskDerivation.hkdfInfo,
-            "Q-Audion NFC Collaborative PSK v1".data(using: .utf8)!,
+            Data("Q-Audion NFC Collaborative PSK v1".utf8),
             "hkdfInfo must be exact UTF-8 of the spec string"
         )
     }

@@ -133,9 +133,9 @@ final class ContactsStoreTests: XCTestCase {
     /// should decode cleanly with pubkey=nil. Simulates that by hand-writing
     /// JSON that mirrors the pre-W14.F shape.
     func test_legacyJsonWithoutPubkey_decodesWithNilPubkey() throws {
-        let legacyJson = """
+        let legacyJson = Data("""
         [{"userId":"u-old","displayName":"Old","phoneHash":"abc","isVerified":false}]
-        """.data(using: .utf8)!
+        """.utf8)
         defaults.set(legacyJson, forKey: "qaudion.contacts.list")
         let loaded = store.load()
         XCTAssertEqual(loaded.count, 1)
@@ -174,9 +174,9 @@ final class ContactsStoreTests: XCTestCase {
     }
 
     func test_legacyJsonWithoutPresenceAuth_decodesWithNilPresenceAuthAndFloor() {
-        let legacyJson = """
+        let legacyJson = Data("""
         [{"userId":"u-old","displayName":"Old","phoneHash":"abc","isVerified":false}]
-        """.data(using: .utf8)!
+        """.utf8)
         defaults.set(legacyJson, forKey: "qaudion.contacts.list")
         let loaded = store.load()
         XCTAssertEqual(loaded.count, 1)
