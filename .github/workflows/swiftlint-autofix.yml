@@ -1,0 +1,54 @@
+# Manual, on-demand mechanical formatting cleanup for QAudionEngine.
+#
+# Runs SwiftLint's --fix (autocorrect) over the same scope as
+# engine-tests.yml's swiftlint-report job, but ONLY for rules SwiftLint can
+# safely auto-correct (comma/colon spacing, statement_position,
+# trailing_whitespace, vertical_parameter_alignment, closure_parameter_position
+# and similar whitespace/punctuation-only rules) — --fix is a no-op for
+# anything it can't correct mechanically (identifier_name, force_unwrapping,
+# cyclomatic_complexity, etc. are never touched by --fix).
+#
+# Pushes to a NEW branch, never main directly — a human reviews the diff
+# and merges deliberately, same discipline as every other change in this
+# repo. Never runs on push/PR; workflow_dispatch only, triggered when
+# someone actually wants a formatting pass.
+
+name: SwiftLint autofix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: SwiftLint --fix (mechanical formatting only)
+        uses: docker://ghcr.io/realm/swiftlint:latest
+        with:
+          args: lint --fix --config .swiftlint.yml --quiet
+
+      - name: Show what changed
+        run: |
+          git diff --stat || true
+
+      - name: Push to a new branch for review
+        run: |
+          if git diff --quiet; then
+            echo "No autocorrectable violations found — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH="swiftlint-autofix-${{ github.run_id }}"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "style: swiftlint --fix (mechanical formatting only, no semantic change)"
+          git push origin "$BRANCH"
+          echo "### SwiftLint autofix pushed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Branch: \`$BRANCH\` — review the diff and merge manually." >> "$GITHUB_STEP_SUMMARY"
