@@ -9,10 +9,22 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.882",
+              date: "2026-07-28",
+              title: "v1.0.882",
+              bullets: [
+                "fix(ci): make swiftlint-report show the real violation count, not the ~20-annotation cap",
+                "refactor(engine): extract tap-callback stages out of AudioCapture.start()",
+                "fix(ci): drop stale SPM checkout-cache fallback that masked LiveKit's AES-256 WebRTC redirect",
+                "feat(engine): bump LiveKit 2.13.1-aes256-raw -> 2.15.1-aes256-raw",
+                "fix(engine): correctly position swiftlint:disable:next in OpusCodec",
+                "chore(engine): split diagnostic-counter methods into an extension",
+              ]),
         .init(id: "v1.0.881",
               date: "2026-07-28",
               title: "v1.0.881",
               bullets: [
+                "chore: regenerate changelog for v1.0.881",
                 "fix(ci): silence two build warnings (Sendable restate, dead try?)",
                 "chore(engine): fix SwiftLint identifier_name/colon findings in Audio/",
                 "chore(engine): document + suppress known-safe force-unwraps in OpusCodec",
@@ -149,13 +161,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.863",
                 "fix(bugreport): port iOS bug reports to the E2EE ticketing pipeline",
-              ]),
-        .init(id: "v1.0.862",
-              date: "2026-07-27",
-              title: "v1.0.862",
-              bullets: [
-                "chore: regenerate changelog for v1.0.862",
-                "fix(group-call): await previous SFU room disconnect before rejoining",
               ]),
     ]
 }
