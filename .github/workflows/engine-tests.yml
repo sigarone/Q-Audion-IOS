@@ -99,8 +99,24 @@ jobs:
           path: |
             ~/Library/Caches/org.swift.swiftpm
             QAudionEngine/.build
-          key: ios-sim-spm-v1-${{ hashFiles('QAudionEngine/Package.swift') }}
-          restore-keys: ios-sim-spm-v1-
+          # Bumped to v2 2026-07-28 (LiveKit 2.13->2.15 bump) and dropped the
+          # restore-keys prefix fallback on purpose: SPM's local checkout
+          # cache is keyed by package IDENTITY (repo name), not URL. The old
+          # v1- prefix fallback restored a stale checkout for the
+          # "webrtc-xcframework" identity from a PRIOR resolution whose
+          # manifest pointed at livekit's upstream URL, and SPM kept
+          # `git fetch`-ing that same checkout's already-configured (wrong)
+          # remote even after this Package.swift's transitive redirect
+          # changed to sigarone's AES-256 fork — confirmed live (run
+          # 30344495020: resolved "LiveKitWebRTC: .../livekit/
+          # webrtc-xcframework.git @ 144.7559.10" instead of the sigarone
+          # fork; sigarone/webrtc-xcframework was never even considered as a
+          # candidate). A prefix-fallback hit on an exact-key MISS is exactly
+          # the scenario that can resurrect this: any future fork-URL swap
+          # under an unchanged package identity would silently reintroduce
+          # it. Exact-key-only means a genuine Package.swift change always
+          # gets a fully fresh resolve — slower on that one run, never stale.
+          key: ios-sim-spm-v2-${{ hashFiles('QAudionEngine/Package.swift') }}
 
       - name: Show Xcode version
         run: xcodebuild -version
