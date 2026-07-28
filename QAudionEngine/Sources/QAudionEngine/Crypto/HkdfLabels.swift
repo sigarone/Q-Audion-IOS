@@ -18,22 +18,22 @@ public enum HkdfLabels {
     // MARK: - Info strings (UTF-8)
 
     /// Per-pair message conversation key. Used by `MessageCrypto`.
-    public static let messageKey: Data = "q-audion-msg-key".data(using: .utf8)!
+    public static let messageKey: Data = Data("q-audion-msg-key".utf8)
 
     /// Hybrid PQC session key (post ML-KEM-1024 + X25519 combined KDF).
-    public static let hybridPqcSessionKey: Data = "q-audion-session-key".data(using: .utf8)!
+    public static let hybridPqcSessionKey: Data = Data("q-audion-session-key".utf8)
 
     /// NFC collaborative pairing PSK info (§5.5). Used by `NfcPskDerivation`.
-    public static let nfcCollaborativePsk: Data = "Q-Audion NFC Collaborative PSK v1".data(using: .utf8)!
+    public static let nfcCollaborativePsk: Data = Data("Q-Audion NFC Collaborative PSK v1".utf8)
 
     /// Device-link PSK info (§5.3 row "Device-link PSK"). NOT YET IMPLEMENTED on iOS.
-    public static let deviceLinkPsk: Data = "qaudion-device-link-v1".data(using: .utf8)!
+    public static let deviceLinkPsk: Data = Data("qaudion-device-link-v1".utf8)
 
     /// Frame chain (audio) — per-frame key derivation in active calls.
-    public static let frameChainAudio: Data = "q-audion-frame-key".data(using: .utf8)!
+    public static let frameChainAudio: Data = Data("q-audion-frame-key".utf8)
 
     /// Frame chain (video) — per-frame key for video uplift (Track B.5).
-    public static let frameChainVideo: Data = "q-audion-video-frame-key".data(using: .utf8)!
+    public static let frameChainVideo: Data = Data("q-audion-video-frame-key".utf8)
 
     /// Earbud-video K_video HKDF `info` label (cross-platform `vkey-v1`).
     ///
@@ -43,17 +43,17 @@ public enum HkdfLabels {
     /// MUST be byte-identical to Android `PHONE_VIDEO_INFO` and the
     /// Desktop port — pinned by the K_video KAT (`PhoneVideoKeyKatTests`).
     /// 23 bytes, NOT null-terminated.
-    public static let phoneVideoV1: Data = "Q-AUDION-PHONE-VIDEO-V1".data(using: .utf8)!
+    public static let phoneVideoV1: Data = Data("Q-AUDION-PHONE-VIDEO-V1".utf8)
 
     /// Earbud-video K_video HKDF `salt` used when NO contact PSK is
     /// present (the only path on iOS today — iOS has no SovereignKeyVault
     /// so the contact PSK is always absent). When a PSK *is* present the
     /// 32-byte PSK replaces this salt. MUST match Android's PSK-absent
     /// salt byte-for-byte. 28 bytes, NOT null-terminated.
-    public static let phoneVideoSaltV1: Data = "Q-AUDION-PHONE-VIDEO-SALT-V1".data(using: .utf8)!
+    public static let phoneVideoSaltV1: Data = Data("Q-AUDION-PHONE-VIDEO-SALT-V1".utf8)
 
     /// Attachment encryption — per-file key derivation.
-    public static let fileKey: Data = "q-audion-file-key".data(using: .utf8)!
+    public static let fileKey: Data = Data("q-audion-file-key".utf8)
 
     /// Recovery seed → secret (BIP-39 mnemonic-derived).
     ///
@@ -64,11 +64,11 @@ public enum HkdfLabels {
     /// the call site when this label is first used — do NOT use `nil` as salt.
     /// Verified against Android `RecoveryKeyDerivation.kt` before shipping
     /// Phase B.8 implementation. Do NOT use this constant until then.
-    public static let recoveryAuth: Data = "recovery-auth-v1".data(using: .utf8)!
+    public static let recoveryAuth: Data = Data("recovery-auth-v1".utf8)
 
     /// Recovery HKDF salt — counterpart to `recoveryAuth` info.
     /// Mirrors Android `RecoveryKeyDerivation.kt` `SALT = "bcrypto-recov-v1"`.
-    public static let recoverySalt: Data = "bcrypto-recov-v1".data(using: .utf8)!
+    public static let recoverySalt: Data = Data("bcrypto-recov-v1".utf8)
 
     /// HMAC-SHA256 key (domain-separation label) used to bind the ML-KEM
     /// ciphertext into the hybrid session-key HKDF `info`. The corrected
@@ -78,16 +78,16 @@ public enum HkdfLabels {
     /// superseded). MUST be byte-identical to firmware `LABEL_CT_BIND`,
     /// Android `HYBRID_CT_BIND_LABEL`, Desktop `HYBRID_CT_BIND`.
     /// Spec: apps/qaudion-firmware/docs/CROSS_PLATFORM_HYBRID_KDF.md.
-    public static let hybridCtBindV1: Data = "q-audion-ct-bind-v1".data(using: .utf8)!
+    public static let hybridCtBindV1: Data = Data("q-audion-ct-bind-v1".utf8)
 
     // MARK: - Salts (UTF-8)
 
     /// Hybrid PQC session key salt (used as the HKDF Extract salt when no
     /// PSK is present; the PSK replaces it when one is negotiated).
-    public static let hybridPqcSaltV1: Data = "q-audion-hybrid-pqc-v1".data(using: .utf8)!
+    public static let hybridPqcSaltV1: Data = Data("q-audion-hybrid-pqc-v1".utf8)
 
     /// Device-link PSK salt (counterpart to `deviceLinkPsk` info).
-    public static let deviceLinkSalt: Data = "qaudion-link-salt".data(using: .utf8)!
+    public static let deviceLinkSalt: Data = Data("qaudion-link-salt".utf8)
 
     // MARK: - Output sizes (bytes)
 

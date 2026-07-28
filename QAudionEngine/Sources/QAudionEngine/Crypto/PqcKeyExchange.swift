@@ -38,10 +38,16 @@ public struct PqcKeyExchange {
         var publicKey = Data(count: pkSize)
         var secretKey = Data(count: skSize)
 
+        // force-unwraps below are safe: publicKey/secretKey were just allocated
+        // with pkSize/skSize, liboqs's own reported (always non-zero for a
+        // successfully-created ML-KEM-1024 kem) key sizes — baseAddress is
+        // only nil for an empty buffer.
         let result = publicKey.withUnsafeMutableBytes { pkBuf in
             secretKey.withUnsafeMutableBytes { skBuf in
                 OQS_KEM_keypair(kem,
+                    // swiftlint:disable:next force_unwrapping
                     pkBuf.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                    // swiftlint:disable:next force_unwrapping
                     skBuf.baseAddress!.assumingMemoryBound(to: UInt8.self))
             }
         }
@@ -68,12 +74,19 @@ public struct PqcKeyExchange {
         var ciphertext = Data(count: ctSize)
         var sharedSecret = Data(count: ssSize)
 
+        // force-unwraps below are safe: ciphertext/sharedSecret were just
+        // allocated with liboqs's own reported (always non-zero) sizes;
+        // remotePublicKey is checked non-empty above — baseAddress is only
+        // nil for an empty buffer.
         let result = ciphertext.withUnsafeMutableBytes { ctBuf in
             sharedSecret.withUnsafeMutableBytes { ssBuf in
                 remotePublicKey.withUnsafeBytes { pkBuf in
                     OQS_KEM_encaps(kem,
+                        // swiftlint:disable:next force_unwrapping
                         ctBuf.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                        // swiftlint:disable:next force_unwrapping
                         ssBuf.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                        // swiftlint:disable:next force_unwrapping
                         pkBuf.baseAddress!.assumingMemoryBound(to: UInt8.self))
                 }
             }
@@ -99,12 +112,19 @@ public struct PqcKeyExchange {
         let ssSize = Int(kem.pointee.length_shared_secret)
         var sharedSecret = Data(count: ssSize)
 
+        // force-unwraps below are safe: sharedSecret was just allocated with
+        // liboqs's own reported (always non-zero) size; ciphertext/privateKey
+        // are checked non-empty above — baseAddress is only nil for an empty
+        // buffer.
         let result = sharedSecret.withUnsafeMutableBytes { ssBuf in
             ciphertext.withUnsafeBytes { ctBuf in
                 privateKey.withUnsafeBytes { skBuf in
                     OQS_KEM_decaps(kem,
+                        // swiftlint:disable:next force_unwrapping
                         ssBuf.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                        // swiftlint:disable:next force_unwrapping
                         ctBuf.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                        // swiftlint:disable:next force_unwrapping
                         skBuf.baseAddress!.assumingMemoryBound(to: UInt8.self))
                 }
             }
