@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.890",
+              date: "2026-07-29",
+              title: "v1.0.890",
+              bullets: [
+                "fix(call): resolve echoed PSK selection before handing it to the K_video salt",
+              ]),
         .init(id: "v1.0.889",
               date: "2026-07-28",
               title: "v1.0.889",
               bullets: [
+                "chore: regenerate changelog for v1.0.889",
                 "fix(call): don't reuse a recvonly video transceiver -- my own W-DUPETRANSCEIVER regression",
               ]),
         .init(id: "v1.0.888",
@@ -170,13 +177,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.871",
                 "feat(call): force CXCallUpdate.hasVideo=true on all 1:1 incoming calls",
-              ]),
-        .init(id: "v1.0.870",
-              date: "2026-07-27",
-              title: "v1.0.870",
-              bullets: [
-                "chore: regenerate changelog for v1.0.870",
-                "fix(call): 1:1 ring screen unreachable, GroupCallView always won (CRITICAL)",
               ]),
     ]
 }
