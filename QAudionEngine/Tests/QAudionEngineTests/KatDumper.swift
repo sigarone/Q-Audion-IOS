@@ -50,12 +50,12 @@ final class KatDumper: XCTestCase {
 
         // ─── HKDF-SHA256 ────────────────────────────────────────────────
         let hkdfCases: [(label: String, ikm: Data, salt: Data, okmLen: Int)] = [
-            ("q-audion-msg-key",        repeatedByte(0xaa, count: 32), repeatedByte(0x11, count: 32), 32),
-            ("q-audion-frame-key",      repeatedByte(0xbb, count: 32), repeatedByte(0x22, count: 32), 32),
-            ("q-audion-video-frame-key",repeatedByte(0xcc, count: 32), repeatedByte(0x33, count: 32), 32),
-            ("q-audion-root-ratchet",   repeatedByte(0xdd, count: 32), repeatedByte(0x44, count: 32), 32),
-            ("q-audion-psk-mix",        repeatedByte(0xee, count: 32), repeatedByte(0x55, count: 32), 32),
-            ("qaudion-pairwise-v1",     repeatedByte(0xff, count: 32), repeatedByte(0x66, count: 32), 32),
+            ("q-audion-msg-key", repeatedByte(0xaa, count: 32), repeatedByte(0x11, count: 32), 32),
+            ("q-audion-frame-key", repeatedByte(0xbb, count: 32), repeatedByte(0x22, count: 32), 32),
+            ("q-audion-video-frame-key", repeatedByte(0xcc, count: 32), repeatedByte(0x33, count: 32), 32),
+            ("q-audion-root-ratchet", repeatedByte(0xdd, count: 32), repeatedByte(0x44, count: 32), 32),
+            ("q-audion-psk-mix", repeatedByte(0xee, count: 32), repeatedByte(0x55, count: 32), 32),
+            ("qaudion-pairwise-v1", repeatedByte(0xff, count: 32), repeatedByte(0x66, count: 32), 32),
         ]
 
         var hkdfEntries: [String] = []

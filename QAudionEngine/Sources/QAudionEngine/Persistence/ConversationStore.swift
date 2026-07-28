@@ -17,7 +17,7 @@ public final class ConversationStore {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .millisecondsSince1970
         self.decoder = d
-        
+
         // One-time migration from UserDefaults
         migrateIfNeeded()
     }
@@ -102,10 +102,10 @@ public final class ConversationStore {
         do {
             try db.writer.write { db in
                 if var conv = try Conversation.fetchOne(db, key: id) {
-                    let truncated = lastMessagePreview.count > 120 
-                        ? String(lastMessagePreview.prefix(120)) + "…" 
+                    let truncated = lastMessagePreview.count > 120
+                        ? String(lastMessagePreview.prefix(120)) + "…"
                         : lastMessagePreview
-                    
+
                     conv = Conversation(
                         id: conv.id,
                         peerUserId: conv.peerUserId,
@@ -511,7 +511,7 @@ public final class ConversationStore {
                 } else {
                     dict[emoji] = users
                 }
-                
+
                 msg = Message(
                     id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
                     plaintext: msg.plaintext, sentAt: msg.sentAt,
@@ -703,7 +703,7 @@ public final class ConversationStore {
             try db.writer.write { db in
                 for conv in conversations {
                     try conv.save(db)
-                    
+
                     // Migrate messages
                     if let msgData = defaults.data(forKey: ConversationStore.messagesKey(for: conv.id)),
                        let messages = try? decoder.decode([Message].self, from: msgData) {
@@ -713,14 +713,14 @@ public final class ConversationStore {
                     }
                 }
             }
-            
+
             // Clear UserDefaults only after successful migration
             print("[ConversationStore] Migration successful. Purging legacy UserDefaults.")
             for conv in conversations {
                 defaults.removeObject(forKey: ConversationStore.messagesKey(for: conv.id))
             }
             defaults.removeObject(forKey: ConversationStore.conversationsKey)
-            
+
         } catch {
             print("[ConversationStore] Migration failed: \(error). DANGER: keeping legacy data.")
         }

@@ -266,8 +266,7 @@ public final class MessageRatchet {
         wire: Data,
         aad: Data
     ) -> Data? {
-        do { return try decryptOrThrow(session: session, wire: wire, aad: aad) }
-        catch { return nil }
+        do { return try decryptOrThrow(session: session, wire: wire, aad: aad) } catch { return nil }
     }
 
     /// Diagnostic decrypt — surfaces the underlying `RatchetError`.

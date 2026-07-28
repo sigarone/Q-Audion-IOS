@@ -35,7 +35,7 @@ final class RecoverySeedViewModelTests: XCTestCase {
 
     func test_recoveryHashLength() {
         let hash = RecoverySeedViewModel.computeRecoveryHash(
-            mnemonic: ["abandon","ability","able","about","above","absent","absorb","abstract","absurd","abuse","access","accident"]
+            mnemonic: ["abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd", "abuse", "access", "accident"]
         )
         XCTAssertEqual(hash.count, 64)  // hex SHA-256
     }

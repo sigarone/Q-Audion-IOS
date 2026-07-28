@@ -27,7 +27,7 @@ final class EarbudPairKatTests: XCTestCase {
     /// eid that is unsigned-lex GREATER than eidLow. Byte 0 = 0x80.
     private let eidHigh = Data((0x80..<0xa0).map { UInt8($0) })   // 0x80..0x9f
 
-    private let fakePkSe     = Data((0..<32).map   { UInt8($0) })
+    private let fakePkSe     = Data((0..<32).map { UInt8($0) })
     private let fakeMaterial = Data((0..<1568).map { UInt8($0 % 256) })
     private let fakeCtEe     = Data((0..<1568).map { UInt8(($0 + 17) % 256) })
 
@@ -153,9 +153,9 @@ final class EarbudPairKatTests: XCTestCase {
 
     func testBuildPairBeginLayoutPkSeAtZeroMaterialAt32EidAt1600() {
         let buf = EarbudPairGatt.buildPairBegin(ownPkSe: fakePkSe, ownMaterial: fakeMaterial, ownEid: eidLow)
-        XCTAssertEqual(fakePkSe,     Data(buf[0..<32]))
+        XCTAssertEqual(fakePkSe, Data(buf[0..<32]))
         XCTAssertEqual(fakeMaterial, Data(buf[32..<1600]))
-        XCTAssertEqual(eidLow,       Data(buf[1600..<1632]))
+        XCTAssertEqual(eidLow, Data(buf[1600..<1632]))
     }
 
     // ─── EarbudPairGatt.buildPairFin vs EarbudPairTranscript.confirmHash ──────
@@ -177,9 +177,9 @@ final class EarbudPairKatTests: XCTestCase {
         guard let parsed = EarbudPairGatt.parsePairResp(payload) else {
             XCTFail("parsePairResp returned nil for valid 1632B payload"); return
         }
-        XCTAssertEqual(fakePkSe,     parsed.pkSe)
+        XCTAssertEqual(fakePkSe, parsed.pkSe)
         XCTAssertEqual(fakeMaterial, parsed.material)
-        XCTAssertEqual(eidHigh,      parsed.eid)
+        XCTAssertEqual(eidHigh, parsed.eid)
     }
 
     func testParsePairRespReturnsNilForWrongSize() {

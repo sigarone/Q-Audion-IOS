@@ -34,8 +34,7 @@ public final class PqcFrameEncryptor: NSObject {
     /// distinguish a genuine empty frame from a crypto failure (and
     /// MUST drop the frame rather than transmit plaintext).
     public func sealFrame(_ frame: Data) -> Data? {
-        do { return try sealer.seal(frame) }
-        catch {
+        do { return try sealer.seal(frame) } catch {
             let edesc: String = error.localizedDescription
             let line: String = "[PqcFrameEncryptor] seal failed: " + edesc
             print(line)
@@ -73,8 +72,7 @@ public final class PqcFrameDecryptor: NSObject {
 
     /// Engine-side open — direct entry point for non-WebRTC transports.
     public func decryptCiphertext(_ frame: Data) -> Data {
-        do { return try sealer.open(frame) }
-        catch {
+        do { return try sealer.open(frame) } catch {
             print("[PqcFrameDecryptor] open failed: \(error)")
             return Data()
         }

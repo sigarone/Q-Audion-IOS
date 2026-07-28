@@ -13,8 +13,8 @@ final class SessionKdfNegotiationTests: XCTestCase {
     }
 
     func testEitherLacksV3FallsBackToV2() {
-        XCTAssertEqual(SessionKdfNegotiation.resolve(localSupportsV3: true,  peerSupportsV3: false), .v2)
-        XCTAssertEqual(SessionKdfNegotiation.resolve(localSupportsV3: false, peerSupportsV3: true),  .v2)
+        XCTAssertEqual(SessionKdfNegotiation.resolve(localSupportsV3: true, peerSupportsV3: false), .v2)
+        XCTAssertEqual(SessionKdfNegotiation.resolve(localSupportsV3: false, peerSupportsV3: true), .v2)
         XCTAssertEqual(SessionKdfNegotiation.resolve(localSupportsV3: false, peerSupportsV3: false), .v2)
     }
 

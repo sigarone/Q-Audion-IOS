@@ -7,12 +7,12 @@ extension Conversation: FetchableRecord, PersistableRecord {
 
 extension Message: FetchableRecord, PersistableRecord {
     public static let databaseTableName = "messages"
-    
+
     // Custom mapping for reactionsJson
     public enum Columns {
         static let reactionsJson = Column("reactionsJson")
     }
-    
+
     public func encode(to container: inout PersistenceContainer) throws {
         container["id"] = id
         container["conversationId"] = conversationId
@@ -43,14 +43,14 @@ extension Message: FetchableRecord, PersistableRecord {
             container[Columns.reactionsJson] = nil
         }
     }
-    
+
     public init(row: Row) throws {
         let reactionsJson: String? = row[Columns.reactionsJson]
         let reactions: [String: [String]]? = reactionsJson.flatMap { json in
             guard let data = json.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode([String: [String]].self, from: data)
         }
-        
+
         self.init(
             id: row["id"],
             conversationId: row["conversationId"],

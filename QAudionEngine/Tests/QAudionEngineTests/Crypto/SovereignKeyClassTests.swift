@@ -13,7 +13,7 @@ import XCTest
 final class SovereignKeyClassTests: XCTestCase {
 
     func testKnownClassesParseExactly() {
-        XCTAssertEqual(SovereignKeyVault.KeyClass.parse("shared"),  .shared)
+        XCTAssertEqual(SovereignKeyVault.KeyClass.parse("shared"), .shared)
         XCTAssertEqual(SovereignKeyVault.KeyClass.parse("hw_only"), .hwOnly)
         XCTAssertEqual(SovereignKeyVault.KeyClass.parse("sw_only"), .swOnly)
     }
@@ -22,17 +22,17 @@ final class SovereignKeyClassTests: XCTestCase {
     /// a contact whose class was never recorded is a plain shared PSK, so D4
     /// (abort iff a hw_only contact yields no/!=hw_only fp) cannot misfire on it.
     func testUnknownAndNilDefaultToShared() {
-        XCTAssertEqual(SovereignKeyVault.KeyClass.parse(nil),        .shared)
-        XCTAssertEqual(SovereignKeyVault.KeyClass.parse(""),         .shared)
-        XCTAssertEqual(SovereignKeyVault.KeyClass.parse("HW_ONLY"),  .shared) // case-sensitive wire
-        XCTAssertEqual(SovereignKeyVault.KeyClass.parse("bogus"),    .shared)
+        XCTAssertEqual(SovereignKeyVault.KeyClass.parse(nil), .shared)
+        XCTAssertEqual(SovereignKeyVault.KeyClass.parse(""), .shared)
+        XCTAssertEqual(SovereignKeyVault.KeyClass.parse("HW_ONLY"), .shared) // case-sensitive wire
+        XCTAssertEqual(SovereignKeyVault.KeyClass.parse("bogus"), .shared)
     }
 
     /// The wire strings MUST equal the cross-platform contract (Android
     /// `KmsKey.keyClass`, firmware contact_meta, KmsTransport.KeyClassV2).
     func testRawValuesMatchCrossPlatformWire() {
-        XCTAssertEqual(SovereignKeyVault.KeyClass.shared.rawValue,  "shared")
-        XCTAssertEqual(SovereignKeyVault.KeyClass.hwOnly.rawValue,  "hw_only")
-        XCTAssertEqual(SovereignKeyVault.KeyClass.swOnly.rawValue,  "sw_only")
+        XCTAssertEqual(SovereignKeyVault.KeyClass.shared.rawValue, "shared")
+        XCTAssertEqual(SovereignKeyVault.KeyClass.hwOnly.rawValue, "hw_only")
+        XCTAssertEqual(SovereignKeyVault.KeyClass.swOnly.rawValue, "sw_only")
     }
 }

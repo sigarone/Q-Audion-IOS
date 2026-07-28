@@ -92,10 +92,7 @@ public struct MessageReadEnvelope: Equatable {
         guard let rid = inner["reader_id"] as? String else { throw Error.missingField("reader_id") }
 
         let ts: Int64
-        if let v = inner["read_ts"] as? Int64 { ts = v }
-        else if let v = inner["read_ts"] as? Int { ts = Int64(v) }
-        else if let v = inner["read_ts"] as? Double { ts = Int64(v) }
-        else { throw Error.missingField("read_ts") }
+        if let v = inner["read_ts"] as? Int64 { ts = v } else if let v = inner["read_ts"] as? Int { ts = Int64(v) } else if let v = inner["read_ts"] as? Double { ts = Int64(v) } else { throw Error.missingField("read_ts") }
 
         return MessageReadEnvelope(messageId: mid, readerId: rid, readTs: ts)
     }

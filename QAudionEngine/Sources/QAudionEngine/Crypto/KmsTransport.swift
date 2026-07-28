@@ -108,7 +108,7 @@ public enum KmsTransport {
     /// reused by `KmsPoPV1`. `internal` so same-module code can call it.
     static func uuidBytes(_ uuid: UUID) -> Data {
         let u = uuid.uuid
-        return Data([u.0,u.1,u.2,u.3,u.4,u.5,u.6,u.7,u.8,u.9,u.10,u.11,u.12,u.13,u.14,u.15])
+        return Data([u.0, u.1, u.2, u.3, u.4, u.5, u.6, u.7, u.8, u.9, u.10, u.11, u.12, u.13, u.14, u.15])
     }
 
     /// 8-byte big-endian uint64 (the `key_epoch(8 BE)` field).

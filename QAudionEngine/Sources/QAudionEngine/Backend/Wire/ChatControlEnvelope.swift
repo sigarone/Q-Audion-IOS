@@ -220,16 +220,16 @@ public enum ChatControlEnvelope: Equatable {
         case .delete(let target, let ts):
             var d: [String: Any] = [
                 "qa_ctl": Self.qaCtlVersion,
-                "t":      "delete",
+                "t": "delete",
                 "target": target,
             ]
             if let ts = ts { d["ts"] = ts }
             return d
         case .edit(let target, let newBody, let ts):
             var d: [String: Any] = [
-                "qa_ctl":   Self.qaCtlVersion,
-                "t":        "edit",
-                "target":   target,
+                "qa_ctl": Self.qaCtlVersion,
+                "t": "edit",
+                "target": target,
                 "new_body": newBody,
             ]
             if let ts = ts { d["ts"] = ts }
@@ -237,23 +237,23 @@ public enum ChatControlEnvelope: Equatable {
         case .reaction(let target, let emoji, let ts):
             var d: [String: Any] = [
                 "qa_ctl": Self.qaCtlVersion,
-                "t":      "reaction",
+                "t": "reaction",
                 "target": target,
-                "emoji":  emoji,
+                "emoji": emoji,
             ]
             if let ts = ts { d["ts"] = ts }
             return d
         case .screenshotRequest(let ts):
             var d: [String: Any] = [
                 "qa_ctl": Self.qaCtlVersion,
-                "t":      "ss_req",
+                "t": "ss_req",
             ]
             if let ts = ts { d["ts"] = ts }
             return d
         case .screenshotResponse(let approved, let ts):
             var d: [String: Any] = [
-                "qa_ctl":   Self.qaCtlVersion,
-                "t":        "ss_resp",
+                "qa_ctl": Self.qaCtlVersion,
+                "t": "ss_resp",
                 "approved": approved,
             ]
             if let ts = ts { d["ts"] = ts }
@@ -261,7 +261,7 @@ public enum ChatControlEnvelope: Equatable {
         case .screenshotLock(let ts):
             var d: [String: Any] = [
                 "qa_ctl": Self.qaCtlVersion,
-                "t":      "ss_lock",
+                "t": "ss_lock",
             ]
             if let ts = ts { d["ts"] = ts }
             return d

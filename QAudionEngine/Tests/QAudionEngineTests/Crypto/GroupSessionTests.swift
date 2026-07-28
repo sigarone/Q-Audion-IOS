@@ -104,7 +104,7 @@ final class GroupSessionTests: XCTestCase {
 
         let pt = Data("once".utf8)
         let r = try alice.encryptForGroup(state: aliceState, plaintext: pt)
-        let _ = try bob.decryptFromGroupOrThrow(state: bobState, senderId: "alice", wire: r.wire)
+        _ = try bob.decryptFromGroupOrThrow(state: bobState, senderId: "alice", wire: r.wire)
         // Replay the same wire — must throw.
         XCTAssertThrowsError(try bob.decryptFromGroupOrThrow(state: bobState, senderId: "alice", wire: r.wire))
     }

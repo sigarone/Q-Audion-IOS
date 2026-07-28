@@ -115,17 +115,14 @@ public enum FastSetupQrCode {
         guard let userId = dict["user_id"] as? String else { throw Error.missingField("user_id") }
 
         let dialExt: String?
-        if let s = dict["extension"] as? String { dialExt = s }
-        else { dialExt = nil }
+        if let s = dict["extension"] as? String { dialExt = s } else { dialExt = nil }
 
         guard let pskB64 = dict["psk"] as? String else { throw Error.missingField("psk") }
         guard let psk = Data(base64Encoded: pskB64) else { throw Error.base64Failed }
         guard psk.count == pskLength else { throw Error.wrongPskLength(psk.count) }
 
         let expiresAt: Int64
-        if let v = dict["expires_at"] as? Int64 { expiresAt = v }
-        else if let v = dict["expires_at"] as? Int { expiresAt = Int64(v) }
-        else if let v = dict["expires_at"] as? Double {
+        if let v = dict["expires_at"] as? Int64 { expiresAt = v } else if let v = dict["expires_at"] as? Int { expiresAt = Int64(v) } else if let v = dict["expires_at"] as? Double {
             // ROBUSTNESS: a malicious QR can carry `expires_at` as a JSON
             // number that maps to a non-finite or out-of-range Double
             // (e.g. 1e400 → +inf, NaN). `Int64(Double)` TRAPS on those,
@@ -137,8 +134,7 @@ public enum FastSetupQrCode {
                 throw Error.malformedJson("expires_at out of range")
             }
             expiresAt = Int64(v)
-        }
-        else { throw Error.missingField("expires_at") }
+        } else { throw Error.missingField("expires_at") }
 
         // Reject expired payloads.
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)

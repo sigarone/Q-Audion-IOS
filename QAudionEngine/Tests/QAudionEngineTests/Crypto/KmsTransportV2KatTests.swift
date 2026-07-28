@@ -61,7 +61,7 @@ final class KmsTransportV2KatTests: XCTestCase {
                 pkg: pkg,
                 x25519Priv: Data(hexString: v.device_x25519_priv_hex),
                 mlkemPriv: v.device_mlkem_priv_hex.map { Data(hexString: $0) },
-                mlkemPub:  v.device_mlkem_pub_hex.map  { Data(hexString: $0) },
+                mlkemPub: v.device_mlkem_pub_hex.map { Data(hexString: $0) },
                 keyId: keyId, userId: userId, deviceId: devId,
                 keyEpoch: epoch, txnId: txnId, keyClass: kc)
             XCTAssertEqual(out.psk.hexLower(), v.expected_psk_hex, "[\(v.tier)] K drift")
@@ -96,8 +96,8 @@ enum KmsKatHex {
     static func uuid(fromRawHex hex: String) -> UUID {
         let b = [UInt8](Data(hexString: hex))
         precondition(b.count == 16, "raw uuid hex must be 16 bytes")
-        return UUID(uuid: (b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],
-                           b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]))
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                           b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
     }
 }
 

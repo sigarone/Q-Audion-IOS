@@ -56,16 +56,16 @@ public final class IOSEarbudGattProxy: NSObject {
     private nonisolated(unsafe) var attestPopChar: CBCharacteristic?   // c1
     private nonisolated(unsafe) var keyImportChar: CBCharacteristic?   // c3
     private nonisolated(unsafe) var pairBeginChar: CBCharacteristic?   // c5
-    private nonisolated(unsafe) var pairRespChar:  CBCharacteristic?   // c6
-    private nonisolated(unsafe) var pairFinChar:   CBCharacteristic?   // c7
-    private nonisolated(unsafe) var fpAdvChar:     CBCharacteristic?   // c8 (Phase B)
+    private nonisolated(unsafe) var pairRespChar: CBCharacteristic?   // c6
+    private nonisolated(unsafe) var pairFinChar: CBCharacteristic?   // c7
+    private nonisolated(unsafe) var fpAdvChar: CBCharacteristic?   // c8 (Phase B)
 
     // Active continuations — at most one write and one read outstanding at a time
     // nonisolated(unsafe): set on the main actor in writeChar/readChar, resumed in
     // the nonisolated didWrite/didUpdate witnesses + failPendingOps — all on the
     // main thread, so ordering is byte-identical to the @MainActor original.
     private nonisolated(unsafe) var writeCont: CheckedContinuation<Void, Error>?
-    private nonisolated(unsafe) var readCont:  CheckedContinuation<Data, Error>?
+    private nonisolated(unsafe) var readCont: CheckedContinuation<Data, Error>?
 
     // MARK: - Init
 

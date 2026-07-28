@@ -3,20 +3,20 @@ import GRDB
 
 public struct SecurityEvent: Codable, FetchableRecord, PersistableRecord, Identifiable {
     public static let databaseTableName = "security_events"
-    
+
     public enum Kind: String, Codable {
         case reKey = "RE_KEY"
         case threat = "THREAT"
         case deepfake = "DEEPFAKE"
         case sessionStart = "SESSION_START"
     }
-    
+
     public enum Severity: String, Codable {
         case info = "INFO"
         case warning = "WARNING"
         case critical = "CRITICAL"
     }
-    
+
     public let id: String
     public let kind: Kind
     public let severity: Severity
@@ -24,7 +24,7 @@ public struct SecurityEvent: Codable, FetchableRecord, PersistableRecord, Identi
     public let details: String?
     public let confidenceScore: Double?
     public let peerUserId: String?
-    
+
     public init(id: String = UUID().uuidString,
                 kind: Kind,
                 severity: Severity,
@@ -44,11 +44,11 @@ public struct SecurityEvent: Codable, FetchableRecord, PersistableRecord, Identi
 
 public final class SecurityEventStore {
     private let db: QAudionDatabase
-    
+
     public init(db: QAudionDatabase = .shared) {
         self.db = db
     }
-    
+
     public func logEvent(_ event: SecurityEvent) {
         // SECURITY M-18 — never persist the full peer user id in the
         // local SQLite security log. Truncate to the first 8 chars
@@ -77,7 +77,7 @@ public final class SecurityEventStore {
             print("[SecurityEventStore] logEvent failed: \(error)")
         }
     }
-    
+
     public func loadRecentEvents(limit: Int = 50) -> [SecurityEvent] {
         do {
             return try db.reader.read { db in
@@ -88,7 +88,7 @@ public final class SecurityEventStore {
             return []
         }
     }
-    
+
     public func clearAll() {
         do {
             _ = try db.writer.write { db in

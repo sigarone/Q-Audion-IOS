@@ -52,8 +52,7 @@ public struct GuardianModeOverlay: View {
 
     public func updateConfidence(level: ConfidenceIndex.Level, score: Float) {
         withAnimation { confidenceLevel = level; confidenceScore = score }
-        if level == .red { withAnimation { isAlertVisible = true } }
-        else { withAnimation { isAlertVisible = false } }
+        if level == .red { withAnimation { isAlertVisible = true } } else { withAnimation { isAlertVisible = false } }
     }
 
     private func colorForLevel(_ level: ConfidenceIndex.Level) -> Color {

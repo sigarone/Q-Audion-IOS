@@ -202,7 +202,6 @@ private final class NfcExchangeDriver: ObservableObject {
         apduExchange = exchange
     }
 
-
     // MARK: - Lifecycle
 
     func start() {

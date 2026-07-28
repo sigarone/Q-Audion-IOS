@@ -48,8 +48,8 @@ final class MockCallKitManager: CallKitManaging, @unchecked Sendable {
 
     // Configurable stub responses.
     var startOutgoingCallResult: Result<UUID, Error> = .success(UUID())
-    var setMutedError: Error? = nil
-    var setOnHoldError: Error? = nil
+    var setMutedError: Error?
+    var setOnHoldError: Error?
 
     // MARK: - CallKitManaging
 

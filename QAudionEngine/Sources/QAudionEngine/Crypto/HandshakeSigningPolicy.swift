@@ -271,9 +271,7 @@ public enum HandshakeSigningPolicy {
         publishedKeySet: Set<Data>?
     ) -> Data? {
         let trustedKey: Data?
-        if let pin = pinnedKey { trustedKey = pin }
-        else if let server = serverFetchedKey { trustedKey = server }
-        else { trustedKey = bundleKey }
+        if let pin = pinnedKey { trustedKey = pin } else if let server = serverFetchedKey { trustedKey = server } else { trustedKey = bundleKey }
         if let bk = bundleKey, bk != trustedKey, isMember(bk, of: publishedKeySet) {
             return bk
         }

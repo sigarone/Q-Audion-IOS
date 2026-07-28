@@ -59,7 +59,7 @@ public enum FrameEncoder {
         let payload = data[offset..<(offset + payloadLen)]; offset += payloadLen
         let tag = data[offset..<(offset + TransportConstants.tagSize)]; offset += TransportConstants.tagSize
         let hasDeepfakeScore = (flags & TransportConstants.flagHasDeepfakeScore) != 0
-        var deepfakeScore: Float? = nil
+        var deepfakeScore: Float?
         if hasDeepfakeScore {
             guard data.count - offset >= 4 else { throw FrameEncoderError.frameTruncated }
             deepfakeScore = readFloatBigEndian(data, offset: offset); offset += 4

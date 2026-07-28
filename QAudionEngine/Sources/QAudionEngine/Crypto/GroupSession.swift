@@ -332,8 +332,7 @@ public final class GroupSession {
     /// failure / replay / unknown sender / wire malformation. Production
     /// callers should prefer this over `decryptFromGroupOrThrow`.
     public func decryptFromGroup(state: GroupState, senderId: String, wire: Data, nowMs: Int64? = nil) -> Data? {
-        do { return try decryptFromGroupOrThrow(state: state, senderId: senderId, wire: wire, nowMs: nowMs) }
-        catch { return nil }
+        do { return try decryptFromGroupOrThrow(state: state, senderId: senderId, wire: wire, nowMs: nowMs) } catch { return nil }
     }
 
     public func decryptFromGroupOrThrow(state: GroupState, senderId: String, wire: Data, nowMs: Int64? = nil) throws -> Data {

@@ -88,10 +88,10 @@ public final class BCryptoCallingApiImpl: CallingApi {
         let callType: String = hasVideo ? "video" : "audio"
         var data: [String: Any] = [
             "recipient_id": recipientId,
-            "call_id":      cid,
-            "sdp":          sdp,
-            "call_type":    callType,
-            "has_video":    hasVideo,
+            "call_id": cid,
+            "sdp": sdp,
+            "call_type": callType,
+            "has_video": hasVideo,
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         if let cd = callerDisplay, !cd.isEmpty {
@@ -156,9 +156,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
         let cid = currentCallId()
         var data: [String: Any] = [
             "recipient_id": recipientId,
-            "call_id":      cid,
-            "sdp":          sdp,
-            "has_video":    hasVideo,
+            "call_id": cid,
+            "sdp": sdp,
+            "has_video": hasVideo,
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         ws.send(type: "call_answer", data: data)
@@ -184,8 +184,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
     ) async throws {
         let cid = currentCallId()
         var data: [String: Any] = [
-            "call_id":         cid,
-            "candidate":       candidate,
+            "call_id": cid,
+            "candidate": candidate,
             "sdp_mline_index": sdpMLineIndex,
         ]
         data["sdp_mid"] = sdpMid ?? ""
@@ -203,9 +203,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
     public func sendCallReaction(targetId: String, emoji: String) async throws {
         let cid = currentCallId()
         ws.send(type: "call_reaction", data: [
-            "call_id":   cid,
+            "call_id": cid,
             "target_id": targetId,
-            "emoji":     emoji,
+            "emoji": emoji,
         ])
     }
 
@@ -219,8 +219,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ws.send(
             type: "call_hangup",
             data: [
-                "call_id":      cid,
-                "reason":       "local_hangup",  // mirrors Android CallHangup.reason
+                "call_id": cid,
+                "reason": "local_hangup",  // mirrors Android CallHangup.reason
                 "recipient_id": recipientId,     // belt-and-braces routing fallback
             ]
         )
@@ -291,10 +291,10 @@ public final class BCryptoCallingApiImpl: CallingApi {
         let callType: String = hasVideo ? "video" : "audio"
         var data: [String: Any] = [
             "recipient_id": recipientId,
-            "call_id":      callId,
-            "sdp":          sdp,
-            "call_type":    callType,
-            "has_video":    hasVideo,
+            "call_id": callId,
+            "sdp": sdp,
+            "call_type": callType,
+            "has_video": hasVideo,
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         if let cd = callerDisplay, !cd.isEmpty {
@@ -315,8 +315,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ws.send(
             type: "call_hangup",
             data: [
-                "call_id":      callId,
-                "reason":       "originator_offer_failed",
+                "call_id": callId,
+                "reason": "originator_offer_failed",
                 "recipient_id": recipientId,   // belt-and-braces routing fallback
             ]
         )
@@ -330,7 +330,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// pre-negotiation flow in cmd/bcrypto-lite/main.go (call_processing case).
     public func sendCallProcessing(callId: String, callerId: String) async throws {
         ws.send(type: "call_processing", data: [
-            "call_id":   callId,
+            "call_id": callId,
             "caller_id": callerId,
         ])
     }
@@ -340,7 +340,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// See bcrypto-server pre-negotiation flow.
     public func sendCallReady(callId: String, callerId: String) async throws {
         ws.send(type: "call_ready", data: [
-            "call_id":   callId,
+            "call_id": callId,
             "caller_id": callerId,
         ])
     }
@@ -368,10 +368,10 @@ public final class BCryptoCallingApiImpl: CallingApi {
         media: String = "camera"
     ) async throws {
         ws.send(type: "call_upgrade_request", data: [
-            "call_id":      callId,
+            "call_id": callId,
             "recipient_id": recipientId,
-            "sdp":          sdp,
-            "media":        media,
+            "sdp": sdp,
+            "media": media,
         ])
     }
 
@@ -386,10 +386,10 @@ public final class BCryptoCallingApiImpl: CallingApi {
         accepted: Bool
     ) async throws {
         ws.send(type: "call_upgrade_response", data: [
-            "call_id":      callId,
+            "call_id": callId,
             "recipient_id": recipientId,
-            "sdp":          sdp,
-            "accepted":     accepted,
+            "sdp": sdp,
+            "accepted": accepted,
         ])
     }
 
@@ -407,11 +407,11 @@ public final class BCryptoCallingApiImpl: CallingApi {
         dir: String
     ) async throws {
         ws.send(type: "call_media_ready", data: [
-            "call_id":      callId,
+            "call_id": callId,
             "recipient_id": recipientId,
-            "mid":          mid,
-            "key_epoch":    keyEpoch,
-            "dir":          dir,
+            "mid": mid,
+            "key_epoch": keyEpoch,
+            "dir": dir,
         ])
     }
 
@@ -426,7 +426,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
     ) async throws {
         guard checkKeyframeRequestRateLimit() else { return }
         ws.send(type: "video_keyframe_request", data: [
-            "call_id":      callId,
+            "call_id": callId,
             "recipient_id": recipientId,
         ])
     }
@@ -452,9 +452,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
         screen: Bool? = nil
     ) async throws {
         var payload: [String: Any] = [
-            "call_id":      callId,
+            "call_id": callId,
             "recipient_id": recipientId,
-            "paused":       paused,
+            "paused": paused,
         ]
         if let seq {
             payload["seq"] = seq

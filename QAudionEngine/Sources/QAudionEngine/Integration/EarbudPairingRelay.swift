@@ -40,7 +40,7 @@ public final class EarbudPairingRelay {
     // MARK: - Private constants
 
     private static let pairingTimeoutNS: UInt64 = 60 * 1_000_000_000
-    private static let finTimeoutNS:     UInt64 = 10 * 1_000_000_000
+    private static let finTimeoutNS: UInt64 = 10 * 1_000_000_000
 
     // MARK: - Init
 
@@ -66,8 +66,8 @@ public final class EarbudPairingRelay {
     ///                  EarbudPairingRelay lives in QAudionEngine (no app-layer imports), so
     ///                  the store dependency is injected via this closure rather than directly.
     public func pairWithPeer(
-        peerPkSe: Data,  peerMaterial: Data,  peerEid: Data,
-        ownPkSe: Data,   ownMaterial: Data,   ownEid: Data,
+        peerPkSe: Data, peerMaterial: Data, peerEid: Data,
+        ownPkSe: Data, ownMaterial: Data, ownEid: Data,
         isConfirmed: @escaping (Data) -> Bool = { _ in true }
     ) async -> PairResult {
         guard gatt.isConnected else { return .defer(reason: "earbud_not_connected") }

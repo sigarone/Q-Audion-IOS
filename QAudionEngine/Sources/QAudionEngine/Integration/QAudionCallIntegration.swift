@@ -414,7 +414,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// When `isHwOnly == true` and the negotiated `selectedFp` does NOT match
     /// `expectedFp`, `phase1DeriveSessionKey` returns `.abort("hw_only_required")`.
     /// `nil` (default) → non-hw_only path, no abort.
-    public var resolveHwOnlyContact: ((String) -> (Bool, String?))? = nil
+    public var resolveHwOnlyContact: ((String) -> (Bool, String?))?
 
     /// D4 + D6 live-call session-key derivation seam.
     ///
@@ -999,7 +999,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if !alreadyDone && currentState == .capabilitySent {
                 self.state = .fallback
                 self.lock.unlock()
-                print("[QAudionCallIntegration] Android JSON OFFER 30s timeout — no ACCEPT for callId=\(callId.prefix(8))… stashedKeys=\(self.localHybridKeysByCall.keys.map { $0.prefix(8) }.joined(separator:","))")
+                print("[QAudionCallIntegration] Android JSON OFFER 30s timeout — no ACCEPT for callId=\(callId.prefix(8))… stashedKeys=\(self.localHybridKeysByCall.keys.map { $0.prefix(8) }.joined(separator: ","))")
                 self.onStateChanged?(.fallback)
             } else {
                 self.lock.unlock()
@@ -1401,8 +1401,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             //     mixedFingerprints, the session-KDF selected_fp, the UI).
             //   * `dialect`   → mirrored in our OWN ACCEPT advertisement, which is what
             //     removes any mixed window on this leg.
-            var selectedFp: String? = nil
-            var selectedPsk: Data? = nil
+            var selectedFp: String?
+            var selectedPsk: Data?
             let resolvedAdvert = PskAdvertResolver.resolve(
                 receivedAdvert: bundle.pskFingerprints,
                 receivedRoles: bundle.pskRoles,
@@ -1493,7 +1493,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 )
                 // Write ct_bind to c8; earbud derives fp_adv in-SE.
                 // Best-effort: GATT failure → fall back to schema:2 (keyClass 0).
-                var ownFpAdv: Data? = nil
+                var ownFpAdv: Data?
                 do {
                     try await gatt.writeFpAdvSeed(ctBind)
                     let (readFpAdv, _) = try await gatt.readFpAdv()
@@ -1799,8 +1799,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 kcN = 0
                 kcMixFingerprints = []
             }
-            var kcKeyForEvent: Data? = nil
-            var kcTranscriptForEvent: Data? = nil
+            var kcKeyForEvent: Data?
+            var kcTranscriptForEvent: Data?
             if !verifiedOfferBindingV2.isEmpty, !acceptBindingV2ForKc.isEmpty,
                let ikResp = localSignerIdentityKey, let ikInit = v4PeerSik, ikInit.count == 32 {
                 // initAdvert = the OFFER's OWN advert (the initiator's, in the
@@ -2006,7 +2006,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                         using: SymmetricKey(data: HkdfLabels.hybridCtBindV1)
                     )
                 )
-                var ownFpAdv: Data? = nil
+                var ownFpAdv: Data?
                 do {
                     try await gatt.writeFpAdvSeed(ctBind)
                     let (readFpAdv, _) = try await gatt.readFpAdv()
@@ -2201,8 +2201,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 kcCallerN = 0
                 kcCallerMixFingerprints = []
             }
-            var kcCallerKeyForEvent: Data? = nil
-            var kcCallerTranscriptForEvent: Data? = nil
+            var kcCallerKeyForEvent: Data?
+            var kcCallerTranscriptForEvent: Data?
             // `v4InitPeerSik` (computed just above for the v4 bootstrap gate) is
             // the SAME decoded peer identity key KCMAC needs — reused, not
             // re-decoded.
@@ -2558,7 +2558,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
               let sig = sign(transcript), sig.count == 64 else {
             return bundle
         }
-        var sigV2B64: String? = nil
+        var sigV2B64: String?
         if let t2 = transcriptV2, let sig2 = sign(t2), sig2.count == 64 {
             sigV2B64 = sig2.base64EncodedString()
         }
@@ -3319,8 +3319,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     ) {
         let wire = CallPiggyBack.serializeFpSet(callId: callId, fpAdv: fpAdv)
         Task {
-            do { try await sendOpaqueRaw(wire) }
-            catch { print("[QAudionCallIntegration] FPSET send failed (\(callId.prefix(8))…): \(error)") }
+            do { try await sendOpaqueRaw(wire) } catch { print("[QAudionCallIntegration] FPSET send failed (\(callId.prefix(8))…): \(error)") }
         }
     }
 

@@ -71,7 +71,7 @@ public enum RatchetNative {
     ) -> UInt {
         guard available, root.count == 32, sessionEpochId.count == 16, transcriptHash.count == 32
         else { return 0 }
-        var handle: OpaquePointer? = nil
+        var handle: OpaquePointer?
         let st = root.withUnsafeBytesU8 { rPtr in
             sessionEpochId.withUnsafeBytesU8 { sPtr in
                 transcriptHash.withUnsafeBytesU8 { tPtr in
@@ -116,7 +116,7 @@ public enum RatchetNative {
     /// handle, or `0` (fail-closed) on a malformed/truncated buffer.
     public static func deserialize(_ data: Data) -> UInt {
         guard available else { return 0 }
-        var handle: OpaquePointer? = nil
+        var handle: OpaquePointer?
         let st = data.withUnsafeBytesU8Len { ptr, len in
             qa_session_deserialize(ptr, len, &handle)
         }
@@ -238,7 +238,7 @@ public enum RatchetNative {
     ) -> UInt {
         guard available, peerMlkemPk.count == 1184, peerX25519Pk.count == 32,
               mlkemSeed.count == 32, x25519Seed.count == 32, callId.count == 16 else { return 0 }
-        var handle: OpaquePointer? = nil
+        var handle: OpaquePointer?
         let st = peerMlkemPk.withUnsafeBytesU8 { pk in
             peerX25519Pk.withUnsafeBytesU8 { xpk in
                 mlkemSeed.withUnsafeBytesU8 { ms in
@@ -278,7 +278,7 @@ public enum RatchetNative {
     ) -> UInt {
         guard available, callId.count == 16, mlkemSk.count == 2400,
               x25519Secret.count == 32, x25519Pub.count == 32 else { return 0 }
-        var handle: OpaquePointer? = nil
+        var handle: OpaquePointer?
         let st = callId.withUnsafeBytesU8 { cid in
             mlkemSk.withUnsafeBytesU8 { sk in
                 x25519Secret.withUnsafeBytesU8 { xsec in

@@ -44,13 +44,13 @@ public final class SecureEnclaveManager {
         let tagData = Data(tag.utf8)
 
         let attributes: [String: Any] = [
-            kSecAttrKeyType as String:            kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeySizeInBits as String:       256,
-            kSecAttrTokenID as String:             kSecAttrTokenIDSecureEnclave,
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+            kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
             kSecPrivateKeyAttrs as String: [
-                kSecAttrIsPermanent as String:      true,
-                kSecAttrApplicationTag as String:   tagData,
-                kSecAttrAccessible as String:       kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+                kSecAttrIsPermanent as String: true,
+                kSecAttrApplicationTag as String: tagData,
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
             ] as [String: Any]
         ]
 
@@ -90,13 +90,13 @@ public final class SecureEnclaveManager {
         }
 
         let attributes: [String: Any] = [
-            kSecAttrKeyType as String:            kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeySizeInBits as String:       256,
-            kSecAttrTokenID as String:             kSecAttrTokenIDSecureEnclave,
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+            kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
             kSecPrivateKeyAttrs as String: [
-                kSecAttrIsPermanent as String:      true,
-                kSecAttrApplicationTag as String:   tagData,
-                kSecAttrAccessControl as String:    accessControl
+                kSecAttrIsPermanent as String: true,
+                kSecAttrApplicationTag as String: tagData,
+                kSecAttrAccessControl as String: accessControl
             ] as [String: Any]
         ]
 
@@ -145,9 +145,9 @@ public final class SecureEnclaveManager {
 
         // Import the remote public key as a SecKey.
         let pubKeyAttributes: [String: Any] = [
-            kSecAttrKeyType as String:        kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeyClass as String:       kSecAttrKeyClassPublic,
-            kSecAttrKeySizeInBits as String:   256
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
+            kSecAttrKeySizeInBits as String: 256
         ]
 
         var error: Unmanaged<CFError>?
@@ -197,10 +197,10 @@ public final class SecureEnclaveManager {
     private func loadKey(tag: String) throws -> SecKey {
         let tagData = Data(tag.utf8)
         let query: [String: Any] = [
-            kSecClass as String:              kSecClassKey,
+            kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: tagData,
-            kSecAttrKeyType as String:        kSecAttrKeyTypeECSECPrimeRandom,
-            kSecReturnRef as String:          true
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecReturnRef as String: true
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
@@ -214,9 +214,9 @@ public final class SecureEnclaveManager {
     private func deleteKey(tag: String) {
         let tagData = Data(tag.utf8)
         let query: [String: Any] = [
-            kSecClass as String:              kSecClassKey,
+            kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: tagData,
-            kSecAttrKeyType as String:        kSecAttrKeyTypeECSECPrimeRandom
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom
         ]
         SecItemDelete(query as CFDictionary)
     }

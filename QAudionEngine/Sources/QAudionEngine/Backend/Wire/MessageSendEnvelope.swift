@@ -67,11 +67,11 @@ public struct MessageSendEnvelope: Equatable {
 
     public func encodeAsJsonString() throws -> String {
         var inner: [String: Any] = [
-            "recipient_id":      recipientId,
+            "recipient_id": recipientId,
             "encrypted_payload": encryptedPayload.base64EncodedString(),
-            "msg_type":          msgType,
-            "client_msg_id":     clientMsgId,
-            "expires_in_sec":    expiresInSec,
+            "msg_type": msgType,
+            "client_msg_id": clientMsgId,
+            "expires_in_sec": expiresInSec,
         ]
         if let reply = replyToServerMsgId {
             inner["reply_to_server_msg_id"] = reply
@@ -115,17 +115,12 @@ public struct MessageSendEnvelope: Equatable {
         }
 
         let msgType: Int
-        if let v = inner["msg_type"] as? Int { msgType = v }
-        else if let v = inner["msg_type"] as? NSNumber { msgType = v.intValue }
-        else { msgType = 0 }
+        if let v = inner["msg_type"] as? Int { msgType = v } else if let v = inner["msg_type"] as? NSNumber { msgType = v.intValue } else { msgType = 0 }
 
         guard let clientMsgId = inner["client_msg_id"] as? String else { throw Error.missingField("client_msg_id") }
 
         let expiresInSec: Int64
-        if let v = inner["expires_in_sec"] as? Int64 { expiresInSec = v }
-        else if let v = inner["expires_in_sec"] as? Int { expiresInSec = Int64(v) }
-        else if let v = inner["expires_in_sec"] as? Double { expiresInSec = Int64(v) }
-        else { expiresInSec = 0 }
+        if let v = inner["expires_in_sec"] as? Int64 { expiresInSec = v } else if let v = inner["expires_in_sec"] as? Int { expiresInSec = Int64(v) } else if let v = inner["expires_in_sec"] as? Double { expiresInSec = Int64(v) } else { expiresInSec = 0 }
 
         let replyTo = inner["reply_to_server_msg_id"] as? String
 

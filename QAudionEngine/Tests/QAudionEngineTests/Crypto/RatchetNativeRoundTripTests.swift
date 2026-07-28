@@ -23,8 +23,8 @@ final class RatchetNativeRoundTripTests: XCTestCase {
     private let th2      = Data(repeating: 0x50, count: 32)
 
     // Handles freed in tearDown so they're released even on test failure.
-    private var handleA:  UInt = 0
-    private var handleB:  UInt = 0
+    private var handleA: UInt = 0
+    private var handleB: UInt = 0
     private var handleB2: UInt = 0
 
     override func tearDown() {
@@ -102,7 +102,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
         handleA  = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         handleB2 = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
 
-        XCTAssertTrue(RatchetNative.dhRatchet(handleA,  ssXwing: ss2, transcriptHash: th2))
+        XCTAssertTrue(RatchetNative.dhRatchet(handleA, ssXwing: ss2, transcriptHash: th2))
         XCTAssertTrue(RatchetNative.dhRatchet(handleB2, ssXwing: ss2, transcriptHash: th2))
 
         for i in 0..<10 {
@@ -180,7 +180,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
         handleA  = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         handleB2 = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
         let callId = Data("call-determinism".utf8)
-        let keyA = RatchetNative.mediaKey(handleA,  callId: callId)
+        let keyA = RatchetNative.mediaKey(handleA, callId: callId)
         let keyB = RatchetNative.mediaKey(handleB2, callId: callId)
         XCTAssertNotNil(keyA); XCTAssertNotNil(keyB)
         XCTAssertEqual(keyA, keyB, "both peers must derive identical media key")

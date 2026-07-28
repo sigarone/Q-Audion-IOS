@@ -130,8 +130,7 @@ public final class LfccExtractor {
             for k in 0..<nfft {
                 let freq = Float(k) * maxFreq / Float(nfft)
                 var weight: Float = 0
-                if freq >= lo && freq < center { weight = (freq - lo) / (center - lo) }
-                else if freq >= center && freq <= hi { weight = (hi - freq) / (hi - center) }
+                if freq >= lo && freq < center { weight = (freq - lo) / (center - lo) } else if freq >= center && freq <= hi { weight = (hi - freq) / (hi - center) }
                 energies[f] += spectrum[k] * weight
             }
         }

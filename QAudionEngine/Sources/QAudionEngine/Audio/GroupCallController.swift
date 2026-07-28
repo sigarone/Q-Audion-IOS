@@ -655,8 +655,7 @@ public final class GroupCallController: @unchecked Sendable {
             self.onManagerStateChanged?(s)
             switch s {
             case .creating:
-                if case .connecting = self.state { /* keep */ }
-                else if let cid = self.manager.callId {
+                if case .connecting = self.state { /* keep */ } else if let cid = self.manager.callId {
                     self.setState(.connecting(callId: cid))
                 }
             case .active:
@@ -692,8 +691,7 @@ public final class GroupCallController: @unchecked Sendable {
                         // same RemoteIO unit — this is exactly how the mirror
                         // bug in `handleSfuUnavailable` crashed a live 5-way
                         // call in `AVAudioPlayerNode.play()`.
-                        do { try self.startAudioPipeline() }
-                        catch { print("[GroupCallController] startAudioPipeline failed: \(error)") }
+                        do { try self.startAudioPipeline() } catch { print("[GroupCallController] startAudioPipeline failed: \(error)") }
                     }
                 }
             case .ended:
@@ -850,8 +848,7 @@ public final class GroupCallController: @unchecked Sendable {
                     self.sfuRoom = nil
                 }
                 await room.disconnect()
-                do { try self.startAudioPipeline() }
-                catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
+                do { try self.startAudioPipeline() } catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
             }
         }
     }
@@ -882,8 +879,7 @@ public final class GroupCallController: @unchecked Sendable {
         usingSfu = false
         lock.unlock()
         print("[GroupCallController] SFU unavailable (\(reason)) — using WS-relay mesh")
-        do { try startAudioPipeline() }
-        catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
+        do { try startAudioPipeline() } catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
     }
 
     /// W-GRPVIDEO: mid-call camera on/off. No-op unless the call is

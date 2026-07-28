@@ -85,7 +85,7 @@ final class CanonicalCborTests: XCTestCase {
         // Mix of 1- and 2-byte keys. Length-first sort puts short keys first.
         let v: CanonicalCbor.Value = .map([
             ("zz", .uint(2)),     // 2-byte key
-            ("a",  .uint(1)),     // 1-byte key
+            ("a", .uint(1)),     // 1-byte key
             ("aa", .uint(3)),     // 2-byte
         ])
         let bytes = CanonicalCbor.encode(v)

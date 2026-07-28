@@ -230,7 +230,7 @@ public enum QAudionCapabilityExchange {
 
         case .accept:
             // For ACCEPT, ciphertext is in the KEM slot
-            var selectedFp: String? = nil
+            var selectedFp: String?
             if pskOffset + 2 <= data.count {
                 let fpCount = Int(readUInt16BE(data, offset: pskOffset))
                 if fpCount > 0 {

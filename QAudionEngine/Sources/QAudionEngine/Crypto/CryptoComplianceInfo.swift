@@ -46,18 +46,18 @@ public struct CryptoComplianceInfo {
     /// Get the full compliance report as a dictionary, suitable for logging or audit export.
     public static func complianceReport() -> [String: String] {
         return [
-            "pqc_standard":      pqcStandard,
-            "aead_standard":     aeadStandard,
-            "kdf_standard":      kdfStandard,
-            "crypto_module":     cryptoModule,
-            "hardware_module":   hardwareModule,
-            "classical_kex":     classicalKex,
-            "hybrid_kex":        hybridKex,
-            "security_level":    securityLevel,
-            "forward_secrecy":   forwardSecrecy,
-            "sep_available":     SecureEnclaveManager.isAvailable ? "true" : "false",
-            "fips_mode":         CryptoConstants.fipsMode ? "enabled" : "disabled",
-            "hybrid_pqc":        CryptoConstants.hybridPqcEnabled ? "enabled" : "disabled"
+            "pqc_standard": pqcStandard,
+            "aead_standard": aeadStandard,
+            "kdf_standard": kdfStandard,
+            "crypto_module": cryptoModule,
+            "hardware_module": hardwareModule,
+            "classical_kex": classicalKex,
+            "hybrid_kex": hybridKex,
+            "security_level": securityLevel,
+            "forward_secrecy": forwardSecrecy,
+            "sep_available": SecureEnclaveManager.isAvailable ? "true" : "false",
+            "fips_mode": CryptoConstants.fipsMode ? "enabled" : "disabled",
+            "hybrid_pqc": CryptoConstants.hybridPqcEnabled ? "enabled" : "disabled"
         ]
     }
 

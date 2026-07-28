@@ -245,7 +245,7 @@ final class KatVectorsTests: XCTestCase {
             let userId      = try XCTUnwrap(v["user_id"]       as? String, "Missing user_id")
             let authCodeHex = try XCTUnwrap(v["auth_code_hex"] as? String, "Missing auth_code_hex")
 
-            let pubkey   = try XCTUnwrap(fromHex(pubkeyHex),   "pubkey_hex not valid hex")
+            let pubkey   = try XCTUnwrap(fromHex(pubkeyHex), "pubkey_hex not valid hex")
             let authCode = try XCTUnwrap(fromHex(authCodeHex), "auth_code_hex not valid hex")
 
             // 1. Encode blob
@@ -279,8 +279,8 @@ final class KatVectorsTests: XCTestCase {
 
             // 5. Round-trip decode
             let decoded = try DeviceLinkBinaryQR.decode(url: url)
-            XCTAssertEqual(decoded.pubkey,   pubkey,   "DeviceLinkBinaryQR round-trip: pubkey mismatch")
-            XCTAssertEqual(decoded.userId,   userId,   "DeviceLinkBinaryQR round-trip: userId mismatch")
+            XCTAssertEqual(decoded.pubkey, pubkey, "DeviceLinkBinaryQR round-trip: pubkey mismatch")
+            XCTAssertEqual(decoded.userId, userId, "DeviceLinkBinaryQR round-trip: userId mismatch")
             XCTAssertEqual(decoded.authCode, authCode, "DeviceLinkBinaryQR round-trip: authCode mismatch")
 
             // 6. Verify exact blob layout bytes

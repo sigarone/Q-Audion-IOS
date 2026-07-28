@@ -237,7 +237,7 @@ public final class AudioProcessingPipeline {
     /// a user request to skip Apple's VP I/O unit (the bundled AEC +
     /// NS + AGC chain). Apple does NOT expose per-effect toggles —
     /// VP is all-or-nothing.
-    public var voiceProcessingOverride: Bool? = nil
+    public var voiceProcessingOverride: Bool?
 
     /// W574c — speaker-route AEC policy ("regola vivavoce"): when the
     /// CURRENT output route includes the built-in loudspeaker, Apple's
@@ -446,7 +446,7 @@ public final class AudioProcessingPipeline {
         lastOutputRoute = route.outputs.map { $0.portType.rawValue }.joined(separator: ",")
         lastGrantedSampleRate = session.sampleRate
         if vpioEnabled { vpioEverActiveThisCall = true }
-        if agcEnabled  { agcEverActiveThisCall = true }
+        if agcEnabled { agcEverActiveThisCall = true }
         let nowSpeaker = Self.currentRouteHasBuiltInSpeaker()
         if nowSpeaker { speakerRouteEverThisCall = true }
         noteSpeakerResidency(nowSpeaker: nowSpeaker)  // W-IOSECHO — speaker_ms
@@ -619,8 +619,7 @@ public final class AudioProcessingPipeline {
                 var vpioError: NSError?
                 var vpioSwiftError: Error?
                 let ran = QAudionRunCatchingNSException({
-                    do { try inputNode.setVoiceProcessingEnabled(true) }
-                    catch { vpioSwiftError = error }
+                    do { try inputNode.setVoiceProcessingEnabled(true) } catch { vpioSwiftError = error }
                 }, &vpioError)
                 if let nsError = vpioError {
                     print("[AudioProcessingPipeline] setVoiceProcessingEnabled raised ObjC NSException — degrading VP-IO OFF (no crash): \(nsError.localizedDescription)")
@@ -719,7 +718,6 @@ public final class AudioProcessingPipeline {
     public func applyNoiseReduction(pcmFrame: Data) -> Data {
         return pcmFrame
     }
-
 
     /// Generate comfort noise at a given level for silence periods.
     /// Delegates to the same algorithm used by `JitterBuffer` for consistency.

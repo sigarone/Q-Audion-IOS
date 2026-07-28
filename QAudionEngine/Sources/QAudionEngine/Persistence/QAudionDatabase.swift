@@ -42,12 +42,12 @@ public final class QAudionDatabase {
             fatalError("Failed to initialize database: \(error)")
         }
     }
-    
+
     // MARK: - Migrations
-    
+
     private var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
-        
+
         migrator.registerMigration("v1-initial-schema") { db in
             try db.create(table: "conversations") { t in
                 t.column("id", .text).primaryKey()
@@ -60,7 +60,7 @@ public final class QAudionDatabase {
                 t.column("kind", .text).notNull()
                 t.column("muted", .boolean).notNull().defaults(to: false)
             }
-            
+
             try db.create(table: "messages") { t in
                 t.column("id", .text).primaryKey()
                 t.column("conversationId", .text).notNull().references("conversations", onDelete: .cascade).indexed()
@@ -80,7 +80,7 @@ public final class QAudionDatabase {
                 t.column("deletedAt", .datetime)
                 t.column("reactionsJson", .text) // Map encoded as JSON
             }
-            
+
             try db.create(table: "security_events") { t in
                 t.column("id", .text).primaryKey()
                 t.column("kind", .text).notNull() // RE_KEY, THREAT, DEEPFAKE, SESSION_START
@@ -91,7 +91,7 @@ public final class QAudionDatabase {
                 t.column("peerUserId", .text)
             }
         }
-        
+
         migrator.registerMigration("v2-ephemeral-timers") { db in
             try db.alter(table: "messages") { t in
                 t.add(column: "expiresAt", .datetime)
@@ -129,9 +129,9 @@ public final class QAudionDatabase {
 
         return migrator
     }
-    
+
     // MARK: - Access
-    
+
     public var reader: DatabaseReader { dbQueue }
     public var writer: DatabaseWriter { dbQueue }
 }

@@ -17,7 +17,7 @@ public final class GuardianMode: @unchecked Sendable {
     private var frameCount: Int64 = 0
     private var analysisRate: Int = 5  // analyze every Nth frame
     private var redThreshold: Float = ConfidenceIndex.redThreshold
-    private var sustainedRedStartMs: Int64? = nil
+    private var sustainedRedStartMs: Int64?
     // 5 s of sustained red required before alarm — effectively impossible for genuine voice.
     // With 2.63% EER model a single misfiring inference doesn't cause an alert.
     private let sustainedRedDurationMs: Int64 = 5000

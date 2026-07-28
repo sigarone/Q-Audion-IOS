@@ -23,9 +23,9 @@ public enum EarbudPairGatt {
     ///   - ownMaterial: ML-KEM ek (1568B) when INITIATOR; ct_ee (1568B) when RESPONDER
     ///   - ownEid:     SHA-256(ownPkSe), 32 B
     public static func buildPairBegin(ownPkSe: Data, ownMaterial: Data, ownEid: Data) -> Data {
-        precondition(ownPkSe.count == 32,     "pk_se must be 32 B")
+        precondition(ownPkSe.count == 32, "pk_se must be 32 B")
         precondition(ownMaterial.count == 1568, "material must be 1568 B")
-        precondition(ownEid.count == 32,      "eid must be 32 B")
+        precondition(ownEid.count == 32, "eid must be 32 B")
         var buf = Data(capacity: EarbudGattConstants.EE_PAIR_MSG_LEN)
         buf.append(ownPkSe)
         buf.append(ownMaterial)
@@ -71,9 +71,9 @@ public enum EarbudPairGatt {
     public static func parsePairResp(_ payload: Data) -> ParsedPairResp? {
         guard payload.count == EarbudGattConstants.EE_PAIR_MSG_LEN else { return nil }
         return ParsedPairResp(
-            pkSe:     Data(payload[0..<32]),
+            pkSe: Data(payload[0..<32]),
             material: Data(payload[32..<1600]),
-            eid:      Data(payload[1600..<1632])
+            eid: Data(payload[1600..<1632])
         )
     }
 }

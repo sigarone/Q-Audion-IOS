@@ -17,10 +17,7 @@ public enum TrustAnchor {
         if debug { issues.append("Debug build detected") }
         if jailbreak { issues.append("Jailbreak detected") }
         let level: TrustReport.TrustLevel
-        if jailbreak { level = .compromised }
-        else if debug { level = .suspicious }
-        else if issues.isEmpty { level = .verified }
-        else { level = .unknown }
+        if jailbreak { level = .compromised } else if debug { level = .suspicious } else if issues.isEmpty { level = .verified } else { level = .unknown }
         return TrustReport(level: level, isDebugBuild: debug, isJailbroken: jailbreak,
             bundleHash: getBundleHash(), issues: issues)
     }

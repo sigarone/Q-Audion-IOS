@@ -230,9 +230,7 @@ public final class DeviceLinkingProtocol {
             .replacingOccurrences(of: "_", with: "/")
         // Re-pad to a multiple of 4.
         let mod = t.count % 4
-        if mod == 2 { t += "==" }
-        else if mod == 3 { t += "=" }
-        else if mod == 1 { return nil }
+        if mod == 2 { t += "==" } else if mod == 3 { t += "=" } else if mod == 1 { return nil }
         return Data(base64Encoded: t)
     }
 }

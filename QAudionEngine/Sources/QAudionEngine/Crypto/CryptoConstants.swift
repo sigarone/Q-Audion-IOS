@@ -150,7 +150,7 @@ public enum CryptoConstants {
     /// backing store, not a throwaway copy.
     public static func zeroize(_ data: inout Data) {
         data.withUnsafeMutableBytes { buffer in
-            guard let baseAddress = buffer.baseAddress, buffer.count > 0 else { return }
+            guard let baseAddress = buffer.baseAddress, !buffer.isEmpty else { return }
             #if canImport(Darwin)
             memset_s(baseAddress, buffer.count, 0, buffer.count)
             #else

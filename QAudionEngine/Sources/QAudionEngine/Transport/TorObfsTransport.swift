@@ -172,7 +172,7 @@ public final class TorObfsTransport: @unchecked Sendable {
     /// Check if a SOCKS5 proxy is accepting connections on localhost.
     private func probeOrbot(port: Int) async -> Bool {
         return await withCheckedContinuation { cont in
-            var probeConnection: URLSessionDataTask? = nil
+            var probeConnection: URLSessionDataTask?
             let cfg = URLSessionConfiguration.ephemeral
             cfg.timeoutIntervalForRequest = 2
             // A plain TCP probe: we just try to open a connection.

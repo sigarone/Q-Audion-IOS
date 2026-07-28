@@ -63,6 +63,6 @@ final class NfcPskDerivationTests: XCTestCase {
         // Placeholder — the actual expected_psk value will be inserted after
         // Android smoke-test confirms the derivation. See cross_platform_vectors.json
         // "nfc_psk_v1" block for the slot.
-        let _ = try NfcPskDerivation.derivePsk(myPriv: aPriv, peerPub: bPriv.publicKey)
+        _ = try NfcPskDerivation.derivePsk(myPriv: aPriv, peerPub: bPriv.publicKey)
     }
 }

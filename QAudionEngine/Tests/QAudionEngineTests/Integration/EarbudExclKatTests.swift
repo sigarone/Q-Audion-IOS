@@ -115,8 +115,8 @@ final class EarbudExclKatTests: XCTestCase {
         let eidB     = Data(hex: vec.earbud_id_B_hex)
         let expected = Data(hex: vec.pair_id_hex)
 
-        XCTAssertEqual(32, eidA.count,     "earbud_id_A must be 32 bytes")
-        XCTAssertEqual(32, eidB.count,     "earbud_id_B must be 32 bytes")
+        XCTAssertEqual(32, eidA.count, "earbud_id_A must be 32 bytes")
+        XCTAssertEqual(32, eidB.count, "earbud_id_B must be 32 bytes")
         XCTAssertEqual(32, expected.count, "pair_id must be 32 bytes")
 
         let got = EarbudPairTranscript.pairId(eidA: eidA, eidB: eidB)

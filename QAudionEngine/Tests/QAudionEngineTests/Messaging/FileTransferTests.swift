@@ -208,7 +208,7 @@ final class FileTransferResumeUploadTests: XCTestCase {
         let uploadStorage = FileTransfer.StorageApi(
             uploadFile: { _, _ in "unused" },
             downloadFile: { _ in throw FileTransferError.emptyVault },
-            uploadFileWithProgress: { data, _, _, resumeCtx in
+            uploadFileWithProgress: { _, _, _, resumeCtx in
                 capturedFileId = "minted-file-1"
                 resumeCtx?.onFileIdMinted(capturedFileId)
                 return capturedFileId

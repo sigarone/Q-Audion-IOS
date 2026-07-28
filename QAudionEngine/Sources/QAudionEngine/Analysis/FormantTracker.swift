@@ -11,7 +11,7 @@ public final class FormantTracker {
         let coeffs = computeLPC(samples, order: lpcOrder)
         let roots = findFormantFrequencies(coeffs, sampleRate: 48000)
         return VoiceAnalysisResult.Formants(
-            f1: roots.count > 0 ? roots[0] : 0,
+            f1: !roots.isEmpty ? roots[0] : 0,
             f2: roots.count > 1 ? roots[1] : 0,
             f3: roots.count > 2 ? roots[2] : 0,
             f4: roots.count > 3 ? roots[3] : 0

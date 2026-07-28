@@ -26,7 +26,7 @@ final class KmsTransportV2Tests: XCTestCase {
         XCTAssertEqual(aad.last, 0x02)
         // key_epoch is bytes [61..<69) big-endian
         let epochSlice = aad.subdata(in: (13+16+16+16)..<(13+16+16+16+8))
-        XCTAssertEqual(Array(epochSlice), [0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08])
+        XCTAssertEqual(Array(epochSlice), [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
     }
 
     func testKeyClassByteMapping() {
@@ -49,7 +49,7 @@ final class KmsTransportV2Tests: XCTestCase {
 
     func testV2Classical_RoundTrip_AndWrapSecret() throws {
         let psk = Data((0..<32).map { UInt8($0 ^ 0x5A) })
-        let (kid,uid,did,epoch,txn,kc) = aadFixture()
+        let (kid, uid, did, epoch, txn, kc) = aadFixture()
         let dev = Curve25519.KeyAgreement.PrivateKey()
         let eph = Curve25519.KeyAgreement.PrivateKey()
         let dh = try eph.sharedSecretFromKeyAgreement(
@@ -79,7 +79,7 @@ final class KmsTransportV2Tests: XCTestCase {
 
     func testV2Hybrid_RoundTrip_AndWrapSecret() throws {
         let psk = Data((0..<32).map { UInt8($0 ^ 0x33) })
-        let (kid,uid,did,epoch,txn,_) = aadFixture()
+        let (kid, uid, did, epoch, txn, _) = aadFixture()
         let kc = KmsTransport.KeyClassV2.hwOnly
         let dev = Curve25519.KeyAgreement.PrivateKey()
         let eph = Curve25519.KeyAgreement.PrivateKey()
@@ -116,7 +116,7 @@ final class KmsTransportV2Tests: XCTestCase {
 
     func testV2_AadTamperRejects() throws {
         let psk = Data(repeating: 0xAB, count: 32)
-        let (kid,uid,did,epoch,txn,kc) = aadFixture()
+        let (kid, uid, did, epoch, txn, kc) = aadFixture()
         let dev = Curve25519.KeyAgreement.PrivateKey()
         let eph = Curve25519.KeyAgreement.PrivateKey()
         let dh = try eph.sharedSecretFromKeyAgreement(

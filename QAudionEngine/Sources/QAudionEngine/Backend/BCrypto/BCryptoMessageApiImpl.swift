@@ -40,11 +40,11 @@ public final class BCryptoMessageApiImpl: MessageApi {
         ws.send(
             type: "msg_send",
             data: [
-                "recipient_id":      recipientId,
+                "recipient_id": recipientId,
                 "encrypted_payload": content.base64EncodedString(),
-                "msg_type":          0,         // 0 = text, 1 = media
-                "client_msg_id":     clientMsgId,
-                "expires_in_sec":    0,         // 0 = no expiry
+                "msg_type": 0,         // 0 = text, 1 = media
+                "client_msg_id": clientMsgId,
+                "expires_in_sec": 0,         // 0 = no expiry
             ]
         )
         return clientMsgId
@@ -70,7 +70,7 @@ public final class BCryptoMessageApiImpl: MessageApi {
         ws.send(
             type: "msg_read",
             data: [
-                "sender_id":   "",
+                "sender_id": "",
                 "message_ids": [messageId],
             ]
         )
@@ -84,7 +84,7 @@ public final class BCryptoMessageApiImpl: MessageApi {
         ws.send(
             type: "msg_read",
             data: [
-                "sender_id":   senderId,
+                "sender_id": senderId,
                 "message_ids": messageIds,
             ]
         )
@@ -95,7 +95,7 @@ public final class BCryptoMessageApiImpl: MessageApi {
             type: "msg_typing",
             data: [
                 "recipient_id": recipientId,
-                "is_typing":    isTyping,
+                "is_typing": isTyping,
             ]
         )
     }

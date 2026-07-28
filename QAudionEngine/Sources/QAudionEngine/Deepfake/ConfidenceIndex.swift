@@ -36,9 +36,9 @@ public final class ConfidenceIndex: @unchecked Sendable {
     public func reset() { lock.lock(); scores.removeAll(); emaScore = 0.5; lock.unlock() }
 
     private func currentLevelLocked() -> Level {
-        if emaScore >= Self.greenThreshold  { return .green }
+        if emaScore >= Self.greenThreshold { return .green }
         if emaScore >= Self.yellowThreshold { return .yellow }
-        if emaScore >= Self.redThreshold    { return .yellow }  // extra yellow band before red
+        if emaScore >= Self.redThreshold { return .yellow }  // extra yellow band before red
         return .red
     }
 }

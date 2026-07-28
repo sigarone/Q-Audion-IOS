@@ -73,12 +73,12 @@ public enum RealityPinStore {
     private static func keychainSet(account: String, value: String) {
         let data = Data(value.utf8)
         let base: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
+            kSecClass: kSecClassGenericPassword,
             kSecAttrService: keychainService,
             kSecAttrAccount: account
         ]
         let attributes: [CFString: Any] = [
-            kSecValueData:      data,
+            kSecValueData: data,
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
 
@@ -98,11 +98,11 @@ public enum RealityPinStore {
 
     private static func keychainGet(account: String) -> String? {
         let query: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
+            kSecClass: kSecClassGenericPassword,
             kSecAttrService: keychainService,
             kSecAttrAccount: account,
-            kSecReturnData:  true,
-            kSecMatchLimit:  kSecMatchLimitOne
+            kSecReturnData: true,
+            kSecMatchLimit: kSecMatchLimitOne
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)

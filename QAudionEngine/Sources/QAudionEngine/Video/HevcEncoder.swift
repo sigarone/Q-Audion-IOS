@@ -196,7 +196,7 @@ public final class HevcEncoder: @unchecked Sendable {
         frameIndex += 1
         lock.unlock()
 
-        var frameProps: CFDictionary? = nil
+        var frameProps: CFDictionary?
         if doForce {
             frameProps = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary
         }
@@ -436,7 +436,7 @@ public final class HevcEncoder: @unchecked Sendable {
             guard offset + 4 + nalLen <= totalLen else { break }
 
             var nal = Data(count: 4 + nalLen)
-            nal.withUnsafeMutableBytes { dst -> Void in
+            nal.withUnsafeMutableBytes { dst in
                 guard let dstBase = dst.baseAddress else { return }
                 // Annex-B start code.
                 dstBase.assumingMemoryBound(to: UInt8.self)[0] = 0x00

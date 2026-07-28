@@ -93,10 +93,7 @@ public struct MessageDeliveredEnvelope: Equatable {
         guard let dto = inner["delivered_to"] as? String else { throw Error.missingField("delivered_to") }
 
         let ts: Int64
-        if let v = inner["delivered_ts"] as? Int64 { ts = v }
-        else if let v = inner["delivered_ts"] as? Int { ts = Int64(v) }
-        else if let v = inner["delivered_ts"] as? Double { ts = Int64(v) }
-        else { throw Error.missingField("delivered_ts") }
+        if let v = inner["delivered_ts"] as? Int64 { ts = v } else if let v = inner["delivered_ts"] as? Int { ts = Int64(v) } else if let v = inner["delivered_ts"] as? Double { ts = Int64(v) } else { throw Error.missingField("delivered_ts") }
 
         return MessageDeliveredEnvelope(messageId: mid, deliveredTo: dto, deliveredTs: ts)
     }

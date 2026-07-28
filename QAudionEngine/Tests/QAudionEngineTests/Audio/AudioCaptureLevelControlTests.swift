@@ -376,7 +376,6 @@ final class AudioCaptureLevelControlTests: XCTestCase {
                                     "agcPeakHeadroom leaves \(dB) dBFS — this is no longer headroom, it is attenuation")
     }
 
-
     func testNeverExceedsTheCeiling() {
         var gain: Float = 1.0
         for _ in 0..<2000 {

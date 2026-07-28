@@ -54,10 +54,10 @@ final class EarbudKeyImportFragmentTests: XCTestCase {
     /// consumed by sovkey_import.c at offsets +0/+16/+32/+64).
     func testPopInputsFrameExactBytes() {
         // Distinct, recognizable byte fills so a wrong field order is caught.
-        let txn = UUID(uuid: (0xD0,0xD1,0xD2,0xD3,0xD4,0xD5,0xD6,0xD7,
-                              0xD8,0xD9,0xDA,0xDB,0xDC,0xDD,0xDE,0xDF))   // txn_id
-        let key = UUID(uuid: (0xA0,0xA1,0xA2,0xA3,0xA4,0xA5,0xA6,0xA7,
-                              0xA8,0xA9,0xAA,0xAB,0xAC,0xAD,0xAE,0xAF))   // key_id
+        let txn = UUID(uuid: (0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,
+                              0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF))   // txn_id
+        let key = UUID(uuid: (0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7,
+                              0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF))   // key_id
         let serverId = Data((0..<32).map { UInt8(0x40 + $0) })           // server_id 0x40..0x5f
         let serverNonce = Data((0..<16).map { UInt8(0xE0 + $0) })        // 0xe0..0xef
 
@@ -71,7 +71,7 @@ final class EarbudKeyImportFragmentTests: XCTestCase {
         XCTAssertEqual(b[0], 0xFF)
         XCTAssertEqual(b[1], 0xFF)
         // txn_id(16) @ +2.
-        XCTAssertEqual(Array(b[2..<18]),  (0xD0...0xDF).map { UInt8($0) })
+        XCTAssertEqual(Array(b[2..<18]), (0xD0...0xDF).map { UInt8($0) })
         // key_id(16) @ +18.
         XCTAssertEqual(Array(b[18..<34]), (0xA0...0xAF).map { UInt8($0) })
         // server_id(32) @ +34.

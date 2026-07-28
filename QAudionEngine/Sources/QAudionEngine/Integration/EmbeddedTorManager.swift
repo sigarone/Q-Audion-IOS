@@ -113,7 +113,7 @@ public actor EmbeddedTorManager {
         let config = TORConfiguration()
         config.cookieAuthentication = true
         config.dataDirectory = torDir
-        if let p = geoipPath  { config.geoipFile  = URL(fileURLWithPath: p) }
+        if let p = geoipPath { config.geoipFile  = URL(fileURLWithPath: p) }
         if let p = geoip6Path { config.geoip6File = URL(fileURLWithPath: p) }
         config.options = [
             "SocksPort": "\(assignedPort)",
@@ -156,8 +156,7 @@ public actor EmbeddedTorManager {
         for attempt in 0..<20 {
             do {
                 try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-                    do { try ctrl.connect(); c.resume() }
-                    catch { c.resume(throwing: error) }
+                    do { try ctrl.connect(); c.resume() } catch { c.resume(throwing: error) }
                 }
                 connected = true
                 break
@@ -175,15 +174,13 @@ public actor EmbeddedTorManager {
            let cookie = try? Data(contentsOf: cookieUrl) {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
                 ctrl.authenticate(with: cookie) { ok, err in
-                    if ok { c.resume() }
-                    else { c.resume(throwing: err ?? TorError.controlPortError("auth failed")) }
+                    if ok { c.resume() } else { c.resume(throwing: err ?? TorError.controlPortError("auth failed")) }
                 }
             }
         } else {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
                 ctrl.authenticate(with: Data()) { ok, err in
-                    if ok { c.resume() }
-                    else { c.resume(throwing: err ?? TorError.controlPortError("null auth failed")) }
+                    if ok { c.resume() } else { c.resume(throwing: err ?? TorError.controlPortError("null auth failed")) }
                 }
             }
         }
