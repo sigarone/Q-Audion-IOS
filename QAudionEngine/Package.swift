@@ -55,10 +55,13 @@ let package = Package(
         // SQLCipher integration is available only via CocoaPods/xcframework.
         // Using standard GRDB; iOS Data Protection (FileProtectionType) provides
         // at-rest encryption when the device is locked.
-        // GRDB 7.x requires swift-tools-version 6.1.0 (Xcode 16.3+); CI runner has
-        // Xcode 16.2 (Swift tools 6.0) which is incompatible. Pin to 6.x until CI
-        // upgrades to Xcode 16.3+.
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
+        // GRDB 7.x requires swift-tools-version 6.1.0 (Xcode 16.3+). Was pinned to
+        // 6.x while CI ran Xcode 16.2; bumped 2026-07-28 now that every CI workflow
+        // builds with Xcode 26.6 (see engine-tests.yml/kat-cross-platform.yml/
+        // ios-testflight.yml). QAudionEngine's own swift-tools-version (5.9, top of
+        // this file) is unaffected — a package can depend on a higher-swift-tools-
+        // version package as long as the actual toolchain resolves it.
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0"),
         // W-GRPLIVEKIT: self-hosted LiveKit SFU for group calls (audio, +video
         // later) with native per-participant E2EE (RTCFrameCryptor). Pinned to
         // an EXACT tag (not `from:`) — same discipline as onnxruntime-spm above.
