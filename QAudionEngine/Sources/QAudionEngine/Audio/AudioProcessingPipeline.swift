@@ -392,79 +392,6 @@ public final class AudioProcessingPipeline {
     /// Read by `AudioCapture.restartEngineForRoute` to bound retries.
     public var voiceProcessingBypassCount: Int { vpioBypassCountThisCall }
 
-    /// `AudioCapture` reports here when it re-arms VP-IO after a bypass.
-    public func noteVoiceProcessingRetry() {
-        vpioRetryCountThisCall += 1
-    }
-
-    /// W-CANONICAL — AudioCapture reports the freshly-read post-enable tap
-    /// format here at every engine (re)start.
-    public func noteTapFormat(sampleRate: Double, channels: Int) {
-        lastTapSampleRate = sampleRate
-        lastTapChannels = channels
-    }
-
-    /// W-CANONICAL — AudioCapture counts mid-call engine rebuilds (route flips).
-    public func noteEngineRestart() {
-        engineRestartsThisCall += 1
-    }
-
-    /// W-AUDIODEATH (2026-07-24) — a `start()` after an engine teardown FAILED.
-    /// This is the single most important audio counter we did not have: the
-    /// engine is torn down before the restart attempt, so a failed restart
-    /// leaves `isRunning == false` and `playFrame`'s guard silently discards
-    /// every decrypted frame for the rest of the call. Before this, that state
-    /// was indistinguishable from "the peer sent nothing" in every log and
-    /// every telemetry record — the failure was only ever a `print`.
-    public func noteEngineRestartFailed() {
-        engineRestartFailuresThisCall += 1
-    }
-
-    /// W-AUDIODEATH — a decoded frame reached `playFrame` and was dropped
-    /// because the engine/player was not running. Non-zero here, with healthy
-    /// `rx_dec` counts, is the exact signature of "audio decrypts fine but the
-    /// user hears nothing", and distinguishes it from a network/crypto fault.
-    public func notePlayoutDropped() {
-        playoutDroppedThisCall += 1
-    }
-
-    /// W-AUDIODEATH — latched at teardown by `AudioCapture`, so the tuning card
-    /// can say whether the audio engine was still alive when the call ended.
-    public func noteEngineRunningAtEnd(_ running: Bool) {
-        engineRunningAtEndThisCall = running
-    }
-
-    /// W-IOSPLAYOUT — a buffer was handed to the player node, with the resulting queue
-    /// depth. `inFlightAfter` is a MAX because a mean over a call would average away the
-    /// backlog that matters; a single excursion to 15 buffers is 300 ms of standing delay
-    /// and is exactly the complaint worth explaining.
-    public func notePlayoutScheduled(inFlightAfter: Int) {
-        playoutWritesThisCall += 1
-        if inFlightAfter > playoutInFlightMaxThisCall {
-            playoutInFlightMaxThisCall = inFlightAfter
-        }
-    }
-
-    /// W-IOSPLAYOUT — a decoded frame the engine was willing to take, discarded by our own
-    /// scheduling code (allocation failure, or an output bus in a format we do not fill).
-    public func notePlayoutSchedFail() {
-        playoutSchedFailThisCall += 1
-    }
-
-    /// W-IOSPLAYOUT — a completion fired with nothing recorded as in flight. Counting it
-    /// rather than clamping silently is what keeps `playout_inflight_max` readable: a
-    /// non-zero anomaly count says "treat the depth as a lower bound".
-    public func notePlayoutLedgerAnomaly() {
-        playoutLedgerAnomaliesThisCall += 1
-    }
-
-    /// W-IOSECHO — AudioCapture.restartEngineForRoute reports here ONLY when
-    /// the restart was route-driven (see the ivar doc above for what this
-    /// deliberately excludes).
-    public func noteRouteChange() {
-        routeChangesThisCall += 1
-    }
-
     /// Pure step function for the speaker-residency accumulator: given the ms
     /// accumulated so far, whether an interval is currently open (0 = no)
     /// and since when, the newly-observed route state, and the current wall
@@ -849,6 +776,87 @@ public final class AudioProcessingPipeline {
         // AVAudioApplication is iOS 17+
         // The system handles voice isolation automatically when enabled by the user.
         #endif
+    }
+}
+
+// MARK: - Per-call diagnostic counters
+// Extracted from the main type body (kept file-private access to its stored
+// properties, same as before — Swift's `private` is file-scoped, so an
+// extension in this same file reaches them unchanged) purely to bring
+// AudioProcessingPipeline's primary declaration back under SwiftLint's
+// type_body_length limit. No behavior change.
+extension AudioProcessingPipeline {
+    /// `AudioCapture` reports here when it re-arms VP-IO after a bypass.
+    public func noteVoiceProcessingRetry() {
+        vpioRetryCountThisCall += 1
+    }
+
+    /// W-CANONICAL — AudioCapture reports the freshly-read post-enable tap
+    /// format here at every engine (re)start.
+    public func noteTapFormat(sampleRate: Double, channels: Int) {
+        lastTapSampleRate = sampleRate
+        lastTapChannels = channels
+    }
+
+    /// W-CANONICAL — AudioCapture counts mid-call engine rebuilds (route flips).
+    public func noteEngineRestart() {
+        engineRestartsThisCall += 1
+    }
+
+    /// W-AUDIODEATH (2026-07-24) — a `start()` after an engine teardown FAILED.
+    /// This is the single most important audio counter we did not have: the
+    /// engine is torn down before the restart attempt, so a failed restart
+    /// leaves `isRunning == false` and `playFrame`'s guard silently discards
+    /// every decrypted frame for the rest of the call. Before this, that state
+    /// was indistinguishable from "the peer sent nothing" in every log and
+    /// every telemetry record — the failure was only ever a `print`.
+    public func noteEngineRestartFailed() {
+        engineRestartFailuresThisCall += 1
+    }
+
+    /// W-AUDIODEATH — a decoded frame reached `playFrame` and was dropped
+    /// because the engine/player was not running. Non-zero here, with healthy
+    /// `rx_dec` counts, is the exact signature of "audio decrypts fine but the
+    /// user hears nothing", and distinguishes it from a network/crypto fault.
+    public func notePlayoutDropped() {
+        playoutDroppedThisCall += 1
+    }
+
+    /// W-AUDIODEATH — latched at teardown by `AudioCapture`, so the tuning card
+    /// can say whether the audio engine was still alive when the call ended.
+    public func noteEngineRunningAtEnd(_ running: Bool) {
+        engineRunningAtEndThisCall = running
+    }
+
+    /// W-IOSPLAYOUT — a buffer was handed to the player node, with the resulting queue
+    /// depth. `inFlightAfter` is a MAX because a mean over a call would average away the
+    /// backlog that matters; a single excursion to 15 buffers is 300 ms of standing delay
+    /// and is exactly the complaint worth explaining.
+    public func notePlayoutScheduled(inFlightAfter: Int) {
+        playoutWritesThisCall += 1
+        if inFlightAfter > playoutInFlightMaxThisCall {
+            playoutInFlightMaxThisCall = inFlightAfter
+        }
+    }
+
+    /// W-IOSPLAYOUT — a decoded frame the engine was willing to take, discarded by our own
+    /// scheduling code (allocation failure, or an output bus in a format we do not fill).
+    public func notePlayoutSchedFail() {
+        playoutSchedFailThisCall += 1
+    }
+
+    /// W-IOSPLAYOUT — a completion fired with nothing recorded as in flight. Counting it
+    /// rather than clamping silently is what keeps `playout_inflight_max` readable: a
+    /// non-zero anomaly count says "treat the depth as a lower bound".
+    public func notePlayoutLedgerAnomaly() {
+        playoutLedgerAnomaliesThisCall += 1
+    }
+
+    /// W-IOSECHO — AudioCapture.restartEngineForRoute reports here ONLY when
+    /// the restart was route-driven (see the ivar doc above for what this
+    /// deliberately excludes).
+    public func noteRouteChange() {
+        routeChangesThisCall += 1
     }
 }
 #endif
