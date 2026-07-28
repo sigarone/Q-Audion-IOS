@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.881",
+              date: "2026-07-28",
+              title: "v1.0.881",
+              bullets: [
+                "fix(ci): silence two build warnings (Sendable restate, dead try?)",
+                "chore(engine): fix SwiftLint identifier_name/colon findings in Audio/",
+                "chore(engine): document + suppress known-safe force-unwraps in OpusCodec",
+              ]),
         .init(id: "v1.0.880",
               date: "2026-07-28",
               title: "v1.0.880",
               bullets: [
+                "chore: regenerate changelog for v1.0.880",
                 "fix(calling): don't kill camera/track on glare rollback before accepting peer's video upgrade",
                 "chore(engine): bump GRDB 6.29.3 -> 7.11.0 now that CI runs Xcode 26.6",
                 "fix(ci): update ios-simulator-tests destination for Xcode 26 device list",
@@ -147,13 +156,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.862",
                 "fix(group-call): await previous SFU room disconnect before rejoining",
-              ]),
-        .init(id: "v1.0.861",
-              date: "2026-07-26",
-              title: "v1.0.861",
-              bullets: [
-                "chore: regenerate changelog for v1.0.861",
-                "fix(group-call): iOS never persisted the call-derived message PSK",
               ]),
     ]
 }
