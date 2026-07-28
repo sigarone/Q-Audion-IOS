@@ -97,8 +97,8 @@ public final class OpusCodec {
         // non-zero constant) — baseAddress is only nil for an empty buffer.
         let result = pcmFrame.withUnsafeBytes { pcmBuf in
             encoded.withUnsafeMutableBytes { outBuf in
-                // swiftlint:disable:next force_unwrapping
                 opus_encode(enc,
+                    // swiftlint:disable:next force_unwrapping
                     pcmBuf.baseAddress!.assumingMemoryBound(to: Int16.self),
                     Int32(AudioConstants.samplesPerFrame),
                     // swiftlint:disable:next force_unwrapping
@@ -122,8 +122,8 @@ public final class OpusCodec {
         // pcm was just allocated with bytesPerFrame (fixed non-zero constant).
         let result = opusFrame.withUnsafeBytes { inBuf in
             pcm.withUnsafeMutableBytes { outBuf in
-                // swiftlint:disable:next force_unwrapping
                 opus_decode(dec,
+                    // swiftlint:disable:next force_unwrapping
                     inBuf.baseAddress!.assumingMemoryBound(to: UInt8.self),
                     Int32(opusFrame.count),
                     // swiftlint:disable:next force_unwrapping
@@ -175,8 +175,8 @@ public final class OpusCodec {
         pcm.withUnsafeMutableBytes { outBuf in
             // force-unwrap safe: pcm was just allocated with bytesPerFrame
             // (fixed non-zero constant) — baseAddress is only nil when empty.
-            // swiftlint:disable:next force_unwrapping
             _ = opus_decode(dec, nil, 0,
+                // swiftlint:disable:next force_unwrapping
                 outBuf.baseAddress!.assumingMemoryBound(to: Int16.self),
                 Int32(AudioConstants.samplesPerFrame), 0)
         }
