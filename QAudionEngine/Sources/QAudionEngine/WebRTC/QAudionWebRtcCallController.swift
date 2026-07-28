@@ -926,6 +926,39 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         print("[WebRTC] video upgrade cancelled — rolled back to audio-only stable state")
     }
 
+    /// WIRE_SPEC §8.3 — glare, polite side ONLY. Roll back OUR pending
+    /// upgrade OFFER's JSEP state so the peer's colliding offer can be
+    /// applied right after — but, unlike `cancelVideoUpgrade()`, do NOT stop
+    /// the camera or remove the local video track.
+    ///
+    /// Device-confirmed (call acd516b8, 2026-07-28, camera confirmed ON):
+    /// `AppState.handleGlareCollision`'s polite branch called
+    /// `cancelVideoUpgrade()` before accepting the peer's offer, on the
+    /// assumption (its own comment: "accepting the peer's upgrade means
+    /// bidirectional video anyway") that our camera/track would survive.
+    /// `cancelVideoUpgrade()` calls `removeLocalVideoTrack()`, which calls
+    /// `pc.removeTrack(sender)` — a JSEP-level operation, not just clearing
+    /// `.track`, that marks the transceiver for a sendrecv→recvonly downgrade
+    /// on the NEXT negotiation. The immediately-following
+    /// `acceptUpgradeOffer()` → `addLocalVideoTrack()` only does
+    /// `existing.sender.track = track` (a soft reattach) on that SAME
+    /// transceiver, which cannot undo `removeTrack()`'s effect — so our own
+    /// answer to the peer's upgrade came back `recvonly` despite the camera
+    /// being on and a track being set. Skipping the camera-stop/track-remove
+    /// here makes the existing comment's assumption actually hold.
+    public func rollbackLocalVideoOfferForGlare() async {
+        guard videoUpgradeInProgress else { return }
+        if let pc = peerConnection {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                pc.rollbackLocalOffer { _ in cont.resume() }
+            }
+        }
+        hasAppliedRemoteAnswer = true
+        videoUpgradeInProgress = false
+        clearVideoTxHold()
+        print("[WebRTC] video upgrade offer rolled back for glare — camera/track kept for peer accept")
+    }
+
     // MARK: - WIRE_SPEC §8.7 — sender-side IDR forcing + TX-hold
 
     /// §8.7 TX-hold state. `true` while the LOCAL video track is held

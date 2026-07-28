@@ -4432,7 +4432,12 @@ final class AppState: ObservableObject {
                 // a PC still parked in have-local-offer (§8.3 correctness).
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
-                    await controller.cancelVideoUpgrade()
+                    // W-GLARERECVONLY (2026-07-28) — NOT cancelVideoUpgrade():
+                    // that stops the camera and removeTrack()s the sender,
+                    // which the very next accept below can't undo (see
+                    // rollbackLocalVideoOfferForGlare kdoc). Roll back only
+                    // the JSEP offer so camera/track survive into the accept.
+                    await controller.rollbackLocalVideoOfferForGlare()
                     self.acceptPendingIncomingUpgrade(pending)
                 }
                 return
