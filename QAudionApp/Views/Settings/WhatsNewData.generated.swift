@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.884",
+              date: "2026-07-28",
+              title: "v1.0.884",
+              bullets: [
+                "fix(ci): sync LiveKitBroadcast pin to 2.13.1-aes256-raw (missed in the revert)",
+              ]),
         .init(id: "v1.0.883",
               date: "2026-07-28",
               title: "v1.0.883",
               bullets: [
+                "chore: regenerate changelog for v1.0.883",
                 "fix(groupcall): revert LiveKit 2.15.1-aes256-raw -> 2.13.1-aes256-raw, breaks iOS video publish",
                 "style: fix vertical_parameter_alignment, multiple_closures_with_trailing_closure, closure_parameter_position, switch_case_alignment",
                 "fix(lint): remove 11 superfluous force_unwrapping disable comments",
@@ -169,13 +176,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.865",
                 "diag(call): instrument the answer→foreground→app-lock chain (W-CALLFG-DIAG)",
-              ]),
-        .init(id: "v1.0.864",
-              date: "2026-07-27",
-              title: "v1.0.864",
-              bullets: [
-                "chore: regenerate changelog for v1.0.864",
-                "feat(call): show the rich IncomingCallScreen for 1:1 calls too (W-1TO1RING)",
               ]),
     ]
 }
