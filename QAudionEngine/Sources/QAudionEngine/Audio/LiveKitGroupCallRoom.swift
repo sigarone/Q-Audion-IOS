@@ -688,7 +688,7 @@ extension LiveKitGroupCallRoom: RoomDelegate {
     /// `.reconnecting` that never resolves for the rest of the call is
     /// visible here, where a fixed heartbeat would simply go silent
     /// (indistinguishable from "app suspended").
-    public func room(_ room: Room, didUpdateConnectionState connectionState: ConnectionState, from oldConnectionState: ConnectionState) {
+    public func room(_ room: Room, didUpdateConnectionState connectionState: LiveKit.ConnectionState, from oldConnectionState: LiveKit.ConnectionState) {
         emitTelemetry("call.media.sfu_connection_state", [
             "state": "\(connectionState)",
             "from": "\(oldConnectionState)"

@@ -1250,7 +1250,7 @@ public final class GroupCallController: @unchecked Sendable {
               let onSend = onSendControlEnvelope else { return }
         Task {
             if await onSend(peer, selfId, json) {
-                lock.withLock { initSentTo.insert(peer) }
+                _ = lock.withLock { initSentTo.insert(peer) }
             }
         }
     }
