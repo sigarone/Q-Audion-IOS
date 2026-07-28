@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.877",
+              date: "2026-07-28",
+              title: "v1.0.877",
+              bullets: [
+                "fix(video): rebind sender/receiver cryptor after fresh-PC upgrade negotiation",
+              ]),
         .init(id: "v1.0.876",
               date: "2026-07-28",
               title: "v1.0.876",
               bullets: [
+                "chore: regenerate changelog for v1.0.876",
                 "fix(build): drop MainActor-isolated sourceMode from nonisolated log line",
               ]),
         .init(id: "v1.0.875",
@@ -140,14 +147,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.858",
                 "fix(audio): a route-change race in the jitter-buffer pump froze the phone on speaker tap (W-PLAYOUTRACE)",
-              ]),
-        .init(id: "v1.0.857",
-              date: "2026-07-26",
-              title: "v1.0.857",
-              bullets: [
-                "chore: regenerate changelog for v1.0.857",
-                "feat(audio): wire the playout jitter buffer into the live iOS path (W-IOSJITTER)",
-                "fix(telemetry): call.end shipped the wrong identifier, so \"how the call died\" was never joinable (W-ENDCALLID)",
               ]),
     ]
 }
