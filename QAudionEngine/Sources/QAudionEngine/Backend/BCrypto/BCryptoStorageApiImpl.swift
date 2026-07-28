@@ -137,12 +137,16 @@ public final class BCryptoStorageApiImpl: StorageApi {
     // MARK: - Helpers
 
     private func createMultipartBody(boundary: String, fieldName: String, fileName: String, data: Data) -> Data {
+        // Data(_:) over .utf8 rather than .data(using: .utf8)! — same
+        // reasoning as BCryptoRestClient.postMultipart: UTF-8 can encode
+        // any valid Swift String regardless of interpolated content, so
+        // this can never actually fail.
         var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n".utf8))
+        body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
         body.append(data)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
         return body
     }
 }

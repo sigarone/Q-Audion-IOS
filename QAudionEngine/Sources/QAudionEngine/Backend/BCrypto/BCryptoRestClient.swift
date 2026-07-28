@@ -94,20 +94,26 @@ public final class BCryptoRestClient {
         if let token = config.accessToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         for (key, value) in headers { req.setValue(value, forHTTPHeaderField: key) }
 
+        // Data(_:) over the interpolated strings below instead of
+        // .data(using: .utf8)! — String.utf8 (unlike .data(using:)) is a
+        // non-optional view and UTF-8 can encode any valid Swift String
+        // regardless of what boundary/key/value/field interpolate in, so
+        // this can never fail; genuinely eliminates the optional rather
+        // than just silencing the warning (same fix as HkdfLabels.swift).
         var body = Data()
         for (key, value) in fields {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(value)\r\n".data(using: .utf8)!)
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".utf8))
+            body.append(Data("\(value)\r\n".utf8))
         }
         if let field = fileField, let data = fileData {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(field)\"; filename=\"avatar.jpg\"\r\n".data(using: .utf8)!)
-            body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(field)\"; filename=\"avatar.jpg\"\r\n".utf8))
+            body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
             body.append(data)
-            body.append("\r\n".data(using: .utf8)!)
+            body.append(Data("\r\n".utf8))
         }
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        body.append(Data("--\(boundary)--\r\n".utf8))
         req.httpBody = body
 
         let (data, response) = try await session.data(for: req)
