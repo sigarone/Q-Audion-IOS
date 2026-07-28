@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.885",
+              date: "2026-07-28",
+              title: "v1.0.885",
+              bullets: [
+                "feat(groupcall): publish H.265 with VP8 backup on the SFU path (W-GRPH265)",
+                "fix(groupcall): root-cause the iOS group-video publish break, restore LiveKit 2.15.1",
+              ]),
         .init(id: "v1.0.884",
               date: "2026-07-28",
               title: "v1.0.884",
               bullets: [
+                "chore: regenerate changelog for v1.0.884",
                 "fix(ci): sync LiveKitBroadcast pin to 2.13.1-aes256-raw (missed in the revert)",
               ]),
         .init(id: "v1.0.883",
@@ -169,13 +177,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.866",
                 "feat(call): proximity screen/touch-off for 1:1 calls (W-EARTOUCH)",
-              ]),
-        .init(id: "v1.0.865",
-              date: "2026-07-27",
-              title: "v1.0.865",
-              bullets: [
-                "chore: regenerate changelog for v1.0.865",
-                "diag(call): instrument the answer→foreground→app-lock chain (W-CALLFG-DIAG)",
               ]),
     ]
 }
