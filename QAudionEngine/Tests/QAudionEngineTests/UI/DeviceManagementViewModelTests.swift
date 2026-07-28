@@ -26,6 +26,8 @@ final class DeviceManagementViewModelTests: XCTestCase {
         let mock = DeviceManagementViewModel.mock
         let current = mock.devices.first { $0.isCurrentDevice }
         XCTAssertNotNil(current)
+        // Safe: XCTAssertNotNil(current) above already confirmed non-nil.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertFalse(current!.canRevoke,
                        "User cannot revoke the device they are currently using — must do that elsewhere")
     }

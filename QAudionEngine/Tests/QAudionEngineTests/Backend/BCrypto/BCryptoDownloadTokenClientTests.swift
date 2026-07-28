@@ -16,6 +16,8 @@ final class BCryptoDownloadTokenClientTests: XCTestCase {
           "token_hex": "deadbeef00000000000000000000000000000000000000000000000000000000"
         }
         """
+        // .utf8 encoding of a Swift String literal never fails.
+        // swiftlint:disable:next force_unwrapping
         let data = json.data(using: .utf8)!
         let issued = try IssuedDownloadToken.decode(data)
         XCTAssertEqual(issued.fileId, "01940000-0000-7000-8000-aaaabbbbcccc")
@@ -29,6 +31,8 @@ final class BCryptoDownloadTokenClientTests: XCTestCase {
         let json = """
         {"recipient_user_id":"r","expires_at_ms":1,"max_uses":1,"token_hex":"a"}
         """
+        // .utf8 encoding of a Swift String literal never fails.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertThrowsError(try IssuedDownloadToken.decode(json.data(using: .utf8)!))
     }
 
@@ -36,6 +40,8 @@ final class BCryptoDownloadTokenClientTests: XCTestCase {
         let json = """
         {"file_id":"f","recipient_user_id":"r","expires_at_ms":1,"max_uses":1}
         """
+        // .utf8 encoding of a Swift String literal never fails.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertThrowsError(try IssuedDownloadToken.decode(json.data(using: .utf8)!))
     }
 

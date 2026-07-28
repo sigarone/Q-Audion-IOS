@@ -12,6 +12,9 @@ final class QAudionAudioProcessorTests: XCTestCase {
     func testProcessIncoming() {
         let proc = QAudionAudioProcessor()
         let pcm = Data(repeating: 0x10, count: AudioConstants.bytesPerFrame)
+        // Safe: pcm is fixed-size (bytesPerFrame) and proc is unmuted, so
+        // processOutgoing() always returns non-nil (delegates to encode()).
+        // swiftlint:disable:next force_unwrapping
         let encoded = proc.processOutgoing(pcmFrame: pcm)!
         let decoded = proc.processIncoming(opusFrame: encoded)
         XCTAssertNotNil(decoded)

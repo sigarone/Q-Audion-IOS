@@ -122,6 +122,7 @@ final class MessageRatchetTests: XCTestCase {
         }
         // Try to deliver the very last one (idx=10001) — that's a skip of 10001
         // beyond expected (0), exceeding maxSkipAhead=10_000.
+        // swiftlint:disable:next force_unwrapping - wires always has 10,002 elements from the fixed loop above
         let last = wires.last!
         XCTAssertThrowsError(try ratchetB.decryptOrThrow(session: sessB, wire: last, aad: aad)) { err in
             guard case MessageRatchet.RatchetError.skipAheadExceeded = err else {

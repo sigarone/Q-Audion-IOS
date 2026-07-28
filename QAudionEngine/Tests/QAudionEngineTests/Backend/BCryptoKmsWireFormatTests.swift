@@ -107,10 +107,12 @@ private final class KmsStubURLProtocol: URLProtocol {
             Self.lastRequestBody = Self.readStream(stream)
         }
         let response = HTTPURLResponse(
+            // swiftlint:disable:next force_unwrapping - test-only stub intercepts only requests this test suite itself created against a hardcoded valid https://test.local base URL; request.url is always present.
             url: request.url!,
             statusCode: Self.stubResponse.status,
             httpVersion: "HTTP/1.1",
             headerFields: ["Content-Type": "application/json"]
+            // swiftlint:disable:next force_unwrapping - HTTPURLResponse init with a literal "HTTP/1.1" version and small literal header dict never fails in practice; test-only stub.
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Self.stubResponse.body)

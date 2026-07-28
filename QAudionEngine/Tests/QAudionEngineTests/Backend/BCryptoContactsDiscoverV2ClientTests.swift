@@ -21,10 +21,14 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
         // "global-pepper-xyz" in base64 — fetchPepper() decodes it to Data
         let pepperB64 = Data("global-pepper-xyz".utf8).base64EncodedString()
         StubProtocol.responseHandler = { _ in
+            // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
+            // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
              Data("{\"pepper\":\"\(pepperB64)\"}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
+            // Hardcoded literal URL string — always parses.
+            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { "token123" }
@@ -36,10 +40,14 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
 
     func test_fetchPepper_emptyPepperThrows() async {
         StubProtocol.responseHandler = { _ in
+            // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
+            // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
              Data("{\"pepper\":\"\"}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
+            // Hardcoded literal URL string — always parses.
+            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { nil }
@@ -56,10 +64,14 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
 
     func test_discover_decodesWrappedShape() async throws {
         StubProtocol.responseHandler = { _ in
+            // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
+            // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
              Data("{\"results\":[{\"hash\":\"abc\",\"user_id\":\"u-1\"},{\"hash\":\"def\"}]}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
+            // Hardcoded literal URL string — always parses.
+            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { "token123" }
@@ -72,10 +84,14 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
 
     func test_discover_decodesBareArray() async throws {
         StubProtocol.responseHandler = { _ in
+            // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
+            // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
              Data("[{\"hash\":\"x\",\"user_id\":\"u-x\"}]".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
+            // Hardcoded literal URL string — always parses.
+            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { nil }

@@ -43,6 +43,8 @@ final class DeviceLinkBinaryQRTests: XCTestCase {
     }
 
     func test_decode_rejectsWrongScheme() {
+        // Hardcoded well-formed URL literal — always parses.
+        // swiftlint:disable:next force_unwrapping
         let url = URL(string: "https://example.com/link/abc")!
         XCTAssertThrowsError(try DeviceLinkBinaryQR.decode(url: url)) { err in
             guard case DeviceLinkBinaryQR.Error.invalidUrl = err else {
@@ -53,6 +55,8 @@ final class DeviceLinkBinaryQRTests: XCTestCase {
     }
 
     func test_decode_rejectsWrongHost() {
+        // Hardcoded well-formed URL literal — always parses.
+        // swiftlint:disable:next force_unwrapping
         let url = URL(string: "qaudion://other/abc")!
         XCTAssertThrowsError(try DeviceLinkBinaryQR.decode(url: url)) { err in
             guard case DeviceLinkBinaryQR.Error.invalidUrl = err else {
@@ -66,6 +70,8 @@ final class DeviceLinkBinaryQRTests: XCTestCase {
         // Manually craft a truncated qaudion://link/<base64url> URL.
         let truncated = Data((0..<10).map { UInt8($0) })  // 10 bytes — too short
         let b64 = truncated.base64UrlEncodedNoPadding()
+        // b64 is base64url alphabet only (no +, /, =) — always a valid URL path component.
+        // swiftlint:disable:next force_unwrapping
         let url = URL(string: "qaudion://link/\(b64)")!
         XCTAssertThrowsError(try DeviceLinkBinaryQR.decode(url: url)) { err in
             guard case DeviceLinkBinaryQR.Error.tooShort = err else {

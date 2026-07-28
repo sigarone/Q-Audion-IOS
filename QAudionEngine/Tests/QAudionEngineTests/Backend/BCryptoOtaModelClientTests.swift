@@ -25,11 +25,15 @@ final class BCryptoOtaModelClientTests: XCTestCase {
     func test_fetchManifest_validSignature_succeeds() async throws {
         let (manifestJson, _) = try makeFixtureManifest()
         StubProtocol.handler = { _ in
+            // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
+            // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
              manifestJson)
         }
 
         let client = BCryptoOtaModelClient(
+            // Hardcoded literal URL string — always parses.
+            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: trustAnchors
@@ -44,11 +48,15 @@ final class BCryptoOtaModelClientTests: XCTestCase {
 
         let (manifestJson, _) = try makeFixtureManifest()
         StubProtocol.handler = { _ in
+            // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
+            // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
              manifestJson)
         }
 
         let client = BCryptoOtaModelClient(
+            // Hardcoded literal URL string — always parses.
+            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: badAnchors
@@ -78,10 +86,14 @@ final class BCryptoOtaModelClientTests: XCTestCase {
         let json = try JSONEncoder().encode(tampered)
 
         StubProtocol.handler = { _ in
+            // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
+            // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
         }
 
         let client = BCryptoOtaModelClient(
+            // Hardcoded literal URL string — always parses.
+            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: trustAnchors
@@ -103,12 +115,19 @@ final class BCryptoOtaModelClientTests: XCTestCase {
         let (_, manifest) = try makeFixtureManifest(binary: binary, overrideSha: sha)
         StubProtocol.handler = { req in
             if req.url?.path.contains("download") == true {
+                // req.url is guaranteed non-nil: client always builds requests via
+                // URLRequest(url:) from baseUrl.appendingPathComponent(...).
+                // swiftlint:disable:next force_unwrapping
                 return (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, binary)
             }
+            // req.url is guaranteed non-nil (see above); status/url are always valid here.
+            // swiftlint:disable:next force_unwrapping
             return (HTTPURLResponse(url: req.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!, nil)
         }
 
         let client = BCryptoOtaModelClient(
+            // Hardcoded literal URL string — always parses.
+            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: trustAnchors
@@ -124,11 +143,15 @@ final class BCryptoOtaModelClientTests: XCTestCase {
         let (_, manifest) = try makeFixtureManifest(binary: realBinary, overrideSha: fakeSha)
 
         StubProtocol.handler = { _ in
+            // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
+            // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
              realBinary)
         }
 
         let client = BCryptoOtaModelClient(
+            // Hardcoded literal URL string — always parses.
+            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: trustAnchors

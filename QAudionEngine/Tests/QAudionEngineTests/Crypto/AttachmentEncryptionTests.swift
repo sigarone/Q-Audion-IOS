@@ -177,6 +177,8 @@ final class AttachmentEncryptionTests: XCTestCase {
         var idx = s.startIndex
         while idx < s.endIndex {
             let next = s.index(idx, offsetBy: 2)
+            // Only fed hardcoded even-length hex literals (frozen KAT vectors above).
+            // swiftlint:disable:next force_unwrapping
             out.append(UInt8(s[idx..<next], radix: 16)!)
             idx = next
         }

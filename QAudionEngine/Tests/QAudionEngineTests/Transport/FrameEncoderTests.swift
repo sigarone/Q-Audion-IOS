@@ -24,6 +24,9 @@ final class FrameEncoderTests: XCTestCase {
             tag: Data(repeating: 0x22, count: 16), deepfakeScore: 0.85)
         let wire = FrameEncoder.serialize(frame)
         let decoded = try FrameEncoder.deserialize(wire)
+        // Safe: this frame is serialized above with flagHasDeepfakeScore set and a literal
+        // 0.85 score — deserialize is guaranteed (and this test verifies) to round-trip it non-nil.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(decoded.deepfakeScore!, 0.85, accuracy: 0.001)
     }
     func testWireFormatLayout() {

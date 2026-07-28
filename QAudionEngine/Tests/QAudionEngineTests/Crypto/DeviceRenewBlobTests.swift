@@ -80,6 +80,8 @@ final class DeviceRenewBlobTests: XCTestCase {
         let bytes: [UInt8] = [0xde, 0xad, 0xbe, 0xef]
         let hex = DeviceRenewBlob.hexEncode(Data(bytes))
         XCTAssertEqual(hex, "deadbeef")
+        // hex was just produced by hexEncode(bytes) above — hexDecode of it is guaranteed non-nil.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(Array(DeviceRenewBlob.hexDecode(hex)!), bytes)
     }
 }

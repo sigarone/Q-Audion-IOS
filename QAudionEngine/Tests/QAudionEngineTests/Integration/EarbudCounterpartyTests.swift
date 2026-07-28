@@ -16,6 +16,8 @@ final class EarbudCounterpartyTests: XCTestCase {
         var idx = s.startIndex
         while idx < s.endIndex {
             let next = s.index(idx, offsetBy: 2)
+            // Safe: hex() is only ever called in this file with hardcoded, well-formed hex literals.
+            // swiftlint:disable:next force_unwrapping
             d.append(UInt8(s[idx..<next], radix: 16)!)
             idx = next
         }
@@ -60,8 +62,13 @@ final class EarbudCounterpartyTests: XCTestCase {
         let pub = Data(repeating: 0xAB, count: 32)
         let pdu = EarbudFwPduCodec.buildHsinit(counter: 7, x25519Pub: pub)
         XCTAssertNotNil(pdu)
+        // Safe: counter=7 and pub are valid (in-range counter, correct 32-byte pub),
+        // so buildHsinit always succeeds — pdu is non-nil for all three uses below.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(pdu!.count, 33)
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(pdu![0], 7)
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(pdu!.subdata(in: 1..<33), pub)
         // Out-of-range counter / wrong pub size ⇒ nil (fail-closed).
         XCTAssertNil(EarbudFwPduCodec.buildHsinit(counter: 256, x25519Pub: pub))
@@ -73,8 +80,11 @@ final class EarbudCounterpartyTests: XCTestCase {
         let frags = EarbudFwPduCodec.buildHsfin(startCounter: 2, mlkemCiphertext: ct)
         XCTAssertNotNil(frags)
         // 1568 / 200 = 7.84 → 8 fragments.
+        // Safe: startCounter=2 and ct (1568B) satisfy buildHsfin's guards, so frags is non-nil.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(frags!.count, 8)
         var reassembled = Data()
+        // swiftlint:disable:next force_unwrapping
         for (i, frag) in frags!.enumerated() {
             // FW-H7: strictly-increasing counter per fragment.
             XCTAssertEqual(Int(frag[0]), 2 + i)
@@ -301,6 +311,9 @@ final class EarbudCounterpartyTests: XCTestCase {
     // MARK: - FW-H7 counter allocator
 
     func testHsinitCounterAllocatorMonotonicAndExhaustion() {
+        // Safe: a freshly generated UUID-based suite name is always a valid,
+        // non-empty string — UserDefaults(suiteName:) only returns nil for invalid names.
+        // swiftlint:disable:next force_unwrapping
         let suite = UserDefaults(suiteName: "earbud-test-\(UUID().uuidString)")!
         XCTAssertEqual(EarbudHsinitCounterAllocator.allocate(peerId: "p1", defaults: suite), 1)
         XCTAssertEqual(EarbudHsinitCounterAllocator.allocate(peerId: "p1", defaults: suite), 11)

@@ -34,6 +34,8 @@ final class PskAdvertResolverTests: XCTestCase {
         let advert = PskAdvertV3.buildAdvertisement(
             callId: callId, ownEphemeralX25519Pub: initiatorPub,
             orderedEntries: [PskAdvertV3.Entry(psk: c.psk, role: PskAdvertV3.roleNfc)]
+        // Safe: fixed UUID callId + 32-byte initiatorPub + 32-byte psk, one entry.
+        // swiftlint:disable:next force_unwrapping
         )!
         let r = PskAdvertResolver.resolve(
             receivedAdvert: advert, receivedRoles: nil, callId: callId,
@@ -59,6 +61,8 @@ final class PskAdvertResolverTests: XCTestCase {
         let advert = PskAdvertV3.buildAdvertisement(
             callId: callId, ownEphemeralX25519Pub: initiatorPub,
             orderedEntries: [PskAdvertV3.Entry(psk: local.psk, role: PskAdvertV3.roleNfc)]
+        // Safe: fixed UUID callId + 32-byte initiatorPub + 32-byte psk, one entry.
+        // swiftlint:disable:next force_unwrapping
         )!
         let r = PskAdvertResolver.resolve(
             receivedAdvert: advert, receivedRoles: nil, callId: callId,
@@ -81,6 +85,8 @@ final class PskAdvertResolverTests: XCTestCase {
                 PskAdvertV3.Entry(psk: b.psk, role: 0),
                 PskAdvertV3.Entry(psk: a.psk, role: 0),
             ]
+        // Safe: fixed UUID callId + 32-byte initiatorPub + two 32-byte psks.
+        // swiftlint:disable:next force_unwrapping
         )!
         let r = PskAdvertResolver.resolve(
             receivedAdvert: advert, receivedRoles: nil, callId: callId,
@@ -102,6 +108,8 @@ final class PskAdvertResolverTests: XCTestCase {
                 PskAdvertV3.Entry(psk: a.psk, role: PskAdvertV3.roleOrdinary),
                 PskAdvertV3.Entry(psk: b.psk, role: PskAdvertV3.roleNfc),
             ]
+        // Safe: fixed UUID callId + 32-byte initiatorPub + two 32-byte psks.
+        // swiftlint:disable:next force_unwrapping
         )!
         let r = PskAdvertResolver.resolve(
             receivedAdvert: advert, receivedRoles: nil, callId: callId,
@@ -120,6 +128,8 @@ final class PskAdvertResolverTests: XCTestCase {
         let advert = PskAdvertV3.buildAdvertisement(
             callId: callId, ownEphemeralX25519Pub: initiatorPub,
             orderedEntries: [PskAdvertV3.Entry(psk: c.psk, role: 0)]
+        // Safe: fixed UUID callId + 32-byte initiatorPub + 32-byte psk, one entry.
+        // swiftlint:disable:next force_unwrapping
         )!
         let r = PskAdvertResolver.resolve(
             receivedAdvert: advert, receivedRoles: nil, callId: callId,
@@ -193,6 +203,8 @@ final class PskAdvertResolverTests: XCTestCase {
         let blinded = PskAdvertV3.buildAdvertisement(
             callId: callId, ownEphemeralX25519Pub: initiatorPub,
             orderedEntries: [PskAdvertV3.Entry(psk: theirs.psk, role: 0)]
+        // Safe: fixed UUID callId + 32-byte initiatorPub + 32-byte psk, one entry.
+        // swiftlint:disable:next force_unwrapping
         )!
         for advert in [blinded, [theirs.staticFp]] {
             let r = PskAdvertResolver.resolve(
@@ -388,6 +400,8 @@ final class PskAdvertResolverTests: XCTestCase {
         let advert = PskAdvertV3.buildAdvertisement(
             callId: callId, ownEphemeralX25519Pub: initiatorPub,
             orderedEntries: [PskAdvertV3.Entry(psk: c.psk, role: PskAdvertV3.roleQr)]
+        // Safe: fixed UUID callId + 32-byte initiatorPub + 32-byte psk, one entry.
+        // swiftlint:disable:next force_unwrapping
         )!
         let r = PskAdvertResolver.resolve(
             receivedAdvert: advert, receivedRoles: nil, callId: callId,
@@ -447,6 +461,8 @@ final class PskAdvertResolverTests: XCTestCase {
         let offerAdvert = PskAdvertV3.buildAdvertisement(
             callId: callId, ownEphemeralX25519Pub: initiatorPub,
             orderedEntries: [PskAdvertV3.Entry(psk: shared.psk, role: shared.localRole)]
+        // Safe: fixed UUID callId + 32-byte initiatorPub + 32-byte psk, one entry.
+        // swiftlint:disable:next force_unwrapping
         )!
 
         let resp = PskAdvertResolver.resolve(

@@ -11,6 +11,8 @@ final class ConversationStoreTests: XCTestCase {
         super.setUp()
         let suite = "test.convstore.\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: suite)
+        // Suite name is a freshly generated, well-formed non-empty string; UserDefaults(suiteName:) never returns nil for it.
+        // swiftlint:disable:next force_unwrapping
         defaults = UserDefaults(suiteName: suite)!
         store = ConversationStore(defaults: defaults)
         store.wipeAll()  // ConversationStore.db is a shared singleton; reset between tests
@@ -92,6 +94,8 @@ final class ConversationStoreTests: XCTestCase {
         store.appendMessage(msg)
         store.updateMessageStatus(id: mid, conversationId: convId,
                                   newStatus: .delivered, deliveredAt: Date(timeIntervalSince1970: 1_745_001_000))
+        // Exactly one message was just appended above for this conversationId; list is guaranteed non-empty.
+        // swiftlint:disable:next force_unwrapping
         let updated = store.loadMessages(conversationId: convId).first!
         XCTAssertEqual(updated.status, .delivered)
         XCTAssertNotNil(updated.deliveredAt)
@@ -123,6 +127,8 @@ final class ConversationStoreTests: XCTestCase {
 
         store.markViewOnceOpened(messageId: mid, conversationId: convId)
 
+        // Exactly one message was appended above for this conversationId; list is guaranteed non-empty.
+        // swiftlint:disable:next force_unwrapping
         let updated = store.loadMessages(conversationId: convId).first!
         XCTAssertEqual(updated.viewOnceOpened, true)
         XCTAssertNotNil(updated.expiresAt)
@@ -144,6 +150,8 @@ final class ConversationStoreTests: XCTestCase {
 
         store.markViewOnceOpened(messageId: mid, conversationId: convId)
 
+        // Exactly one message was appended above for this conversationId; list is guaranteed non-empty.
+        // swiftlint:disable:next force_unwrapping
         let updated = store.loadMessages(conversationId: convId).first!
         XCTAssertNil(updated.viewOnceOpened)
         XCTAssertNil(updated.expiresAt)
@@ -181,6 +189,8 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: tmpFile.path),
                        "cached blob must be removed on delete")
 
+        // Exactly one message was appended above for this conversationId; tombstoning keeps the row, not just non-empty.
+        // swiftlint:disable:next force_unwrapping
         let tombstoned = store.loadMessages(conversationId: convId).first!
         XCTAssertEqual(tombstoned.plaintext, "Messaggio eliminato")
         XCTAssertNil(tombstoned.mediaLocalPath)
@@ -211,6 +221,8 @@ final class ConversationStoreTests: XCTestCase {
         let applied = store.applyDeleteByClientMsgId(cmid)
 
         XCTAssertTrue(applied, "tombstone write must succeed even if cleanup has nothing to remove")
+        // Exactly one message was appended above for this conversationId; tombstoning keeps the row, not just non-empty.
+        // swiftlint:disable:next force_unwrapping
         let tombstoned = store.loadMessages(conversationId: convId).first!
         XCTAssertEqual(tombstoned.plaintext, "Messaggio eliminato")
         XCTAssertNil(tombstoned.mediaLocalPath)

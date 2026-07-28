@@ -196,6 +196,10 @@ final class PskAdvertisingTests: XCTestCase {
         // match — i.e. it is no longer silently unselectable dead weight.
         let psk = Data(repeating: 0x77, count: 32)
         let entry = PskAdvertising.Entry(name: "rotated_ephemeral.123", origin: .manual, material: psk, createdAt: nil)
+        // Safe: a single .manual-origin entry is never filtered out by
+        // fingerprintsForAdvertisement (see the exclusion tests above), so
+        // the result always has exactly one element here.
+        // swiftlint:disable:next force_unwrapping
         let advertisedFp = PskAdvertising.fingerprintsForAdvertisement([entry]).first!
 
         XCTAssertEqual(QAudionCallIntegration.pskIfFingerprintMatches(psk, advertisedFp), psk)

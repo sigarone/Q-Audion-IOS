@@ -48,11 +48,15 @@ final class KmsTransportV2KatTests: XCTestCase {
         XCTAssertEqual(file.schema, "kms-psk-v2-kat:1")
         XCTAssertGreaterThan(file.vectors.count, 0)
         for v in file.vectors {
+            // key_class is a frozen KAT field (shared|hw_only|sw_only), generator-guaranteed valid.
+            // swiftlint:disable:next force_unwrapping
             let kc = KmsTransport.KeyClassV2(wire: v.key_class)!
             let keyId  = KmsKatHex.uuid(fromRawHex: v.key_id_hex)
             let userId = KmsKatHex.uuid(fromRawHex: v.user_id_hex)
             let devId  = KmsKatHex.uuid(fromRawHex: v.device_id_hex)
             let txnId  = KmsKatHex.uuid(fromRawHex: v.txn_id_hex)
+            // key_epoch is a frozen KAT decimal uint64 string, generator-guaranteed parseable.
+            // swiftlint:disable:next force_unwrapping
             let epoch  = UInt64(v.key_epoch)!
 
             // AAD byte-equality (independent of decrypt).
@@ -61,6 +65,8 @@ final class KmsTransportV2KatTests: XCTestCase {
                 keyEpoch: epoch, txnId: txnId, keyClass: kc)
             XCTAssertEqual(aad.hexLower(), v.aad_hex, "[\(v.tier)] AAD drift")
 
+            // encrypted_package_b64 is a frozen KAT base64 blob, generator-guaranteed valid.
+            // swiftlint:disable:next force_unwrapping
             let pkg = Data(base64Encoded: v.encrypted_package_b64)!
             let out = try KmsTransport.decryptPackageV2(
                 pkg: pkg,

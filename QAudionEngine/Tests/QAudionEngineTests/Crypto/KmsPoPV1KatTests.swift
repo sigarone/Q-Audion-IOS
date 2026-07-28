@@ -35,9 +35,15 @@ final class KmsPoPV1KatTests: XCTestCase {
     func testSelfConsistency() throws {
         // Deterministic local round-trip independent of the KAT file.
         let secret = Data(repeating: 0x11, count: 64)
+        // Hardcoded well-formed UUID literal — always decodes.
+        // swiftlint:disable:next force_unwrapping
         let did = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
         let serverId = Data(repeating: 0x22, count: 32)
+        // Hardcoded well-formed UUID literal — always decodes.
+        // swiftlint:disable:next force_unwrapping
         let txn = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        // Hardcoded well-formed UUID literal — always decodes.
+        // swiftlint:disable:next force_unwrapping
         let kid = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         let nonce = Data(repeating: 0x55, count: 16)
         let pop = KmsPoPV1.compute(wrapSecret: secret, deviceId: did,
@@ -64,6 +70,8 @@ final class KmsPoPV1KatTests: XCTestCase {
                 serverId: Data(hexString: v.server_id_hex),
                 txnId: KmsKatHex.uuid(fromRawHex: v.txn_id_hex),
                 keyId: KmsKatHex.uuid(fromRawHex: v.key_id_hex),
+                // key_epoch is a frozen KAT decimal uint64 string, generator-guaranteed parseable.
+                // swiftlint:disable:next force_unwrapping
                 keyEpoch: UInt64(v.key_epoch)!,
                 serverNonce: Data(hexString: v.server_nonce_hex))
             XCTAssertEqual(pop.hexLower(), v.pop_hex, "[\(v.origin)] pop drift")

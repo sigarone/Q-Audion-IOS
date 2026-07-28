@@ -156,10 +156,15 @@ final class KatDumper: XCTestCase {
         """
 
         let outURL = URL(fileURLWithPath: "/tmp/kat-vectors-ios.json")
+        // Safe: String.data(using: .utf8) never fails — UTF-8 can represent any Swift String.
+        // swiftlint:disable:next force_unwrapping
         try json.data(using: .utf8)!.write(to: outURL)
         print("[KatDumper] wrote \(outURL.path)")
 
         // Sanity: parse it back
+        // Safe: `json` above is a literal object `{ ... }` we just built, so the top-level
+        // JSON value is always a dictionary.
+        // swiftlint:disable:next force_cast
         let parsed = try JSONSerialization.jsonObject(with: Data(contentsOf: outURL)) as! [String: Any]
         XCTAssertEqual(parsed["schema"] as? Int, 1)
         XCTAssertEqual((parsed["hkdf"] as? [[String: Any]])?.count, 6)

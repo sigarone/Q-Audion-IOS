@@ -13,9 +13,17 @@ final class KmsTransportV2Tests: XCTestCase {
     // §3.2 AAD = "qa-kms-psk-v2"(13) || key_id(16) || user_id(16)
     //          || device_id(16) || key_epoch(8 BE) || txn_id(16) || key_class_byte(1)
     func testAadLayoutAndLength() throws {
+        // Hardcoded well-formed UUID literal — always decodes.
+        // swiftlint:disable:next force_unwrapping
         let keyId   = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        // Hardcoded well-formed UUID literal — always decodes.
+        // swiftlint:disable:next force_unwrapping
         let userId  = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        // Hardcoded well-formed UUID literal — always decodes.
+        // swiftlint:disable:next force_unwrapping
         let devId   = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        // Hardcoded well-formed UUID literal — always decodes.
+        // swiftlint:disable:next force_unwrapping
         let txnId   = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
         let aad = KmsTransport.buildAadV2(
             keyId: keyId, userId: userId, deviceId: devId,
@@ -41,9 +49,14 @@ final class KmsTransportV2Tests: XCTestCase {
     }
 
     private func aadFixture() -> (UUID, UUID, UUID, UInt64, UUID, KmsTransport.KeyClassV2) {
+        // Hardcoded well-formed UUID literals — always decode.
+        // swiftlint:disable:next force_unwrapping
         (UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+         // swiftlint:disable:next force_unwrapping
          UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+         // swiftlint:disable:next force_unwrapping
          UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+         // swiftlint:disable:next force_unwrapping
          7, UUID(uuidString: "44444444-4444-4444-4444-444444444444")!, .shared)
     }
 

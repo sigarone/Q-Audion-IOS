@@ -10,6 +10,8 @@ final class ContactsStoreTests: XCTestCase {
         super.setUp()
         let suite = "test.contactsstore.\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: suite)
+        // Suite name is a freshly generated, well-formed non-empty string; UserDefaults(suiteName:) never returns nil for it.
+        // swiftlint:disable:next force_unwrapping
         defaults = UserDefaults(suiteName: suite)!
         store = ContactsStore(defaults: defaults)
     }
@@ -392,6 +394,8 @@ final class ContactsStoreTests: XCTestCase {
         // Mirrors PeerTrustEvaluator.acceptNewFingerprint's own reconstruction
         // EXACTLY: every field threaded through from `existing` EXCEPT
         // presenceAuth/presenceFloor, which are simply omitted.
+        // seedContact(...) above just upserted a contact with userId "u-1"; it is guaranteed present.
+        // swiftlint:disable:next force_unwrapping
         let existing = store.load().first(where: { $0.userId == "u-1" })!
         store.upsert(ContactsStore.StoredContact(
             userId: existing.userId, displayName: existing.displayName, phoneHash: existing.phoneHash,

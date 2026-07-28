@@ -156,6 +156,7 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
             let frame = ratchet.encryptV4Routed(peerId: "B", plaintext: pt)  // A's send chain
             XCTAssertNotNil(frame, "encryptV4Routed(\(i)) returned nil")
             XCTAssertEqual(frame?.first, MessageRatchet.magicV4, "frame must carry 0xE5")
+            // swiftlint:disable:next force_unwrapping - frame nil-checked by XCTAssertNotNil above
             let got = ratchet.decryptV4Routed(peerId: "A", frame: frame!)     // B's recv chain
             XCTAssertEqual(got, pt, "round-trip \(i) mismatch")
         }
@@ -164,9 +165,11 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
         let rpt = Data("reverse direction".utf8)
         let rframe = ratchet.encryptV4Routed(peerId: "A", plaintext: rpt)     // B's send chain
         XCTAssertEqual(rframe?.first, MessageRatchet.magicV4)
+        // swiftlint:disable:next force_unwrapping - rframe implicitly checked via magicV4 assertion above
         XCTAssertEqual(ratchet.decryptV4Routed(peerId: "B", frame: rframe!), rpt)
 
         // Fail-closed: a tampered frame yields nil and does NOT clobber state.
+        // swiftlint:disable:next force_unwrapping - hardcoded literal on an already-proven-working bootstrapped session
         var bad = ratchet.encryptV4Routed(peerId: "B", plaintext: Data("tamper-target".utf8))!
         bad[bad.count - 1] ^= 0xFF
         XCTAssertNil(ratchet.decryptV4Routed(peerId: "A", frame: bad),
@@ -196,7 +199,9 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
         let frame = ratchet.encryptV4Routed(peerId: "B", plaintext: plaintext)
         XCTAssertNotNil(frame)
         // The receive dispatcher routes on this:
+        // swiftlint:disable:next force_unwrapping - frame nil-checked by XCTAssertNotNil above
         XCTAssertEqual(MessageWireFormat.detect(frame!), .v4)
+        // swiftlint:disable:next force_unwrapping - frame nil-checked by XCTAssertNotNil above
         let recovered = ratchet.decryptV4Routed(peerId: "A", frame: frame!)
         XCTAssertEqual(recovered, plaintext, "dispatch-seam round-trip mismatch")
     }

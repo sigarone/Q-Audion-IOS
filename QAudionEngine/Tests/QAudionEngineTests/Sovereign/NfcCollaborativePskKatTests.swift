@@ -35,6 +35,8 @@ final class NfcCollaborativePskKatTests: XCTestCase {
         var out = Data(); var i = s.startIndex
         while i < s.endIndex {
             let j = s.index(i, offsetBy: 2)
+            // Only fed hardcoded even-length hex literals (frozen KAT vectors above).
+            // swiftlint:disable:next force_unwrapping
             out.append(UInt8(s[i..<j], radix: 16)!)
             i = j
         }

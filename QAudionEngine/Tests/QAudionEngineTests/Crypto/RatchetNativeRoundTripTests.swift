@@ -67,6 +67,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
             let frame = RatchetNative.encrypt(handleA, plaintext: pt)
             XCTAssertNotNil(frame, "encrypt(\(i)) returned nil")
             XCTAssertGreaterThan(frame?.count ?? 0, pt.count, "frame(\(i)) not longer than plaintext")
+            // swiftlint:disable:next force_unwrapping - frame nil-checked by XCTAssertNotNil above
             let got = RatchetNative.decrypt(handleB, frame: frame!)
             XCTAssertNotNil(got, "decrypt(\(i)) returned nil")
             XCTAssertEqual(got, pt, "round-trip \(i) plaintext mismatch")
@@ -78,7 +79,9 @@ final class RatchetNativeRoundTripTests: XCTestCase {
         handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         handleB = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
 
+        // swiftlint:disable:next force_unwrapping - hardcoded literal + freshly-initialized session, native core linked
         let f0 = RatchetNative.encrypt(handleA, plaintext: Data("m0".utf8))!
+        // swiftlint:disable:next force_unwrapping - hardcoded literal + freshly-initialized session, native core linked
         let f1 = RatchetNative.encrypt(handleA, plaintext: Data("m1".utf8))!
 
         let d0 = RatchetNative.decrypt(handleB, frame: f0)
@@ -90,6 +93,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
         RatchetNative.free(handleB); handleB = 0
 
+        // swiftlint:disable:next force_unwrapping - blob nil/size-checked by XCTAssertNotNil/XCTAssertGreaterThan above
         handleB2 = RatchetNative.deserialize(blob!)
         XCTAssertNotEqual(handleB2, 0)
 
@@ -107,6 +111,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
 
         for i in 0..<10 {
             let pt = Data("post-ratchet-\(i)".utf8)
+            // swiftlint:disable:next force_unwrapping - hardcoded literal after successful dhRatchet, native core linked
             let frame = RatchetNative.encrypt(handleA, plaintext: pt)!
             let got   = RatchetNative.decrypt(handleB2, frame: frame)
             XCTAssertEqual(got, pt, "post-dhRatchet round-trip \(i)")
@@ -118,6 +123,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
         handleA  = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         handleB2 = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: false)
 
+        // swiftlint:disable:next force_unwrapping - hardcoded literal + freshly-initialized session, native core linked
         var frame = RatchetNative.encrypt(handleA, plaintext: Data("secret".utf8))!
         frame[frame.count - 1] ^= 0xFF
 
@@ -140,6 +146,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
         let ctTag   = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: pt, counter: 0)
         XCTAssertNotNil(ctTag, "fileEncrypt returned nil")
         XCTAssertEqual(ctTag?.count, pt.count + 16, "ctTag must be plaintext.count + 16 bytes")
+        // swiftlint:disable:next force_unwrapping - ctTag nil/size-checked by XCTAssertNotNil/XCTAssertEqual above
         let got = RatchetNative.fileDecrypt(handleA, fileId: fileId, ctTag: ctTag!, counter: 0)
         XCTAssertNotNil(got, "fileDecrypt returned nil")
         XCTAssertEqual(got, pt, "file round-trip plaintext mismatch")
@@ -149,6 +156,7 @@ final class RatchetNativeRoundTripTests: XCTestCase {
         try XCTSkipUnless(RatchetNative.available)
         handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         let fileId = Data("doc.txt".utf8)
+        // swiftlint:disable:next force_unwrapping - hardcoded literal + freshly-initialized session, native core linked
         var ctTag  = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: Data("secret".utf8), counter: 0)!
         ctTag[ctTag.count - 1] ^= 0xFF
         XCTAssertNil(RatchetNative.fileDecrypt(handleA, fileId: fileId, ctTag: ctTag, counter: 0),
@@ -160,7 +168,9 @@ final class RatchetNativeRoundTripTests: XCTestCase {
         handleA = RatchetNative.initSession(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         let fileId = Data("shared.bin".utf8)
         let pt     = Data("payload".utf8)
+        // swiftlint:disable:next force_unwrapping - hardcoded literal + freshly-initialized session, native core linked
         let ct0    = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: pt, counter: 0)!
+        // swiftlint:disable:next force_unwrapping - hardcoded literal + freshly-initialized session, native core linked
         let ct1    = RatchetNative.fileEncrypt(handleA, fileId: fileId, plaintext: pt, counter: 1)!
         XCTAssertNotEqual(ct0, ct1, "different counters must produce different ciphertexts")
         XCTAssertNil(RatchetNative.fileDecrypt(handleA, fileId: fileId, ctTag: ct1, counter: 0),

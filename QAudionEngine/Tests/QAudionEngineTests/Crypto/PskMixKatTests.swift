@@ -31,6 +31,8 @@ final class PskMixKatTests: XCTestCase {
         var idx = s.startIndex
         while idx < s.endIndex {
             let next = s.index(idx, offsetBy: 2)
+            // Only fed hex from the frozen psk-mix-v1-kat.json cross-repo contract fixture.
+            // swiftlint:disable:next force_unwrapping
             out.append(UInt8(s[idx..<next], radix: 16)!)
             idx = next
         }

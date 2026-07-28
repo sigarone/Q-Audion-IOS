@@ -11,6 +11,8 @@ final class SettingsStoreTests: XCTestCase {
         // In-memory UserDefaults via a unique suite name per test.
         let suite = "test.settingsstore.\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: suite)
+        // Suite name is a freshly generated, well-formed non-empty string; UserDefaults(suiteName:) never returns nil for it.
+        // swiftlint:disable:next force_unwrapping
         defaults = UserDefaults(suiteName: suite)!
         store = SettingsStore(defaults: defaults)
     }

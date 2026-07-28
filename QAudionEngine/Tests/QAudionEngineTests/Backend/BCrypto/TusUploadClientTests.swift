@@ -32,8 +32,12 @@ final class TusUploadClientTests: XCTestCase {
         TusStubProtocol.responseHandler = { request in
             if request.httpMethod == "POST" {
                 let resp = HTTPURLResponse(
+                    // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                    // swiftlint:disable:next force_unwrapping
                     url: request.url!, statusCode: 201, httpVersion: nil,
                     headerFields: ["Location": "/api/v1/files/tus/\(fileId)"]
+                // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+                // swiftlint:disable:next force_unwrapping
                 )!
                 return (resp, nil)
             }
@@ -44,8 +48,12 @@ final class TusUploadClientTests: XCTestCase {
             let bodyLen = request.httpBodyLength
             let newOffset = startOffset + bodyLen
             let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
                 url: request.url!, statusCode: 204, httpVersion: nil,
                 headerFields: ["Upload-Offset": String(newOffset)]
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
             )!
             return (resp, nil)
         }
@@ -89,16 +97,24 @@ final class TusUploadClientTests: XCTestCase {
         TusStubProtocol.responseHandler = { request in
             if request.httpMethod == "POST" {
                 let resp = HTTPURLResponse(
+                    // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                    // swiftlint:disable:next force_unwrapping
                     url: request.url!, statusCode: 201, httpVersion: nil,
                     headerFields: ["Location": "/api/v1/files/tus/\(fileId)"]
+                // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+                // swiftlint:disable:next force_unwrapping
                 )!
                 return (resp, nil)
             }
             let startOffset = Int(request.value(forHTTPHeaderField: "Upload-Offset") ?? "0") ?? 0
             let bodyLen = request.httpBodyLength
             let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
                 url: request.url!, statusCode: 204, httpVersion: nil,
                 headerFields: ["Upload-Offset": String(startOffset + bodyLen)]
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
             )!
             return (resp, nil)
         }
@@ -120,15 +136,23 @@ final class TusUploadClientTests: XCTestCase {
         TusStubProtocol.responseHandler = { request in
             if request.httpMethod == "POST" {
                 let resp = HTTPURLResponse(
+                    // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                    // swiftlint:disable:next force_unwrapping
                     url: request.url!, statusCode: 201, httpVersion: nil,
                     headerFields: ["Location": "/api/v1/files/tus/\(fileId)"]
+                // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+                // swiftlint:disable:next force_unwrapping
                 )!
                 return (resp, nil)
             }
             let bodyLen = request.httpBodyLength
             let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
                 url: request.url!, statusCode: 204, httpVersion: nil,
                 headerFields: ["Upload-Offset": String(bodyLen)]
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
             )!
             return (resp, nil)
         }
@@ -158,16 +182,24 @@ final class TusUploadClientTests: XCTestCase {
         TusStubProtocol.responseHandler = { request in
             if request.httpMethod == "POST" {
                 let resp = HTTPURLResponse(
+                    // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                    // swiftlint:disable:next force_unwrapping
                     url: request.url!, statusCode: 201, httpVersion: nil,
                     headerFields: ["Location": "/api/v1/files/tus/\(fileId)"]
+                // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+                // swiftlint:disable:next force_unwrapping
                 )!
                 return (resp, nil)
             }
             patchCallCount += 1
             let bodyLen = request.httpBodyLength
             let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
                 url: request.url!, statusCode: 204, httpVersion: nil,
                 headerFields: ["Upload-Offset": String(bodyLen)]
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
             )!
             return (resp, nil)
         }
@@ -193,8 +225,12 @@ final class TusUploadClientTests: XCTestCase {
         TusStubProtocol.responseHandler = { request in
             XCTAssertEqual(request.httpMethod, "HEAD")
             let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
                 url: request.url!, statusCode: 200, httpVersion: nil,
                 headerFields: ["Upload-Offset": "42", "Upload-Length": "100"]
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
             )!
             return (resp, nil)
         }
@@ -209,7 +245,11 @@ final class TusUploadClientTests: XCTestCase {
     func test_head_404_throwsUploadNotFound() async throws {
         TusStubProtocol.responseHandler = { request in
             let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
                 url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
             )!
             return (resp, nil)
         }
@@ -231,7 +271,11 @@ final class TusUploadClientTests: XCTestCase {
     func test_head_genericFailure_throwsHeadFailed() async throws {
         TusStubProtocol.responseHandler = { request in
             let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
                 url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
             )!
             return (resp, nil)
         }
@@ -263,8 +307,12 @@ final class TusUploadClientTests: XCTestCase {
             if request.httpMethod == "POST" {
                 sawCreateCall = true
                 let resp = HTTPURLResponse(
+                    // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                    // swiftlint:disable:next force_unwrapping
                     url: request.url!, statusCode: 201, httpVersion: nil,
                     headerFields: ["Location": "/api/v1/files/tus/\(fileId)"]
+                // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+                // swiftlint:disable:next force_unwrapping
                 )!
                 return (resp, nil)
             }
@@ -272,8 +320,12 @@ final class TusUploadClientTests: XCTestCase {
             patchedOffsets.append(startOffset)
             let bodyLen = request.httpBodyLength
             let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
                 url: request.url!, statusCode: 204, httpVersion: nil,
                 headerFields: ["Upload-Offset": String(startOffset + bodyLen)]
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
             )!
             return (resp, nil)
         }
@@ -303,6 +355,8 @@ final class TusUploadClientTests: XCTestCase {
         var patchCallCount = 0
         TusStubProtocol.responseHandler = { request in
             patchCallCount += 1
+            // Safe: request.url is non-nil (dispatched via URLSession) and the literal status code make this init infallible.
+            // swiftlint:disable:next force_unwrapping
             let resp = HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!
             return (resp, nil)
         }
@@ -321,6 +375,8 @@ final class TusUploadClientTests: XCTestCase {
         // succeed earlier, but by the time resume's PATCH lands the
         // record is gone.
         TusStubProtocol.responseHandler = { request in
+            // Safe: request.url is non-nil (dispatched via URLSession) and the literal status code make this init infallible.
+            // swiftlint:disable:next force_unwrapping
             let resp = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
             return (resp, nil)
         }
@@ -368,20 +424,30 @@ final class TusUploadClientTests: XCTestCase {
         TusStubProtocol.responseHandler = { request in
             if request.httpMethod == "POST" {
                 let resp = HTTPURLResponse(
+                    // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                    // swiftlint:disable:next force_unwrapping
                     url: request.url!, statusCode: 201, httpVersion: nil,
                     headerFields: ["Location": "/api/v1/files/tus/\(fileId)"]
+                // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+                // swiftlint:disable:next force_unwrapping
                 )!
                 return (resp, nil)
             }
             patchAttempts += 1
             if patchAttempts < 3 {
+                // Safe: request.url is non-nil (dispatched via URLSession) and the literal status code make this init infallible.
+                // swiftlint:disable:next force_unwrapping
                 let resp = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
                 return (resp, nil)
             }
             let bodyLen = request.httpBodyLength
             let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
                 url: request.url!, statusCode: 204, httpVersion: nil,
                 headerFields: ["Upload-Offset": String(bodyLen)]
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
             )!
             return (resp, nil)
         }
@@ -405,12 +471,18 @@ final class TusUploadClientTests: XCTestCase {
         TusStubProtocol.responseHandler = { request in
             if request.httpMethod == "POST" {
                 let resp = HTTPURLResponse(
+                    // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                    // swiftlint:disable:next force_unwrapping
                     url: request.url!, statusCode: 201, httpVersion: nil,
                     headerFields: ["Location": "/api/v1/files/tus/exhaust-1"]
+                // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+                // swiftlint:disable:next force_unwrapping
                 )!
                 return (resp, nil)
             }
             patchAttempts += 1
+            // Safe: request.url is non-nil (dispatched via URLSession) and the literal status code make this init infallible.
+            // swiftlint:disable:next force_unwrapping
             let resp = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
             return (resp, nil)
         }
@@ -454,6 +526,8 @@ private func withTimeout<T: Sendable>(
             try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             throw TestTimeoutError()
         }
+        // Safe: two tasks were just added above; this first next() call always yields a result.
+        // swiftlint:disable:next force_unwrapping
         let result = try await group.next()!
         group.cancelAll()
         return result

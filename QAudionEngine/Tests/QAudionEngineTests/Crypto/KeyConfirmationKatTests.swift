@@ -30,6 +30,7 @@ final class KeyConfirmationKatTests: XCTestCase {
         var idx = hex.startIndex
         while idx < hex.endIndex {
             let next = hex.index(idx, offsetBy: 2)
+            // swiftlint:disable:next force_unwrapping - hex-pair parse of a hardcoded, well-formed KAT hex literal; every call site passes a fixed valid-hex constant defined above.
             out.append(UInt8(hex[idx..<next], radix: 16)!)
             idx = next
         }
@@ -315,8 +316,10 @@ final class KeyConfirmationKatTests: XCTestCase {
 
         // And therefore the MACs never verify: the false-S1 mechanism, end to end.
         let kKc = KeyConfirmation.deriveKcKey(sessionKey: sessionKey)
+        // swiftlint:disable:next force_unwrapping - peerSide non-nil was just asserted above (line 311); inputs are small (1 entry), well under the 256-entry oversized-nil threshold.
         let peerMac = KeyConfirmation.macInit(kcKey: kKc, transcript: peerSide!)
         XCTAssertFalse(
+            // swiftlint:disable:next force_unwrapping - buggyLocal non-nil was just asserted above (line 312); same small, non-oversized input shape as peerSide.
             KeyConfirmation.verify(received: peerMac, kcKey: kKc, asInitiator: true, transcript: buggyLocal!),
             "the peer's MAC must NOT verify against the role-stripped transcript")
 
@@ -328,6 +331,7 @@ final class KeyConfirmationKatTests: XCTestCase {
             ikInit: ikInit, ikResp: ikResp)
         XCTAssertEqual(fixedLocal, peerSide)
         XCTAssertTrue(
+            // swiftlint:disable:next force_unwrapping - fixedLocal built from the same non-oversized input shape as peerSide (asserted non-nil above) and just confirmed equal to it via XCTAssertEqual.
             KeyConfirmation.verify(received: peerMac, kcKey: kKc, asInitiator: true, transcript: fixedLocal!))
     }
 

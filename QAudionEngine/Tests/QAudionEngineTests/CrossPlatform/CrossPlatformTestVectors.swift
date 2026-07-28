@@ -258,6 +258,8 @@ final class CrossPlatformTestVectors: XCTestCase {
         XCTAssertEqual(decrypted?.senderId, "alice")
         XCTAssertEqual(decrypted?.recipientId, "bob")
         XCTAssertEqual(decrypted?.msgType, "offer")
+        // Safe: XCTAssertNotNil(decrypted) above already confirmed non-nil.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(String(data: decrypted!.payload, encoding: .utf8), "hello")
     }
 

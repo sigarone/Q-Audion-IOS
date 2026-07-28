@@ -77,6 +77,9 @@ final class PskAdvertV3KatTests: XCTestCase {
         var i = s.startIndex
         while i < s.endIndex {
             let j = s.index(after: i)
+            // Safe: only ever fed golden KAT hex strings, self-verified by
+            // gen_psk_advert_v3_kat.py before being written to the fixture.
+            // swiftlint:disable:next force_unwrapping
             out.append(UInt8(s[i...j], radix: 16)!)
             i = s.index(after: j)
         }
@@ -155,13 +158,22 @@ final class PskAdvertV3KatTests: XCTestCase {
         let pubB = Data((0..<32).map { UInt8($0 &+ 2) })
         let a = PskAdvertV3.tag(
             psk: psk, callId: "call-1",
+            // Safe: 32-byte hardcoded pubA + short callId — deriveNonce only
+            // returns nil for wrong-width keys or an oversized callId.
+            // swiftlint:disable:next force_unwrapping
             nonce: PskAdvertV3.deriveNonce(callId: "call-1", senderEphemeralX25519Pub: pubA)!,
             role: PskAdvertV3.roleNfc
+        // Safe: 32-byte psk + matching-width nonce + valid role constant.
+        // swiftlint:disable:next force_unwrapping
         )!
         let b = PskAdvertV3.tag(
             psk: psk, callId: "call-2",
+            // Safe: 32-byte hardcoded pubB + short callId, same as above.
+            // swiftlint:disable:next force_unwrapping
             nonce: PskAdvertV3.deriveNonce(callId: "call-2", senderEphemeralX25519Pub: pubB)!,
             role: PskAdvertV3.roleNfc
+        // Safe: 32-byte psk + matching-width nonce + valid role constant.
+        // swiftlint:disable:next force_unwrapping
         )!
         XCTAssertNotEqual(
             toHex(a), toHex(b),
@@ -178,13 +190,19 @@ final class PskAdvertV3KatTests: XCTestCase {
         let advert = PskAdvertV3.buildAdvertisement(
             callId: callId, ownEphemeralX25519Pub: pub,
             orderedEntries: [PskAdvertV3.Entry(psk: psk, role: PskAdvertV3.roleNfc)]
+        // Safe: fixed UUID callId + 32-byte pub + 32-byte psk, well within contract.
+        // swiftlint:disable:next force_unwrapping
         )!
         // Nothing in the wire value discloses the role: an ordinary-role tag over the
         // same key is equally valid-looking and simply different.
         let asOrdinary = PskAdvertV3.tag(
             psk: psk, callId: callId,
+            // Safe: same fixed 32-byte pub + fixed callId used above.
+            // swiftlint:disable:next force_unwrapping
             nonce: PskAdvertV3.deriveNonce(callId: callId, senderEphemeralX25519Pub: pub)!,
             role: PskAdvertV3.roleOrdinary
+        // Safe: 32-byte psk + matching-width nonce + valid role constant.
+        // swiftlint:disable:next force_unwrapping
         )!
         XCTAssertNotEqual(advert[0], toHex(asOrdinary))
 
@@ -207,6 +225,9 @@ final class PskAdvertV3KatTests: XCTestCase {
         let good = PskAdvertV3.buildAdvertisement(
             callId: callId, ownEphemeralX25519Pub: pub,
             orderedEntries: [PskAdvertV3.Entry(psk: psk, role: PskAdvertV3.roleQr)]
+        // Safe: short callId + 32-byte pub/psk + a single ordered entry, so
+        // the result is non-nil and non-empty.
+        // swiftlint:disable:next force_unwrapping
         )![0]
 
         let hostile = [

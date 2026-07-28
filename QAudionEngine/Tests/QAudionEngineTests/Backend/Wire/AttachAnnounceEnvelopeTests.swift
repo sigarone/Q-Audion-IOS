@@ -26,12 +26,20 @@ final class AttachAnnounceEnvelopeTests: XCTestCase {
         """
         let env = try AttachAnnounceEnvelope.parse(json)
         XCTAssertNotNil(env)
+        // Safe: nil-checked above; JSON literal is well-formed and matches schema.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(env!.att.id, "AAECAwQFBgcICQoLDA0ODw==")
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(env!.att.mime, "audio/opus")
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(env!.att.byteLength, 12345)
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(env!.att.sha256B64, "aGVsbG8gd29ybGQK")
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(env!.att.fileId, "01940000-0000-7000-8000-aaaabbbbcccc")
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(env!.att.durationMs, 5234)
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(env!.ts, 1700000000)
     }
 
@@ -47,6 +55,8 @@ final class AttachAnnounceEnvelopeTests: XCTestCase {
         """
         let env = try AttachAnnounceEnvelope.parse(json)
         XCTAssertNotNil(env)
+        // Safe: nil-checked above; JSON literal is well-formed and matches schema.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertNil(env!.att.durationMs)
     }
 
@@ -116,7 +126,10 @@ final class AttachAnnounceEnvelopeTests: XCTestCase {
         let wire = try original.toJsonString()
         let parsed = try AttachAnnounceEnvelope.parse(wire)
         XCTAssertNotNil(parsed)
+        // Safe: nil-checked above; encoded from a valid in-memory value.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(parsed!.att, original.att)
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(parsed!.ts, original.ts)
     }
 
@@ -165,6 +178,8 @@ final class AttachAnnounceEnvelopeTests: XCTestCase {
         """
         let env = try AttachAnnounceEnvelope.parse(json)
         XCTAssertNotNil(env)
+        // Safe: nil-checked above; JSON literal is well-formed and matches schema.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertNil(env!.att.ex)
     }
 

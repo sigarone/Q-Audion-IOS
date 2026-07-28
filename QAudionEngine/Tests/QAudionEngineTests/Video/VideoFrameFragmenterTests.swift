@@ -46,6 +46,8 @@ final class VideoFrameFragmenterTests: XCTestCase {
             XCTAssertNil(recv.defragment(f))
         }
         // Last (= original first) completes the reassembly.
+        // Safe: XCTAssertGreaterThan(frags.count, 1) above guarantees frags is non-empty.
+        // swiftlint:disable:next force_unwrapping
         let result = recv.defragment(frags.first!)
         XCTAssertEqual(result?.nalUnit, nal)
     }

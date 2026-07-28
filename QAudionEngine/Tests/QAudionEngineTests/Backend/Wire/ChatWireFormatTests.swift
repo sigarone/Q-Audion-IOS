@@ -84,6 +84,8 @@ final class MessageSendEnvelopeTests: XCTestCase {
 
 final class MessageDeliveredEnvelopeTests: XCTestCase {
 
+    // Safe: hardcoded well-formed UUID literal, always parses.
+    // swiftlint:disable:next force_unwrapping
     private let messageId = UUID(uuidString: "aaaabbbb-cccc-dddd-eeee-ffffffffffff")!
     private let deliveredTo = "user-11223344-5566-7788-99aa-bbccddeeff00"
     private let deliveredTs: Int64 = 1_745_100_000_000
@@ -150,6 +152,8 @@ final class MessageDeliveredEnvelopeTests: XCTestCase {
 
 final class MessageReadEnvelopeTests: XCTestCase {
 
+    // Safe: hardcoded well-formed UUID literal, always parses.
+    // swiftlint:disable:next force_unwrapping
     private let messageId = UUID(uuidString: "deadbeef-dead-beef-dead-beefdeadbeef")!
     private let readerId = "user-cafebabe-cafe-babe-cafe-babecafebabe"
     private let readTs: Int64 = 1_745_200_000_000

@@ -63,6 +63,8 @@ final class LiveKitGroupE2eeKatTests: XCTestCase {
         var idx = hex.startIndex
         while idx < hex.endIndex {
             let next = hex.index(idx, offsetBy: 2)
+            // Only fed hardcoded even-length hex literals (frozen KAT vectors above).
+            // swiftlint:disable:next force_unwrapping
             data.append(UInt8(hex[idx..<next], radix: 16)!)
             idx = next
         }

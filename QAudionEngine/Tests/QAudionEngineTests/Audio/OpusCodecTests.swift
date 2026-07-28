@@ -7,6 +7,8 @@ final class OpusCodecTests: XCTestCase {
         let pcm = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
         let encoded = codec.encode(pcm)
         XCTAssertNotNil(encoded)
+        // Safe: pcm is fixed-size (bytesPerFrame), so encode() always succeeds.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertFalse(encoded!.isEmpty)
     }
 
@@ -18,9 +20,13 @@ final class OpusCodecTests: XCTestCase {
     func testDecodeReturnsData() {
         let codec = OpusCodec()
         let pcm = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
+        // Safe: pcm is fixed-size (bytesPerFrame), so encode() always succeeds.
+        // swiftlint:disable:next force_unwrapping
         let encoded = codec.encode(pcm)!
         let decoded = codec.decode(encoded)
         XCTAssertNotNil(decoded)
+        // Safe: decoded from a valid non-empty encoded frame, so decode() always succeeds.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertEqual(decoded!.count, AudioConstants.bytesPerFrame)
     }
 
@@ -35,6 +41,8 @@ final class OpusCodecTests: XCTestCase {
         let pcm = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
         _ = codec.encode(pcm)
         _ = codec.encode(pcm)
+        // Safe: pcm is fixed-size (bytesPerFrame), so encode() always succeeds.
+        // swiftlint:disable:next force_unwrapping
         let encoded = codec.encode(pcm)!
         _ = codec.decode(encoded)
         let stats = codec.getStats()
@@ -119,8 +127,13 @@ final class OpusCodecTests: XCTestCase {
         let codec = OpusCodec()
         let loud = tone()
         let silence = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
+        // Safe: loud/silence are fixed-size tone()/Data buffers, so encode() always succeeds.
+        // swiftlint:disable:next force_unwrapping
         for _ in 0..<4 { _ = codec.decode(codec.encode(loud)!) }
         var last = 0.0
+        // Safe: encode() always succeeds on a fixed-size buffer, and decode() always
+        // succeeds on the resulting non-empty encoded frame.
+        // swiftlint:disable:next force_unwrapping
         for _ in 0..<4 { last = rms(codec.decode(codec.encode(silence)!)!) }
         XCTAssertLessThan(last, rms(loud) * 0.2, "silence decoded at RMS \(last)")
     }

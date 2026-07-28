@@ -16,6 +16,8 @@ final class QAudionEngineTests: XCTestCase {
         try engine.initSession(sharedSecret: Data(repeating: 0x42, count: 32))
         XCTAssertEqual(engine.getState(), .sessionActive)
         XCTAssertNotNil(engine.getSessionInfo())
+        // getState() == .sessionActive was just asserted above, so getSessionInfo() is non-nil here too.
+        // swiftlint:disable:next force_unwrapping
         XCTAssertTrue(engine.getSessionInfo()!.isActive)
     }
 
