@@ -986,9 +986,9 @@ public final class AudioCapture {
                 let count = Int(buffer.frameLength)
                 var int16Buf = [Int16](repeating: 0, count: count)
                 let src = floatData[0]
-                for i in 0..<count {
-                    let clamped = max(-1.0 as Float, min(1.0 as Float, src[i]))
-                    int16Buf[i] = Int16(clamped * Float(Int16.max))
+                for idx in 0..<count {
+                    let clamped = max(-1.0 as Float, min(1.0 as Float, src[idx]))
+                    int16Buf[idx] = Int16(clamped * Float(Int16.max))
                 }
                 raw = int16Buf.withUnsafeBytes { Data($0) }
             } else {
@@ -1006,14 +1006,14 @@ public final class AudioCapture {
             // the full rationale and honest limitations.
             raw.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
                 guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
-                let n = raw.count / 2
-                guard n > 0 else { return }
+                let sampleCount = raw.count / 2
+                guard sampleCount > 0 else { return }
                 var echoSumSq: Double = 0
-                for i in 0..<n {
-                    let s = Double(samples[i]) / Double(Int16.max)
+                for idx in 0..<sampleCount {
+                    let s = Double(samples[idx]) / Double(Int16.max)
                     echoSumSq += s * s
                 }
-                let frameRms = Float((echoSumSq / Double(n)).squareRoot())
+                let frameRms = Float((echoSumSq / Double(sampleCount)).squareRoot())
                 let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
                 let farEndActive = Self.isFarEndActive(lastLoudPlayoutAtMs: self.lastLoudPlayoutAtMs, nowMs: nowMs)
                 self.echoBucketThisCall = Self.accumulatingEchoBucket(self.echoBucketThisCall,

@@ -570,28 +570,28 @@ public final class AudioProcessingPipeline {
             nowSpeaker: false,
             nowMs: now)
         let stats = AudioDiagStats(
-            agcEverActive:       agcEverActiveThisCall,
-            speakerRouteEver:    speakerRouteEverThisCall,
-            bluetoothRouteEver:  bluetoothRouteEverThisCall,
-            vpioEverActive:      vpioEverActiveThisCall,
-            inputRoute:          lastInputRoute,
-            outputRoute:         lastOutputRoute,
-            grantedSampleRate:   lastGrantedSampleRate,
+            agcEverActive: agcEverActiveThisCall,
+            speakerRouteEver: speakerRouteEverThisCall,
+            bluetoothRouteEver: bluetoothRouteEverThisCall,
+            vpioEverActive: vpioEverActiveThisCall,
+            inputRoute: lastInputRoute,
+            outputRoute: lastOutputRoute,
+            grantedSampleRate: lastGrantedSampleRate,
             preferredSampleRate: config.preferredSampleRate,
-            tapSampleRate:       lastTapSampleRate,
-            tapChannels:         lastTapChannels,
-            engineRestarts:      engineRestartsThisCall,
-            vpioBypassedEver:    vpioBypassedEverThisCall,
-            vpioBypassCount:     vpioBypassCountThisCall,
-            vpioRetryCount:      vpioRetryCountThisCall,
-            routeChanges:        routeChangesThisCall,
-            speakerMs:           speakerMsAccumulatedThisCall,
+            tapSampleRate: lastTapSampleRate,
+            tapChannels: lastTapChannels,
+            engineRestarts: engineRestartsThisCall,
+            vpioBypassedEver: vpioBypassedEverThisCall,
+            vpioBypassCount: vpioBypassCountThisCall,
+            vpioRetryCount: vpioRetryCountThisCall,
+            routeChanges: routeChangesThisCall,
+            speakerMs: speakerMsAccumulatedThisCall,
             engineRestartFailures: engineRestartFailuresThisCall,
-            playoutDropped:      playoutDroppedThisCall,
-            engineRunningAtEnd:  engineRunningAtEndThisCall,
-            playoutWrites:          playoutWritesThisCall,
-            playoutInFlightMax:     playoutInFlightMaxThisCall,
-            playoutSchedFail:       playoutSchedFailThisCall,
+            playoutDropped: playoutDroppedThisCall,
+            engineRunningAtEnd: engineRunningAtEndThisCall,
+            playoutWrites: playoutWritesThisCall,
+            playoutInFlightMax: playoutInFlightMaxThisCall,
+            playoutSchedFail: playoutSchedFailThisCall,
             playoutLedgerAnomalies: playoutLedgerAnomaliesThisCall
         )
         agcEverActiveThisCall = false
@@ -695,8 +695,8 @@ public final class AudioProcessingPipeline {
                     do { try inputNode.setVoiceProcessingEnabled(true) }
                     catch { vpioSwiftError = error }
                 }, &vpioError)
-                if let e = vpioError {
-                    print("[AudioProcessingPipeline] setVoiceProcessingEnabled raised ObjC NSException — degrading VP-IO OFF (no crash): \(e.localizedDescription)")
+                if let nsError = vpioError {
+                    print("[AudioProcessingPipeline] setVoiceProcessingEnabled raised ObjC NSException — degrading VP-IO OFF (no crash): \(nsError.localizedDescription)")
                     voiceProcessingActive = false
                     vpioBypassedEverThisCall = true
                     vpioBypassCountThisCall += 1   // W-VPIORETRY
@@ -704,7 +704,7 @@ public final class AudioProcessingPipeline {
                     emitSessionDiagnostics(vpioEnabled: false)
                     return
                 }
-                if let e = vpioSwiftError { throw e }
+                if let swiftError = vpioSwiftError { throw swiftError }
                 _ = ran
                 // W-CANONICAL — Apple AGC ON on ALL routes (supersedes W537/
                 // W574c which disabled it off-speaker). The W537 "envelope
@@ -801,8 +801,8 @@ public final class AudioProcessingPipeline {
         var pcm = Data(count: AudioConstants.bytesPerFrame)
         pcm.withUnsafeMutableBytes { buf in
             let ptr = buf.bindMemory(to: Int16.self)
-            for i in 0..<AudioConstants.samplesPerFrame {
-                ptr[i] = Int16.random(in: -amplitude...amplitude)
+            for idx in 0..<AudioConstants.samplesPerFrame {
+                ptr[idx] = Int16.random(in: -amplitude...amplitude)
             }
         }
         return pcm

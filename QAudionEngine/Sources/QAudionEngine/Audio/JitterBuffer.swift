@@ -36,8 +36,8 @@ public final class JitterBuffer: @unchecked Sendable {
         var pcm = Data(count: AudioConstants.bytesPerFrame)
         pcm.withUnsafeMutableBytes { buf in
             let ptr = buf.bindMemory(to: Int16.self)
-            for i in 0..<AudioConstants.samplesPerFrame {
-                ptr[i] = Int16.random(in: -AudioConstants.comfortNoiseAmplitude...AudioConstants.comfortNoiseAmplitude)
+            for idx in 0..<AudioConstants.samplesPerFrame {
+                ptr[idx] = Int16.random(in: -AudioConstants.comfortNoiseAmplitude...AudioConstants.comfortNoiseAmplitude)
             }
         }
         return pcm
