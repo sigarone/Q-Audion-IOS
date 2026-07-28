@@ -341,11 +341,38 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // RoomOptions is a class with `let`-only properties (no post-init
         // mutation possible) — verified against the actual pinned fork
         // source (Types/Options/RoomOptions.swift), which also confirms
-        // this exact argument order (defaultAudioPublishOptions <
-        // adaptiveStream < dynacast < encryptionOptions in the declared
-        // initializer — all params defaulted, but Swift still requires
-        // whichever ones are specified to appear in that order).
+        // this exact argument order (defaultVideoPublishOptions <
+        // defaultAudioPublishOptions < adaptiveStream < dynacast <
+        // encryptionOptions in the declared initializer — all params
+        // defaulted, but Swift still requires whichever ones are
+        // specified to appear in that order).
+        //
+        // W-GRPVIDEO-CODEC (2026-07-28): explicit preferredCodec: .vp8, not
+        // the SDK default (nil). Every video-publish call in this file
+        // (setCamera, setScreenShare) falls back to THIS single default
+        // when it doesn't pass its own publishOptions — verified against
+        // the fork source (LocalParticipant.swift: every publish path reads
+        // `room._state.roomOptions.defaultVideoPublishOptions` when no
+        // per-call override is given, `setScreenShare` doesn't even accept
+        // an override) — so setting it once here covers every video
+        // publish path, present and future, instead of each call site
+        // separately. With no preferredCodec, iOS ships an
+        // AddTrackRequest.simulcastCodecs[0] with an empty `codec` field;
+        // the SFU logs "simulcast codec without mime type" and falls back
+        // server-side to VP8 (bcrypto-server fi-1 log, 2026-07-28), but the
+        // iOS-side encoder was never prepared for that fallback and the
+        // publish then hard-times-out 30s later ("publish time out") — no
+        // other participant ever sees iOS's video. Other platforms don't
+        // hit this because they already declare an explicit preferredCodec.
+        // VP8 matches both the SFU's own fallback choice and every other
+        // platform's already-working codec in that same test call — H265
+        // was considered and rejected here: LiveKit does not transcode, so
+        // whatever iOS publishes must be directly decodable by every other
+        // participant, and WebRTC-level H265 decode support outside Apple
+        // platforms is not established for this SFU path (the existing 1:1
+        // H265 pipeline is a separate SFrame-based path, not this one).
         let roomOptions = RoomOptions(
+            defaultVideoPublishOptions: VideoPublishOptions(preferredCodec: .vp8),
             defaultAudioPublishOptions: AudioPublishOptions(red: false),
             adaptiveStream: false,
             dynacast: false,
@@ -382,6 +409,9 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         attachStatsReporting(to: room.localParticipant.firstAudioTrack)
         if wantsVideo {
             if await ensureCameraAuthorized() {
+                // preferredCodec: .vp8 is set globally via RoomOptions.
+                // defaultVideoPublishOptions above (see its comment for why)
+                // — no per-call override needed here.
                 _ = try await room.localParticipant.setCamera(enabled: true)
                 print("[GroupCallController][telemetry] local video track published identity=\(room.localParticipant.identity?.stringValue ?? "self")")
                 onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
@@ -421,6 +451,9 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         if enabled {
             guard await ensureCameraAuthorized() else { throw CameraPermissionError.denied }
         }
+        // preferredCodec: .vp8 is set globally via RoomOptions.
+        // defaultVideoPublishOptions (see connect()'s RoomOptions
+        // construction) — no per-call override needed here.
         _ = try await room.localParticipant.setCamera(enabled: enabled)
         let track = enabled ? room.localParticipant.firstCameraVideoTrack : nil
         onLocalVideoTrack?(track)

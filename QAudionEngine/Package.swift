@@ -66,18 +66,26 @@ let package = Package(
         // later) with native per-participant E2EE (RTCFrameCryptor). Pinned to
         // an EXACT tag (not `from:`) — same discipline as onnxruntime-spm above.
         //
-        // REVERTED 2026-07-28 back to 2.13.1-aes256-raw. The 2.15.1 bump
-        // (same day, see git history) broke iOS group-video publish:
-        // fi-1 LiveKit server logs for the very next test call show iOS's
-        // camera addTrackRequest.simulcastCodecs[0] arriving with NO mime
-        // type ("simulcast codec without mime type" / "falling back to
-        // alternative video codec" codec="video/" -> VP8), and the track
-        // publish then hard-times-out 30s later ("publish time out") —
-        // no other participant ever sees iOS's video, though iOS still
-        // receives everyone else's fine (consistent with only the PUBLISH
-        // path breaking). 2.13.1-aes256-raw does not exhibit this; the
-        // 2.15.1 upgrade (Xcode 26.6 compat) needs the fork's H265/simulcast
-        // codec population fixed before it's safe to re-attempt.
+        // RESTORED 2026-07-28 to 2.15.1-aes256-raw after root-causing (and
+        // fixing) the group-video publish break, briefly worked around by
+        // reverting to 2.13.1-aes256-raw earlier the same day. The real bug
+        // was NOT in this fork/version: fi-1's LiveKit server logs showed
+        // iOS's camera addTrackRequest.simulcastCodecs[0] arriving with NO
+        // mime type ("simulcast codec without mime type"), because
+        // `LiveKitGroupCallRoom`'s `RoomOptions` never set
+        // `defaultVideoPublishOptions.preferredCodec` — every other
+        // platform already declares one explicitly, iOS didn't. The SFU
+        // did fall back server-side to VP8 ("falling back to alternative
+        // video codec" codec="video/" -> VP8), but iOS's own encoder was
+        // never prepared for that fallback, so the publish then hard-timed-
+        // out 30s later ("publish time out") — confirmed identical
+        // client-sdk-swift source (LocalParticipant.swift, byte-for-byte)
+        // between 2.13.1-aes256-raw and 2.15.1-aes256-raw, so 2.13.1 was
+        // never actually safe either — it was just never exercised with an
+        // unset preferredCodec in a group call before. Fixed at the call
+        // site (`LiveKitGroupCallRoom.swift`'s `RoomOptions` construction,
+        // `defaultVideoPublishOptions: VideoPublishOptions(preferredCodec:
+        // .vp8)`), not here — restoring 2.15.1 is safe once that fix lands.
         //
         // Bumped 2026-07-28 from 2.13.1-aes256-raw to 2.15.1-aes256-raw now
         // that every CI workflow builds with Xcode 26.6 (was held at 2.13.x
@@ -135,7 +143,7 @@ let package = Package(
         // feeds the RAW 32-byte SK_0 through this overload -> native
         // derives AES-256-GCM. Every other file/line in client-sdk-swift
         // 2.15.1 is untouched — same-tag-shape fork, not a rewrite.
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.13.1-aes256-raw"),
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.15.1-aes256-raw"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency

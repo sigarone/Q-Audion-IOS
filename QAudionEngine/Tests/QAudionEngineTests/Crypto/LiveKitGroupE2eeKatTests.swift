@@ -10,7 +10,7 @@ import CommonCrypto
 /// (`LiveKitGroupCallRoom.rawKeyMaterial`) and handed VERBATIM to the native
 /// `LKRTCFrameCryptorKeyProvider` via the fork's raw-Data
 /// `BaseKeyProvider.setKey(keyData:participantId:index:)` overload
-/// (sigarone/client-sdk-swift tag `2.13.1-aes256-raw`). The patched native
+/// (sigarone/client-sdk-swift tag `2.15.1-aes256-raw`). The patched native
 /// DeriveKeys (aes256-framecryptor.patch: `password.size() == 32 ? 256 :
 /// 128`) then PBKDF2-derives an AES-256-GCM frame key. Any Android /
 /// Desktop / iOS client joining the same SFU room MUST derive the
