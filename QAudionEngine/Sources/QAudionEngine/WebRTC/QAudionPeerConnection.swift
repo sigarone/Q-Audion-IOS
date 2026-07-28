@@ -396,7 +396,13 @@ public final class QAudionPeerConnection: NSObject {
         // there) and bind the track directly to ITS sender — unambiguous,
         // guaranteed to keep the same mid.
         if let existing = pc.transceivers.first(where: { $0.mediaType == .video }) {
-            if existing.direction != .sendRecv { existing.direction = .sendRecv }
+            // Direction isn't clamped here: the pre-allocated transceiver was
+            // created with RTCRtpTransceiverInit().direction = .sendRecv (see
+            // createOffer's BUG2-fix pre-allocation) and `direction` on an
+            // already-live RTCRtpTransceiver is get-only on this WebRTC SDK
+            // build — nothing between pre-allocation and this reuse would
+            // have flipped it away from sendRecv on a still-trackless
+            // transceiver anyway.
             existing.sender.track = track
             localVideoTrack = track
             videoSender = existing.sender
