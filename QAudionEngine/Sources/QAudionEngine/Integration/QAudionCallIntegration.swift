@@ -2159,10 +2159,30 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
-            // DISPLAY-ONLY: surface the PSK fingerprint the responder
-            // selected (`selectedFpStr`, from `bundle.selectedPskFingerprint`
-            // at the top of this ACCEPT branch). Empty ⇒ no PSK mixed ⇒ nil.
-            onPqcSessionKeyEstablishedWithPsk?(combined, selectedFpStr.isEmpty ? nil : selectedFpStr)
+            // NOT display-only (it used to be, hence the old comment here).
+            // AppState feeds this straight into `resolvePskBytes`, which is the
+            // HKDF *salt* for K_video — so a value that fails to resolve there
+            // silently swaps the salt for the literal fallback and the two legs
+            // derive different video keys (purple screen, AES-GCM open failures,
+            // no other symptom). `selectedFpStr` is `bundle.selectedPskFingerprint`
+            // = the W-PSKBLIND **wire** value: since bb8affd that is a per-call
+            // blinded HMAC tag, NOT the static SHA-256(psk) fingerprint the
+            // consumer matches on — so it never resolved and iOS-as-initiator
+            // always fell back to the literal salt while Android salted with the
+            // raw PSK. Resolve the echo to the actual PSK (same helper both
+            // derivation branches above already use) and hand over that PSK's
+            // canonical static fingerprint, which is what the consumer expects.
+            // The responder path (line ~1772) was already correct: it emits
+            // `selectedFp`, kept in static form precisely for this.
+            let establishedPskFp: String? = Self.pskForEchoedSelection(
+                echo: selectedFpStr,
+                callId: callId,
+                ownEphemeralX25519Pub: local.x25519Priv.publicKey.rawRepresentation
+            ).map { PskAdvertising.canonicalFingerprint(forPsk: $0) }
+            if !selectedFpStr.isEmpty && establishedPskFp == nil {
+                print("[QAudionCallIntegration] ⚠️ ACCEPT echoed selection did not resolve to a vault PSK callId=\(callId.prefix(8))… — K_video will use the literal salt and WILL diverge from the peer")
+            }
+            onPqcSessionKeyEstablishedWithPsk?(combined, establishedPskFp)
             // Phase 18 — v4 bootstrap (initiator leg). Mirrors Android
             // PqcHandshake.kt:333-335: self = our identity, peer = the ACCEPT's
             // signerIdentityKey (base64-decoded), transcriptHash = the binding of
