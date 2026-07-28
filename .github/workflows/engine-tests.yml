@@ -286,11 +286,64 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: SwiftLint (report only)
+      # 2026-07-28 — was `--reporter github-actions-logging`, which surfaces
+      # each violation as a GitHub annotation. Confirmed live (run
+      # 30350292476) that this silently caps at ~20 annotations shown/
+      # queryable via the Checks API — the job's own raw log said "Done
+      # linting! Found 3380 violations, 1580 serious in 472 files" the same
+      # run, so the annotation view was showing 0.6% of the real picture
+      # with no indication anything was cut. `--output` writes the FULL,
+      # uncapped result as JSON instead, which the next two steps turn into
+      # an actually-complete signal: a real total in the job summary (not
+      # annotation-capped) and the full list as a downloadable artifact.
+      - name: SwiftLint (full JSON report)
+        id: swiftlint
         continue-on-error: true
         uses: docker://ghcr.io/realm/swiftlint:latest
         with:
-          args: lint --config .swiftlint.yml --reporter github-actions-logging
+          args: lint --config .swiftlint.yml --reporter json --output swiftlint-report.json
+      - name: Summarize SwiftLint results (uncapped)
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ ! -s swiftlint-report.json ]; then
+            echo "### SwiftLint" >> "$GITHUB_STEP_SUMMARY"
+            echo "No report produced (lint step may have crashed — see the step above)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          TOTAL=$(jq 'length' swiftlint-report.json)
+          SERIOUS=$(jq '[.[] | select(.severity == "Error")] | length' swiftlint-report.json)
+          WARNINGS=$(jq '[.[] | select(.severity == "Warning")] | length' swiftlint-report.json)
+          {
+            echo "### SwiftLint — full report ($TOTAL violations, GitHub annotations cap at ~20 so this summary is the real count)"
+            echo ""
+            echo "**$TOTAL total** — $SERIOUS serious (error), $WARNINGS warning"
+            echo ""
+            echo "<details><summary>Top rules by count</summary>"
+            echo ""
+            echo '```'
+            jq -r '.[].rule_id' swiftlint-report.json | sort | uniq -c | sort -rn | head -20
+            echo '```'
+            echo "</details>"
+            echo ""
+            echo "<details><summary>Top files by violation count</summary>"
+            echo ""
+            echo '```'
+            jq -r '.[].file' swiftlint-report.json | xargs -n1 basename | sort | uniq -c | sort -rn | head -20
+            echo '```'
+            echo "</details>"
+            echo ""
+            echo "Full per-violation detail (file/line/rule/message): download the \`swiftlint-full-report\` artifact on this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload full SwiftLint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swiftlint-full-report
+          path: swiftlint-report.json
+          if-no-files-found: warn
+          retention-days: 14
 
   # RealityCore (VLESS+REALITY Go core, see ios-simulator-tests above
   # for the gomobile-bind build of the same module) has go.mod/tests
