@@ -15,3 +15,17 @@ opt_in_rules:
   - closure_spacing
   - force_unwrapping
   - implicitly_unwrapped_optional
+
+# identifier_name's default min_length (warning:3, error:2) was responsible
+# for 2258 of 3380 real violations (67% — see swiftlint-report artifact,
+# run 30351576472), almost all single/double-letter names in crypto/DSP math
+# (i, j, k, n, s, a, dh, ct, fs, sq...) — the readable convention in that
+# code, not a naming defect. Lowering min_length to 1 drops the length
+# complaint entirely while keeping identifier_name's other checks (max
+# length, reserved names, etc.) active. Deliberate choice over renaming
+# thousands of call sites, which would mostly make dense math code harder
+# to read, not easier.
+identifier_name:
+  min_length:
+    warning: 1
+    error: 1
