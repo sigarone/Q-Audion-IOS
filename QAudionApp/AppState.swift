@@ -7520,22 +7520,26 @@ final class AppState: ObservableObject {
                 let epochLen = wire.count >= 2 ? Int(wire[base + 1]) : 0
                 if epochLen >= 1, wire.count >= 2 + epochLen,
                    let epochTag = String(data: wire.subdata(in: (base + 2)..<(base + 2 + epochLen)), encoding: .utf8) {
-                    if let psk = Self.lookupGroupCtrlPskByEpoch(epochTag: epochTag, sender: senderId) {
-                        if let session = try? Self.ratchet.ensureSession(
-                            epochId: epochTag, selfId: selfId, peerId: senderId, pskRoot: psk) {
-                            let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: selfId, clientMsgId: cmid)
-                            json = Self.ratchet.decrypt(session: session, wire: wire, aad: aad)
-                                .flatMap { String(data: $0, encoding: .utf8) }
-                            if json == nil {
-                                print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v3_decrypt_failed epoch=\(epochTag.prefix(16))")
-                            }
-                        } else {
-                            json = nil
-                            print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v3_ensure_session_failed epoch=\(epochTag.prefix(16))")
+                    // W-GRPCTRLPSKSWEEP — TRY each candidate; a single best
+                    // guess never matched Desktop. See groupCtrlPskCandidates.
+                    let candidates = Self.groupCtrlPskCandidates(epochTag: epochTag, sender: senderId)
+                    json = nil
+                    var attempted = 0
+                    for psk in candidates {
+                        guard let session = try? Self.ratchet.ensureSession(
+                            epochId: epochTag, selfId: selfId, peerId: senderId, pskRoot: psk) else { continue }
+                        attempted += 1
+                        let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: selfId, clientMsgId: cmid)
+                        if let opened = Self.ratchet.decrypt(session: session, wire: wire, aad: aad)
+                            .flatMap({ String(data: $0, encoding: .utf8) }) {
+                            json = opened
+                            break
                         }
-                    } else {
-                        json = nil
-                        print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v3_no_psk_for_epoch epoch=\(epochTag.prefix(16))")
+                    }
+                    if json == nil {
+                        let reason = candidates.isEmpty ? "v3_no_psk_for_epoch"
+                            : (attempted == 0 ? "v3_ensure_session_failed" : "v3_decrypt_failed")
+                        print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=\(reason) epoch=\(epochTag.prefix(16)) tried=\(attempted)/\(candidates.count)")
                     }
                 } else {
                     json = nil
@@ -7548,15 +7552,22 @@ final class AppState: ObservableObject {
                 // branch — and our own send side above).
                 let aad = Data("grpcall-ctrl:\(senderId):\(selfId)".utf8)
                 if let parsed = try? MessageCryptoV2.parse(wire) {
-                    if let psk = Self.lookupGroupCtrlPskByEpoch(epochTag: parsed.epoch, sender: senderId) {
-                        json = MessageCryptoV2.openWithPsk(parsed: parsed, psk: psk, aad: aad)
-                            .flatMap { String(data: $0, encoding: .utf8) }
-                        if json == nil {
-                            print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v2_decrypt_failed epoch=\(parsed.epoch.prefix(16))")
+                    // W-GRPCTRLPSKSWEEP — TRY each candidate (see the v3 branch
+                    // above and groupCtrlPskCandidates for why one guess never
+                    // matched Desktop). This is the branch Desktop actually
+                    // uses: its transport tag on the wire is `v2:auto:...`.
+                    let candidates = Self.groupCtrlPskCandidates(epochTag: parsed.epoch, sender: senderId)
+                    json = nil
+                    for psk in candidates {
+                        if let opened = MessageCryptoV2.openWithPsk(parsed: parsed, psk: psk, aad: aad)
+                            .flatMap({ String(data: $0, encoding: .utf8) }) {
+                            json = opened
+                            break
                         }
-                    } else {
-                        json = nil
-                        print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v2_no_psk_for_epoch epoch=\(parsed.epoch.prefix(16))")
+                    }
+                    if json == nil {
+                        let reason = candidates.isEmpty ? "v2_no_psk_for_epoch" : "v2_decrypt_failed"
+                        print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=\(reason) epoch=\(parsed.epoch.prefix(16)) tried=\(candidates.count)")
                     }
                 } else {
                     json = nil
@@ -14189,6 +14200,49 @@ extension AppState {
             }
         }
         return resolveGroupCtrlPsk(peer: sender)
+    }
+
+    /// W-GRPCTRLPSKSWEEP (2026-07-28) — every PSK worth TRYING for a
+    /// `qa_grpcall_ctrl` envelope, best guess first, mirroring Android's
+    /// `MessageCrypto.tryAllPsks` fallthrough.
+    ///
+    /// [lookupGroupCtrlPskByEpoch] returns a single best guess, and both call
+    /// sites used to attempt exactly ONE decrypt with it. That is three
+    /// candidates in total (`call-<tag>`, `<tag>`, one contact-bound key), and
+    /// Desktop matches none of them: it seals with
+    /// `vault.forContactWithMeta(peer)` and puts THAT key's own name on the
+    /// wire as the epoch tag (live value observed: `9d8f98fe`). So iOS never
+    /// installed Desktop's sender key even once. Server-side corpus over three
+    /// days: `ctrl envelope RECEIVED+decrypted sender=81ad802f` = 0 against
+    /// `RECEIVE FAILED sender=81ad802f` = 41. In a live call Desktop's audio
+    /// then arrived ~100% concealed (in_concealed_samples 13 200 -> 213 840 in
+    /// ~5 s) and its video never rendered, while Android's tracks in the SAME
+    /// call were fine — exactly the asymmetry reported as "on iOS I don't see
+    /// Desktop, the others do".
+    ///
+    /// Trying rather than guessing is safe and bounded: AEAD authenticates, so
+    /// a wrong key fails the tag and can never yield a forged plaintext; the
+    /// extra work is at most one open() per stored PSK and is paid ONLY when
+    /// the targeted lookup already missed. Deduped so the common case still
+    /// costs a single attempt.
+    static func groupCtrlPskCandidates(epochTag: String, sender: String) -> [Data] {
+        let vault = SovereignKeyVault()
+        var out: [Data] = []
+        var seen = Set<Data>()
+        func add(_ d: Data?) {
+            guard let d, !d.isEmpty, !seen.contains(d) else { return }
+            seen.insert(d)
+            out.append(d)
+        }
+        let targetName = epochTag.hasPrefix("call-") ? epochTag : "call-\(epochTag)"
+        for name in [targetName, epochTag] {
+            add((try? vault.loadPsk(name: name)) ?? nil)
+        }
+        add(resolveGroupCtrlPsk(peer: sender))
+        for name in vault.listPskNames() {
+            add((try? vault.loadPsk(name: name)) ?? nil)
+        }
+        return out
     }
 
     /// Decrypt a v3.1 wire blob. Bootstraps the per-peer session from

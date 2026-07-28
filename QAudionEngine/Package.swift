@@ -66,6 +66,27 @@ let package = Package(
         // later) with native per-participant E2EE (RTCFrameCryptor). Pinned to
         // an EXACT tag (not `from:`) — same discipline as onnxruntime-spm above.
         //
+        // BUMPED 2026-07-28 to 2.15.1-aes256-raw2 — the REAL root cause of
+        // "nobody ever receives anything from iOS in a group call".
+        // `E2EEManager.addRtpSender` created the frame cryptor and set only
+        // `.delegate`/`.enabled`, never `.keyIndex`, so it kept the native
+        // default `key_index_ = 0`; the ENCRYPT path looks up exactly that
+        // slot and `GetKeySet(0) == nullptr` makes `encryptFrame` report
+        // kMissingKey and RETURN WITHOUT emitting the frame — zero RTP leaves
+        // the device, and the SFU times the publish out at +30s. This app
+        // installs keys at `groupEpoch % 16`, which is 1/2/3 and provably
+        // never 0. RECEIVE was unaffected because decryption reads the index
+        // from the frame trailer instead. Device-confirmed: 12/12 local
+        // tracks (AUDIO AND VIDEO) missing_key, 0 ok, over three days.
+        // client-sdk-android has always pinned this (E2EEManager.kt:199) and
+        // client-sdk-js re-reads it per frame; Swift had neither. raw2 adds
+        // `BaseKeyProvider.getLatestKeyIndex(_:)` + the pin on sender and
+        // receiver. No xcframework rebuild needed — `RTCFrameCryptor.keyIndex`
+        // is already public/assign in the pinned webrtc-sdk m144_release.
+        // NOTE: the codec note below was a REAL but SEPARATE bug (the empty
+        // simulcastCodecs mimeType). Fixing it removed the noise that was
+        // hiding this one; it was never sufficient on its own.
+        //
         // RESTORED 2026-07-28 to 2.15.1-aes256-raw after root-causing (and
         // fixing) the group-video publish break, briefly worked around by
         // reverting to 2.13.1-aes256-raw earlier the same day. The real bug
@@ -143,7 +164,7 @@ let package = Package(
         // feeds the RAW 32-byte SK_0 through this overload -> native
         // derives AES-256-GCM. Every other file/line in client-sdk-swift
         // 2.15.1 is untouched — same-tag-shape fork, not a rewrite.
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.15.1-aes256-raw"),
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.15.1-aes256-raw2"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
