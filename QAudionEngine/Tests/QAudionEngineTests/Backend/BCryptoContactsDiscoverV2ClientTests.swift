@@ -27,8 +27,6 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
              Data("{\"pepper\":\"\(pepperB64)\"}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
-            // Hardcoded literal URL string — always parses.
-            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { "token123" }
@@ -46,8 +44,6 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
              Data("{\"pepper\":\"\"}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
-            // Hardcoded literal URL string — always parses.
-            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { nil }
@@ -70,8 +66,6 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
              Data("{\"results\":[{\"hash\":\"abc\",\"user_id\":\"u-1\"},{\"hash\":\"def\"}]}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
-            // Hardcoded literal URL string — always parses.
-            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { "token123" }
@@ -90,8 +84,6 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
              Data("[{\"hash\":\"x\",\"user_id\":\"u-x\"}]".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
-            // Hardcoded literal URL string — always parses.
-            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { nil }

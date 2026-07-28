@@ -32,8 +32,6 @@ final class BCryptoOtaModelClientTests: XCTestCase {
         }
 
         let client = BCryptoOtaModelClient(
-            // Hardcoded literal URL string — always parses.
-            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: trustAnchors
@@ -55,8 +53,6 @@ final class BCryptoOtaModelClientTests: XCTestCase {
         }
 
         let client = BCryptoOtaModelClient(
-            // Hardcoded literal URL string — always parses.
-            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: badAnchors
@@ -92,8 +88,6 @@ final class BCryptoOtaModelClientTests: XCTestCase {
         }
 
         let client = BCryptoOtaModelClient(
-            // Hardcoded literal URL string — always parses.
-            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: trustAnchors
@@ -126,8 +120,6 @@ final class BCryptoOtaModelClientTests: XCTestCase {
         }
 
         let client = BCryptoOtaModelClient(
-            // Hardcoded literal URL string — always parses.
-            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: trustAnchors
@@ -150,8 +142,6 @@ final class BCryptoOtaModelClientTests: XCTestCase {
         }
 
         let client = BCryptoOtaModelClient(
-            // Hardcoded literal URL string — always parses.
-            // swiftlint:disable:next force_unwrapping
             baseUrl: URL(string: "https://test")!,
             session: session,
             trustAnchors: trustAnchors

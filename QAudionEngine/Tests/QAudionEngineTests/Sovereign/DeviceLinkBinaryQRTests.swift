@@ -43,8 +43,6 @@ final class DeviceLinkBinaryQRTests: XCTestCase {
     }
 
     func test_decode_rejectsWrongScheme() {
-        // Hardcoded well-formed URL literal — always parses.
-        // swiftlint:disable:next force_unwrapping
         let url = URL(string: "https://example.com/link/abc")!
         XCTAssertThrowsError(try DeviceLinkBinaryQR.decode(url: url)) { err in
             guard case DeviceLinkBinaryQR.Error.invalidUrl = err else {
@@ -55,8 +53,6 @@ final class DeviceLinkBinaryQRTests: XCTestCase {
     }
 
     func test_decode_rejectsWrongHost() {
-        // Hardcoded well-formed URL literal — always parses.
-        // swiftlint:disable:next force_unwrapping
         let url = URL(string: "qaudion://other/abc")!
         XCTAssertThrowsError(try DeviceLinkBinaryQR.decode(url: url)) { err in
             guard case DeviceLinkBinaryQR.Error.invalidUrl = err else {
