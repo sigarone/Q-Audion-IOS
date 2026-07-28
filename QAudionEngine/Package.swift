@@ -66,20 +66,14 @@ let package = Package(
         // later) with native per-participant E2EE (RTCFrameCryptor). Pinned to
         // an EXACT tag (not `from:`) — same discipline as onnxruntime-spm above.
         //
-        // Version pin rationale (CORRECTED 2026-07-14 after a CI resolution
-        // failure): this repo builds with **swift-tools-version 5.9** (line 1)
-        // and CI runs **Xcode 15.4 / Swift 5.10** (see kat-cross-platform.yml
-        // `xcode-select .../Xcode_15.4.app`). LiveKit >= 2.14.0 declares
-        // swift-tools-version 6.0, which a Swift-5.10 toolchain CANNOT resolve
-        // ("incompatible tools version (6.0.0)"), so 2.14.1 broke the build.
-        // **2.13.0 is the newest tag whose manifest declares swift-tools-version
-        // 5.9** — resolvable by Xcode 15.4. Its E2EE API is identical to 2.14.x
-        // for everything used here (verified against the tagged source), EXCEPT
-        // it has no `keyDerivationAlgorithm` option: 2.13.0 derives the frame
-        // key with PBKDF2 UNCONDITIONALLY (the `.pbkdf2`/`.hkdf` toggle is 2.14+),
-        // which is exactly the cross-platform contract. Bump this pin to >= 2.14
-        // only together with (or after) bumping CI's Xcode to >= 16.0, and
-        // re-add `keyDerivationAlgorithm: .pbkdf2` explicitly when you do.
+        // Bumped 2026-07-28 from 2.13.1-aes256-raw to 2.15.1-aes256-raw now
+        // that every CI workflow builds with Xcode 26.6 (was held at 2.13.x
+        // because CI ran Xcode 15.4/Swift 5.10, and LiveKit >= 2.14.0
+        // declares swift-tools-version 6.0 — see git history for that
+        // superseded rationale). 2.15.1 ships `keyDerivationAlgorithm`
+        // (`.pbkdf2`/`.hkdf`); this app does not set it, so it keeps the
+        // same PBKDF2-unconditional behavior 2.13.0 always had — no call
+        // site changes needed.
         //
         // Dual-WebRTC safety (verified against the actual sources before
         // adding this, not assumed): `client-sdk-swift` depends on its OWN
@@ -92,8 +86,8 @@ let package = Package(
         // SPECIFICALLY so it can coexist in the same binary as any other
         // WebRTC-based library. So this app's own custom-patched `WebRTC`
         // binaryTarget below (webrtc-aes256-build, also M144.7559.x
-        // upstream) and LiveKit's `LiveKitWebRTC` (2.13.0 pins
-        // webrtc-xcframework 144.7559.03) can link into the same app
+        // upstream) and LiveKit's `LiveKitWebRTC` (2.15.1 pins
+        // webrtc-xcframework 144.7559.10) can link into the same app
         // without file- or symbol-level collisions: two independent WebRTC
         // engines, one per call type (1:1 calls keep using this app's own
         // `WebRTC`/`QAudionPeerConnection`; group-call SFU media uses
@@ -105,46 +99,30 @@ let package = Package(
         // group calls are mutually exclusive call states, but a future
         // call-waiting/concurrent-call scenario would need explicit
         // handoff between the two.
-        // AES-256 fork (sigarone/client-sdk-swift, tag 2.13.0-aes256-livekit):
-        // redirects ONLY the transitive webrtc-xcframework dependency to
-        // sigarone/webrtc-xcframework's own aes256-livekit fork, which
-        // carries the same aes256-framecryptor.patch as this app's own
-        // WebRTC binaryTarget below — group-call media now gets AES-256-GCM
-        // instead of the fixed AES-128 FrameCryptor once a 32-byte shared
-        // key is supplied (matches the Android wiring, feature-call's
-        // configurations.all { resolutionStrategy.dependencySubstitution }).
-        // Every other file/line in client-sdk-swift 2.13.0 is untouched —
-        // this is a same-tag-shape fork, not a rewrite. All the Dual-WebRTC
-        // safety analysis above still applies unchanged (package/symbol
-        // relocation is baked into the xcframework itself, independent of
-        // which URL serves it).
         //
-        // Build-history note (2026-07-15/16): the FIRST xcframework this fork
-        // pointed at was built from webrtc_ref=m144_release (a rolling
-        // branch), whose tip had drifted ~2.5 months past
-        // livekit/webrtc-xcframework's real 144.7559.03 cut and broke THIS
-        // package's own compile (LKRTCAudioDeviceModule missing
-        // isVoiceProcessingEnabled — client-sdk-swift's AudioManager.swift
-        // calls it directly). Fixed at the source: sigarone/webrtc-aes256-build's
-        // build-livekit-ios.yml now pins an exact commit (via a tag on a
-        // sigarone/webrtc fork, since GitHub won't shallow-fetch an
-        // arbitrary SHA) and the xcframework was rebuilt+republished under
-        // the SAME release asset URL. No change needed here — this comment
-        // exists only to force a fresh SPM resolution in CI so the new
-        // checksum gets picked up (Package.resolved caching could otherwise
-        // mask a stale binary).
-        //
-        // W-GRPKEY256 (2026-07-20 lockstep flag day): tag 2.13.1-aes256-raw is
-        // 2.13.0-aes256-livekit + EXACTLY ONE commit (9255cb3, fork branch
-        // aes256-raw): a raw-Data `setKey(keyData:participantId:index:)`
-        // overload on `BaseKeyProvider` that hands the bytes VERBATIM to
+        // AES-256 fork (sigarone/client-sdk-swift, tag 2.15.1-aes256-raw,
+        // rebased from 2.13.1-aes256-raw's same two commits onto upstream
+        // 2.15.1): (1) redirects the transitive webrtc-xcframework
+        // dependency to sigarone/webrtc-xcframework@144.7559.10-aes256-livekit
+        // (itself rebuilt via sigarone/webrtc-aes256-build's
+        // build-livekit-ios.yml from sigarone/webrtc@f47af7bc9658 — one day
+        // before livekit/webrtc-xcframework's real 144.7559.10 cut on
+        // 2026-06-16, same day-prior matching methodology already validated
+        // for 144.7559.03; verified in the build log: LK-prefixed symbols
+        // present, "AES-256 GCM using openssl" string present in the
+        // binary), carrying the same aes256-framecryptor.patch as this
+        // app's own WebRTC binaryTarget below — group-call media gets
+        // AES-256-GCM instead of the fixed AES-128 FrameCryptor once a
+        // 32-byte shared key is supplied (matches the Android wiring).
+        // (2) a raw-Data `setKey(keyData:participantId:index:)` overload on
+        // `BaseKeyProvider` that hands the bytes VERBATIM to
         // `LKRTCFrameCryptorKeyProvider` (the String overload UTF-8-encodes,
         // so a 44-char base64 key can never fire the patched native
-        // `password.size() == 32 ? 256 : 128` gate — the whole fleet was
-        // silently deriving AES-128-GCM). `LiveKitGroupCallRoom` now feeds
-        // the RAW 32-byte SK_0 through this overload -> native derives
-        // AES-256-GCM. Nothing else differs from the analysis above.
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.13.1-aes256-raw"),
+        // `password.size() == 32 ? 256 : 128` gate). `LiveKitGroupCallRoom`
+        // feeds the RAW 32-byte SK_0 through this overload -> native
+        // derives AES-256-GCM. Every other file/line in client-sdk-swift
+        // 2.15.1 is untouched — same-tag-shape fork, not a rewrite.
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.15.1-aes256-raw"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
