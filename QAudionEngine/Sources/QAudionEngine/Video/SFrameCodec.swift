@@ -174,7 +174,7 @@ public enum SFrameCodec {
         padded: Bool = false,
         keyFrame: Bool = false
     ) throws -> Header {
-        guard kid.isEmpty && kid.count <= 3 else { throw SFrameError.invalidKidLength(kid.count) }
+        guard kid.count <= 3 else { throw SFrameError.invalidKidLength(kid.count) }
         // 4 most-significant bits of CTR are reserved for layer mux (spec §5).
         guard (ctr >> 60) == 0 else { throw SFrameError.ctrTopFourBitsReserved(ctr) }
 
