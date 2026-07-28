@@ -395,7 +395,37 @@ public final class QAudionPeerConnection: NSObject {
         // existing video transceiver (if the pre-allocation already put one
         // there) and bind the track directly to ITS sender — unambiguous,
         // guaranteed to keep the same mid.
-        if let existing = pc.transceivers.first(where: { $0.mediaType == .video }) {
+        // W-RECVONLYPIN (2026-07-28) — the reuse below is ONLY valid while the
+        // existing transceiver can still SEND. Device-confirmed regression from
+        // the W-DUPETRANSCEIVER change above (call 5ec6cc1d, iOS-initiated
+        // upgrade): iOS's own upgrade offer went out as
+        //     m=video dir=recvonly  ssrcs=NONE
+        // and Android correctly mirrored it with sendonly, so Android showed
+        // purple for 110 s while iOS decoded Android's 1629 frames perfectly —
+        // a one-way call that iOS itself had asked for, while its
+        // `call_video_state` beacon simultaneously claimed paused=false.
+        //
+        // Why reuse cannot fix that: on this WebRTC build
+        // `RTCRtpTransceiver.direction` is READONLY and there is no
+        // `setDirection:` (verified against webrtc-sdk m144_release's
+        // RTCRtpTransceiver.h — only `currentDirection:`, `stopInternal`,
+        // `setCodecPreferences`). Assigning `sender.track` does NOT promote a
+        // recvonly transceiver. `pc.add(track:streamIds:)` is the ONLY API here
+        // that does, because libwebrtc's AddTrack applies the JSEP rule
+        // "if transceiver.direction is recvonly, set it to sendrecv".
+        //
+        // So: reuse when the transceiver can send (keeps the mid stable, which
+        // is the whole point of W-DUPETRANSCEIVER), otherwise fall back to
+        // addTrack and accept a possible new mid — a renegotiated mid is
+        // recoverable, a permanently recvonly m-line is not.
+        let reusable = pc.transceivers.first {
+            $0.mediaType == .video && ($0.direction == .sendRecv || $0.direction == .sendOnly)
+        }
+        if reusable == nil,
+           let blocked = pc.transceivers.first(where: { $0.mediaType == .video }) {
+            print("[WebRTC] W-RECVONLYPIN video transceiver mid=\(blocked.mid) is \(blocked.direction.rawValue) — cannot promote (direction is readonly on this SDK); falling back to addTrack so the offer is sendrecv")
+        }
+        if let existing = reusable {
             // Direction isn't clamped here: the pre-allocated transceiver was
             // created with RTCRtpTransceiverInit().direction = .sendRecv (see
             // createOffer's BUG2-fix pre-allocation) and `direction` on an
