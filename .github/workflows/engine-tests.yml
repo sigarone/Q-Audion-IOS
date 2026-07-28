@@ -7,6 +7,12 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Same discovery pattern as ios-testflight.yml's "Select Xcode" step —
+  # kept in lockstep 2026-07-28 so ios-simulator-tests below builds/tests
+  # against the same Xcode major version that actually ships to
+  # TestFlight, instead of silently running on macos-14's old Xcode 15.4
+  # default while production ships on Xcode 26.x.
+  XCODE_VERSION: '26'
 
 jobs:
   # NOTE 2026-07-28: the old macOS "test" job (swift build/swift test on
@@ -29,10 +35,24 @@ jobs:
   # run fully (not skipped). WebRTC's iOS-simulator slice is present, so this
   # job does NOT share the macOS-slice-missing issue.
   ios-simulator-tests:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+
+      - name: Select Xcode
+        run: |
+          set -e
+          PIN="${XCODE_VERSION}"
+          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$MATCH" ]; then
+            echo "No Xcode matching '${PIN}*' found. Available:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
+            exit 1
+          fi
+          echo "Selecting: $MATCH"
+          sudo xcode-select -s "$MATCH"
+          xcodebuild -version
 
       # ----------------------------------------------------------
       # Build Reality.xcframework -- VLESS+REALITY-over-xray-core transport

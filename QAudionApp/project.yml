@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.qaudion
   deploymentTarget:
     iOS: "16.0"
-  xcodeVersion: "16.2"
+  xcodeVersion: "26.6"
   # Prevents "member of multiple groups" xcodebuild warnings.
   # Without this, subdirectories (DesignSystem, Services, Views) appear
   # both in the target group and the root project group ("") when

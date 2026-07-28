@@ -7,9 +7,9 @@
 # implemented (planned in 1.0 §3.5 + iOS Track B Phase A of
 # glittery-sleeping-hejlsberg.md). Until then this is a no-op stub.
 #
-# Production CI for iOS continues to run via Codemagic; this GitHub
-# workflow is the cross-platform PR-gating canary that runs only
-# the deterministic crypto KAT suite (no simulator boot needed).
+# This GitHub Actions workflow (CI moved off Codemagic 2026-05-06, see
+# CLAUDE.md) is the cross-platform PR-gating canary that runs only the
+# deterministic crypto KAT suite (no simulator boot needed).
 
 name: KAT cross-platform
 
@@ -22,17 +22,33 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Same discovery pattern as ios-testflight.yml's "Select Xcode" step —
+  # kept in lockstep 2026-07-28 so this workflow tests against the same
+  # Xcode major version that actually ships to TestFlight, instead of
+  # drifting behind on an old runner default (was hard-pinned to 15.4).
+  XCODE_VERSION: '26'
 
 jobs:
   ios-kat:
     name: iOS Swift KAT
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+        run: |
+          set -e
+          PIN="${XCODE_VERSION}"
+          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$MATCH" ]; then
+            echo "No Xcode matching '${PIN}*' found. Available:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
+            exit 1
+          fi
+          echo "Selecting: $MATCH"
+          sudo xcode-select -s "$MATCH"
+          xcodebuild -version
 
       # When KAT test target is implemented:
       # - name: Pull KAT vectors
