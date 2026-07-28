@@ -2,6 +2,11 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
+// This file's Decodable structs mirror KAT JSON fixture keys verbatim
+// (snake_case, no CodingKeys) — renaming would silently break decoding
+// against the shared cross-platform fixture.
+// swiftlint:disable identifier_name
+
 /// Cross-platform KMS round-trip KAT verifier (iOS side).
 ///
 /// Loads `tools/kat/kms/kms-roundtrip-kat.json` (mirrored byte-equal
@@ -113,3 +118,4 @@ private extension Data {
         map { String(format: "%02x", $0) }.joined()
     }
 }
+// swiftlint:enable identifier_name

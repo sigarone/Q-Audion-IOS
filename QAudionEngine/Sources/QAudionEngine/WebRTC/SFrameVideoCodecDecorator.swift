@@ -80,7 +80,7 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
             case .sframe(let s):
                 sealedDataOpt = try? s.seal(
                     plaintext: image.buffer,
-                    layer: .L,
+                    layer: .low,
                     keyFrame: isKeyFrame,
                     padded: true // Match Android's 64-byte padding policy
                 )

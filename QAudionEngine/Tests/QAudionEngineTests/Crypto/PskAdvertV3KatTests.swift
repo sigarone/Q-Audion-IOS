@@ -2,6 +2,11 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
+// This file's Decodable structs mirror KAT JSON fixture keys verbatim
+// (snake_case, no CodingKeys) — renaming would silently break decoding
+// against the shared cross-platform fixture.
+// swiftlint:disable identifier_name
+
 /// Cross-platform KAT for `PskAdvertV3` (WIRE_SPEC §3.3.1).
 ///
 /// Golden source: `bcrypto-server/tools/kat/psk-advert-v3/psk-advert-v3-kat.json`,
@@ -263,3 +268,4 @@ final class PskAdvertV3KatTests: XCTestCase {
         ))
     }
 }
+// swiftlint:enable identifier_name

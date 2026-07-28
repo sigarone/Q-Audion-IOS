@@ -1468,7 +1468,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             peerHeardFrom: negotiated != nil,
             useSFrame: negotiated?.useSFrame ?? false
         ) {
-        case .defer_:
+        case .`defer`:
             return nil
         case .failClosed:
             if let n = negotiated {

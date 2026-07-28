@@ -123,9 +123,9 @@ final class SFrameCodecKatTest: XCTestCase {
 
     private static func layerFromString(_ s: String) -> SFrameCodec.Layer? {
         switch s {
-        case "L": return .L
-        case "M": return .M
-        case "H": return .H
+        case "L": return .low
+        case "M": return .mid
+        case "H": return .high
         default: return nil
         }
     }

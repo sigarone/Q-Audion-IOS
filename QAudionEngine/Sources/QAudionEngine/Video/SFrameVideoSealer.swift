@@ -47,10 +47,10 @@ public final class SFrameVideoSealer: @unchecked Sendable {
     /// plaintext (≤ ~1200 B for typical RTP MTU).
     ///
     /// The simulcast layer is set per-frame; for 1:1 calls (no simulcast)
-    /// the default `.M` mirrors the Kotlin contract.
+    /// the default `.mid` mirrors the Kotlin contract.
     public func seal(
         plaintext: Data,
-        layer: SFrameCodec.Layer = .M,
+        layer: SFrameCodec.Layer = .mid,
         keyFrame: Bool = false,
         padded: Bool = false
     ) throws -> Data {

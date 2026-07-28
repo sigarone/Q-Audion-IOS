@@ -2,6 +2,11 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
+// This file's Decodable structs mirror KAT JSON fixture keys verbatim
+// (snake_case, no CodingKeys) — renaming would silently break decoding
+// against the shared cross-platform fixture.
+// swiftlint:disable identifier_name
+
 /// Cross-platform SAS KAT verifier (iOS side).
 ///
 /// Loads `tools/kat/sas/sas-kat.json` (mirrored byte-equal in all 4
@@ -129,3 +134,4 @@ private extension Data {
         map { String(format: "%02x", $0) }.joined()
     }
 }
+// swiftlint:enable identifier_name

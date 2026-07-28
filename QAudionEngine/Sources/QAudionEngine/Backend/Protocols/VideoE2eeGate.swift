@@ -22,7 +22,7 @@ import Foundation
 /// Mirrors `shared/videoE2eeGate.ts` (Desktop) and `VideoE2eeGate.kt` (Android).
 public enum VideoE2eeDecision: String, Equatable, Sendable {
     /// No usable key yet. The caller is invoked again; change nothing.
-    case defer_
+    case `defer`
     /// The peer did not agree. Disable video and say so.
     case failClosed
     /// Install the cryptor, then lift any earlier refusal.
@@ -40,11 +40,11 @@ public enum VideoE2eeGate {
         peerHeardFrom: Bool,
         useSFrame: Bool
     ) -> VideoE2eeDecision {
-        guard peerHeardFrom else { return .defer_ }
+        guard peerHeardFrom else { return .`defer` }
         // Order matters: a peer that declined frame encryption is refused whether
         // or not a key ever turns up. Checking the key first would silently turn
         // a downgrade back into a deferral on the slow path.
         guard useSFrame else { return .failClosed }
-        return hasSessionKey ? .install : .defer_
+        return hasSessionKey ? .install : .`defer`
     }
 }

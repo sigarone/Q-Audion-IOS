@@ -69,7 +69,7 @@ final class SFrameCodecRoundTripTest: XCTestCase {
 
     func test_layerEncoded_inExtensionByteAndCtrMux() throws {
         let master = try SFrameCodec.deriveMaster1to1(pqcKey)
-        for layer in [SFrameCodec.Layer.L, .M, .H] {
+        for layer in [SFrameCodec.Layer.low, .mid, .high] {
             let wire = try SFrameCodec.seal(
                 master: master, ctr: 7, plaintext: Data("abc".utf8), layer: layer
             )
@@ -151,11 +151,11 @@ final class SFrameCodecRoundTripTest: XCTestCase {
         let kid = Data([0x12, 0x34, 0x56])
         let pt = Data("group video frame".utf8)
         let wire = try SFrameCodec.seal(
-            master: master, ctr: 5, plaintext: pt, kid: kid, layer: .M
+            master: master, ctr: 5, plaintext: pt, kid: kid, layer: .mid
         )
         let (h, _) = try SFrameCodec.decodeHeader(wire)
         XCTAssertEqual(h.kid, kid)
-        XCTAssertEqual(h.layer, .M)
+        XCTAssertEqual(h.layer, .mid)
         let opened = try SFrameCodec.open(master: master, wire: wire)
         XCTAssertEqual(opened, pt)
     }
@@ -169,7 +169,7 @@ final class SFrameCodecRoundTripTest: XCTestCase {
             ctr: 0xABCDEF,
             plaintext: Data("x".utf8),
             kid: Data([0x01, 0x02, 0x03]),
-            layer: .H,
+            layer: .high,
             padded: true,
             keyFrame: true
         )

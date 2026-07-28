@@ -5,14 +5,14 @@ import XCTest
 final class VideoE2eeGateTests: XCTestCase {
 
     func testDefersUntilThePeerHasBeenHeardFrom() {
-        XCTAssertEqual(.defer_, VideoE2eeGate.decide(
+        XCTAssertEqual(.`defer`, VideoE2eeGate.decide(
             hasSessionKey: true, peerHeardFrom: false, useSFrame: false))
-        XCTAssertEqual(.defer_, VideoE2eeGate.decide(
+        XCTAssertEqual(.`defer`, VideoE2eeGate.decide(
             hasSessionKey: false, peerHeardFrom: false, useSFrame: true))
     }
 
     func testDefersWhileTheSessionKeyIsStillMissing() {
-        XCTAssertEqual(.defer_, VideoE2eeGate.decide(
+        XCTAssertEqual(.`defer`, VideoE2eeGate.decide(
             hasSessionKey: false, peerHeardFrom: true, useSFrame: true))
     }
 

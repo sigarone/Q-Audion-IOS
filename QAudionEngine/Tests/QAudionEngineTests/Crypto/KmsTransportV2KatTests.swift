@@ -2,6 +2,11 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
+// This file's Decodable structs mirror KAT JSON fixture keys verbatim
+// (snake_case, no CodingKeys) — renaming would silently break decoding
+// against the shared cross-platform fixture.
+// swiftlint:disable identifier_name
+
 /// Cross-platform KAT consumer for kms-psk-v2 (§4). Authoritative
 /// generator: firmware tools/kat/kms-v2/gen_kms_v2_kat.py. iOS MUST
 /// reproduce every vector's recovered K AND match the pinned
@@ -113,3 +118,4 @@ extension Data {
     }
     func hexLower() -> String { map { String(format: "%02x", $0) }.joined() }
 }
+// swiftlint:enable identifier_name

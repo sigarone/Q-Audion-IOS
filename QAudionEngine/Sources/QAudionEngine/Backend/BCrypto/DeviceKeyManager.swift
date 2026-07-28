@@ -47,6 +47,9 @@ public final class DeviceKeyManager: @unchecked Sendable {
         case registrationFailed(underlying: Swift.Error)
     }
 
+    // UPPER_SNAKE_CASE matches the convention used for frozen wire/storage
+    // constants throughout this codebase (see CryptoConstants, KmsTransport).
+    // swiftlint:disable identifier_name
     private static let LABEL_X25519_PRIV = "__device.x25519.priv"
     private static let LABEL_X25519_PUB  = "__device.x25519.pub"
     private static let LABEL_MLKEM_PRIV  = "__device.mlkem.priv"
@@ -59,6 +62,7 @@ public final class DeviceKeyManager: @unchecked Sendable {
     private static let LABEL_ED25519_PRIV = "__device.ed25519.priv"
     private static let LABEL_ED25519_PUB  = "__device.ed25519.pub"
     private static let DEVICE_FP_LABEL   = "device-key"
+    // swiftlint:enable identifier_name
 
     private let vault: SovereignKeyVault
     private let kmsClient: BCryptoKmsClient

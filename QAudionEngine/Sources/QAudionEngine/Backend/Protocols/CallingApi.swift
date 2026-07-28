@@ -336,14 +336,15 @@ public struct RelayServer: Decodable, Equatable {
         self.credential = try c.decodeIfPresent(String.self, forKey: .credential)
         let ttl = try c.decodeIfPresent(Int.self, forKey: .ttl)
             ?? c.decodeIfPresent(Int.self, forKey: .ttlSeconds)
-            ?? c.decodeIfPresent(Int.self, forKey: .ttl_seconds)
+            ?? c.decodeIfPresent(Int.self, forKey: .ttlSecondsSnake)
             ?? 3600
         self.ttl = ttl
     }
 
     private enum CodingKeys: String, CodingKey {
         case urls, username, credential, ttl
-        case ttlSeconds, ttl_seconds
+        case ttlSeconds
+        case ttlSecondsSnake = "ttl_seconds"
     }
 }
 
@@ -376,19 +377,22 @@ public struct RelayResponse: Decodable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.relays = try c.decodeIfPresent([RelayServer].self, forKey: .relays) ?? []
         self.wssTurnUrl = try c.decodeIfPresent(String.self, forKey: .wssTurnUrl)
-            ?? c.decodeIfPresent(String.self, forKey: .wss_turn_url)
+            ?? c.decodeIfPresent(String.self, forKey: .wssTurnUrlSnake)
         self.onionAddress = try c.decodeIfPresent(String.self, forKey: .onionAddress)
-            ?? c.decodeIfPresent(String.self, forKey: .onion_address)
+            ?? c.decodeIfPresent(String.self, forKey: .onionAddressSnake)
         self.masqueUrl = try c.decodeIfPresent(String.self, forKey: .masqueUrl)
-            ?? c.decodeIfPresent(String.self, forKey: .masque_url)
+            ?? c.decodeIfPresent(String.self, forKey: .masqueUrlSnake)
         self.reality = try c.decodeIfPresent(RealityRelayParams.self, forKey: .reality)
     }
 
     private enum CodingKeys: String, CodingKey {
         case relays
-        case wssTurnUrl, wss_turn_url
-        case onionAddress, onion_address
-        case masqueUrl, masque_url
+        case wssTurnUrl
+        case wssTurnUrlSnake = "wss_turn_url"
+        case onionAddress
+        case onionAddressSnake = "onion_address"
+        case masqueUrl
+        case masqueUrlSnake = "masque_url"
         case reality
     }
 }
@@ -449,20 +453,23 @@ public struct RealityRelayParams: Decodable, Equatable, Sendable {
         self.hostname = try c.decodeIfPresent(String.self, forKey: .hostname) ?? ""
         self.port = try c.decodeIfPresent(Int.self, forKey: .port) ?? 8447
         self.publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey)
-            ?? c.decodeIfPresent(String.self, forKey: .public_key) ?? ""
+            ?? c.decodeIfPresent(String.self, forKey: .publicKeySnake) ?? ""
         self.uuid = try c.decodeIfPresent(String.self, forKey: .uuid) ?? ""
         self.shortId = try c.decodeIfPresent(String.self, forKey: .shortId)
-            ?? c.decodeIfPresent(String.self, forKey: .short_id) ?? ""
+            ?? c.decodeIfPresent(String.self, forKey: .shortIdSnake) ?? ""
         self.serverName = try c.decodeIfPresent(String.self, forKey: .serverName)
-            ?? c.decodeIfPresent(String.self, forKey: .server_name) ?? ""
+            ?? c.decodeIfPresent(String.self, forKey: .serverNameSnake) ?? ""
         self.flow = try c.decodeIfPresent(String.self, forKey: .flow) ?? "xtls-rprx-vision"
     }
 
     private enum CodingKeys: String, CodingKey {
         case hostname, port, uuid, flow
-        case publicKey, public_key
-        case shortId, short_id
-        case serverName, server_name
+        case publicKey
+        case publicKeySnake = "public_key"
+        case shortId
+        case shortIdSnake = "short_id"
+        case serverName
+        case serverNameSnake = "server_name"
     }
 
     /// True when the block carries the minimum set of fields needed to dial

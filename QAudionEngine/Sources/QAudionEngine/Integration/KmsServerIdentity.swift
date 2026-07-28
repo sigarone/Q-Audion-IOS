@@ -10,6 +10,7 @@ import Foundation
 public enum KmsServerIdentity {
 
     /// The provisioned KMS server identity string (build constant).
+    // swiftlint:disable:next identifier_name
     public static let SERVER_IDENTITY = "qa-kms-test-server-2026-06-16"
 
     private static let PREFIX = "qa-kms-server-id-v1|"

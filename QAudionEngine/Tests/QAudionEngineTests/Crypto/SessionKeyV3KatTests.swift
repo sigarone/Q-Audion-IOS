@@ -2,6 +2,11 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
+// This file's Decodable structs mirror KAT JSON fixture keys verbatim
+// (snake_case, no CodingKeys) — renaming would silently break decoding
+// against the shared cross-platform fixture.
+// swiftlint:disable identifier_name
+
 /// KMS-rotation-v2 Phase-1 (D6) — schema:3 session-KDF KAT verifier (iOS).
 ///
 /// FROZEN contract `tools/kat/kms-v2/session-key-v3-kat.json` (vendored byte-for-byte
@@ -134,3 +139,4 @@ private extension Data {
     }
     func hexV3() -> String { map { String(format: "%02x", $0) }.joined() }
 }
+// swiftlint:enable identifier_name

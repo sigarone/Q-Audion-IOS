@@ -57,6 +57,10 @@ public enum KmsTransport {
     }
 
     // MARK: - Constants (cross-platform contract — WIRE_SPEC §1)
+    // UPPER_SNAKE_CASE is deliberate here: these names mirror Android/Desktop
+    // constants byte-for-byte so cross-platform WIRE_SPEC review is a direct
+    // visual diff, not a mental camelCase<->snake_case translation.
+    // swiftlint:disable identifier_name
 
     private static let CLASSICAL_INFO = Data("bcrypto-kms-psk-v1".utf8)
     private static let CLASSICAL_SALT = Data("bcrypto-kms-salt-v1".utf8)
@@ -79,6 +83,7 @@ public enum KmsTransport {
     static let V2_HYBRID_INFO    = Data("bcrypto-kms-hybrid-pqc-v2".utf8)
     static let V2_HYBRID_SALT    = Data("bcrypto-kms-hybrid-salt-v1".utf8)
     static let V2_AAD_PREFIX     = Data("qa-kms-psk-v2".utf8)   // 13 B
+    // swiftlint:enable identifier_name
 
     /// §3.2 key_class wire byte. Used both as the AAD trailing byte and
     /// as the routing class for the v2 phone-held / sovereign split.

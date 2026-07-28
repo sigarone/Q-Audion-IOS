@@ -2,6 +2,11 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
+// This file's Decodable structs mirror KAT JSON fixture keys verbatim
+// (snake_case, no CodingKeys) — renaming would silently break decoding
+// against the shared cross-platform fixture.
+// swiftlint:disable identifier_name
+
 /// Gate #9 / #11 — per-platform RS matrix KAT (pure Swift, no native code).
 ///
 /// Derives the Vandermonde-based systematic Reed-Solomon generator matrix G (18×12)
@@ -305,3 +310,4 @@ final class RsMatrixKatTests: XCTestCase {
         }
     }
 }
+// swiftlint:enable identifier_name

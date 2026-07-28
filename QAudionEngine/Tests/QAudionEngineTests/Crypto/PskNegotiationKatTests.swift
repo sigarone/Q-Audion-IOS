@@ -1,6 +1,11 @@
 import XCTest
 @testable import QAudionEngine
 
+// This file's Decodable structs mirror KAT JSON fixture keys verbatim
+// (snake_case, no CodingKeys) — renaming would silently break decoding
+// against the shared cross-platform fixture.
+// swiftlint:disable identifier_name
+
 /// Cross-platform PSK fingerprint negotiation KAT verifier (iOS side).
 ///
 /// Loads `tools/kat/psk-negotiation/psk-negotiation-kat.json` and
@@ -66,3 +71,4 @@ final class PskNegotiationKatTests: XCTestCase {
         return nil
     }
 }
+// swiftlint:enable identifier_name

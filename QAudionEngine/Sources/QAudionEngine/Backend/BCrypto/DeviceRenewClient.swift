@@ -57,7 +57,7 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
             "/api/v1/auth/device-challenge?device_id=\(urlEncode(deviceId))"
         )
         let challenge = try JSONDecoder().decode(ChallengeResp.self, from: challengeData)
-        guard let nonceBytes = DeviceRenewBlob.hexDecode(challenge.nonce_hex),
+        guard let nonceBytes = DeviceRenewBlob.hexDecode(challenge.nonceHex),
               nonceBytes.count == DeviceRenewBlob.nonceLenBytes else {
             throw Error.malformedNonceHex
         }
@@ -67,7 +67,7 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
         // Cross-platform JSON safe: max signed 64-bit fits comfortably.
         let epochMs = Int64(Date().timeIntervalSince1970 * 1000)
         let blob = DeviceRenewBlob.buildRenew(
-            serverId: challenge.server_id,
+            serverId: challenge.serverId,
             deviceId: deviceId,
             nonce: nonceBytes,
             epochMs: UInt64(bitPattern: epochMs)
@@ -90,11 +90,11 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
         }
         let resp = try JSONDecoder().decode(RenewResp.self, from: respData)
         return RenewedTokens(
-            accessToken: resp.access_token,
-            refreshToken: resp.refresh_token,
-            userId: resp.user_id,
-            deviceId: resp.device_id,
-            expiresInSec: resp.expires_in
+            accessToken: resp.accessToken,
+            refreshToken: resp.refreshToken,
+            userId: resp.userId,
+            deviceId: resp.deviceId,
+            expiresInSec: resp.expiresIn
         )
     }
 
@@ -110,7 +110,7 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
             "/api/v1/auth/device-challenge?device_id=\(urlEncode(requestingDeviceId))"
         )
         let challenge = try JSONDecoder().decode(ChallengeResp.self, from: challengeData)
-        guard let nonceBytes = DeviceRenewBlob.hexDecode(challenge.nonce_hex),
+        guard let nonceBytes = DeviceRenewBlob.hexDecode(challenge.nonceHex),
               nonceBytes.count == DeviceRenewBlob.nonceLenBytes else {
             throw Error.malformedNonceHex
         }
@@ -129,34 +129,53 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
         let body = try JSONSerialization.data(withJSONObject: [
             "target_device_id": targetDeviceId,
             "requesting_device_id": requestingDeviceId,
-            "nonce_hex": challenge.nonce_hex,
+            "nonce_hex": challenge.nonceHex,
             "epoch_ms": epochMs,
             "signature_hex": sigHex,
         ])
         let respData = try await rest.post("/api/v1/auth/revoke-device", body: body)
         let resp = try JSONDecoder().decode(RevokeResp.self, from: respData)
-        return resp.revoked_at
+        return resp.revokedAt
     }
 
     // MARK: - Wire types (match Go struct tags exactly)
 
     private struct ChallengeResp: Decodable {
-        let nonce_hex: String
-        let server_id: String
+        let nonceHex: String
+        let serverId: String
         let ttl: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case nonceHex = "nonce_hex"
+            case serverId = "server_id"
+            case ttl
+        }
     }
 
     private struct RenewResp: Decodable {
-        let access_token: String
-        let refresh_token: String
-        let expires_in: Int
-        let token_type: String
-        let user_id: String
-        let device_id: String
+        let accessToken: String
+        let refreshToken: String
+        let expiresIn: Int
+        let tokenType: String
+        let userId: String
+        let deviceId: String
+
+        private enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiresIn = "expires_in"
+            case tokenType = "token_type"
+            case userId = "user_id"
+            case deviceId = "device_id"
+        }
     }
 
     private struct RevokeResp: Decodable {
-        let revoked_at: Int64
+        let revokedAt: Int64
+
+        private enum CodingKeys: String, CodingKey {
+            case revokedAt = "revoked_at"
+        }
     }
 
     private func urlEncode(_ s: String) -> String {

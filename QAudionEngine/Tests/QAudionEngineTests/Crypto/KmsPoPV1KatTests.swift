@@ -2,6 +2,11 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
+// This file's Decodable structs mirror KAT JSON fixture keys verbatim
+// (snake_case, no CodingKeys) — renaming would silently break decoding
+// against the shared cross-platform fixture.
+// swiftlint:disable identifier_name
+
 /// §3.4 qa-kms-pop-v1. Authoritative generator: firmware
 /// tools/kat/kms-v2/gen_kms_v2_kat.py. Vectors include one
 /// app-classical (32B secret), one app-hybrid (64B), one earbud (64B),
@@ -81,3 +86,4 @@ final class KmsPoPV1KatTests: XCTestCase {
         return nil
     }
 }
+// swiftlint:enable identifier_name

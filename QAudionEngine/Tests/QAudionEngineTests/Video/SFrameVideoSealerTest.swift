@@ -34,7 +34,7 @@ final class SFrameVideoSealerTest: XCTestCase {
     func test_1to1_roundTripViaSealer() throws {
         let sealer = SFrameVideoSealer.forOneToOne(pqcSessionKey: pqcKey)
         let nal = Data([0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0x0C, 0x01])
-        let wire = try sealer.seal(plaintext: nal, layer: .M)
+        let wire = try sealer.seal(plaintext: nal, layer: .mid)
         let opened = try sealer.open(wire)
         XCTAssertEqual(opened, nal)
     }
@@ -91,12 +91,12 @@ final class SFrameVideoSealerTest: XCTestCase {
         let sealer = SFrameVideoSealer.forOneToOne(pqcSessionKey: pqcKey)
         let wire = try sealer.seal(
             plaintext: Data([0x01]),
-            layer: .H,
+            layer: .high,
             keyFrame: true,
             padded: false
         )
         let (h, _) = try SFrameCodec.decodeHeader(wire)
-        XCTAssertEqual(h.layer, .H)
+        XCTAssertEqual(h.layer, .high)
         XCTAssertTrue(h.keyFrame)
         XCTAssertFalse(h.padded)
     }

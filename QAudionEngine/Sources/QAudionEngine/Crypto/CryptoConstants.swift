@@ -40,10 +40,14 @@ public enum CryptoConstants {
 
     // MARK: - Desktop/Android Interop HKDF Labels
     // Match qaudion-desktop/src/main/crypto/MessageCrypto.ts and pairwise PSK derivation.
+    // UPPER_SNAKE_CASE is deliberate: mirrors the Desktop/Android constant
+    // names byte-for-byte so cross-platform review is a direct visual diff.
+    // swiftlint:disable identifier_name
     public static let HKDF_INFO_MSG_KEY: Data = HkdfLabels.messageKey
     public static let HKDF_INFO_FILE_KEY: Data = HkdfLabels.fileKey
     public static let HKDF_SALT_PAIRWISE = Data("qaudion-pairwise-v1".utf8)
     public static let HKDF_INFO_PAIRWISE = Data("psk-first-contact".utf8)
+    // swiftlint:enable identifier_name
 
     // MARK: - Opaque Envelope
     /// HKDF salt for envelope key derivation (must match Android exactly).

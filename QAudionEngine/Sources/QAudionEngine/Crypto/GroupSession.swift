@@ -104,6 +104,12 @@ public final class GroupState {
 
 // MARK: - Envelopes
 
+// `qa_grp` is the literal wire key — encode/decode sites elsewhere
+// (GroupCallController.encodeInitEnvelope/encodeRotateEnvelope, and the
+// `["qa_grp": ...]` dictionaries) reference it as-is; the KAT fixtures
+// also pin the exact string "qa_grp". Not renamed — see file header doc
+// `{qa_grp:1, t:...}` wire shape.
+// swiftlint:disable identifier_name
 public struct SenderKeyInitEnvelope: Codable, Equatable {
     public let qa_grp: Int
     public let t: String
@@ -128,6 +134,7 @@ public struct SenderKeyRotateEnvelope: Codable, Equatable {
         self.qa_grp = qa_grp; self.t = t; self.g = g; self.e = e; self.seed = seed
     }
 }
+// swiftlint:enable identifier_name
 
 public struct GroupEncryptResult: Equatable {
     public let wire: Data

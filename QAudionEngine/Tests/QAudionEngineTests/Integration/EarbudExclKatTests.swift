@@ -2,6 +2,11 @@ import CryptoKit
 import XCTest
 @testable import QAudionEngine
 
+// This file's Decodable structs mirror KAT JSON fixture keys verbatim
+// (snake_case, no CodingKeys) — renaming would silently break decoding
+// against the shared cross-platform fixture.
+// swiftlint:disable identifier_name
+
 /// CL-5.5 — KAT guard for public earbud-exclusive v2 constants.
 ///
 /// Pins client-COMPUTABLE public values against the frozen KAT vector
@@ -286,3 +291,4 @@ private extension Data {
         self = data
     }
 }
+// swiftlint:enable identifier_name

@@ -39,15 +39,15 @@ public enum SFrameCodec {
 
     /// Simulcast layer label for the `LAYER` field of the extension byte.
     public enum Layer: Int {
-        case L = 0
-        case M = 1
-        case H = 2
+        case low = 0
+        case mid = 1
+        case high = 2
 
         fileprivate static func fromCode(_ c: Int) throws -> Layer {
             switch c {
-            case 0: return .L
-            case 1: return .M
-            case 2: return .H
+            case 0: return .low
+            case 1: return .mid
+            case 2: return .high
             default: throw SFrameError.invalidLayer(c)
             }
         }
@@ -170,7 +170,7 @@ public enum SFrameCodec {
     public static func composeHeader(
         ctr: UInt64,
         kid: Data = Data(),
-        layer: Layer = .L,
+        layer: Layer = .low,
         padded: Bool = false,
         keyFrame: Bool = false
     ) throws -> Header {
@@ -182,7 +182,7 @@ public enum SFrameCodec {
         let muxedCtr = (UInt64(layer.rawValue) << 60) | ctr
         let ctrLen = ctrLenBytes(muxedCtr)
         let lenField = ctrLen - 1
-        let needExt = padded || keyFrame || layer != .L
+        let needExt = padded || keyFrame || layer != .low
 
         // R (bit 0) = 0; LEN (bits 1-3); X (bit 4); K (bits 5-7).
         // The diagram in the spec is MSB-first within the byte:
@@ -249,7 +249,7 @@ public enum SFrameCodec {
             keyFrame = ((ext >> 4) & 0x1) == 1
             guard (ext & 0x0F) == 0 else { throw SFrameError.extensionReservedBitsNonZero }
         } else {
-            layer = .L
+            layer = .low
             padded = false
             keyFrame = false
         }
@@ -311,7 +311,7 @@ public enum SFrameCodec {
         ctr: UInt64,
         plaintext: Data,
         kid: Data = Data(),
-        layer: Layer = .L,
+        layer: Layer = .low,
         padded: Bool = false,
         keyFrame: Bool = false
     ) throws -> Data {
@@ -339,7 +339,7 @@ public enum SFrameCodec {
         ctr: UInt64,
         plaintext: Data,
         kid: Data = Data(),
-        layer: Layer = .L,
+        layer: Layer = .low,
         padded: Bool = false,
         keyFrame: Bool = false
     ) throws -> Sealed {

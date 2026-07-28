@@ -3,6 +3,9 @@ import Foundation
 /// Frozen wire constants for the qa-earbud-excl-v2 GATT protocol.
 /// Mirror of Android EarbudGattConstants / EarbudDiag.kt.
 /// Any change requires cross-platform KAT update (firmware, Android, iOS).
+// UPPER_SNAKE_CASE is deliberate: mirrors Android/firmware constant names
+// byte-for-byte so cross-platform review is a direct visual diff.
+// swiftlint:disable identifier_name
 public enum EarbudGattConstants {
 
     // ── GATT UUIDs ────────────────────────────────────────────────────────────
@@ -55,3 +58,4 @@ public enum EarbudGattConstants {
     /// Fragment header for pair messages = [chunk_idx: u8]
     public static let EE_PAIR_FRAG_HDR     = 2
 }
+// swiftlint:enable identifier_name

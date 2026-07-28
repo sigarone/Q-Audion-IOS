@@ -88,8 +88,8 @@ public final class SecureBytes: @unchecked Sendable {
         #else
         // Fallback: volatile-style store through a function pointer the
         // compiler cannot reason about at link time.
-        let volatile_memset: @convention(c) (UnsafeMutableRawPointer?, Int32, Int) -> UnsafeMutableRawPointer? = memset
-        _ = volatile_memset(pointer, 0, byteCount)
+        let volatileMemset: @convention(c) (UnsafeMutableRawPointer?, Int32, Int) -> UnsafeMutableRawPointer? = memset
+        _ = volatileMemset(pointer, 0, byteCount)
         #endif
     }
 

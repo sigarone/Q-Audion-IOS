@@ -242,6 +242,9 @@ public enum KmsPreBootstrapCbor {
 
     /// Top-level envelope keys — verbatim from Android/Desktop's
     /// `buildEnvelopeMap`.
+    // UPPER_SNAKE_CASE is deliberate: mirrors Android/Desktop constant names
+    // byte-for-byte so cross-platform review is a direct visual diff.
+    // swiftlint:disable identifier_name
     public static let K_MAGIC = "qa_kms_prebootstrap"
     public static let K_V = "v"
     public static let K_S = "s"
@@ -254,6 +257,7 @@ public enum KmsPreBootstrapCbor {
     public static let K_AD_BYTES = "ad_bytes"
     public static let K_SIG = "sig"
     public static let K_ONE_TIME_PREKEY_ID = "one_time_prekey_id"
+    // swiftlint:enable identifier_name
 
     /// Build the canonical CBOR encoding of the whole envelope. Map keys
     /// are sorted internally by `encodeMap`; insertion order below is
