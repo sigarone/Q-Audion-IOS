@@ -222,7 +222,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     private func attachStatsReporting(to track: Track?) {
         guard let track, onTelemetry != nil else { return }
         track.add(delegate: self)
-        Task { try? await track.set(reportStatistics: true) }
+        Task { await track.set(reportStatistics: true) }
     }
 
     private func detachStatsReporting(from track: Track?) {
