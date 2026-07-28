@@ -221,6 +221,82 @@ public final class MessageRatchet {
         return session
     }
 
+    /// W-GRPCTRLPSKSWEEP2 (2026-07-28) — read the persisted snapshot for
+    /// `(epochId, peerId)` WITHOUT bootstrapping one.
+    ///
+    /// [ensureSession] cannot be used to ask "do I already have a session?",
+    /// because on a miss it DERIVES one from whatever `pskRoot` it was handed
+    /// and PERSISTS it. A caller probing for an established session would
+    /// therefore create — and permanently store — a session built from a
+    /// placeholder root. Returns nil when nothing is stored; never writes.
+    public func existingSession(epochId: String, peerId: String) -> RatchetSession? {
+        guard let snap = vault.load(epochId: epochId, peerId: peerId) else { return nil }
+        return Self.toLiveSession(snap)
+    }
+
+    /// W-GRPCTRLPSKSWEEP2 (2026-07-28) — derive the session for
+    /// `(epochId, peerId)` PURELY from `pskRoot`: no vault read, no vault
+    /// write. Same derivation as [ensureSession]'s bootstrap branch, minus
+    /// both sides of the persistence.
+    ///
+    /// WHY THIS HAS TO EXIST. [ensureSession] is snapshot-first BY DESIGN —
+    /// the chain state IS the security state, so once a snapshot exists for
+    /// `(epochId, peerId)` it is returned and `pskRoot` is **silently
+    /// ignored** (the vault key does not include the root). That makes it
+    /// unusable for a receiver that must TRY several candidate roots, in two
+    /// separate ways:
+    ///   1. Every candidate collapses onto the same cached session, so a
+    ///      "sweep" re-runs the identical decrypt N times and learns nothing.
+    ///      Measured live: `tried=68/68` with 0 successes.
+    ///   2. On a MISS it persists the FIRST guess. A wrong first guess is
+    ///      therefore written to the Keychain permanently and poisons that
+    ///      `(epochId, peerId)` pair for the life of the install.
+    /// Both bit the `qa_grpcall_ctrl` channel: Desktop names an epoch tag
+    /// (`9d8f98fe`) for a key iOS may hold under a different name, iOS's very
+    /// first attempt fell through to the `auto:` pairing root, that wrong
+    /// session got persisted, and every Desktop control envelope since has
+    /// failed — 43 failures, 0 successes, across three days and unchanged by
+    /// the earlier candidate-sweep fix, which was inert for exactly this
+    /// reason.
+    ///
+    /// Nothing is committed here: [decrypt] persists the winning session
+    /// itself once it actually opens a frame, and a losing candidate throws
+    /// before reaching that point, so a failed trial leaves no trace.
+    public func deriveSessionUnpersisted(
+        epochId: String,
+        selfId: String,
+        peerId: String,
+        pskRoot: Data
+    ) throws -> RatchetSession {
+        guard selfId != peerId else {
+            throw RatchetError.invalidArguments("selfId and peerId must differ")
+        }
+        let epochBytes = Data(epochId.utf8)
+        guard (1...255).contains(epochBytes.count) else {
+            throw RatchetError.invalidArguments(
+                "epochId must encode to 1..255 UTF-8 bytes (got \(epochBytes.count))")
+        }
+        let selfIsLo = Self.lexLess(selfId, peerId)
+        let lo = selfIsLo ? selfId : peerId
+        let hi = selfIsLo ? peerId : selfId
+        let infoLoToHi = CanonicalCbor.buildInitInfo(direction: "lo->hi", lo: lo, hi: hi)
+        let infoHiToLo = CanonicalCbor.buildInitInfo(direction: "hi->lo", lo: lo, hi: hi)
+        let ckLoToHi0 = Self.hkdf(ikm: pskRoot, salt: Self.initSalt, info: infoLoToHi, length: Self.keyLen)
+        let ckHiToLo0 = Self.hkdf(ikm: pskRoot, salt: Self.initSalt, info: infoHiToLo, length: Self.keyLen)
+        return RatchetSession(
+            epochId: epochId,
+            selfId: selfId,
+            peerId: peerId,
+            sendDirFlag: selfIsLo ? Self.dirLoToHi : Self.dirHiToLo,
+            recvDirFlag: selfIsLo ? Self.dirHiToLo : Self.dirLoToHi,
+            ckSend: selfIsLo ? ckLoToHi0 : ckHiToLo0,
+            nextSendIdx: 0,
+            ckRecv: selfIsLo ? ckHiToLo0 : ckLoToHi0,
+            lastSeenRecvIdx: nil,
+            skippedKeys: []
+        )
+    }
+
     /// Encrypt `plaintext` under the session's send chain.
     /// Mutates `session` (advances `ckSend`, `nextSendIdx`) and **persists
     /// the new state to the vault BEFORE returning** — the write-ahead

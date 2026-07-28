@@ -7522,18 +7522,49 @@ final class AppState: ObservableObject {
                    let epochTag = String(data: wire.subdata(in: (base + 2)..<(base + 2 + epochLen)), encoding: .utf8) {
                     // W-GRPCTRLPSKSWEEP — TRY each candidate; a single best
                     // guess never matched Desktop. See groupCtrlPskCandidates.
-                    let candidates = Self.groupCtrlPskCandidates(epochTag: epochTag, sender: senderId)
+                    // W-GRPCTRLPSKSWEEP2 (2026-07-28) — the earlier sweep here
+                    // was INERT and this is why. It called `ensureSession`,
+                    // which is snapshot-first: once a snapshot exists for
+                    // (epochTag, sender) it returns THAT and ignores pskRoot,
+                    // so all N candidates collapsed onto one cached session and
+                    // re-ran the identical decrypt N times (measured live:
+                    // `tried=68/68`, 0 successes). Worse, `ensureSession`
+                    // PERSISTS on a miss, so iOS's very first Desktop envelope
+                    // — which fell through to the wrong `auto:` root — wrote a
+                    // poisoned session into the Keychain permanently: 43
+                    // failures, 0 successes, ever.
+                    //
+                    // Correct order: try the ESTABLISHED session first (the
+                    // normal path, and the only one that carries chain state
+                    // forward), then genuinely distinct roots derived WITHOUT
+                    // touching the vault. `decrypt` persists whichever session
+                    // actually opens the frame, so a winning candidate becomes
+                    // the established session from then on and the poisoned
+                    // snapshot is replaced rather than worked around.
+                    let aadV3 = MessageRatchet.buildMessageAD(
+                        senderId: senderId, recipientId: selfId, clientMsgId: cmid)
                     var opened: String?
                     var attempted = 0
-                    for psk in candidates {
-                        guard let session = try? Self.ratchet.ensureSession(
-                            epochId: epochTag, selfId: selfId, peerId: senderId, pskRoot: psk) else { continue }
+                    if let stored = Self.ratchet.existingSession(
+                        epochId: epochTag, peerId: senderId) {
                         attempted += 1
-                        let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: selfId, clientMsgId: cmid)
-                        if let plain = Self.ratchet.decrypt(session: session, wire: wire, aad: aad)
-                            .flatMap({ String(data: $0, encoding: .utf8) }) {
-                            opened = plain
-                            break
+                        opened = Self.ratchet.decrypt(session: stored, wire: wire, aad: aadV3)
+                            .flatMap { String(data: $0, encoding: .utf8) }
+                    }
+                    let candidates = opened == nil
+                        ? Self.groupCtrlPskCandidates(epochTag: epochTag, sender: senderId)
+                        : []
+                    if opened == nil {
+                        for psk in candidates {
+                            guard let session = try? Self.ratchet.deriveSessionUnpersisted(
+                                epochId: epochTag, selfId: selfId, peerId: senderId,
+                                pskRoot: psk) else { continue }
+                            attempted += 1
+                            if let plain = Self.ratchet.decrypt(session: session, wire: wire, aad: aadV3)
+                                .flatMap({ String(data: $0, encoding: .utf8) }) {
+                                opened = plain
+                                break
+                            }
                         }
                     }
                     json = opened
