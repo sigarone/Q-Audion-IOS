@@ -123,6 +123,10 @@ public final class HevcEncoder: @unchecked Sendable {
             throw EncoderError.sessionCreateFailed(status)
         }
 
+        // force-unwraps safe: kCFBooleanTrue/kCFBooleanFalse are CoreFoundation
+        // global singletons, always populated at framework load — never nil
+        // in practice on any real platform.
+        // swiftlint:disable:next force_unwrapping
         try setProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue!)
         try setProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_HEVC_Main_AutoLevel)
         try setProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: NSNumber(value: bitrateBps))
@@ -137,6 +141,7 @@ public final class HevcEncoder: @unchecked Sendable {
         try setProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: NSNumber(value: fps))
         try setProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
                          value: NSNumber(value: keyframeIntervalSec))
+        // swiftlint:disable:next force_unwrapping
         try setProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse!)
 
         let prepStatus = VTCompressionSessionPrepareToEncodeFrames(session)

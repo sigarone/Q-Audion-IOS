@@ -59,8 +59,12 @@ public struct ConversationListViewModel: ViewModelProtocol {
         }
     }
 
+    // force-unwraps below are safe: fixed hardcoded UUID string literals
+    // ("1111...", "2222...", "3333..."), well-formed by inspection — not
+    // user/network input, so UUID(uuidString:) can never return nil here.
     public static let mock = ConversationListViewModel(items: [
         Item(
+            // swiftlint:disable:next force_unwrapping
             conversationId: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
             peerUserId: "user-alice", peerDisplayName: "Alice (Pixel 7)",
             lastMessagePreview: "Tutto bene, grazie. Ci vediamo alle 18?",
@@ -68,6 +72,7 @@ public struct ConversationListViewModel: ViewModelProtocol {
             unreadCount: 0, pinned: true, kind: .oneToOne
         ),
         Item(
+            // swiftlint:disable:next force_unwrapping
             conversationId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
             peerUserId: "user-bob", peerDisplayName: "Bob (iPhone 14)",
             lastMessagePreview: "OK ricevuto, grazie",
@@ -75,6 +80,7 @@ public struct ConversationListViewModel: ViewModelProtocol {
             unreadCount: 2, pinned: false, kind: .oneToOne
         ),
         Item(
+            // swiftlint:disable:next force_unwrapping
             conversationId: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
             peerUserId: "group-team", peerDisplayName: "Q-Audion Team",
             lastMessagePreview: "Charlie: meeting alle 17",

@@ -1610,6 +1610,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if resolvedAdvert.dialect == .unknown,
                !PskAdvertising.candidatesForAdvertisement(acceptPskAdvertEntries).isEmpty {
                 let n = bundle.pskFingerprints?.count
+                // force-unwrap safe: reaching the innermost branch already
+                // establishes n != nil (outer ternary) and n != 0 (inner
+                // ternary) from the conditions themselves.
+                // swiftlint:disable:next force_unwrapping
                 let shape = n == nil ? "ABSENT" : (n == 0 ? "EMPTY" : "\(n!) entries in neither dialect")
                 print("[QAudionCallIntegration] no PSK this call: peer advert \(shape) "
                     + "while we hold keys — session key derives WITHOUT a PSK. ABSENT can "

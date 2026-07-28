@@ -102,6 +102,11 @@ public final class ModelManager {
             } catch {
                 // CoreML EP unavailable — continue CPU-only.
             }
+            // force-unwrap safe: ortEnv was just assigned by the `try` two
+            // lines above in this same synchronous do-block — a throw
+            // there jumps straight to `catch`, so reaching this line
+            // guarantees ortEnv is non-nil.
+            // swiftlint:disable:next force_unwrapping
             session = try ORTSession(env: ortEnv!, modelPath: modelURL.path, sessionOptions: options)
             activeTier = tier
             state = .loaded

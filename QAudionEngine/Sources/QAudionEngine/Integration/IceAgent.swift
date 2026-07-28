@@ -169,10 +169,17 @@ public final class IceAgent: @unchecked Sendable {
 
     /// Send a small UDP probe to the candidate and wait for any response or timeout.
     private func probeCandidate(_ candidate: IceCandidate) async -> Bool {
-        await withCheckedContinuation { continuation in
+        // `candidate` comes from `checkConnectivity(remoteCandidates:)` — a
+        // remote peer's ICE candidates received over signaling, so
+        // `candidate.port` is not locally trusted. NWEndpoint.Port(rawValue:)
+        // returns nil for port 0 (the only invalid UInt16 port); a
+        // malformed/malicious remote candidate must fail this probe, never
+        // crash the app.
+        guard let nwPort = NWEndpoint.Port(rawValue: candidate.port) else { return false }
+        return await withCheckedContinuation { continuation in
             let endpoint = NWEndpoint.hostPort(
                 host: NWEndpoint.Host(candidate.ip),
-                port: NWEndpoint.Port(rawValue: candidate.port)!
+                port: nwPort
             )
             let connection = NWConnection(to: endpoint, using: .udp)
 

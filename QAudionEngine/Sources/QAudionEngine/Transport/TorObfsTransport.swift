@@ -171,6 +171,12 @@ public final class TorObfsTransport: @unchecked Sendable {
 
     /// Check if a SOCKS5 proxy is accepting connections on localhost.
     private func probeOrbot(port: Int) async -> Bool {
+        // `port` traces back to the public `orbotSocksPort` init parameter
+        // (default 9050, but callers can pass anything). A negative value
+        // makes "http://127.0.0.1:\(port)" an invalid URL string (RFC 3986
+        // ports are digits-only) — guard before entering the continuation
+        // so an invalid port fails the probe instead of crashing.
+        guard let url = URL(string: "http://127.0.0.1:\(port)") else { return false }
         return await withCheckedContinuation { cont in
             var probeConnection: URLSessionDataTask?
             let cfg = URLSessionConfiguration.ephemeral
@@ -183,8 +189,6 @@ public final class TorObfsTransport: @unchecked Sendable {
                 kCFStreamPropertySOCKSProxyHost as String: "127.0.0.1",
                 kCFStreamPropertySOCKSProxyPort as String: port,
             ]
-            // A loopback request to something that will likely fast-fail.
-            let url = URL(string: "http://127.0.0.1:\(port)")!
             probeConnection = URLSession(configuration: cfg).dataTask(with: url) { _, _, err in
                 // Any error that is NOT "connection refused" means the port is open.
                 if let nsErr = err as NSError? {

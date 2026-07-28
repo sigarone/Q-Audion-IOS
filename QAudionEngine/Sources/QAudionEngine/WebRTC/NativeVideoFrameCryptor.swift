@@ -55,6 +55,9 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
             // rejects `.hkdf` (all-caps acronym case isn't lowercased like
             // `.aesGcm`), so construct by rawValue — bridge-spelling-proof.
             // HKDF matches Android FrameCryptorKeyDerivationAlgorithm.HKDF.
+            // force-unwrap safe: rawValue 1 is HKDF, a defined case of this
+            // fixed NS_ENUM (PBKDF2=0, HKDF=1) — a literal, not external data.
+            // swiftlint:disable:next force_unwrapping
             keyDerivationAlgorithm: RTCKeyDerivationAlgorithm(rawValue: 1)!
         )
     }

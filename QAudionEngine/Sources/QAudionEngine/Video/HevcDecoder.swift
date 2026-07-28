@@ -151,7 +151,12 @@ public final class HevcDecoder: @unchecked Sendable {
                 flags: 0,
                 blockBufferOut: &blockBuffer
             ).onSuccess {
+                // force-unwrap safe: onSuccess only runs this closure when
+                // the preceding CMBlockBufferCreateWithMemoryBlock returned
+                // noErr, which per Apple's contract guarantees blockBufferOut
+                // (blockBuffer) was populated.
                 CMBlockBufferReplaceDataBytes(
+                    // swiftlint:disable:next force_unwrapping
                     with: baseAddr, blockBuffer: blockBuffer!,
                     offsetIntoDestination: 0, dataLength: avcc.count)
             }

@@ -106,8 +106,13 @@ public final class LfccExtractor {
         // Use withUnsafeMutableBufferPointer so the raw pointers stored inside
         // DSPSplitComplex are guaranteed to remain valid for the entire vDSP call chain.
         var magnitudes = [Float](repeating: 0, count: n / 2)
+        // force-unwraps safe: computeFFT is `private`, its only caller
+        // passes frame.prefix(fftSize) where frame is always padded to
+        // >= frameSize (1200) and fftSize == 512 — n is always 512, so
+        // realPart/imagPart (padded to n/2 == 256 above) are never empty.
         realPart.withUnsafeMutableBufferPointer { realBuf in
             imagPart.withUnsafeMutableBufferPointer { imagBuf in
+                // swiftlint:disable:next force_unwrapping
                 var splitComplex = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
                 vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Forward))
                 vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(n / 2))

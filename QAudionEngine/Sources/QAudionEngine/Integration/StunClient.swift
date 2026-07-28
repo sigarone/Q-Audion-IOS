@@ -95,7 +95,10 @@ public final class StunClient: @unchecked Sendable {
 
         // Transaction ID: 12 random bytes
         var transactionID = Data(count: 12)
+        // force-unwrap safe: transactionID is a fixed 12-byte buffer,
+        // always non-empty — baseAddress nil only for an empty buffer.
         transactionID.withUnsafeMutableBytes { ptr in
+            // swiftlint:disable:next force_unwrapping
             _ = SecRandomCopyBytes(kSecRandomDefault, 12, ptr.baseAddress!)
         }
         data.append(transactionID)
@@ -172,10 +175,19 @@ public final class StunClient: @unchecked Sendable {
     // MARK: - UDP transport
 
     private func sendUDP(data: Data, host: String, port: UInt16) async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
+        // `port` ultimately traces back to `discoverPublicEndpoint`'s public
+        // `port` parameter — today's only caller (`discoverFromAnyServer`)
+        // always passes a fixed non-zero value, but nothing stops a future
+        // caller of this public API from passing 0 (the only UInt16 value
+        // NWEndpoint.Port(rawValue:) rejects), so fail closed instead of
+        // force-unwrapping.
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+            throw StunError.connectionFailed
+        }
+        return try await withCheckedThrowingContinuation { continuation in
             let endpoint = NWEndpoint.hostPort(
                 host: NWEndpoint.Host(host),
-                port: NWEndpoint.Port(rawValue: port)!
+                port: nwPort
             )
             let connection = NWConnection(to: endpoint, using: .udp)
 

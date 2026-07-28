@@ -34,11 +34,16 @@ public final class AdaptivePadding: @unchecked Sendable {
         output.append(encryptedPayload)
         if paddingLength > 0 {
             var randomBytes = Data(count: paddingLength)
+            // force-unwraps safe: the `if paddingLength > 0` guard above
+            // makes randomBytes non-empty — baseAddress nil only for an
+            // empty buffer.
             randomBytes.withUnsafeMutableBytes { buffer in
                 #if canImport(Security)
+                // swiftlint:disable:next force_unwrapping
                 _ = SecRandomCopyBytes(kSecRandomDefault, paddingLength, buffer.baseAddress!)
                 #else
                 let fd = open("/dev/urandom", O_RDONLY)
+                // swiftlint:disable:next force_unwrapping
                 if fd >= 0 { _ = read(fd, buffer.baseAddress!, paddingLength); close(fd) }
                 #endif
             }

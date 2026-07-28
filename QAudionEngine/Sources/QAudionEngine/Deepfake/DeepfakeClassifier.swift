@@ -60,8 +60,13 @@ public final class DeepfakeClassifier: @unchecked Sendable {
         var input = [Float](repeating: 0, count: Self.modelInputLength)
         let copyLen = min(pcm16kMono.count, Self.modelInputLength)
         if copyLen > 0 {
+            // force-unwraps safe: dst is `input`, fixed non-empty size
+            // (modelInputLength == 64600); src is pcm16kMono, non-empty
+            // because copyLen > 0 (the min of the two counts) implies
+            // both counts are > 0.
             input.withUnsafeMutableBufferPointer { dst in
                 pcm16kMono.withUnsafeBufferPointer { src in
+                    // swiftlint:disable:next force_unwrapping
                     dst.baseAddress!.update(from: src.baseAddress!, count: copyLen)
                 }
             }
@@ -183,9 +188,17 @@ public final class DeepfakeClassifier: @unchecked Sendable {
         }
 
         // Copy float buffer into NSMutableData (ORT tensor owns a view into it).
+        // force-unwraps safe: `runDirectInference` is only reached via
+        // `runInferenceLogits(waveform: input)` in `score(pcm16kMono:)`,
+        // where `input` is always exactly modelInputLength (64600, fixed)
+        // elements — byteCount is always non-zero and src is never empty.
+        // NSMutableData(length:) itself only returns nil on allocation
+        // failure (OOM), the same accepted risk as any other allocation.
         let byteCount = waveform.count * MemoryLayout<Float>.size
+        // swiftlint:disable:next force_unwrapping
         let data = NSMutableData(length: byteCount)!
         _ = waveform.withUnsafeBufferPointer { src in
+            // swiftlint:disable:next force_unwrapping
             memcpy(data.mutableBytes, src.baseAddress!, byteCount)
         }
 

@@ -100,8 +100,12 @@ public actor EmbeddedTorManager {
 
     private func bootstrap(timeoutSeconds: Int) async throws -> UInt16 {
         // Tor data directory.
+        // force-unwrap safe: FileManager.urls(for:in:) for
+        // .applicationSupportDirectory in .userDomainMask is documented to
+        // always return exactly one URL on Apple platforms.
         let torDir = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
+            // swiftlint:disable:next force_unwrapping
         ).first!.appendingPathComponent("tor-data", isDirectory: true)
         try FileManager.default.createDirectory(at: torDir, withIntermediateDirectories: true)
 
@@ -141,6 +145,10 @@ public actor EmbeddedTorManager {
                 try await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
                 throw TorError.bootstrapTimeout
             }
+            // force-unwrap safe: 2 tasks were just added above; the first
+            // call to group.next() can never return nil (nil only means
+            // no more results are pending).
+            // swiftlint:disable:next force_unwrapping
             try await group.next()!
             group.cancelAll()
         }

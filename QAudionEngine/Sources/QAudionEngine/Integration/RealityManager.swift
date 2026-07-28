@@ -102,8 +102,12 @@ public actor RealityManager {
         // outbound, no rules[] block — see RealityCore/reality.go
         // startParams.DataDir comment), so any writable per-app-instance
         // directory works even though it's never populated with .dat files.
+        // force-unwrap safe: FileManager.urls(for:in:) for
+        // .applicationSupportDirectory in .userDomainMask is documented to
+        // always return exactly one URL on Apple platforms.
         let dataDir = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
+            // swiftlint:disable:next force_unwrapping
         ).first!.appendingPathComponent("reality-data", isDirectory: true)
         try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
 

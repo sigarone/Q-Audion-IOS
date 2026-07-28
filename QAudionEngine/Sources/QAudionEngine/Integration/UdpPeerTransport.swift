@@ -14,7 +14,14 @@ public final class UdpPeerTransport: SecureChannel, @unchecked Sendable {
     public func open(config: ChannelConfig) { lock.lock(); _isOpen = true; lock.unlock() }
 
     public func connectToPeer(host: String, port: UInt16) {
-        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!)
+        // `port` is a public API parameter — today's only caller
+        // (`TransportSelector`) passes a candidate already validated by
+        // `IceAgent.probeCandidate`'s live connectivity check, but nothing
+        // guarantees that for a future caller. NWEndpoint.Port(rawValue:)
+        // returns nil only for port 0 — fail closed (never connect) rather
+        // than crash.
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else { return }
+        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: nwPort)
         let params = NWParameters.udp
         connection = NWConnection(to: endpoint, using: params)
         connection?.stateUpdateHandler = { [weak self] state in
