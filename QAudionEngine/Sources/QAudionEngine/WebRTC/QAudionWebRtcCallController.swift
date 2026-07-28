@@ -663,6 +663,38 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         //    the PC was built silently dropped them → cryptor never keyed →
         //    discardFrameWhenCryptorNotReady drops every frame → black video.
         acceptPeerCapabilities(peerCapabilities)
+        // W-ORPHANSENDER (2026-07-28) — this fresh PC has ZERO transceivers
+        // when addLocalVideoTrack() (above, before setRemoteOffer) adds the
+        // camera track: WebRTC creates one to hold it. setRemoteOffer then
+        // negotiates Android's own m=video section against that same
+        // brand-new transceiver in the common case — but when it doesn't
+        // (an ambiguous/unmatched pairing), WebRTC ends up with the camera's
+        // track sitting on a transceiver that never gets associated (no mid,
+        // never answered), while a SEPARATE transceiver carries the real,
+        // negotiated m=video Android actually receives an answer for — with
+        // no track attached. The answer SDP still looks correct (every
+        // offered m-line must be answered) and ICE/DTLS connect fine, so the
+        // peer sees a fully "healthy" call that simply never gets any video:
+        // acceptPeerCapabilities -> ensureVideoSealer just kept the cryptor
+        // on `videoSender`, captured from addLocalVideoTrack() BEFORE this
+        // negotiation ran — the wrong, orphaned sender either way.
+        // Live-reproduced 2026-07-28 (call ef6307dd...): the camera pipeline
+        // pushed 12,000+ real frames into the RTCVideoSource the whole call
+        // (confirmed via W-CAPTUREDIAG), delegate always set, yet the peer's
+        // rx-arrived counter stayed at literal 0 throughout.
+        // rebindVideoSenderCryptorPostNegotiation() re-queries pc.senders
+        // NOW — after setRemoteOffer + createAnswer have both completed, so
+        // the transceiver is guaranteed associated — updates `videoSender`
+        // to whichever sender is CURRENTLY carrying a video track, and
+        // rebinds the cryptor onto it. Exact same pair of calls
+        // applyUpgradeAnswer already runs after setRemoteAnswer for the
+        // INITIATOR side of a video upgrade (BUG2 fix, 2026-07-11) — this
+        // fresh-PC-build RESPONDER path never got the equivalent call.
+        // rebindVideoReceiverCryptorPostNegotiation() alongside it for the
+        // same reason on the receive side, mirroring applyUpgradeAnswer's
+        // pairing of the two calls.
+        _ = pc.rebindVideoReceiverCryptorPostNegotiation()
+        _ = pc.rebindVideoSenderCryptorPostNegotiation()
         // WIRE_SPEC §8.7 (SHOULD) — upgradee path (fresh-PC build):
         // same TX-hold as acceptUpgradeOffer above.
         beginVideoTxHold()
