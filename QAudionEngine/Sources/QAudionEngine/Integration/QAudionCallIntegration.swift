@@ -141,7 +141,25 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private var retrySenderClosure: ((String) async throws -> Void)?
     /// W529 retry task — fires at 5 s intervals up to handshakeTimeout.
     private var offerRetryTask: Task<Void, Never>?
-    public let handshakeTimeoutSec: Double = 30.0
+    /// W-HSRINGDRIFT (2026-07-28) — MUST outlast the RING window, or a slow
+    /// pickup silently produces a call with no session key.
+    ///
+    /// This was 30 s while the ring window is 45 s (Android's ring timeout is
+    /// `OUTGOING_RING_TIMEOUT_MS = 45_000`, and iOS's own group ring in
+    /// `armGroupCallRingTimeout` is likewise 45 s). The PQC await therefore
+    /// expired FIFTEEN SECONDS BEFORE the phone stopped ringing: answer after a
+    /// short hesitation and the transport still comes up on its own (ICE
+    /// completes, the UI flips to connected) while the key exchange has already
+    /// been abandoned — no decoded media, "Connecting…" forever on the other
+    /// side. User-reported 2026-07-28 ("ho risposto con un po' di ritardo e non
+    /// ha completato lo scambio chiavi"); Android carried the identical drift
+    /// at 35 s and is fixed in the same pass (PqcHandshake.HANDSHAKE_TIMEOUT).
+    ///
+    /// 50 s = 45 s ring + 5 s margin, matching Android exactly. Unanswered
+    /// calls are unaffected: the ring timeout still fires first and tears the
+    /// call down, cancelling this await. Retune BOTH sides together or the
+    /// invariant breaks again the same silent way.
+    public let handshakeTimeoutSec: Double = 50.0
     public let offerRetryIntervalSec: UInt64 = 5
     /// Tracks whether the local UI/CallKit alert is already ringing for an
     /// incoming call. Lets `onCallRingReceived` (server "we told the caller you

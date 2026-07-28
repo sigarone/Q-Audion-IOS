@@ -7523,19 +7523,20 @@ final class AppState: ObservableObject {
                     // W-GRPCTRLPSKSWEEP — TRY each candidate; a single best
                     // guess never matched Desktop. See groupCtrlPskCandidates.
                     let candidates = Self.groupCtrlPskCandidates(epochTag: epochTag, sender: senderId)
-                    json = nil
+                    var opened: String?
                     var attempted = 0
                     for psk in candidates {
                         guard let session = try? Self.ratchet.ensureSession(
                             epochId: epochTag, selfId: selfId, peerId: senderId, pskRoot: psk) else { continue }
                         attempted += 1
                         let aad = MessageRatchet.buildMessageAD(senderId: senderId, recipientId: selfId, clientMsgId: cmid)
-                        if let opened = Self.ratchet.decrypt(session: session, wire: wire, aad: aad)
+                        if let plain = Self.ratchet.decrypt(session: session, wire: wire, aad: aad)
                             .flatMap({ String(data: $0, encoding: .utf8) }) {
-                            json = opened
+                            opened = plain
                             break
                         }
                     }
+                    json = opened
                     if json == nil {
                         let reason = candidates.isEmpty ? "v3_no_psk_for_epoch"
                             : (attempted == 0 ? "v3_ensure_session_failed" : "v3_decrypt_failed")
@@ -7557,14 +7558,15 @@ final class AppState: ObservableObject {
                     // matched Desktop). This is the branch Desktop actually
                     // uses: its transport tag on the wire is `v2:auto:...`.
                     let candidates = Self.groupCtrlPskCandidates(epochTag: parsed.epoch, sender: senderId)
-                    json = nil
+                    var opened: String?
                     for psk in candidates {
-                        if let opened = MessageCryptoV2.openWithPsk(parsed: parsed, psk: psk, aad: aad)
+                        if let plain = MessageCryptoV2.openWithPsk(parsed: parsed, psk: psk, aad: aad)
                             .flatMap({ String(data: $0, encoding: .utf8) }) {
-                            json = opened
+                            opened = plain
                             break
                         }
                     }
+                    json = opened
                     if json == nil {
                         let reason = candidates.isEmpty ? "v2_no_psk_for_epoch" : "v2_decrypt_failed"
                         print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=\(reason) epoch=\(parsed.epoch.prefix(16)) tried=\(candidates.count)")
