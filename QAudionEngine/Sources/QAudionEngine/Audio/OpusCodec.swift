@@ -92,11 +92,16 @@ public final class OpusCodec {
         guard pcmFrame.count == AudioConstants.bytesPerFrame else { return nil }
 
         var encoded = Data(count: Int(maxEncodedSize))
+        // force-unwraps below are safe: pcmFrame.count == bytesPerFrame (checked
+        // above) and encoded was just allocated with maxEncodedSize (fixed
+        // non-zero constant) — baseAddress is only nil for an empty buffer.
         let result = pcmFrame.withUnsafeBytes { pcmBuf in
             encoded.withUnsafeMutableBytes { outBuf in
+                // swiftlint:disable:next force_unwrapping
                 opus_encode(enc,
                     pcmBuf.baseAddress!.assumingMemoryBound(to: Int16.self),
                     Int32(AudioConstants.samplesPerFrame),
+                    // swiftlint:disable:next force_unwrapping
                     outBuf.baseAddress!.assumingMemoryBound(to: UInt8.self),
                     maxEncodedSize)
             }
@@ -113,11 +118,15 @@ public final class OpusCodec {
         guard !opusFrame.isEmpty else { return nil }
 
         var pcm = Data(count: AudioConstants.bytesPerFrame)
+        // force-unwraps below are safe: opusFrame is checked non-empty above,
+        // pcm was just allocated with bytesPerFrame (fixed non-zero constant).
         let result = opusFrame.withUnsafeBytes { inBuf in
             pcm.withUnsafeMutableBytes { outBuf in
+                // swiftlint:disable:next force_unwrapping
                 opus_decode(dec,
                     inBuf.baseAddress!.assumingMemoryBound(to: UInt8.self),
                     Int32(opusFrame.count),
+                    // swiftlint:disable:next force_unwrapping
                     outBuf.baseAddress!.assumingMemoryBound(to: Int16.self),
                     Int32(AudioConstants.samplesPerFrame),
                     // W-IOSFECFLAG (2026-07-25) — MUST be 0. This is libopus'
@@ -164,6 +173,9 @@ public final class OpusCodec {
         guard let dec = decoder else { return Data(count: AudioConstants.bytesPerFrame) }
         var pcm = Data(count: AudioConstants.bytesPerFrame)
         pcm.withUnsafeMutableBytes { outBuf in
+            // force-unwrap safe: pcm was just allocated with bytesPerFrame
+            // (fixed non-zero constant) — baseAddress is only nil when empty.
+            // swiftlint:disable:next force_unwrapping
             _ = opus_decode(dec, nil, 0,
                 outBuf.baseAddress!.assumingMemoryBound(to: Int16.self),
                 Int32(AudioConstants.samplesPerFrame), 0)
