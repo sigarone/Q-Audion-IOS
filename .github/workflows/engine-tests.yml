@@ -9,55 +9,19 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # macOS swift test — pure-Swift + pure-C tests (WebRTC has no macOS slice so
-  # swift build fails; exit code is masked intentionally — this job verifies
-  # logic that doesn't require WebRTC or the native XCFramework).
-  test:
-    runs-on: macos-14
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Cache SPM packages + build artifacts
-        id: cache-spm
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/Library/Caches/org.swift.swiftpm
-            QAudionEngine/.build
-          key: ${{ runner.os }}-spm-engine-v2-${{ hashFiles('QAudionEngine/Package.swift') }}
-          restore-keys: |
-            ${{ runner.os }}-spm-engine-v2-
-
-      # NO git credential injection here. All SPM deps (onnxruntime-spm,
-      # webrtc-spm, GRDB) are PUBLIC. Injecting
-      #   git config url."https://x-access-token:TOKEN@github.com/".insteadOf ...
-      # makes SPM rewrite the binaryTarget download URLs too, sending an
-      # Authorization header to GitHub's release-asset S3 redirect, which
-      # returns 401 Unauthorized → SPM hangs retrying for hours. Verified:
-      # plain URL → 200 OK 43 MB; auth-injected URL → 401. Public repos clone
-      # fine without credentials, so this step is removed entirely.
-
-      - name: Show Swift version
-        run: swift --version
-
-      # Only resolve when cache missed — SPM re-downloads binaries every time
-      # even with a warm cache, adding 10-20 min to every CI run.
-      - name: Resolve dependencies
-        if: steps.cache-spm.outputs.cache-hit != 'true'
-        run: |
-          cd QAudionEngine
-          swift package resolve
-
-      - name: Build (macOS)
-        run: |
-          cd QAudionEngine
-          swift build 2>&1 | tail -100
-
-      - name: Run Tests (macOS)
-        run: |
-          cd QAudionEngine
-          swift test 2>&1 | tail -100
+  # NOTE 2026-07-28: the old macOS "test" job (swift build/swift test on
+  # QAudionEngine, macos-14) was removed here. It never actually verified
+  # anything: WebRTC has no macOS xcframework slice, so `swift build` failed
+  # to compile every single run, and the failure was masked on purpose via
+  # `| tail -100` (no `set -o pipefail`), so the job reported green
+  # unconditionally. Confirmed zero real coverage lost — grepping that job's
+  # historical logs for `Test Suite` never matched once; all real
+  # QAudionEngine test coverage has only ever come from ios-simulator-tests
+  # below. Re-adding a macOS-native lane would require either a WebRTC
+  # macOS-slice build (separate repo, sigarone/webrtc-aes256-build) or
+  # splitting QAudionEngine's test target so pure-logic tests don't pull in
+  # WebRTC/SwiftUI-iOS-only code — both real engineering efforts, not a CI
+  # config tweak, and neither can be verified without macOS/Xcode access.
 
   # iOS Simulator job — runs xcodebuild test targeting arm64 simulator.
   # This uses the ios-arm64-simulator slice of QaudionCryptoCore.xcframework
