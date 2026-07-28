@@ -197,7 +197,6 @@ let package = Package(
                     "-Wno-shorten-64-to-32",
                     "-Wno-unused-but-set-variable",
                     "-Wno-unreachable-code",
-                    "-w",  // Suppress ALL warnings
                 ]),
             ]
         ),
