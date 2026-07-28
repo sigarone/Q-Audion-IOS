@@ -258,3 +258,80 @@ jobs:
           EXIT_CODE=$?
           kill "$WATCHDOG_PID" 2>/dev/null || true
           exit "$EXIT_CODE"
+
+  # ----------------------------------------------------------------
+  # Report-only checks added 2026-07-28. Each of these three jobs is
+  # independent of `test`/`ios-simulator-tests` above (no `needs:`,
+  # no shared cache key, no shared runner) and every step below sets
+  # `continue-on-error: true` so a finding here can NEVER fail the
+  # workflow or block a merge (main has no branch protection today,
+  # but the flag makes that explicit and future-proof). These exist
+  # to surface signal that wasn't visible before, not to gate CI.
+  # Once someone has reviewed the first report and the noise (if
+  # any) is triaged, `continue-on-error` can be dropped to make a
+  # given job actually enforce.
+  # ----------------------------------------------------------------
+
+  # SwiftLint over QAudionEngine only (scope + exclusions come from the
+  # existing .swiftlint.yml at repo root — CLiboqs/COpus are already
+  # excluded there since they're C, not Swift). Deliberately does NOT
+  # touch QAudionApp: that's the SwiftUI app with the documented Xcode
+  # 26.4 type-checker-timeout traps (see CLAUDE.md), and adding lint
+  # there is a separate, higher-risk decision for later. Runs the
+  # official realm/swiftlint Docker image directly (no third-party
+  # Action) on ubuntu-latest — no Xcode/macOS runner needed for pure
+  # linting, so this doesn't compete for macOS runner capacity.
+  swiftlint-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: SwiftLint (report only)
+        continue-on-error: true
+        uses: docker://ghcr.io/realm/swiftlint:latest
+        with:
+          args: lint --config .swiftlint.yml --reporter github-actions-logging
+
+  # RealityCore (VLESS+REALITY Go core, see ios-simulator-tests above
+  # for the gomobile-bind build of the same module) has go.mod/tests
+  # but was never checked by `go vet`/`go test` in CI. go-version pinned
+  # to match RealityCore/go.mod's own `go` directive, same as the
+  # ios-simulator-tests job's Go setup above.
+  realitycore-go-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.3'
+          cache: true
+          cache-dependency-path: RealityCore/go.sum
+      - name: go vet (report only)
+        continue-on-error: true
+        run: |
+          cd RealityCore
+          go vet ./...
+      - name: go test (report only)
+        continue-on-error: true
+        run: |
+          cd RealityCore
+          go test ./... -v
+
+  # Secret scan over the full repo (including history) via the
+  # official gitleaks Docker image. Report only: a hit here (e.g. an
+  # already-rotated historical secret, see project_vps_rotation memory)
+  # is signal to review, not a merge blocker.
+  secret-scan-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: gitleaks (report only)
+        continue-on-error: true
+        uses: docker://zricethezav/gitleaks:latest
+        with:
+          args: detect --source . -v --redact
