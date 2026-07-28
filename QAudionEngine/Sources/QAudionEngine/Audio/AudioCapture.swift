@@ -952,311 +952,16 @@ public final class AudioCapture {
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
             self.firstFrameReceived = true  // W-AEC-FIX — VP-IO tap is delivering
-            // W574: VP-IO may deliver Float32 frames even though we requested Int16.
-            // The tap bufferSize hint is also overridden by VP-IO (tied to hardware I/O
-            // duration per W475). Guard on int16ChannelData first; if VP-IO delivered
-            // Float32 natively, convert to Int16 so the accumulator/re-chunker always
-            // receives 16-bit samples regardless of the engine's VP-IO state.
-            // W-CANONICAL — when the tap's rate/channel layout differs from the
-            // canonical 48 kHz/mono (BT HFP 16 k, headsets 24/44.1 k), run the
-            // AVAudioConverter built at start(): proper polyphase resampling into
-            // canonical Int16, instead of letting wrong-rate samples reach the
-            // byte-count re-chunker (the W556 "metallica e scattosa" warp class).
-            var raw: Data
-            if let converter = rateConverter {
-                let ratio = Double(AudioConstants.sampleRate) / max(buffer.format.sampleRate, 1)
-                let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up) + 64)
-                guard let outBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
-                var fed = false
-                var convErr: NSError?
-                let status = converter.convert(to: outBuf, error: &convErr) { _, outStatus in
-                    if fed {
-                        outStatus.pointee = .noDataNow
-                        return nil
-                    }
-                    fed = true
-                    outStatus.pointee = .haveData
-                    return buffer
-                }
-                guard status != .error, let int16Data = outBuf.int16ChannelData, outBuf.frameLength > 0 else { return }
-                raw = Data(bytes: int16Data[0], count: Int(outBuf.frameLength) * 2)
-            } else if let int16Data = buffer.int16ChannelData {
-                raw = Data(bytes: int16Data[0], count: Int(buffer.frameLength) * 2)
-            } else if let floatData = buffer.floatChannelData {
-                let count = Int(buffer.frameLength)
-                var int16Buf = [Int16](repeating: 0, count: count)
-                let src = floatData[0]
-                for idx in 0..<count {
-                    let clamped = max(-1.0 as Float, min(1.0 as Float, src[idx]))
-                    int16Buf[idx] = Int16(clamped * Float(Int16.max))
-                }
-                raw = int16Buf.withUnsafeBytes { Data($0) }
-            } else {
-                return
-            }
-            // W-IOSECHO (2026-07-22) — echo-effectiveness proxy (iOS port of
-            // Android's W-SPKAEC/W-SPKECHO echo_active/idle buckets). Grades
-            // this frame's RAW mic RMS — post-hardware VP-IO AEC/NS/AGC if
-            // any, PRE our own software make-up gain below — against whether
-            // the far end was recently audible out of the transducer. Runs
-            // unconditionally (not gated on micAgcEnabled or VP-IO state) so
-            // it always measures the true unprocessed near-end level, same
-            // as Android grades its raw capture frame before its own
-            // software residual suppressor. See `EchoBucketTotals` above for
-            // the full rationale and honest limitations.
-            raw.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
-                guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
-                let sampleCount = raw.count / 2
-                guard sampleCount > 0 else { return }
-                var echoSumSq: Double = 0
-                for idx in 0..<sampleCount {
-                    let s = Double(samples[idx]) / Double(Int16.max)
-                    echoSumSq += s * s
-                }
-                let frameRms = Float((echoSumSq / Double(sampleCount)).squareRoot())
-                let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-                let farEndActive = Self.isFarEndActive(lastLoudPlayoutAtMs: self.lastLoudPlayoutAtMs, nowMs: nowMs)
-                self.echoBucketThisCall = Self.accumulatingEchoBucket(self.echoBucketThisCall,
-                                                                       frameRms: frameRms,
-                                                                       farEndActive: farEndActive)
-            }
-            // W-MICAGC — gentle make-up AGC. Runs in BOTH modes: VP-IO off (we
-            // own leveling entirely, ceiling agcMaxGain=6.0) and VP-IO on
-            // (rides on top of Apple's own AGC with a LOWER ceiling,
-            // agcMaxGainVpio=3.0, to bound any double-AGC interaction — still
-            // boost-only + noise-gated + slow one-pole + de-zippered +
-            // peak-headroom clamped, so it cannot pump).
-            //
-            // W-TUNEGAP (2026-07-20) — RESTORED. This dual-mode gate shipped
-            // in 04f82f1 (2026-07-12 19:17) after real telemetry (call
-            // c4185402) proved Apple's VP-IO AGC alone leaves the iOS mic at
-            // only ~11% peak vs Android's ~71% ("faint"). The SAME DAY at
-            // 23:32, commit a542727's broader "canonical VP-IO everywhere"
-            // refactor silently re-gated this to `!vpioActiveThisEngine`
-            // (VP-IO-off only) as a side effect of its "retire custom DSP to
-            // fallback only" policy — re-asserting, without new evidence, the
-            // very "Apple's AGC alone is enough" assumption 04f82f1 had just
-            // disproven. Real call 40f6d641 (2026-07-20) reproduced exactly
-            // the predicted regression: agc_ever_active=true,
-            // vpio_ever_active=true, yet tx rms_pct=2% (Android decoded the
-            // exact same 2% on its end — confirmed no transport/decode loss,
-            // this is genuinely how quiet the transmitted signal was), far
-            // below the "healthy 5-15%" band a542727's own commit message set
-            // as its target. `vpioActiveThisEngine` is the per-engine-instance
-            // latch captured right after setVoiceProcessingEnabled — never
-            // live global state — so the ceiling selection can't desync
-            // mid-call (double-AGC risk) for buffers already in flight on a
-            // prior engine.
+            guard var raw = self.convertTapBufferToInt16(buffer, rateConverter: rateConverter, canonicalFormat: format) else { return }
+            self.updateEchoBucket(rawPcm: raw)
             if Self.micAgcEnabled {
-                let configuredMaxGain = Self.selectMakeUpAgcMaxGain(vpioActive: vpioActiveThisEngine)
-                raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
-                    guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
-                    let n = rawBuf.count / 2
-                    guard n > 0 else { return }
-                    let fs = Float(Int16.max)
-                    var sumSq: Double = 0
-                    var peak: Float = 0
-                    for i in 0..<n {
-                        let s = Float(samples[i]) / fs
-                        sumSq += Double(s * s)
-                        let a = abs(s)
-                        if a > peak { peak = a }
-                    }
-                    let rms = Float((sumSq / Double(n)).squareRoot())
-                    // W-AGCCEIL — the whole control law now lives in the pure,
-                    // unit-tested `nextMakeUpAgcGain` (peak ceiling enforced on
-                    // the APPLIED gain + bounded attack). Keeping it out of this
-                    // closure is deliberate: this is the exact code a broad
-                    // refactor edited by accident once already.
-                    // W-AGCNOISE — track the background floor from the RAW
-                    // (pre-gain) buffer RMS, then let it bound the ceiling. The
-                    // gain multiply below has not run yet on these samples, so
-                    // this really is the input level and not our own output.
-                    self.micAgcNoiseFloor = Self.nextNoiseFloor(previous: self.micAgcNoiseFloor,
-                                                                bufferRms: rms)
-                    let noiseFloor = self.micAgcNoiseFloor
-                    let maxGain = Self.noiseLimitedMaxGain(configuredMaxGain: configuredMaxGain,
-                                                           noiseFloorRms: noiseFloor)
-                    if !Self.shouldAdaptMakeUpGain(bufferRms: rms, noiseFloorRms: noiseFloor) {
-                        self.micAgcHoldCount &+= 1
-                    }
-                    self.micAgcGain = Self.nextMakeUpAgcGain(previousGain: self.micAgcGain,
-                                                             bufferRms: rms,
-                                                             bufferPeak: peak,
-                                                             maxGain: maxGain,
-                                                             noiseFloorRms: noiseFloor)
-                    self.micAgcGainSum += Double(self.micAgcGain)
-                    self.micAgcBufferCount &+= 1
-                    if self.micAgcGain > self.micAgcMaxGainThisCall { self.micAgcMaxGainThisCall = self.micAgcGain }
-                    // W-DEZIPPER — apply the make-up gain with PER-SAMPLE ramping
-                    // from the previous frame's end gain, so the gain is
-                    // CONTINUOUS across the 20 ms frame boundary. A constant
-                    // per-frame gain that changed frame-to-frame stepped the
-                    // waveform at each boundary → an audible click every frame
-                    // (the "scoppiettante" crackle).
-                    //
-                    // W-AGCCEIL (2026-07-21) — CORRECTION to the note that used
-                    // to live here. It claimed "peak safety is now a per-sample
-                    // SOFT-KNEE applied inline", i.e. it treated the limiter as
-                    // the peak-safety mechanism. That is precisely the design
-                    // error: a memoryless waveshaper is a BACKSTOP, not a
-                    // leveller, and using it as one means it is in circuit
-                    // continuously (measured: post-gain peaks driven to
-                    // 1.045–1.251 × full scale on every call) and therefore
-                    // generating continuous harmonic distortion — the far end's
-                    // "metallic" report. Peak safety now lives where it belongs,
-                    // in the gain law (`nextMakeUpAgcGain`, ceiling enforced on
-                    // the APPLIED gain); the knee below sits ABOVE that ceiling
-                    // and should essentially never fire. `limiter_pct` telemetry
-                    // measures whether that is actually true in the field.
-                    let gStart = self.micAgcRampFrom
-                    let gTarget = self.micAgcGain
-                    // W-TXHEADROOM-DEAD (2026-07-21) — this guard used to read
-                    // `gTarget > 1.001 || gStart > 1.001`, i.e. "only do work
-                    // when we are BOOSTING". That silently made the entire
-                    // W-TXHEADROOM attenuation half DEAD CODE in exactly the
-                    // case it was written for: once the peak clamp settles the
-                    // gain at `agcPeakHeadroom` (0.70), BOTH gStart and gTarget
-                    // are ≤ 1.001 forever, the multiply loop below never runs,
-                    // and 0 dB is applied where −3.1 dB was intended. Caught by
-                    // adversarial review, then reproduced here: 8 consecutive
-                    // buffers computed gain 0.7080/0.7071/0.7071… and applied
-                    // 1.0000 every time.
-                    //
-                    // Second-order damage from the same bug: `micAgcRampFrom`
-                    // is assigned `gTarget` unconditionally after this block, so
-                    // it recorded 0.707 while the samples had actually been
-                    // multiplied by 1.0 — the de-zipper's start point desynced
-                    // from reality and the next buffer that DID engage ramped
-                    // from a wrong value, producing precisely the click
-                    // W-DEZIPPER exists to prevent.
-                    //
-                    // The predicate is now "does the gain differ from unity in
-                    // EITHER direction", which is the actual condition for
-                    // needing to touch the samples.
-                    if abs(gTarget - 1) > 0.001 || abs(gStart - 1) > 0.001 {
-                        // W-AGCCEIL — asymmetric ramp. A gain INCREASE is still
-                        // spread across the whole buffer (slow, inaudible). A
-                        // gain DECREASE completes in ~1 ms so a level jump is met
-                        // almost immediately: the old symmetric full-buffer ramp
-                        // meant a peak arriving early in the buffer was still
-                        // multiplied by the PREVIOUS (too high) gain, so the
-                        // limiter ate the whole onset.
-                        let rampSamples = gTarget < gStart ? min(n, Self.agcAttackRampSamples) : n
-                        let inv: Float = 1 / Float(rampSamples)
-                        let limThresh: Float = Self.limiterKnee * fs
-                        let limCeil: Float = Self.limiterCeiling * fs
-                        let limRange: Float = limCeil - limThresh
-                        var limited: Int64 = 0
-                        for i in 0..<n {
-                            let t: Float = i < rampSamples ? Float(i) * inv : 1
-                            let gi = gStart + (gTarget - gStart) * t
-                            var v = Float(samples[i]) * gi
-                            let mag = abs(v)
-                            if mag > limThresh {
-                                let excess = mag - limThresh
-                                let comp = limThresh + limRange * (1 - exp(-excess / limRange))
-                                v = (v < 0 ? -1 : 1) * comp
-                                limited &+= 1
-                            }
-                            samples[i] = Int16(clamping: Int(v.rounded()))
-                        }
-                        self.limiterSampleCount &+= limited
-                    }
-                    self.micAgcRampFrom = gTarget
-                }
+                self.applyMicMakeUpAgc(rawPcm: &raw, vpioActiveThisEngine: vpioActiveThisEngine)
             }
-            // AGC-DIAG — scan the samples we already have in hand (no extra
-            // decode) for peak amplitude + near-full-scale clip count. `raw`
-            // is exactly the int16 bytes about to be re-chunked below.
-            raw.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
-                guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
-                let n = raw.count / 2
-                var localPeak = self.peakAmplitude
-                var localClips = self.clipSampleCount
-                var localSumSq = self.sumSqAmplitude
-                for i in 0..<n {
-                    // Int32 magnitude — avoids the abs(Int16.min) overflow trap.
-                    let mag = Int32(samples[i]).magnitude
-                    if mag > Int32(localPeak).magnitude { localPeak = Int16(clamping: mag) }
-                    if mag >= Int32(Self.clipThreshold).magnitude { localClips += 1 }
-                    // TX-RMS — sum of squares of the same samples (Double avoids
-                    // Int overflow over a full call); RMS is derived at consume time.
-                    let sq = Double(samples[i])
-                    localSumSq += sq * sq
-                }
-                self.peakAmplitude = localPeak
-                self.clipSampleCount = localClips
-                self.sumSqAmplitude = localSumSq
-                self.rmsSampleCount &+= Int64(n)
-            }
-            // TX-LIMITER (2026-07-11) — soft-knee peak limiter on the raw mic
-            // samples before they reach Opus. W-CANONICAL (2026-07-12): runs
-            // ONLY on the raw-mic fallback path (VP-IO off). With VP-IO active
-            // the output is already level-managed by Apple's AGC — a second
-            // nonlinear stage on an already-managed signal is pure added
-            // distortion. On the fallback path it stays: no AEC/NS/AGC runs
-            // there, and a loud/close mouth-to-mic can saturate downstream of
-            // the ADC ("scoppiettio").
+            self.recordLevelDiagnostics(rawPcm: raw)
             if !vpioActiveThisEngine {
-                raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
-                    guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
-                    let n = rawBuf.count / 2
-                    // W-AGCCEIL — shares the knee/ceiling constants with the
-                    // inline make-up limiter so the two curves can never drift
-                    // apart. NOT counted into `limiterSampleCount`: on this
-                    // (VP-IO-off) path the inline stage has already run over the
-                    // same samples with the identical curve, so counting here
-                    // would double-count. The duty-cycle metric is about the
-                    // VP-IO path, where this block does not run at all.
-                    let threshold: Float = Self.limiterKnee * Float(Int16.max)
-                    let ceiling: Float = Self.limiterCeiling * Float(Int16.max)
-                    let range = ceiling - threshold
-                    for i in 0..<n {
-                        let sample = Float(samples[i])
-                        let mag = abs(sample)
-                        guard mag > threshold else { continue }
-                        let excess = mag - threshold
-                        let compressed = threshold + range * (1 - exp(-excess / range))
-                        samples[i] = Int16(clamping: Int((sample < 0 ? -1 : 1) * compressed))
-                    }
-                }
+                self.applyRawMicTxLimiter(rawPcm: &raw)
             }
-            // W475 — re-chunk into EXACT bytesPerFrame frames. `installTap`'s
-            // bufferSize is only a hint, and VoiceProcessing I/O ties the tap
-            // buffer to the hardware I/O duration — so `buffer.frameLength`
-            // is an arbitrary size, frequently far larger than the 960
-            // samples Opus requires. A mis-sized frame made OpusCodec.encode
-            // return nil; QAudionEngine.processOutgoingAudio then fell back
-            // to encrypting the RAW PCM, and once that raw buffer exceeded
-            // maxPayloadSize (4096 B / >2048 samples — common) the
-            // `payload.count <= maxPayloadSize` precondition in
-            // EncryptedFrame.init trapped (SIGTRAP), crashing the call the
-            // instant capture started on answer. It also killed TX outright:
-            // Opus never once encoded a frame. Re-chunking guarantees every
-            // onFrame delivery is exactly bytesPerFrame.
-            self.pcmAccumulator.append(raw)
-            let frameBytes = AudioConstants.bytesPerFrame
-            var consumed = 0
-            var emitted = 0
-            while self.pcmAccumulator.count - consumed >= frameBytes {
-                let chunk = self.pcmAccumulator.subdata(in: consumed ..< consumed + frameBytes)
-                consumed += frameBytes
-                emitted += 1
-                // W-CANONICAL — software NR retired (double-NS over VP-IO's);
-                // chunks go straight to Opus.
-                self.onFrame?(chunk)
-            }
-            // W-TXBURST — largest number of 20 ms frames emitted from ONE tap
-            // callback. 1 (occasionally 2) is a steady 50 fps stream; a large
-            // value means the hardware is clumping our I/O and the peer's
-            // jitter buffer sees bursts, not a stream. Counter only.
-            if emitted > self.txBurstMaxThisCall { self.txBurstMaxThisCall = emitted }
-            if consumed > 0 {
-                self.pcmAccumulator = consumed < self.pcmAccumulator.count
-                    ? self.pcmAccumulator.subdata(in: consumed ..< self.pcmAccumulator.count)
-                    : Data()
-            }
+            self.rechunkAndEmit(rawPcm: raw)
         }
 
         // 5. Start the engine, then the player node (single engine drives both).
@@ -1372,6 +1077,338 @@ public final class AudioCapture {
         // completion handler below for the other half.
         DispatchQueue.main.async { [weak self] in
             self?.pumpPlayout()
+        }
+    }
+
+    // MARK: - Tap callback stages
+    //
+    // Extracted from the installTap closure in start() (2026-07-28) so that
+    // closure's own cyclomatic complexity / body length stop being counted
+    // against start() itself (SwiftLint measures a closure's contents as part
+    // of its enclosing function). Pure code motion — every line below is
+    // unchanged from what used to run inline in the closure, in the same
+    // order, on the same tap-callback thread. `raw` (the tap buffer,
+    // progressively transformed by each stage) is threaded through via
+    // `inout` rather than returned, so Data's copy-on-write never triggers an
+    // extra copy across stage boundaries.
+
+    /// W574 / W-CANONICAL — convert one delivered tap buffer to canonical
+    /// Int16 PCM, resampling via `rateConverter` when the tap's native
+    /// rate/channel layout differs from 48 kHz/mono (BT HFP 16 k, some
+    /// headsets 24/44.1 k — the W556 "metallica e scattosa" warp class).
+    /// Returns nil on any of the early-return cases the original closure had
+    /// (conversion error, empty output, no usable channel data) — the caller
+    /// must skip the rest of the tap callback for this buffer exactly as
+    /// before.
+    private func convertTapBufferToInt16(_ buffer: AVAudioPCMBuffer,
+                                          rateConverter: AVAudioConverter?,
+                                          canonicalFormat: AVAudioFormat) -> Data? {
+        if let converter = rateConverter {
+            let ratio = Double(AudioConstants.sampleRate) / max(buffer.format.sampleRate, 1)
+            let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up) + 64)
+            guard let outBuf = AVAudioPCMBuffer(pcmFormat: canonicalFormat, frameCapacity: capacity) else { return nil }
+            var fed = false
+            var convErr: NSError?
+            let status = converter.convert(to: outBuf, error: &convErr) { _, outStatus in
+                if fed {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                fed = true
+                outStatus.pointee = .haveData
+                return buffer
+            }
+            guard status != .error, let int16Data = outBuf.int16ChannelData, outBuf.frameLength > 0 else { return nil }
+            return Data(bytes: int16Data[0], count: Int(outBuf.frameLength) * 2)
+        } else if let int16Data = buffer.int16ChannelData {
+            return Data(bytes: int16Data[0], count: Int(buffer.frameLength) * 2)
+        } else if let floatData = buffer.floatChannelData {
+            let count = Int(buffer.frameLength)
+            var int16Buf = [Int16](repeating: 0, count: count)
+            let src = floatData[0]
+            for idx in 0..<count {
+                let clamped = max(-1.0 as Float, min(1.0 as Float, src[idx]))
+                int16Buf[idx] = Int16(clamped * Float(Int16.max))
+            }
+            return int16Buf.withUnsafeBytes { Data($0) }
+        } else {
+            return nil
+        }
+    }
+
+    /// W-IOSECHO (2026-07-22) — echo-effectiveness proxy (iOS port of
+    /// Android's W-SPKAEC/W-SPKECHO echo_active/idle buckets). Grades this
+    /// frame's RAW mic RMS — post-hardware VP-IO AEC/NS/AGC if any, PRE our
+    /// own software make-up gain — against whether the far end was recently
+    /// audible out of the transducer. Runs unconditionally (not gated on
+    /// micAgcEnabled or VP-IO state) so it always measures the true
+    /// unprocessed near-end level, same as Android grades its raw capture
+    /// frame before its own software residual suppressor. See
+    /// `EchoBucketTotals` above for the full rationale and honest
+    /// limitations.
+    private func updateEchoBucket(rawPcm raw: Data) {
+        raw.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
+            guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
+            let sampleCount = raw.count / 2
+            guard sampleCount > 0 else { return }
+            var echoSumSq: Double = 0
+            for idx in 0..<sampleCount {
+                let s = Double(samples[idx]) / Double(Int16.max)
+                echoSumSq += s * s
+            }
+            let frameRms = Float((echoSumSq / Double(sampleCount)).squareRoot())
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let farEndActive = Self.isFarEndActive(lastLoudPlayoutAtMs: self.lastLoudPlayoutAtMs, nowMs: nowMs)
+            self.echoBucketThisCall = Self.accumulatingEchoBucket(self.echoBucketThisCall,
+                                                                   frameRms: frameRms,
+                                                                   farEndActive: farEndActive)
+        }
+    }
+
+    /// W-MICAGC — gentle make-up AGC. Runs in BOTH modes: VP-IO off (we own
+    /// leveling entirely, ceiling agcMaxGain=6.0) and VP-IO on (rides on top
+    /// of Apple's own AGC with a LOWER ceiling, agcMaxGainVpio=3.0, to bound
+    /// any double-AGC interaction — still boost-only + noise-gated + slow
+    /// one-pole + de-zippered + peak-headroom clamped, so it cannot pump).
+    ///
+    /// W-TUNEGAP (2026-07-20) — RESTORED. This dual-mode gate shipped in
+    /// 04f82f1 (2026-07-12 19:17) after real telemetry (call c4185402)
+    /// proved Apple's VP-IO AGC alone leaves the iOS mic at only ~11% peak
+    /// vs Android's ~71% ("faint"). The SAME DAY at 23:32, commit a542727's
+    /// broader "canonical VP-IO everywhere" refactor silently re-gated this
+    /// to `!vpioActiveThisEngine` (VP-IO-off only) as a side effect of its
+    /// "retire custom DSP to fallback only" policy — re-asserting, without
+    /// new evidence, the very "Apple's AGC alone is enough" assumption
+    /// 04f82f1 had just disproven. Real call 40f6d641 (2026-07-20)
+    /// reproduced exactly the predicted regression: agc_ever_active=true,
+    /// vpio_ever_active=true, yet tx rms_pct=2% (Android decoded the exact
+    /// same 2% on its end — confirmed no transport/decode loss, this is
+    /// genuinely how quiet the transmitted signal was), far below the
+    /// "healthy 5-15%" band a542727's own commit message set as its target.
+    /// `vpioActiveThisEngine` is the per-engine-instance latch captured
+    /// right after setVoiceProcessingEnabled — never live global state — so
+    /// the ceiling selection can't desync mid-call (double-AGC risk) for
+    /// buffers already in flight on a prior engine.
+    ///
+    /// Caller gates this on `Self.micAgcEnabled` (the killswitch) exactly as
+    /// the original inline code did — kept at the call site rather than
+    /// inside here so the "AGC disabled entirely" case is visible at the
+    /// tap-callback level, not buried inside this method.
+    private func applyMicMakeUpAgc(rawPcm raw: inout Data, vpioActiveThisEngine: Bool) {
+        let configuredMaxGain = Self.selectMakeUpAgcMaxGain(vpioActive: vpioActiveThisEngine)
+        raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
+            guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
+            let n = rawBuf.count / 2
+            guard n > 0 else { return }
+            let fs = Float(Int16.max)
+            var sumSq: Double = 0
+            var peak: Float = 0
+            for i in 0..<n {
+                let s = Float(samples[i]) / fs
+                sumSq += Double(s * s)
+                let a = abs(s)
+                if a > peak { peak = a }
+            }
+            let rms = Float((sumSq / Double(n)).squareRoot())
+            // W-AGCCEIL — the whole control law now lives in the pure,
+            // unit-tested `nextMakeUpAgcGain` (peak ceiling enforced on
+            // the APPLIED gain + bounded attack). Keeping it out of this
+            // closure is deliberate: this is the exact code a broad
+            // refactor edited by accident once already.
+            // W-AGCNOISE — track the background floor from the RAW
+            // (pre-gain) buffer RMS, then let it bound the ceiling. The
+            // gain multiply below has not run yet on these samples, so
+            // this really is the input level and not our own output.
+            self.micAgcNoiseFloor = Self.nextNoiseFloor(previous: self.micAgcNoiseFloor,
+                                                        bufferRms: rms)
+            let noiseFloor = self.micAgcNoiseFloor
+            let maxGain = Self.noiseLimitedMaxGain(configuredMaxGain: configuredMaxGain,
+                                                   noiseFloorRms: noiseFloor)
+            if !Self.shouldAdaptMakeUpGain(bufferRms: rms, noiseFloorRms: noiseFloor) {
+                self.micAgcHoldCount &+= 1
+            }
+            self.micAgcGain = Self.nextMakeUpAgcGain(previousGain: self.micAgcGain,
+                                                     bufferRms: rms,
+                                                     bufferPeak: peak,
+                                                     maxGain: maxGain,
+                                                     noiseFloorRms: noiseFloor)
+            self.micAgcGainSum += Double(self.micAgcGain)
+            self.micAgcBufferCount &+= 1
+            if self.micAgcGain > self.micAgcMaxGainThisCall { self.micAgcMaxGainThisCall = self.micAgcGain }
+            // W-DEZIPPER — apply the make-up gain with PER-SAMPLE ramping
+            // from the previous frame's end gain, so the gain is
+            // CONTINUOUS across the 20 ms frame boundary. A constant
+            // per-frame gain that changed frame-to-frame stepped the
+            // waveform at each boundary → an audible click every frame
+            // (the "scoppiettante" crackle).
+            //
+            // W-AGCCEIL (2026-07-21) — CORRECTION to the note that used
+            // to live here. It claimed "peak safety is now a per-sample
+            // SOFT-KNEE applied inline", i.e. it treated the limiter as
+            // the peak-safety mechanism. That is precisely the design
+            // error: a memoryless waveshaper is a BACKSTOP, not a
+            // leveller, and using it as one means it is in circuit
+            // continuously (measured: post-gain peaks driven to
+            // 1.045–1.251 × full scale on every call) and therefore
+            // generating continuous harmonic distortion — the far end's
+            // "metallic" report. Peak safety now lives where it belongs,
+            // in the gain law (`nextMakeUpAgcGain`, ceiling enforced on
+            // the APPLIED gain); the knee below sits ABOVE that ceiling
+            // and should essentially never fire. `limiter_pct` telemetry
+            // measures whether that is actually true in the field.
+            let gStart = self.micAgcRampFrom
+            let gTarget = self.micAgcGain
+            // W-TXHEADROOM-DEAD (2026-07-21) — this guard used to read
+            // `gTarget > 1.001 || gStart > 1.001`, i.e. "only do work
+            // when we are BOOSTING". That silently made the entire
+            // W-TXHEADROOM attenuation half DEAD CODE in exactly the
+            // case it was written for: once the peak clamp settles the
+            // gain at `agcPeakHeadroom` (0.70), BOTH gStart and gTarget
+            // are ≤ 1.001 forever, the multiply loop below never runs,
+            // and 0 dB is applied where −3.1 dB was intended. Caught by
+            // adversarial review, then reproduced here: 8 consecutive
+            // buffers computed gain 0.7080/0.7071/0.7071… and applied
+            // 1.0000 every time.
+            //
+            // Second-order damage from the same bug: `micAgcRampFrom`
+            // is assigned `gTarget` unconditionally after this block, so
+            // it recorded 0.707 while the samples had actually been
+            // multiplied by 1.0 — the de-zipper's start point desynced
+            // from reality and the next buffer that DID engage ramped
+            // from a wrong value, producing precisely the click
+            // W-DEZIPPER exists to prevent.
+            //
+            // The predicate is now "does the gain differ from unity in
+            // EITHER direction", which is the actual condition for
+            // needing to touch the samples.
+            if abs(gTarget - 1) > 0.001 || abs(gStart - 1) > 0.001 {
+                // W-AGCCEIL — asymmetric ramp. A gain INCREASE is still
+                // spread across the whole buffer (slow, inaudible). A
+                // gain DECREASE completes in ~1 ms so a level jump is met
+                // almost immediately: the old symmetric full-buffer ramp
+                // meant a peak arriving early in the buffer was still
+                // multiplied by the PREVIOUS (too high) gain, so the
+                // limiter ate the whole onset.
+                let rampSamples = gTarget < gStart ? min(n, Self.agcAttackRampSamples) : n
+                let inv: Float = 1 / Float(rampSamples)
+                let limThresh: Float = Self.limiterKnee * fs
+                let limCeil: Float = Self.limiterCeiling * fs
+                let limRange: Float = limCeil - limThresh
+                var limited: Int64 = 0
+                for i in 0..<n {
+                    let t: Float = i < rampSamples ? Float(i) * inv : 1
+                    let gi = gStart + (gTarget - gStart) * t
+                    var v = Float(samples[i]) * gi
+                    let mag = abs(v)
+                    if mag > limThresh {
+                        let excess = mag - limThresh
+                        let comp = limThresh + limRange * (1 - exp(-excess / limRange))
+                        v = (v < 0 ? -1 : 1) * comp
+                        limited &+= 1
+                    }
+                    samples[i] = Int16(clamping: Int(v.rounded()))
+                }
+                self.limiterSampleCount &+= limited
+            }
+            self.micAgcRampFrom = gTarget
+        }
+    }
+
+    /// AGC-DIAG — scan the samples we already have in hand (no extra
+    /// decode) for peak amplitude + near-full-scale clip count. `raw` is
+    /// exactly the int16 bytes about to be re-chunked next.
+    private func recordLevelDiagnostics(rawPcm raw: Data) {
+        raw.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
+            guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
+            let n = raw.count / 2
+            var localPeak = self.peakAmplitude
+            var localClips = self.clipSampleCount
+            var localSumSq = self.sumSqAmplitude
+            for i in 0..<n {
+                // Int32 magnitude — avoids the abs(Int16.min) overflow trap.
+                let mag = Int32(samples[i]).magnitude
+                if mag > Int32(localPeak).magnitude { localPeak = Int16(clamping: mag) }
+                if mag >= Int32(Self.clipThreshold).magnitude { localClips += 1 }
+                // TX-RMS — sum of squares of the same samples (Double avoids
+                // Int overflow over a full call); RMS is derived at consume time.
+                let sq = Double(samples[i])
+                localSumSq += sq * sq
+            }
+            self.peakAmplitude = localPeak
+            self.clipSampleCount = localClips
+            self.sumSqAmplitude = localSumSq
+            self.rmsSampleCount &+= Int64(n)
+        }
+    }
+
+    /// TX-LIMITER (2026-07-11) — soft-knee peak limiter on the raw mic
+    /// samples before they reach Opus. W-CANONICAL (2026-07-12): runs ONLY
+    /// on the raw-mic fallback path (VP-IO off) — caller gates on
+    /// `!vpioActiveThisEngine` exactly as the original inline code did. With
+    /// VP-IO active the output is already level-managed by Apple's AGC — a
+    /// second nonlinear stage on an already-managed signal is pure added
+    /// distortion. On the fallback path it stays: no AEC/NS/AGC runs there,
+    /// and a loud/close mouth-to-mic can saturate downstream of the ADC
+    /// ("scoppiettio").
+    private func applyRawMicTxLimiter(rawPcm raw: inout Data) {
+        raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
+            guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
+            let n = rawBuf.count / 2
+            // W-AGCCEIL — shares the knee/ceiling constants with the
+            // inline make-up limiter so the two curves can never drift
+            // apart. NOT counted into `limiterSampleCount`: on this
+            // (VP-IO-off) path the inline stage has already run over the
+            // same samples with the identical curve, so counting here
+            // would double-count. The duty-cycle metric is about the
+            // VP-IO path, where this block does not run at all.
+            let threshold: Float = Self.limiterKnee * Float(Int16.max)
+            let ceiling: Float = Self.limiterCeiling * Float(Int16.max)
+            let range = ceiling - threshold
+            for i in 0..<n {
+                let sample = Float(samples[i])
+                let mag = abs(sample)
+                guard mag > threshold else { continue }
+                let excess = mag - threshold
+                let compressed = threshold + range * (1 - exp(-excess / range))
+                samples[i] = Int16(clamping: Int((sample < 0 ? -1 : 1) * compressed))
+            }
+        }
+    }
+
+    /// W475 — re-chunk into EXACT bytesPerFrame frames. `installTap`'s
+    /// bufferSize is only a hint, and VoiceProcessing I/O ties the tap
+    /// buffer to the hardware I/O duration — so `buffer.frameLength` is an
+    /// arbitrary size, frequently far larger than the 960 samples Opus
+    /// requires. A mis-sized frame made OpusCodec.encode return nil;
+    /// QAudionEngine.processOutgoingAudio then fell back to encrypting the
+    /// RAW PCM, and once that raw buffer exceeded maxPayloadSize (4096 B /
+    /// >2048 samples — common) the `payload.count <= maxPayloadSize`
+    /// precondition in EncryptedFrame.init trapped (SIGTRAP), crashing the
+    /// call the instant capture started on answer. It also killed TX
+    /// outright: Opus never once encoded a frame. Re-chunking guarantees
+    /// every onFrame delivery is exactly bytesPerFrame.
+    private func rechunkAndEmit(rawPcm raw: Data) {
+        self.pcmAccumulator.append(raw)
+        let frameBytes = AudioConstants.bytesPerFrame
+        var consumed = 0
+        var emitted = 0
+        while self.pcmAccumulator.count - consumed >= frameBytes {
+            let chunk = self.pcmAccumulator.subdata(in: consumed ..< consumed + frameBytes)
+            consumed += frameBytes
+            emitted += 1
+            // W-CANONICAL — software NR retired (double-NS over VP-IO's);
+            // chunks go straight to Opus.
+            self.onFrame?(chunk)
+        }
+        // W-TXBURST — largest number of 20 ms frames emitted from ONE tap
+        // callback. 1 (occasionally 2) is a steady 50 fps stream; a large
+        // value means the hardware is clumping our I/O and the peer's
+        // jitter buffer sees bursts, not a stream. Counter only.
+        if emitted > self.txBurstMaxThisCall { self.txBurstMaxThisCall = emitted }
+        if consumed > 0 {
+            self.pcmAccumulator = consumed < self.pcmAccumulator.count
+                ? self.pcmAccumulator.subdata(in: consumed ..< self.pcmAccumulator.count)
+                : Data()
         }
     }
 
