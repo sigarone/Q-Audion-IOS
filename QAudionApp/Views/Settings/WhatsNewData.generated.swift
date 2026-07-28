@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.878",
+              date: "2026-07-28",
+              title: "v1.0.878",
+              bullets: [
+                "fix(video): reuse the pre-allocated video transceiver in upgradeToVideo()",
+                "chore(engine): stop suppressing all C warnings in CLiboqs",
+                "chore(ci): remove masked-failure macOS test job from engine-tests.yml",
+                "chore(ci): report-only lint/secret/RealityCore checks, drop orphaned zips",
+              ]),
         .init(id: "v1.0.877",
               date: "2026-07-28",
               title: "v1.0.877",
               bullets: [
+                "chore: regenerate changelog for v1.0.877",
                 "fix(video): rebind sender/receiver cryptor after fresh-PC upgrade negotiation",
               ]),
         .init(id: "v1.0.876",
@@ -140,13 +150,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.859",
                 "fix(telemetry): 5xx flush response silently dropped the whole batch",
-              ]),
-        .init(id: "v1.0.858",
-              date: "2026-07-26",
-              title: "v1.0.858",
-              bullets: [
-                "chore: regenerate changelog for v1.0.858",
-                "fix(audio): a route-change race in the jitter-buffer pump froze the phone on speaker tap (W-PLAYOUTRACE)",
               ]),
     ]
 }
