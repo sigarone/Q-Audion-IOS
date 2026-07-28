@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.889",
+              date: "2026-07-28",
+              title: "v1.0.889",
+              bullets: [
+                "fix(call): don't reuse a recvonly video transceiver -- my own W-DUPETRANSCEIVER regression",
+              ]),
         .init(id: "v1.0.888",
               date: "2026-07-28",
               title: "v1.0.888",
               bullets: [
+                "chore: regenerate changelog for v1.0.888",
                 "fix(groupcall): Desktop ctrl envelopes -- the 1.0.887 sweep was inert, here is why",
               ]),
         .init(id: "v1.0.887",
@@ -170,13 +177,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.870",
                 "fix(call): 1:1 ring screen unreachable, GroupCallView always won (CRITICAL)",
-              ]),
-        .init(id: "v1.0.869",
-              date: "2026-07-27",
-              title: "v1.0.869",
-              bullets: [
-                "chore: regenerate changelog for v1.0.869",
-                "fix(call): group-call accept silently no-ops after CallKit UI release (CRITICAL regression)",
               ]),
     ]
 }
