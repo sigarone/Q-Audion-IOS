@@ -150,16 +150,16 @@ public struct ContactDetailView: View {
 
     private var actionsSection: some View {
         Section("Actions") {
-            Button(action: { onCall?() }) {
+            Button(action: { onCall?() }, label: {
                 Label("Call", systemImage: "phone.fill")
-            }
-            Button(action: { onChat?() }) {
+            })
+            Button(action: { onChat?() }, label: {
                 Label("Chat", systemImage: "message.fill")
-            }
+            })
             if viewModel.trustLevel == .unverified {
-                Button(action: { onVerifySas?() }) {
+                Button(action: { onVerifySas?() }, label: {
                     Label("Verify SAS", systemImage: "lock.shield")
-                }
+                })
             }
         }
     }
@@ -184,13 +184,14 @@ public struct ContactDetailView: View {
     private var dangerSection: some View {
         Section {
             Button(role: viewModel.isBlocked ? .none : .destructive,
-                   action: { onBlock?() }) {
+                   action: { onBlock?() },
+                   label: {
                 Label(viewModel.isBlocked ? "Unblock" : "Block",
                       systemImage: viewModel.isBlocked ? "lock.open" : "hand.raised.fill")
-            }
-            Button(role: .destructive, action: { onDelete?() }) {
+            })
+            Button(role: .destructive, action: { onDelete?() }, label: {
                 Label("Delete contact", systemImage: "trash")
-            }
+            })
         }
     }
 }

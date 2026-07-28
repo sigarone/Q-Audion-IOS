@@ -38,7 +38,7 @@ public struct WelcomeView: View {
 
             // Action buttons
             VStack(spacing: 12) {
-                Button(action: { appState.authState = .login }) {
+                Button(action: { appState.authState = .login }, label: {
                     Text("Accedi con Telefono")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
@@ -46,9 +46,9 @@ public struct WelcomeView: View {
                         .background(QColors.qGreen)
                         .foregroundColor(QColors.textOnPrimary)
                         .cornerRadius(12)
-                }
+                })
 
-                Button(action: { appState.authState = .sovereignSetup }) {
+                Button(action: { appState.authState = .sovereignSetup }, label: {
                     Text("Crea Identita' Sovrana")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
@@ -57,7 +57,7 @@ public struct WelcomeView: View {
                         .foregroundColor(QColors.qGreen)
                         .cornerRadius(12)
                         .overlay(RoundedRectangle(cornerRadius: 12).stroke(QColors.qGreen, lineWidth: 1))
-                }
+                })
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 32)
@@ -135,7 +135,7 @@ public struct LoginView: View {
                         }
                         isLoading = false
                     }
-                }) {
+                }, label: {
                     if isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity)
@@ -146,7 +146,7 @@ public struct LoginView: View {
                             .frame(maxWidth: .infinity)
                             .padding()
                     }
-                }
+                })
                 .background(QColors.qGreen)
                 .foregroundColor(QColors.textOnPrimary)
                 .cornerRadius(12)
@@ -222,7 +222,7 @@ public struct SovereignSetupView: View {
                         await appState.registerSovereign(displayName: displayName.isEmpty ? nil : displayName)
                         isLoading = false
                     }
-                }) {
+                }, label: {
                     if isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity)
@@ -233,7 +233,7 @@ public struct SovereignSetupView: View {
                             .frame(maxWidth: .infinity)
                             .padding()
                     }
-                }
+                })
                 .background(QColors.qGold)
                 .foregroundColor(QColors.textOnPrimary)
                 .cornerRadius(12)

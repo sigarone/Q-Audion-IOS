@@ -274,20 +274,20 @@ extension IOSEarbudGattProxy: CBCentralManagerDelegate {
     }
 
     public nonisolated func centralManager(_ central: CBCentralManager,
-                               didConnect peripheral: CBPeripheral) {
+                                           didConnect peripheral: CBPeripheral) {
         peripheral.delegate = self
         let svcUUID = CBUUID(string: EarbudGattConstants.SERVICE_UUID)
         peripheral.discoverServices([svcUUID])
     }
 
     public nonisolated func centralManager(_ central: CBCentralManager,
-                               didFailToConnect peripheral: CBPeripheral, error: Error?) {
+                                           didFailToConnect peripheral: CBPeripheral, error: Error?) {
         failPendingOps(with: error ?? GattError.gattError("connect_failed"))
     }
 
     public nonisolated func centralManager(_ central: CBCentralManager,
-                               didDisconnectPeripheral peripheral: CBPeripheral,
-                               error: Error?) {
+                                           didDisconnectPeripheral peripheral: CBPeripheral,
+                                           error: Error?) {
         clearCharacteristics()
         failPendingOps(with: GattError.gattError(
             "disconnected:\(error?.localizedDescription ?? "nil")"))
@@ -299,7 +299,7 @@ extension IOSEarbudGattProxy: CBCentralManagerDelegate {
 extension IOSEarbudGattProxy: CBPeripheralDelegate {
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral,
-                           didDiscoverServices error: Error?) {
+                                       didDiscoverServices error: Error?) {
         if let err = error {
             failPendingOps(with: err)
             return
@@ -322,8 +322,8 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
     }
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral,
-                           didDiscoverCharacteristicsFor service: CBService,
-                           error: Error?) {
+                                       didDiscoverCharacteristicsFor service: CBService,
+                                       error: Error?) {
         if let err = error {
             failPendingOps(with: err)
             return
@@ -342,8 +342,8 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
     }
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral,
-                           didWriteValueFor characteristic: CBCharacteristic,
-                           error: Error?) {
+                                       didWriteValueFor characteristic: CBCharacteristic,
+                                       error: Error?) {
         if let err = error {
             writeCont?.resume(throwing: GattError.gattError(err.localizedDescription))
         } else {
@@ -353,8 +353,8 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
     }
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral,
-                           didUpdateValueFor characteristic: CBCharacteristic,
-                           error: Error?) {
+                                       didUpdateValueFor characteristic: CBCharacteristic,
+                                       error: Error?) {
         if let err = error {
             readCont?.resume(throwing: GattError.gattError(err.localizedDescription))
         } else {

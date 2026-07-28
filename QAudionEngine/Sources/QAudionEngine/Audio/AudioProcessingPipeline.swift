@@ -404,9 +404,9 @@ public final class AudioProcessingPipeline {
     /// (unlike `latchAudioDiag`, which needs a live `AVAudioSession` and
     /// currently only exercises for real on the iOS Simulator CI job).
     static func nextSpeakerResidency(accumulatedMs: Int64,
-                                      sinceMs: Int64,
-                                      nowSpeaker: Bool,
-                                      nowMs: Int64) -> (accumulatedMs: Int64, sinceMs: Int64) {
+                                     sinceMs: Int64,
+                                     nowSpeaker: Bool,
+                                     nowMs: Int64) -> (accumulatedMs: Int64, sinceMs: Int64) {
         var acc = accumulatedMs
         if sinceMs != 0 {
             acc += nowMs - sinceMs

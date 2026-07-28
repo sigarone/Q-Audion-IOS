@@ -80,14 +80,14 @@ public struct QrIdentityView: View {
 
                 Divider()
 
-                Button(action: { showScanner = true }) {
+                Button(action: { showScanner = true }, label: {
                     Label("Scansiona identita' remota", systemImage: "qrcode.viewfinder")
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(QColors.cardSurface)
                         .foregroundColor(QColors.qBlue)
                         .cornerRadius(12)
-                }
+                })
                 .padding(.horizontal, 24)
             }
             .padding()

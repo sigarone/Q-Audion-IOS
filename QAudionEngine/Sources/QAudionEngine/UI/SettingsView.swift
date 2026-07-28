@@ -106,20 +106,20 @@ public struct SettingsView: View {
 
                 // Logout
                 Section {
-                    Button(role: .destructive, action: { showLogoutConfirm = true }) {
+                    Button(role: .destructive, action: { showLogoutConfirm = true }, label: {
                         Label("Disconnetti", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
+                    })
                 }
             }
             .navigationTitle("Impostazioni")
-            .alert("Disconnetti?", isPresented: $showLogoutConfirm) {
+            .alert("Disconnetti?", isPresented: $showLogoutConfirm, actions: {
                 Button("Annulla", role: .cancel) {}
                 Button("Disconnetti", role: .destructive) {
                     Task { await appState.logout() }
                 }
-            } message: {
+            }, message: {
                 Text("Verrai disconnesso dal server BCrypto.")
-            }
+            })
         }
     }
 }

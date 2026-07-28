@@ -45,14 +45,14 @@ public struct ChatView: View {
 
             // Call buttons
             HStack(spacing: 24) {
-                Button(action: {}) {
+                Button(action: {}, label: {
                     Label("Audio", systemImage: "phone.fill")
                         .font(.caption)
-                }
-                Button(action: {}) {
+                })
+                Button(action: {}, label: {
                     Label("Video", systemImage: "video.fill")
                         .font(.caption)
-                }
+                })
             }
             .padding(.bottom, 4)
             .foregroundColor(QColors.qGreen)

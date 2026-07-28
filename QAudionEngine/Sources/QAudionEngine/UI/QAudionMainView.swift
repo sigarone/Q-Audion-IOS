@@ -66,9 +66,9 @@ public struct ConversationListView: View {
             .navigationTitle("Q-Audion")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button(action: { appState.showContactDiscovery = true }) {
+                    Button(action: { appState.showContactDiscovery = true }, label: {
                         Image(systemName: "plus")
-                    }
+                    })
                 }
             }
             .sheet(isPresented: $appState.showContactDiscovery) {
@@ -202,9 +202,9 @@ public struct ContactsListView: View {
             .navigationTitle("Contatti")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button(action: { appState.showContactDiscovery = true }) {
+                    Button(action: { appState.showContactDiscovery = true }, label: {
                         Image(systemName: "person.badge.plus")
-                    }
+                    })
                 }
             }
         }

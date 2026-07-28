@@ -681,8 +681,8 @@ public final class AudioCapture {
 
     /// Fold one buffer's RMS into the running totals. Pure; unit-tested.
     static func accumulatingEchoBucket(_ totals: EchoBucketTotals,
-                                        frameRms: Float,
-                                        farEndActive: Bool) -> EchoBucketTotals {
+                                       frameRms: Float,
+                                       farEndActive: Bool) -> EchoBucketTotals {
         var next = totals
         let sq = Double(frameRms) * Double(frameRms)
         if farEndActive {
@@ -1106,8 +1106,8 @@ public final class AudioCapture {
     /// must skip the rest of the tap callback for this buffer exactly as
     /// before.
     private func convertTapBufferToInt16(_ buffer: AVAudioPCMBuffer,
-                                          rateConverter: AVAudioConverter?,
-                                          canonicalFormat: AVAudioFormat) -> Data? {
+                                         rateConverter: AVAudioConverter?,
+                                         canonicalFormat: AVAudioFormat) -> Data? {
         if let converter = rateConverter {
             let ratio = Double(AudioConstants.sampleRate) / max(buffer.format.sampleRate, 1)
             let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up) + 64)

@@ -38,7 +38,7 @@ public final class BCryptoSecurityApiImpl: SecurityApi {
     /// Default algorithm is "ml-kem-1024" (project target; Android default
     /// "ml-kem-768" is wrong for this deployment).
     public func sendPqcKeyExchange(recipientId: String, ciphertext: Data,
-                                    algorithm: String = "ml-kem-1024") async throws {
+                                   algorithm: String = "ml-kem-1024") async throws {
         let dict: [String: Any] = [
             "recipient_id": recipientId,
             "ciphertext": ciphertext.base64EncodedString(),

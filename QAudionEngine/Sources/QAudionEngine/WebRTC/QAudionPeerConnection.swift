@@ -27,13 +27,13 @@ public final class QAudionPeerConnection: NSObject {
         /// A locally-discovered ICE candidate that must be shipped to the peer
         /// via the signaling channel (`CallingApi.sendIceCandidate`).
         func peerConnection(_ pc: QAudionPeerConnection,
-                             didDiscoverLocalIceCandidate candidate: String,
-                             sdpMid: String?,
-                             sdpMLineIndex: Int32)
+                            didDiscoverLocalIceCandidate candidate: String,
+                            sdpMid: String?,
+                            sdpMLineIndex: Int32)
 
         /// ICE connection state transitions (new → checking → connected → ...).
         func peerConnection(_ pc: QAudionPeerConnection,
-                             didChangeIceConnectionState state: RTCIceConnectionState)
+                            didChangeIceConnectionState state: RTCIceConnectionState)
 
         /// Aggregate ICE+DTLS connection state transitions (the "combined"
         /// `RTCPeerConnectionState`, distinct from the ICE-only state above).
@@ -42,24 +42,24 @@ public final class QAudionPeerConnection: NSObject {
         /// of ICE, and only this callback observes that. Default no-op below
         /// so existing conformers need not implement it.
         func peerConnection(_ pc: QAudionPeerConnection,
-                             didChangeConnectionState state: RTCPeerConnectionState)
+                            didChangeConnectionState state: RTCPeerConnectionState)
 
         /// Signaling state transitions.
         func peerConnection(_ pc: QAudionPeerConnection,
-                             didChangeSignalingState state: RTCSignalingState)
+                            didChangeSignalingState state: RTCSignalingState)
 
         /// Remote track received (e.g. peer's microphone audio).
         func peerConnection(_ pc: QAudionPeerConnection,
-                             didReceiveRemoteAudioTrack track: RTCAudioTrack)
+                            didReceiveRemoteAudioTrack track: RTCAudioTrack)
         /// Remote video track (only fired when video is negotiated).
         func peerConnection(_ pc: QAudionPeerConnection,
-                             didReceiveRemoteVideoTrack track: RTCVideoTrack)
+                            didReceiveRemoteVideoTrack track: RTCVideoTrack)
         /// Remote video RTP receiver — the attach point for the native
         /// `RTCFrameCryptor` (decrypts inbound video). Fires on the WebRTC
         /// signalling thread alongside `didReceiveRemoteVideoTrack`. Default
         /// no-op so non-video conformers need not implement it.
         func peerConnection(_ pc: QAudionPeerConnection,
-                             didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver)
+                            didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver)
     }
 
     public weak var delegate: Delegate?
@@ -181,8 +181,8 @@ public final class QAudionPeerConnection: NSObject {
         // carrier-NAT environments.
         config.iceTransportPolicy = iceTransportPolicy
         guard let pc = factory.peerConnection(with: config,
-                                                constraints: mediaConstraints,
-                                                delegate: self) else {
+                                              constraints: mediaConstraints,
+                                              delegate: self) else {
             return
         }
         self.peerConnection = pc
@@ -650,7 +650,7 @@ public final class QAudionPeerConnection: NSObject {
     // MARK: - Offer / Answer
 
     public func createOffer(audioOnly: Bool = true,
-                              completion: @escaping (Result<String, Error>) -> Void) {
+                            completion: @escaping (Result<String, Error>) -> Void) {
         guard let pc = peerConnection else {
             completion(.failure(WebRTCError.notInitialized))
             return
@@ -721,7 +721,7 @@ public final class QAudionPeerConnection: NSObject {
     }
 
     public func createAnswer(hasVideo: Bool = false,
-                              completion: @escaping (Result<String, Error>) -> Void) {
+                             completion: @escaping (Result<String, Error>) -> Void) {
         guard let pc = peerConnection else {
             completion(.failure(WebRTCError.notInitialized))
             return
@@ -789,8 +789,8 @@ public final class QAudionPeerConnection: NSObject {
     public func addRemoteIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
         guard let pc = peerConnection else { return }
         let cand = RTCIceCandidate(sdp: candidate,
-                                     sdpMLineIndex: sdpMLineIndex,
-                                     sdpMid: sdpMid)
+                                   sdpMLineIndex: sdpMLineIndex,
+                                   sdpMid: sdpMid)
         pc.add(cand) { _ in /* errors logged at signaling layer */ }
     }
 
@@ -849,9 +849,9 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
     public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         delegate?.peerConnection(self,
-                                  didDiscoverLocalIceCandidate: candidate.sdp,
-                                  sdpMid: candidate.sdpMid,
-                                  sdpMLineIndex: candidate.sdpMLineIndex)
+                                 didDiscoverLocalIceCandidate: candidate.sdp,
+                                 sdpMid: candidate.sdpMid,
+                                 sdpMLineIndex: candidate.sdpMLineIndex)
     }
     public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {

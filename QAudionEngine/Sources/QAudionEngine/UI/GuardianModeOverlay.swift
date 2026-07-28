@@ -56,11 +56,19 @@ public struct GuardianModeOverlay: View {
     }
 
     private func colorForLevel(_ level: ConfidenceIndex.Level) -> Color {
-        switch level { case .green: return .green; case .yellow: return .yellow; case .red: return .red }
+        switch level {
+        case .green: return .green
+        case .yellow: return .yellow
+        case .red: return .red
+        }
     }
 
     private func labelForLevel(_ level: ConfidenceIndex.Level) -> String {
-        switch level { case .green: return "Secure"; case .yellow: return "Caution"; case .red: return "Alert" }
+        switch level {
+        case .green: return "Secure"
+        case .yellow: return "Caution"
+        case .red: return "Alert"
+        }
     }
 }
 #endif

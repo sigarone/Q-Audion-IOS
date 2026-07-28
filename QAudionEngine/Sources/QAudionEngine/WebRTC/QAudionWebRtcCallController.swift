@@ -1763,9 +1763,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     // MARK: - QAudionPeerConnection.Delegate
 
     public func peerConnection(_ pc: QAudionPeerConnection,
-                                 didDiscoverLocalIceCandidate candidate: String,
-                                 sdpMid: String?,
-                                 sdpMLineIndex: Int32) {
+                               didDiscoverLocalIceCandidate candidate: String,
+                               sdpMid: String?,
+                               sdpMLineIndex: Int32) {
         guard let rid = recipientId else { return }
         let mid: String? = sdpMid
         let mlineIdx: Int32 = sdpMLineIndex
@@ -1780,7 +1780,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
 
     public func peerConnection(_ pc: QAudionPeerConnection,
-                                 didChangeIceConnectionState s: RTCIceConnectionState) {
+                               didChangeIceConnectionState s: RTCIceConnectionState) {
         // W419 — log every ICE state transition. Crucial for diagnosing
         // "audio drops after 30s" bugs: typically ICE goes connected →
         // disconnected → failed when network is unstable, or stays
@@ -1823,7 +1823,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `.failed` here too, independent of the ICE path, so a DTLS-only
     /// failure is not silently unobserved.
     public func peerConnection(_ pc: QAudionPeerConnection,
-                                 didChangeConnectionState s: RTCPeerConnectionState) {
+                               didChangeConnectionState s: RTCPeerConnectionState) {
         let stateName: String
         switch s {
         case .new:          stateName = "new"
@@ -2030,7 +2030,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
 
     public func peerConnection(_ pc: QAudionPeerConnection,
-                                 didChangeSignalingState s: RTCSignalingState) {
+                               didChangeSignalingState s: RTCSignalingState) {
         // W419 — log signaling state transitions for end-to-end visibility
         // into the SDP exchange flow.
         let stateName: String
@@ -2047,7 +2047,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
 
     public func peerConnection(_ pc: QAudionPeerConnection,
-                                 didReceiveRemoteAudioTrack track: RTCAudioTrack) {
+                               didReceiveRemoteAudioTrack track: RTCAudioTrack) {
         // W466 — confirm the remote audio track arrived. If this never
         // logs, the peer never published audio (or SDP m-line missing).
         //
@@ -2064,7 +2064,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
 
     public func peerConnection(_ pc: QAudionPeerConnection,
-                                 didReceiveRemoteVideoTrack track: RTCVideoTrack) {
+                               didReceiveRemoteVideoTrack track: RTCVideoTrack) {
         // W466 — confirm the remote video track arrived.
         print("[WebRTC] remote VIDEO track received — enabled=\(track.isEnabled)")
         // R-4 (sovereign-only): a sovereign user only accepts video under
@@ -2091,7 +2091,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// peer video). Runs on the WebRTC signalling thread (correct place to build
     /// RTCFrameCryptor). Mirrors Android enableVideoFrameCryptorOnReceiver.
     public func peerConnection(_ pc: QAudionPeerConnection,
-                                 didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver) {
+                               didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver) {
         // R-4: never attach a receiver cryptor when rejecting incoming video
         // (the track is already disabled in didReceiveRemoteVideoTrack).
         if shouldRejectIncomingVideo() { return }

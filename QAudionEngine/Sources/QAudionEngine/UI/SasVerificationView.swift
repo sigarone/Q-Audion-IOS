@@ -79,23 +79,23 @@ public struct SasVerificationView: View {
             Spacer()
 
             HStack(spacing: 16) {
-                Button(action: { onVerdict(.mismatch) }) {
+                Button(action: { onVerdict(.mismatch) }, label: {
                     Label("They Don't Match", systemImage: "xmark.circle.fill")
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(Color.red.opacity(0.15))
                         .foregroundColor(.red)
                         .cornerRadius(12)
-                }
+                })
 
-                Button(action: { onVerdict(.match) }) {
+                Button(action: { onVerdict(.match) }, label: {
                     Label("They Match", systemImage: "checkmark.circle.fill")
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(Color.green.opacity(0.15))
                         .foregroundColor(.green)
                         .cornerRadius(12)
-                }
+                })
             }
         }
         .padding()

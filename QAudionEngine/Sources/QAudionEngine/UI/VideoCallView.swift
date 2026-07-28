@@ -99,14 +99,14 @@ public struct VideoCallView: View {
                 .padding(.bottom, 16)
 
                 // Hang up button
-                Button(action: { dismiss() }) {
+                Button(action: { dismiss() }, label: {
                     Image(systemName: "phone.down.fill")
                         .font(.title2)
                         .foregroundColor(.white)
                         .frame(width: 64, height: 64)
                         .background(QColors.error)
                         .clipShape(Circle())
-                }
+                })
                 .padding(.bottom, 40)
             }
         }

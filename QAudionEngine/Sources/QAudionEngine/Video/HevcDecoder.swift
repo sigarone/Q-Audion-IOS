@@ -258,8 +258,7 @@ public final class HevcDecoder: @unchecked Sendable {
             init(_ cb: @escaping PixelBufferCallback) { self.cb = cb }
         }
         let holder = CallbackHolder(callback)
-        let cocb: VTDecompressionOutputCallback = {
-            refcon, _, status, _, imageBuffer, pts, _ in
+        let cocb: VTDecompressionOutputCallback = { refcon, _, status, _, imageBuffer, pts, _ in
             guard status == noErr, let buffer = imageBuffer, let refcon = refcon else { return }
             let h = Unmanaged<CallbackHolder>.fromOpaque(refcon).takeUnretainedValue()
             h.cb(buffer, pts)

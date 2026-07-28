@@ -17,9 +17,9 @@ public struct ContactDiscoveryView: View {
         NavigationView {
             List {
                 Section("Scansione QR") {
-                    Button(action: { showQrScanner = true }) {
+                    Button(action: { showQrScanner = true }, label: {
                         Label("Scansiona QR Code", systemImage: "qrcode.viewfinder")
-                    }
+                    })
                 }
 
                 Section("Aggiungi manualmente") {
@@ -33,13 +33,13 @@ public struct ContactDiscoveryView: View {
                 }
 
                 Section("Scopri contatti dalla rubrica") {
-                    Button(action: { Task { await discoverFromAddressBook() } }) {
+                    Button(action: { Task { await discoverFromAddressBook() } }, label: {
                         if isScanning {
                             ProgressView()
                         } else {
                             Label("Cerca contatti registrati", systemImage: "person.crop.rectangle.stack")
                         }
-                    }
+                    })
                     .disabled(isScanning)
                 }
 

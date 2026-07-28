@@ -338,8 +338,7 @@ public final class HevcEncoder: @unchecked Sendable {
 
     // MARK: - VideoToolbox callback
 
-    private static let outputCallback: VTCompressionOutputCallback = {
-        outputCallbackRefCon, _, status, _, sampleBuffer in
+    private static let outputCallback: VTCompressionOutputCallback = { outputCallbackRefCon, _, status, _, sampleBuffer in
         guard status == noErr, let buffer = sampleBuffer, CMSampleBufferDataIsReady(buffer) else {
             return
         }
