@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.893",
+              date: "2026-07-29",
+              title: "v1.0.893",
+              bullets: [
+                "fix(build): fix 2 real compile errors from the unverified-by-compilation W-EXTPREFIX pass",
+              ]),
         .init(id: "v1.0.892",
               date: "2026-07-29",
               title: "v1.0.892",
               bullets: [
+                "chore: regenerate changelog for v1.0.892",
                 "feat(auth): SMS-OTP + extension-only registration onboarding",
               ]),
         .init(id: "v1.0.891",
@@ -172,13 +179,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.874",
                 "fix(build): cast webRtcController before identity comparison",
-              ]),
-        .init(id: "v1.0.873",
-              date: "2026-07-28",
-              title: "v1.0.873",
-              bullets: [
-                "chore: regenerate changelog for v1.0.873",
-                "fix(call): watchdog timeout for on-demand video-upgrade PeerConnection ICE",
               ]),
     ]
 }
