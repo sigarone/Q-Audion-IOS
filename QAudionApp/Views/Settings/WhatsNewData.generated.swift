@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.898",
+              date: "2026-07-30",
+              title: "v1.0.898",
+              bullets: [
+                "fix(contacts): discover-v2 client decode never matched the real server",
+              ]),
         .init(id: "v1.0.897",
               date: "2026-07-29",
               title: "v1.0.897",
               bullets: [
+                "chore: regenerate changelog for v1.0.897",
                 "fix(contacts): phone number now outranks extension in identity display",
                 "fix(call): surface dial-by-phone errors, fix misleading group-call count",
               ]),
@@ -170,16 +177,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.879",
                 "fix(build): drop read-only direction clamp on existing RTCRtpTransceiver",
-              ]),
-        .init(id: "v1.0.878",
-              date: "2026-07-28",
-              title: "v1.0.878",
-              bullets: [
-                "chore: regenerate changelog for v1.0.878",
-                "fix(video): reuse the pre-allocated video transceiver in upgradeToVideo()",
-                "chore(engine): stop suppressing all C warnings in CLiboqs",
-                "chore(ci): remove masked-failure macOS test job from engine-tests.yml",
-                "chore(ci): report-only lint/secret/RealityCore checks, drop orphaned zips",
               ]),
     ]
 }
