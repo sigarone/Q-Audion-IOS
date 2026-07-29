@@ -272,8 +272,18 @@ private final class NfcExchangeDriver: ObservableObject {
         // very name; that fallback exists for keys stored before the tag did,
         // and a renamed convention should not be able to quietly turn an NFC
         // key back into an exportable one.
+        //
+        // W-NFCIDBIND (2026-07-29) — `peerIdPub` (the full 32-byte Ed25519
+        // identity captured at THIS tap, per `NfcApduExchange.onPskDerived`'s
+        // own contract) is now ALSO persisted verbatim in the vault blob, not
+        // just truncated to 16 hex chars in the entry name. `resolveNfcMixInputs`'s
+        // `nfcBound` check needs the real captured identity to compare against
+        // the peer's verified identity key at call time, and a 16-hex-char
+        // (8-byte) prefix is not a sound basis for that comparison — this app's
+        // security floor elsewhere is full 256-bit fingerprints and 32-byte
+        // identity keys throughout, never a truncated one.
         try vault.storePsk(name: name, key: psk, fingerprint: fingerprint,
-                           keyClass: nil, origin: .nfc)
+                           keyClass: nil, origin: .nfc, nfcPeerIdentityKey: peerIdPub)
     }
 }
 

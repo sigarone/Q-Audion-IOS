@@ -7753,6 +7753,34 @@ final class AppState: ObservableObject {
         return (try? vault.loadPsk(name: name)) ?? nil
     }
 
+    /// W-NFCIDBIND (2026-07-29) — the peer's Ed25519 identity pubkey captured
+    /// at NFC-tap time for the vault entry matching `fingerprint`, or `nil`
+    /// when there is no match or the matched entry never recorded one (every
+    /// non-NFC entry, and any NFC entry written before this field existed).
+    ///
+    /// Feeds `AssuranceState.resolveNfcMixInputs`'s `capturedPeerIdentityKey`.
+    /// Previously that function was handed `fingerprint` itself under the
+    /// (false) assumption that an NFC entry's fingerprint label WAS the
+    /// captured identity — it is `lc_hex(SHA-256(psk))` on every real code
+    /// path, an entirely different 32 bytes, so that comparison could never
+    /// succeed and every NFC-selected call landed on a false S3 identity-
+    /// mismatch instead of S2. Mirrors `resolvePskDisplayMeta`'s matching
+    /// shape rather than sharing it, same convention as `resolvePskBytes`
+    /// just above.
+    static func resolveNfcPeerIdentityKey(fingerprint: String?) -> Data? {
+        guard let fp = fingerprint, !fp.isEmpty else { return nil }
+        let vault = SovereignKeyVault()
+        let matchedName: String? = vault.listPskNames().first { n in
+            if n.hasPrefix("__") { return false }
+            guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: n)) else { return false }
+            // W-STALEFP — see resolvePskDisplayMeta's identical comment above.
+            guard let raw = (try? vault.loadPsk(name: n)) ?? nil, !raw.isEmpty else { return false }
+            return PskAdvertising.canonicalFingerprint(forPsk: raw) == fp
+        }
+        guard let name = matchedName else { return nil }
+        return vault.nfcPeerIdentityKey(name: name)
+    }
+
     /// Responder-side dispatch for Android JSON OFFER. Symmetric to
     /// `routeInboundPqcOffer` but consumes the Android wire format
     /// directly via `QAudionCallIntegration.onAndroidBundleReceived`.
@@ -8149,13 +8177,18 @@ final class AppState: ObservableObject {
         // `QAudionCallIntegration`. See `AssuranceState.resolveNfcMixInputs`
         // for the pure decision logic (unit-tested).
         let selectedIsNfc = AppState.resolvePskDisplayMeta(fingerprint: state.selectedFp).method == "NFC"
+        // W-NFCIDBIND (2026-07-29) — the identity captured AT THE TAP, read
+        // from the vault's dedicated sidecar field, NOT derived from the
+        // fingerprint (which is SHA-256(psk), never an identity key — see
+        // `resolveNfcMixInputs`'s parameter doc for the failure this replaces).
+        let capturedPeerIdentityKey = AppState.resolveNfcPeerIdentityKey(fingerprint: state.selectedFp)
         let verifiedPeerIdentityKey = PeerIdentityPinStore().pinnedKey(contactId: state.peerId)
         let priorPresenceAuth = existingContact?.presenceAuth
             .map { (peerIdentityKey: $0.peerIdentityKey, witnessTier: $0.witnessTier) }
         let (mixRoles, nfcBound, nfcWitnessOk) = AssuranceState.resolveNfcMixInputs(
             n: state.n,
             selectedIsNfcOrigin: selectedIsNfc,
-            selectedFingerprintHex: state.selectedFp,
+            capturedPeerIdentityKey: capturedPeerIdentityKey,
             verifiedPeerIdentityKey: verifiedPeerIdentityKey,
             priorPresenceAuth: priorPresenceAuth
         )

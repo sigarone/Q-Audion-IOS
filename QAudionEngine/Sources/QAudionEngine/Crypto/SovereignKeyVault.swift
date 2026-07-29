@@ -57,13 +57,24 @@ public final class SovereignKeyVault {
     /// would have needed its own migration path and could desynchronise from the
     /// key it describes.
     private enum Blob {
-        static func encode(keyClass: KeyClass?, origin: PskOrigin?) -> Data? {
-            guard keyClass != nil || origin != nil else { return nil }
+        static func encode(keyClass: KeyClass?, origin: PskOrigin?, nfcPeerIdentityKey: Data? = nil) -> Data? {
+            guard keyClass != nil || origin != nil || nfcPeerIdentityKey != nil else { return nil }
             // A blob that carries only an origin still needs the class field
             // present so the separator has a left-hand side; `.shared` is what
             // an absent class already means.
             var s = (keyClass ?? .shared).rawValue
             if let origin { s += ";origin=" + origin.rawValue }
+            // W-NFCIDBIND (2026-07-29) — the peer's 32-byte Ed25519 identity
+            // pubkey captured at the NFC tap itself, hex-encoded. This is the
+            // ONLY place that identity is ever recorded: nothing else in this
+            // codebase persists it, and `AssuranceState.resolveNfcMixInputs`'s
+            // `nfcBound` check needs the REAL captured identity to compare
+            // against the peer's verified identity key at call time — the
+            // fingerprint field is SHA-256(psk), an unrelated 32 bytes, and
+            // comparing it to an identity key can never legitimately match.
+            if let nfcPeerIdentityKey {
+                s += ";nfcpid=" + nfcPeerIdentityKey.map { String(format: "%02x", $0) }.joined()
+            }
             return Data(s.utf8)
         }
 
@@ -75,6 +86,17 @@ public final class SovereignKeyVault {
             guard let data, let s = String(data: data, encoding: .utf8) else { return nil }
             for field in s.split(separator: ";") where field.hasPrefix("origin=") {
                 return PskOrigin(rawValue: String(field.dropFirst("origin=".count)))
+            }
+            return nil
+        }
+
+        /// W-NFCIDBIND — the peer identity pubkey captured at tap time, or nil
+        /// when this entry never recorded one (every non-NFC entry, and any
+        /// NFC entry written before this field existed).
+        static func nfcPeerIdentityKey(_ data: Data?) -> Data? {
+            guard let data, let s = String(data: data, encoding: .utf8) else { return nil }
+            for field in s.split(separator: ";") where field.hasPrefix("nfcpid=") {
+                return DeviceRenewBlob.hexDecode(String(field.dropFirst("nfcpid=".count)))
             }
             return nil
         }
@@ -96,10 +118,19 @@ public final class SovereignKeyVault {
         key: Data,
         fingerprint: String,
         keyClass: KeyClass?,
-        origin: PskOrigin?
+        origin: PskOrigin?,
+        // W-NFCIDBIND (2026-07-29) — the peer's 32-byte Ed25519 identity
+        // pubkey captured AT THE NFC TAP ITSELF, when `origin == .nfc`. This
+        // is the only place that identity is ever recorded going forward;
+        // `AssuranceState.resolveNfcMixInputs`'s `nfcBound` check compares
+        // THIS against the peer's verified identity key at call time — never
+        // the fingerprint (SHA-256(psk), an unrelated 32 bytes that can never
+        // legitimately equal an identity key). nil for every non-NFC call
+        // site, byte-identical to the pre-existing blob.
+        nfcPeerIdentityKey: Data? = nil
     ) throws {
         try storeInternal(name: name, key: key, fingerprint: fingerprint,
-                          blob: Blob.encode(keyClass: keyClass, origin: origin))
+                          blob: Blob.encode(keyClass: keyClass, origin: origin, nfcPeerIdentityKey: nfcPeerIdentityKey))
     }
 
     public func storePsk(name: String, key: Data, fingerprint: String, keyClass: KeyClass?) throws {
@@ -219,6 +250,35 @@ public final class SovereignKeyVault {
         }
         #endif
         return PskOrigin.inferred(fromAccountName: name)
+    }
+
+    /// W-NFCIDBIND (2026-07-29) reader — the peer's 32-byte Ed25519 identity
+    /// pubkey captured at NFC-tap time for this entry, or `nil` when this
+    /// entry never recorded one (every non-NFC entry, and any NFC entry
+    /// written before this field existed — those keep degrading to plain PSK
+    /// in `resolveNfcMixInputs`, exactly as an entry with no vault match at
+    /// all already does).
+    ///
+    /// Deliberately separate from `origin(name:)`/`getKeyClass(name:)` rather
+    /// than folded into a combined return, so a caller that only needs this
+    /// one fact (`AppState`'s `resolveNfcMixInputs` wiring) doesn't have to
+    /// know the other two exist.
+    public func nfcPeerIdentityKey(name: String) -> Data? {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: name,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess, let attrs = item as? [String: Any] {
+            return Blob.nfcPeerIdentityKey(attrs[kSecAttrGeneric as String] as? Data)
+        }
+        #endif
+        return nil
     }
 
     /// W-NFCBIND — raw material for an entry that is about to LEAVE the device

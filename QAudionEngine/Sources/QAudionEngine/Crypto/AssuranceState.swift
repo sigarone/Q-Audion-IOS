@@ -233,12 +233,19 @@ public enum AssuranceState: Equatable {
     ///     PSK has `PskOrigin.nfc` (i.e. `SovereignKeyVault.origin(name:)`,
     ///     surfaced to the app layer via `AppState.resolvePskDisplayMeta`'s
     ///     `method == "NFC"` — reused, not re-derived).
-    ///   - selectedFingerprintHex: `KcMacReadyEvent.selectedFp` — for an
-    ///     `nfc-` vault entry this hex string IS the peer's raw 32-byte
-    ///     Ed25519 identity pubkey captured at the tap itself
-    ///     (`NfcApduExchange`'s `peerIdentityPub`, persisted verbatim as the
-    ///     Keychain label by `NfcExchangeView.persistPsk`) — see that type's
-    ///     doc. `nil`/malformed ⇒ cannot establish binding, same as no NFC.
+    ///   - capturedPeerIdentityKey: the peer's raw 32-byte Ed25519 identity
+    ///     pubkey captured AT THE NFC TAP ITSELF for the SELECTED vault
+    ///     entry (`NfcApduExchange`'s `peerIdentityPub`, persisted via
+    ///     `SovereignKeyVault.nfcPeerIdentityKey(name:)` — W-NFCIDBIND,
+    ///     2026-07-29). Deliberately NOT derived from `selectedFingerprintHex`:
+    ///     that value is `lc_hex(SHA-256(psk))` on every real code path (see
+    ///     `PskAdvertising.canonicalFingerprint`), an entirely different 32
+    ///     bytes from an identity key that can never legitimately equal one —
+    ///     an earlier version of this function tried exactly that and always
+    ///     produced `nfcBound == false`, a permanent false S3 identity-
+    ///     mismatch on every NFC-selected call. `nil`/malformed ⇒ cannot
+    ///     establish binding, same as no NFC (covers both a legacy vault
+    ///     entry written before this field existed and the vault-miss case).
     ///   - verifiedPeerIdentityKey: this call's own verified peer identity
     ///     key — the SAME value `sigOk`'s own verdict is anchored to
     ///     elsewhere in `QAudionCallIntegration`, surfaced via
@@ -267,17 +274,14 @@ public enum AssuranceState: Equatable {
     public static func resolveNfcMixInputs(
         n: Int,
         selectedIsNfcOrigin: Bool,
-        selectedFingerprintHex: String?,
+        capturedPeerIdentityKey: Data?,
         verifiedPeerIdentityKey: Data?,
         priorPresenceAuth: (peerIdentityKey: Data, witnessTier: String)?
     ) -> (mixRoles: [MixSecretRole], nfcBound: Bool, witnessOk: Bool) {
         guard selectedIsNfcOrigin else {
             return (n >= 1 ? [.psk] : [], false, false)
         }
-        guard let fpHex = selectedFingerprintHex,
-              let capturedIdentity = DeviceRenewBlob.hexDecode(fpHex),
-              capturedIdentity.count == 32
-        else {
+        guard let capturedIdentity = capturedPeerIdentityKey, capturedIdentity.count == 32 else {
             // The vault entry's OWN recorded identity is missing or
             // malformed — this can never be trusted as an NFC-authenticated
             // secret at all, so degrade fully to plain PSK rather than

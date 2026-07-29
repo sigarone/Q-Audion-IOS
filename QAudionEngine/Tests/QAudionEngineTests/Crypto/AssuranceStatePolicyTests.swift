@@ -328,13 +328,9 @@ final class AssuranceStatePolicyTests: XCTestCase {
     // mixing, no wire change — see that function's doc for the full
     // design-pivot context)
 
-    private func hex(_ data: Data) -> String {
-        data.map { String(format: "%02x", $0) }.joined()
-    }
-
     func testResolveNfcMixInputs_nonNfcOrigin_nOneOrMore_yieldsPskRole() {
         let result = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: false, selectedFingerprintHex: "deadbeef",
+            n: 1, selectedIsNfcOrigin: false, capturedPeerIdentityKey: Data(repeating: 0xDE, count: 32),
             verifiedPeerIdentityKey: nil, priorPresenceAuth: nil
         )
         XCTAssertEqual(result.mixRoles, [.psk])
@@ -344,7 +340,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
 
     func testResolveNfcMixInputs_nonNfcOrigin_nZero_yieldsNoRoles() {
         let result = AssuranceState.resolveNfcMixInputs(
-            n: 0, selectedIsNfcOrigin: false, selectedFingerprintHex: nil,
+            n: 0, selectedIsNfcOrigin: false, capturedPeerIdentityKey: nil,
             verifiedPeerIdentityKey: nil, priorPresenceAuth: nil
         )
         XCTAssertEqual(result.mixRoles, [])
@@ -353,7 +349,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
     func testResolveNfcMixInputs_nfcOrigin_matchingIdentity_noPriorRecord_boundAndWitnessed() {
         let identity = Data(repeating: 0xAB, count: 32)
         let result = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: identity,
             verifiedPeerIdentityKey: identity, priorPresenceAuth: nil
         )
         XCTAssertEqual(result.mixRoles, [.nfc])
@@ -365,7 +361,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
         let capturedAtTap = Data(repeating: 0xAB, count: 32)
         let verifiedNow = Data(repeating: 0xCD, count: 32)
         let result = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(capturedAtTap),
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: capturedAtTap,
             verifiedPeerIdentityKey: verifiedNow, priorPresenceAuth: nil
         )
         XCTAssertEqual(result.mixRoles, [.nfc], "still NFC-origin -- decide() itself must see nfcMixed to route to S3, not silently fall back to PSK")
@@ -376,7 +372,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
     func testResolveNfcMixInputs_nfcOrigin_priorBackupRestoreDowngrade_sticks() {
         let identity = Data(repeating: 0xAB, count: 32)
         let result = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: identity,
             verifiedPeerIdentityKey: identity,
             priorPresenceAuth: (peerIdentityKey: identity, witnessTier: "backup_restore")
         )
@@ -387,7 +383,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
     func testResolveNfcMixInputs_nfcOrigin_priorSecureElement_staysWitnessed() {
         let identity = Data(repeating: 0xAB, count: 32)
         let result = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: identity,
             verifiedPeerIdentityKey: identity,
             priorPresenceAuth: (peerIdentityKey: identity, witnessTier: "secure_element")
         )
@@ -403,7 +399,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
         let identity = Data(repeating: 0xAB, count: 32)
         let staleIdentity = Data(repeating: 0xEF, count: 32)
         let result = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: identity,
             verifiedPeerIdentityKey: identity,
             priorPresenceAuth: (peerIdentityKey: staleIdentity, witnessTier: "backup_restore")
         )
@@ -413,7 +409,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
     func testResolveNfcMixInputs_nfcOrigin_noVerifiedIdentityYet_treatsAsUnbound() {
         let identity = Data(repeating: 0xAB, count: 32)
         let result = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: identity,
             verifiedPeerIdentityKey: nil, priorPresenceAuth: nil
         )
         XCTAssertEqual(result.mixRoles, [.nfc])
@@ -421,15 +417,27 @@ final class AssuranceStatePolicyTests: XCTestCase {
         XCTAssertFalse(result.witnessOk)
     }
 
-    func testResolveNfcMixInputs_nfcOrigin_malformedFingerprint_fallsBackLikeNonNfc() {
+    func testResolveNfcMixInputs_nfcOrigin_missingCapturedIdentity_fallsBackLikeNonNfc() {
+        // W-NFCIDBIND: `capturedPeerIdentityKey` is nil whenever the vault
+        // entry never recorded one (legacy NFC entry written before this
+        // field existed, or the vault lookup missed) -- must degrade to
+        // plain PSK exactly like the old "malformed fingerprint" case did.
         let result = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: "not-hex!!",
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: nil,
             verifiedPeerIdentityKey: Data(repeating: 0xAB, count: 32), priorPresenceAuth: nil
         )
         XCTAssertEqual(
             result.mixRoles, [.psk],
-            "a malformed/undecodable fingerprint can't establish NFC binding -- degrade to plain PSK, never claim NFC"
+            "a missing/wrong-length captured identity can't establish NFC binding -- degrade to plain PSK, never claim NFC"
         )
+    }
+
+    func testResolveNfcMixInputs_nfcOrigin_wrongLengthCapturedIdentity_fallsBackLikeNonNfc() {
+        let result = AssuranceState.resolveNfcMixInputs(
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: Data(repeating: 0xAB, count: 16),
+            verifiedPeerIdentityKey: Data(repeating: 0xAB, count: 32), priorPresenceAuth: nil
+        )
+        XCTAssertEqual(result.mixRoles, [.psk])
     }
 
     // MARK: - End-to-end: resolveNfcMixInputs -> decide(), the ACTUAL pipeline
@@ -438,7 +446,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
     func testEndToEnd_nfcSelectedKey_matchingIdentity_witnessed_reachesS2() {
         let identity = Data(repeating: 0x11, count: 32)
         let (mixRoles, nfcBound, witnessOk) = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(identity),
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: identity,
             verifiedPeerIdentityKey: identity, priorPresenceAuth: nil
         )
         let result = AssuranceState.decide(
@@ -458,7 +466,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
         // as before this wiring -- mixRoles == [.psk], nfcBound/witnessOk
         // false, decide() reaches S8 exactly like today.
         let (mixRoles, nfcBound, witnessOk) = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: false, selectedFingerprintHex: "aabbccdd",
+            n: 1, selectedIsNfcOrigin: false, capturedPeerIdentityKey: Data(repeating: 0xAA, count: 32),
             verifiedPeerIdentityKey: Data(repeating: 0x22, count: 32), priorPresenceAuth: nil
         )
         let result = AssuranceState.decide(
@@ -473,7 +481,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
         let capturedAtTap = Data(repeating: 0x11, count: 32)
         let verifiedNow = Data(repeating: 0x99, count: 32)
         let (mixRoles, nfcBound, witnessOk) = AssuranceState.resolveNfcMixInputs(
-            n: 1, selectedIsNfcOrigin: true, selectedFingerprintHex: hex(capturedAtTap),
+            n: 1, selectedIsNfcOrigin: true, capturedPeerIdentityKey: capturedAtTap,
             verifiedPeerIdentityKey: verifiedNow, priorPresenceAuth: nil
         )
         let result = AssuranceState.decide(
