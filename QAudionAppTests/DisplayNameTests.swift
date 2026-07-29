@@ -251,10 +251,15 @@ final class DisplayNameTests: XCTestCase {
         XCTAssertEqual(DisplayName.forUser("u8", contacts: contacts), "+391234567890")
     }
 
-    func test_extensionWinsOverPhoneNumber_whenBothKnown() {
+    // 2026-07-29 (Pavel, explicit product decision): a known phone number
+    // only ever exists because its owner explicitly published/opted in
+    // (opt-in profile field, or the wire caller_display self-disclosure
+    // gated on the caller's own "show my phone number" preference) — so it
+    // now outranks the always-present-but-never-chosen bare extension.
+    func test_phoneNumberWinsOverExtension_whenBothKnown() {
         XCTAssertEqual(
             DisplayName.forUser("u9", knownExtension: "100", knownPhoneNumber: "+391234567890", contacts: []),
-            "100"
+            "+391234567890"
         )
     }
 

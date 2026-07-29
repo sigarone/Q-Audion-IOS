@@ -100,16 +100,30 @@ enum DisplayName {
                 return cleaned
             }
         }
-        // 3. Known extension — bare digits, no prefix, no padding. See
+        // 3. Known phone number — already self-evidently a number. 2026-07-29
+        //    (Pavel, explicit product decision): a phone number only ever
+        //    reaches a StoredContact/knownPhoneNumber because its owner
+        //    explicitly opted in — either the server's opt-in
+        //    PublicPhoneNumber profile field, or the wire `caller_display`
+        //    self-disclosure that ONLY carries a phone-shaped value when
+        //    the caller's own "show my phone number" preference is active
+        //    (see `NameResolutionService.enrichFromCallProfile`'s
+        //    `profilePhone ?? callLinkedPhone(for:)`). There is no path
+        //    today for a phone number to be known WITHOUT that explicit
+        //    choice — so honouring it ahead of the bare (but always-
+        //    present, never explicitly chosen) extension is what "prefer
+        //    showing my phone number" actually means to the person who set
+        //    it. Extension moves to tier 4, still the reliable fallback
+        //    for every peer who hasn't published a phone.
+        if let phone = (knownPhoneNumber ?? match?.phoneNumber)?
+            .trimmingCharacters(in: .whitespaces), !phone.isEmpty {
+            return phone
+        }
+        // 4. Known extension — bare digits, no prefix, no padding. See
         //    `resolvedExtension` for the recovery priority.
         if let ext = resolvedExtension(for: id, serverDisplay: serverDisplay,
                                        knownExtension: knownExtension, contacts: stored) {
             return ext
-        }
-        // 4. Known phone number — already self-evidently a number.
-        if let phone = (knownPhoneNumber ?? match?.phoneNumber)?
-            .trimmingCharacters(in: .whitespaces), !phone.isEmpty {
-            return phone
         }
         // 5. Legacy dev-seed convention ("user-mario" → "Mario").
         if id.hasPrefix("user-") { return String(id.dropFirst(5)).capitalized }
