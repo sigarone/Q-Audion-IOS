@@ -65,7 +65,19 @@ struct GroupCallView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Chiamata di gruppo")
                             .font(.headline).foregroundColor(.white)
-                        Text("\(viewModel.participants.count) partecipanti")
+                        // 2026-07-29 fix (Pavel: answering a group call shows
+                        // "0 partecipanti" — a real, physically-accurate
+                        // count during the genuine window between screen
+                        // presentation and the roster's first
+                        // `group_call_update` WS reply, which is a SEPARATE
+                        // signal from LiveKit's own room-connect — see
+                        // `onParticipantsChanged`/`mergeSfuOnlyParticipants`.
+                        // Say so instead of showing a number that reads as
+                        // "the room is empty" when it's actually just not
+                        // loaded yet.
+                        Text(viewModel.participants.isEmpty
+                             ? "Connessione…"
+                             : "\(viewModel.participants.count) partecipanti")
                             .font(.caption).foregroundColor(.gray)
                     }
                     Spacer()

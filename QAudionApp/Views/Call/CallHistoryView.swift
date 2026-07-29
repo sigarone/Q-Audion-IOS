@@ -194,6 +194,16 @@ struct CallHistoryView: View {
     @State private var showingDialPad = false
     @State private var showingGroupComposer = false
     @State private var showingClearAllConfirm = false
+    /// 2026-07-29 fix (Pavel: dialed a real phone number, "nothing
+    /// happened") — `DialPadSheet` dismisses synchronously the instant
+    /// "chiama" is tapped, before `dialAndCall`'s async resolution even
+    /// starts, and nothing on this screen ever read `appState.errorMessage`
+    /// (the resolve-failure path DOES set it correctly — mirrors
+    /// `ChatListScreen`'s `dialError` — it was just never surfaced here).
+    /// A local, screen-owned var (not bound live to the shared
+    /// `errorMessage`) so an unrelated later error elsewhere in the app
+    /// can't pop this alert back up.
+    @State private var dialCallError: String?
 
     /// W296: filter toggle. When true, only missed calls are shown.
     /// State persists for the lifetime of the screen instance, not
@@ -232,7 +242,13 @@ struct CallHistoryView: View {
                 // E.164. Senza questa risoluzione il server riceve
                 // recipient_id='175' e droppa il segnale silenziosamente
                 // (Android non squilla).
-                Task { await appState.dialAndCall(rawInput: dialed, video: false) }
+                Task {
+                    appState.errorMessage = nil
+                    await appState.dialAndCall(rawInput: dialed, video: false)
+                    if let err = appState.errorMessage {
+                        dialCallError = err
+                    }
+                }
             })
             // Su iPad il sheet viene presentato come floating card —
             // un'altezza fissa di 560pt lo rende compatto e centrato
@@ -266,6 +282,16 @@ struct CallHistoryView: View {
             }
         } message: {
             Text("Verranno rimosse \(store.entries.count) chiamate dallo storico locale. L'azione non si può annullare.")
+        }
+        // 2026-07-29 fix — see dialCallError kdoc above.
+        .alert("Chiamata non riuscita",
+               isPresented: Binding(
+                    get: { dialCallError != nil },
+                    set: { if !$0 { dialCallError = nil } }
+               )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(dialCallError ?? "")
         }
     }
 
