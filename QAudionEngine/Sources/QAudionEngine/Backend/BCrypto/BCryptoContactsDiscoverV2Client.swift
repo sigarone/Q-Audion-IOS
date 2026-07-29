@@ -23,13 +23,31 @@ public final class BCryptoContactsDiscoverV2Client {
         }
     }
 
+    /// 2026-07-30 fix (real device evidence: dialing a registered E.164 from
+    /// the iPhone keypad failed with "decoding failed: typeMismatch expected
+    /// value type array") — this struct/the `discover()` decode below never
+    /// matched what the server actually sends. `cmd/bcrypto-lite/main.go`'s
+    /// `handleDiscoverContactsV2` returns `{"contacts": [safeUser, ...]}`
+    /// where each entry has `id`/`user_id`/`phone_hash`/`display_name`/
+    /// `avatar_url`/`status_message` — there has never been a `"results"`
+    /// wrapper, a bare top-level array, or a per-entry `"hash"` echo field.
+    /// Mirrors Android's `DiscoveredContactDto` (`ContactsDto.kt`) exactly,
+    /// which already matches the server correctly.
     public struct DiscoveredEntry: Equatable, Decodable {
-        public let hash: String      // peppered hash echo
-        public let userId: String?   // present if a user is registered with that hash
+        public let userId: String
+        public let phoneHash: String?
+        public let displayName: String?
+        public let avatarUrl: String?
+        public let statusMessage: String?
+        public let phoneNumber: String?
 
         enum CodingKeys: String, CodingKey {
-            case hash
             case userId = "user_id"
+            case phoneHash = "phone_hash"
+            case displayName = "display_name"
+            case avatarUrl = "avatar_url"
+            case statusMessage = "status_message"
+            case phoneNumber = "phone_number"
         }
     }
 
@@ -125,16 +143,12 @@ public final class BCryptoContactsDiscoverV2Client {
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw Error.httpError(http.statusCode)
         }
+        // Real server shape (handleDiscoverContactsV2): {"contacts": [...]}.
         struct DiscoverResponse: Decodable {
-            let results: [DiscoveredEntry]
+            let contacts: [DiscoveredEntry]
         }
         do {
-            // Try wrapped form first.
-            if let wrapped = try? JSONDecoder().decode(DiscoverResponse.self, from: data) {
-                return wrapped.results
-            }
-            // Fallback: bare array.
-            return try JSONDecoder().decode([DiscoveredEntry].self, from: data)
+            return try JSONDecoder().decode(DiscoverResponse.self, from: data).contacts
         } catch {
             throw Error.decodingFailed(String(describing: error))
         }

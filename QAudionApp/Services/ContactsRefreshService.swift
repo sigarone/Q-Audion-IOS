@@ -54,12 +54,11 @@ final class ContactsRefreshService {
         let entries = try await client.discover(alg: pepper.alg, hashes: validHashes)
         // Map back to StoredContact (display name comes from local phonebook;
         // the discover-v2 response only confirms userId existence).
-        let resolved: [ContactsStore.StoredContact] = entries.compactMap { entry in
-            guard let uid = entry.userId else { return nil }
-            return ContactsStore.StoredContact(
-                userId: uid,
-                displayName: "Contact \(uid.suffix(6))",  // replaced by phonebook name in caller
-                phoneHash: entry.hash,
+        let resolved: [ContactsStore.StoredContact] = entries.map { entry in
+            ContactsStore.StoredContact(
+                userId: entry.userId,
+                displayName: "Contact \(entry.userId.suffix(6))",  // replaced by phonebook name in caller
+                phoneHash: entry.phoneHash ?? "",
                 avatarUrl: nil,
                 lastSeen: nil,
                 isVerified: false

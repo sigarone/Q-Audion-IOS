@@ -58,39 +58,78 @@ final class BCryptoContactsDiscoverV2ClientTests: XCTestCase {
         }
     }
 
-    func test_discover_decodesWrappedShape() async throws {
+    // 2026-07-30 fix (real device evidence: dialing a registered E.164 from
+    // the iPhone keypad failed with "decoding failed: typeMismatch expected
+    // value type array") — these two tests used to assert a wire shape
+    // (`{"results":[{"hash","user_id"}]}` / a bare top-level array) that
+    // NEVER matched what `cmd/bcrypto-lite/main.go`'s handleDiscoverContactsV2
+    // actually sends (`{"contacts":[{"id","user_id","phone_hash",
+    // "display_name","avatar_url","status_message"}]}`) — they gave false
+    // confidence in a contract that was wrong from day one. Replaced with
+    // the REAL shape, mirroring Android's DiscoveredContactDto exactly.
+
+    func test_discover_decodesRealServerShape() async throws {
         StubProtocol.responseHandler = { _ in
             // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
             // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-             Data("{\"results\":[{\"hash\":\"abc\",\"user_id\":\"u-1\"},{\"hash\":\"def\"}]}".utf8))
+             Data("""
+             {"contacts":[
+               {"id":"u-1","user_id":"u-1","phone_hash":"ph-1","display_name":"Marta Rinaldi","avatar_url":"https://x/a.png","status_message":"Ciao"},
+               {"id":"u-2","user_id":"u-2","phone_hash":"ph-2","display_name":""}
+             ]}
+             """.utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { "token123" }
         )
-        let entries = try await client.discover(hashes: ["abc", "def"])
+        let entries = try await client.discover(alg: "sha256-peppered-v1", hashes: ["ph-1", "ph-2"])
         XCTAssertEqual(entries.count, 2)
         XCTAssertEqual(entries[0].userId, "u-1")
-        XCTAssertNil(entries[1].userId)
+        XCTAssertEqual(entries[0].displayName, "Marta Rinaldi")
+        XCTAssertEqual(entries[0].phoneHash, "ph-1")
+        XCTAssertEqual(entries[1].userId, "u-2")
     }
 
-    func test_discover_decodesBareArray() async throws {
+    func test_discover_emptyContactsArray_decodesToEmpty() async throws {
         StubProtocol.responseHandler = { _ in
-            // Hardcoded literal URL/status — HTTPURLResponse init cannot fail here.
             // swiftlint:disable:next force_unwrapping
             (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-             Data("[{\"hash\":\"x\",\"user_id\":\"u-x\"}]".utf8))
+             Data("{\"contacts\":[]}".utf8))
         }
         let client = BCryptoContactsDiscoverV2Client(
             baseUrl: URL(string: "https://test")!,
             session: session,
             bearerTokenProvider: { nil }
         )
-        let entries = try await client.discover(hashes: ["x"])
-        XCTAssertEqual(entries.count, 1)
-        XCTAssertEqual(entries[0].userId, "u-x")
+        let entries = try await client.discover(alg: "sha256-peppered-v1", hashes: ["nope"])
+        XCTAssertTrue(entries.isEmpty)
+    }
+
+    func test_discover_unexpectedShape_throwsDecodingFailed() async {
+        StubProtocol.responseHandler = { _ in
+            // A bare array (the OLD, wrong assumption) must NOT silently
+            // decode — the real server never sends this shape, so treating
+            // it as valid would just reintroduce a different silent bug.
+            // swiftlint:disable:next force_unwrapping
+            (HTTPURLResponse(url: URL(string: "https://test")!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+             Data("[{\"user_id\":\"u-x\"}]".utf8))
+        }
+        let client = BCryptoContactsDiscoverV2Client(
+            baseUrl: URL(string: "https://test")!,
+            session: session,
+            bearerTokenProvider: { nil }
+        )
+        do {
+            _ = try await client.discover(alg: "sha256-peppered-v1", hashes: ["x"])
+            XCTFail("Should have thrown decodingFailed")
+        } catch BCryptoContactsDiscoverV2Client.Error.decodingFailed {
+            // expected
+        } catch {
+            XCTFail("Wrong error: \(error)")
+        }
     }
 }
 

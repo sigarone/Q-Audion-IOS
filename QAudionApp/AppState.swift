@@ -9572,13 +9572,16 @@ final class AppState: ObservableObject {
                 let pepper = try await v2.fetchPepper()
                 let hash = try PepperedPhoneHash.hash(phone: normalized, pepperBytes: pepper.pepperBytes)
                 let entries = try await v2.discover(alg: pepper.alg, hashes: [hash])
-                guard let entry = entries.first, let userId = entry.userId else {
+                guard let entry = entries.first else {
                     errorMessage = "Numero \(normalized) non risulta tra gli utenti registrati."
                     return
                 }
+                let userId = entry.userId
                 // Same UUID-leak fix as the extension branch: show the dialed
-                // E.164 number on the call screens instead of the raw UUID.
-                self.incomingCallerName = DisplayName.forUser(userId, knownPhoneNumber: normalized)
+                // E.164 number on the call screens instead of the raw UUID,
+                // unless the discovered account has a real display name.
+                self.incomingCallerName = DisplayName.forUser(
+                    userId, serverDisplay: entry.displayName, knownPhoneNumber: normalized)
                 await startCall(contactId: userId, video: video)
                 return
             } catch {
@@ -9664,11 +9667,13 @@ final class AppState: ObservableObject {
                 let pepper = try await v2.fetchPepper()
                 let hash = try PepperedPhoneHash.hash(phone: normalized, pepperBytes: pepper.pepperBytes)
                 let entries = try await v2.discover(alg: pepper.alg, hashes: [hash])
-                guard let entry = entries.first, let userId = entry.userId else {
+                guard let entry = entries.first else {
                     errorMessage = "Numero \(normalized) non risulta tra gli utenti registrati."
                     return nil
                 }
-                let label = DisplayName.forUser(userId, knownPhoneNumber: normalized)
+                let userId = entry.userId
+                let label = DisplayName.forUser(
+                    userId, serverDisplay: entry.displayName, knownPhoneNumber: normalized)
                 return ResolvedDialTarget(userId: userId, displayLabel: label)
             } catch {
                 errorMessage = "Risoluzione \(trimmed) fallita: \(error.localizedDescription)"

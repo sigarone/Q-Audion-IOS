@@ -229,13 +229,29 @@ final class PhonebookSyncCoordinator {
         }
 
         // Step 6 — persist resolved contacts and build results list.
+        //
+        // 2026-07-30: the server never echoes back which REQUEST hash
+        // matched a given discovered account (a genuine, pre-existing gap
+        // shared with Android's DiscoverContactsUseCase, not introduced by
+        // this fix — see that file's identical two-step fallback). Mirrors
+        // it exactly: (a) try the discovered account's own phone_hash as a
+        // hashToInfo key — essentially never true in practice, since that's
+        // the account's regular auth hash, a different hash space than the
+        // discovery pepper, kept only for parity/future-proofing — then (b)
+        // fall back to a direct plaintext match against the account's
+        // opt-in public phone_number when the server sends one. An entry
+        // that matches neither is skipped, same as Android — "can't tell
+        // which local contact this is", not an error.
         var results: [ResolvedMatch] = []
         for entry in discovered {
-            guard let uid = entry.userId, let info = hashToInfo[entry.hash] else { continue }
+            let info = hashToInfo[entry.phoneHash ?? ""]
+                ?? entry.phoneNumber.flatMap { pn in normalized.first(where: { $0.phone == pn }) }
+            guard let info else { continue }
+            let uid = entry.userId
             let stored = ContactsStore.StoredContact(
                 userId: uid,
                 displayName: info.name,
-                phoneHash: entry.hash,
+                phoneHash: entry.phoneHash ?? "",
                 avatarUrl: nil,
                 lastSeen: nil,
                 isVerified: false
@@ -244,7 +260,7 @@ final class PhonebookSyncCoordinator {
             results.append(ResolvedMatch(
                 userId: uid,
                 displayName: info.name,
-                phoneHash: entry.hash,
+                phoneHash: entry.phoneHash ?? "",
                 originalPhone: info.phone
             ))
         }
