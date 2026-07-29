@@ -291,7 +291,7 @@ public final class PersistentCallRecordStore: ObservableObject {
         if let name = nameByUserId[userId], !name.isEmpty {
             contacts = [ContactsStore.StoredContact(
                 userId: userId, displayName: name, phoneHash: "",
-                avatarUrl: nil, lastSeen: nil, isVerified: false)]
+                avatarUrl: nil as URL?, lastSeen: nil as Date?, isVerified: false)]
         }
         return DisplayName.forUser(userId, serverDisplay: wireDisplay, contacts: contacts)
     }

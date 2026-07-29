@@ -64,7 +64,7 @@ final class InCallContainer: ObservableObject {
                 // network refetch below (`if localName == nil`), permanently
                 // freezing the bad value for the rest of the call. Gated on
                 // the canonical `DisplayName.isPlaceholderName` instead.
-                let localName: String? = stored?.displayName.flatMap {
+                let localName: String? = (stored?.displayName).flatMap {
                     (!$0.isEmpty && !DisplayName.isPlaceholderName($0)) ? $0 : nil
                 }
                 let avatarUrl = stored?.avatarUrl
