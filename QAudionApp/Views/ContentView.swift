@@ -398,6 +398,12 @@ struct ContentView: View {
         )
     }
 
+    /// W-EXTPREFIX consolidation (2026-07-29): this was another independent
+    /// copy of the resolution chain (near-identical to the pre-fix
+    /// `LiveInCallScreen.resolvePeerDisplayName`) — its own UUID/placeholder-
+    /// blind rubrica check plus its own digit-token-scan-truncated-to-3
+    /// parser for `outgoingShortNumber`. Now delegates to the canonical
+    /// `DisplayName.forUser`/`resolvedExtension`.
     private func resolveOutgoingName(_ contactId: String?) {
         guard let id = contactId else {
             outgoingDisplayName = ""
@@ -405,40 +411,10 @@ struct ContentView: View {
             return
         }
         let contacts = contactsStore.load()
-        if let match = contacts.first(where: { $0.userId == id }) {
-            outgoingDisplayName = match.displayName
-            let tokens = match.displayName
-                .trimmingCharacters(in: .whitespaces)
-                .split(whereSeparator: { $0.isWhitespace })
-                .map(String.init)
-            if let numTok = tokens.first(where: { $0.allSatisfy({ $0.isNumber }) }) {
-                outgoingShortNumber = String(numTok.prefix(3))
-            } else {
-                outgoingShortNumber = nil
-            }
-        } else {
-            // Priority: incomingCallerName (resolved to "Int. 112" by
-            // call_incoming handler for incoming calls) → truncated UUID.
-            // Never show the full 36-char UUID on any call screen.
-            let resolved = appState.incomingCallerName
-            if !resolved.isEmpty {
-                outgoingDisplayName = resolved
-                let toks = resolved.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-                if let num = toks.first(where: { $0.allSatisfy({ $0.isNumber }) }) {
-                    outgoingShortNumber = String(num.prefix(3))
-                } else {
-                    outgoingShortNumber = nil
-                }
-            } else if id.hasPrefix("user-") {
-                outgoingDisplayName = String(id.dropFirst(5)).capitalized
-                outgoingShortNumber = nil
-            } else if id.count > 12 {
-                outgoingDisplayName = DisplayName.shortUserFallback(id)
-                outgoingShortNumber = nil
-            } else {
-                outgoingDisplayName = id
-                outgoingShortNumber = nil
-            }
-        }
+        let match = contacts.first(where: { $0.userId == id })
+        let wireCandidate = appState.incomingCallerName.isEmpty ? nil : appState.incomingCallerName
+        outgoingDisplayName = DisplayName.forUser(id, serverDisplay: wireCandidate, contacts: contacts)
+        outgoingShortNumber = DisplayName.resolvedExtension(
+            for: id, serverDisplay: wireCandidate, knownExtension: match?.`extension`, contacts: contacts)
     }
 }

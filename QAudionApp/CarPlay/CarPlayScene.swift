@@ -192,12 +192,20 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             }
             .prefix(50)
 
+        // W-EXTPREFIX consolidation (2026-07-29): this used `c.displayName`
+        // verbatim — a stale "Phone #100"/"New User" row would render as-is
+        // on the head-unit list AND get handed to `requestCall` as the
+        // in-call label. Resolved through the canonical `DisplayName
+        // .forUser` instead (this file is gated behind `QAUDION_CARPLAY`,
+        // off by default, but should not carry the same bug the moment it
+        // ships).
         let items: [CPListItem] = contacts.map { c in
-            let item = CPListItem(text: c.displayName,
+            let resolvedName = DisplayName.forUser(c.userId, contacts: [c])
+            let item = CPListItem(text: resolvedName,
                                   detailText: c.isVerified ? "Verificato" : nil)
             item.handler = { _, completion in
                 CarPlayBridge.shared.requestCall(
-                    peerUserId: c.userId, displayName: c.displayName)
+                    peerUserId: c.userId, displayName: resolvedName)
                 completion()
             }
             return item

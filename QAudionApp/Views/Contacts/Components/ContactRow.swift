@@ -7,6 +7,10 @@ struct ContactRow: View {
     @Environment(\.qaudionType) private var type
 
     let item: ContactsListViewModel.Item
+    /// Sub-label under the name, when set — currently unwired by any live
+    /// caller (only exercised in the `#Preview` below). If ever wired up,
+    /// pass bare digits ONLY (e.g. `item.\`extension\``), no "Int."/"Phone"/etc.
+    /// prefix (Pavel rule, 2026-07-29) — see `DisplayName.formatExtension`.
     let extensionLabel: String?
     let presence: PresenceDot?
     let onChatTap: () -> Void
@@ -131,12 +135,12 @@ struct ContactRow: View {
 #Preview {
     VStack(spacing: 0) {
         ContactRow(item: ContactsListViewModel.mock.items[0],
-                   extensionLabel: "Int. 103")
+                   extensionLabel: "103")
         Divider().background(Color.gray.opacity(0.2))
         ContactRow(item: ContactsListViewModel.mock.items[1])
         Divider().background(Color.gray.opacity(0.2))
         ContactRow(item: ContactsListViewModel.mock.items[2],
-                   extensionLabel: "Int. 207")
+                   extensionLabel: "207")
     }
     .padding()
     .background(Color.black)

@@ -167,6 +167,53 @@ public final class BCryptoAccountApiImpl: AccountApi {
         }
     }
 
+    // MARK: - SMS-OTP + extension-only registration (2026-07-29)
+
+    public func requestOtp(phoneNumber: String, purpose: OtpPurpose) async throws -> OtpRequestResponse {
+        let dict: [String: Any] = ["phone_number": phoneNumber, "purpose": purpose.rawValue]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let data = try await rest.post("/api/v1/auth/otp/request", body: body)
+        return try JSONDecoder().decode(OtpRequestResponse.self, from: data)
+    }
+
+    public func verifyOtp(phoneNumber: String, code: String, purpose: OtpPurpose, deviceName: String,
+                           inviteCode: String?, displayName: String?) async throws -> OtpAuthResult {
+        var dict: [String: Any] = [
+            "phone_number": phoneNumber,
+            "code": code,
+            "purpose": purpose.rawValue,
+            "device_name": deviceName,
+            "platform": "ios",
+        ]
+        if let invite = inviteCode, !invite.isEmpty { dict["invite_code"] = invite }
+        if let name = displayName, !name.isEmpty { dict["display_name"] = name }
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let data = try await rest.post("/api/v1/auth/otp/verify", body: body)
+        return try JSONDecoder().decode(OtpAuthResult.self, from: data)
+    }
+
+    public func registerExtensionOnly(displayName: String?, email: String) async throws -> OtpAuthResult {
+        var dict: [String: Any] = ["email": email, "platform": "ios"]
+        if let name = displayName, !name.isEmpty { dict["display_name"] = name }
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let data = try await rest.post("/api/v1/auth/register/extension", body: body)
+        return try JSONDecoder().decode(OtpAuthResult.self, from: data)
+    }
+
+    public func requestEmailVerification(email: String) async throws -> EmailVerifyRequestResponse {
+        let dict: [String: Any] = ["email": email]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let data = try await rest.post("/api/v1/auth/email/verify-request", body: body)
+        return try JSONDecoder().decode(EmailVerifyRequestResponse.self, from: data)
+    }
+
+    public func confirmEmailVerification(token: String) async throws -> EmailVerifyConfirmResponse {
+        let dict: [String: Any] = ["token": token]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let data = try await rest.post("/api/v1/auth/email/verify-confirm", body: body)
+        return try JSONDecoder().decode(EmailVerifyConfirmResponse.self, from: data)
+    }
+
     @available(*, deprecated, message: "Use PhoneHash.hash(_:) — matches Android PhoneHashHelper byte-for-byte. This forwarder is kept only to avoid breaking callers in the in-progress BCrypto workstream.")
     public static func hashPhone(_ phone: String) -> String {
         // Forward to the canonical helper. Falls back to raw-hex only if

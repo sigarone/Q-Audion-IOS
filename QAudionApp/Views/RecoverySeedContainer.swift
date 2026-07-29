@@ -41,10 +41,28 @@ final class RecoverySeedContainer: ObservableObject {
 
     // MARK: - Backend helper
 
-    /// Build a provider from the currently-stored token, matching the pattern
-    /// used in AppState.sendMessage. Returns nil if no token is available.
+    /// Build a provider for the current mode.
+    ///
+    /// `.setup` (`recoverySetup`) is an AUTHENTICATED endpoint — enrolling
+    /// a recovery hash only makes sense for an already-logged-in session,
+    /// so this still requires a stored token and returns `nil` without one
+    /// (same behaviour as before this fix).
+    ///
+    /// `.verify` (`recoveryVerify`) is explicitly documented as a
+    /// NO-SESSION endpoint (see its kdoc on `AccountApi`: "Re-provision a
+    /// device from a recovery secret on a fresh install (no active
+    /// session)"). 2026-07-29 fix: this method used to unconditionally
+    /// require a token for BOTH modes, which made the "restore from
+    /// recovery phrase" flow impossible on the exact scenario it exists
+    /// for — a fresh install with no prior session. That bug never
+    /// surfaced because `RecoverySeedContainer(mode: .verify, ...)` had
+    /// zero call sites anywhere in the shipped app until `OnboardingRoot`
+    /// wired one in. Build an unauthenticated provider for `.verify`
+    /// instead — `recoveryVerify`'s `identifier` + `recoverySecret`
+    /// arguments ARE the credential, no bearer token needed.
     private func makeProvider() -> BCryptoBackendProvider? {
-        guard let token = appState.authService.loadToken() else { return nil }
+        let token = appState.authService.loadToken()
+        if mode == .setup && token == nil { return nil }
         let config = BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
         return BCryptoBackendProvider(config: config)
     }
@@ -79,11 +97,23 @@ final class RecoverySeedContainer: ObservableObject {
                 guard let provider = makeProvider() else {
                     throw RecoverySeedContainerError.notAuthenticated
                 }
-                _ = try await provider.accountApi.recoveryVerify(
+                let creds = try await provider.accountApi.recoveryVerify(
                     identifier: identifier,
                     recoverySecret: hash,
                     deviceName: deviceName
                 )
+                // 2026-07-29 fix: the returned credentials used to be
+                // discarded entirely (`_ = try await ...`) — a successful
+                // recovery-verify never actually logged the user in, it
+                // just flipped the view to a "Done" screen with no working
+                // session behind it. Persist + activate exactly like the
+                // password-based login paths do (AppState.login /
+                // loginWithPhoneHash) so restoring from a mnemonic on a
+                // fresh install actually leaves the user signed in.
+                appState.authService.saveCredentials(creds)
+                appState.currentUserId = creds.userId
+                UserDefaults.standard.set(creds.userId, forKey: "currentUserId")
+                appState.activatePendingSession()
                 viewModel.transition(to: .complete)
             } catch {
                 errorMessage = error.localizedDescription

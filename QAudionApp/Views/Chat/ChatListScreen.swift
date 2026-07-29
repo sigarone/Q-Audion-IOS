@@ -39,6 +39,14 @@ struct ChatListScreen: View {
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
     @State private var showingNewGroup = false
+    /// 2026-07-29 — "start a chat by typed number/extension" fields, shown
+    /// above the contact picker inside the "new conversation" sheet. Ports
+    /// `AppState.dialAndCall`'s resolution heuristic (extension / E.164 /
+    /// already-a-userId) — previously only the DialPad (calls) had this;
+    /// starting a CHAT required an existing contact.
+    @State private var dialInput: String = ""
+    @State private var isResolvingDial = false
+    @State private var dialError: String?
     /// W94: deep-link state. When `appState.pendingDeepLinkConversationId`
     /// is published (notification tap), `deepLinkItem` captures the
     /// matching conversation and `deepLinkActive` flips on, triggering
@@ -306,12 +314,22 @@ struct ChatListScreen: View {
         }
         .sheet(isPresented: $showingNewConversation) {
             NavigationStack {
-                ContactsListView()
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Annulla") { showingNewConversation = false }
-                        }
+                VStack(spacing: 0) {
+                    dialByNumberRow
+                    Divider()
+                    // W-DIALCHAT: explicit maxHeight so the List inside
+                    // ContactsListView actually expands to fill the sheet
+                    // instead of sizing to its intrinsic content — same
+                    // fix ContactsScreen.body already applies to its own
+                    // List-containing Group for the identical reason.
+                    ContactsListView()
+                        .frame(maxHeight: .infinity)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Annulla") { showingNewConversation = false }
                     }
+                }
             }
         }
         // W139: present the export share sheet when a transcript file
@@ -572,14 +590,26 @@ struct ChatListScreen: View {
     /// migration cannot reach them. Never trust a persisted UUID-shaped
     /// title at render: re-resolve through the central chain (rubrica →
     /// "Utente/Gruppo xxxxxxxx…").
+    ///
+    /// W-EXTPREFIX consolidation (2026-07-29): the guard used to check only
+    /// `looksLikeUUID`/`isEmpty` — a persisted "Phone #100" (written back
+    /// when this row was created by, say, the old `resolveDialInput`)
+    /// rendered verbatim forever. For the 1:1 case this now always calls
+    /// `DisplayName.forUser` with the persisted value threaded through as
+    /// `serverDisplay`, so the SAME placeholder check and extension
+    /// recovery `forUser` applies everywhere else also applies here — the
+    /// live rubrica (via `contacts:`) still wins first if it has a better
+    /// name than what's frozen in this row.
     private func resolvedRowTitle(_ item: ConversationListViewModel.Item) -> String {
-        guard DisplayName.looksLikeUUID(item.peerDisplayName) || item.peerDisplayName.isEmpty else {
-            return item.peerDisplayName
-        }
         if item.kind == .group {
+            guard DisplayName.isPlaceholderName(item.peerDisplayName) else {
+                return item.peerDisplayName
+            }
             return DisplayName.forGroup(id: item.peerUserId, name: nil)
         }
-        return DisplayName.forUser(item.peerUserId, contacts: appState.cachedContacts)
+        return DisplayName.forUser(
+            item.peerUserId, serverDisplay: item.peerDisplayName,
+            contacts: appState.cachedContacts)
     }
 
     private func conversationRow(_ item: ConversationListViewModel.Item) -> some View {
@@ -858,6 +888,109 @@ struct ChatListScreen: View {
             peerUserId: item.peerUserId,
             peerDisplayName: item.peerDisplayName
         )
+    }
+
+    // MARK: - New conversation by number/extension (2026-07-29)
+
+    /// Inline row shown above the contact picker inside the "new
+    /// conversation" sheet — lets the user type a raw phone number, PBX
+    /// extension, or userId and start a chat directly, without needing an
+    /// existing rubrica entry first. `.default` keyboard (not `.phonePad`)
+    /// since the field also accepts a raw userId (letters + digits +
+    /// hyphens), unlike the DialPad which is purely numeric.
+    private var dialByNumberRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                TextField("Numero, interno o ID utente", text: $dialInput)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onChange(of: dialInput) { _ in dialError = nil }
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(scheme.surfaceVariant.opacity(0.5))
+                    )
+                Button {
+                    Task { await startChatFromDialInput() }
+                } label: {
+                    Group {
+                        if isResolvingDial {
+                            ProgressView().scaleEffect(0.8)
+                        } else {
+                            Text("Avvia")
+                                .qaudionStyle(type.labelMedium)
+                        }
+                    }
+                    .foregroundStyle(scheme.onPrimary)
+                    .frame(width: 72, height: 40)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(scheme.primary))
+                }
+                .buttonStyle(.plain)
+                .disabled(dialInput.trimmingCharacters(in: .whitespaces).isEmpty || isResolvingDial)
+            }
+            if let err = dialError {
+                Text(err)
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(extras.riskHigh)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    /// Resolves `dialInput` via `AppState.resolveDialInput` (the same
+    /// extension/E.164/userId heuristic `dialAndCall` uses for calls) and,
+    /// on success, starts a chat with the resolved peer.
+    private func startChatFromDialInput() async {
+        dialError = nil
+        isResolvingDial = true
+        defer { isResolvingDial = false }
+        guard let target = await appState.resolveDialInput(dialInput) else {
+            dialError = appState.errorMessage ?? "Risoluzione fallita."
+            return
+        }
+        startChatFromDial(target: target)
+    }
+
+    /// Creates-or-finds the conversation for a dial-resolved peer, exactly
+    /// like `ContactsListView.openOrCreateChat`, PLUS persists the peer as
+    /// a local contact if it isn't one already — unlike the contact-picker
+    /// path (where the peer is by definition already a stored contact),
+    /// a peer reached by typed number/extension usually is NOT yet known
+    /// locally, so without this the conversation would exist but the peer
+    /// would never show up in the Contacts tab.
+    private func startChatFromDial(target: AppState.ResolvedDialTarget) {
+        let contactsStore = ContactsStore()
+        if contactsStore.load().first(where: { $0.userId == target.userId }) == nil {
+            contactsStore.upsert(ContactsStore.StoredContact(
+                userId: target.userId,
+                displayName: target.displayLabel,
+                phoneHash: "",
+                avatarUrl: nil,
+                lastSeen: nil,
+                isVerified: false
+            ))
+        }
+        let convStore = ConversationStore()
+        let convId: UUID
+        if let existing = convStore.loadConversations().first(where: { $0.peerUserId == target.userId }) {
+            convId = existing.id
+        } else {
+            let newConv = Conversation(
+                id: UUID(),
+                peerUserId: target.userId,
+                peerDisplayName: target.displayLabel,
+                lastMessagePreview: nil,
+                lastActivity: Date(),
+                unreadCount: 0,
+                pinned: false
+            )
+            convStore.upsertConversation(newConv)
+            convId = newConv.id
+        }
+        dialInput = ""
+        showingNewConversation = false
+        appState.pendingDeepLinkConversationId = convId
     }
 
     // MARK: - Empty state

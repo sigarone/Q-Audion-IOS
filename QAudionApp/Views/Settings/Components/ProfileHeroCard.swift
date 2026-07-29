@@ -7,8 +7,8 @@ import SwiftUI
 /// Layout (left → right):
 ///   - 72pt `QAudionAvatar` with the user's display name + image
 ///   - column: display name (titleLarge, semibold) + handle (mono
-///     `labelSmall`, e.g. "Int. 103 · 7f3b…d2e9") + status (italic
-///     `bodySmall`, optional)
+///     `labelSmall`, e.g. "103 · 7f3b…d2e9" — bare digits, no "Int."
+///     prefix, Pavel 2026-07-29) + status (italic `bodySmall`, optional)
 ///   - trailing 28pt "EDIT" pill (capsule, 1pt primary border, mono)
 ///
 /// Card surface = `scheme.surface`, 1pt `primary @ 0.5α` border,
@@ -107,7 +107,7 @@ private struct MonoCaption: ViewModifier {
     VStack {
         ProfileHeroCard(
             displayName: "Mario Rossi",
-            handle: "Int. 103 · 7f3b…d2e9",
+            handle: "103 · 7f3b…d2e9",
             statusMessage: "Disponibile per chiamate sicure."
         )
         Spacer()

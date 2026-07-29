@@ -20,7 +20,8 @@ public struct CallHistoryEntry: Equatable, Identifiable {
     /// Durata della chiamata in secondi. nil per missed/ongoing.
     public let durationSeconds: Int?
     public let isVideo: Bool
-    /// Internal extension (PBX). Italian copy: "Int. {ext}".
+    /// Internal extension (PBX). Rendered bare, no prefix word (Pavel rule,
+    /// 2026-07-29) — e.g. "103", never "Int. 103".
     public let peerExtension: Int?
 
     public init(id: String, peerUserId: String, peerDisplay: String,
@@ -101,20 +102,29 @@ final class CallHistoryStore: ObservableObject {
         case .outgoing: dir = .outgoing
         case .missed:   dir = .missed
         }
-        // Display priority: live rubrica name > a stored REAL name (not a UUID
-        // truncation) > PBX extension > stored fallback. Without this the list
-        // shows whatever was resolved at call time forever — a bare
-        // prefix8…suffix4 UUID for peers not yet in the address book.
+        // W-EXTPREFIX consolidation (2026-07-29): this used to be an
+        // independent copy of the priority chain (live rubrica name > a
+        // stored "real" name checked only for UUID-shape, not placeholder
+        // shape > "Int. NNN" > `resolveDisplayName`) — a stale "Phone #100"
+        // in either `nameByUserId` or `record.peerDisplayName` rendered
+        // verbatim. Now a single call into the canonical `DisplayName
+        // .forUser`: `nameByUserId` (live rubrica) wins first via
+        // `contacts`, then `record.peerDisplayName` (the persisted value at
+        // call time) via `serverDisplay`, then `record.peerExtension` —
+        // every source subject to the SAME placeholder check.
         let display: String = {
-            if let n = nameByUserId[record.peerUserId], !n.isEmpty { return n }
-            let s = record.peerDisplayName
-            let isUuidish = s.isEmpty || s == record.peerUserId || s.contains("…")
-            if !isUuidish { return s }
-            if let ext = record.peerExtension, ext > 0 { return "Int. \(ext)" }
-            return s.isEmpty
-                ? PersistentCallRecordStore.resolveDisplayName(
-                    userId: record.peerUserId, wireDisplay: nil, nameByUserId: nameByUserId)
-                : s
+            var contacts: [ContactsStore.StoredContact] = []
+            if let n = nameByUserId[record.peerUserId], !n.isEmpty {
+                contacts = [ContactsStore.StoredContact(
+                    userId: record.peerUserId, displayName: n, phoneHash: "",
+                    avatarUrl: nil, lastSeen: nil, isVerified: false)]
+            }
+            return DisplayName.forUser(
+                record.peerUserId,
+                serverDisplay: record.peerDisplayName,
+                knownExtension: record.peerExtension.flatMap { $0 > 0 ? String($0) : nil },
+                contacts: contacts
+            )
         }()
         return CallHistoryEntry(
             id: record.id,
@@ -557,8 +567,12 @@ private struct CallHistoryRow: View {
 
     private var metadataLine: String {
         var parts: [String] = []
-        if let ext = entry.peerExtension {
-            parts.append("Int. \(ext)")
+        // Pavel, 2026-07-29: bare digits, no "Int." prefix — this subtitle
+        // must show the SAME string as the title above it would if the
+        // peer had no real name (rule 3), never a differently-formatted
+        // copy of the identical extension.
+        if let ext = entry.peerExtension, ext > 0 {
+            parts.append(String(ext))
         }
         parts.append(timestampLabel)
         if let dur = entry.durationSeconds {

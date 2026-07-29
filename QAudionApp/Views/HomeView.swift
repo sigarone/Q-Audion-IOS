@@ -296,20 +296,19 @@ struct HomeView: View {
                 Image(systemName: "phone.fill")
                 // Resolve peer display name (extension, contact, truncated UUID)
                 // — same priority as incoming call banner — never show raw UUID.
+                // W-EXTPREFIX consolidation (2026-07-29): the outgoing branch
+                // used to check only `looksLikeUUID` on the rubrica name (a
+                // stale "Phone #100" would have shown verbatim); both
+                // branches now collapse into one `DisplayName.forUser` call,
+                // which already does rubrica-first-then-serverDisplay itself.
                 Text({
                     guard let cid = appState.callContactId, !cid.isEmpty else { return "Chiamata attiva" }
-                    // Use already-resolved incomingCallerName if set (incoming call).
-                    if !appState.incomingCallerName.isEmpty { return "Chiamata attiva con \(appState.incomingCallerName)" }
-                    // Outgoing: look up in cached contacts (AppState.cachedContacts,
-                    // refreshed on every ContactsStore write — avoids a UserDefaults
-                    // decode on every in-call banner render).
-                    let stored = appState.cachedContacts
-                    if let m = stored.first(where: { $0.userId == cid }),
-                       !m.displayName.isEmpty, !DisplayName.looksLikeUUID(m.displayName) {
-                        return "Chiamata attiva con \(m.displayName)"
-                    }
-                    // Central humane fallback — never the raw/truncated UUID.
-                    return "Chiamata attiva con \(DisplayName.forUser(cid, contacts: stored))"
+                    // AppState.cachedContacts is refreshed on every
+                    // ContactsStore write — avoids a UserDefaults decode on
+                    // every in-call banner render.
+                    let candidate = appState.incomingCallerName.isEmpty ? nil : appState.incomingCallerName
+                    let name = DisplayName.forUser(cid, serverDisplay: candidate, contacts: appState.cachedContacts)
+                    return "Chiamata attiva con \(name)"
                 }())
                 Spacer()
                 Text("Tocca per rientrare")
@@ -465,7 +464,12 @@ private struct CallsTabView: View {
     /// `CallHistoryStore.resolvePeerDisplay` — keep them aligned if you
     /// ever change the priority order.
     private func displayNameFor(_ userId: String) -> String {
-        if let name = contactNameByUserId[userId], !name.isEmpty {
+        // W-EXTPREFIX consolidation (2026-07-29): this cache-hit shortcut
+        // used to accept ANY non-empty cached name, including a legacy
+        // placeholder ("Phone #100"/"New User") — bypassing the canonical
+        // check entirely. Now gated the same way `forUser` itself gates
+        // its own rubrica step.
+        if let name = contactNameByUserId[userId], !DisplayName.isPlaceholderName(name) {
             return name
         }
         // Central rule (DisplayName.swift): never the raw UUID.
@@ -479,9 +483,11 @@ private struct CallsTabView: View {
         var map: [String: String] = [:]
         // W-UUIDSWEEP: skip UUID-shaped stored names (legacy rows persisted
         // before addScannedContact was fixed) so displayNameFor falls
-        // through to DisplayName.forUser's humane fallback.
+        // through to DisplayName.forUser's humane fallback. Also skips
+        // every OTHER placeholder shape (W-EXTPREFIX, 2026-07-29) — see
+        // `displayNameFor`'s own guard for why both places check this.
         for c in appState.cachedContacts
-        where !c.displayName.isEmpty && !DisplayName.looksLikeUUID(c.displayName) {
+        where !DisplayName.isPlaceholderName(c.displayName) {
             map[c.userId] = c.displayName
         }
         contactNameByUserId = map

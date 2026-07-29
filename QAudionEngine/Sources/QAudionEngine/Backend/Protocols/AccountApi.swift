@@ -70,6 +70,117 @@ public protocol AccountApi {
     /// signaling layer needs.
     /// Matches `GET /api/v1/directory/by-extension/{n}`.
     func lookupByExtension(_ ext: Int64) async throws -> UserProfile?
+
+    // MARK: - SMS-OTP + extension-only registration (2026-07-29)
+
+    /// Request an SMS-OTP code for `phoneNumber` (the RAW E.164 number —
+    /// NOT a hash: the server itself sends the SMS and cannot deliver to a
+    /// hash). `purpose` distinguishes a brand-new registration from a
+    /// login on an existing account so the server can 404 (login, unknown
+    /// number) or 409 (register, number already taken) appropriately.
+    /// Matches `POST /api/v1/auth/otp/request`.
+    func requestOtp(phoneNumber: String, purpose: OtpPurpose) async throws -> OtpRequestResponse
+
+    /// Verify a previously-requested SMS-OTP code and complete register OR
+    /// login — no password: possession of the code IS the credential.
+    /// `inviteCode`/`displayName` are only meaningful when
+    /// `purpose == .register` (both optional even then). `deviceName`
+    /// mirrors the same field on ``login(phoneHash:password:deviceName:)``.
+    /// Matches `POST /api/v1/auth/otp/verify`.
+    func verifyOtp(phoneNumber: String, code: String, purpose: OtpPurpose, deviceName: String,
+                    inviteCode: String?, displayName: String?) async throws -> OtpAuthResult
+
+    /// Extension-only registration — no phone number at all, just a PBX
+    /// extension the server assigns. Email is REQUIRED (no phone means no
+    /// other recovery/support channel for the account). Matches
+    /// `POST /api/v1/auth/register/extension`.
+    func registerExtensionOnly(displayName: String?, email: String) async throws -> OtpAuthResult
+
+    /// Authenticated — request a verification link/token for the email on
+    /// the current account. Matches `POST /api/v1/auth/email/verify-request`.
+    func requestEmailVerification(email: String) async throws -> EmailVerifyRequestResponse
+
+    /// Authenticated — confirm a previously requested email-verification
+    /// token (pasted manually, or extracted from the deep-linked
+    /// verify-landing URL). Matches `POST /api/v1/auth/email/verify-confirm`.
+    func confirmEmailVerification(token: String) async throws -> EmailVerifyConfirmResponse
+}
+
+/// Distinguishes a brand-new account from an existing one across the
+/// SMS-OTP endpoints — same enum reused by both `otp/request` and
+/// `otp/verify` since the server needs to know which flow it's in.
+public enum OtpPurpose: String, Codable {
+    case register
+    case login
+}
+
+/// Response of `POST /api/v1/auth/otp/request`.
+public struct OtpRequestResponse: Codable {
+    /// Seconds until the issued code expires.
+    public let expiresIn: Int
+    /// Seconds the client must wait before it may request a fresh code
+    /// (drives the resend-timer UI).
+    public let resendAfter: Int
+
+    enum CodingKeys: String, CodingKey {
+        case expiresIn = "expires_in"
+        case resendAfter = "resend_after"
+    }
+}
+
+/// Response of `POST /api/v1/auth/otp/verify` and
+/// `POST /api/v1/auth/register/extension` — both endpoints return the same
+/// credential shape (plus a couple of endpoint-specific extras), so one
+/// type covers both.
+public struct OtpAuthResult: Codable {
+    public let userId: String
+    public let deviceId: String
+    public let accessToken: String
+    public let refreshToken: String?
+    public let expiresIn: Int?
+    public let tokenType: String?
+    /// The server-assigned PBX extension. Present on a successful
+    /// `register` (either via `otp/verify` or `register/extension`);
+    /// absent on `otp/verify` with `purpose == .login`.
+    public let assignedExtension: Int64?
+    /// `register/extension` only — whether the email the user supplied
+    /// still needs the confirm-link/token flow. Nil on `otp/verify`.
+    public let emailPendingVerification: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case deviceId = "device_id"
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
+        case tokenType = "token_type"
+        case assignedExtension = "extension"
+        case emailPendingVerification = "email_pending_verification"
+    }
+
+    /// Projects the shared credential fields into ``AuthCredentials`` so
+    /// callers can reuse the exact same post-login plumbing (Keychain
+    /// persistence, WS connect, presence bind…) that the password-based
+    /// register/login paths already use — see `AuthService.saveCredentials`
+    /// in the app layer.
+    public var asAuthCredentials: AuthCredentials {
+        AuthCredentials(userId: userId, deviceId: deviceId, accessToken: accessToken,
+                         refreshToken: refreshToken, expiresIn: expiresIn)
+    }
+}
+
+/// Response of `POST /api/v1/auth/email/verify-request`.
+public struct EmailVerifyRequestResponse: Codable {
+    public let expiresIn: Int
+
+    enum CodingKeys: String, CodingKey {
+        case expiresIn = "expires_in"
+    }
+}
+
+/// Response of `POST /api/v1/auth/email/verify-confirm`.
+public struct EmailVerifyConfirmResponse: Codable {
+    public let verified: Bool
 }
 
 /// Public-profile projection returned by `GET /api/v1/users/{user_id}`.
@@ -87,7 +198,31 @@ public struct PublicUser: Codable, Hashable {
     /// upstream data error, not an acceptable state (Pavel rule
     /// 2026-07-20: the display chain must END in "Int. NNN", never in a
     /// steady-state short8 placeholder).
+    ///
+    /// 2026-07-29 reconciliation with ``UserProfile/dialExtension``: as of
+    /// the SMS-OTP + extension-only registration server rollout, EVERY
+    /// newly-created account (any registration path — OTP, extension-only,
+    /// legacy phone) is assigned a non-zero extension at creation time, so
+    /// the "guarantee" above is now literally true for accounts created
+    /// after that date. Accounts created before the rollout are NOT
+    /// backfilled — a pre-existing account can still legitimately carry a
+    /// nil/0 extension, which is why this field stays `Optional` rather
+    /// than becoming non-optional.
     public var extensionNumber: Int64?
+    /// Opt-in PUBLIC phone number the peer has chosen to publish on their
+    /// profile (server field `User.PublicPhoneNumber`, set via
+    /// `UpdateUserProfile`, surfaced by `handleUserProfile` in
+    /// `cmd/bcrypto-lite/main.go` as `"phone_number"`). Distinct from the
+    /// private auth phone hash / `PhoneHash`: this is only ever populated
+    /// when the user explicitly opted their number into their public
+    /// profile. `nil` when the peer has not opted in (the common case).
+    ///
+    /// 2026-07-29: the server has sent this field on
+    /// `GET /api/v1/users/{id}` all along — this struct's `Codable` decode
+    /// simply had no field for it and silently dropped it on the floor.
+    /// Added so the auto-save-from-call address-book enrichment
+    /// (`NameResolutionService.enrichFromCallProfile`) can actually see it.
+    public var phoneNumber: String?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
@@ -95,14 +230,16 @@ public struct PublicUser: Codable, Hashable {
         case avatarUrl = "avatar_url"
         case statusMessage = "status_message"
         case extensionNumber = "extension"
+        case phoneNumber = "phone_number"
     }
 
-    public init(userId: String, displayName: String? = nil, avatarUrl: String? = nil, statusMessage: String? = nil, extensionNumber: Int64? = nil) {
+    public init(userId: String, displayName: String? = nil, avatarUrl: String? = nil, statusMessage: String? = nil, extensionNumber: Int64? = nil, phoneNumber: String? = nil) {
         self.userId = userId
         self.displayName = displayName
         self.avatarUrl = avatarUrl
         self.statusMessage = statusMessage
         self.extensionNumber = extensionNumber
+        self.phoneNumber = phoneNumber
     }
 }
 
@@ -119,6 +256,26 @@ public struct AuthCredentials: Codable {
         case accessToken = "access_token"
         case refreshToken = "refresh_token"
         case expiresIn = "expires_in"
+    }
+
+    /// 2026-07-29 — the synthesized Swift memberwise init for a struct is
+    /// only ever `internal`, never `public`, regardless of member access
+    /// level, so without this explicit initializer no code outside this
+    /// module (e.g. the `QAudionApp` app target) could construct a value —
+    /// only decode one via `Codable`. Added so app-layer code has a
+    /// documented, supported way to build one if a future call site needs
+    /// to (``OtpAuthResult/asAuthCredentials`` itself is same-module and
+    /// doesn't strictly need this, but relies on the type being
+    /// constructible without reaching for `Codable` round-tripping).
+    /// Purely additive: does not affect the compiler-synthesized
+    /// `Codable` conformance above.
+    public init(userId: String, deviceId: String, accessToken: String,
+                refreshToken: String?, expiresIn: Int?) {
+        self.userId = userId
+        self.deviceId = deviceId
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.expiresIn = expiresIn
     }
 }
 
@@ -145,9 +302,17 @@ public struct UserProfile: Codable {
     /// signups it's SHA-256 of the E.164 number. Surfaced so the
     /// Account Settings screen can show the canonical identifier.
     public var phoneHash: String?
-    /// Sequential dial-by-extension number assigned at fast-setup
-    /// time. `nil` (or 0) when the account was created via the legacy
-    /// phone-number signup path. Maps to `User.Extension` server-side.
+    /// Sequential dial-by-extension number assigned at account-creation
+    /// time. Maps to `User.Extension` server-side.
+    ///
+    /// 2026-07-29: previously documented as "nil/0 when created via legacy
+    /// phone-number signup, i.e. NOT guaranteed" — that is now stale. The
+    /// server assigns a non-zero extension on EVERY registration path
+    /// (fast-setup, SMS-OTP register/login, extension-only registration)
+    /// as of the SMS-OTP rollout. `nil`/0 can still occur for accounts
+    /// created BEFORE that rollout (not backfilled) — this field stays
+    /// `Optional` for that reason, not because new accounts are exempt.
+    /// See the matching note on ``PublicUser/extensionNumber``.
     public var dialExtension: Int64?
 
     enum CodingKeys: String, CodingKey {

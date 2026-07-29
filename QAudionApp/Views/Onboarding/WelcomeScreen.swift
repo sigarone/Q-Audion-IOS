@@ -13,29 +13,35 @@ import Vision
 ///   - CTA hierarchy:
 ///       1. **Primary** "Configurazione rapida (QR)" — fast-setup, the
 ///          zero-friction path the admin panel pushes by default
-///       2. **Secondary** "Inizia con un codice invito" — placeholder for
-///          a future invite-code flow (NOT YET WIRED — tap shows a
-///          "Coming soon" sheet)
-///       3. **Text** "Accedi con un account esistente" — placeholder for
-///          phone-entry login (NOT YET WIRED)
+///       2. **Secondary** "Inizia con un codice invito" — SMS-OTP
+///          registration (`PhoneEntryScreen` → `OtpVerificationScreen`)
+///       3. **Text** "Accedi con un account esistente" — SMS-OTP login,
+///          same phone-entry screen in `.login` mode
+///       4. **Text** "Registrati senza numero" — extension-only
+///          registration (email required, no phone at all)
+///       5. **Text** "Ho già una frase di recupero" — restores an
+///          existing account's session from a previously-enrolled
+///          mnemonic (fresh-install recovery path)
 ///   - footer "Hybrid PQC · Voice-first · Deepfake Guard"
 ///
-/// Per user 2026-04-29: only the Primary CTA (Fast Setup) is wired today.
-/// The other two are stubs because the server-side register/login flows
-/// don't have a phone-OTP path yet — server provisions credentials via
-/// the QR.
+/// 2026-07-29: the server now has a real SMS-OTP register/login flow plus
+/// extension-only registration and recovery-phrase restore — all 5 CTAs
+/// above are live. (Previously only Fast Setup was wired; the other two
+/// were disclaimed stubs because the server had no phone-OTP path yet.)
 struct WelcomeScreen: View {
-
-    // W314 — static copy helpers (avoid multi-segment interpolation in
-    // ViewBuilder closures per SWIFT6_PATTERNS.md §1).
-    private static let stubHintInvite: String =
-        "Funzione in arrivo — usa per ora la Configurazione rapida (QR)."
-    private static let stubHintLogin: String =
-        "Funzione in arrivo — il login via numero richiede l'OTP server."
 
     let onStartFastSetup: () -> Void
     let onStartRegister: () -> Void
     let onStartLogin: () -> Void
+    /// 2026-07-29 — extension-only registration (no phone number, email
+    /// required). Previously there was no distinct CTA for this path.
+    let onStartExtensionOnlyRegister: () -> Void
+    /// 2026-07-29 — restores an existing account's session from a
+    /// previously-enrolled recovery mnemonic. Previously
+    /// `RecoverySeedContainer(mode: .verify)` had zero call sites
+    /// anywhere in the shipped app, so a fresh install had no way to
+    /// actually use a saved mnemonic.
+    let onStartRecoveryRestore: () -> Void
     /// W459 — mirrors Android's `onGalleryQrDecoded` callback. When
     /// non-nil a "Carica immagine QR" PhotosPicker button is shown
     /// directly on this screen (above the secondary CTA). The caller
@@ -131,23 +137,21 @@ struct WelcomeScreen: View {
                             label: "Inizia con un codice invito",
                             variant: .secondary
                         )
-                        // W314 — stub disclaimer for invite-code path
-                        Text(Self.stubHintInvite)
-                            .qaudionStyle(type.labelSmall)
-                            .italic()
-                            .foregroundStyle(scheme.onSurfaceVariant)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                         QAudionButton(
                             action: onStartLogin,
                             label: "Accedi con un account esistente",
                             variant: .text
                         )
-                        // W314 — stub disclaimer for phone-login path
-                        Text(Self.stubHintLogin)
-                            .qaudionStyle(type.labelSmall)
-                            .italic()
-                            .foregroundStyle(scheme.onSurfaceVariant)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        QAudionButton(
+                            action: onStartExtensionOnlyRegister,
+                            label: "Registrati senza numero (solo interno)",
+                            variant: .text
+                        )
+                        QAudionButton(
+                            action: onStartRecoveryRestore,
+                            label: "Ho già una frase di recupero",
+                            variant: .text
+                        )
                     }
 
                     Spacer().frame(height: 24)
@@ -223,6 +227,8 @@ private struct FeaturePill: View {
     WelcomeScreen(
         onStartFastSetup: {},
         onStartRegister: {},
-        onStartLogin: {}
+        onStartLogin: {},
+        onStartExtensionOnlyRegister: {},
+        onStartRecoveryRestore: {}
     )
 }

@@ -65,6 +65,29 @@ public final class ContactsStore {
         /// so legacy rows persisted before this field existed decode cleanly,
         /// same Optional-absent-tolerant convention as `pubkey` above).
         public let presenceFloor: Bool?
+        /// Raw phone number actually observed for this peer — populated
+        /// ONLY by (a) the manual phone-book import flow (the user picked
+        /// this exact device-contact row, see `PhoneContactImportView`) or
+        /// (b) the automatic auto-save-from-call enrichment
+        /// (`NameResolutionService.enrichFromCallProfile` +
+        /// `insertIfAbsentOrFillBlanks` below), which learns it from a
+        /// genuine encrypted call with this peer via the server's public
+        /// profile `phone_number` field (`PublicUser.phoneNumber`).
+        /// Deliberately SEPARATE from `phoneHash` (a peppered HASH, never a
+        /// raw number) — `PhoneContactImportView` used to write the raw
+        /// phone into `phoneHash` by mistake; this field is the fix. `nil`
+        /// for contacts we have never learned a raw phone number for (the
+        /// normal case for discover-v2 / QR-scan contacts, which only ever
+        /// carry `phoneHash`). Never populated by any bulk/background sync
+        /// of the whole device address book — only by an actual call or a
+        /// user-picked manual import row.
+        public let phoneNumber: String?
+        /// PBX short dial extension, as text (e.g. "103"). Populated the
+        /// same way, and under the same constraints, as `phoneNumber`
+        /// above — learned from a genuine call's server profile fetch
+        /// (`PublicUser.extensionNumber`), never bulk-synced. `nil` until
+        /// learned.
+        public let `extension`: String?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
@@ -73,7 +96,9 @@ public final class ContactsStore {
                     verifiedAtMs: Int64? = nil,
                     verificationMethod: String? = nil,
                     presenceAuth: PresenceAuth? = nil,
-                    presenceFloor: Bool? = nil) {
+                    presenceFloor: Bool? = nil,
+                    phoneNumber: String? = nil,
+                    `extension`: String? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -86,6 +111,8 @@ public final class ContactsStore {
             self.verificationMethod = verificationMethod
             self.presenceAuth = presenceAuth
             self.presenceFloor = presenceFloor
+            self.phoneNumber = phoneNumber
+            self.`extension` = `extension`
         }
     }
 
@@ -203,6 +230,74 @@ public final class ContactsStore {
         var current = load()
         current.removeAll { $0.userId == userId }
         save(current)
+    }
+
+    // MARK: - Auto-save-from-call (call-driven address-book enrichment)
+
+    /// The rubrica starts EMPTY and fills in automatically from calls made
+    /// and received — no manual import required for that (manual import
+    /// via `PhoneContactImportView` stays available, separately, unchanged).
+    /// This is the ONLY sanctioned write path for that auto-save mechanism,
+    /// deliberately narrower than `upsert()`:
+    ///   - Absent row   → inserted fresh, using `fallbackDisplayName`.
+    ///   - Existing row → ONLY the currently-`nil` fields among
+    ///     `extension` / `phoneNumber` / `avatarUrl` are filled in.
+    ///     `displayName` — and every other already-set field — is NEVER
+    ///     touched, so a user's manual rename (or any name a more
+    ///     authoritative resolution already set) can never be clobbered by
+    ///     background enrichment.
+    /// Contrast with `upsert()`, which stays a full-record overwrite for
+    /// its existing server-truth-refresh callers (e.g.
+    /// `ContactsRefreshService`) — this method changes nothing about that.
+    ///
+    /// - Parameter fallbackDisplayName: used ONLY when inserting a
+    ///   brand-new row — there is no existing displayName to protect in
+    ///   that case.
+    @discardableResult
+    public func insertIfAbsentOrFillBlanks(
+        userId: String,
+        fallbackDisplayName: String,
+        extensionNumber: String? = nil,
+        phoneNumber: String? = nil,
+        avatarUrl: URL? = nil
+    ) -> StoredContact {
+        var current = load()
+        if let idx = current.firstIndex(where: { $0.userId == userId }) {
+            let existing = current[idx]
+            let patched = StoredContact(
+                userId: existing.userId,
+                displayName: existing.displayName,
+                phoneHash: existing.phoneHash,
+                avatarUrl: existing.avatarUrl ?? avatarUrl,
+                lastSeen: existing.lastSeen,
+                isVerified: existing.isVerified,
+                pubkey: existing.pubkey,
+                verifiedFingerprintHex: existing.verifiedFingerprintHex,
+                verifiedAtMs: existing.verifiedAtMs,
+                verificationMethod: existing.verificationMethod,
+                presenceAuth: existing.presenceAuth,
+                presenceFloor: existing.presenceFloor,
+                phoneNumber: existing.phoneNumber ?? phoneNumber,
+                `extension`: existing.`extension` ?? extensionNumber
+            )
+            current[idx] = patched
+            save(current)
+            return patched
+        } else {
+            let inserted = StoredContact(
+                userId: userId,
+                displayName: fallbackDisplayName,
+                phoneHash: "",
+                avatarUrl: avatarUrl,
+                lastSeen: nil,
+                isVerified: false,
+                phoneNumber: phoneNumber,
+                `extension`: extensionNumber
+            )
+            current.append(inserted)
+            save(current)
+            return inserted
+        }
     }
 
     public func wipeAll() {
@@ -344,8 +439,49 @@ public final class ContactsStore {
             verifiedAtMs: base.verifiedAtMs,
             verificationMethod: base.verificationMethod,
             presenceAuth: presenceAuth,
-            presenceFloor: presenceFloor
+            presenceFloor: presenceFloor,
+            phoneNumber: base.phoneNumber,
+            `extension`: base.`extension`
         )
+    }
+}
+
+// MARK: - Call-driven enrichment policy (pure, no Contacts-framework dependency)
+
+/// Pure decision logic for whether the auto-save-from-call path
+/// (`NameResolutionService.enrichFromCallProfile` on the app side) should
+/// even attempt the on-device Contacts lookup for a freshly-learned phone
+/// number. Kept separate from any `CNContactStore` call — and out of the
+/// `Contacts` framework entirely — so it is unit-testable here in
+/// `QAudionEngine` without a device/simulator address book, and so this
+/// module gains no new framework dependency.
+public enum CallEnrichmentGate {
+    /// - Parameters:
+    ///   - hasExistingLocalRow: `true` if `ContactsStore` already has ANY
+    ///     row for this peer, regardless of what its `displayName` is —
+    ///     `insertIfAbsentOrFillBlanks` can never repurpose a device-
+    ///     contact name onto a row that already exists, so there is
+    ///     nothing to gain from a lookup once a row exists. This doubles
+    ///     as the "no local name is set yet" condition.
+    ///   - phoneNumber: the freshly-learned raw phone number, if any.
+    ///   - isContactsAuthorized: the caller's own
+    ///     `CNContactStore.authorizationStatus(for: .contacts) ==
+    ///     .authorized` check, passed in as a plain `Bool` — this type has
+    ///     zero Contacts-framework dependency. Callers must NEVER call
+    ///     `requestAccess` to make this `true`; it must be a read-only
+    ///     check of the CURRENT status.
+    /// - Returns: `true` only when a phone number is present, no local row
+    ///   exists yet, and the OS already granted Contacts access.
+    public static func shouldAttemptDeviceLookup(
+        hasExistingLocalRow: Bool,
+        phoneNumber: String?,
+        isContactsAuthorized: Bool
+    ) -> Bool {
+        guard let phoneNumber,
+              !phoneNumber.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        guard !hasExistingLocalRow else { return false }
+        guard isContactsAuthorized else { return false }
+        return true
     }
 }
 

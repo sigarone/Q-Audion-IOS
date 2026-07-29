@@ -3,17 +3,13 @@ import SwiftUI
 /// Phone-entry screen — visual replica of Android
 /// `qaudion-android-new/feature/feature-auth/ui/PhoneEntryScreen.kt`.
 ///
-/// **Status (per user 2026-04-29):** the actual register/login wire path
-/// behind phone entry is NOT enabled today — the server-side flow assumes
-/// the admin panel pre-creates the account and pushes credentials via the
-/// fast-setup QR. Once a phone-OTP flow is added server-side, this screen
-/// is wired to call `appState.authService.register / login` with the
-/// `phone_hash` derived here.
-///
-/// We still ship the screen so the WelcomeScreen Secondary/Text CTAs land
-/// somewhere meaningful instead of leading to a stub. The Continue button
-/// computes the `phone_hash` and shows an info banner that documents the
-/// current state.
+/// 2026-07-29: the server now has a real SMS-OTP register/login flow
+/// (`POST /api/v1/auth/otp/request` + `/otp/verify`). This screen collects
+/// + validates the phone number (unchanged) and, for `.register`, an
+/// optional invite code; `OnboardingRoot` routes `onContinue`'s output to
+/// `OtpVerificationScreen`, which requests the code and completes the
+/// register/login itself. This screen stays a pure input screen — it does
+/// not touch the network.
 struct PhoneEntryScreen: View {
 
     enum Mode: String {
@@ -37,12 +33,15 @@ struct PhoneEntryScreen: View {
 
     let mode: Mode
     let onBack: () -> Void
-    /// Receives `(phoneHash, e164)` once the user submits a valid number.
-    /// Today the parent surfaces the "not yet enabled" banner; future
-    /// callers will route through the real register/login flow.
-    let onContinue: (_ phoneHash: String, _ e164: String) -> Void
+    /// Receives `(phoneHash, e164, inviteCode)` once the user submits a
+    /// valid number. `inviteCode` is always nil for `.login`; for
+    /// `.register` it's nil unless the user typed one. `OnboardingRoot`
+    /// routes this to `OtpVerificationScreen` to request + verify the SMS
+    /// code and complete registration/login.
+    let onContinue: (_ phoneHash: String, _ e164: String, _ inviteCode: String?) -> Void
 
     @State private var raw: String = "+39 "
+    @State private var inviteCode: String = ""
     @State private var validationError: String?
     // W315 — track last submit attempt to give the user feedback that
     // their tap was registered (server flow is stubbed today).
@@ -133,6 +132,25 @@ struct PhoneEntryScreen: View {
                 }
                 .padding(.horizontal, 24)
 
+                if mode == .register {
+                    Spacer().frame(height: 16)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Codice invito (opzionale)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                        TextField("Codice invito", text: $inviteCode)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .foregroundStyle(.white)
+                            .padding(14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(.white.opacity(0.3), lineWidth: 1.2)
+                            )
+                    }
+                    .padding(.horizontal, 24)
+                }
+
                 Spacer().frame(height: 32)
 
                 Button {
@@ -160,12 +178,12 @@ struct PhoneEntryScreen: View {
 
                 Spacer().frame(height: 16)
 
-                // Status banner — explicit about the current limitation
-                // so testers don't think the button is broken.
+                // Info banner — explains what happens next (SMS code),
+                // not a "not implemented yet" disclaimer anymore.
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "info.circle.fill")
-                        .foregroundStyle(.orange)
-                    Text("Il flusso \(mode == .register ? "di registrazione" : "di accesso") via numero di telefono è in attesa del backend OTP. Per ora usa **Configurazione rapida (QR)** dal Welcome.")
+                    Image(systemName: "message.fill")
+                        .foregroundStyle(.blue)
+                    Text("Ti invieremo un codice via SMS per verificare questo numero.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.7))
                 }
@@ -182,13 +200,16 @@ struct PhoneEntryScreen: View {
     }
 
     private func submit() {
-        // W315 — record attempt regardless of outcome so the user sees
-        // visible feedback for the stubbed server path.
+        // W315 — record attempt so the user sees visible feedback that
+        // their tap registered before the OTP screen's own network call
+        // resolves.
         lastAttemptAt = Date()
         do {
             let e164 = try PhoneHashHelper.normalizeE164(raw)
             let hash = PhoneHashHelper.sha256Hex(e164)
-            onContinue(hash, e164)
+            let trimmedInvite = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            let invite: String? = (mode == .register && !trimmedInvite.isEmpty) ? trimmedInvite : nil
+            onContinue(hash, e164, invite)
         } catch {
             validationError = error.localizedDescription
         }
@@ -196,5 +217,5 @@ struct PhoneEntryScreen: View {
 }
 
 #Preview {
-    PhoneEntryScreen(mode: .register, onBack: {}, onContinue: { _, _ in })
+    PhoneEntryScreen(mode: .register, onBack: {}, onContinue: { _, _, _ in })
 }

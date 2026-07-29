@@ -929,12 +929,15 @@ struct SettingsScreen: View {
     // MARK: - Helpers
 
     private var profileDisplayName: String {
-        // W459: prefer the server-assigned PBX extension (e.g. "Interno 103")
-        // over the UUID fragment. getProfile() populates currentUserDialExtension
-        // on every launch; UUID fallback applies only on first-frame before the
-        // profile round-trip completes (or if server returns dialExtension == 0).
+        // W459: prefer the server-assigned PBX extension over the UUID
+        // fragment. getProfile() populates currentUserDialExtension on
+        // every launch; UUID fallback applies only on first-frame before
+        // the profile round-trip completes (or if server returns
+        // dialExtension == 0). Pavel, 2026-07-29: bare digits, no "Interno"
+        // prefix — the local user's own extension follows the same
+        // no-prefix rule as every peer-facing display.
         if let ext = appState.currentUserDialExtension, !ext.isEmpty {
-            return "Interno \(ext)"
+            return DisplayName.formatExtension(ext)
         }
         if let userId = appState.currentUserId, !userId.isEmpty {
             if userId.hasPrefix("user-") {
@@ -948,14 +951,15 @@ struct SettingsScreen: View {
 
     private var profileHandle: String? {
         guard let userId = appState.currentUserId else { return nil }
-        // W444: prefer the real server-assigned PBX extension (e.g. "Int. 103 · …d2e9")
+        // W444: prefer the real server-assigned PBX extension (e.g. "103 · …d2e9")
         // over the hardcoded dash. Falls back to the UUID fragment when extension
         // is not yet loaded (first launch before getProfile() returns).
+        // Pavel, 2026-07-29: bare digits, no "Int." prefix.
         let tail = userId.count > 4 ? "…" + String(userId.suffix(4)) : userId
         if let ext = appState.currentUserDialExtension, !ext.isEmpty {
-            return "Int. " + ext + " · " + tail
+            return DisplayName.formatExtension(ext) + " · " + tail
         }
-        return "Int. — · " + tail
+        return "— · " + tail
     }
 }
 

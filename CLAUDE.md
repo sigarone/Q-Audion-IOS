@@ -247,7 +247,7 @@ Current keys that must NOT be removed:
 - `NSMicrophoneUsageDescription` — voice calls
 - `NFCReaderUsageDescription` — NFC key import from Android
 - `NSCameraUsageDescription` — QR code key exchange
-- `NSContactsUsageDescription` — **required even though the app doesn't use Contacts** (a linked SDK references the API; ITMS-90683 otherwise)
+- `NSContactsUsageDescription` — required, and NOT a false-positive: the app genuinely uses `CNContactStore` (manual phone-book import in `PhoneContactImportView`/`PhonebookSyncCoordinator`, and auto-save-from-call device-contact enrichment in `NameResolutionService`). The string must describe that real usage — see `Info.plist` (fixed 2026-07-29; it used to falsely claim "does not access your contacts", which this same file used to also assert — don't reintroduce either claim)
 - `UISupportedInterfaceOrientations~ipad` — must contain all 4 orientations for iPad multitasking, even if iPhone is Portrait-only
 
 ### 10. NFC entitlement format

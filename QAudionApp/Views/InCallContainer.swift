@@ -58,7 +58,15 @@ final class InCallContainer: ObservableObject {
             .sink { [weak self] cid in
                 guard let self, let cid = cid else { return }
                 let stored = self.contactsStore.load().first(where: { $0.userId == cid })
-                let localName: String? = (stored?.displayName).flatMap { $0.isEmpty ? nil : $0 }
+                // W-EXTPREFIX consolidation (2026-07-29): this used to accept
+                // ANY non-empty stored name, including a legacy placeholder
+                // ("Phone #100"/"New User") — which then ALSO suppressed the
+                // network refetch below (`if localName == nil`), permanently
+                // freezing the bad value for the rest of the call. Gated on
+                // the canonical `DisplayName.isPlaceholderName` instead.
+                let localName: String? = stored?.displayName.flatMap {
+                    (!$0.isEmpty && !DisplayName.isPlaceholderName($0)) ? $0 : nil
+                }
                 let avatarUrl = stored?.avatarUrl
                 let fingerprint: String = {
                     guard let pk = stored?.pubkey else {
@@ -95,7 +103,20 @@ final class InCallContainer: ObservableObject {
                         let rawName: String? = pub.displayName
                         // NIM-fix2b: sanitise displayName — trim whitespace, strip RTL/LTR
                         // override codepoints (U+202A–202E, U+2066–2069), cap at 100 chars.
-                        let resolvedName: String = Self.sanitiseDisplayName(rawName, fallback: capturedFallback)
+                        // W-EXTPREFIX consolidation (2026-07-29): sanitising alone does not
+                        // catch a legacy placeholder shape ("Phone #100"/"New User") an
+                        // un-migrated server/peer might still send — this used to persist
+                        // that verbatim into the rubrica. Same canonical check + bare-digit
+                        // extension fallback as `NameResolutionService.apply`.
+                        let sanitisedName = StringSanitiser.displayName(rawName, fallback: "")
+                        let resolvedName: String
+                        if !sanitisedName.isEmpty, !DisplayName.isPlaceholderName(sanitisedName) {
+                            resolvedName = sanitisedName
+                        } else if let ext = pub.extensionNumber, ext > 0 {
+                            resolvedName = String(ext)
+                        } else {
+                            resolvedName = capturedFallback
+                        }
                         // NIM-fix2c: only accept https:// avatar URLs;
                         // reject file://, data://, javascript: and other dangerous schemes.
                         let rawAvatarStr: String? = pub.avatarUrl
@@ -113,16 +134,35 @@ final class InCallContainer: ObservableObject {
                             // OR-fix4: preserve existing phoneHash — server /users/{id} doesn't
                             // return it for privacy; overwriting with "" would erase a QR-paired
                             // or phone-book-imported contact's hash.
+                            //
+                            // W-AUTOSAVE fix (found auditing this reconstruction for the
+                            // phoneNumber/extension additions): this call site was ALSO
+                            // silently dropping pubkey / verifiedFingerprintHex / verifiedAtMs
+                            // / verificationMethod / presenceAuth / presenceFloor on every
+                            // upsert here — any in-call name resolution for a peer that had
+                            // previously been QR-paired, manually verified, or NFC-presence-
+                            // confirmed would wipe all of that the first time this branch fired
+                            // for them. Thread every existing field through unchanged, same as
+                            // the other reconstruction sites in this repo (ContactsStore.rebuild,
+                            // NameResolutionService.apply, PeerTrustEvaluator.markVerified).
                             if !resolvedName.isEmpty && resolvedName != capturedFallback {
-                                let existingHash: String = self.contactsStore.load()
-                                    .first(where: { $0.userId == capturedCid })?.phoneHash ?? ""
+                                let existing = self.contactsStore.load()
+                                    .first(where: { $0.userId == capturedCid })
                                 let contact = ContactsStore.StoredContact(
                                     userId: capturedCid,
                                     displayName: resolvedName,
-                                    phoneHash: existingHash,
+                                    phoneHash: existing?.phoneHash ?? "",
                                     avatarUrl: resolvedAvatar,
-                                    lastSeen: nil,
-                                    isVerified: false
+                                    lastSeen: existing?.lastSeen,
+                                    isVerified: existing?.isVerified ?? false,
+                                    pubkey: existing?.pubkey,
+                                    verifiedFingerprintHex: existing?.verifiedFingerprintHex,
+                                    verifiedAtMs: existing?.verifiedAtMs,
+                                    verificationMethod: existing?.verificationMethod,
+                                    presenceAuth: existing?.presenceAuth,
+                                    presenceFloor: existing?.presenceFloor,
+                                    phoneNumber: existing?.phoneNumber,
+                                    `extension`: existing?.`extension`
                                 )
                                 self.contactsStore.upsert(contact)
                             }
@@ -247,15 +287,6 @@ final class InCallContainer: ObservableObject {
     }
 
     // MARK: - NIM security helpers
-
-    /// NIM-fix2b / SECURITY H-16 / H-15: Sanitise a server-supplied
-    /// display name. Delegates to the central `StringSanitiser` which
-    /// also strips the previously-missed zero-width / direction-mark
-    /// codepoints (U+200B–U+200F, U+FEFF) on top of the explicit and
-    /// isolate bidi families. Signature kept stable for existing callers.
-    private static func sanitiseDisplayName(_ raw: String?, fallback: String) -> String {
-        return StringSanitiser.displayName(raw, fallback: fallback)
-    }
 
     /// NIM-fix2c: Accept only https:// URLs for peer avatars.
     /// Rejects file://, data://, javascript: and any other scheme that

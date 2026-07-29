@@ -140,7 +140,12 @@ public enum PeerTrustEvaluator {
             // `PeerTrustEvaluatorTests.test_markVerified_preservesPresenceAuthAndFloor`
             // (QAudionAppTests).
             presenceAuth: existing.presenceAuth,
-            presenceFloor: existing.presenceFloor
+            presenceFloor: existing.presenceFloor,
+            // W-AUTOSAVE — a manual verify is not a phone-number/extension
+            // change either; thread these through unchanged same as
+            // phoneHash/avatarUrl above.
+            phoneNumber: existing.phoneNumber,
+            `extension`: existing.`extension`
         ))
     }
 
@@ -188,7 +193,14 @@ public enum PeerTrustEvaluator {
             pubkey: existing.pubkey,
             verifiedFingerprintHex: nil,
             verifiedAtMs: nil,
-            verificationMethod: nil
+            verificationMethod: nil,
+            // W-AUTOSAVE — an identity-key rotation is the SAME person with
+            // a new key, not a new phone number/extension; thread these
+            // through unchanged same as phoneHash/avatarUrl above (they are
+            // not identity-key-bound the way presenceAuth/presenceFloor are,
+            // which is why ONLY those two are deliberately omitted here).
+            phoneNumber: existing.phoneNumber,
+            `extension`: existing.`extension`
         ))
     }
 }

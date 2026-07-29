@@ -62,13 +62,14 @@ final class AppState: ObservableObject {
 
     /// W466 — short, human-readable label for the logged-in account,
     /// for the iPad sidebar header (and any other "this is you" chip).
-    /// Prefers the server-assigned PBX extension ("Interno 234") over the
-    /// raw 36-char UUID, which the user reported as unreadably long in
-    /// the main-screen top-left. Falls back to a truncated UUID, then a
-    /// generic label, mirroring `SettingsScreen.profileDisplayName`.
+    /// Prefers the server-assigned PBX extension over the raw 36-char UUID,
+    /// which the user reported as unreadably long in the main-screen
+    /// top-left. Falls back to a truncated UUID, then a generic label,
+    /// mirroring `SettingsScreen.profileDisplayName`. Pavel, 2026-07-29:
+    /// bare digits, no "Interno" prefix.
     var displayAccountLabel: String {
         if let ext = currentUserDialExtension, !ext.isEmpty {
-            return "Interno " + ext
+            return DisplayName.formatExtension(ext)
         }
         if let uid = currentUserId, !uid.isEmpty {
             let head: String = String(uid.prefix(8))
@@ -2870,6 +2871,52 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 2026-07-29 — SMS-OTP / extension-only registration onboarding.
+    /// Persists the credentials returned by `otp/verify` or
+    /// `register/extension` (Keychain + UserDefaults, exactly like
+    /// `saveCredentials` in the password-based paths) and caches the
+    /// assigned extension — but, UNLIKE `login`/`loginWithPhoneHash`,
+    /// deliberately does NOT flip `isAuthenticated` and does NOT open the
+    /// persistent socket / bind presence / reassert push tokens yet.
+    ///
+    /// Why: `ContentView.mainStack` switches away from `OnboardingRoot` to
+    /// `HomeView` the INSTANT `isAuthenticated` flips true. The new
+    /// onboarding flow has a mandatory recovery-phrase reveal step that
+    /// must run AFTER a successful register but BEFORE the user lands in
+    /// HomeView — flipping `isAuthenticated` immediately here would skip
+    /// that step entirely (OnboardingRoot would be unmounted out from
+    /// under it). Call `activatePendingSession()` once the onboarding
+    /// chain (profile setup + recovery reveal) actually completes.
+    ///
+    /// Safe to call again for the same session (e.g. re-running this after
+    /// `registerExtensionOnly`) — it's a plain overwrite, not additive.
+    func completeOtpAuth(_ result: OtpAuthResult) {
+        let creds = result.asAuthCredentials
+        authService.saveCredentials(creds)
+        currentUserId = creds.userId
+        UserDefaults.standard.set(creds.userId, forKey: "currentUserId")
+        if let ext = result.assignedExtension, ext > 0 {
+            let extStr = String(ext)
+            currentUserDialExtension = extStr
+            UserDefaults.standard.set(extStr, forKey: "currentUserDialExtension")
+        }
+        errorMessage = nil
+    }
+
+    /// Finishes activating a session started by `completeOtpAuth(_:)` —
+    /// flips `isAuthenticated` (which is what makes `ContentView` switch
+    /// from `OnboardingRoot` to `HomeView`) and runs the same post-login
+    /// wiring every other auth path already runs on success.
+    func activatePendingSession() {
+        isAuthenticated = true
+        replayPendingTrackB()
+        connectPersistentSocket()
+        bindPresenceAfterAuth()
+        reassertVoipPushTokenRegistration()
+        reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
+        refreshOwnDialExtension()
+    }
+
     /// W70: drain `PendingGroupInviteStore` chiamando `POST /groups/:id/join`
     /// per ogni pending. Best-effort, mai blocca l'UI. Chiamato al
     /// completamento di ogni transizione auth → success.
@@ -3803,29 +3850,29 @@ final class AppState: ObservableObject {
             // when the wire value sanitises away to nothing.
             let sanitisedWireDisplay = StringSanitiser.displayName(rawWireCallerDisplay, fallback: "")
             let wireCallerDisplay: String? = sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay
-            let resolvedCallerName: String = {
-                if let cd = wireCallerDisplay, !cd.isEmpty {
-                    // The server sets caller_display to the caller's PBX
-                    // extension (a bare integer, e.g. "103") when no custom
-                    // display name is configured. Format it consistently with
-                    // CallHistoryView ("Int. 103") so the banner, CallKit UI
-                    // and call history all show the same string.
-                    if cd.allSatisfy({ $0.isNumber }) { return "Int. \(cd)" }
-                    return cd
-                }
-                // W-CC: use cached snapshot — avoids a UserDefaults decode
-                // on every incoming call ringing path.
-                if let match = self.cachedContacts.first(where: { $0.userId == senderId }),
-                   !match.displayName.isEmpty, !DisplayName.looksLikeUUID(match.displayName) {
-                    return match.displayName
-                }
-                // Last resort: never show the raw 36-char UUID to the user —
-                // humane short8 fallback (central rule, see DisplayName.swift).
-                if senderId.count > 12 {
-                    return DisplayName.shortUserFallback(senderId)
-                }
-                return senderId
-            }()
+            // W-CALLBOOK (2026-07-29) — mark this peer as call-linked so the
+            // rubrica auto-save/device-contact-enrichment path (
+            // NameResolutionService.enrichFromCallProfile) is allowed to run
+            // for them; also hands along the already-sanitised wire value as
+            // a second phone-number signal. Synchronous, in-memory only —
+            // same safety class as the cachedContacts read right below.
+            NameResolutionService.markCallLinkedPeer(senderId, callerDisplay: wireCallerDisplay)
+            // W-EXTPREFIX consolidation (2026-07-29): this used to be an
+            // independent copy of the resolution chain (its own
+            // `allSatisfy(isNumber)` check, its own "Int. " prefix, no
+            // placeholder-awareness for `wireCallerDisplay` itself) — now a
+            // single call into the canonical `DisplayName.forUser`, so the
+            // banner, CallKit UI, and call history all resolve through the
+            // SAME chain instead of three independently-formatted copies.
+            // Priority note: this now puts the rubrica ahead of the wire
+            // value (forUser's documented order), where before the wire
+            // value won outright — deliberate, matching every other
+            // consolidated call site; see canonicalFunctionLocation notes.
+            let resolvedCallerName: String = DisplayName.forUser(
+                senderId,
+                serverDisplay: wireCallerDisplay,
+                contacts: self.cachedContacts
+            )
             // Commit 540b79c0 parity — `call_incoming` is the responder's
             // FIRST view of the caller's caps (the server forwards the
             // call_offer's capabilities verbatim under this envelope).
@@ -4115,8 +4162,9 @@ final class AppState: ObservableObject {
         // local `missedCall` notification. Wire payload (server-authoritative):
         // {call_id, caller_id, caller_display, call_type, ts_ms}. The
         // display-name resolution mirrors the `call_incoming` handler above
-        // (sanitise the attacker-controlled wire display, numeric ⇒ "Int. N",
-        // else rubrica match, else truncated caller_id — never a raw UUID).
+        // (sanitise the attacker-controlled wire display, then the SAME
+        // canonical `DisplayName.forUser` chain — never a raw UUID, never a
+        // stale placeholder shown verbatim).
         ws.registerHandler(type: "call_missed") { [weak self] _, data in
             guard let self = self else { return }
             let callIdStr = (data["call_id"] as? String) ?? UUID().uuidString
@@ -4131,22 +4179,13 @@ final class AppState: ObservableObject {
             // cachedContacts is main-isolated AppState state (this handler is
             // invoked on the WS delegate background thread — see call_incoming).
             DispatchQueue.main.async {
-                let resolvedName: String = {
-                    if !sanitisedWireDisplay.isEmpty {
-                        if sanitisedWireDisplay.allSatisfy({ $0.isNumber }) {
-                            return "Int. \(sanitisedWireDisplay)"
-                        }
-                        return sanitisedWireDisplay
-                    }
-                    if let match = self.cachedContacts.first(where: { $0.userId == callerId }),
-                       !match.displayName.isEmpty {
-                        return match.displayName
-                    }
-                    if callerId.count > 12 {
-                        return DisplayName.shortUserFallback(callerId)
-                    }
-                    return callerId.isEmpty ? "Sconosciuto" : callerId
-                }()
+                let resolvedName: String = callerId.isEmpty
+                    ? "Sconosciuto"
+                    : DisplayName.forUser(
+                        callerId,
+                        serverDisplay: sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay,
+                        contacts: self.cachedContacts
+                    )
                 // Record the missed call directly (dedup by call_id). A `.missed`
                 // insert — NOT markMissed — because this device never registered
                 // an in-progress record for this call (it was busy, no ring).
@@ -6245,12 +6284,10 @@ final class AppState: ObservableObject {
 
         let title = GroupRegistry.shared.entry(for: groupHex)?.name ?? "Gruppo"
         // Sender label — same fallback chain the group bubbles use.
-        let senderName: String = {
-            if let n = self.cachedContacts.first(where: { $0.userId == senderId })?.displayName,
-               !n.isEmpty { return n }
-            if senderId.count > 12 { return String(senderId.prefix(8)) + "…" }
-            return senderId
-        }()
+        // W-EXTPREFIX consolidation (2026-07-29): this had NO placeholder
+        // guard at all (a stale "Phone #100" would have shown verbatim in
+        // the notification banner) — now the canonical `DisplayName.forUser`.
+        let senderName: String = DisplayName.forUser(senderId, contacts: self.cachedContacts)
 
         let hideContent = (UserDefaults.standard.object(
             forKey: "qaudion.privacy.hide_notification_content") as? Bool) ?? false
@@ -6642,14 +6679,10 @@ final class AppState: ObservableObject {
             // the peer is not yet in contacts (e.g. first-contact inbound message).
             // W-CC: use cached snapshot — avoids a UserDefaults decode
             // on every incoming message path.
-            let resolvedName: String = {
-                if let name = self.cachedContacts.first(where: { $0.userId == senderId })?.displayName,
-                   !name.isEmpty, !DisplayName.looksLikeUUID(name) { return name }
-                if senderId.count > 12 {
-                    return DisplayName.shortUserFallback(senderId)
-                }
-                return senderId
-            }()
+            // W-EXTPREFIX consolidation (2026-07-29): checked only
+            // `looksLikeUUID`, not the full placeholder set — now the
+            // canonical `DisplayName.forUser`.
+            let resolvedName: String = DisplayName.forUser(senderId, contacts: self.cachedContacts)
             conv = Conversation(
                 id: UUID(),
                 peerUserId: senderId,
@@ -9063,34 +9096,16 @@ final class AppState: ObservableObject {
         return display
     }
 
+    /// W-EXTPREFIX consolidation (2026-07-29): this older, parallel resolver
+    /// used to reimplement `DisplayName.forUser`'s tiers by hand (its own
+    /// UUID guard per W-GRPTITLE-UUIDGAP, its own bare-numeric check, its
+    /// own "Int. " prefix) — now a single call into the canonical function
+    /// so PushKit-woken calls resolve through the exact same chain as the
+    /// WS `call_incoming` path above instead of a second copy that could
+    /// (and did) drift from it.
     @MainActor
     private func callKitDisplayName(callerId: String, fallback: String?) -> String {
-        // W-GRPTITLE-UUIDGAP (2026-07-20): both tiers below used to trust
-        // their source verbatim — a legacy UUID-shaped rubrica row (Tier 1)
-        // or a UUID-shaped push `caller_name`/`creatorName` (Tier 2, e.g.
-        // group-call PushKit payloads via `prepareIncomingPushGroupCall`)
-        // rendered straight onto CallKit's native incoming-call UI with no
-        // guard, unlike `DisplayName.forUser`'s identical two tiers which
-        // both call `looksLikeUUID`. Added the same guard here so this
-        // older, parallel resolver can't leak a raw id either.
-        // Tier 1: local rubrica (cached snapshot) by userId.
-        if let match = cachedContacts.first(where: { $0.userId == callerId }),
-           !match.displayName.isEmpty, !DisplayName.looksLikeUUID(match.displayName) {
-            return match.displayName
-        }
-        // Tier 2: server-supplied name (push caller_name), sanitised. A bare
-        // numeric value is the PBX extension → format as "Int. NNN".
-        let san = StringSanitiser.displayName(fallback, fallback: "")
-        if !san.isEmpty, !DisplayName.looksLikeUUID(san) {
-            if san.allSatisfy({ $0.isNumber }) { return "Int. " + san }
-            return san
-        }
-        // Tier 3: never show the raw 36-char UUID — humane short8 fallback
-        // (central rule, see DisplayName.swift).
-        if callerId.count > 12 {
-            return DisplayName.shortUserFallback(callerId)
-        }
-        return callerId
+        DisplayName.forUser(callerId, serverDisplay: fallback, contacts: cachedContacts)
     }
 
     /// W77: public hook to trigger the first-contact PSK handshake with a
@@ -9241,14 +9256,33 @@ final class AppState: ObservableObject {
     /// user rename upgrades them further. The rewrite triggers ONE extra
     /// .contactsDidChange -> refreshContactsCache pass, which then finds
     /// nothing UUID-shaped and terminates (no loop).
+    ///
+    /// W-EXTPREFIX consolidation (2026-07-29): extended to every other
+    /// recognised placeholder shape too (rule 5 — a stale cached
+    /// "Phone #100"/"New User" is "no name set", the server migration
+    /// cannot reach a row a client is still holding locally). Recovers the
+    /// BEST available replacement (extension, then phone, then short8) via
+    /// the side-effect-free `resolvedExtension` primitive rather than the
+    /// full `DisplayName.forUser` — this function runs on EVERY
+    /// `.contactsDidChange` (including ones this very rewrite causes), so
+    /// it must never itself trigger `forUser`'s own `ensureResolved` fetch,
+    /// and the `replacement != c.displayName` guard keeps an already-
+    /// converged short8 row (nothing left to recover) from re-triggering
+    /// `migrated` on every subsequent pass.
     private func refreshContactsCache() {
         let store = ContactsStore()
         var contacts = store.load()
         var migrated = false
-        for (i, c) in contacts.enumerated() where DisplayName.looksLikeUUID(c.displayName) {
+        for i in contacts.indices {
+            let c = contacts[i]
+            guard DisplayName.isPlaceholderName(c.displayName) else { continue }
+            let replacement = DisplayName.resolvedExtension(for: c.userId, contacts: [c])
+                ?? c.phoneNumber.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+                ?? DisplayName.shortUserFallback(c.userId)
+            guard replacement != c.displayName else { continue }
             contacts[i] = ContactsStore.StoredContact(
                 userId: c.userId,
-                displayName: DisplayName.shortUserFallback(c.userId),
+                displayName: replacement,
                 phoneHash: c.phoneHash,
                 avatarUrl: c.avatarUrl,
                 lastSeen: c.lastSeen,
@@ -9261,10 +9295,12 @@ final class AppState: ObservableObject {
                 // displayName; every other field (including these two) must
                 // thread through unchanged, same as verifiedFingerprintHex
                 // above. Omitting them here would silently wipe a contact's
-                // NFC presence record on nothing more than a UUID-display-name
+                // NFC presence record on nothing more than a display-name
                 // migration pass.
                 presenceAuth: c.presenceAuth,
-                presenceFloor: c.presenceFloor)
+                presenceFloor: c.presenceFloor,
+                phoneNumber: c.phoneNumber,
+                `extension`: c.`extension`)
             migrated = true
         }
         if migrated { store.save(contacts) }
@@ -9507,14 +9543,16 @@ final class AppState: ObservableObject {
                 // Dialing a short extension resolves to a bare UUID; without
                 // this the outgoing / in-call screens fall back to the
                 // truncated UUID ("non si capisce perché mostri uid lungo").
-                // The server sets display_name = userId (UUID) for users who
-                // registered via QR/fast-setup without a real display name
-                // (server main.go: "if req.DisplayName == "" { req.DisplayName = id }").
-                // Detect UUID-format strings (36 chars, 4 hyphens) and prefer
-                // the dialed extension "Int. NNN" over the raw UUID.
-                let dn = (profile.displayName ?? "").trimmingCharacters(in: .whitespaces)
-                let looksLikeUUID = dn.count == 36 && dn.filter({ $0 == "-" }).count == 4
-                self.incomingCallerName = (dn.isEmpty || looksLikeUUID) ? "Int. \(ext)" : dn
+                // W-EXTPREFIX consolidation (2026-07-29): this used to be an
+                // independent copy of the UUID/placeholder check with its
+                // own "Int. NNN" formatting — `resolveDialInput` below used
+                // to SKIP this entirely and always show "Int. NNN" even
+                // when `profile.displayName` was a perfectly good real
+                // name, a documented contradiction for the identical
+                // account. Both now call the same `DisplayName.forUser`.
+                self.incomingCallerName = DisplayName.forUser(
+                    profile.userId, serverDisplay: profile.displayName,
+                    knownExtension: String(ext))
                 await startCall(contactId: profile.userId, video: video)
                 return
             } catch {
@@ -9540,7 +9578,7 @@ final class AppState: ObservableObject {
                 }
                 // Same UUID-leak fix as the extension branch: show the dialed
                 // E.164 number on the call screens instead of the raw UUID.
-                self.incomingCallerName = normalized
+                self.incomingCallerName = DisplayName.forUser(userId, knownPhoneNumber: normalized)
                 await startCall(contactId: userId, video: video)
                 return
             } catch {
@@ -9552,6 +9590,94 @@ final class AppState: ObservableObject {
         // Step C — fallback: assumiamo già uno user_id e proviamo
         // diretto. Il server rifiuterà in modo benigno se sbagliato.
         await startCall(contactId: trimmed, video: video)
+    }
+
+    /// Resolution result for `resolveDialInput` below.
+    struct ResolvedDialTarget {
+        let userId: String
+        /// Best available human label for the resolved peer, run through
+        /// the SAME canonical `DisplayName.forUser` chain `dialAndCall`
+        /// uses for `incomingCallerName` on its identical two branches —
+        /// the caller may still want to persist it as the contact's
+        /// initial display name.
+        let displayLabel: String
+    }
+
+    /// 2026-07-29 — same 3-branch resolution heuristic as `dialAndCall`
+    /// above (short extension / E.164 phone / already-a-userId), but
+    /// returns the resolved target instead of starting a call. Lets
+    /// `ChatListScreen`'s "new conversation" flow start a chat by typed
+    /// number/extension the same way `dialAndCall` already lets the
+    /// DialPad start a CALL by typed number/extension — that capability
+    /// existed only for calls before this.
+    ///
+    /// W-EXTPREFIX consolidation (2026-07-29): this used to be a documented
+    /// DELIBERATE parallel implementation that ignored `profile.displayName`
+    /// entirely and always synthesized its own "Int. NNN" — a real,
+    /// user-visible contradiction with `dialAndCall` for the identical
+    /// account (dialing FROM the pad showed a real name; starting a chat by
+    /// the SAME number showed "Int. NNN" instead). Both branches below now
+    /// call the exact same `DisplayName.forUser` `dialAndCall` uses, so the
+    /// two entry points can no longer diverge. Still a separate function
+    /// from `dialAndCall` (returns a target instead of starting a call and
+    /// has its own error-message wiring) — only the divergent NAME
+    /// resolution has been closed, not the two call-start paths themselves.
+    @MainActor
+    func resolveDialInput(_ rawInput: String) async -> ResolvedDialTarget? {
+        let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            errorMessage = "Numero vuoto."
+            return nil
+        }
+        guard let token = authService.loadToken(), !token.isEmpty else {
+            errorMessage = "Sessione non autenticata."
+            return nil
+        }
+        let backendConfig = pinnedConfig(token: token)
+        let provider = BCryptoBackendProvider(config: backendConfig)
+
+        // Step A — short extension (digits only, length <= 7).
+        let digitsOnly = trimmed.allSatisfy { $0.isNumber }
+        if digitsOnly, trimmed.count <= 7, let ext = Int64(trimmed) {
+            do {
+                guard let profile = try await provider.accountApi.lookupByExtension(ext) else {
+                    errorMessage = "Interno \(ext) non assegnato — verifica il numero e riprova."
+                    return nil
+                }
+                let label = DisplayName.forUser(
+                    profile.userId, serverDisplay: profile.displayName,
+                    knownExtension: String(ext))
+                return ResolvedDialTarget(userId: profile.userId, displayLabel: label)
+            } catch {
+                errorMessage = "Risoluzione interno \(ext) fallita: \(error.localizedDescription)"
+                return nil
+            }
+        }
+
+        // Step B — E.164 (+...) via contacts/discover-v2.
+        if trimmed.hasPrefix("+") {
+            do {
+                let normalized = try PhoneHashHelper.normalizeE164(trimmed)
+                let v2 = BCryptoContactsDiscoverV2Client(
+                    baseUrl: URL(string: serverUrl)!,
+                    bearerTokenProvider: { [weak self] in self?.authService.loadToken() })
+                let pepper = try await v2.fetchPepper()
+                let hash = try PepperedPhoneHash.hash(phone: normalized, pepperBytes: pepper.pepperBytes)
+                let entries = try await v2.discover(alg: pepper.alg, hashes: [hash])
+                guard let entry = entries.first, let userId = entry.userId else {
+                    errorMessage = "Numero \(normalized) non risulta tra gli utenti registrati."
+                    return nil
+                }
+                let label = DisplayName.forUser(userId, knownPhoneNumber: normalized)
+                return ResolvedDialTarget(userId: userId, displayLabel: label)
+            } catch {
+                errorMessage = "Risoluzione \(trimmed) fallita: \(error.localizedDescription)"
+                return nil
+            }
+        }
+
+        // Step C — fallback: assume it's already a userId.
+        return ResolvedDialTarget(userId: trimmed, displayLabel: DisplayName.shortUserFallback(trimmed))
     }
 
     /// UserDefaults key namespace for the server-fetched peer Ed25519 identity
@@ -9668,44 +9794,49 @@ final class AppState: ObservableObject {
         // (not saved as a contact) fell straight to the UUID truncation
         // "a0184f04…4b8f", which then got SHOWN in-call AND persisted in
         // the history record — so every redial kept showing the UUID
-        // (user report 310d3304). New priority:
-        //   1. ContactsStore name (skipping UUID-format server defaults)
-        //   2. dialer label — dialAndCall sets incomingCallerName to
-        //      "Int. NNN" / E.164 BEFORE startCall
-        //   3. last history record for this peer with a real label
-        //      (covers redial-from-history after one good dial)
-        //   4. UUID truncation (last resort, as before)
+        // (user report 310d3304).
+        //
+        // W-EXTPREFIX consolidation (2026-07-29): this used to be a further
+        // independent copy of the resolution chain — its own UUID-only
+        // check (no placeholder-awareness for the ContactsStore name, the
+        // dialer label, OR the history record), plus its own digit-token
+        // scan to recover an extension from the resolved string (same
+        // fragile pattern as `LiveInCallScreen.cachedPeerShortNumber`).
+        // The "last real history record" signal is still consulted (a
+        // peer dialed by extension but never saved as a contact still
+        // benefits from an earlier call's resolved label/extension on
+        // redial) but now flows THROUGH `DisplayName.forUser` /
+        // `resolvedExtension` as an extra candidate, instead of being a
+        // side-channel that bypassed the placeholder check entirely.
         let _dialerLabel = incomingCallerName.trimmingCharacters(in: .whitespaces)
-        let _outgoingPeerDisplay: String = {
-            // W-CC: use cached snapshot — avoids a UserDefaults decode on every outgoing dial.
-            let stored = self.cachedContacts
-            if let c = stored.first(where: { $0.userId == contactId }) {
-                let dn = c.displayName.trimmingCharacters(in: .whitespaces)
-                let looksLikeUUID = dn.count == 36 && dn.filter({ $0 == "-" }).count == 4
-                if !dn.isEmpty && !looksLikeUUID { return dn }
-            }
-            if !_dialerLabel.isEmpty { return _dialerLabel }
-            if let prev = PersistentCallRecordStore.shared.records.first(where: {
-                $0.peerUserId == contactId
-                    && !$0.peerDisplayName.isEmpty
-                    && !$0.peerDisplayName.contains("…")
-            }) {
-                return prev.peerDisplayName
-            }
-            return PersistentCallRecordStore.resolveDisplayName(
-                userId: contactId, wireDisplay: nil, nameByUserId: [:])
-        }()
-        // PBX extension for the record: parse "Int. NNN" / bare digits from
-        // the resolved label, else inherit from a previous record.
-        let _outgoingPeerExt: Int? = {
-            let tokens = _outgoingPeerDisplay
-                .split(whereSeparator: { $0.isWhitespace }).map(String.init)
-            if let num = tokens.first(where: { !$0.isEmpty && $0.allSatisfy({ $0.isNumber }) }),
-               let v = Int(num) { return v }
-            return PersistentCallRecordStore.shared.records
-                .first(where: { $0.peerUserId == contactId && $0.peerExtension != nil })?
-                .peerExtension
-        }()
+        let _historyRecord = PersistentCallRecordStore.shared.records.first(where: {
+            $0.peerUserId == contactId
+                && !$0.peerDisplayName.isEmpty
+                && !$0.peerDisplayName.contains("…")
+        })
+        let _candidateLabel: String? = !_dialerLabel.isEmpty ? _dialerLabel : _historyRecord?.peerDisplayName
+        let _historyExt: String? = (_historyRecord?.peerExtension
+            ?? PersistentCallRecordStore.shared.records
+                .first(where: { $0.peerUserId == contactId && $0.peerExtension != nil })?.peerExtension)
+            .flatMap { $0 > 0 ? String($0) : nil }
+        let _outgoingPeerDisplay: String = DisplayName.forUser(
+            contactId, serverDisplay: _candidateLabel, knownExtension: _historyExt,
+            contacts: self.cachedContacts)
+        // W-CALLBOOK (2026-07-29) — mark the callee as call-linked (see the
+        // matching comment on the incoming-call path above) so the rubrica
+        // auto-save path is allowed to run for them once the profile fetch
+        // resolves. Outgoing calls carry no wire caller_display for the
+        // CALLEE (that field only ever describes what THIS device presents
+        // to the other side), so no phone signal is passed here — the
+        // callee's opt-in public-profile phone number is the only source.
+        NameResolutionService.markCallLinkedPeer(contactId)
+        // PBX extension for the record — same candidates as the display
+        // name above, resolved via the dedicated extension-only primitive
+        // instead of scanning the resolved display string for a digit
+        // token (which silently returned nil for any real, non-numeric name).
+        let _outgoingPeerExt: Int? = DisplayName.resolvedExtension(
+            for: contactId, serverDisplay: _candidateLabel, knownExtension: _historyExt,
+            contacts: self.cachedContacts).flatMap { Int($0) }
         // Feed the in-call screen: LiveInCallScreen falls back to
         // incomingCallerName when the peer is not in contacts. Without this,
         // calls started OUTSIDE the dialer (history redial, contact row)

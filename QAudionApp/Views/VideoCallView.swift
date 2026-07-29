@@ -697,24 +697,19 @@ struct VideoCallView: View {
             identityTag: SasVerificationStore.identityTag(forPinnedKey: pinned))
     }
 
+    /// W-EXTPREFIX consolidation (2026-07-29): this used to be ANOTHER
+    /// independent copy of the resolution chain — `match.displayName`
+    /// returned raw with no placeholder (or even UUID) guard at all, unlike
+    /// every other consolidated call site. Now a single call into the
+    /// canonical `DisplayName.forUser`.
     private func resolveDisplayName() {
         guard let id = appState.callContactId else { peerDisplayName = ""; return }
         let contacts = contactsStore.load()
-        if let match = contacts.first(where: { $0.userId == id }) {
-            peerDisplayName = match.displayName
-        } else {
-            // Priority: incomingCallerName (resolved to "Int. 112" by
-            // call_incoming handler) → truncated UUID. Never show the full
-            // 36-char UUID on the video call screen.
-            let resolved = appState.incomingCallerName
-            if !resolved.isEmpty {
-                peerDisplayName = resolved
-            } else if id.count > 12 {
-                peerDisplayName = DisplayName.shortUserFallback(id)
-            } else {
-                peerDisplayName = id
-            }
-        }
+        peerDisplayName = DisplayName.forUser(
+            id,
+            serverDisplay: appState.incomingCallerName.isEmpty ? nil : appState.incomingCallerName,
+            contacts: contacts
+        )
     }
 }
 

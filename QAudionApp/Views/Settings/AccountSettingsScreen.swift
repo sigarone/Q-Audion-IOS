@@ -349,18 +349,24 @@ struct AccountSettingsScreen: View {
                     }
 
                     // Caller-id substitution. Locally-stored only —
-                    // never pushed to the server. Pure digits so the
-                    // callee's CallKit can dial it back. When unset
-                    // the server fills the call_offer's `caller_display`
-                    // field with the user's internal extension.
+                    // never pushed to the server. When unset the server
+                    // fills the call_offer's `caller_display` field with
+                    // the user's internal extension.
+                    //
+                    // 2026-07-29: was a free-text field (any string the
+                    // user typed). Now a single-select: "la mia estensione"
+                    // or one of the numbers from MyPhonesScreen's list —
+                    // the underlying mechanism (`LocalCallerIdSettings`,
+                    // embedded per-call into `call_offer.caller_display`)
+                    // is unchanged; this is a UI constraint on top of it.
+                    // Does not affect discoverability of the
+                    // non-selected identifier — both stay reachable via
+                    // `directory/by-extension` and peppered discovery
+                    // regardless of which one is the active caller-id.
                     SettingsSectionHeader("CALLER-ID")
                     VStack(spacing: 12) {
-                        phoneNumberField(
-                            label: "Numero telefono pubblico",
-                            value: $container.draftLocalPhone,
-                            placeholder: "es. +393331234567"
-                        )
-                        Text("Mostrato come ID chiamante alle persone che chiami. Puoi usare il prefisso internazionale (es. +39). Salvato solo su questo dispositivo.")
+                        callerIdPicker
+                        Text("Mostrato come ID chiamante alle persone che chiami. Scegli tra la tua estensione o uno dei numeri elencati in \"Numeri pubblici\" qui sotto. Salvato solo su questo dispositivo.")
                             .qaudionStyle(type.labelSmall)
                             .foregroundStyle(scheme.onSurfaceVariant)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -597,46 +603,65 @@ struct AccountSettingsScreen: View {
         }
     }
 
-    /// Phone number field supporting E.164 format ("+39…") or plain digits.
-    /// Uses phonePad keyboard (has "+", "*", "#"). Strips spaces/dashes/parens
-    /// but keeps a leading "+". Caps at 20 chars.
-    private func phoneNumberField(label: String,
-                                  value: Binding<String>,
-                                  placeholder: String) -> some View {
-        let sanitisedBinding = Binding<String>(
-            get: { value.wrappedValue },
-            set: { newValue in
-                let hasPlus = newValue.hasPrefix("+")
-                let digits = newValue.filter { $0.isASCII && $0.isNumber }
-                let canonical = hasPlus ? "+" + digits : digits
-                value.wrappedValue = String(canonical.prefix(20))
-            }
-        )
-        return VStack(alignment: .leading, spacing: 6) {
-            Text(label)
+    /// 2026-07-29 — caller-id single-select. Options are "la mia
+    /// estensione" (tag `""`, clears `LocalCallerIdSettings` so the
+    /// server falls back to the extension — see `save()`'s existing
+    /// `LocalCallerIdSettings.setPhoneNumber(draftLocalPhone)` call,
+    /// unchanged) plus every number from `container.publicPhones`
+    /// (same UserDefaults-backed list `MyPhonesScreen` manages).
+    private var callerIdPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Numero telefono pubblico")
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.0)
                 .foregroundStyle(scheme.onSurfaceVariant)
 
-            TextField("", text: sanitisedBinding,
-                      prompt: Text(placeholder).foregroundColor(scheme.onSurfaceVariant))
-                .qaudionStyle(type.bodyMedium)
-                .foregroundColor(scheme.onSurface)
-                .tint(scheme.primary)
-                .keyboardType(.phonePad)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .disabled(container.isLoading)
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(scheme.surfaceVariant.opacity(0.45))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
-                )
+            Picker("Numero telefono pubblico", selection: $container.draftLocalPhone) {
+                Text(extensionOptionLabel).tag("")
+                ForEach(callerIdOptions, id: \.self) { phone in
+                    Text(phone).tag(phone)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(scheme.onSurface)
+            .disabled(container.isLoading)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(scheme.surfaceVariant.opacity(0.45))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
+            )
         }
+    }
+
+    /// Label for the "use my extension" picker option — includes the
+    /// actual extension when known, matching the "Interno" kvRow above.
+    /// Pavel, 2026-07-29: bare digits, no "Int." prefix — applies to the
+    /// LOCAL user's own extension exactly like every peer-facing site.
+    private var extensionOptionLabel: String {
+        if let ext = container.viewModel.dialExtension, !ext.isEmpty {
+            return "La mia estensione (\(DisplayName.formatExtension(ext)))"
+        }
+        return "La mia estensione"
+    }
+
+    /// Picker options: `container.publicPhones` plus — defensively — the
+    /// CURRENTLY saved `draftLocalPhone` value if it's non-empty and not
+    /// already in that list (e.g. a value set before this screen switched
+    /// from free-text to a picker, or before the number was added to
+    /// MyPhonesScreen's list). Without this a stale/foreign saved value
+    /// would leave the Picker's `selection` binding matching no tag.
+    private var callerIdOptions: [String] {
+        var opts = container.publicPhones
+        let current = container.draftLocalPhone
+        if !current.isEmpty && !opts.contains(current) {
+            opts.insert(current, at: 0)
+        }
+        return opts
     }
 
     private func textField(label: String,

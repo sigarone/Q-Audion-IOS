@@ -1,3 +1,4 @@
+import Contacts
 import Foundation
 import QAudionEngine
 
@@ -10,7 +11,9 @@ import QAudionEngine
 /// `BCryptoGroupCallManager`'s re-resolve hook) re-renders reactively.
 ///
 /// Resolution preference on fetch: server display name → extension rendered
-/// as "Int. NNN" (the server guarantees every userId has an interno). If a
+/// as bare digits, no prefix (Pavel, 2026-07-29: "probably better to drop
+/// the word 'phone' entirely" — applies to every prefix word, not just
+/// that one; the server guarantees every userId has an interno). If a
 /// profile comes back with NEITHER, that is a real upstream error and is
 /// logged as such — never silently accepted.
 ///
@@ -113,7 +116,7 @@ final class NameResolutionService: @unchecked Sendable {
             // discover refresh, InCallContainer's own W444 fetch) may have
             // landed a real name between the forUser miss and now.
             if let stored = self.contactsStore.load().first(where: { $0.userId == id }),
-               !Self.isPlaceholderName(stored.displayName) {
+               !DisplayName.isPlaceholderName(stored.displayName) {
                 return
             }
             guard let api = await src() else {
@@ -130,6 +133,12 @@ final class NameResolutionService: @unchecked Sendable {
                 let outcome = classifyProfileLookup(succeeded: pub != nil, httpStatus: pub == nil ? 404 : nil)
                 await Self.recordOrphanOutcome(id: id, outcome: outcome)
                 if let pub {
+                    // W-AUTOSAVE — MUST run before `apply` below: when a
+                    // device-contact match seeds a REAL local name for a
+                    // brand-new peer, `apply`'s own `mayOverwrite`
+                    // placeholder-detection then correctly refuses to
+                    // downgrade it to the synthetic "Int. NNN" fallback.
+                    self.enrichFromCallProfile(pub, for: id)
                     self.apply(pub, for: id)
                 } else {
                     // Not an error: the server answered, clearly, that this
@@ -149,19 +158,169 @@ final class NameResolutionService: @unchecked Sendable {
         }
     }
 
+    // MARK: - W-AUTOSAVE — call-driven address-book auto-population
+
+    /// W-CALLBOOK reconciliation (2026-07-29): `ensureResolved`/
+    /// `enrichFromCallProfile` are kicked from `DisplayName.forUser`, which
+    /// is called from EVERYWHERE a peer name is rendered — chat rows
+    /// (`HomeView`), group-call rosters, not just actual calls. Without a
+    /// gate here, merely opening the chat list for a phone-verified peer
+    /// not yet in the rubrica would trigger device-contact enrichment and
+    /// an auto-save, violating the product rule ("populated automatically
+    /// ONLY from calls made and received", phone number "ONLY through an
+    /// actual encrypted call event"). `markCallLinkedPeer` is called from
+    /// AppState's two call-start sites (incoming `call_incoming` handler,
+    /// outgoing `dialAndCall`/`startCall`) — trivial, synchronous, in-memory
+    /// `Set`/`Dictionary` writes, the same safety class as the
+    /// `cachedContacts` snapshot reads already done in those same blocks.
+    /// `enrichFromCallProfile` below is a no-op for any id that has never
+    /// been marked this way.
+    private static let callLinkLock = NSLock()
+    private static var callLinkedPeerIds: Set<String> = []
+    private static var callLinkedPeerPhones: [String: String] = [:]
+
+    /// Mark `id` as "a real call with this peer is happening or just
+    /// happened", optionally carrying the wire `caller_display` value from
+    /// that SAME call (already sanitised by the caller) as a second phone
+    /// signal alongside the peer's opt-in public-profile field — mirrors
+    /// Desktop's `extractCallPhoneNumber`/`markCallLinkedPeer` and Android's
+    /// `phoneNumberOf`/`CallerDisplayCache` exactly, so all three clients
+    /// treat the same wire value identically.
+    static func markCallLinkedPeer(_ id: String, callerDisplay: String? = nil) {
+        guard !id.isEmpty else { return }
+        callLinkLock.lock()
+        callLinkedPeerIds.insert(id)
+        if let phone = phoneNumberOf(callerDisplay) {
+            callLinkedPeerPhones[id] = phone
+        }
+        callLinkLock.unlock()
+    }
+
+    private static func isCallLinkedPeer(_ id: String) -> Bool {
+        callLinkLock.lock()
+        defer { callLinkLock.unlock() }
+        return callLinkedPeerIds.contains(id)
+    }
+
+    private static func callLinkedPhone(for id: String) -> String? {
+        callLinkLock.lock()
+        defer { callLinkLock.unlock() }
+        return callLinkedPeerPhones[id]
+    }
+
+    /// Phone-shaped extraction from an arbitrary wire `caller_display`
+    /// string — mirrors Desktop's `extractCallPhoneNumber` (store.svelte.ts)
+    /// and Android's `phoneNumberOf` (CallPeerNameViewModel.kt) exactly: a
+    /// leading `+` or at least 7 digits reads as a phone number, otherwise
+    /// this is an extension/name/something else and yields nil. Pure, no
+    /// I/O. `internal` (not `private`) so it is directly unit-testable.
+    static func phoneNumberOf(_ s: String?) -> String? {
+        guard let t = s?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { return nil }
+        let digitCount = t.filter { $0.isNumber }.count
+        guard digitCount > 0 else { return nil }
+        return (t.hasPrefix("+") || digitCount >= 7) ? t : nil
+    }
+
+    /// The rubrica starts EMPTY and fills in automatically from calls made
+    /// and received, no manual import required (Pavel spec 2026-07-29).
+    /// Runs from the SAME already-async, already-off-the-call-setup-hot-path
+    /// `Task` `ensureResolved` kicks off after a real network fetch —
+    /// nothing here can ever delay key generation or ringing, because by
+    /// the time this executes the profile fetch (and therefore the call
+    /// itself) has already happened.
+    ///
+    /// Two independent phases:
+    ///   1. Best-effort device-address-book enrichment (name + photo) —
+    ///      ONLY for a peer we have genuinely never heard of before, and
+    ///      only when Contacts access is ALREADY `.authorized` (a
+    ///      read-only check — this NEVER calls `requestAccess`).
+    ///   2. Always fill `extension`/`phoneNumber` blanks via
+    ///      `insertIfAbsentOrFillBlanks` — independent of whether phase 1
+    ///      found a match. Never touches `displayName` either way.
+    ///
+    /// Called BEFORE `apply(_:for:)` below: when phase 1 seeds a REAL local
+    /// name for a brand-new peer, `apply`'s own `mayOverwrite`
+    /// placeholder-detection then correctly refuses to downgrade it to the
+    /// synthetic "Int. NNN" fallback — no change needed there for that
+    /// half. `apply`'s reconstruction of an EXISTING row DOES need to
+    /// thread `phoneNumber`/`extension` through unchanged (see its own
+    /// comment) or its very next upsert would immediately wipe what this
+    /// method just wrote.
+    private func enrichFromCallProfile(_ pub: PublicUser, for id: String) {
+        guard Self.isCallLinkedPeer(id) else { return }
+        let ext = pub.extensionNumber.map { String($0) }
+        let trimmedPhone = pub.phoneNumber?.trimmingCharacters(in: .whitespaces)
+        let profilePhone = (trimmedPhone?.isEmpty == false) ? trimmedPhone : nil
+        // Reconciliation 2026-07-29: `pub.phoneNumber` only ever carries the
+        // peer's OPT-IN public-profile field, which most accounts never set
+        // — the wire `caller_display` captured at call-start time (the
+        // caller's own chosen caller-id) is a second, independent signal
+        // that this call itself is "from a phone number". Prefer the
+        // server-confirmed opt-in value when present, else fall back to it.
+        let phone = profilePhone ?? Self.callLinkedPhone(for: id)
+        guard ext != nil || phone != nil else { return }
+
+        // Phase 1 — device-contact enrichment.
+        let hasLocalRow = { self.contactsStore.load().first(where: { $0.userId == id }) != nil }
+        if CallEnrichmentGate.shouldAttemptDeviceLookup(
+            hasExistingLocalRow: hasLocalRow(),
+            phoneNumber: phone,
+            isContactsAuthorized: CNContactStore.authorizationStatus(for: .contacts) == .authorized
+        ), let phone, let match = DeviceContactLookup.lookup(phoneNumber: phone) {
+            // Race guard — re-evaluate the SAME gate immediately before
+            // writing: a manual rename, a concurrent `ensureResolved` for
+            // the same id, or InCallContainer's own W444 fetch may have
+            // landed a row in the window since the check above.
+            if CallEnrichmentGate.shouldAttemptDeviceLookup(
+                hasExistingLocalRow: hasLocalRow(),
+                phoneNumber: phone,
+                isContactsAuthorized: CNContactStore.authorizationStatus(for: .contacts) == .authorized
+            ) {
+                let photoUrl = match.thumbnailData.flatMap {
+                    DeviceContactLookup.cachePhoto($0, forUserId: id)
+                }
+                contactsStore.insertIfAbsentOrFillBlanks(
+                    userId: id,
+                    fallbackDisplayName: match.name,
+                    extensionNumber: ext,
+                    phoneNumber: phone,
+                    avatarUrl: photoUrl
+                )
+                RTLog.info("NameResolve", "device-contact match for \(id.prefix(8))… -> \"\(match.name)\"")
+            }
+        }
+
+        // Phase 2 — always fill extension/phoneNumber blanks, independent
+        // of whether phase 1 found a match. Never touches displayName;
+        // the fallback below is only ever used the one time this ALSO
+        // happens to be the very first write for `id` (phase 1 didn't run
+        // — no phone, not authorized, or no device match).
+        let fallback = contactsStore.load().first(where: { $0.userId == id })?.displayName
+            ?? DisplayName.shortUserFallback(id)
+        contactsStore.insertIfAbsentOrFillBlanks(
+            userId: id,
+            fallbackDisplayName: fallback,
+            extensionNumber: ext,
+            phoneNumber: phone
+        )
+    }
+
     // MARK: - Internals
 
     private func apply(_ pub: PublicUser, for id: String) {
         let serverName = StringSanitiser.displayName(pub.displayName ?? "", fallback: "")
         let ext = pub.extensionNumber ?? 0
 
+        // W-EXTPREFIX (Pavel, 2026-07-29 re-escalation): bare digits, no
+        // "Int."/"Phone"/etc. prefix — same `DisplayName.isPlaceholderName`
+        // check `forUser` uses, so a legacy-shaped `serverName` (an
+        // un-migrated peer, or a stale value some other platform still
+        // sends) is never persisted verbatim into the rubrica either.
         let resolved: String
-        if !serverName.isEmpty && !DisplayName.looksLikeUUID(serverName) {
-            // A bare-numeric display name IS the extension (same convention
-            // as DisplayName.forUser step 2).
-            resolved = serverName.allSatisfy({ $0.isNumber }) ? "Int. \(serverName)" : serverName
+        if !serverName.isEmpty && !DisplayName.isPlaceholderName(serverName) {
+            resolved = serverName
         } else if ext > 0 {
-            resolved = "Int. \(ext)"
+            resolved = String(ext)
         } else {
             // Server guarantees every userId an extension — reaching here
             // means something is broken upstream. Real error, not a warn.
@@ -173,7 +332,7 @@ final class NameResolutionService: @unchecked Sendable {
         if let s = stored {
             // NEVER overwrite a real user-given rubrica name; only fill
             // empty/UUID-shaped/placeholder rows (and upgrade our own
-            // synthetic "Int. NNN" to a real server name).
+            // synthetic bare-extension name to a real server name).
             guard Self.mayOverwrite(s.displayName, with: resolved),
                   s.displayName != resolved else { return }
             contactsStore.upsert(ContactsStore.StoredContact(
@@ -192,7 +351,13 @@ final class NameResolutionService: @unchecked Sendable {
                 // every other field above (a routine name-resolution pass
                 // must never silently wipe a contact's NFC presence record).
                 presenceAuth: s.presenceAuth,
-                presenceFloor: s.presenceFloor
+                presenceFloor: s.presenceFloor,
+                // W-AUTOSAVE — same reasoning: `enrichFromCallProfile` (called
+                // just before `apply`, above) may have just written these;
+                // omitting them here would immediately wipe them again on
+                // the very next line of the SAME resolution pass.
+                phoneNumber: s.phoneNumber,
+                `extension`: s.`extension`
             ))
         } else {
             contactsStore.upsert(ContactsStore.StoredContact(
@@ -210,25 +375,20 @@ final class NameResolutionService: @unchecked Sendable {
         RTLog.info("NameResolve", "resolved \(id.prefix(8))… -> \"\(resolved)\"")
     }
 
-    /// True when a STORED display name is one of the transient/legacy
-    /// placeholder shapes the resolver is allowed to replace.
-    private static func isPlaceholderName(_ dn: String) -> Bool {
-        let t = dn.trimmingCharacters(in: .whitespaces)
-        if t.isEmpty { return true }
-        if DisplayName.looksLikeUUID(t) { return true }
-        if t.hasPrefix("Utente ") && t.hasSuffix("…") { return true }
-        return false
-    }
-
+    /// W-EXTPREFIX consolidation (2026-07-29): placeholder detection now
+    /// lives ONLY in `DisplayName.isPlaceholderName` — this used to be an
+    /// independent copy (checking only empty/UUID/short8-shape, missing
+    /// "Phone #N"/"Extension #N"/"New User" entirely) that could silently
+    /// diverge from the canonical resolver's idea of "no name set".
+    ///
+    /// A stored name that is nothing but digits ("103") is our own
+    /// synthetic bare-extension fallback — never typed by a human through
+    /// the contact editor, which collects the extension in its own
+    /// separate field — so it stays eligible to upgrade to a real server
+    /// name too, same as before this consolidation (previously detected via
+    /// the now-removed "Int. " prefix; the prefix is gone but the shape
+    /// this needs to recognise, "just digits", still is).
     private static func mayOverwrite(_ storedName: String, with resolved: String) -> Bool {
-        if isPlaceholderName(storedName) { return true }
-        // Our own synthetic "Int. NNN" may upgrade to a real server name,
-        // but a real name never downgrades to "Int. NNN".
-        let t = storedName.trimmingCharacters(in: .whitespaces)
-        if t.hasPrefix("Int. "), t.dropFirst(5).allSatisfy({ $0.isNumber }),
-           !resolved.hasPrefix("Int. ") {
-            return true
-        }
-        return false
+        DisplayName.isPlaceholderName(storedName) || DisplayName.isBareExtension(storedName)
     }
 }

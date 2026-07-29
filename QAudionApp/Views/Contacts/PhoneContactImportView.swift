@@ -280,18 +280,12 @@ struct PhoneContactImportView: View {
     private func loadCandidates() {
         loading = true
         DispatchQueue.global(qos: .userInitiated).async {
-            let keys: [CNKeyDescriptor] = [
-                CNContactGivenNameKey as CNKeyDescriptor,
-                CNContactFamilyNameKey as CNKeyDescriptor,
-                CNContactPhoneNumbersKey as CNKeyDescriptor,
-                CNContactThumbnailImageDataKey as CNKeyDescriptor
-            ]
-            let request = CNContactFetchRequest(keysToFetch: keys)
+            let request = CNContactFetchRequest(keysToFetch: DeviceContactLookup.keysToFetch)
             var result: [PhoneCandidate] = []
             do {
                 try CNContactStore().enumerateContacts(with: request) { contact, _ in
                     let phones = contact.phoneNumbers.map {
-                        $0.value.stringValue.filter { "0123456789+".contains($0) }
+                        DeviceContactLookup.normalizedDigits($0.value.stringValue)
                     }.filter { !$0.isEmpty }
                     guard !phones.isEmpty else { return }
                     let name = [contact.givenName, contact.familyName]
@@ -428,15 +422,21 @@ private struct ImportContactSheet: View {
         // Use Q-Audion ID if provided; otherwise provisional key from phone number.
         let trimId = qaudionId.trimmingCharacters(in: .whitespaces)
         let userId = trimId.isEmpty ? "phone:" + phone : trimId
-        // phoneHash stores the raw phone number (no server-side peppered hash
-        // for locally-imported contacts — field stays as the lookup key).
+        // The raw phone number lives in `phoneNumber` — `phoneHash` stays
+        // reserved exclusively for the real peppered server hash (never
+        // populated here: a purely-local manual import never talks to the
+        // server, so there is no peppered hash to store).
+        let localPhotoUrl = candidate.thumbnailData.flatMap {
+            DeviceContactLookup.cachePhoto($0, forUserId: userId)
+        }
         let stored = ContactsStore.StoredContact(
             userId: userId,
             displayName: trimName,
-            phoneHash: phone,
-            avatarUrl: nil,
+            phoneHash: "",
+            avatarUrl: localPhotoUrl,
             lastSeen: nil,
-            isVerified: false
+            isVerified: false,
+            phoneNumber: phone
         )
         onConfirm(stored)
     }

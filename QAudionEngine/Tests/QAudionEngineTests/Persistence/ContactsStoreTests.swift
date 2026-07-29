@@ -406,4 +406,150 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertNil(reloaded?.presenceAuth, "identity-change reconstruction must clear presenceAuth as an emergent side effect of omission")
         XCTAssertNil(reloaded?.presenceFloor)
     }
+
+    // MARK: - W-AUTOSAVE — insertIfAbsentOrFillBlanks
+    //
+    // NOTE (unverified by compilation — no Xcode/compiler available in this
+    // environment; reviewed manually with extra care, matching this repo's
+    // established pattern for iOS work done under the same constraint).
+
+    func test_insertIfAbsentOrFillBlanks_insertsWhenAbsent() {
+        XCTAssertTrue(store.load().isEmpty)
+        let result = store.insertIfAbsentOrFillBlanks(
+            userId: "u-new", fallbackDisplayName: "Mario Rossi",
+            extensionNumber: "103", phoneNumber: "+391234567890"
+        )
+        XCTAssertEqual(result.userId, "u-new")
+        XCTAssertEqual(result.displayName, "Mario Rossi", "insert branch MAY set displayName — nothing existing to protect")
+        XCTAssertEqual(result.`extension`, "103")
+        XCTAssertEqual(result.phoneNumber, "+391234567890")
+        let loaded = store.load()
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded.first?.userId, "u-new")
+    }
+
+    func test_insertIfAbsentOrFillBlanks_patchesOnlyNilFieldsWhenPresent() {
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Alice", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: false
+        ))
+        let result = store.insertIfAbsentOrFillBlanks(
+            userId: "u-1", fallbackDisplayName: "SHOULD NOT BE USED",
+            extensionNumber: "103", phoneNumber: "+391234567890",
+            avatarUrl: URL(string: "https://example.com/a.jpg")
+        )
+        XCTAssertEqual(result.`extension`, "103", "nil extension must be filled")
+        XCTAssertEqual(result.phoneNumber, "+391234567890", "nil phoneNumber must be filled")
+        XCTAssertEqual(result.avatarUrl, URL(string: "https://example.com/a.jpg"), "nil avatarUrl must be filled")
+    }
+
+    func test_insertIfAbsentOrFillBlanks_neverOverwritesExistingDisplayName() {
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Alice (manually renamed)", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: false
+        ))
+        let result = store.insertIfAbsentOrFillBlanks(
+            userId: "u-1", fallbackDisplayName: "Server Placeholder Int. 103",
+            extensionNumber: "103"
+        )
+        XCTAssertEqual(result.displayName, "Alice (manually renamed)", "an existing row's displayName must NEVER be touched by this method")
+    }
+
+    func test_insertIfAbsentOrFillBlanks_neverOverwritesAlreadySetFields() {
+        let originalAvatar = URL(string: "https://example.com/original.jpg")
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Alice", phoneHash: "abc",
+            avatarUrl: originalAvatar, lastSeen: nil, isVerified: false,
+            phoneNumber: "+390000000000", `extension`: "1"
+        ))
+        let result = store.insertIfAbsentOrFillBlanks(
+            userId: "u-1", fallbackDisplayName: "irrelevant",
+            extensionNumber: "999", phoneNumber: "+399999999999",
+            avatarUrl: URL(string: "https://example.com/new.jpg")
+        )
+        XCTAssertEqual(result.`extension`, "1", "an already-set extension must not be overwritten by a new value")
+        XCTAssertEqual(result.phoneNumber, "+390000000000", "an already-set phoneNumber must not be overwritten by a new value")
+        XCTAssertEqual(result.avatarUrl, originalAvatar, "an already-set avatarUrl must not be overwritten by a new value")
+    }
+
+    func test_insertIfAbsentOrFillBlanks_preservesOtherFieldsOnExistingRow() {
+        let pk = Data(repeating: 0x11, count: 32)
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Alice", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: true, pubkey: pk,
+            verifiedFingerprintHex: "ff", verifiedAtMs: 123, verificationMethod: "qr"
+        ))
+        let result = store.insertIfAbsentOrFillBlanks(
+            userId: "u-1", fallbackDisplayName: "irrelevant", extensionNumber: "103"
+        )
+        XCTAssertEqual(result.pubkey, pk)
+        XCTAssertEqual(result.verifiedFingerprintHex, "ff")
+        XCTAssertEqual(result.verifiedAtMs, 123)
+        XCTAssertEqual(result.verificationMethod, "qr")
+        XCTAssertTrue(result.isVerified)
+    }
+
+    // MARK: - W-AUTOSAVE — CallEnrichmentGate (pure device-lookup gating)
+
+    func test_callEnrichmentGate_skipsWhenNotAuthorized() {
+        XCTAssertFalse(CallEnrichmentGate.shouldAttemptDeviceLookup(
+            hasExistingLocalRow: false, phoneNumber: "+391234567890", isContactsAuthorized: false
+        ), "must skip the (expensive) device lookup when Contacts access is not already granted")
+    }
+
+    func test_callEnrichmentGate_skipsWhenLocalRowAlreadyExists() {
+        XCTAssertFalse(CallEnrichmentGate.shouldAttemptDeviceLookup(
+            hasExistingLocalRow: true, phoneNumber: "+391234567890", isContactsAuthorized: true
+        ), "a row already existing means a name can never be written by insertIfAbsentOrFillBlanks anyway — nothing to gain from the lookup")
+    }
+
+    func test_callEnrichmentGate_skipsWhenNoPhoneNumber() {
+        XCTAssertFalse(CallEnrichmentGate.shouldAttemptDeviceLookup(
+            hasExistingLocalRow: false, phoneNumber: nil, isContactsAuthorized: true
+        ))
+        XCTAssertFalse(CallEnrichmentGate.shouldAttemptDeviceLookup(
+            hasExistingLocalRow: false, phoneNumber: "   ", isContactsAuthorized: true
+        ), "a whitespace-only phone number must count as absent")
+    }
+
+    func test_callEnrichmentGate_allowsWhenEveryConditionMet() {
+        XCTAssertTrue(CallEnrichmentGate.shouldAttemptDeviceLookup(
+            hasExistingLocalRow: false, phoneNumber: "+391234567890", isContactsAuthorized: true
+        ))
+    }
+
+    /// Race-guard re-check: simulates the exact sequence
+    /// `NameResolutionService.enrichFromCallProfile` performs — gate check,
+    /// [another writer wins the race in the window], re-check immediately
+    /// before the write. Pins that the re-check correctly aborts the write
+    /// so the racing writer's name survives untouched.
+    func test_callEnrichmentGate_raceGuardRecheckPreventsClobberingConcurrentWrite() {
+        let userId = "u-1"
+        // Step 1 — gate check BEFORE any lookup: row absent, would proceed.
+        let firstCheck = CallEnrichmentGate.shouldAttemptDeviceLookup(
+            hasExistingLocalRow: store.load().first(where: { $0.userId == userId }) != nil,
+            phoneNumber: "+391234567890", isContactsAuthorized: true
+        )
+        XCTAssertTrue(firstCheck, "row is absent at this point — the lookup would be attempted")
+
+        // Step 2 — simulate the race: another writer (manual rename, a
+        // concurrent resolution) lands a row in the window while the
+        // (slow) device lookup was "in flight".
+        store.upsert(ContactsStore.StoredContact(
+            userId: userId, displayName: "Manual Name (won the race)", phoneHash: "",
+            avatarUrl: nil, lastSeen: nil, isVerified: false
+        ))
+
+        // Step 3 — race-guard re-check immediately before the write, using
+        // a FRESH load (not the stale `firstCheck` result).
+        let recheck = CallEnrichmentGate.shouldAttemptDeviceLookup(
+            hasExistingLocalRow: store.load().first(where: { $0.userId == userId }) != nil,
+            phoneNumber: "+391234567890", isContactsAuthorized: true
+        )
+        XCTAssertFalse(recheck, "re-check must now see the row that landed in the meantime and abort the write")
+
+        // Step 4 — since a correct caller honours the re-check and skips
+        // the write, the racing writer's name must survive untouched.
+        XCTAssertEqual(store.load().first(where: { $0.userId == userId })?.displayName, "Manual Name (won the race)")
+    }
 }

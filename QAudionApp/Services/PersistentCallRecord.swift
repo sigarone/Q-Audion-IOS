@@ -267,13 +267,18 @@ public final class PersistentCallRecordStore: ObservableObject {
 
     // MARK: - Display name helper
 
-    /// Resolve a display name for a peer userId using the same priority
-    /// as the inbound call_incoming handler in AppState:
-    ///   1. `wireDisplay` if non-nil and non-empty (caller_display from wire)
-    ///   2. ContactsStore rubrica match
-    ///   3. Legacy `user-<name>` prefix strip
-    ///   4. UUID truncation to prefix(8)…suffix(4)
-    ///   5. Raw userId fallback
+    /// Resolve a display name for a peer userId. W-EXTPREFIX consolidation
+    /// (2026-07-29): this used to be an independent copy of the resolution
+    /// chain with NO placeholder-awareness at all (a stale "Phone #100"
+    /// cached in `nameByUserId` or arriving as `wireDisplay` rendered
+    /// verbatim). Now a thin adapter over the single canonical
+    /// `DisplayName.forUser` — `nameByUserId[userId]`, when present, is
+    /// wrapped as a one-entry rubrica snapshot so it flows through the
+    /// SAME rubrica-then-server-then-extension-then-fallback priority
+    /// every other call site uses, instead of this function keeping its
+    /// own parallel order (in practice every live caller already passes
+    /// `wireDisplay: nil`, so this is not an observable behaviour change
+    /// for wire-vs-rubrica precedence today).
     ///
     /// Static so callers don't need an instance reference and the logic
     /// stays unit-testable without touching persistence.
@@ -282,25 +287,12 @@ public final class PersistentCallRecordStore: ObservableObject {
         wireDisplay: String?,
         nameByUserId: [String: String]
     ) -> String {
-        // NIM-fix3 / SECURITY H-16 / H-15: sanitise server-supplied
-        // wireDisplay via the central StringSanitiser (also strips the
-        // previously-missed zero-width / direction-mark codepoints
-        // U+200B–U+200F and U+FEFF in addition to the bidi families).
-        // Pass an empty fallback here so we fall through to the local
-        // resolution chain below when sanitisation yields nothing.
-        if let wd = wireDisplay, !wd.isEmpty {
-            let cleaned: String = StringSanitiser.displayName(wd, fallback: "")
-            if !cleaned.isEmpty { return cleaned }
+        var contacts: [ContactsStore.StoredContact] = []
+        if let name = nameByUserId[userId], !name.isEmpty {
+            contacts = [ContactsStore.StoredContact(
+                userId: userId, displayName: name, phoneHash: "",
+                avatarUrl: nil, lastSeen: nil, isVerified: false)]
         }
-        if let name = nameByUserId[userId], !name.isEmpty { return name }
-        if userId.hasPrefix("user-") {
-            return String(userId.dropFirst(5)).capitalized
-        }
-        if userId.count > 12 {
-            // Central humane fallback (see DisplayName.swift) — call
-            // history rows say "Utente a1b2c3d4…", never a bare UUID slice.
-            return DisplayName.shortUserFallback(userId)
-        }
-        return userId
+        return DisplayName.forUser(userId, serverDisplay: wireDisplay, contacts: contacts)
     }
 }

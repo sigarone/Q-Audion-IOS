@@ -10,10 +10,17 @@ public struct ContactsListViewModel: ViewModelProtocol {
         public let isOnline: Bool
         public let unreadMessageCount: Int
         public let isVerified: Bool          // SAS or NFC verified
+        /// PBX short dial extension, as bare digits (e.g. "103") — no
+        /// prefix word. Mirrors `ContactsStore.StoredContact.extension`;
+        /// carried here so a surface that shows the extension in its own
+        /// slot (separate from `displayName`, e.g. a metadata row) never
+        /// has to re-derive it by parsing `displayName`.
+        public let `extension`: String?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, isOnline: Bool,
-                    unreadMessageCount: Int, isVerified: Bool) {
+                    unreadMessageCount: Int, isVerified: Bool,
+                    `extension`: String? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -21,6 +28,7 @@ public struct ContactsListViewModel: ViewModelProtocol {
             self.isOnline = isOnline
             self.unreadMessageCount = unreadMessageCount
             self.isVerified = isVerified
+            self.`extension` = `extension`
         }
     }
 

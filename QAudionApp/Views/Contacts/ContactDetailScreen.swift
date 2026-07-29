@@ -38,8 +38,11 @@ struct ContactDetailScreen: View {
     @State private var sharingVCard: VCardShareItem? = nil
     /// Local block state — initialised from BlockedContactsStore on .onAppear.
     @State private var isBlocked: Bool = false
-    /// Internal extension number extracted from displayName (#NNN pattern),
-    /// or nil when absent.
+    /// Internal extension number for this peer, bare digits, no prefix —
+    /// resolved via the canonical `DisplayName.resolvedExtension`, not by
+    /// parsing `item.displayName` (see `extractExtension`'s old kdoc: that
+    /// regex only ever matched a legacy "#NNN" shape and silently returned
+    /// nil — showing "—" — for the current no-prefix/"Int. NNN" rendering).
     @State private var peerExtension: String? = nil
     /// Real persistent safety-number + TOFU trust-state evaluation (W36
     /// wiring). nil while the initial server fetch + HKDF derivation is
@@ -76,7 +79,9 @@ struct ContactDetailScreen: View {
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             isBlocked = BlockedContactsStore.isBlocked(item.userId)
-            peerExtension = Self.extractExtension(from: item.displayName)
+            peerExtension = DisplayName.resolvedExtension(
+                for: item.userId, serverDisplay: item.displayName,
+                knownExtension: item.`extension`, contacts: appState.cachedContacts)
         }
         .task(id: item.userId) {
             await loadTrustEvaluation()
@@ -763,19 +768,6 @@ struct ContactDetailScreen: View {
         }
         let msg: String = name + " sbloccato."
         snackbar?.show(.init(text: msg, severity: .info))
-    }
-
-    // MARK: - Extension extraction
-
-    /// Extracts a dial extension from a displayName containing a "#NNN" suffix.
-    /// Returns nil when no such pattern is present.
-    private static func extractExtension(from displayName: String) -> String? {
-        guard let range = displayName.range(of: #"#(\d+)"#, options: .regularExpression) else {
-            return nil
-        }
-        // Drop the leading '#'.
-        let match = String(displayName[range])
-        return String(match.dropFirst())
     }
 
     /// W294: build the guidance snackbar text via static method to keep

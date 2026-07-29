@@ -26,13 +26,22 @@ final class ContactsListContainer: ObservableObject {
         // QA pass). The empty-state UI in ContactsScreen handles the
         // "Nessun contatto" copy.
         let stored = store.load()
+        // W-EXTPREFIX consolidation (2026-07-29): `displayName` used to be
+        // `sc.displayName` verbatim — a stale "Phone #100"/"New User" row
+        // rendered as-is everywhere this view model feeds (ContactsScreen,
+        // the new-conversation contact picker). Resolved through the
+        // canonical `DisplayName.forUser` instead, with `contacts: stored`
+        // so it also picks up `sc`'s own structured `extension`/
+        // `phoneNumber` fields for the bare-digit/phone fallback.
         self.viewModel = ContactsListViewModel(items: stored.map { sc in
             ContactsListViewModel.Item(
-                userId: sc.userId, displayName: sc.displayName,
+                userId: sc.userId,
+                displayName: DisplayName.forUser(sc.userId, contacts: stored),
                 phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
                 isOnline: false,
                 unreadMessageCount: 0,
-                isVerified: sc.isVerified
+                isVerified: sc.isVerified,
+                `extension`: sc.`extension`
             )
         })
     }
@@ -128,11 +137,13 @@ final class ContactsListContainer: ObservableObject {
         viewModel = ContactsListViewModel(
             items: stored.map { sc in
                 ContactsListViewModel.Item(
-                    userId: sc.userId, displayName: sc.displayName,
+                    userId: sc.userId,
+                    displayName: DisplayName.forUser(sc.userId, contacts: stored),
                     phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
                     isOnline: false,
                     unreadMessageCount: 0,
-                    isVerified: sc.isVerified
+                    isVerified: sc.isVerified,
+                    `extension`: sc.`extension`
                 )
             },
             searchQuery: viewModel.searchQuery
@@ -156,11 +167,13 @@ final class ContactsListContainer: ObservableObject {
                     self.viewModel = ContactsListViewModel(
                         items: stored.map { sc in
                             ContactsListViewModel.Item(
-                                userId: sc.userId, displayName: sc.displayName,
+                                userId: sc.userId,
+                                displayName: DisplayName.forUser(sc.userId, contacts: stored),
                                 phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
                                 isOnline: false,
                                 unreadMessageCount: 0,
-                                isVerified: sc.isVerified
+                                isVerified: sc.isVerified,
+                                `extension`: sc.`extension`
                             )
                         },
                         searchQuery: self.viewModel.searchQuery

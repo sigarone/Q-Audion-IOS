@@ -570,6 +570,20 @@ struct LiveInCallScreen: View {
         return head + "…" + tail
     }
 
+    /// W-EXTPREFIX consolidation (2026-07-29): this used to be an
+    /// independent copy of the resolution chain PLUS a separate ad-hoc
+    /// token-scan parser for `cachedPeerShortNumber` (regex-shaped digit
+    /// hunting through the ALREADY-resolved display string, truncated to 3
+    /// chars) — fragile, and capable of silently diverging from
+    /// `cachedPeerDisplayName` for a 4+-digit extension (a real bug: the
+    /// name would show "1234" while the avatar glyph showed the wrong
+    /// "123"). Now `cachedPeerDisplayName` is a single call into the
+    /// canonical `DisplayName.forUser`, and `cachedPeerShortNumber` (the
+    /// avatar-circle glyph only — see `QAudionAvatar`'s `shortNumber` param,
+    /// rendered verbatim with no length cap of its own, same as
+    /// `CallHistoryView`'s `entry.peerExtension.map(String.init)`) reads the
+    /// peer's OWN structured extension field directly instead of
+    /// re-deriving it by scanning text and truncating to 3 chars.
     private func resolvePeerDisplayName() {
         guard let id = appState.callContactId else {
             cachedPeerDisplayName = "Sconosciuto"
@@ -577,58 +591,15 @@ struct LiveInCallScreen: View {
             return
         }
         let stored = contactsStore.load()
-        // W569: sanitise the contact's displayName via StringSanitiser so that
-        // UUID-format names (set by the server when a user registers without a
-        // real display name) are treated as absent rather than displayed raw.
-        // Fall through to the incomingCallerName path when the name is a UUID.
-        let contactSanitised: String? = {
-            guard let m = stored.first(where: { $0.userId == id }) else { return nil }
-            let sanitised = StringSanitiser.displayName(m.displayName, fallback: "")
-            return sanitised.isEmpty ? nil : sanitised
-        }()
-        if let displayName = contactSanitised {
-            cachedPeerDisplayName = displayName
-            // Estrai il numero interno dal displayName del contatto usando
-            // la stessa logica di QAudionAvatar.initials() — cerca token
-            // puramente numerici (es. "103" in "Interno 103").
-            let tokens = displayName
-                .trimmingCharacters(in: .whitespaces)
-                .split(whereSeparator: { $0.isWhitespace })
-                .map(String.init)
-            if let numTok = tokens.first(where: { $0.allSatisfy({ $0.isNumber }) }) {
-                cachedPeerShortNumber = String(numTok.prefix(3))
-            } else if let hashTok = tokens.first(where: { $0.hasPrefix("#") }) {
-                cachedPeerShortNumber = String(hashTok.dropFirst().prefix(3))
-            } else {
-                cachedPeerShortNumber = nil
-            }
-        } else {
-            // Peer not in contacts. Priority:
-            // 1. incomingCallerName (already resolved from server caller_display
-            //    → "Int. 112") — this is set by call_incoming handler and contains
-            //    the PBX extension even when the peer is not in local contacts.
-            // 2. UUID truncation as last resort (never show 36-char raw UUID).
-            let resolvedFromSignaling = appState.incomingCallerName
-            if !resolvedFromSignaling.isEmpty {
-                cachedPeerDisplayName = resolvedFromSignaling
-                // Extract short number from "Int. 112" → "112"
-                let tokens = resolvedFromSignaling.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-                if let num = tokens.first(where: { $0.allSatisfy({ $0.isNumber }) }) {
-                    cachedPeerShortNumber = String(num.prefix(3))
-                } else {
-                    cachedPeerShortNumber = nil
-                }
-            } else if id.hasPrefix("user-") {
-                cachedPeerDisplayName = String(id.dropFirst(5)).capitalized
-                cachedPeerShortNumber = nil
-            } else if id.count > 12 {
-                cachedPeerDisplayName = DisplayName.shortUserFallback(id)
-                cachedPeerShortNumber = nil
-            } else {
-                cachedPeerDisplayName = id
-                cachedPeerShortNumber = nil
-            }
-        }
+        let match = stored.first(where: { $0.userId == id })
+        cachedPeerDisplayName = DisplayName.forUser(
+            id,
+            serverDisplay: appState.incomingCallerName.isEmpty ? nil : appState.incomingCallerName,
+            contacts: stored
+        )
+        cachedPeerShortNumber = DisplayName.resolvedExtension(
+            for: id, serverDisplay: appState.incomingCallerName.isEmpty ? nil : appState.incomingCallerName,
+            knownExtension: match?.`extension`, contacts: stored)
     }
 
     /// Stub rekey countdown derived from a local anchor. Counts down

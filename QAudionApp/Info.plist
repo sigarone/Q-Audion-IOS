@@ -56,7 +56,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Q-Audion uses the camera to scan QR codes for key exchange.</string>
 	<key>NSContactsUsageDescription</key>
-	<string>Q-Audion does not access your contacts. This description is required because a linked SDK references the Contacts API.</string>
+	<string>Q-Audion can use your contacts so you can import them into your encrypted address book, and to automatically show the name and photo of a phone contact when they call you or you call them.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Q-Audion saves chat images you choose to keep into your Photos library.</string>
 	<key>NSFaceIDUsageDescription</key>

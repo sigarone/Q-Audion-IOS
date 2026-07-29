@@ -8,9 +8,12 @@ import QAudionEngine
 ///
 /// Wire-shape parity with Android: on save, the full list of E.164 phone
 /// numbers is pushed to the server as **peppered hashes** via
-/// `POST /contacts/phones`. Engine wiring for that endpoint is deferred —
-/// today the screen persists locally to `UserDefaults` so the UX is
-/// complete even before the server endpoint surfaces.
+/// `GET /contacts/pepper` + `POST /contacts/phones` (see `savePhones`
+/// below) — this IS live-wired to the real server, not a stub. Numbers are
+/// also mirrored to local `UserDefaults` so the UX stays usable offline.
+/// (Stale note removed 2026-07-29 — this doc comment previously said
+/// "engine wiring deferred", which was true when the screen only persisted
+/// locally; confirmed wired end-to-end since commit `080db8b`.)
 ///
 /// The "Profilo" entry (AccountSettingsScreen) stays the canonical
 /// display-name / status / avatar editor. This screen ONLY handles the
@@ -18,7 +21,6 @@ import QAudionEngine
 /// iOS profile flow untouched while adding the missing surface.
 @MainActor
 final class MyPhonesContainer: ObservableObject {
-    @Published private(set) var myExtension: Int? = nil
     @Published private(set) var phones: [String] = []
     @Published var newPhone: String = ""
     @Published var savingProfile: Bool = false
@@ -26,7 +28,6 @@ final class MyPhonesContainer: ObservableObject {
     @Published var error: String? = nil
 
     private let phonesKey = "com.qaudion.profile.myPhones"
-    private let extensionKey = "com.qaudion.profile.dialExtension"
 
     init() {
         load()
@@ -40,8 +41,15 @@ final class MyPhonesContainer: ObservableObject {
         if let stored = UserDefaults.standard.array(forKey: phonesKey) as? [String] {
             phones = stored
         }
-        let ext = UserDefaults.standard.integer(forKey: extensionKey)
-        myExtension = ext > 0 ? ext : nil
+        // 2026-07-29 fix: the extension row used to read a dead
+        // UserDefaults key (`com.qaudion.profile.dialExtension`) that
+        // nothing in the app ever wrote — only `DevResetScreen` cleared
+        // it — so the row never rendered. The REAL, server-fetched
+        // extension is cached by `AppState` under `currentUserDialExtension`
+        // (populated from `getProfile().dialExtension`, see
+        // `AppState.swift`). The screen now reads that live via
+        // `appState.currentUserDialExtension` directly in the view body
+        // instead of a stale container copy — see `MyPhonesScreen.headerCard`.
     }
 
     /// Validate + add. Returns true on success (so the UI can clear the
@@ -240,9 +248,13 @@ struct MyPhonesScreen: View {
                 .foregroundStyle(scheme.primary)
             Spacer().frame(height: 8)
 
-            // Extension (server-assigned, read-only).
-            if let ext = container.myExtension {
-                extensionRow(ext)
+            // Extension (server-assigned, read-only). 2026-07-29: read
+            // live from AppState's server-fetched cache instead of the
+            // container's own dead UserDefaults key (see load() comment
+            // above) — nothing ever wrote that key so this row never
+            // rendered before.
+            if let ext = appState.currentUserDialExtension, let extInt = Int(ext) {
+                extensionRow(extInt)
                 Spacer().frame(height: 6)
             }
 
@@ -288,7 +300,9 @@ struct MyPhonesScreen: View {
                 .tracking(1.2)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .frame(width: 80, alignment: .leading)
-            Text("#\(ext)")
+            // Pavel, 2026-07-29: bare digits, no "#" (or any other) prefix —
+            // same rule as every other rendering of this identity, self or peer.
+            Text(String(ext))
                 .font(.system(size: 14, weight: .semibold, design: .monospaced))
                 .foregroundStyle(scheme.onSurface)
             Spacer(minLength: 0)
