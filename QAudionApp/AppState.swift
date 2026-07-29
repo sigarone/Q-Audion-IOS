@@ -11193,46 +11193,25 @@ final class AppState: ObservableObject {
     /// Sets `isVideoCall = true` so the camera toggle button appears in InCallScreen
     /// and starts the local video capture pipeline. Does NOT yet signal the peer
     /// (a WS video-upgrade message will be added when the server supports it).
+    ///
+    /// 2026-07-29 fix (call b3d9f465, W-VIDDIAG) — this used to special-case
+    /// `webRtcController == nil` into a WS-relay-ONLY branch that skipped any
+    /// WebRTC attempt outright (own comment: "if the peer is actually
+    /// Android/Desktop (WebRTC), this branch is WRONG... yields one-way/black
+    /// video"). It was wrong for exactly this incident: audio had fallen back
+    /// to the WS relay (peer lacks dc-mux-v1 / ICE never converged) while the
+    /// Android peer still only renders real WebRTC RTP video — so the
+    /// WS-relay-only branch produced a black/purple screen with zero
+    /// `video_frame` ever reaching the server from either side.
+    /// `performWebRtcVideoUpgrade` below already degrades to the identical
+    /// WS-HEVC-only behavior whenever `webRtcController` is nil or the SDP
+    /// renegotiation throws — so routing through it unconditionally removes
+    /// the premature nil-check instead of duplicating (and mis-selecting) its
+    /// own safe fallback.
     func upgradeToVideo() {
         guard isInCall, !isVideoCall else { return }
         guard let peerId = callContactId, !peerId.isEmpty else {
             RTLog.warn("call", "upgradeToVideo: callContactId nil — aborting")
-            return
-        }
-        // iOS↔iOS WS-relay path: WebRTC controller is nil — start
-        // VideoCallPipeline directly (camera → HEVC → WS relay → HEVC decode).
-        // WebRTC renegotiation is skipped because there is no RTP transceiver,
-        // but media-consent v1 STILL ships a `call_upgrade_request` (empty
-        // sdp): the pipeline starts PAUSED (camera + mirror preview only,
-        // nothing leaves the device) and unpauses only when the peer accepts.
-        if webRtcController == nil {
-            // W-VIDDIAG: if the peer is actually Android/Desktop (WebRTC), this
-            // branch is WRONG — they render only WebRTC RTP, so WS-relay video
-            // yields one-way/black video. webRtcController is nil here because no
-            // WebRTC controller was built during the audio phase. The next build
-            // fixes the decision; this log captures the peer caps to confirm.
-            print("[AppState] W-VIDDIAG upgradeToVideo: webRtcController=nil → taking WS-relay branch (peer=\(peerId.prefix(8)) caps=\(pendingPeerCapabilities ?? []))")
-            RTLog.info("call", "upgradeToVideo: iOS↔iOS WS relay — starting VideoCallPipeline (paused until consent)")
-            // W571 — check camera permission BEFORE flipping isVideoCall.
-            let camStatus = AVCaptureDevice.authorizationStatus(for: .video)
-            if camStatus == .denied || camStatus == .restricted {
-                errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
-                return
-            }
-            isVideoCall = true
-            setCamera(true)
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                await self.startVideoPipeline(for: peerId, startPaused: true)
-                // Rollback if the pipeline failed to start (permission denied
-                // at requestAccess time, or camera unavailable).
-                guard self.videoPipeline != nil else {
-                    self.isVideoCall = false
-                    self.setCamera(false)
-                    return
-                }
-                await self.sendUpgradeConsentRequest(to: peerId, sdp: "", media: "camera")
-            }
             return
         }
         RTLog.info("call", "upgradeToVideo: starting WebRTC renegotiation for peer " + peerId.prefix(8).description + "…")
@@ -11254,10 +11233,15 @@ final class AppState: ObservableObject {
         //   3. Peer responds with call_upgrade_response (handled in
         //      wireUpgradeHandlers). On accept, we feed the answer
         //      back via applyUpgradeAnswer.
-        //   4. Once the renegotiation lands, VideoCallPipeline starts
-        //      so the WS-relay HEVC path (iOS↔iOS) ALSO carries video.
-        //      Cross-platform peers ignore the WS video_frame (no
-        //      consumer) but the WebRTC RTP path is what they render.
+        //   4. VideoCallPipeline is already running (started in
+        //      performWebRtcVideoUpgrade below, before the WebRTC attempt),
+        //      so the WS-relay HEVC path carries video too — Android DOES
+        //      consume WS `video_frame` while its transport is in
+        //      BcryptoWsRelay mode (`CallController.kt` arms
+        //      `BcryptoWsVideoRelayTransport` whenever
+        //      `mode == BcryptoWsRelay && videoActive`), which is exactly
+        //      the state a `dc-mux-v1`/ICE fallback puts it in — this
+        //      WS-relay leg is not a no-op for cross-platform peers.
         //
         // setCamera(true) is deferred to AFTER the WebRTC renegotiation
         // succeeds — turning on the camera before there's a sink for
