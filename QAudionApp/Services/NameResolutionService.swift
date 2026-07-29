@@ -110,7 +110,7 @@ final class NameResolutionService: @unchecked Sendable {
         Task { [weak self] in
             guard let self else { return }
             defer {
-                self.lock.withLock { self.inFlight.remove(id) }
+                _ = self.lock.withLock { self.inFlight.remove(id) }
             }
             // Re-check the rubrica inside the task: another path (QR scan,
             // discover refresh, InCallContainer's own W444 fetch) may have
@@ -357,7 +357,7 @@ final class NameResolutionService: @unchecked Sendable {
                 // omitting them here would immediately wipe them again on
                 // the very next line of the SAME resolution pass.
                 phoneNumber: s.phoneNumber,
-                `extension`: s.`extension`
+                extension: s.`extension`
             ))
         } else {
             contactsStore.upsert(ContactsStore.StoredContact(

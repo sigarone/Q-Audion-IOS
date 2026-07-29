@@ -29,7 +29,7 @@ final class DisplayNameTests: XCTestCase {
         ContactsStore.StoredContact(
             userId: userId, displayName: displayName, phoneHash: "",
             avatarUrl: nil, lastSeen: nil, isVerified: false,
-            phoneNumber: phoneNumber, `extension`: extensionNumber
+            phoneNumber: phoneNumber, extension: extensionNumber
         )
     }
 

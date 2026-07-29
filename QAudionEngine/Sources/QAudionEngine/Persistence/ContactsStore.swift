@@ -278,7 +278,7 @@ public final class ContactsStore {
                 presenceAuth: existing.presenceAuth,
                 presenceFloor: existing.presenceFloor,
                 phoneNumber: existing.phoneNumber ?? phoneNumber,
-                `extension`: existing.`extension` ?? extensionNumber
+                extension: existing.`extension` ?? extensionNumber
             )
             current[idx] = patched
             save(current)
@@ -292,7 +292,7 @@ public final class ContactsStore {
                 lastSeen: nil,
                 isVerified: false,
                 phoneNumber: phoneNumber,
-                `extension`: extensionNumber
+                extension: extensionNumber
             )
             current.append(inserted)
             save(current)
@@ -441,7 +441,7 @@ public final class ContactsStore {
             presenceAuth: presenceAuth,
             presenceFloor: presenceFloor,
             phoneNumber: base.phoneNumber,
-            `extension`: base.`extension`
+            extension: base.`extension`
         )
     }
 }

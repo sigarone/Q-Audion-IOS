@@ -9300,7 +9300,7 @@ final class AppState: ObservableObject {
                 presenceAuth: c.presenceAuth,
                 presenceFloor: c.presenceFloor,
                 phoneNumber: c.phoneNumber,
-                `extension`: c.`extension`)
+                extension: c.`extension`)
             migrated = true
         }
         if migrated { store.save(contacts) }

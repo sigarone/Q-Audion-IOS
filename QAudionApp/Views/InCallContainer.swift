@@ -162,7 +162,7 @@ final class InCallContainer: ObservableObject {
                                     presenceAuth: existing?.presenceAuth,
                                     presenceFloor: existing?.presenceFloor,
                                     phoneNumber: existing?.phoneNumber,
-                                    `extension`: existing?.`extension`
+                                    extension: existing?.`extension`
                                 )
                                 self.contactsStore.upsert(contact)
                             }

@@ -460,7 +460,7 @@ final class ContactsStoreTests: XCTestCase {
         store.upsert(ContactsStore.StoredContact(
             userId: "u-1", displayName: "Alice", phoneHash: "abc",
             avatarUrl: originalAvatar, lastSeen: nil, isVerified: false,
-            phoneNumber: "+390000000000", `extension`: "1"
+            phoneNumber: "+390000000000", extension: "1"
         ))
         let result = store.insertIfAbsentOrFillBlanks(
             userId: "u-1", fallbackDisplayName: "irrelevant",

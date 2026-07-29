@@ -41,7 +41,7 @@ final class ContactsListContainer: ObservableObject {
                 isOnline: false,
                 unreadMessageCount: 0,
                 isVerified: sc.isVerified,
-                `extension`: sc.`extension`
+                extension: sc.`extension`
             )
         })
     }
@@ -143,7 +143,7 @@ final class ContactsListContainer: ObservableObject {
                     isOnline: false,
                     unreadMessageCount: 0,
                     isVerified: sc.isVerified,
-                    `extension`: sc.`extension`
+                    extension: sc.`extension`
                 )
             },
             searchQuery: viewModel.searchQuery
@@ -173,7 +173,7 @@ final class ContactsListContainer: ObservableObject {
                                 isOnline: false,
                                 unreadMessageCount: 0,
                                 isVerified: sc.isVerified,
-                                `extension`: sc.`extension`
+                                extension: sc.`extension`
                             )
                         },
                         searchQuery: self.viewModel.searchQuery

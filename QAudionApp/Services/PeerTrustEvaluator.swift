@@ -145,7 +145,7 @@ public enum PeerTrustEvaluator {
             // change either; thread these through unchanged same as
             // phoneHash/avatarUrl above.
             phoneNumber: existing.phoneNumber,
-            `extension`: existing.`extension`
+            extension: existing.`extension`
         ))
     }
 
@@ -200,7 +200,7 @@ public enum PeerTrustEvaluator {
             // not identity-key-bound the way presenceAuth/presenceFloor are,
             // which is why ONLY those two are deliberately omitted here).
             phoneNumber: existing.phoneNumber,
-            `extension`: existing.`extension`
+            extension: existing.`extension`
         ))
     }
 }
