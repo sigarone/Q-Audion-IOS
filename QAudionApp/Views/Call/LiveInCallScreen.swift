@@ -137,6 +137,14 @@ struct LiveInCallScreen: View {
             // between successive calls on the same showcase entry).
             resolvePeerDisplayName()
         }
+        // 2026-07-29 fix — pick up NameResolutionService's async enrichment
+        // (device-contact match, or the `ensureResolved` profile fetch
+        // kicked off by `resolvePeerDisplayName` above) once it lands the
+        // real phone number/name into the rubrica after the fact; without
+        // this the screen only shows it on the NEXT unrelated redraw.
+        .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
+            resolvePeerDisplayName()
+        }
         // media-consent v1 — the peer asked to turn their camera on.
         // NOTHING (no camera, no answer) happens until the user decides
         // here; AppState auto-declines after 25s.
@@ -600,6 +608,16 @@ struct LiveInCallScreen: View {
         cachedPeerShortNumber = DisplayName.resolvedExtension(
             for: id, serverDisplay: appState.incomingCallerName.isEmpty ? nil : appState.incomingCallerName,
             knownExtension: match?.`extension`, contacts: stored)
+        // 2026-07-29 fix (same root cause as InCallContainer's — see its
+        // doc comment): `DisplayName.forUser`'s async enrichment
+        // (`NameResolutionService.ensureResolved` → `enrichFromCallProfile`,
+        // the only path that persists the peer's real phone number) only
+        // fires on a tier-6 miss, which `incomingCallerName` already
+        // resolving the name at tier 2 usually prevents. Fire it
+        // explicitly so phone/extension enrichment is attempted for every
+        // real call regardless of which tier resolved the display name —
+        // idempotent, internally deduped + cooldown-gated.
+        NameResolutionService.shared.ensureResolved(userId: id)
     }
 
     /// Stub rekey countdown derived from a local anchor. Counts down

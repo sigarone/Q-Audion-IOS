@@ -49,126 +49,57 @@ final class InCallContainer: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Peer info from callContactId. Resolution order (mirrors Android CallPeerNameViewModel):
-        //   1. Local ContactsStore by userId (QR-paired or phone-book imported)
-        //   2. Server GET /api/v1/users/{id} if not in ContactsStore
-        //   3. Abbreviated userId (first 8 + last 4) as last resort
+        // Peer info from callContactId.
+        //
+        // 2026-07-29 fix (Pavel live-test evidence: an active call showed
+        // the bare extension "135" for the whole call — no name, no phone
+        // number saved anywhere) — this sink used to hand-roll its OWN
+        // resolution (local ContactsStore → its own `getPublicUser` call →
+        // its own ext/name fallback), completely independent of the
+        // canonical `DisplayName.forUser` chain every other in-call/ring
+        // surface uses (`LiveInCallScreen.resolvePeerDisplayName`,
+        // `HomeView`'s in-call banner, `ContentView`'s outgoing screen —
+        // all pass `appState.incomingCallerName`, the value ALREADY
+        // correctly resolved at ring time and held for the whole call).
+        // This sink alone ignored `incomingCallerName`, so a peer whose
+        // name resolved fine at ring regressed to the bare extension the
+        // moment the call became active. It also never read or persisted
+        // `pub.phoneNumber` at all — only `NameResolutionService.
+        // enrichFromCallProfile` does that — so the real phone number could
+        // never be saved via this path either. Routing through the same
+        // canonical chain used everywhere else fixes both at once.
         appState.$callContactId
             .receive(on: RunLoop.main)
             .sink { [weak self] cid in
                 guard let self, let cid = cid else { return }
-                let stored = self.contactsStore.load().first(where: { $0.userId == cid })
-                // W-EXTPREFIX consolidation (2026-07-29): this used to accept
-                // ANY non-empty stored name, including a legacy placeholder
-                // ("Phone #100"/"New User") — which then ALSO suppressed the
-                // network refetch below (`if localName == nil`), permanently
-                // freezing the bad value for the rest of the call. Gated on
-                // the canonical `DisplayName.isPlaceholderName` instead.
-                let localName: String? = (stored?.displayName).flatMap {
-                    (!$0.isEmpty && !DisplayName.isPlaceholderName($0)) ? $0 : nil
-                }
-                let avatarUrl = stored?.avatarUrl
-                let fingerprint: String = {
-                    guard let pk = stored?.pubkey else {
-                        return String(cid.prefix(8)) + "…" + String(cid.suffix(4))
-                    }
-                    return (try? Fingerprint.format(pubkey: pk))
-                        ?? String(cid.prefix(8)) + "…" + String(cid.suffix(4))
-                }()
-                let fallbackName: String = DisplayName.shortUserFallback(cid)
+                self.resolvePeer(for: cid)
+                // The canonical chain's own async enrichment
+                // (`NameResolutionService.ensureResolved` →
+                // `enrichFromCallProfile`, the only path that persists the
+                // peer's phone number / backfills a blank extension) only
+                // fires from `DisplayName.forUser`'s tier-6 miss — i.e.
+                // NEVER when `incomingCallerName` already resolved the name
+                // via tier 2, which is the common case for an established
+                // call. Fire it explicitly here so a call-linked peer (see
+                // `AppState`'s `markCallLinkedPeer` call at its two
+                // call-start sites) always gets its phone/extension
+                // enrichment attempted for every real call, independent of
+                // which tier resolved the display name. Cheap to call
+                // redundantly — internally deduped + cooldown-gated.
+                NameResolutionService.shared.ensureResolved(userId: cid)
+            }
+            .store(in: &cancellables)
 
-                // Apply local result immediately so the UI is not blank.
-                self.update {
-                    $0.peer = InCallViewModel.PeerInfo(
-                        userId: cid,
-                        displayName: localName ?? fallbackName,
-                        avatarUrl: avatarUrl,
-                        fingerprint: fingerprint
-                    )
-                }
-
-                // W444: if no local contact, kick off a server lookup to get
-                // the peer's real display name (mirrors Android step 4).
-                if localName == nil, let provider = self.appState?.liveProvider {
-                    // Capture primitives before entering Task — avoids type-checker
-                    // timeouts (CLAUDE.md §13) and weak-self capture complexity.
-                    let capturedCid = cid
-                    let capturedFallback = fallbackName
-                    let capturedFingerprint = fingerprint
-                    let capturedAvatar = avatarUrl
-                    Task { [weak self] in
-                        guard let self else { return }
-                        guard let pub = try? await provider.accountApi.getPublicUser(userId: capturedCid) else { return }
-                        // Pre-bind all String construction outside await/MainActor calls.
-                        let rawName: String? = pub.displayName
-                        // NIM-fix2b: sanitise displayName — trim whitespace, strip RTL/LTR
-                        // override codepoints (U+202A–202E, U+2066–2069), cap at 100 chars.
-                        // W-EXTPREFIX consolidation (2026-07-29): sanitising alone does not
-                        // catch a legacy placeholder shape ("Phone #100"/"New User") an
-                        // un-migrated server/peer might still send — this used to persist
-                        // that verbatim into the rubrica. Same canonical check + bare-digit
-                        // extension fallback as `NameResolutionService.apply`.
-                        let sanitisedName = StringSanitiser.displayName(rawName, fallback: "")
-                        let resolvedName: String
-                        if !sanitisedName.isEmpty, !DisplayName.isPlaceholderName(sanitisedName) {
-                            resolvedName = sanitisedName
-                        } else if let ext = pub.extensionNumber, ext > 0 {
-                            resolvedName = String(ext)
-                        } else {
-                            resolvedName = capturedFallback
-                        }
-                        // NIM-fix2c: only accept https:// avatar URLs;
-                        // reject file://, data://, javascript: and other dangerous schemes.
-                        let rawAvatarStr: String? = pub.avatarUrl
-                        let resolvedAvatar: URL? = Self.sanitiseAvatarUrl(rawAvatarStr, fallback: capturedAvatar)
-                        await MainActor.run {
-                            self.update {
-                                $0.peer = InCallViewModel.PeerInfo(
-                                    userId: capturedCid,
-                                    displayName: resolvedName,
-                                    avatarUrl: resolvedAvatar,
-                                    fingerprint: capturedFingerprint
-                                )
-                            }
-                            // Persist so future calls resolve locally without a server round-trip.
-                            // OR-fix4: preserve existing phoneHash — server /users/{id} doesn't
-                            // return it for privacy; overwriting with "" would erase a QR-paired
-                            // or phone-book-imported contact's hash.
-                            //
-                            // W-AUTOSAVE fix (found auditing this reconstruction for the
-                            // phoneNumber/extension additions): this call site was ALSO
-                            // silently dropping pubkey / verifiedFingerprintHex / verifiedAtMs
-                            // / verificationMethod / presenceAuth / presenceFloor on every
-                            // upsert here — any in-call name resolution for a peer that had
-                            // previously been QR-paired, manually verified, or NFC-presence-
-                            // confirmed would wipe all of that the first time this branch fired
-                            // for them. Thread every existing field through unchanged, same as
-                            // the other reconstruction sites in this repo (ContactsStore.rebuild,
-                            // NameResolutionService.apply, PeerTrustEvaluator.markVerified).
-                            if !resolvedName.isEmpty && resolvedName != capturedFallback {
-                                let existing = self.contactsStore.load()
-                                    .first(where: { $0.userId == capturedCid })
-                                let contact = ContactsStore.StoredContact(
-                                    userId: capturedCid,
-                                    displayName: resolvedName,
-                                    phoneHash: existing?.phoneHash ?? "",
-                                    avatarUrl: resolvedAvatar,
-                                    lastSeen: existing?.lastSeen,
-                                    isVerified: existing?.isVerified ?? false,
-                                    pubkey: existing?.pubkey,
-                                    verifiedFingerprintHex: existing?.verifiedFingerprintHex,
-                                    verifiedAtMs: existing?.verifiedAtMs,
-                                    verificationMethod: existing?.verificationMethod,
-                                    presenceAuth: existing?.presenceAuth,
-                                    presenceFloor: existing?.presenceFloor,
-                                    phoneNumber: existing?.phoneNumber,
-                                    extension: existing?.`extension`
-                                )
-                                self.contactsStore.upsert(contact)
-                            }
-                        }
-                    }
-                }
+        // Re-resolve when NameResolutionService's async enrichment (device-
+        // contact match, or the profile fetch kicked off above) lands a
+        // real name/phone/avatar into the rubrica after the fact — without
+        // this, a peer resolved via the async path only updates the NEXT
+        // time some other state change happens to redraw this screen.
+        NotificationCenter.default.publisher(for: .contactsDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, let cid = self.appState?.callContactId else { return }
+                self.resolvePeer(for: cid)
             }
             .store(in: &cancellables)
 
@@ -280,21 +211,40 @@ final class InCallContainer: ObservableObject {
         viewModel = .mock
     }
 
+    /// Canonical peer-name resolution for the active call — a single call
+    /// into `DisplayName.forUser`, mirroring `LiveInCallScreen.
+    /// resolvePeerDisplayName` exactly (same `incomingCallerName` seed) so
+    /// the ring banner, the in-call title, and the rubrica all agree
+    /// instead of drifting via independently hand-rolled copies. See the
+    /// `$callContactId` sink's doc comment above for why this replaced the
+    /// old ad hoc `getPublicUser` fetch.
+    private func resolvePeer(for cid: String) {
+        let contacts = self.contactsStore.load()
+        let match = contacts.first(where: { $0.userId == cid })
+        let callerName = self.appState?.incomingCallerName
+        let serverDisplay = (callerName?.isEmpty == false) ? callerName : nil
+        let displayName = DisplayName.forUser(cid, serverDisplay: serverDisplay, contacts: contacts)
+        let fingerprint: String = {
+            guard let pk = match?.pubkey else {
+                return String(cid.prefix(8)) + "…" + String(cid.suffix(4))
+            }
+            return (try? Fingerprint.format(pubkey: pk))
+                ?? String(cid.prefix(8)) + "…" + String(cid.suffix(4))
+        }()
+        self.update {
+            $0.peer = InCallViewModel.PeerInfo(
+                userId: cid,
+                displayName: displayName,
+                avatarUrl: match?.avatarUrl,
+                fingerprint: fingerprint
+            )
+        }
+    }
+
     private func update(_ mutate: (inout MutableInCallViewModel) -> Void) {
         var m = viewModel.toMutable()
         mutate(&m)
         viewModel = m.toImmutable()
-    }
-
-    // MARK: - NIM security helpers
-
-    /// NIM-fix2c: Accept only https:// URLs for peer avatars.
-    /// Rejects file://, data://, javascript: and any other scheme that
-    /// could trigger unintended I/O or ImageIO parsing of attacker bytes.
-    private static func sanitiseAvatarUrl(_ raw: String?, fallback: URL?) -> URL? {
-        guard let raw, let url = URL(string: raw) else { return fallback }
-        guard url.scheme == "https" else { return fallback }
-        return url
     }
 }
 

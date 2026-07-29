@@ -624,7 +624,7 @@ private struct DialPadSheet: View {
         [.digit("1", ""),    .digit("2", "ABC"), .digit("3", "DEF")],
         [.digit("4", "GHI"), .digit("5", "JKL"), .digit("6", "MNO")],
         [.digit("7", "PQRS"),.digit("8", "TUV"), .digit("9", "WXYZ")],
-        [.symbol("*"),       .digit("0", "+"),   .symbol("#")],
+        [.symbol("*"),       .digit("0", "+"),   .symbol("+")],
     ]
 
     var body: some View {
