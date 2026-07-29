@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.895",
+              date: "2026-07-29",
+              title: "v1.0.895",
+              bullets: [
+                "fix(call): always route video upgrade through performWebRtcVideoUpgrade",
+              ]),
         .init(id: "v1.0.894",
               date: "2026-07-29",
               title: "v1.0.894",
               bullets: [
+                "chore: regenerate changelog for v1.0.894",
                 "fix(build): real compile error was a missing import, not the nil-context guess",
               ]),
         .init(id: "v1.0.893",
@@ -172,13 +179,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.876",
                 "fix(build): drop MainActor-isolated sourceMode from nonisolated log line",
-              ]),
-        .init(id: "v1.0.875",
-              date: "2026-07-28",
-              title: "v1.0.875",
-              bullets: [
-                "chore: regenerate changelog for v1.0.875",
-                "diag(video): throttled capture-pipeline + WebRTC-bridge frame logging",
               ]),
     ]
 }
