@@ -9,10 +9,21 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.908",
+              date: "2026-07-30",
+              title: "v1.0.908",
+              bullets: [
+                "feat(voice): real Voice-as-Key pipeline + per-contact voice learning",
+                "fix(ci): disable standalone iOS KAT job, real coverage is in engine-tests.yml",
+                "fix(kat): dedupe SPM resource basename collision",
+                "fix(kat): vendor cross-platform vectors instead of CI curl",
+                "feat(kat): wire real cross-platform KAT against bcrypto-server vectors",
+              ]),
         .init(id: "v1.0.907",
               date: "2026-07-30",
               title: "v1.0.907",
               bullets: [
+                "chore: regenerate changelog for v1.0.907",
                 "fix(avatar): apply adversarial security-review findings",
               ]),
         .init(id: "v1.0.906",
@@ -144,13 +155,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.889",
                 "fix(call): don't reuse a recvonly video transceiver -- my own W-DUPETRANSCEIVER regression",
-              ]),
-        .init(id: "v1.0.888",
-              date: "2026-07-28",
-              title: "v1.0.888",
-              bullets: [
-                "chore: regenerate changelog for v1.0.888",
-                "fix(groupcall): Desktop ctrl envelopes -- the 1.0.887 sweep was inert, here is why",
               ]),
     ]
 }
