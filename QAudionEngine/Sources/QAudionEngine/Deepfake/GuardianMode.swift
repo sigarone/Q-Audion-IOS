@@ -3,14 +3,20 @@ import Foundation
 public final class GuardianMode: @unchecked Sendable {
     public var onAlert: ((ConfidenceIndex.Level, Float) -> Void)?
 
-    /// Weight for the ML spoof-probability component in the combined score.
-    /// Mirrors the Desktop/Android Guardian: `0.7 * ml + 0.3 * lfcc`.
-    public static let mlWeight: Float = 0.7
-    /// Weight for the LFCC voiceprint-mismatch component.
-    public static let lfccWeight: Float = 0.3
+    /// Drives `ConfidenceIndex` off a single AASIST-raw spoof score from
+    /// `VoiceprintAnalyzer`, sampled every `analysisRate`-th frame on the
+    /// synchronous audio-processing thread (no per-frame Task/dispatch —
+    /// see the never-block note at the `processFrame` call site in
+    /// `QAudionCallIntegration`).
+    ///
+    /// Unlike the Desktop Guardian (`GuardianScorer.ts`, `0.7 * ml + 0.3 *
+    /// lfcc`), this does NOT fuse an ML score with a real LFCC/voiceprint
+    /// mismatch score. `DeepfakeClassifier` (a second, `async` AASIST path)
+    /// and `SpeakerVerifier`/`LfccExtractor` (the actual LFCC leg, requires
+    /// speaker enrollment) exist in this module but aren't wired in here —
+    /// same Sprint-22-pending status as the third `LcnnDetector` leg.
 
     private let analyzer = VoiceprintAnalyzer()
-    private let classifier = DeepfakeClassifier.shared
     private let confidence = ConfidenceIndex()
     private let lock = NSLock()
     private var enabled = true
