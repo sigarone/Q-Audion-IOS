@@ -3,10 +3,20 @@ import XCTest
 
 final class VoiceprintStoreTests: XCTestCase {
 
+    /// Injects the in-memory backing (see `VoiceprintBacking` doc in
+    /// `VoiceprintStore.swift`) instead of the real Keychain — production
+    /// `VoiceprintStore()` is Keychain-backed as of the persistence fix
+    /// (voiceprint templates must survive an app restart), but a unit test
+    /// must stay hermetic across runs on the SAME simulator/device rather
+    /// than accumulating real Keychain items call after call.
+    private func makeStore() -> VoiceprintStore {
+        VoiceprintStore(backing: InMemoryVoiceprintBacking())
+    }
+
     // MARK: - Save and Load
 
     func testSaveAndLoadRoundTrip() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         let template: [Float] = [0.1, 0.2, 0.3, 0.4, 0.5]
         store.save(contactId: "alice", template: template)
 
@@ -15,12 +25,12 @@ final class VoiceprintStoreTests: XCTestCase {
     }
 
     func testLoadNonexistentReturnsNil() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         XCTAssertNil(store.load(contactId: "nobody"))
     }
 
     func testSaveOverwritesExisting() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         store.save(contactId: "bob", template: [1.0, 2.0])
         store.save(contactId: "bob", template: [3.0, 4.0])
 
@@ -31,14 +41,14 @@ final class VoiceprintStoreTests: XCTestCase {
     // MARK: - Delete
 
     func testDeleteRemovesEntry() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         store.save(contactId: "carol", template: [1.0])
         store.delete(contactId: "carol")
         XCTAssertNil(store.load(contactId: "carol"))
     }
 
     func testDeleteNonexistentDoesNotCrash() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         store.delete(contactId: "ghost")
         // No crash expected
     }
@@ -46,7 +56,7 @@ final class VoiceprintStoreTests: XCTestCase {
     // MARK: - List
 
     func testListContactsReturnsAllKeys() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         store.save(contactId: "alice", template: [1.0])
         store.save(contactId: "bob", template: [2.0])
         store.save(contactId: "carol", template: [3.0])
@@ -56,12 +66,12 @@ final class VoiceprintStoreTests: XCTestCase {
     }
 
     func testListContactsEmptyStoreReturnsEmpty() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         XCTAssertTrue(store.listContacts().isEmpty)
     }
 
     func testListContactsAfterDeleteExcludesDeleted() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         store.save(contactId: "alice", template: [1.0])
         store.save(contactId: "bob", template: [2.0])
         store.delete(contactId: "alice")
@@ -73,18 +83,18 @@ final class VoiceprintStoreTests: XCTestCase {
     // MARK: - Has Template
 
     func testHasTemplateReturnsTrueWhenPresent() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         store.save(contactId: "dave", template: [0.5])
         XCTAssertTrue(store.hasTemplate(contactId: "dave"))
     }
 
     func testHasTemplateReturnsFalseWhenAbsent() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         XCTAssertFalse(store.hasTemplate(contactId: "eve"))
     }
 
     func testHasTemplateReturnsFalseAfterDelete() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         store.save(contactId: "frank", template: [1.0])
         store.delete(contactId: "frank")
         XCTAssertFalse(store.hasTemplate(contactId: "frank"))
@@ -93,7 +103,7 @@ final class VoiceprintStoreTests: XCTestCase {
     // MARK: - Empty Template
 
     func testSaveEmptyTemplate() {
-        let store = VoiceprintStore()
+        let store = makeStore()
         store.save(contactId: "empty", template: [])
         let loaded = store.load(contactId: "empty")
         XCTAssertEqual(loaded, [])

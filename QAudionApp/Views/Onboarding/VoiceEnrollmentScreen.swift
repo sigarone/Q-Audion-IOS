@@ -114,7 +114,7 @@ struct VoiceEnrollmentScreen: View {
             heroBadge(
                 icon: "waveform.badge.mic",
                 title: "Registra la tua voce",
-                description: "Leggi 5 brevi frasi (3 secondi ciascuna). Q-Audion userà il prototipo per riconoscerti durante le chiamate e bloccare i deepfake.",
+                description: "Leggi 3 brevi frasi (3 secondi ciascuna). Q-Audion userà il prototipo per riconoscerti durante le chiamate e bloccare i deepfake.",
                 tint: extras.pqcAccent
             )
         case .promptShowing(let prompt):

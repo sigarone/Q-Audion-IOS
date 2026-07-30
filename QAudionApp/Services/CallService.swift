@@ -32,6 +32,13 @@ final class CallService: @unchecked Sendable {
     /// `onVoiceAnalysis` on BOTH the outgoing and incoming integration
     /// binding sites; AppState publishes it for the Guardian MiniSpectrum.
     var onVoiceSpectrum: (([Float]) -> Void)?
+    /// Feature B ("voce verificata") — bridges
+    /// `QAudionCallIntegration.onVoiceLearningStateChanged` to AppState.
+    /// Wired 1:1 alongside `onVoiceAnalysis`/`onVoiceSpectrum` on BOTH
+    /// integration binding sites (`startCall` outgoing +
+    /// `activateIncomingCallAudio` responder) so a manually-started
+    /// learning session works on either call direction.
+    var onVoiceLearningStateChanged: ((VoiceLearningSession.State) -> Void)?
 
     /// W65+W66: Full audio capture + processing pipeline.
     ///
@@ -458,6 +465,18 @@ final class CallService: @unchecked Sendable {
         self.isMuted = muted
     }
 
+    /// Feature B ("voce verificata") — start learning `contactId`'s voice
+    /// from the CURRENT call's decoded RX audio. No-op if there is no
+    /// active `callIntegration` (e.g. called outside a call).
+    func startVoiceLearning(contactId: String) {
+        callIntegration?.startVoiceLearning(contactId: contactId)
+    }
+
+    /// Cancel an in-flight voice-learning session for the current call.
+    func cancelVoiceLearning() {
+        callIntegration?.cancelVoiceLearning()
+    }
+
     /// When true, audio is paused. For now, hold == mute both directions plus
     /// pausing the duration timer (QAudionCallIntegration hold API is USER WT).
     public private(set) var isOnHold: Bool = false
@@ -650,6 +669,14 @@ final class CallService: @unchecked Sendable {
             }
         }
 
+        // Feature B ("voce verificata") — bridge the per-contact learning
+        // session's state, unconditionally (not gated on enableVoiceAnalysis:
+        // this is a manually-triggered, one-shot action, not a per-frame
+        // battery-cost pipeline like the gauges above).
+        integration.onVoiceLearningStateChanged = { [weak self] state in
+            self?.onVoiceLearningStateChanged?(state)
+        }
+
         // NOTE: do NOT call `integration.onCallSetupStarted` here.
         // That legacy entry point flipped the engine state machine into
         // .capabilitySent with an empty send-closure (bytes → /dev/null),
@@ -836,6 +863,11 @@ final class CallService: @unchecked Sendable {
             integration.onVoiceSpectrum = { [weak self] bands in
                 self?.onVoiceSpectrum?(bands)
             }
+        }
+        // Feature B — mirror the outgoing-side wiring 1:1 (same reasoning as
+        // the voiceAnalysis mirror immediately above this block).
+        integration.onVoiceLearningStateChanged = { [weak self] state in
+            self?.onVoiceLearningStateChanged?(state)
         }
         // For incoming calls the PQC handshake started before answer, so
         // engine.initialize() has already run — apply tuner prefs now.

@@ -97,6 +97,23 @@ public final class ContactsStore {
         /// (e.g. on every call-connect) be deduped without
         /// re-downloading. `nil` for a contact with no avatar cached yet.
         public let avatarVersion: Int?
+        /// Feature B ("voce verificata" — per-contact call-time voice
+        /// learning). Epoch-ms timestamp of the last time a
+        /// `VoiceLearningSession` for THIS contact reached `.completed`
+        /// (i.e. `SpeakerVerifier.finishEnrollment()` succeeded on the
+        /// peer's decoded RX audio and a template was persisted to
+        /// `VoiceprintStore`). `nil` until that has happened at least once.
+        ///
+        /// Deliberately a SEPARATE, independent field — NOT folded into
+        /// `isVerified` (the SAS/identity trust ladder). That single-value
+        /// ladder cannot represent "both SAS-verified AND voice-verified"
+        /// simultaneously as two independent facts, which is exactly the
+        /// bug this field fixes: `ContactDetailScreen`'s "Voce verificata"
+        /// row used to read the SAME `isVerified`-derived boolean as the
+        /// "SAS verificato" row below it — a mislabeled duplicate of a
+        /// different signal, not a real one. Mirrors Android's independent
+        /// nullable `voiceVerifiedAt` column for the same reason.
+        public let voiceVerifiedAt: Int64?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
@@ -108,7 +125,8 @@ public final class ContactsStore {
                     presenceFloor: Bool? = nil,
                     phoneNumber: String? = nil,
                     `extension`: String? = nil,
-                    avatarVersion: Int? = nil) {
+                    avatarVersion: Int? = nil,
+                    voiceVerifiedAt: Int64? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -124,6 +142,7 @@ public final class ContactsStore {
             self.phoneNumber = phoneNumber
             self.`extension` = `extension`
             self.avatarVersion = avatarVersion
+            self.voiceVerifiedAt = voiceVerifiedAt
         }
     }
 
@@ -290,7 +309,8 @@ public final class ContactsStore {
                 presenceFloor: existing.presenceFloor,
                 phoneNumber: existing.phoneNumber ?? phoneNumber,
                 extension: existing.`extension` ?? extensionNumber,
-                avatarVersion: existing.avatarVersion
+                avatarVersion: existing.avatarVersion,
+                voiceVerifiedAt: existing.voiceVerifiedAt
             )
             current[idx] = patched
             save(current)
@@ -345,7 +365,8 @@ public final class ContactsStore {
             presenceFloor: existing.presenceFloor,
             phoneNumber: existing.phoneNumber,
             extension: existing.`extension`,
-            avatarVersion: existing.avatarVersion
+            avatarVersion: existing.avatarVersion,
+            voiceVerifiedAt: existing.voiceVerifiedAt
         )
         save(current)
         return true
@@ -393,7 +414,40 @@ public final class ContactsStore {
             presenceFloor: existing.presenceFloor,
             phoneNumber: existing.phoneNumber,
             extension: existing.`extension`,
-            avatarVersion: version
+            avatarVersion: version,
+            voiceVerifiedAt: existing.voiceVerifiedAt
+        )
+        save(current)
+        return true
+    }
+
+    /// Feature B ("voce verificata") — the ONE write path for
+    /// `voiceVerifiedAt`. Called when a `VoiceLearningSession` for
+    /// `userId` reaches `.completed`. No-op (returns false) if no row
+    /// exists for `userId` — same contract as `overwriteDisplayName` /
+    /// `setAvatarLocalPath`, this never creates a contact.
+    @discardableResult
+    public func setVoiceVerified(userId: String, at date: Date = Date()) -> Bool {
+        var current = load()
+        guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
+        let existing = current[idx]
+        current[idx] = StoredContact(
+            userId: existing.userId,
+            displayName: existing.displayName,
+            phoneHash: existing.phoneHash,
+            avatarUrl: existing.avatarUrl,
+            lastSeen: existing.lastSeen,
+            isVerified: existing.isVerified,
+            pubkey: existing.pubkey,
+            verifiedFingerprintHex: existing.verifiedFingerprintHex,
+            verifiedAtMs: existing.verifiedAtMs,
+            verificationMethod: existing.verificationMethod,
+            presenceAuth: existing.presenceAuth,
+            presenceFloor: existing.presenceFloor,
+            phoneNumber: existing.phoneNumber,
+            extension: existing.`extension`,
+            avatarVersion: existing.avatarVersion,
+            voiceVerifiedAt: Int64(date.timeIntervalSince1970 * 1000)
         )
         save(current)
         return true
@@ -541,7 +595,8 @@ public final class ContactsStore {
             presenceFloor: presenceFloor,
             phoneNumber: base.phoneNumber,
             extension: base.`extension`,
-            avatarVersion: base.avatarVersion
+            avatarVersion: base.avatarVersion,
+            voiceVerifiedAt: base.voiceVerifiedAt
         )
     }
 }

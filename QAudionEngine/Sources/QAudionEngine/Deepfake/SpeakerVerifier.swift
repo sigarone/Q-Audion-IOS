@@ -37,6 +37,22 @@ public final class SpeakerVerifier {
 
     public func getState() -> State { state }
 
+    /// Export the enrolled template for external persistence (e.g.
+    /// `VoiceprintStore`). `nil` while not yet `.ready` (no successful
+    /// `finishEnrollment()` has completed). Callers own what happens to
+    /// the returned vector — this class never persists anything itself.
+    public func exportTemplate() -> [Float]? { storedTemplate }
+
+    /// Restore a previously-persisted template (e.g. loaded from
+    /// `VoiceprintStore`) into a freshly-constructed verifier so it can
+    /// serve `verify(pcmFrame:)` calls without re-running enrollment.
+    /// Moves straight to `.ready` — this is the counterpart to
+    /// `exportTemplate()`, not a substitute for `finishEnrollment()`.
+    public func importTemplate(_ template: [Float]) {
+        storedTemplate = template
+        state = .ready
+    }
+
     private func computeEmbedding(from features: [[Float]]) -> [Float] {
         guard !features.isEmpty else { return [Float](repeating: 0, count: embeddingDimension) }
         let dim = min(features[0].count, embeddingDimension)

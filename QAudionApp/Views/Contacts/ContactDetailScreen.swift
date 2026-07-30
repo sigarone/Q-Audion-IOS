@@ -428,6 +428,19 @@ struct ContactDetailScreen: View {
     private var trustVerificationCard: some View {
         let verified = trustEval?.state == .userVerified
         let changed = trustEval?.state == .identityChanged
+        // C-4 (2026-07-30) — was `trustEval != nil`, which is true for EVERY
+        // outcome of `PeerTrustEvaluator.evaluate()` including the graceful-
+        // degrade `.unverified` fallback (self identity missing, provider
+        // nil, peer fetch failed, bad UUID — see that function's own kdoc:
+        // "Never throws... degrades to `.unverified`"). That made this row
+        // claim "IK pubblicata sulla directory bcrypto" with a green check
+        // even when the identity-key fetch had just FAILED. `peerIkEdPub`
+        // is only non-nil on the paths where the peer's Ed25519 identity was
+        // actually resolved from the server (see `Evaluation` — every early
+        // guard-failure return sets it to `nil`), so it is the correct
+        // signal for "identity published", independent of whether the peer
+        // also went on to be TOFU-pinned / verified.
+        let identityPublished = trustEval?.peerIkEdPub != nil
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("VERIFICA TRUST")
@@ -441,20 +454,46 @@ struct ContactDetailScreen: View {
             .padding(.bottom, 12)
 
             trustFactorRow(label: "Identità pubblicata",
-                           description: trustEval == nil ? "Verifica in corso…" : "IK pubblicata sulla directory bcrypto",
-                           done: trustEval != nil)
+                           description: trustEval == nil
+                               ? "Verifica in corso…"
+                               : (identityPublished ? "IK pubblicata sulla directory bcrypto" : "Impossibile risolvere l'identità del contatto"),
+                           done: identityPublished)
             divider
+            // Feature B ("voce verificata") — FIXED: this row used to read
+            // the SAME `verified` boolean as the SAS row below (a mislabeled
+            // duplicate, not a real independent signal — see the
+            // W-VOICEFACTOR finding this replaces). Now reads
+            // `voiceVerifiedAt`, written ONLY by `ContactsStore
+            // .setVoiceVerified` when a `VoiceLearningSession` for this
+            // contact — started manually from the live in-call "Avvia
+            // apprendimento voce" button, fed from the peer's decoded RX
+            // audio — actually reaches `.completed`. Independent of SAS: a
+            // contact can be SAS-verified without ever being voice-learned,
+            // and vice versa.
             trustFactorRow(label: "Voce verificata",
-                           description: verified
-                               ? "Match con il voiceprint del contatto"
-                               : "Effettua una chiamata per registrare il match",
-                           done: verified)
+                           description: voiceVerifiedDescription,
+                           done: voiceVerifiedAt != nil)
             divider
+            // C-4 — the SAS row now has a real, tappable CTA. It reuses the
+            // SAME `showingSasSheet` flow as the "SAS" quick-action button in
+            // `actionRow` above (identical guards in `onVerified`, no new
+            // code path) rather than opening `NfcExchangeView` directly:
+            // that view has no notion of "verify THIS specific contact" (it
+            // blind-pairs with whichever HCE device answers the tap) and its
+            // success path persists a call PSK into `SovereignKeyVault`
+            // only — it never writes to `PeerTrustEvaluator` / `ContactsStore`
+            // / `PeerIdentityPinStore`, so completing that ceremony would
+            // NOT flip this row and would look like a broken confirmation.
+            // `SasVerifySheet` already lists "NFC" as one of its self-attest
+            // methods, so a user who really did tap via the Contacts-list
+            // "Aggiungi via NFC" flow can still record that here today.
             trustFactorRow(label: "SAS verificato",
                            description: verified
                                ? "Cerimonia SAS completata"
                                : "Avvia cerimonia NFC o SAS via voce",
-                           done: verified)
+                           done: verified,
+                           ctaLabel: verified ? nil : "Avvia verifica",
+                           ctaAction: verified ? nil : { showingSasSheet = true })
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -469,7 +508,14 @@ struct ContactDetailScreen: View {
             .padding(.vertical, 10)
     }
 
-    private func trustFactorRow(label: String, description: String, done: Bool) -> some View {
+    /// C-4 (2026-07-30) — rows optionally render a trailing CTA button when
+    /// `ctaLabel`/`ctaAction` are both non-nil, mirroring Android's
+    /// `TrustFactorRow` (`ContactDetailScreen.kt`), which shows an inline
+    /// `TextButton` only for an unsatisfied factor. Before this the row was
+    /// a plain `HStack` with no `Button`/`.onTapGesture` anywhere in it —
+    /// nothing here was ever selectable, on any row, regardless of state.
+    private func trustFactorRow(label: String, description: String, done: Bool,
+                                ctaLabel: String? = nil, ctaAction: (() -> Void)? = nil) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: done ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 18, weight: .semibold))
@@ -483,7 +529,17 @@ struct ContactDetailScreen: View {
                     .foregroundStyle(scheme.onSurfaceVariant)
             }
             Spacer(minLength: 0)
+            if let ctaLabel, let ctaAction {
+                Button(action: ctaAction) {
+                    Text(ctaLabel)
+                        .qaudionStyle(type.labelSmall)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(scheme.primary)
+                }
+                .buttonStyle(.plain)
+            }
         }
+        .contentShape(Rectangle())
     }
 
     // MARK: - Safety number section (W36)
@@ -552,6 +608,33 @@ struct ContactDetailScreen: View {
     /// this project's "two things that must never share a widget" rule.
     private var presenceAuth: ContactsStore.PresenceAuth? {
         ContactsStore().load().first(where: { $0.userId == item.userId })?.presenceAuth
+    }
+
+    /// Feature B ("voce verificata") — plain synchronous local read (same
+    /// pattern as `presenceAuth` above, no network), the persisted
+    /// "a `VoiceLearningSession` for this contact reached `.completed`"
+    /// timestamp. nil until the user has run the in-call voice-learning
+    /// flow at least once for this contact — see `trustVerificationCard`'s
+    /// "Voce verificata" row above, the only consumer.
+    private var voiceVerifiedAt: Date? {
+        guard let ms = ContactsStore().load().first(where: { $0.userId == item.userId })?.voiceVerifiedAt else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: Double(ms) / 1000)
+    }
+
+    private static let voiceVerifiedDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateStyle = .medium
+        return f
+    }()
+
+    private var voiceVerifiedDescription: String {
+        guard let date = voiceVerifiedAt else {
+            return "Durante una chiamata, avvia l'apprendimento vocale per registrare il match"
+        }
+        return "Voiceprint appreso il \(Self.voiceVerifiedDateFormatter.string(from: date))"
     }
 
     /// `nil` while this contact has never reached `AssuranceState

@@ -67,6 +67,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// ~50 fps RX frame rate. Touched only on the RX processing thread
     /// (same single-thread contract as the extractor itself).
     private var lastSpectrumUptimeNs: UInt64 = 0
+    /// Feature B ("voce verificata") — the in-flight per-contact
+    /// call-time voice-learning session, if the user tapped "Avvia
+    /// apprendimento voce" for THIS call. nil most of the time. Fed inside
+    /// `processIncomingAudio` on the SAME thread as `guardianMode`/
+    /// `voiceAnalysis` above — same never-block, no-extra-dispatch rule.
+    private var voiceLearningSession: VoiceLearningSession?
     private var sendOpaque: ((Data) async throws -> Void)?
     private var resolvedBcryptoUserId: String?
     private var bcryptoUserIdCache: [String: String] = [:]  // recipientId -> BCrypto userId
@@ -178,6 +184,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// and non-blocking (2026-07-04 never-block rules). While nil the FFT is
     /// skipped entirely (zero cost).
     public var onVoiceSpectrum: (([Float]) -> Void)?
+
+    /// Feature B ("voce verificata") — fires whenever the in-flight
+    /// `VoiceLearningSession` (see `startVoiceLearning(contactId:)`)
+    /// changes state, INCLUDING every progress tick while `.inProgress`.
+    /// nil sink ⇒ no session running ⇒ zero overhead (the RX tap still
+    /// runs the guardian/voiceAnalysis work either way; only the extra
+    /// `voiceLearningSession.processRxFrame` call is skipped, see
+    /// `processIncomingAudio`). Invoked synchronously on the RX thread —
+    /// same never-block contract as `onVoiceSpectrum`.
+    public var onVoiceLearningStateChanged: ((VoiceLearningSession.State) -> Void)?
 
     /// W389 — fired the moment the ML-KEM-1024 PQC handshake completes
     /// successfully on EITHER side (caller `case .accept` after
@@ -3230,9 +3246,43 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return try engine.processOutgoingAudio(pcmFrame: pcmFrame)
     }
 
+    /// Feature B ("voce verificata") — start learning `contactId`'s voice
+    /// from THIS call's decoded RX audio, from this point forward. Replaces
+    /// any previously in-flight session for this integration instance
+    /// (there is only ever one active call per integration).
+    public func startVoiceLearning(contactId: String) {
+        let session = VoiceLearningSession()
+        voiceLearningSession = session
+        session.start(contactId: contactId)
+        onVoiceLearningStateChanged?(session.state)
+    }
+
+    /// Cancel an in-flight voice-learning session without persisting
+    /// anything partial.
+    public func cancelVoiceLearning() {
+        voiceLearningSession?.cancel()
+        voiceLearningSession = nil
+        onVoiceLearningStateChanged?(.idle)
+    }
+
     public func processIncomingAudio(serializedFrame: Data) throws -> Data {
         let pcm = try engine.processIncomingAudio(serializedFrame: serializedFrame)
         guardianMode.processFrame(pcm)
+        // Feature B — feed the SAME decoded RX PCM used by the guardian tap
+        // above into the per-contact learning session, if one is running.
+        // Deliberately the RX path, never TX/mic — see `VoiceLearningSession`'s
+        // type doc for why that distinction matters. Runs inline on the same
+        // thread, same never-block contract as the rest of this function.
+        if let session = voiceLearningSession {
+            session.processRxFrame(pcm)
+            onVoiceLearningStateChanged?(session.state)
+            switch session.state {
+            case .completed, .failed:
+                voiceLearningSession = nil
+            case .idle, .inProgress:
+                break
+            }
+        }
         // Unified call UI — voice biometrics (pitch/stress/HNR) of the REMOTE
         // party. Moved here from processOutgoingAudio (2026-07-04): it used to
         // analyze the TX mic (YOUR OWN voice), while the Guardian ribbon
@@ -3264,6 +3314,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public func onCallEnded() {
         engine.destroySession()
         engine.release()
+        // Feature B — drop any in-flight per-contact voice-learning session
+        // so a straggling reference never bleeds into the next call (which
+        // may be with a different peer entirely).
+        voiceLearningSession = nil
         // M-15 — cancel any pending capability-exchange fallback so it
         // cannot fire on a later, unrelated call.
         capabilityTimeoutWorkItem?.cancel()

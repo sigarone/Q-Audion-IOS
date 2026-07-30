@@ -253,6 +253,16 @@ struct InCallScreen: View {
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
     let onToggleDiagnostics: () -> Void
+    /// Feature B ("voce verificata") — state of the manually-started,
+    /// per-contact call-time voice-learning session, fed from the SAME
+    /// decoded RX audio as `voiceBiometrics`/`voiceSpectrum` above. nil ⇒
+    /// no session started this call ⇒ renders the plain "Avvia apprendimento
+    /// voce" trigger. Mirrors Android's manual in-call learning trigger.
+    let voiceLearningState: VoiceLearningSession.State?
+    /// Start a `VoiceLearningSession` for the CURRENT call's peer. Shown
+    /// only while `voiceLearningState` is nil/`.idle`/`.failed` — the pill
+    /// hides itself while `.inProgress`/`.completed`.
+    let onStartVoiceLearning: () -> Void
 
     init(peerDisplayName: String,
          avatarUrl: URL? = nil,
@@ -292,7 +302,9 @@ struct InCallScreen: View {
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
-         onToggleDiagnostics: @escaping () -> Void = {}) {
+         onToggleDiagnostics: @escaping () -> Void = {},
+         voiceLearningState: VoiceLearningSession.State? = nil,
+         onStartVoiceLearning: @escaping () -> Void = {}) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
         self.durationSeconds = durationSeconds
@@ -332,6 +344,8 @@ struct InCallScreen: View {
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
         self.onToggleDiagnostics = onToggleDiagnostics
+        self.voiceLearningState = voiceLearningState
+        self.onStartVoiceLearning = onStartVoiceLearning
     }
 
     // MARK: - Body
@@ -1872,8 +1886,47 @@ struct InCallScreen: View {
         HStack(spacing: 8) {
             MetaPill("LIVENESS OK",   accent: extras.success, filled: true)
             MetaPill("PSK ROTATION",  accent: extras.success)
+            Spacer(minLength: 8)
+            voiceLearningControl
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Feature B ("voce verificata") — call-time voice learning
+
+    /// Manual per-contact voice-learning trigger + progress. Fed from the
+    /// SAME decoded RX audio as the Guardian ribbon above (see
+    /// `QAudionCallIntegration.processIncomingAudio` → `voiceLearningSession
+    /// .processRxFrame`) — never local mic. On `.completed`, AppState writes
+    /// the real `ContactsStore.voiceVerifiedAt` signal that
+    /// `ContactDetailScreen`'s "Voce verificata" row reads.
+    @ViewBuilder
+    private var voiceLearningControl: some View {
+        switch voiceLearningState {
+        case .none, .idle, .failed:
+            Button(action: onStartVoiceLearning) {
+                Text(voiceLearningState == .failed ? "RIPROVA APPRENDIMENTO" : "AVVIA APPRENDIMENTO VOCE")
+                    .qaudionStyle(type.labelSmall)
+                    .tracking(1.0)
+                    .foregroundStyle(extras.pqcAccent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .overlay(Capsule().stroke(extras.pqcAccent.opacity(0.55), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+        case .inProgress(let progress):
+            HStack(spacing: 6) {
+                ProgressView(value: Double(progress))
+                    .frame(width: 44)
+                    .tint(extras.pqcAccent)
+                Text("APPRENDIMENTO…")
+                    .qaudionStyle(type.labelSmall)
+                    .tracking(1.0)
+                    .foregroundStyle(extras.pqcAccent)
+            }
+        case .completed:
+            MetaPill("VOCE IMPARATA", accent: extras.success, filled: true)
+        }
     }
 
     // MARK: - Transport row

@@ -109,6 +109,19 @@ final class AppLockService: ObservableObject {
         }
     }
 
+    /// Feature A ("Voice-as-Key") — additive re-authentication path.
+    /// `AppLockGateView` calls this ONLY after `VoiceUnlockController`
+    /// reports a `VoiceAuthGate` `.passed` verdict against the enrolled
+    /// device-owner voiceprint. This is ADDITIVE to `evaluatePolicy()`
+    /// (PIN/biometric) — it never replaces it, never disables it, and the
+    /// UI never removes the existing "Sblocca" (Face ID/passcode) button.
+    /// A device with no enrolled voiceprint never reaches this method at
+    /// all (`VoiceUnlockController.isAvailable` gates the button itself).
+    func unlockViaVoice() {
+        isLocked = false
+        RTLog.info("call", "W441-VOICE AppLockService.unlockViaVoice — voice re-auth passed, isLocked=false")
+    }
+
     // MARK: - Call bypass
 
     /// Call-active bypass: the lock screen must not obstruct in-call

@@ -1343,6 +1343,17 @@ final class AppState: ObservableObject {
     /// Reset in endCall().
     @Published var voiceSpectrum: [Float]?
 
+    /// Feature B ("voce verificata") — state of the manually-started,
+    /// per-contact call-time voice-learning session (`VoiceLearningSession`,
+    /// fed from the SAME decoded RX audio as `voiceAnalysis`/`voiceSpectrum`
+    /// above via `QAudionCallIntegration.processIncomingAudio`). nil when no
+    /// session has ever been started this call. `LiveInCallScreen` maps this
+    /// onto the "Avvia apprendimento voce" button + progress indicator.
+    /// Reset in endCall(). On `.completed(contactId:)` this also writes the
+    /// real "voice verified" signal via `ContactsStore.setVoiceVerified` —
+    /// see the observer set up alongside `callService.onVoiceLearningStateChanged`.
+    @Published var voiceLearningState: VoiceLearningSession.State?
+
     /// Unified call UI — crypto-engine meter. Live count of real AES-256-GCM
     /// frame operations per second, sampled once/sec from the ground-truth
     /// `CallService` frame counters (`framesEncryptedTx` = seal(TX),
@@ -2292,6 +2303,20 @@ final class AppState: ObservableObject {
         callService.onVoiceSpectrum = { [weak self] bands in
             Task { @MainActor in
                 self?.voiceSpectrum = bands
+            }
+        }
+
+        // Feature B ("voce verificata") — publish the learning-session state
+        // for LiveInCallScreen's button/progress UI, and on `.completed`
+        // write the real independent trust signal `ContactDetailScreen`'s
+        // "Voce verificata" row reads (replacing its former mislabeled
+        // duplicate of the SAS-verified boolean).
+        callService.onVoiceLearningStateChanged = { [weak self] state in
+            Task { @MainActor in
+                self?.voiceLearningState = state
+                if case .completed(let contactId) = state {
+                    ContactsStore().setVoiceVerified(userId: contactId)
+                }
             }
         }
 
@@ -11073,6 +11098,10 @@ final class AppState: ObservableObject {
         // Unified call UI — drop the last spectrum frame too, so the ribbon
         // bars decay to rest between calls (mirrors the reset above).
         voiceSpectrum = nil
+        // Feature B — drop any in-flight/last learning-session state so a
+        // stale "Voce imparata" badge doesn't leak into the next call's UI
+        // before a new session (if any) reports its own state.
+        voiceLearningState = nil
         // Unified call UI — stop the 1 Hz crypto-engine sampler and zero its
         // readout so the meter hides between calls and the next call starts
         // from 0 (mirrors the voiceAnalysis reset directly above).
@@ -11278,6 +11307,22 @@ final class AppState: ObservableObject {
         // W-MUTEBTNSRC — publish it so every surface follows, including when the
         // change came from CallKit rather than from one of our buttons.
         callMuted = muted
+    }
+
+    /// Feature B ("voce verificata") — manual trigger for
+    /// `LiveInCallScreen`'s "Avvia apprendimento voce" button. No-op if
+    /// there is no bound call peer. `voiceLearningState` publishes progress
+    /// via the `onVoiceLearningStateChanged` observer wired in `init()`.
+    func startVoiceLearning() {
+        guard let peer = callContactId else { return }
+        callService.startVoiceLearning(contactId: peer)
+    }
+
+    /// Cancel an in-flight voice-learning session (e.g. the call ended, or
+    /// the user backed out of the flow) without persisting a partial result.
+    func cancelVoiceLearning() {
+        callService.cancelVoiceLearning()
+        voiceLearningState = nil
     }
 
     func setSpeaker(_ enabled: Bool) {

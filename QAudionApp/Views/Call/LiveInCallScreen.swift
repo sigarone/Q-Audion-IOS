@@ -287,7 +287,14 @@ struct LiveInCallScreen: View {
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
                 // W502: toggle the diagnostics overlay.
-                onToggleDiagnostics: handleToggleDiagnostics
+                onToggleDiagnostics: handleToggleDiagnostics,
+                // Feature B ("voce verificata") — manual call-time voice
+                // learning, fed from AppState.voiceLearningState (itself fed
+                // from the SAME decoded RX audio the Guardian ribbon above
+                // already uses). nil between calls / before the user taps
+                // "Avvia apprendimento voce".
+                voiceLearningState: appState.voiceLearningState,
+                onStartVoiceLearning: { appState.startVoiceLearning() }
             )
     }
 
