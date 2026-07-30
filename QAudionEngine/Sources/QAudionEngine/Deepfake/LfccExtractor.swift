@@ -4,7 +4,21 @@ import Accelerate
 public final class LfccExtractor {
     public static let sampleRate = 48000
     public static let preEmphasis: Float = 0.97
-    public static let frameSize = 1200   // 25ms at 48kHz
+    // 2026-07-30 fix: was 1200 (25ms). Every caller in this app (enrollment,
+    // in-call learning, unlock verification) feeds ONE 20ms/960-sample raw
+    // PCM frame per extract() call — see AudioConstants.samplesPerFrame,
+    // the atomic frame unit the whole audio pipeline is built on. With
+    // frameSize=1200, `samples.count >= frameSize` never held for a single
+    // frame, so extract() always returned [] and SpeakerVerifier's
+    // enrollment/verification never worked (100% reproducible, confirmed on
+    // a real device: 3 full enrollment passes, always stuck at "processing"
+    // — CI never caught it because QAudionEngineTests/SpeakerVerifierTests
+    // is skip-listed in engine-tests.yml). 960 matches the real per-call
+    // frame size, so a single frame now always yields exactly 1 analysis
+    // window (hopSize=480 divides it evenly), and SpeakerVerifier's
+    // existing extract-per-frame design (which it inherited from the same
+    // per-frame contract) starts working without needing a rewrite.
+    public static let frameSize = 960   // 20ms at 48kHz
     public static let hopSize = 480      // 10ms at 48kHz
     public static let fftSize = 512
     public static let numFilters = 40

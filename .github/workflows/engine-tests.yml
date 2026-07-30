@@ -248,7 +248,6 @@ jobs:
             -skip-testing "QAudionEngineTests/MessageRatchetWireFuzzTests/testMutatedRealFrameFailsSoft" \
             -skip-testing "QAudionEngineTests/PitchExtractorTests" \
             -skip-testing "QAudionEngineTests/QAudionCapabilityExchangeTests" \
-            -skip-testing "QAudionEngineTests/SpeakerVerifierTests" \
             -skip-testing "QAudionEngineTests/VoiceHealthMonitorTests" \
             -skip-testing "QAudionEngineTests/QAudionEngineTests/testProcessRoundTrip" &
           XCODEBUILD_PID=$!

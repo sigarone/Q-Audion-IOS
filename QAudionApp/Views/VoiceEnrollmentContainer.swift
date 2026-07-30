@@ -25,7 +25,12 @@ final class VoiceEnrollmentContainer: ObservableObject {
 
     private let audioEngine = AVAudioEngine()
     private var recordedSamples: [Float] = []
-    private var maxDurationSeconds: TimeInterval = 8.0
+    // 2026-07-30: was 8.0 — way over what's actually needed (the accumulator
+    // only needs ~150 total 20ms frames == 3s of speech across ALL 3
+    // prompts combined, ~1s each on average) and read as "stuck"/"takes
+    // forever" since nothing here auto-advances early. 3.0 matches
+    // Android's per-prompt SAMPLE_DURATION exactly.
+    private var maxDurationSeconds: TimeInterval = 3.0
     private var recordingStartedAt: Date?
 
     /// Feature A ("Voice-as-Key") real pipeline — the LFCC-mean-embedding
