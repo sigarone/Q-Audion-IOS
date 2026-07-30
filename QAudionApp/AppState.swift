@@ -7652,9 +7652,23 @@ final class AppState: ObservableObject {
            let decoded = QAudionCapabilityExchange.parse(blob) {
             switch decoded {
             case .keyExchangeOffer(let pub):
-                Task { await cke.handleOffer(senderId: senderId, peerPubKey: pub) }
+                Task { [weak self] in
+                    await cke.handleOffer(senderId: senderId, peerPubKey: pub)
+                    // E2EE avatar transport (2026-07-30) — the moment a
+                    // pairwise PSK becomes available for this peer (for
+                    // ANY reason: a call just triggered this exchange, a
+                    // manual re-sync, whatever) is exactly the moment
+                    // Pavel wants an avatar exchange to fire, not only on
+                    // the NEXT chat message. Safe no-op if the derive
+                    // above actually failed (maybeAnnounceAvatarTo fails
+                    // closed on a missing PSK).
+                    await self?.maybeAnnounceAvatarTo(senderId)
+                }
             case .keyExchangeAccept(let pub):
-                Task { await cke.handleAccept(senderId: senderId, peerPubKey: pub) }
+                Task { [weak self] in
+                    await cke.handleAccept(senderId: senderId, peerPubKey: pub)
+                    await self?.maybeAnnounceAvatarTo(senderId)
+                }
             case .offer:
                 Task { @MainActor [weak self] in
                     self?.routeInboundPqcOffer(blob: blob, senderId: senderId)
@@ -10804,6 +10818,46 @@ final class AppState: ObservableObject {
         } else {
             self.callState = .active
             RTLog.info("call", "call_answer: callee answered — .ringing → .active")
+        }
+        maybeExchangeAvatarOnCallConnect()
+    }
+
+    /// E2EE avatar transport (2026-07-30) — Pavel: "durante la chiamata ci
+    /// stiamo già autenticando... in quel momento se hanno avatar/foto
+    /// devono scambiarseli e memorizzarli". Before this fix, avatar
+    /// exchange was wired ONLY to a successful chat-message decrypt
+    /// (`maybeAnnounceAvatarTo`'s only caller) — two contacts who had
+    /// only ever called each other, never messaged, never got an avatar
+    /// at all, even though the call itself is a strong mutual
+    /// authentication event (PQC ML-KEM handshake). Unlike Android's call
+    /// handshake (`PqcHandshake.kt`), iOS's PQC call handshake does NOT
+    /// itself derive a pairwise message PSK — that comes ONLY from
+    /// `ContactKeyExchange`'s separate X25519 OFFER/ACCEPT protocol,
+    /// previously triggered only at call END (`endCall()`, W564). Fired
+    /// here too, at call CONNECT, so the PSK — and therefore the avatar
+    /// exchange the OFFER/ACCEPT completion now also triggers (see
+    /// `dispatchInboundOpaque`) — starts as early as possible during a
+    /// LIVE call instead of only after hangup.
+    ///
+    /// Gated on "no PSK yet" so an ordinary call to an already-known
+    /// contact doesn't re-send a redundant `KEY_EXCHANGE_OFFER` on every
+    /// single call — `ContactKeyExchange.initiate` has no existing-PSK
+    /// skip of its own (unlike `force`, which is for explicit desync
+    /// recovery), so gating here is what keeps this call-connect hook
+    /// from being wire-chatty for repeat contacts. When a PSK already
+    /// exists, [maybeAnnounceAvatarTo] is called directly instead —
+    /// covers the common case immediately rather than waiting for the
+    /// next chat message.
+    @MainActor
+    private func maybeExchangeAvatarOnCallConnect() {
+        guard let peerId = self.callContactId else { return }
+        let hasPsk = (try? PairwiseChainKeyResolver.resolvePsk(
+            peerId: peerId, vault: SovereignKeyVault()
+        )) != nil
+        if hasPsk {
+            maybeAnnounceAvatarTo(peerId)
+        } else {
+            triggerKeyExchange(with: peerId)
         }
     }
 
