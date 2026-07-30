@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.903",
+              date: "2026-07-30",
+              title: "v1.0.903",
+              bullets: [
+                "fix(identity): ensureResolved must fire even when a bare extension is already cached",
+              ]),
         .init(id: "v1.0.902",
               date: "2026-07-30",
               title: "v1.0.902",
               bullets: [
+                "chore: regenerate changelog for v1.0.902",
                 "fix(identity): tier-1 defer must also trigger for a real serverDisplay",
               ]),
         .init(id: "v1.0.901",
@@ -144,28 +151,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.884",
                 "fix(ci): sync LiveKitBroadcast pin to 2.13.1-aes256-raw (missed in the revert)",
-              ]),
-        .init(id: "v1.0.883",
-              date: "2026-07-28",
-              title: "v1.0.883",
-              bullets: [
-                "chore: regenerate changelog for v1.0.883",
-                "fix(groupcall): revert LiveKit 2.15.1-aes256-raw -> 2.13.1-aes256-raw, breaks iOS video publish",
-                "style: fix vertical_parameter_alignment, multiple_closures_with_trailing_closure, closure_parameter_position, switch_case_alignment",
-                "fix(lint): remove 11 superfluous force_unwrapping disable comments",
-                "chore(ci): bump stale GitHub Actions versions still on deprecated Node runtime",
-                "chore(engine): fix remaining force_unwrapping findings in test files (164 sites, 37 files)",
-                "chore(lint): resolve identifier_name snake_case findings (193 sites, 27 files)",
-                "fix(lint): correct swiftlint:disable:next placement in 3 force_unwrapping sites",
-                "chore(engine): fix force_unwrapping in Deepfake/Integration/Transport/UI/Video/WebRTC",
-                "chore(engine): fix force_unwrapping in Audio + remaining Crypto files",
-                "chore(engine): fix remaining non_optional_string_data_conversion findings",
-                "chore(engine): fix remaining force_unwrapping findings (BCryptoRestClient/StorageApiImpl, ChatViewModel, VpnMlKem)",
-                "fix(engine): revert a swiftlint --fix regression in SFrameCodec KID validation",
-                "chore(engine): fix force_unwrapping findings in HkdfLabels + PqcKeyExchange",
-                "chore(lint): lower identifier_name min_length — stop flagging short math/crypto names",
-                "style: swiftlint --fix (mechanical formatting only, no semantic change)",
-                "chore(ci): add on-demand SwiftLint --fix workflow",
               ]),
     ]
 }
