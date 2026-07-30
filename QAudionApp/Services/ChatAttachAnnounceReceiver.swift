@@ -31,6 +31,9 @@ final class ChatAttachAnnounceReceiver {
         case decodeFailed(String)
         case writeFailed(String)
         case invalidId
+        /// FIX H1-PARITY (2026-07-30): no real pairwise PSK bound yet for
+        /// this sender — see `deterministicChainKey`'s kdoc.
+        case pskMissing
 
         var errorDescription: String? {
             switch self {
@@ -39,11 +42,13 @@ final class ChatAttachAnnounceReceiver {
             case .decodeFailed(let m): return "Decodifica fallita: \(m)"
             case .writeFailed(let m):  return "Scrittura fallita: \(m)"
             case .invalidId:           return "ID allegato non valido"
+            case .pskMissing: return "Scambio chiavi in corso — riprova tra poco."
             }
         }
     }
 
     private let appState: AppState
+    private let vault = SovereignKeyVault()
 
     init(appState: AppState) {
         self.appState = appState
@@ -95,7 +100,16 @@ final class ChatAttachAnnounceReceiver {
         } catch {
             throw ReceiveError.decodeFailed(String(describing: error))
         }
-        let chainKey = Self.deterministicChainKey(senderId: senderId, recipientUserId: recipientId)
+        let chainKey: Data
+        do {
+            chainKey = try Self.deterministicChainKey(senderId: senderId, recipientUserId: recipientId, vault: vault)
+        } catch ReceiveError.pskMissing {
+            // FIX H1-PARITY: no real pairwise PSK bound yet for this
+            // sender — kick off a key exchange and fail closed rather
+            // than falling back to a server-guessable key.
+            appState.triggerKeyExchange(with: senderId)
+            throw ReceiveError.pskMissing
+        }
 
         // 3. Decrypt + verify SHA-256.
         let plaintext: Data
@@ -124,12 +138,27 @@ final class ChatAttachAnnounceReceiver {
 
     // MARK: - Helpers
 
-    private static func deterministicChainKey(senderId: String, recipientUserId: String) -> Data {
+    /// Mirrors `ChatAttachAnnounceSender.deterministicChainKey` exactly
+    /// (same FIX H1-PARITY fail-closed PSK ladder) — from the receiver's
+    /// side, the PEER whose PSK is looked up is `senderId` (the other
+    /// party), not `recipientUserId` (self).
+    private static func deterministicChainKey(
+        senderId: String, recipientUserId: String, vault: SovereignKeyVault
+    ) throws -> Data {
+        let prefix = senderId.count > 8 ? String(senderId.prefix(8)) : senderId
+        let autoName = "auto:\(prefix):\(senderId)"
+        let psk: Data
+        if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
+            psk = stored
+        } else if let stored = try vault.loadPsk(name: senderId), !stored.isEmpty {
+            psk = stored
+        } else {
+            throw ReceiveError.pskMissing
+        }
         let pair = [senderId, recipientUserId].sorted().joined(separator: ":")
         let info = Data("attach-chain-v1:\(pair)".utf8)
-        let ikm = Data(SHA256.hash(data: Data("qaudion-attach-ikm:\(pair)".utf8)))
         let derived = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: ikm),
+            inputKeyMaterial: SymmetricKey(data: psk),
             salt: Data("qaudion-attach-salt-v1".utf8),
             info: info,
             outputByteCount: 32

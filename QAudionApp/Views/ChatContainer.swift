@@ -881,8 +881,12 @@ final class ChatContainer: ObservableObject {
             )
         } catch let e as ChatVoiceNoteSender.Error {
             print("[ChatContainer] voice note prep failed: \(e.localizedDescription)")
+            let reason: SendFailureReason = {
+                if case .pskMissing = e { return .pskMissing }
+                return .uploadFailure
+            }()
             await MainActor.run {
-                weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure)
+                weakContainer.value?.markFailed(messageId: msgId, reason: reason)
             }
             return
         } catch {
@@ -1530,6 +1534,14 @@ final class ChatContainer: ObservableObject {
                 // leaves something to resume from on retry.
                 resumeClientMsgId: msgId.uuidString
             )
+        } catch let e as ChatVoiceNoteSender.Error {
+            print("[ChatContainer] sendImage prep failed: \(e.localizedDescription)")
+            let reason: SendFailureReason = {
+                if case .pskMissing = e { return .pskMissing }
+                return .uploadFailure
+            }()
+            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: reason) }
+            return
         } catch {
             print("[ChatContainer] sendImage prep failed: \(error)")
             await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
@@ -1862,6 +1874,14 @@ final class ChatContainer: ObservableObject {
                     }
                 }
             )
+        } catch let e as ChatVoiceNoteSender.Error {
+            print("[ChatContainer] sendFileAttachment prep failed: \(e.localizedDescription)")
+            let reason: SendFailureReason = {
+                if case .pskMissing = e { return .pskMissing }
+                return .uploadFailure
+            }()
+            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: reason) }
+            return
         } catch {
             print("[ChatContainer] sendFileAttachment prep failed: \(error)")
             await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }

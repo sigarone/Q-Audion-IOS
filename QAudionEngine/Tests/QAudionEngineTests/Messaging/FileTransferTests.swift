@@ -325,4 +325,37 @@ final class FileTransferResumeUploadTests: XCTestCase {
             XCTAssertEqual(error, .noPskAvailable)
         }
     }
+
+    /// FIX H1-PARITY regression (2026-07-30): `upload()` must fail closed
+    /// exactly like `resumeUpload()` when no vault entry is bound — this
+    /// is the guarantee the app-layer `ChatVoiceNoteSender.resolvePsk`
+    /// used to defeat by always synthesizing an insecure fallback key
+    /// instead of ever letting the vault return nil (see
+    /// `ChatVoiceNoteSender.swift`'s `resolvePsk` kdoc). `FileTransfer`
+    /// itself never had the bug — this test pins that contract so a
+    /// future regression at either layer is caught here first.
+    func test_upload_noPskAvailable_throwsNoPskAvailable() async throws {
+        let emptyVault = FileTransfer.VaultAdapter(
+            forContact: { _ in nil },
+            primary: { nil },
+            allByPriority: { [] }
+        )
+        let storage = FileTransfer.StorageApi(
+            uploadFile: { _, _ in "unused" },
+            downloadFile: { _ in throw FileTransferError.emptyVault }
+        )
+        let transfer = FileTransfer(storage: storage, vault: emptyVault, selfUserId: "me")
+
+        do {
+            _ = try await transfer.upload(
+                recipientId: "peer-4",
+                bytes: Data("x".utf8),
+                filename: "f.jpg",
+                mime: "image/jpeg"
+            )
+            XCTFail("expected noPskAvailable to be thrown")
+        } catch let error as FileTransferError {
+            XCTAssertEqual(error, .noPskAvailable)
+        }
+    }
 }

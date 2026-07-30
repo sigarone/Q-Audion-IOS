@@ -40,6 +40,13 @@ final class ChatAttachAnnounceSender {
         case encryptFailed(String)
         case uploadFailed(String)
         case envelopeFailed(String)
+        /// W-PHONEVERIFY-adjacent FIX H1-PARITY (2026-07-30): no real
+        /// pairwise PSK exists yet for this peer — see
+        /// `deterministicChainKey`'s kdoc. A key exchange has been
+        /// triggered; the caller should surface this as "retry once the
+        /// peer accepts", same UX as `ChatMessageSendService`'s identical
+        /// `.pskMissing` case.
+        case pskMissing
 
         var errorDescription: String? {
             switch self {
@@ -48,11 +55,13 @@ final class ChatAttachAnnounceSender {
             case .encryptFailed(let m):return "Cifratura fallita: \(m)"
             case .uploadFailed(let m): return "Upload fallito: \(m)"
             case .envelopeFailed(let m): return "Envelope fallito: \(m)"
+            case .pskMissing: return "Scambio chiavi in corso — riprova tra poco."
             }
         }
     }
 
     private let appState: AppState
+    private let vault = SovereignKeyVault()
 
     init(appState: AppState) {
         self.appState = appState
@@ -107,7 +116,17 @@ final class ChatAttachAnnounceSender {
         }
 
         // 3. Encrypt.
-        let chainKey = Self.deterministicChainKey(senderId: senderId, recipientUserId: recipientUserId)
+        let chainKey: Data
+        do {
+            chainKey = try Self.deterministicChainKey(
+                senderId: senderId, recipientUserId: recipientUserId, vault: vault)
+        } catch SendError.pskMissing {
+            // FIX H1-PARITY: mirror ChatMessageSendService — no real pairwise
+            // PSK yet, kick off a key exchange and fail closed rather than
+            // falling back to a server-guessable key.
+            appState.triggerKeyExchange(with: recipientUserId)
+            throw SendError.pskMissing
+        }
         let encrypted: AttachmentEncryption.Encrypted
         do {
             encrypted = try AttachmentEncryption.encryptAttachment(
@@ -159,20 +178,45 @@ final class ChatAttachAnnounceSender {
     // MARK: - Helpers
 
     /// Deterministic chain key for the transitional flow: HKDF-SHA256
-    /// over the per-pair PSK (resolved from SovereignKeyVault with the
-    /// same ladder ChatMessageSendService uses) bound to the unordered
-    /// pair tuple. Both ends derive the same 32 bytes without any
-    /// extra signaling. This will be replaced with the v3 ratchet's
-    /// per-message chain key once the engine surfaces it.
-    private static func deterministicChainKey(senderId: String, recipientUserId: String) -> Data {
+    /// over the REAL per-pair PSK, resolved from `SovereignKeyVault` via
+    /// the exact same ladder `ChatMessageSendService` uses
+    /// (`auto:<prefix>:<peerId>`, then the bare `peerId` legacy name).
+    /// Both ends derive the same 32 bytes without extra signaling. This
+    /// will be replaced with the v3 ratchet's per-message chain key once
+    /// the engine surfaces it.
+    ///
+    /// FIX H1-PARITY (2026-07-30, found while designing E2EE avatar
+    /// transport — see `docs/E2EE_AVATAR_TRANSPORT_DESIGN.md`): this
+    /// function used to derive its "chain key" from
+    /// `SHA256("qaudion-attach-ikm:" + sortedPair)` — a hash of the two
+    /// PUBLIC userIds, no secret material at all, despite this same
+    /// doc comment already (wrongly) claiming it came from the vault.
+    /// `ChatMessageSendService` hit and fixed the IDENTICAL class of bug
+    /// under the name "FIX H1" ("the old deterministic
+    /// SHA-256(sorted(peer,self)) fallback was derivable by the server
+    /// ... so it gave NO confidentiality") — that fix was never ported
+    /// here, so every voice note and file attachment sent through this
+    /// path had zero real confidentiality from the server the whole
+    /// time. Throws `.pskMissing` (fail-closed, same as
+    /// `ChatMessageSendService`) rather than falling back to a
+    /// server-guessable key when no real PSK is bound yet.
+    private static func deterministicChainKey(
+        senderId: String, recipientUserId: String, vault: SovereignKeyVault
+    ) throws -> Data {
+        let prefix = recipientUserId.count > 8 ? String(recipientUserId.prefix(8)) : recipientUserId
+        let autoName = "auto:\(prefix):\(recipientUserId)"
+        let psk: Data
+        if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
+            psk = stored
+        } else if let stored = try vault.loadPsk(name: recipientUserId), !stored.isEmpty {
+            psk = stored
+        } else {
+            throw SendError.pskMissing
+        }
         let pair = [senderId, recipientUserId].sorted().joined(separator: ":")
         let info = Data("attach-chain-v1:\(pair)".utf8)
-        // Salt = "qaudion-attach-salt-v1"; IKM = SHA-256(pair) so the
-        // function is purely a function of the (sender, recipient) pair
-        // for the transitional period.
-        let ikm = Data(SHA256.hash(data: Data("qaudion-attach-ikm:\(pair)".utf8)))
         let derived = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: ikm),
+            inputKeyMaterial: SymmetricKey(data: psk),
             salt: Data("qaudion-attach-salt-v1".utf8),
             info: info,
             outputByteCount: 32

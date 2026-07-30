@@ -34,6 +34,10 @@ final class ChatVoiceNoteReceiver {
         case downloadFailed(String)
         case decryptFailed(String)
         case writeFailed(String)
+        /// FIX H1-PARITY (2026-07-30): no real pairwise PSK bound yet for
+        /// this sender on the attach_announce path — see
+        /// `ChatAttachAnnounceReceiver.ReceiveError.pskMissing`.
+        case pskMissing
 
         var errorDescription: String? {
             switch self {
@@ -41,6 +45,7 @@ final class ChatVoiceNoteReceiver {
             case .downloadFailed(let m):  return "Download voice note fallito: \(m)"
             case .decryptFailed(let m):   return "Decrypt voice note fallito: \(m)"
             case .writeFailed(let m):     return "Scrittura cache fallita: \(m)"
+            case .pskMissing:             return "Scambio chiavi in corso — riprova tra poco."
             }
         }
     }
@@ -202,6 +207,10 @@ final class ChatVoiceNoteReceiver {
                 throw Error.decryptFailed("attachment id non valido")
             case .writeFailed(let m):
                 throw Error.writeFailed(m)
+            case .pskMissing:
+                // Key exchange already triggered inside
+                // ChatAttachAnnounceReceiver.downloadAndDecrypt.
+                throw Error.pskMissing
             }
         } catch {
             throw Error.decryptFailed(String(describing: error))

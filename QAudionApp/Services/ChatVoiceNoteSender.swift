@@ -41,6 +41,11 @@ final class ChatVoiceNoteSender {
         case uploadFailed(String)
         case tokenIssueFailed(String)
         case markerSerializeFailed(String)
+        /// FIX H1-PARITY (2026-07-30): no real pairwise PSK exists yet for
+        /// this peer — see `resolvePsk`'s kdoc. A key exchange has been
+        /// triggered; same fail-closed contract as
+        /// `ChatMessageSendService.SendError.pskMissing`.
+        case pskMissing
 
         var errorDescription: String? {
             switch self {
@@ -48,6 +53,7 @@ final class ChatVoiceNoteSender {
             case .uploadFailed(let m):         return "Upload voice note fallito: \(m)"
             case .tokenIssueFailed(let m):     return "Mint token download fallito: \(m)"
             case .markerSerializeFailed(let m): return "Serializzazione marker fallita: \(m)"
+            case .pskMissing: return "Scambio chiavi in corso — riprova tra poco."
             }
         }
     }
@@ -288,6 +294,12 @@ final class ChatVoiceNoteSender {
                     TusResumeStateStore.save(state)
                 }
             )
+        } catch FileTransferError.noPskAvailable {
+            // FIX H1-PARITY: no real pairwise PSK bound yet — kick off a
+            // key exchange and fail closed rather than letting
+            // `resolvePsk` fall back to a server-guessable key.
+            appState.triggerKeyExchange(with: recipientUserId)
+            throw Error.pskMissing
         } catch {
             throw Error.uploadFailed(error.localizedDescription)
         }
@@ -420,7 +432,10 @@ final class ChatVoiceNoteSender {
         // to tier 3, never PATCH a continuation with a key that doesn't
         // match what the server's partial upload was sealed with.
         guard let currentPsk = Self.resolvePsk(vault: vault, peerUserId: state.recipientUserId, senderId: senderId) else {
-            throw Error.uploadFailed("PSK non risolvibile per il resume")
+            // FIX H1-PARITY: same fail-closed contract as the fresh-upload
+            // path — no guessable-key fallback for a resume either.
+            appState.triggerKeyExchange(with: state.recipientUserId)
+            throw Error.pskMissing
         }
         guard TusResumeStateStore.fingerprint(ofPsk: currentPsk) == state.pskFingerprintHex else {
             throw Error.uploadFailed("PSK cambiata dal tentativo originale — resume non sicuro")
@@ -463,6 +478,12 @@ final class ChatVoiceNoteSender {
         } catch let tusError as TusUploadClient.TusError {
             // Rethrow verbatim — see doc comment above.
             throw tusError
+        } catch FileTransferError.noPskAvailable {
+            // FIX H1-PARITY: defense in depth — the PSK could have been
+            // unbound in the window between the guard above and this
+            // call. Same fail-closed contract, never a guessable key.
+            appState.triggerKeyExchange(with: state.recipientUserId)
+            throw Error.pskMissing
         } catch {
             throw Error.uploadFailed(error.localizedDescription)
         }
@@ -540,8 +561,19 @@ final class ChatVoiceNoteSender {
     /// Same lookup ladder as ``ChatMessageSendService``:
     /// 1. `auto:<peerIdPrefix8>:<peerId>` (ContactKeyExchange-derived PSK).
     /// 2. Bare `peerId` (legacy / manually-bound).
-    /// 3. Deterministic SHA256(sortedPair) fallback (insecure, but lets
-    ///    the wire flow until ContactKeyExchange completes).
+    /// Returns `nil` — never a fallback key — when neither is bound.
+    ///
+    /// FIX H1-PARITY (2026-07-30): this used to fall through to
+    /// `SHA256("qaudion-fallback-psk:" + sortedPair)` — a hash of the two
+    /// PUBLIC userIds, server-guessable, zero real confidentiality — on
+    /// this DEFAULT (non-experimental) attachment/voice-note path used by
+    /// every 1:1 file send in production. `FileTransfer.upload`/
+    /// `resumeUpload` were ALREADY written to fail closed
+    /// (`throw .noPskAvailable`) when `vault.forContact`/`primary` return
+    /// nil — this function just never let that happen. Same bug class
+    /// `ChatMessageSendService` already fixed under the name FIX H1;
+    /// callers now catch `.noPskAvailable` and trigger a key exchange
+    /// instead of silently sending under a guessable key.
     private static func resolvePsk(
         vault: SovereignKeyVault,
         peerUserId: String,
@@ -551,9 +583,6 @@ final class ChatVoiceNoteSender {
         let autoName = "auto:\(prefix):\(peerUserId)"
         if let psk = try? vault.loadPsk(name: autoName), !psk.isEmpty { return psk }
         if let psk = try? vault.loadPsk(name: peerUserId), !psk.isEmpty { return psk }
-        // Fallback — symmetric in (peer, self).
-        let pair = [peerUserId, senderId].sorted().joined(separator: ":")
-        let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
-        return Data(digest)
+        return nil
     }
 }
