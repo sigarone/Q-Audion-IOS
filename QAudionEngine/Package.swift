@@ -320,9 +320,14 @@ let package = Package(
                 // matches how every other KAT fixture in this file is handled).
                 // Bump by hand when the source vectors change.
                 .copy("Crypto/Resources/wire_v1.0.0/hkdf/expand.json"),
-                .copy("Crypto/Resources/wire_v1.0.0/x25519/derive.json"),
+                // Renamed from derive.json in both subdirectories: SPM's
+                // resource bundling requires basenames unique across the
+                // WHOLE target, not just within their declared subdirectory
+                // — "multiple resources named 'derive.json'" broke package
+                // resolution entirely until this rename (2026-07-30).
+                .copy("Crypto/Resources/wire_v1.0.0/x25519/x25519-derive.json"),
                 .copy("Crypto/Resources/wire_v1.0.0/x25519/ecdh.json"),
-                .copy("Crypto/Resources/wire_v1.0.0/aead_nonce/derive.json"),
+                .copy("Crypto/Resources/wire_v1.0.0/aead_nonce/aead-nonce-derive.json"),
                 .copy("Crypto/Resources/wire_v1.0.0/ml_kem_1024/keygen.json"),
                 .copy("Crypto/Resources/wire_v1.0.0/ml_kem_1024/decap.json")
             ]

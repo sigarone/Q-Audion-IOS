@@ -116,8 +116,11 @@ final class WireV1CrossPlatformKatTests: XCTestCase {
     }
 
     func testX25519DeriveMatchesServerVectors() throws {
-        guard let vectors = loadVectors([X25519DeriveVec].self, category: "x25519", file: "derive") else {
-            XCTFail("wire_v1.0.0/x25519/derive.json not found"); return
+        // Filename is "x25519-derive" not "derive" — SPM requires resource
+        // basenames unique across the whole target, and "derive.json"
+        // collided with aead_nonce's file (see Package.swift comment).
+        guard let vectors = loadVectors([X25519DeriveVec].self, category: "x25519", file: "x25519-derive") else {
+            XCTFail("wire_v1.0.0/x25519/x25519-derive.json not found"); return
         }
         for v in vectors {
             let priv = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: b64(v.priv_b64))
@@ -159,8 +162,10 @@ final class WireV1CrossPlatformKatTests: XCTestCase {
     /// bcrypto-server's aead_nonce KAT header comment) — it does not
     /// exercise iOS's internal counter plumbing.
     func testAeadNonceFormulaMatchesServerVectors() throws {
-        guard let vectors = loadVectors([AeadNonceVec].self, category: "aead_nonce", file: "derive") else {
-            XCTFail("wire_v1.0.0/aead_nonce/derive.json not found"); return
+        // Filename is "aead-nonce-derive" not "derive" — see the x25519
+        // comment above for why (SPM basename collision).
+        guard let vectors = loadVectors([AeadNonceVec].self, category: "aead_nonce", file: "aead-nonce-derive") else {
+            XCTFail("wire_v1.0.0/aead_nonce/aead-nonce-derive.json not found"); return
         }
         XCTAssertEqual(vectors.count, 9, "expected 9 canonical AEAD-nonce boundary cases")
         for v in vectors {
