@@ -23,7 +23,7 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 |---|---|---|
 | `.github/workflows/ios-testflight.yml` | **ACTIVE** — TestFlight build | YES, this is the pipeline |
 | `.github/workflows/engine-tests.yml` | ACTIVE — Swift package tests on every push | reference if engine tests fail |
-| `.github/workflows/kat-cross-platform.yml` | SCAFFOLD, `workflow_dispatch` only since 2026-07-30 (was duplicating engine-tests.yml on macos-latest for zero benefit) | reference once KmsCrossPlatformKatTests.swift lands |
+| `.github/workflows/kat-cross-platform.yml` | **ACTIVE** since 2026-07-30 — runs `WireV1CrossPlatformKatTests.swift` (CryptoKit HKDF/X25519 + liboqs ML-KEM derand) against bcrypto-server's real `test/kat/wire_v1.0.0/` vectors. Written on win32, first real compile/run is THIS workflow — read the actual CI error before assuming vectors are wrong | YES if this or engine-tests fails |
 | `.github/workflows/artifact-cleanup.yml` | ACTIVE — scheduled artifact retention | leave alone |
 | `XCODE_CLOUD_MIGRATION.md` | **HISTORICAL** — proposal for Xcode Cloud, never adopted | **do not follow its instructions** |
 | `ci_scripts/` (`ci_post_clone.sh`, `ci_pre_xcodebuild.sh`, `ci_post_xcodebuild.sh`) | **DEAD SCRIPTS** — Xcode Cloud convention, NEVER executed by the active GH Actions pipeline | do not edit them when fixing CI |
@@ -146,9 +146,8 @@ QAudionEngine/       # Swift package with crypto + audio C libs
 
 - **Tag push `v*`** → full TestFlight pipeline (`ios-testflight.yml`).
 - **Workflow_dispatch** with optional `tag` input → ad-hoc rebuild.
-- **Main branch push** → `engine-tests.yml` (macOS Swift unit + KAT) only
-  (no iOS build). `kat-cross-platform.yml` no longer auto-triggers — see
-  the workflow table above.
+- **Main branch push** → `engine-tests.yml` (macOS Swift unit + KAT) +
+  `kat-cross-platform.yml` (cross-platform wire vectors) — no iOS build.
 - **Never** trigger TestFlight builds from branches — always tag.
 
 ## Hard-won lessons — DO NOT REPEAT THESE MISTAKES

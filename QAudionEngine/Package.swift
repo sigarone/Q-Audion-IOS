@@ -282,7 +282,11 @@ let package = Package(
         ),
         .testTarget(
             name: "QAudionEngineTests",
-            dependencies: ["QAudionEngine"],
+            // "CLiboqs" added for WireV1CrossPlatformKatTests — the
+            // ML-KEM-1024 deterministic-seed KAT calls
+            // OQS_KEM_ml_kem_1024_keypair_derand directly (no generic-handle
+            // equivalent exists in liboqs; it's algorithm-specific).
+            dependencies: ["QAudionEngine", "CLiboqs"],
             path: "Tests/QAudionEngineTests",
             resources: [
                 .copy("../Resources/cross_platform_vectors.json"),
@@ -307,7 +311,18 @@ let package = Package(
                 // KmsPreBootstrap (random per-run key material, see the
                 // vector's own "notes" field — NOT bit-reproduced by encode()).
                 .copy("Resources/kat/kms-prebootstrap-kat.json"),
-                .copy("Integration/Resources/earbud-excl-v2-kat.json")
+                .copy("Integration/Resources/earbud-excl-v2-kat.json"),
+                // Cross-platform canonical vectors from bcrypto-server's
+                // test/kat/wire_v1.0.0/ — see WireV1CrossPlatformKatTests.swift
+                // and that repo's test/kat/README.md. Pulled by CI (see
+                // "Pull KAT vectors" step in kat-cross-platform.yml); copy
+                // manually here for a local run.
+                .copy("Crypto/Resources/wire_v1.0.0/hkdf/expand.json"),
+                .copy("Crypto/Resources/wire_v1.0.0/x25519/derive.json"),
+                .copy("Crypto/Resources/wire_v1.0.0/x25519/ecdh.json"),
+                .copy("Crypto/Resources/wire_v1.0.0/aead_nonce/derive.json"),
+                .copy("Crypto/Resources/wire_v1.0.0/ml_kem_1024/keygen.json"),
+                .copy("Crypto/Resources/wire_v1.0.0/ml_kem_1024/decap.json")
             ]
         )
     ] + (hasRealityXcframework ? [

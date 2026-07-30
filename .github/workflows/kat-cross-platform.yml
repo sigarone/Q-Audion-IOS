@@ -3,25 +3,33 @@
 # Runs the Swift+CryptoKit+liboqs implementation against canonical
 # vectors hosted in bcrypto-server/test/kat/wire_v1.0.0/.
 #
-# Status: SCAFFOLD. Test target KmsCrossPlatformKatTests.swift not yet
-# implemented (planned in 1.0 §3.5 + iOS Track B Phase A of
-# glittery-sleeping-hejlsberg.md). Until then this is a no-op stub.
-#
 # This GitHub Actions workflow (CI moved off Codemagic 2026-05-06, see
 # CLAUDE.md) is the cross-platform PR-gating canary that runs only the
 # deterministic crypto KAT suite (no simulator boot needed).
 #
-# Auto-trigger disabled 2026-07-30: while KmsCrossPlatformKatTests.swift
-# doesn't exist yet, the "Run SPM tests" step falls back to re-running
-# QAudionEngineTests -- the same suite engine-tests.yml already runs on
-# the same push/PR, on the same macos-latest runner, with
-# continue-on-error so it gates nothing. Pure duplicate cost until the
-# real KAT target lands. Re-add push/pull_request triggers alongside
-# implementing KmsCrossPlatformKatTests.swift.
+# Status: GATING (since 2026-07-30). Auto-trigger was disabled earlier the
+# same day because the old fallback ("Run SPM tests" re-running the whole
+# QAudionEngineTests suite with continue-on-error) was a pure duplicate of
+# engine-tests.yml on the same expensive macos-latest runner, testing
+# nothing of its own. WireV1CrossPlatformKatTests.swift now exists and
+# exercises CryptoKit (HKDF/X25519) + liboqs (ML-KEM-1024 derand) directly
+# against these vectors — see that file's own header comment for the one
+# caveat: it was authored on win32 (no local Xcode/CryptoKit/liboqs), so
+# THIS WORKFLOW'S FIRST RUN is the first real compile+execute of it. If it
+# fails, read the actual error before assuming the vectors are wrong — the
+# Swift code is unverified, the vectors are (Android + Desktop already pass
+# against the same bcrypto-server SHA locally).
+#
+# Scope: does not cover canonical_cbor/sealed_sender_cert_v2.json —
+# SenderCertV2/sealed-sender has no iOS implementation at all.
 
 name: KAT cross-platform
 
 on:
+  pull_request:
+    branches: [main, release/*]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -54,19 +62,23 @@ jobs:
           sudo xcode-select -s "$MATCH"
           xcodebuild -version
 
-      # When KAT test target is implemented:
-      # - name: Pull KAT vectors
-      #   run: |
-      #     curl -sSfL https://raw.githubusercontent.com/sigarone/Bcrypto-server/<SHA>/test/kat/wire_v1.0.0/...
-      #     mkdir -p QAudionEngine/Tests/Resources/kat/
-      #     ...
+      - name: Pull KAT vectors
+        env:
+          BCRYPTO_SERVER_SHA: ef3a1d423b6980b571b5d7bd63d574cb3b2b480d
+        run: |
+          set -euo pipefail
+          BASE="https://raw.githubusercontent.com/sigarone/Bcrypto-server/${BCRYPTO_SERVER_SHA}/test/kat/wire_v1.0.0"
+          DIR="QAudionEngine/Tests/QAudionEngineTests/Crypto/Resources/wire_v1.0.0"
+          mkdir -p "$DIR/hkdf" "$DIR/x25519" "$DIR/aead_nonce" "$DIR/ml_kem_1024"
+          for f in hkdf/expand.json x25519/derive.json x25519/ecdh.json \
+                   aead_nonce/derive.json ml_kem_1024/keygen.json ml_kem_1024/decap.json; do
+            curl -sSfL "$BASE/$f" -o "$DIR/$f"
+          done
 
       - name: Run SPM tests
-        continue-on-error: true   # SCAFFOLD: enable gating once KmsCrossPlatformKatTests.swift exists
         run: |
           cd QAudionEngine
-          swift test --filter KmsCrossPlatformKatTests || \
-          swift test --filter QAudionEngineTests || true
+          swift test --filter WireV1CrossPlatformKatTests
 
       - name: Upload test reports on failure
         if: failure()
