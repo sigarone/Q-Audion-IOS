@@ -4,32 +4,29 @@
 # vectors hosted in bcrypto-server/test/kat/wire_v1.0.0/.
 #
 # This GitHub Actions workflow (CI moved off Codemagic 2026-05-06, see
-# CLAUDE.md) is the cross-platform PR-gating canary that runs only the
-# deterministic crypto KAT suite (no simulator boot needed).
+# CLAUDE.md) was meant to be a cross-platform PR-gating canary that runs
+# only the deterministic crypto KAT suite, without booting a simulator.
 #
-# Status: GATING (since 2026-07-30). Auto-trigger was disabled earlier the
-# same day because the old fallback ("Run SPM tests" re-running the whole
-# QAudionEngineTests suite with continue-on-error) was a pure duplicate of
-# engine-tests.yml on the same expensive macos-latest runner, testing
-# nothing of its own. WireV1CrossPlatformKatTests.swift now exists and
-# exercises CryptoKit (HKDF/X25519) + liboqs (ML-KEM-1024 derand) directly
-# against these vectors — see that file's own header comment for the one
-# caveat: it was authored on win32 (no local Xcode/CryptoKit/liboqs), so
-# THIS WORKFLOW'S FIRST RUN is the first real compile+execute of it. If it
-# fails, read the actual error before assuming the vectors are wrong — the
-# Swift code is unverified, the vectors are (Android + Desktop already pass
-# against the same bcrypto-server SHA locally).
-#
-# Vectors are VENDORED (committed under Tests/QAudionEngineTests/Crypto/
-# Resources/wire_v1.0.0/), not fetched by CI — an earlier version of this
-# workflow tried an unauthenticated `curl` against bcrypto-server at test
-# time, which 404s because that repo is PRIVATE. SPM also requires every
-# resource declared in Package.swift to physically exist at manifest-
-# resolution time regardless of network access, so a CI-fetch approach
-# can't work here anyway (it broke engine-tests.yml's build on first try).
-# Vendoring matches this repo's existing convention for every other KAT
-# fixture (see kms-prebootstrap-kat.json etc.). Bump the copies by hand
-# when bcrypto-server's test/kat/wire_v1.0.0/ changes.
+# Status: DISABLED AGAIN (workflow_dispatch only), 2026-07-30, same day it
+# was re-enabled. WireV1CrossPlatformKatTests.swift is real and DOES pass
+# (all 6 assertions: HKDF, X25519 derive+ECDH, AEAD-nonce, ML-KEM-1024
+# keygen+decap) — confirmed green via engine-tests.yml's ios-simulator-tests
+# job, which already runs the whole QAudionEngineTests target including
+# this class. What doesn't work is running it HERE, standalone, via bare
+# `swift test`: this package depends on LiveKit's binary `LiveKitWebRTC`
+# xcframework, and SwiftPM's CLI can't resolve/link binary xcframework
+# targets the way `xcodebuild -scheme ...` can — every attempt fails with
+# "no such module 'LiveKitWebRTC'" before a single test runs. Making this
+# job work would mean switching to `xcodebuild test -scheme QAudionEngine
+# -destination 'platform=iOS Simulator...'`, i.e. booting a simulator —
+# at which point it costs exactly what engine-tests.yml already costs, for
+# zero additional coverage (that job runs this same test class). Vectors
+# stay vendored under Tests/QAudionEngineTests/Crypto/Resources/wire_v1.0.0/
+# (bcrypto-server is private, CI can't curl it, and SPM needs the files to
+# exist on disk regardless) so engine-tests.yml's run of this class keeps
+# working. Re-enable this workflow only if it's rewritten to not need
+# LiveKitWebRTC at all (e.g. a build configuration that excludes it), not
+# by just re-adding the triggers.
 #
 # Scope: does not cover canonical_cbor/sealed_sender_cert_v2.json —
 # SenderCertV2/sealed-sender has no iOS implementation at all.
@@ -37,10 +34,6 @@
 name: KAT cross-platform
 
 on:
-  pull_request:
-    branches: [main, release/*]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 env:
