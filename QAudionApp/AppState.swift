@@ -9460,7 +9460,11 @@ final class AppState: ObservableObject {
                 presenceAuth: c.presenceAuth,
                 presenceFloor: c.presenceFloor,
                 phoneNumber: c.phoneNumber,
-                extension: c.`extension`)
+                extension: c.`extension`,
+                // E2EE avatar transport (2026-07-30) — same reasoning as
+                // presenceAuth/phoneNumber above: this rewrite touches
+                // ONLY displayName.
+                avatarVersion: c.avatarVersion)
             migrated = true
         }
         if migrated { store.save(contacts) }

@@ -127,12 +127,6 @@ public enum PeerTrustEvaluator {
             verifiedFingerprintHex: fingerprintHex,
             verifiedAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             verificationMethod: method.rawValue,
-            // E2EE avatar transport (2026-07-30) — same reasoning as
-            // avatarUrl above: a manual verify confirms the SAME peer,
-            // never touches their cached avatar. Thread through
-            // unchanged so the version-dedup in AvatarAnnounceReceiver
-            // doesn't spuriously re-download an already-cached avatar.
-            avatarVersion: existing.avatarVersion,
             // W-ASSURANCE/W-FLOOR — a manual SAS/QR/anti-replay verify is NOT
             // an identity change (the OPPOSITE: it's confirming the SAME
             // identity this call already trusts) and must never wipe a
@@ -151,7 +145,13 @@ public enum PeerTrustEvaluator {
             // change either; thread these through unchanged same as
             // phoneHash/avatarUrl above.
             phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`
+            extension: existing.`extension`,
+            // E2EE avatar transport (2026-07-30) — same reasoning as
+            // avatarUrl above: a manual verify confirms the SAME peer,
+            // never touches their cached avatar. Thread through
+            // unchanged so the version-dedup in AvatarAnnounceReceiver
+            // doesn't spuriously re-download an already-cached avatar.
+            avatarVersion: existing.avatarVersion
         ))
     }
 
