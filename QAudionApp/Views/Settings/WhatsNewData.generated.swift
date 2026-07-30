@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.910",
+              date: "2026-07-30",
+              title: "v1.0.910",
+              bullets: [
+                "refactor(deepfake): remove unused DeepfakeClassifier ref, document real fusion state",
+                "test(voice): fix stale 5-prompt assertion after 3-phrase Italian rewrite",
+              ]),
         .init(id: "v1.0.909",
               date: "2026-07-30",
               title: "v1.0.909",
               bullets: [
+                "chore: regenerate changelog for v1.0.909",
                 "fix(avatar): trigger E2EE avatar exchange on call-connect, not just chat decrypt",
               ]),
         .init(id: "v1.0.908",
@@ -148,13 +156,6 @@ extension ReleaseNote {
                 "fix(crypto): resolveNfcMixInputs compared SHA-256(psk) against an identity key (W-NFCIDBIND)",
                 "fix(call): fix two more consumers of the same blinded-vs-static PSK fingerprint bug",
                 "test(psk): pin blinded-wire-form vs static-fingerprint as a hard invariant",
-              ]),
-        .init(id: "v1.0.890",
-              date: "2026-07-29",
-              title: "v1.0.890",
-              bullets: [
-                "chore: regenerate changelog for v1.0.890",
-                "fix(call): resolve echoed PSK selection before handing it to the K_video salt",
               ]),
     ]
 }
