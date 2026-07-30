@@ -7,9 +7,11 @@ final class VoiceEnrollmentViewModelTests: XCTestCase {
         XCTAssertEqual(VoiceEnrollmentViewModel.mock, VoiceEnrollmentViewModel.mock)
     }
 
-    func test_mockHas5Prompts() {
-        XCTAssertEqual(VoiceEnrollmentViewModel.mock.prompts.count, 5)
-        XCTAssertEqual(VoiceEnrollmentViewModel.mock.totalPrompts, 5)
+    func test_mockHas3Prompts() {
+        // 3 Italian phrases, matching Android's 3-phrase design — see
+        // VoiceEnrollmentViewModel.mock kdoc. Was 5 English placeholders.
+        XCTAssertEqual(VoiceEnrollmentViewModel.mock.prompts.count, 3)
+        XCTAssertEqual(VoiceEnrollmentViewModel.mock.totalPrompts, 3)
     }
 
     func test_mockStartsInIntroduction() {
