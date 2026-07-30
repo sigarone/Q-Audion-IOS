@@ -92,6 +92,25 @@ enum DisplayName {
         let cleanedServerDisplay = serverDisplay.map { StringSanitiser.displayName($0, fallback: "") }
         let hasRealServerDisplay = cleanedServerDisplay.map { !$0.isEmpty && !isPlaceholderName($0) } ?? false
 
+        // W-PHONEVERIFY (2026-07-30, THIRD fix same day — real-device
+        // regression, account 135/b649b53f): this call used to sit AFTER
+        // tiers 1/2, reached only when NEITHER already returned — but tier
+        // 1 returns immediately for an already-cached bare-extension value
+        // whenever nothing better is available AT THIS SPECIFIC CALL
+        // (e.g. an incoming call with no wire caller_display/phone
+        // attached), so this line was never reached at all for that case.
+        // Confirmed live: account 135's server display_name is actually
+        // "Pavel Ivanov" today, yet the incoming-call screen kept showing
+        // "135" and the rubrica never picked it up, because nothing ever
+        // asked the server again. A bare-extension value is NEVER a truly
+        // final answer — it's what renders while nothing better is known
+        // YET — so this must fire unconditionally, before any tier can
+        // return early. Safe/cheap regardless: ensureResolved is itself
+        // deduped + cooldown-gated + a fast no-op for ids too short to be
+        // real userIds, and its own internal re-check (see that function)
+        // bails immediately once a genuinely real name is already cached.
+        NameResolutionService.shared.ensureResolved(userId: id)
+
         // 1. Rubrica (alias / local display name) — a REAL human-set name
         //    wins outright. Skip anything UUID-shaped or one of the
         //    recognised placeholder shapes (rule 5 — a stale cached
@@ -133,16 +152,8 @@ enum DisplayName {
             return cleaned
         }
         // No real name (rubrica alias or server display) resolved above —
-        // kick background enrichment NOW, regardless of which fallback tier
-        // ends up rendering below. 2026-07-30 fix: this used to only fire
-        // from tier 6 (the last-resort short8/UUID case), so any peer
-        // reachable via a bare extension (virtually everyone — every
-        // account has one) or a known phone number never triggered a
-        // profile fetch at all, and stayed on that fallback forever even
-        // though the real name was one `getPublicUserIfExists` away. Safe
-        // to call unconditionally: deduped + cooldown-gated, no-op for
-        // ids too short to be a real userId.
-        NameResolutionService.shared.ensureResolved(userId: id)
+        // enrichment was already kicked unconditionally near the top of
+        // this function (see that comment).
         // 3. Known phone number — already self-evidently a number. 2026-07-29
         //    (Pavel, explicit product decision): a phone number only ever
         //    reaches a StoredContact/knownPhoneNumber because its owner

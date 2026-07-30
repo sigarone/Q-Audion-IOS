@@ -115,8 +115,28 @@ final class NameResolutionService: @unchecked Sendable {
             // Re-check the rubrica inside the task: another path (QR scan,
             // discover refresh, InCallContainer's own W444 fetch) may have
             // landed a real name between the forUser miss and now.
+            //
+            // W-PHONEVERIFY (2026-07-30, THIRD fix same day — real-device
+            // regression, account 135/b649b53f): `isPlaceholderName` alone
+            // does NOT flag a bare-extension value ("135") — deliberately,
+            // it's DisplayName.forUser's correct tier-4 rendering on its
+            // own (see that function's kdoc). But THIS gate decides
+            // whether to even ATTEMPT a fresh profile fetch — and
+            // `forUser` only calls `ensureResolved` in the first place
+            // when tier 1 doesn't already return something (a bare
+            // extension counts, once cached). Net effect: a userId whose
+            // rubrica row was ever seeded with the bare-extension fallback
+            // could NEVER be re-resolved again, even after the server
+            // display_name that was empty at the time is later actually
+            // set (confirmed live: account 135's server display_name is
+            // "Pavel Ivanov" today, yet the incoming-call screen still
+            // showed "135" and the rubrica never picked it up). Also
+            // check `isBareExtension`, matching `mayOverwrite`'s existing
+            // rule below — a synthetic value must never block its OWN
+            // upgrade path.
             if let stored = self.contactsStore.load().first(where: { $0.userId == id }),
-               !DisplayName.isPlaceholderName(stored.displayName) {
+               !DisplayName.isPlaceholderName(stored.displayName),
+               !DisplayName.isBareExtension(stored.displayName) {
                 return
             }
             guard let api = await src() else {
