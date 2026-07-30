@@ -489,6 +489,46 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertTrue(result.isVerified)
     }
 
+    // MARK: - W-PHONEVERIFY (2026-07-30) — overwriteDisplayName
+    //
+    // insertIfAbsentOrFillBlanks deliberately never touches displayName on
+    // an existing row (see the test above) — correct for protecting a real
+    // human-set name, but it also meant a synthetic bare-extension row
+    // could NEVER be upgraded once created. This primitive is the explicit,
+    // caller-gated escape hatch (the caller — NameResolutionService, which
+    // has access to DisplayName's placeholder rules — decides when it's
+    // safe to call this; this module has no such rules of its own).
+
+    func test_overwriteDisplayName_updatesExistingRow() {
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "135", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: false
+        ))
+        let ok = store.overwriteDisplayName(userId: "u-1", to: "Mario Rossi")
+        XCTAssertTrue(ok)
+        XCTAssertEqual(store.load().first(where: { $0.userId == "u-1" })?.displayName, "Mario Rossi")
+    }
+
+    func test_overwriteDisplayName_returnsFalseWhenRowAbsent() {
+        XCTAssertFalse(store.overwriteDisplayName(userId: "u-missing", to: "Mario Rossi"))
+    }
+
+    func test_overwriteDisplayName_preservesOtherFields() {
+        let pk = Data(repeating: 0x11, count: 32)
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "135", phoneHash: "abc",
+            avatarUrl: URL(string: "https://example.com/a.jpg"), lastSeen: nil, isVerified: true,
+            pubkey: pk, phoneNumber: "+391111111111", extension: "135"
+        ))
+        _ = store.overwriteDisplayName(userId: "u-1", to: "Mario Rossi")
+        let result = store.load().first(where: { $0.userId == "u-1" })!
+        XCTAssertEqual(result.displayName, "Mario Rossi")
+        XCTAssertEqual(result.phoneNumber, "+391111111111")
+        XCTAssertEqual(result.`extension`, "135")
+        XCTAssertEqual(result.pubkey, pk)
+        XCTAssertTrue(result.isVerified)
+    }
+
     // MARK: - W-AUTOSAVE — CallEnrichmentGate (pure device-lookup gating)
 
     func test_callEnrichmentGate_skipsWhenNotAuthorized() {

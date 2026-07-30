@@ -82,13 +82,34 @@ enum DisplayName {
         let stored = contacts ?? ContactsStore().load()
         let match = stored.first(where: { $0.userId == id })
 
+        // Precompute phone availability once — reused by tier 1's defer
+        // check below AND by tier 3's own return, so the two can never
+        // silently disagree about what counts as "a phone is known".
+        let availablePhone = (knownPhoneNumber ?? match?.phoneNumber)?
+            .trimmingCharacters(in: .whitespaces)
+        let hasPhone = availablePhone?.isEmpty == false
+
         // 1. Rubrica (alias / local display name) — a REAL human-set name
         //    wins outright. Skip anything UUID-shaped or one of the
         //    recognised placeholder shapes (rule 5 — a stale cached
         //    "Phone #100"/"New User"/etc. is "no name set", not a name).
+        //    2026-07-30 fix (real-device regression, bug report 59a01e0a):
+        //    a BARE-EXTENSION-shaped rubrica value ("135") is `apply()`'s
+        //    own synthetic fallback for a peer with no server display_name
+        //    — never a human-typed name (rule stated in `isBareExtension`'s
+        //    kdoc). `isPlaceholderName` deliberately does NOT flag it (see
+        //    that test's kdoc: it IS the correct tier-4 rendering when
+        //    nothing better exists), so once written it silently outranked
+        //    a phone number that only became known LATER, even though tier
+        //    3 (phone) is supposed to rank above tier 4 (extension). Defer
+        //    ONLY when a phone is actually available — otherwise this bare
+        //    value still stands as the good-enough final answer, unchanged
+        //    from before.
         if let match {
             let dn = match.displayName.trimmingCharacters(in: .whitespaces)
-            if !dn.isEmpty, !isPlaceholderName(dn) { return dn }
+            if !dn.isEmpty, !isPlaceholderName(dn), !(isBareExtension(dn) && hasPhone) {
+                return dn
+            }
         }
         // 2. Server-supplied display, sanitised. Same placeholder check —
         //    a legacy label the SERVER (or an un-migrated peer) still
@@ -126,8 +147,7 @@ enum DisplayName {
         //    showing my phone number" actually means to the person who set
         //    it. Extension moves to tier 4, still the reliable fallback
         //    for every peer who hasn't published a phone.
-        if let phone = (knownPhoneNumber ?? match?.phoneNumber)?
-            .trimmingCharacters(in: .whitespaces), !phone.isEmpty {
+        if hasPhone, let phone = availablePhone {
             return phone
         }
         // 4. Known extension — bare digits, no prefix, no padding. See

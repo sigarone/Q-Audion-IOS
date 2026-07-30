@@ -300,6 +300,44 @@ public final class ContactsStore {
         }
     }
 
+    /// W-PHONEVERIFY (2026-07-30): directly overwrites `displayName` for an
+    /// EXISTING row — `insertIfAbsentOrFillBlanks` deliberately never
+    /// touches displayName on an existing row (a real, human-set name must
+    /// never be silently replaced), which also means a row auto-created
+    /// with a synthetic bare-extension/placeholder name could never be
+    /// upgraded later (e.g. once a device-contact match or a real server
+    /// name becomes available) — the real-device mechanism behind "the
+    /// name I set is ignored". This module has no access to the
+    /// placeholder-detection rules (`DisplayName.isPlaceholderName`/
+    /// `isBareExtension` live in QAudionApp, which imports this module, not
+    /// the other way around) — callers MUST have already decided the
+    /// overwrite is safe before calling this. No-op (returns false) if no
+    /// row exists for `userId`.
+    @discardableResult
+    public func overwriteDisplayName(userId: String, to newName: String) -> Bool {
+        var current = load()
+        guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
+        let existing = current[idx]
+        current[idx] = StoredContact(
+            userId: existing.userId,
+            displayName: newName,
+            phoneHash: existing.phoneHash,
+            avatarUrl: existing.avatarUrl,
+            lastSeen: existing.lastSeen,
+            isVerified: existing.isVerified,
+            pubkey: existing.pubkey,
+            verifiedFingerprintHex: existing.verifiedFingerprintHex,
+            verifiedAtMs: existing.verifiedAtMs,
+            verificationMethod: existing.verificationMethod,
+            presenceAuth: existing.presenceAuth,
+            presenceFloor: existing.presenceFloor,
+            phoneNumber: existing.phoneNumber,
+            extension: existing.`extension`
+        )
+        save(current)
+        return true
+    }
+
     public func wipeAll() {
         defaults.removeObject(forKey: key)
     }

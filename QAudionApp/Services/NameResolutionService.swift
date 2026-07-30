@@ -261,24 +261,41 @@ final class NameResolutionService: @unchecked Sendable {
         guard ext != nil || phone != nil else { return }
 
         // Phase 1 — device-contact enrichment.
-        let hasLocalRow = { self.contactsStore.load().first(where: { $0.userId == id }) != nil }
+        //
+        // W-PHONEVERIFY (2026-07-30, real-device regression): this gate
+        // used to key off "does ANY row exist" — but `insertIfAbsentOrFillBlanks`
+        // deliberately never touches displayName on an EXISTING row (a real
+        // human rename must never be clobbered), so once a row was
+        // auto-created with only a synthetic bare-extension/placeholder
+        // name (extension/phone alone, no real name yet — e.g. from Phase 2
+        // below, or `apply()`'s own fallback), the device lookup was
+        // skipped FOREVER for that peer — even after later adding them to
+        // the native address book. Key off "does a REAL name already
+        // exist" instead, the actual condition that makes the lookup
+        // pointless.
+        let hasRealLocalName = {
+            guard let dn = self.contactsStore.load().first(where: { $0.userId == id })?.displayName else { return false }
+            let trimmed = dn.trimmingCharacters(in: .whitespaces)
+            return !trimmed.isEmpty && !DisplayName.isPlaceholderName(trimmed) && !DisplayName.isBareExtension(trimmed)
+        }
         if CallEnrichmentGate.shouldAttemptDeviceLookup(
-            hasExistingLocalRow: hasLocalRow(),
+            hasExistingLocalRow: hasRealLocalName(),
             phoneNumber: phone,
             isContactsAuthorized: CNContactStore.authorizationStatus(for: .contacts) == .authorized
         ), let phone, let match = DeviceContactLookup.lookup(phoneNumber: phone) {
             // Race guard — re-evaluate the SAME gate immediately before
             // writing: a manual rename, a concurrent `ensureResolved` for
             // the same id, or InCallContainer's own W444 fetch may have
-            // landed a row in the window since the check above.
+            // landed a REAL name in the window since the check above.
             if CallEnrichmentGate.shouldAttemptDeviceLookup(
-                hasExistingLocalRow: hasLocalRow(),
+                hasExistingLocalRow: hasRealLocalName(),
                 phoneNumber: phone,
                 isContactsAuthorized: CNContactStore.authorizationStatus(for: .contacts) == .authorized
             ) {
                 let photoUrl = match.thumbnailData.flatMap {
                     DeviceContactLookup.cachePhoto($0, forUserId: id)
                 }
+                let hadExistingRow = self.contactsStore.load().first(where: { $0.userId == id }) != nil
                 contactsStore.insertIfAbsentOrFillBlanks(
                     userId: id,
                     fallbackDisplayName: match.name,
@@ -286,6 +303,14 @@ final class NameResolutionService: @unchecked Sendable {
                     phoneNumber: phone,
                     avatarUrl: photoUrl
                 )
+                // insertIfAbsentOrFillBlanks never writes displayName onto
+                // an EXISTING row — do that explicitly here, now that
+                // hasRealLocalName() has already confirmed any existing
+                // value is only a synthetic bare-extension/placeholder,
+                // safe to upgrade to the real device-contact name.
+                if hadExistingRow {
+                    contactsStore.overwriteDisplayName(userId: id, to: match.name)
+                }
                 RTLog.info("NameResolve", "device-contact match for \(id.prefix(8))… -> \"\(match.name)\"")
             }
         }

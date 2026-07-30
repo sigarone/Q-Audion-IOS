@@ -132,6 +132,43 @@ final class DisplayNameTests: XCTestCase {
         XCTAssertFalse(DisplayName.isPlaceholderName("7"))
     }
 
+    // MARK: - W-PHONEVERIFY (2026-07-30): a synthetic bare-extension rubrica
+    // name (NameResolutionService.apply()'s own fallback when a peer's
+    // server display_name is empty) must not permanently outrank a phone
+    // number that becomes known LATER — real-device regression (bug report
+    // 59a01e0a, screenshot showed "135" in-call for a peer whose phone the
+    // dialer had just resolved via discover-v2). isPlaceholderName itself
+    // stays unchanged (rule above) — forUser's tier-1 rubrica check must
+    // ALSO defer specifically when the stored name is bare-extension-shaped
+    // AND a phone is available, without touching the general contract.
+
+    func test_bareExtensionRubricaName_defersToPhoneNumber_whenPhoneAvailable() {
+        let contacts = [contact(userId: "u5", displayName: "135", extensionNumber: "135")]
+        XCTAssertEqual(
+            DisplayName.forUser("u5", knownPhoneNumber: "+393472103420", contacts: contacts),
+            "+393472103420"
+        )
+    }
+
+    func test_bareExtensionRubricaName_stillFinal_whenNoPhoneAvailable() {
+        // Non-regression: the 2026-07-29 design intent (isPlaceholderName
+        // kdoc above) stands when there is genuinely no phone to defer to —
+        // no flicker/re-resolution for peers who will never have one.
+        let contacts = [contact(userId: "u5", displayName: "135", extensionNumber: "135")]
+        XCTAssertEqual(DisplayName.forUser("u5", contacts: contacts), "135")
+    }
+
+    func test_realRubricaName_stillWinsOverPhoneNumber() {
+        // Non-regression: a REAL human-set name (not bare-extension-shaped)
+        // must keep winning outright — the defer-to-phone behavior is
+        // narrowly scoped to the synthetic bare-extension case only.
+        let contacts = [contact(userId: "u5", displayName: "Mario Rossi", extensionNumber: "135")]
+        XCTAssertEqual(
+            DisplayName.forUser("u5", knownPhoneNumber: "+393472103420", contacts: contacts),
+            "Mario Rossi"
+        )
+    }
+
     // MARK: - isBareExtension (the narrower, write-path-only predicate)
 
     func test_isBareExtension_trueForDigitsOnly() {
