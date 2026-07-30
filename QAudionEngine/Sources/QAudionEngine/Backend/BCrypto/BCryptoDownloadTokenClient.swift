@@ -76,12 +76,23 @@ public final class BCryptoDownloadTokenClient {
     /// and returns the (still-encrypted) blob bytes — caller is
     /// responsible for running the AEAD via the per-attachment key
     /// derived per WIRE_SPEC §5.1.3.
+    ///
+    /// 2026-07-30 fix (W-AVATAR404): this used to hit
+    /// `/api/v1/files/{fileId}` — the LEGACY, uploader-only blob route
+    /// (`cmd/bcrypto-lite/main.go handleFileDownload`), which is a
+    /// completely separate storage record from a tus.io upload and
+    /// ignores the `X-Download-*` headers entirely. Every call here goes
+    /// through `TusUploadClient`, so the record only ever exists at
+    /// `/api/v1/files/tus/{fileId}` (`TusHandler.HandleDownload`, the
+    /// handler that actually validates the capability token). The old path
+    /// 404'd unconditionally — even for the OWNER, since the legacy
+    /// handler's `db.GetFileMeta` never finds a tus-created record.
     public func downloadCiphertext(
         fileId: String,
         claim: DownloadTokenClaim
     ) async throws -> Data {
         try await rest.get(
-            "/api/v1/files/\(fileId)",
+            "/api/v1/files/tus/\(fileId)",
             headers: downloadHeaders(claim: claim)
         )
     }
