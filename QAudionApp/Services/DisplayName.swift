@@ -82,12 +82,15 @@ enum DisplayName {
         let stored = contacts ?? ContactsStore().load()
         let match = stored.first(where: { $0.userId == id })
 
-        // Precompute phone availability once — reused by tier 1's defer
-        // check below AND by tier 3's own return, so the two can never
-        // silently disagree about what counts as "a phone is known".
+        // Precompute phone/server-display availability once — reused by
+        // tier 1's defer check below AND by tiers 2/3's own returns, so
+        // none of them can silently disagree about what counts as
+        // "something better is known".
         let availablePhone = (knownPhoneNumber ?? match?.phoneNumber)?
             .trimmingCharacters(in: .whitespaces)
         let hasPhone = availablePhone?.isEmpty == false
+        let cleanedServerDisplay = serverDisplay.map { StringSanitiser.displayName($0, fallback: "") }
+        let hasRealServerDisplay = cleanedServerDisplay.map { !$0.isEmpty && !isPlaceholderName($0) } ?? false
 
         // 1. Rubrica (alias / local display name) — a REAL human-set name
         //    wins outright. Skip anything UUID-shaped or one of the
@@ -100,14 +103,25 @@ enum DisplayName {
         //    kdoc). `isPlaceholderName` deliberately does NOT flag it (see
         //    that test's kdoc: it IS the correct tier-4 rendering when
         //    nothing better exists), so once written it silently outranked
-        //    a phone number that only became known LATER, even though tier
-        //    3 (phone) is supposed to rank above tier 4 (extension). Defer
-        //    ONLY when a phone is actually available — otherwise this bare
-        //    value still stands as the good-enough final answer, unchanged
-        //    from before.
+        //    anything better arriving LATER, even though tiers 2/3 are
+        //    supposed to rank above tier 4 (extension).
+        //    2026-07-30 SECOND fix, same day (still live-broken after the
+        //    first): `startCall`'s real dial path never passes
+        //    `knownPhoneNumber` — it resolves the phone number to a STRING
+        //    once (`dialAndCall`) and threads it through as `serverDisplay`
+        //    on every subsequent `forUser` call (`_candidateLabel`). The
+        //    first fix only deferred for `knownPhoneNumber`/the STORED
+        //    row's phone field, so a phone arriving via `serverDisplay`
+        //    was invisible to this check and tier 1 kept winning — this is
+        //    the actual mechanism Pavel hit live, the first fix alone did
+        //    not close it. Defer whenever ANYTHING better is available
+        //    (phone, via either channel, OR a real serverDisplay) —
+        //    otherwise this bare value still stands as the good-enough
+        //    final answer, unchanged from before.
         if let match {
             let dn = match.displayName.trimmingCharacters(in: .whitespaces)
-            if !dn.isEmpty, !isPlaceholderName(dn), !(isBareExtension(dn) && hasPhone) {
+            let somethingBetterAvailable = hasPhone || hasRealServerDisplay
+            if !dn.isEmpty, !isPlaceholderName(dn), !(isBareExtension(dn) && somethingBetterAvailable) {
                 return dn
             }
         }
@@ -115,11 +129,8 @@ enum DisplayName {
         //    a legacy label the SERVER (or an un-migrated peer) still
         //    sends verbatim must not leak through just because it isn't
         //    UUID-shaped.
-        if let sd = serverDisplay {
-            let cleaned = StringSanitiser.displayName(sd, fallback: "")
-            if !cleaned.isEmpty, !isPlaceholderName(cleaned) {
-                return cleaned
-            }
+        if hasRealServerDisplay, let cleaned = cleanedServerDisplay {
+            return cleaned
         }
         // No real name (rubrica alias or server display) resolved above —
         // kick background enrichment NOW, regardless of which fallback tier

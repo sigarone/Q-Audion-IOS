@@ -169,6 +169,44 @@ final class DisplayNameTests: XCTestCase {
         )
     }
 
+    // MARK: - W-PHONEVERIFY, SECOND fix same day (2026-07-30): the FIRST
+    // fix above only deferred tier 1 when a phone arrived via
+    // `knownPhoneNumber` (or the stored row's own `phoneNumber` field) —
+    // still live-broken, because `startCall`'s real dial path never passes
+    // `knownPhoneNumber` at all. It resolves the phone number to a string
+    // ONCE in `dialAndCall` and threads it through every subsequent
+    // `forUser` call as `serverDisplay` (`_candidateLabel` /
+    // `_dialerLabel` in `AppState.startCall`). A phone arriving through
+    // THIS channel was invisible to the first fix, so tier 1 kept winning
+    // — this is the actual mechanism behind the still-reproducing bug.
+
+    func test_bareExtensionRubricaName_defersToRealServerDisplay_evenWhenThatIsAPhoneNumber() {
+        let contacts = [contact(userId: "u6", displayName: "135", extensionNumber: "135")]
+        XCTAssertEqual(
+            DisplayName.forUser("u6", serverDisplay: "+393472103420", contacts: contacts),
+            "+393472103420"
+        )
+    }
+
+    func test_bareExtensionRubricaName_defersToRealServerDisplay_whenItIsAName() {
+        let contacts = [contact(userId: "u6", displayName: "135", extensionNumber: "135")]
+        XCTAssertEqual(
+            DisplayName.forUser("u6", serverDisplay: "Marta Rinaldi", contacts: contacts),
+            "Marta Rinaldi"
+        )
+    }
+
+    func test_bareExtensionRubricaName_stillFinal_whenServerDisplayIsAlsoPlaceholder() {
+        // Non-regression: a placeholder-shaped serverDisplay ("Phone #100")
+        // must NOT count as "something better available" — the bare
+        // extension still stands rather than deferring to nothing real.
+        let contacts = [contact(userId: "u6", displayName: "135", extensionNumber: "135")]
+        XCTAssertEqual(
+            DisplayName.forUser("u6", serverDisplay: "Phone #100", contacts: contacts),
+            "135"
+        )
+    }
+
     // MARK: - isBareExtension (the narrower, write-path-only predicate)
 
     func test_isBareExtension_trueForDigitsOnly() {
