@@ -27,6 +27,17 @@ final class MyPhonesContainer: ObservableObject {
     @Published var savingPhones: Bool = false
     @Published var error: String? = nil
 
+    // W-PHONEVERIFY (2026-07-30, Pavel): adding a number here now requires
+    // proving ownership via SMS-OTP — the SAME rigor as initial phone
+    // registration — instead of the old flow (add(2) → save → silently
+    // push an unverified hash). `pendingOtpPhone` non-nil means step 2 of
+    // 2 (code entry) is showing for that normalized E.164 number.
+    @Published var pendingOtpPhone: String? = nil
+    @Published var otpCode: String = ""
+    @Published var requestingOtp: Bool = false
+    @Published var verifyingOtp: Bool = false
+    @Published var otpError: String? = nil
+
     private let phonesKey = "com.qaudion.profile.myPhones"
 
     init() {
@@ -52,35 +63,98 @@ final class MyPhonesContainer: ObservableObject {
         // instead of a stale container copy — see `MyPhonesScreen.headerCard`.
     }
 
-    /// Validate + add. Returns true on success (so the UI can clear the
-    /// input field), false on E.164 validation failure (the inline error
-    /// banner explains why).
-    @discardableResult
-    func addPhone() -> Bool {
+    /// Step 1 of 2: validate the typed number and request an SMS-OTP code
+    /// for it (`POST /api/v1/profile/phone/otp/request`) — the SAME
+    /// endpoint/rigor as post-registration phone verification elsewhere in
+    /// the app. On success, `pendingOtpPhone` is set and the screen shows
+    /// the code-entry step; nothing is added to the local list yet.
+    func beginAddPhone(serverUrl: String, token: String?) async {
         error = nil
         let trimmed = newPhone.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             error = "Inserisci un numero in formato E.164 (es. +393331234567)."
-            return false
+            return
         }
         // Normalize via the same helper FastSetup uses — keeps cross-
-        // platform `phone_hash` parity intact (the eventual server push
-        // hashes the canonical E.164 form, not the raw user input).
+        // platform `phone_hash` parity intact (the server hashes the
+        // canonical E.164 form, not the raw user input).
         let normalized: String
         do {
             normalized = try PhoneHashHelper.normalizeE164(trimmed)
         } catch {
             self.error = "Numero non valido: \(error.localizedDescription)"
-            return false
+            return
         }
         if phones.contains(normalized) {
             self.error = "Numero già presente nella lista."
+            return
+        }
+        guard let token, !token.isEmpty else {
+            self.error = "Sessione non attiva — accedi per verificare un numero."
+            return
+        }
+
+        requestingOtp = true
+        defer { requestingOtp = false }
+        let rest = Self.restClient(serverUrl: serverUrl, token: token)
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["phone_number": normalized])
+            _ = try await rest.post("/api/v1/profile/phone/otp/request", body: body)
+            pendingOtpPhone = normalized
+            otpCode = ""
+            otpError = nil
+        } catch {
+            self.error = "Richiesta codice fallita: \(error.localizedDescription)"
+        }
+    }
+
+    /// Step 2 of 2: verify the SMS code against `pendingOtpPhone`
+    /// (`POST /api/v1/profile/phone/otp/verify`). Only on success is the
+    /// number appended to the local list and persisted — matching how the
+    /// server only enrolls it into discovery once ownership is proven.
+    @discardableResult
+    func confirmOtp(serverUrl: String, token: String?) async -> Bool {
+        guard let phone = pendingOtpPhone else { return false }
+        let trimmedCode = otpCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCode.isEmpty else {
+            otpError = "Inserisci il codice ricevuto via SMS."
             return false
         }
-        phones.append(normalized)
-        persist()
-        newPhone = ""
-        return true
+        guard let token, !token.isEmpty else {
+            otpError = "Sessione non attiva."
+            return false
+        }
+
+        verifyingOtp = true
+        defer { verifyingOtp = false }
+        let rest = Self.restClient(serverUrl: serverUrl, token: token)
+        do {
+            let body = try JSONSerialization.data(withJSONObject: ["phone_number": phone, "code": trimmedCode])
+            _ = try await rest.post("/api/v1/profile/phone/otp/verify", body: body)
+            phones.append(phone)
+            persist()
+            newPhone = ""
+            pendingOtpPhone = nil
+            otpCode = ""
+            otpError = nil
+            return true
+        } catch {
+            otpError = "Codice non valido o scaduto: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// Abandon the pending verification (e.g. user taps "Annulla") without
+    /// adding anything — the server-side OTP simply expires unused.
+    func cancelOtp() {
+        pendingOtpPhone = nil
+        otpCode = ""
+        otpError = nil
+    }
+
+    private static func restClient(serverUrl: String, token: String) -> BCryptoRestClient {
+        let config = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
+        return BCryptoBackendProvider(config: config).getRestClient()
     }
 
     func removePhone(_ p: String) {
@@ -280,6 +354,10 @@ struct MyPhonesScreen: View {
 
             Spacer().frame(height: 4)
             addPhoneRow
+            if container.pendingOtpPhone != nil {
+                Spacer().frame(height: 8)
+                otpVerifyCard
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -363,21 +441,103 @@ struct MyPhonesScreen: View {
                         .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
                 )
             Button {
-                if container.addPhone() {
-                    snackbar?.show(.init(text: "Numero aggiunto.", severity: .info))
+                Task {
+                    await container.beginAddPhone(serverUrl: appState.serverUrl, token: appState.authService.loadToken())
                 }
             } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.onPrimary)
-                    .frame(width: 48, height: 48)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(scheme.primary)
-                    )
+                if container.requestingOtp {
+                    ProgressView()
+                        .tint(scheme.onPrimary)
+                        .frame(width: 48, height: 48)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(scheme.primary)
+                        )
+                } else {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(scheme.onPrimary)
+                        .frame(width: 48, height: 48)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(scheme.primary)
+                        )
+                }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Aggiungi numero")
+            .disabled(container.requestingOtp)
+            .accessibilityLabel("Verifica e aggiungi numero")
+        }
+    }
+
+    // MARK: - OTP verification step (W-PHONEVERIFY)
+
+    /// Shown in place of nothing extra when `pendingOtpPhone` is set —
+    /// a code was just sent via SMS and must be confirmed before the
+    /// number is added to the list / enrolled server-side.
+    @ViewBuilder
+    private var otpVerifyCard: some View {
+        if let phone = container.pendingOtpPhone {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Codice inviato a \(phone)")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                if let otpErr = container.otpError {
+                    Text(otpErr)
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(extras.riskHigh)
+                }
+                HStack(spacing: 8) {
+                    TextField("Codice a 6 cifre",
+                              text: Binding(
+                                get: { container.otpCode },
+                                set: { container.otpCode = String($0.prefix(6)) }
+                              ))
+                        .font(.system(size: 16, design: .monospaced))
+                        .keyboardType(.numberPad)
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(scheme.surfaceVariant.opacity(0.5))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
+                        )
+                    Button {
+                        Task {
+                            let ok = await container.confirmOtp(
+                                serverUrl: appState.serverUrl, token: appState.authService.loadToken())
+                            if ok {
+                                snackbar?.show(.init(text: "Numero verificato e aggiunto.", severity: .info))
+                            }
+                        }
+                    } label: {
+                        Text(container.verifyingOtp ? "…" : "Verifica")
+                            .qaudionStyle(type.labelLarge)
+                            .foregroundStyle(scheme.onPrimary)
+                            .padding(.horizontal, 16)
+                            .frame(height: 44)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(scheme.primary)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(container.verifyingOtp || container.otpCode.isEmpty)
+                }
+                Button("Annulla") {
+                    container.cancelOtp()
+                }
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(scheme.surfaceVariant.opacity(0.3))
+            )
         }
     }
 
