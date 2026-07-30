@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.899",
+              date: "2026-07-30",
+              title: "v1.0.899",
+              bullets: [
+                "fix(identity): trigger name enrichment from every DisplayName.forUser call site",
+              ]),
         .init(id: "v1.0.898",
               date: "2026-07-30",
               title: "v1.0.898",
               bullets: [
+                "chore: regenerate changelog for v1.0.898",
                 "fix(contacts): discover-v2 client decode never matched the real server",
               ]),
         .init(id: "v1.0.897",
@@ -170,13 +177,6 @@ extension ReleaseNote {
                 "fix(ci): update ios-simulator-tests destination for Xcode 26 device list",
                 "chore(ci): upgrade every Xcode pin to 26.x, not just the release pipeline",
                 "fix(livekit): qualify ConnectionState so RoomDelegate telemetry actually fires",
-              ]),
-        .init(id: "v1.0.879",
-              date: "2026-07-28",
-              title: "v1.0.879",
-              bullets: [
-                "chore: regenerate changelog for v1.0.879",
-                "fix(build): drop read-only direction clamp on existing RTCRtpTransceiver",
               ]),
     ]
 }
