@@ -154,6 +154,15 @@ struct VideoCallView: View {
         .onChange(of: appState.callContactId) { _ in
             resolveDisplayName()
         }
+        // 2026-07-30: `peerDisplayName` is a @State snapshot taken by
+        // `resolveDisplayName()` — same stale-cache shape as the
+        // ContactsListView bug (W-UUIDSWEEP class). Without this, a peer
+        // reached via bare extension/UUID fallback at call-start stays on
+        // that fallback for the ENTIRE call even after
+        // `NameResolutionService` lands the real name mid-call.
+        .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
+            resolveDisplayName()
+        }
     }
 
     // MARK: - Remote video

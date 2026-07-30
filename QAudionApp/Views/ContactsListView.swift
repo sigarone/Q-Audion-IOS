@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import QAudionEngine
 
 @MainActor
@@ -11,6 +12,7 @@ final class ContactsListContainer: ObservableObject {
     private var appState: AppState?
     private let store: ContactsStore
     private var service: ContactsRefreshService?
+    private var cancellables: Set<AnyCancellable> = []
 
     init(appState: AppState? = nil, store: ContactsStore = ContactsStore()) {
         self.appState = appState
@@ -44,6 +46,48 @@ final class ContactsListContainer: ObservableObject {
                 extension: sc.`extension`
             )
         })
+        // 2026-07-30 fix (real device evidence: a contact whose ONLY known
+        // field is the extension shows the bare extension forever — server
+        // display_name "Pavel Ivanov" never surfaces, contact detail's
+        // METADATI stays permanently blank). `DisplayName.forUser`'s async
+        // enrichment (`NameResolutionService.ensureResolved` →
+        // `enrichFromCallProfile`, the only path that fetches the server
+        // profile and persists name/phone) only fires on a tier-6 miss —
+        // never here, since tier 4 (bare extension, always known once a
+        // contact has one) succeeds first. This list — unlike the in-call
+        // screens fixed earlier — never called `ensureResolved` at all, so
+        // enrichment for a contact reached only by extension never had a
+        // chance to run. Kick it explicitly for every row (cheap — the
+        // call is internally deduped + cooldown-gated) and re-render via
+        // `.contactsDidChange` once it lands.
+        for sc in stored {
+            NameResolutionService.shared.ensureResolved(userId: sc.userId)
+        }
+        NotificationCenter.default.publisher(for: .contactsDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.reloadFromStore() }
+            .store(in: &cancellables)
+    }
+
+    /// Re-reads the store and rebuilds the view model, preserving the
+    /// current search query — shared by the `.contactsDidChange` observer
+    /// above and any other "the persisted contacts changed under us" path.
+    private func reloadFromStore() {
+        let stored = store.load()
+        viewModel = ContactsListViewModel(
+            items: stored.map { sc in
+                ContactsListViewModel.Item(
+                    userId: sc.userId,
+                    displayName: DisplayName.forUser(sc.userId, contacts: stored),
+                    phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
+                    isOnline: false,
+                    unreadMessageCount: 0,
+                    isVerified: sc.isVerified,
+                    extension: sc.`extension`
+                )
+            },
+            searchQuery: viewModel.searchQuery
+        )
     }
 
     func setSearchQuery(_ query: String) {
@@ -133,21 +177,7 @@ final class ContactsListContainer: ObservableObject {
         }
         // Refresh the in-memory view-model from the store so the new row
         // shows up immediately in the list.
-        let stored = store.load()
-        viewModel = ContactsListViewModel(
-            items: stored.map { sc in
-                ContactsListViewModel.Item(
-                    userId: sc.userId,
-                    displayName: DisplayName.forUser(sc.userId, contacts: stored),
-                    phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
-                    isOnline: false,
-                    unreadMessageCount: 0,
-                    isVerified: sc.isVerified,
-                    extension: sc.`extension`
-                )
-            },
-            searchQuery: viewModel.searchQuery
-        )
+        reloadFromStore()
         return true
     }
 
@@ -160,24 +190,11 @@ final class ContactsListContainer: ObservableObject {
                 self.scanProgress = nil
             }
             do {
-                let stored = try await svc.refreshFromPhonebook { progress in
+                _ = try await svc.refreshFromPhonebook { progress in
                     Task { @MainActor in self.scanProgress = progress }
                 }
                 await MainActor.run {
-                    self.viewModel = ContactsListViewModel(
-                        items: stored.map { sc in
-                            ContactsListViewModel.Item(
-                                userId: sc.userId,
-                                displayName: DisplayName.forUser(sc.userId, contacts: stored),
-                                phoneHash: sc.phoneHash, avatarUrl: sc.avatarUrl,
-                                isOnline: false,
-                                unreadMessageCount: 0,
-                                isVerified: sc.isVerified,
-                                extension: sc.`extension`
-                            )
-                        },
-                        searchQuery: self.viewModel.searchQuery
-                    )
+                    self.reloadFromStore()
                     self.isRefreshing = false
                 }
             } catch {

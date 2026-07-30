@@ -100,6 +100,17 @@ enum DisplayName {
                 return cleaned
             }
         }
+        // No real name (rubrica alias or server display) resolved above —
+        // kick background enrichment NOW, regardless of which fallback tier
+        // ends up rendering below. 2026-07-30 fix: this used to only fire
+        // from tier 6 (the last-resort short8/UUID case), so any peer
+        // reachable via a bare extension (virtually everyone — every
+        // account has one) or a known phone number never triggered a
+        // profile fetch at all, and stayed on that fallback forever even
+        // though the real name was one `getPublicUserIfExists` away. Safe
+        // to call unconditionally: deduped + cooldown-gated, no-op for
+        // ids too short to be a real userId.
+        NameResolutionService.shared.ensureResolved(userId: id)
         // 3. Known phone number — already self-evidently a number. 2026-07-29
         //    (Pavel, explicit product decision): a phone number only ever
         //    reaches a StoredContact/knownPhoneNumber because its owner
