@@ -60,10 +60,22 @@ final class AvatarAnnounceReceiver {
         }
         _ = token
 
+        // 2026-07-30 fix (W-AVATAR404): download via the tus recipient
+        // capability-token path — see AvatarAnnounceMeta kdoc for why the
+        // legacy `storageApi.downloadFile` always 404'd for a recipient.
         let provider = appState.makeUploadProvider()
+        let claim = DownloadTokenClaim(
+            fileId: envelope.att.fileId,
+            expiresAtMs: envelope.att.tokenExpiresMs,
+            maxUses: envelope.att.tokenMaxUses,
+            tokenHex: envelope.att.token
+        )
         let ciphertext: Data
         do {
-            ciphertext = try await provider.storageApi.downloadFile(fileId: envelope.att.fileId)
+            ciphertext = try await provider.downloadTokenClient.downloadCiphertext(
+                fileId: envelope.att.fileId,
+                claim: claim
+            )
         } catch {
             throw ReceiveError.downloadFailed(error.localizedDescription)
         }

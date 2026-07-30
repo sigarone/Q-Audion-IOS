@@ -128,13 +128,25 @@ public struct AvatarAnnounceMeta: Equatable {
     public let byteLength: Int64
     /// SHA-256 of plaintext, base64.
     public let sha256B64: String
-    /// Server-issued upload id from `POST /files/upload`.
+    /// Server-issued upload id from `POST /files/tus`.
     public let fileId: String
     /// Monotonic per-sender version counter, bumped every time the
     /// sender changes their avatar. Lets a receiver dedupe a
     /// defensively-resent announce (e.g. sent again on every
     /// call-connect) without re-downloading.
     public let version: Int
+    /// Exact ciphertext byte length as uploaded to tus — NOT the same as
+    /// [byteLength] (plaintext, AEAD-tag-exclusive). 2026-07-30 fix
+    /// (W-AVATAR404): this envelope originally shipped `fileId` from the
+    /// LEGACY `POST /files/upload` + `GET /files/{id}` pair, which
+    /// `SRV-C2` (server, 2026-05-18) locked to uploader-only — a
+    /// recipient's download always 404'd. Real cross-user delivery needs
+    /// the tus recipient-capability-token fields below, the SAME
+    /// mechanism `ChatVoiceNoteReceiver`/`GroupAttachmentReceiver` use.
+    public let cipherByteLength: Int64
+    public let token: String
+    public let tokenExpiresMs: Int64
+    public let tokenMaxUses: Int32
 
     public init(
         id: String,
@@ -142,7 +154,11 @@ public struct AvatarAnnounceMeta: Equatable {
         byteLength: Int64,
         sha256B64: String,
         fileId: String,
-        version: Int
+        version: Int,
+        cipherByteLength: Int64,
+        token: String,
+        tokenExpiresMs: Int64,
+        tokenMaxUses: Int32
     ) {
         self.id = id
         self.mime = mime
@@ -150,6 +166,10 @@ public struct AvatarAnnounceMeta: Equatable {
         self.sha256B64 = sha256B64
         self.fileId = fileId
         self.version = version
+        self.cipherByteLength = cipherByteLength
+        self.token = token
+        self.tokenExpiresMs = tokenExpiresMs
+        self.tokenMaxUses = tokenMaxUses
     }
 
     /// Validate non-empty + non-negative invariants. Throws on malformed.
@@ -160,6 +180,10 @@ public struct AvatarAnnounceMeta: Equatable {
         guard !sha256B64.isEmpty else { throw AvatarAnnounceEnvelope.Error.invalidValue("att.sha256_b64") }
         guard !fileId.isEmpty else { throw AvatarAnnounceEnvelope.Error.invalidValue("att.file_id") }
         guard version >= 0 else { throw AvatarAnnounceEnvelope.Error.invalidValue("att.version") }
+        guard cipherByteLength > 0 else { throw AvatarAnnounceEnvelope.Error.invalidValue("att.cipher_byte_length") }
+        guard !token.isEmpty else { throw AvatarAnnounceEnvelope.Error.invalidValue("att.token") }
+        guard tokenExpiresMs > 0 else { throw AvatarAnnounceEnvelope.Error.invalidValue("att.token_expires_ms") }
+        guard tokenMaxUses > 0 else { throw AvatarAnnounceEnvelope.Error.invalidValue("att.token_max_uses") }
     }
 
     static func parse(_ dict: [String: Any]) throws -> AvatarAnnounceMeta {
@@ -197,9 +221,26 @@ public struct AvatarAnnounceMeta: Equatable {
         guard version >= 0 else {
             throw AvatarAnnounceEnvelope.Error.invalidValue("att.version")
         }
+        guard let cipherByteLength = (dict["cipher_byte_length"] as? Int64) ??
+                (dict["cipher_byte_length"] as? NSNumber)?.int64Value, cipherByteLength > 0 else {
+            throw AvatarAnnounceEnvelope.Error.missingField("att.cipher_byte_length")
+        }
+        guard let token = dict["token"] as? String, !token.isEmpty else {
+            throw AvatarAnnounceEnvelope.Error.missingField("att.token")
+        }
+        guard let tokenExpiresMs = (dict["token_expires_ms"] as? Int64) ??
+                (dict["token_expires_ms"] as? NSNumber)?.int64Value, tokenExpiresMs > 0 else {
+            throw AvatarAnnounceEnvelope.Error.missingField("att.token_expires_ms")
+        }
+        guard let tokenMaxUses = (dict["token_max_uses"] as? Int32) ??
+                (dict["token_max_uses"] as? NSNumber)?.int32Value, tokenMaxUses > 0 else {
+            throw AvatarAnnounceEnvelope.Error.missingField("att.token_max_uses")
+        }
         return AvatarAnnounceMeta(
             id: id, mime: mime, byteLength: byteLength,
-            sha256B64: sha256B64, fileId: fileId, version: version
+            sha256B64: sha256B64, fileId: fileId, version: version,
+            cipherByteLength: cipherByteLength, token: token,
+            tokenExpiresMs: tokenExpiresMs, tokenMaxUses: tokenMaxUses
         )
     }
 
@@ -211,6 +252,10 @@ public struct AvatarAnnounceMeta: Equatable {
             "sha256_b64": sha256B64,
             "file_id": fileId,
             "version": NSNumber(value: version),
+            "cipher_byte_length": NSNumber(value: cipherByteLength),
+            "token": token,
+            "token_expires_ms": NSNumber(value: tokenExpiresMs),
+            "token_max_uses": NSNumber(value: tokenMaxUses),
         ]
     }
 }

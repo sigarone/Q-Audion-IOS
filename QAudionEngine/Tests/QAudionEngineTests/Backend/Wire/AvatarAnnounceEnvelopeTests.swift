@@ -18,7 +18,11 @@ final class AvatarAnnounceEnvelopeTests: XCTestCase {
             "byte_length": 41234,
             "sha256_b64": "aGVsbG8gd29ybGQK",
             "file_id": "01940000-0000-7000-8000-aaaabbbbcccc",
-            "version": 3
+            "version": 3,
+            "cipher_byte_length": 41250,
+            "token": "deadbeef",
+            "token_expires_ms": 1785500000000,
+            "token_max_uses": 10
           },
           "ts": 1785400000
         }
@@ -49,7 +53,11 @@ final class AvatarAnnounceEnvelopeTests: XCTestCase {
             byteLength: 41234,
             sha256B64: "aGVsbG8gd29ybGQK",
             fileId: "file-abc",
-            version: 7
+            version: 7,
+            cipherByteLength: 41250,
+            token: "deadbeef",
+            tokenExpiresMs: 1785500000000,
+            tokenMaxUses: 10
         )
         let original = AvatarAnnounceEnvelope(att: meta, ts: 1785400000)
         let wire = try original.toJsonString()
@@ -98,7 +106,9 @@ final class AvatarAnnounceEnvelopeTests: XCTestCase {
     func test_validate_rejectsEmptyId() {
         let meta = AvatarAnnounceMeta(
             id: "", mime: "image/jpeg", byteLength: 1,
-            sha256B64: "x", fileId: "y", version: 0
+            sha256B64: "x", fileId: "y", version: 0,
+            cipherByteLength: 10, token: "deadbeef",
+            tokenExpiresMs: 1785500000000, tokenMaxUses: 10
         )
         XCTAssertThrowsError(try meta.validate())
     }

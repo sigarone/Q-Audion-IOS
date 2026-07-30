@@ -24,6 +24,7 @@ final class AvatarAnnounceSender {
         case readFailed(String)
         case encryptFailed(String)
         case uploadFailed(String)
+        case tokenIssueFailed(String)
         case envelopeFailed(String)
         /// No real pairwise PSK exists yet for this peer — same
         /// fail-closed contract as `ChatAttachAnnounceSender`. Caller
@@ -38,6 +39,7 @@ final class AvatarAnnounceSender {
             case .readFailed(let m):   return "Lettura fallita: \(m)"
             case .encryptFailed(let m):return "Cifratura fallita: \(m)"
             case .uploadFailed(let m): return "Upload fallito: \(m)"
+            case .tokenIssueFailed(let m): return "Token di download fallito: \(m)"
             case .envelopeFailed(let m): return "Envelope fallito: \(m)"
             case .pskMissing: return "Scambio chiavi in corso — riprova tra poco."
             }
@@ -100,15 +102,31 @@ final class AvatarAnnounceSender {
             throw SendError.encryptFailed(String(describing: error))
         }
 
+        // 2026-07-30 fix (W-AVATAR404): upload via tus (not the legacy
+        // uploader-only `storageApi.uploadFile`, which SRV-C2 locked to
+        // owner-only — the recipient's download always 404'd) + mint a
+        // recipient capability token, same mechanism ChatVoiceNoteSender
+        // already uses correctly for real attachments.
         let provider = appState.makeUploadProvider()
+        guard let storageImpl = provider.storageApi as? BCryptoStorageApiImpl else {
+            throw SendError.uploadFailed("storageApi is not BCryptoStorageApiImpl")
+        }
+        let tusClient = storageImpl.makeTusClient()
         let fileId: String
         do {
-            fileId = try await provider.storageApi.uploadFile(
-                data: encrypted.ciphertext,
-                filename: "avatar-\(attachmentId.base64EncodedString().prefix(16)).bin"
-            )
+            fileId = try await tusClient.upload(data: encrypted.ciphertext)
         } catch {
             throw SendError.uploadFailed(error.localizedDescription)
+        }
+
+        let issued: IssuedDownloadToken
+        do {
+            issued = try await provider.downloadTokenClient.issueToken(
+                fileId: fileId,
+                recipientUserId: recipientUserId
+            )
+        } catch {
+            throw SendError.tokenIssueFailed(error.localizedDescription)
         }
 
         let attMeta = AvatarAnnounceMeta(
@@ -117,7 +135,11 @@ final class AvatarAnnounceSender {
             byteLength: Int64(avatarJpegBytes.count),
             sha256B64: encrypted.sha256Plain.base64EncodedString(),
             fileId: fileId,
-            version: version
+            version: version,
+            cipherByteLength: Int64(encrypted.ciphertext.count),
+            token: issued.tokenHex,
+            tokenExpiresMs: issued.expiresAtMs,
+            tokenMaxUses: issued.maxUses
         )
         let envelope = AvatarAnnounceEnvelope(
             att: attMeta,
