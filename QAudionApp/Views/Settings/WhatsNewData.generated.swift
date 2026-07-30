@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.911",
+              date: "2026-07-30",
+              title: "v1.0.911",
+              bullets: [
+                "fix(avatar): download client hits the tus blob route, not the legacy uploader-only one",
+                "fix(deepfake): LfccExtractor frameSize mismatch broke enrollment + in-call learning",
+              ]),
         .init(id: "v1.0.910",
               date: "2026-07-30",
               title: "v1.0.910",
               bullets: [
+                "chore: regenerate changelog for v1.0.910",
                 "refactor(deepfake): remove unused DeepfakeClassifier ref, document real fusion state",
                 "test(voice): fix stale 5-prompt assertion after 3-phrase Italian rewrite",
               ]),
@@ -147,15 +155,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.892",
                 "feat(auth): SMS-OTP + extension-only registration onboarding",
-              ]),
-        .init(id: "v1.0.891",
-              date: "2026-07-29",
-              title: "v1.0.891",
-              bullets: [
-                "chore: regenerate changelog for v1.0.891",
-                "fix(crypto): resolveNfcMixInputs compared SHA-256(psk) against an identity key (W-NFCIDBIND)",
-                "fix(call): fix two more consumers of the same blinded-vs-static PSK fingerprint bug",
-                "test(psk): pin blinded-wire-form vs static-fingerprint as a hard invariant",
               ]),
     ]
 }
