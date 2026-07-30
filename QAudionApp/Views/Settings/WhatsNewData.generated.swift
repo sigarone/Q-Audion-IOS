@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.900",
+              date: "2026-07-30",
+              title: "v1.0.900",
+              bullets: [
+                "feat(profile): OTP-verify phone numbers added to \"I miei numeri\"",
+              ]),
         .init(id: "v1.0.899",
               date: "2026-07-30",
               title: "v1.0.899",
               bullets: [
+                "chore: regenerate changelog for v1.0.899",
                 "fix(identity): trigger name enrichment from every DisplayName.forUser call site",
               ]),
         .init(id: "v1.0.898",
@@ -166,17 +173,6 @@ extension ReleaseNote {
                 "fix(ci): silence two build warnings (Sendable restate, dead try?)",
                 "chore(engine): fix SwiftLint identifier_name/colon findings in Audio/",
                 "chore(engine): document + suppress known-safe force-unwraps in OpusCodec",
-              ]),
-        .init(id: "v1.0.880",
-              date: "2026-07-28",
-              title: "v1.0.880",
-              bullets: [
-                "chore: regenerate changelog for v1.0.880",
-                "fix(calling): don't kill camera/track on glare rollback before accepting peer's video upgrade",
-                "chore(engine): bump GRDB 6.29.3 -> 7.11.0 now that CI runs Xcode 26.6",
-                "fix(ci): update ios-simulator-tests destination for Xcode 26 device list",
-                "chore(ci): upgrade every Xcode pin to 26.x, not just the release pipeline",
-                "fix(livekit): qualify ConnectionState so RoomDelegate telemetry actually fires",
               ]),
     ]
 }
