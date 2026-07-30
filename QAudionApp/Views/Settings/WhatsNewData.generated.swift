@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.906",
+              date: "2026-07-30",
+              title: "v1.0.906",
+              bullets: [
+                "fix(avatar): correct StoredContact argument order + thread avatarVersion in AppState migration",
+                "ci: stop auto-triggering iOS KAT cross-platform scaffold",
+              ]),
         .init(id: "v1.0.905",
               date: "2026-07-30",
               title: "v1.0.905",
               bullets: [
+                "chore: regenerate changelog for v1.0.905",
                 "feat(avatar): E2EE avatar transport — replace plaintext server-hosted avatars",
               ]),
         .init(id: "v1.0.904",
@@ -143,13 +151,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.887",
                 "fix(call): handshake budget must outlast the ring window (was 30s vs 45s ring)",
-              ]),
-        .init(id: "v1.0.886",
-              date: "2026-07-28",
-              title: "v1.0.886",
-              bullets: [
-                "chore: regenerate changelog for v1.0.886",
-                "fix(groupcall): iOS never transmitted ANY media in group calls (E2EE keyIndex never pinned)",
               ]),
     ]
 }
