@@ -1,0 +1,56 @@
+[
+  {
+    "label": "seq_0_zero_prefix",
+    "prefix_b64": "AAAAAA==",
+    "seq": 0,
+    "expected_nonce_b64": "AAAAAAAAAAAAAAAA"
+  },
+  {
+    "label": "seq_1_zero_prefix",
+    "prefix_b64": "AAAAAA==",
+    "seq": 1,
+    "expected_nonce_b64": "AAAAAAAAAAAAAAAB"
+  },
+  {
+    "label": "seq_255_zero_prefix",
+    "prefix_b64": "AAAAAA==",
+    "seq": 255,
+    "expected_nonce_b64": "AAAAAAAAAAAAAAD/"
+  },
+  {
+    "label": "seq_256_zero_prefix",
+    "prefix_b64": "AAAAAA==",
+    "seq": 256,
+    "expected_nonce_b64": "AAAAAAAAAAAAAAEA"
+  },
+  {
+    "label": "seq_2_to_32_minus_1_zero_prefix",
+    "prefix_b64": "AAAAAA==",
+    "seq": 4294967295,
+    "expected_nonce_b64": "AAAAAAAAAAD/////"
+  },
+  {
+    "label": "seq_2_to_32_zero_prefix",
+    "prefix_b64": "AAAAAA==",
+    "seq": 4294967296,
+    "expected_nonce_b64": "AAAAAAAAAAEAAAAA"
+  },
+  {
+    "label": "seq_max_int64_zero_prefix",
+    "prefix_b64": "AAAAAA==",
+    "seq": 9223372036854775807,
+    "expected_nonce_b64": "AAAAAH//////////"
+  },
+  {
+    "label": "seq_42_with_marker_prefix",
+    "prefix_b64": "yv66vg==",
+    "seq": 42,
+    "expected_nonce_b64": "yv66vgAAAAAAAAAq"
+  },
+  {
+    "label": "seq_high_with_marker_prefix",
+    "prefix_b64": "3q2+7w==",
+    "seq": 1311768467463790320,
+    "expected_nonce_b64": "3q2+7xI0VniavN7w"
+  }
+]

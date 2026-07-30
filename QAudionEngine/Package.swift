@@ -314,9 +314,11 @@ let package = Package(
                 .copy("Integration/Resources/earbud-excl-v2-kat.json"),
                 // Cross-platform canonical vectors from bcrypto-server's
                 // test/kat/wire_v1.0.0/ — see WireV1CrossPlatformKatTests.swift
-                // and that repo's test/kat/README.md. Pulled by CI (see
-                // "Pull KAT vectors" step in kat-cross-platform.yml); copy
-                // manually here for a local run.
+                // and that repo's test/kat/README.md. VENDORED (bcrypto-server
+                // is private, so CI can't curl it unauthenticated, and SPM
+                // needs every declared resource to exist on disk regardless —
+                // matches how every other KAT fixture in this file is handled).
+                // Bump by hand when the source vectors change.
                 .copy("Crypto/Resources/wire_v1.0.0/hkdf/expand.json"),
                 .copy("Crypto/Resources/wire_v1.0.0/x25519/derive.json"),
                 .copy("Crypto/Resources/wire_v1.0.0/x25519/ecdh.json"),

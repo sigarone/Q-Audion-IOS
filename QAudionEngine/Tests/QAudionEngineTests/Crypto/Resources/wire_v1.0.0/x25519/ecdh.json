@@ -1,0 +1,32 @@
+[
+  {
+    "label": "alice→bob",
+    "priv_a_b64": "Xdbjrkxtkpxyza5LMpChatlZODbYpxwi+nMTE3cTscs=",
+    "pub_b_b64": "d3mewZQxLijIkUbMy8d+jOACIH4Cm0oewlWHHP+Wjxw=",
+    "expected_shared_secret_b64": "JFqFKpyXJutV9rknR7Ub2CPQMmInJiNthg5UQIZNI1E="
+  },
+  {
+    "label": "bob→alice",
+    "priv_a_b64": "s4TnLxij5hpxvbSiuSbPbnbokrloUrAofyK9hkYBpz4=",
+    "pub_b_b64": "EZhT9HrIGOj4Ca+GSlruYCeB83J/K8MY5sy9yl2UfiI=",
+    "expected_shared_secret_b64": "JFqFKpyXJutV9rknR7Ub2CPQMmInJiNthg5UQIZNI1E="
+  },
+  {
+    "label": "alice→carol",
+    "priv_a_b64": "Xdbjrkxtkpxyza5LMpChatlZODbYpxwi+nMTE3cTscs=",
+    "pub_b_b64": "Zmfpnw6xOP8LisnXjhByEWZpF1AdYRqTfbGPYqv/NyU=",
+    "expected_shared_secret_b64": "tCOe/6+UGpGn8hwRMyeJ6NRPZ7frJ53Gy+enmCfADyc="
+  },
+  {
+    "label": "carol→dave",
+    "priv_a_b64": "y1NxVfCrzGFT+nD2iYvkGm4Fkalx/VPO8hGCdXTDhmY=",
+    "pub_b_b64": "Yo3kr5SiFqeVyF2/U6l9fbnI58mLFkZhEopoEfvnsF0=",
+    "expected_shared_secret_b64": "nez7X/IzTfBAX6aLDKqRKkWMJeP1rvIvpBivqgUPaWk="
+  },
+  {
+    "label": "dave→eve",
+    "priv_a_b64": "6G0BBY0bVnpuBTIlwLRl4NFT0P5PvwChfo39GDmbpz0=",
+    "pub_b_b64": "j9+NVZRgm0zqD50Y+uPPHk3XX87vMGwAwSupTn7AjEQ=",
+    "expected_shared_secret_b64": "xzoh5a6HxdlZZt2B1ORdLXR95XeAwnS1oadubrddREM="
+  }
+]

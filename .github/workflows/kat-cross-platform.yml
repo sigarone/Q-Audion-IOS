@@ -20,6 +20,17 @@
 # Swift code is unverified, the vectors are (Android + Desktop already pass
 # against the same bcrypto-server SHA locally).
 #
+# Vectors are VENDORED (committed under Tests/QAudionEngineTests/Crypto/
+# Resources/wire_v1.0.0/), not fetched by CI — an earlier version of this
+# workflow tried an unauthenticated `curl` against bcrypto-server at test
+# time, which 404s because that repo is PRIVATE. SPM also requires every
+# resource declared in Package.swift to physically exist at manifest-
+# resolution time regardless of network access, so a CI-fetch approach
+# can't work here anyway (it broke engine-tests.yml's build on first try).
+# Vendoring matches this repo's existing convention for every other KAT
+# fixture (see kms-prebootstrap-kat.json etc.). Bump the copies by hand
+# when bcrypto-server's test/kat/wire_v1.0.0/ changes.
+#
 # Scope: does not cover canonical_cbor/sealed_sender_cert_v2.json —
 # SenderCertV2/sealed-sender has no iOS implementation at all.
 
@@ -61,19 +72,6 @@ jobs:
           echo "Selecting: $MATCH"
           sudo xcode-select -s "$MATCH"
           xcodebuild -version
-
-      - name: Pull KAT vectors
-        env:
-          BCRYPTO_SERVER_SHA: ef3a1d423b6980b571b5d7bd63d574cb3b2b480d
-        run: |
-          set -euo pipefail
-          BASE="https://raw.githubusercontent.com/sigarone/Bcrypto-server/${BCRYPTO_SERVER_SHA}/test/kat/wire_v1.0.0"
-          DIR="QAudionEngine/Tests/QAudionEngineTests/Crypto/Resources/wire_v1.0.0"
-          mkdir -p "$DIR/hkdf" "$DIR/x25519" "$DIR/aead_nonce" "$DIR/ml_kem_1024"
-          for f in hkdf/expand.json x25519/derive.json x25519/ecdh.json \
-                   aead_nonce/derive.json ml_kem_1024/keygen.json ml_kem_1024/decap.json; do
-            curl -sSfL "$BASE/$f" -o "$DIR/$f"
-          done
 
       - name: Run SPM tests
         run: |

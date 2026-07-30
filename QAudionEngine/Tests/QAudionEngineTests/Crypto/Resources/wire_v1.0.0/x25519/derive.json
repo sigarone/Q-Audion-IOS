@@ -1,0 +1,27 @@
+[
+  {
+    "label": "alice",
+    "priv_b64": "Xdbjrkxtkpxyza5LMpChatlZODbYpxwi+nMTE3cTscs=",
+    "expected_pub_b64": "EZhT9HrIGOj4Ca+GSlruYCeB83J/K8MY5sy9yl2UfiI="
+  },
+  {
+    "label": "bob",
+    "priv_b64": "s4TnLxij5hpxvbSiuSbPbnbokrloUrAofyK9hkYBpz4=",
+    "expected_pub_b64": "d3mewZQxLijIkUbMy8d+jOACIH4Cm0oewlWHHP+Wjxw="
+  },
+  {
+    "label": "carol",
+    "priv_b64": "y1NxVfCrzGFT+nD2iYvkGm4Fkalx/VPO8hGCdXTDhmY=",
+    "expected_pub_b64": "Zmfpnw6xOP8LisnXjhByEWZpF1AdYRqTfbGPYqv/NyU="
+  },
+  {
+    "label": "dave",
+    "priv_b64": "6G0BBY0bVnpuBTIlwLRl4NFT0P5PvwChfo39GDmbpz0=",
+    "expected_pub_b64": "Yo3kr5SiFqeVyF2/U6l9fbnI58mLFkZhEopoEfvnsF0="
+  },
+  {
+    "label": "eve",
+    "priv_b64": "1S/Lb54C1sD5GBV4P2987s746Hac+FOjMoZy2/OjyYM=",
+    "expected_pub_b64": "j9+NVZRgm0zqD50Y+uPPHk3XX87vMGwAwSupTn7AjEQ="
+  }
+]
