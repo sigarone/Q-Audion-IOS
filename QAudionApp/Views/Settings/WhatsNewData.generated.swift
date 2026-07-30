@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.902",
+              date: "2026-07-30",
+              title: "v1.0.902",
+              bullets: [
+                "fix(identity): tier-1 defer must also trigger for a real serverDisplay",
+              ]),
         .init(id: "v1.0.901",
               date: "2026-07-30",
               title: "v1.0.901",
               bullets: [
+                "chore: regenerate changelog for v1.0.901",
                 "fix(identity): stop synthetic bare-extension rubrica name from sticking forever",
               ]),
         .init(id: "v1.0.900",
@@ -159,18 +166,6 @@ extension ReleaseNote {
                 "chore(lint): lower identifier_name min_length — stop flagging short math/crypto names",
                 "style: swiftlint --fix (mechanical formatting only, no semantic change)",
                 "chore(ci): add on-demand SwiftLint --fix workflow",
-              ]),
-        .init(id: "v1.0.882",
-              date: "2026-07-28",
-              title: "v1.0.882",
-              bullets: [
-                "chore: regenerate changelog for v1.0.882",
-                "fix(ci): make swiftlint-report show the real violation count, not the ~20-annotation cap",
-                "refactor(engine): extract tap-callback stages out of AudioCapture.start()",
-                "fix(ci): drop stale SPM checkout-cache fallback that masked LiveKit's AES-256 WebRTC redirect",
-                "feat(engine): bump LiveKit 2.13.1-aes256-raw -> 2.15.1-aes256-raw",
-                "fix(engine): correctly position swiftlint:disable:next in OpusCodec",
-                "chore(engine): split diagnostic-counter methods into an extension",
               ]),
     ]
 }
