@@ -7162,7 +7162,7 @@ final class AppState: ObservableObject {
         let sender = AvatarAnnounceSender(appState: self)
         let sendService = ChatMessageSendService(appState: self)
         Task {
-            for peerId in peers {
+            for (index, peerId) in peers.enumerated() {
                 do {
                     let json = try await sender.prepareEnvelopeJson(
                         avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
@@ -7173,6 +7173,24 @@ final class AppState: ObservableObject {
                     continue
                 } catch {
                     print("[AppState] avatar_announce broadcast failed to \(peerId): \(error)")
+                }
+                // Security-review fix (2026-07-30): this loop is the only
+                // place in the app that fires one HTTP upload per known
+                // contact in a tight sequence — every other send path
+                // (chat messages, attachments) targets exactly one peer
+                // per user action. Unpaced, a user with a large contact
+                // list changing their avatar could exhaust the server's
+                // shared per-IP general rate-limit bucket and start
+                // getting OTHER unrelated requests (a WS reconnect, a
+                // normal chat send) throttled with it. This broadcast has
+                // no urgency the user can observe (their own avatar
+                // already updated locally; a peer who misses this round
+                // still gets it opportunistically on the next real
+                // message exchange via maybeAnnounceAvatarTo), so pace it
+                // well under the server's sustained refill rate rather
+                // than bursting.
+                if index < peers.count - 1 {
+                    try? await Task.sleep(nanoseconds: 1_100_000_000)
                 }
             }
         }
@@ -7190,9 +7208,22 @@ final class AppState: ObservableObject {
     /// lacking a PSK at broadcast time.
     private func maybeAnnounceAvatarTo(_ peerId: String) {
         let version = selfAvatarVersion
-        guard version > 0, Self.lastAvatarVersionSent(toPeer: peerId) < version,
+        let priorSent = Self.lastAvatarVersionSent(toPeer: peerId)
+        guard version > 0, priorSent < version,
               let cacheURL = AvatarUploader.selfAvatarCacheURL,
               let jpegBytes = try? Data(contentsOf: cacheURL) else { return }
+        // Security-review fix (2026-07-30): mark optimistically BEFORE
+        // starting the async encrypt+upload+send, not only after it
+        // succeeds. This method is called unconditionally on every
+        // successful decrypt from a peer — a burst of messages from the
+        // same peer arriving before the first Task's network round trip
+        // completes (e.g. the offline pending-sync replay loop, which
+        // processes up to 50 buffered messages in a tight synchronous
+        // loop) used to re-read the still-stale "last sent" state and
+        // spawn a fresh redundant full avatar re-upload for EACH message
+        // in the burst. Marking first closes that window; on failure we
+        // restore the prior value so a later real exchange still retries.
+        Self.markAvatarSent(version: version, toPeer: peerId)
         let sender = AvatarAnnounceSender(appState: self)
         let sendService = ChatMessageSendService(appState: self)
         Task {
@@ -7201,9 +7232,11 @@ final class AppState: ObservableObject {
                     avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
                 _ = await sendService.sendEncrypted(
                     messageId: UUID(), peerUserId: peerId, plaintext: json)
-                Self.markAvatarSent(version: version, toPeer: peerId)
             } catch {
-                // Silent — retried on the next real exchange with this peer.
+                // Failed — restore the prior state so the next real
+                // exchange with this peer retries instead of treating a
+                // failed send as if it had succeeded.
+                Self.markAvatarSent(version: priorSent, toPeer: peerId)
             }
         }
     }
@@ -7224,10 +7257,32 @@ final class AppState: ObservableObject {
                 ).appendingPathComponent("qaudion/avatars", isDirectory: true)
                 try FileManager.default.createDirectory(
                     at: cacheDir, withIntermediateDirectories: true)
-                let fileURL = cacheDir.appendingPathComponent("\(senderId).jpg")
+                // Security-review fix (2026-07-30): exclude from iCloud/
+                // iTunes device backup — see AvatarUploader
+                // .excludeFromBackup's doc for why decrypted E2EE avatar
+                // plaintext must never ride into a device backup, unlike
+                // the codebase's other decrypted-media caches which
+                // already get this for free via .cachesDirectory/
+                // temporaryDirectory.
+                AvatarUploader.excludeFromBackup(cacheDir)
+                // Security-review fix (2026-07-30): never write an
+                // unvalidated wire-supplied identifier into a filesystem
+                // path — mirrors ChatAttachAnnounceReceiver's own pattern
+                // of only ever using a self-validated identifier
+                // (att.id) in a cache filename, never a peer/sender
+                // string directly. senderId is a server-issued UUID
+                // today (the server overwrites sender_id with the
+                // authenticated connection's own userID before relay),
+                // but this is defense-in-depth against ever trusting
+                // that invariant implicitly.
+                let safeName = UUID(uuidString: senderId) != nil
+                    ? senderId
+                    : Data(SHA256.hash(data: Data(senderId.utf8))).map { String(format: "%02x", $0) }.joined()
+                let fileURL = cacheDir.appendingPathComponent("\(safeName).jpg")
                 try plaintext.write(to: fileURL, options: [.atomic])
-                _ = ContactsStore().setAvatarLocalPath(
+                let applied = ContactsStore().setAvatarLocalPath(
                     userId: senderId, path: fileURL, version: envelope.att.version)
+                guard applied else { return }
                 NotificationCenter.default.post(
                     name: AppState.chatRefreshNotification,
                     object: nil,

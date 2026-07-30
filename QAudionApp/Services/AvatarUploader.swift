@@ -87,6 +87,7 @@ final class AvatarUploader {
                 try FileManager.default.createDirectory(
                     at: cacheDir, withIntermediateDirectories: true)
             }
+            Self.excludeFromBackup(cacheDir)
         } catch {
             throw Error.uploadFailed("cache dir: \(error.localizedDescription)")
         }
@@ -101,6 +102,23 @@ final class AvatarUploader {
         appState.broadcastAvatarToKnownPeers(jpegBytes: jpegData, version: version)
 
         return selfURL
+    }
+
+    /// Security-review fix (2026-07-30): decrypted avatar plaintext was
+    /// being cached under `.applicationSupportDirectory` with no
+    /// backup-exclusion flag — unlike every OTHER decrypted-E2EE-media
+    /// cache in this codebase (voice notes/attachments use `.cachesDirectory`
+    /// or `temporaryDirectory`, both excluded from iCloud/iTunes backup by
+    /// default), this rode into the device backup by default. Peer photos
+    /// obtained only via a real pairwise relationship would then be
+    /// exposed to anyone with access to that backup. Called on the
+    /// avatars directory right after creation, both here and in
+    /// AppState's `handleInboundAvatarAnnounce` (the peer-avatar cache).
+    static func excludeFromBackup(_ url: URL) {
+        var mutableUrl = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutableUrl.setResourceValues(values)
     }
 
     private static func resize(_ image: UIImage, to maxSize: CGSize) -> UIImage {

@@ -549,6 +549,33 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertFalse(store.setAvatarLocalPath(userId: "u-missing", path: path, version: 1))
     }
 
+    /// Security-review regression (2026-07-30): two overlapping
+    /// avatar_announce deliveries for the same sender can have their
+    /// async download+decrypt Tasks finish out of order (see AppState
+    /// .handleInboundAvatarAnnounce's doc). Without a monotonic guard
+    /// HERE — the single source of truth for the row — a
+    /// slower-finishing OLDER version would silently regress
+    /// avatarVersion backwards. Pin: a same-or-lower version is a
+    /// rejected no-op, never applied.
+    func test_setAvatarLocalPath_rejectsSameOrOlderVersion() {
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Mario", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: false, avatarVersion: 5
+        ))
+        let newerPath = URL(fileURLWithPath: "/tmp/avatars/u-1-v5.jpg")
+        XCTAssertTrue(store.setAvatarLocalPath(userId: "u-1", path: newerPath, version: 6))
+
+        let stalePath = URL(fileURLWithPath: "/tmp/avatars/u-1-stale.jpg")
+        XCTAssertFalse(store.setAvatarLocalPath(userId: "u-1", path: stalePath, version: 5),
+                       "same version as already-applied must be rejected")
+        XCTAssertFalse(store.setAvatarLocalPath(userId: "u-1", path: stalePath, version: 3),
+                       "older version must be rejected")
+
+        let result = store.load().first(where: { $0.userId == "u-1" })
+        XCTAssertEqual(result?.avatarVersion, 6, "the newer version must still win regardless of write order")
+        XCTAssertEqual(result?.avatarUrl, newerPath)
+    }
+
     func test_setAvatarLocalPath_preservesOtherFields() {
         let pk = Data(repeating: 0x11, count: 32)
         store.upsert(ContactsStore.StoredContact(

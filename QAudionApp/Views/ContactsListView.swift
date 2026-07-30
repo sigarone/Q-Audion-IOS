@@ -158,14 +158,35 @@ final class ContactsListContainer: ObservableObject {
             // fastSetup è onboarding-time, gestito da OnboardingFlow.
             return false
         }
+        // Security-review fix (2026-07-30): this used to build a bare
+        // StoredContact and upsert() unconditionally — a full-record
+        // replace (ContactsStore.upsert never merges). Re-scanning an
+        // ALREADY-known contact's QR (a normal re-verify/re-pair action)
+        // silently wiped displayName back to the synthetic short
+        // fallback AND reset avatarVersion/avatarUrl/phoneNumber/
+        // extension/presenceAuth/presenceFloor to nil — the exact
+        // silent-wipe bug class this session's H1-parity/avatar-transport
+        // sweep already fixed at 6 other call sites, missed here because
+        // this one predates that sweep. Look up any existing row first
+        // and preserve everything a re-scan isn't actually meant to
+        // change; only pubkey/isVerified are this action's real purpose.
+        let existing = store.load().first(where: { $0.userId == userId })
         let contact = ContactsStore.StoredContact(
             userId: userId,
-            displayName: displayName,
-            phoneHash: "",         // phone not present in QR payloads
-            avatarUrl: nil,
-            lastSeen: nil,
+            displayName: existing?.displayName ?? displayName,
+            phoneHash: existing?.phoneHash ?? "",         // phone not present in QR payloads
+            avatarUrl: existing?.avatarUrl,
+            lastSeen: existing?.lastSeen,
             isVerified: true,       // in-person scan ⇒ verified
-            pubkey: pubkey          // 32B X25519, source of canonical fingerprint
+            pubkey: pubkey,          // 32B X25519, source of canonical fingerprint
+            verifiedFingerprintHex: existing?.verifiedFingerprintHex,
+            verifiedAtMs: existing?.verifiedAtMs,
+            verificationMethod: existing?.verificationMethod,
+            presenceAuth: existing?.presenceAuth,
+            presenceFloor: existing?.presenceFloor,
+            phoneNumber: existing?.phoneNumber,
+            extension: existing?.`extension`,
+            avatarVersion: existing?.avatarVersion
         )
         store.upsert(contact)
         // W77: kick off the pairwise PSK handshake so future chats with

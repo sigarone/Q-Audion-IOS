@@ -355,16 +355,29 @@ public final class ContactsStore {
     /// freshly decrypted avatar. Sets `avatarUrl` to a LOCAL `file://`
     /// path (the caller has already written the decrypted bytes there —
     /// this method never touches the filesystem itself) and bumps
-    /// `avatarVersion` to the sender's announced version, so a later
-    /// re-sent announce at the same-or-older version is a cheap no-op
-    /// for the caller to detect via `avatarVersion` before even calling
-    /// this. No-op (returns false) if no row exists for `userId` — same
-    /// contract as `overwriteDisplayName`, this never creates a contact.
+    /// `avatarVersion` to the sender's announced version. No-op (returns
+    /// false) if no row exists for `userId` — same contract as
+    /// `overwriteDisplayName`, this never creates a contact.
+    ///
+    /// Security-review fix (2026-07-30): the caller (`AppState
+    /// .handleInboundAvatarAnnounce`) only checks "is this version newer"
+    /// ONCE, synchronously, before spawning an async download+decrypt
+    /// Task — two overlapping announces for the same sender (e.g. two
+    /// avatar changes in quick succession, or a re-sent announce racing
+    /// a slow in-flight download) can therefore have their Tasks finish
+    /// out of order, and without a guard HERE the slower-finishing
+    /// (older) one would win and silently regress avatarVersion
+    /// backwards. This method is the single source of truth for the
+    /// contact row, so the monotonic check belongs here, atomically with
+    /// the write, not only at the caller's one-time pre-Task check.
+    /// No-op (returns false, does NOT touch the row) if `version` is not
+    /// strictly greater than the currently-stored `avatarVersion`.
     @discardableResult
     public func setAvatarLocalPath(userId: String, path: URL, version: Int) -> Bool {
         var current = load()
         guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
         let existing = current[idx]
+        guard version > (existing.avatarVersion ?? -1) else { return false }
         current[idx] = StoredContact(
             userId: existing.userId,
             displayName: existing.displayName,

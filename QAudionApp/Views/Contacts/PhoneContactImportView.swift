@@ -77,7 +77,39 @@ struct PhoneContactImportView: View {
         .onAppear { refreshIfAuthorized() }
         .sheet(item: $selectedCandidate) { candidate in
             ImportContactSheet(candidate: candidate) { stored in
-                ContactsStore().upsert(stored)
+                // Security-review fix (2026-07-30): `stored` is always a
+                // freshly-built StoredContact from ImportContactSheet — an
+                // unconditional upsert() (full-record replace, never a
+                // merge) would silently wipe avatarVersion/presenceAuth/
+                // presenceFloor/pubkey/verifiedFingerprintHex if the user
+                // re-imports (or manually re-types the real userId of) a
+                // contact already known locally, the same silent-wipe bug
+                // class this session's avatar-transport sweep fixed at 6
+                // other call sites. displayName/avatarUrl/phoneNumber stay
+                // the user's fresh choice here (this is a deliberate
+                // manual-import action, unlike the QR re-scan case) —
+                // only the identity/trust/avatar-version fields thread
+                // through from any existing row.
+                let store = ContactsStore()
+                let existing = store.load().first(where: { $0.userId == stored.userId })
+                let merged = ContactsStore.StoredContact(
+                    userId: stored.userId,
+                    displayName: stored.displayName,
+                    phoneHash: stored.phoneHash,
+                    avatarUrl: stored.avatarUrl,
+                    lastSeen: existing?.lastSeen,
+                    isVerified: existing?.isVerified ?? stored.isVerified,
+                    pubkey: existing?.pubkey,
+                    verifiedFingerprintHex: existing?.verifiedFingerprintHex,
+                    verifiedAtMs: existing?.verifiedAtMs,
+                    verificationMethod: existing?.verificationMethod,
+                    presenceAuth: existing?.presenceAuth,
+                    presenceFloor: existing?.presenceFloor,
+                    phoneNumber: stored.phoneNumber,
+                    extension: existing?.`extension`,
+                    avatarVersion: existing?.avatarVersion
+                )
+                store.upsert(merged)
                 selectedCandidate = nil
                 let name = stored.displayName
                 onImported(name)
