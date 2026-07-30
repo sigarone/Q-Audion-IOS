@@ -10,14 +10,18 @@
 # This GitHub Actions workflow (CI moved off Codemagic 2026-05-06, see
 # CLAUDE.md) is the cross-platform PR-gating canary that runs only the
 # deterministic crypto KAT suite (no simulator boot needed).
+#
+# Auto-trigger disabled 2026-07-30: while KmsCrossPlatformKatTests.swift
+# doesn't exist yet, the "Run SPM tests" step falls back to re-running
+# QAudionEngineTests -- the same suite engine-tests.yml already runs on
+# the same push/PR, on the same macos-latest runner, with
+# continue-on-error so it gates nothing. Pure duplicate cost until the
+# real KAT target lands. Re-add push/pull_request triggers alongside
+# implementing KmsCrossPlatformKatTests.swift.
 
 name: KAT cross-platform
 
 on:
-  pull_request:
-    branches: [main, release/*]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 env:
