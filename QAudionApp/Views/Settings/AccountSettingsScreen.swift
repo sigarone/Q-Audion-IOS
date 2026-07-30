@@ -38,7 +38,7 @@ final class AccountSettingsContainer: ObservableObject {
             phoneHash: "",
             displayName: nil,
             statusMessage: nil,
-            avatarUrl: nil,
+            avatarUrl: AvatarUploader.selfAvatarCacheURL,
             dialExtension: nil
         )
         self.draftDisplayName = ""
@@ -124,7 +124,13 @@ final class AccountSettingsContainer: ObservableObject {
                         phoneHash: profile.phoneHash ?? "",
                         displayName: profile.displayName,
                         statusMessage: profile.statusMessage,
-                        avatarUrl: profile.avatarUrl.flatMap(URL.init(string:)),
+                        // E2EE avatar transport (2026-07-30): the self-avatar
+                        // preview reads the LOCAL plaintext cache
+                        // (AvatarUploader.uploadAndApply writes it), never
+                        // profile.avatarUrl — that field pointed at a
+                        // plaintext server URL any authenticated account
+                        // could fetch, exactly the gap this replaces.
+                        avatarUrl: AvatarUploader.selfAvatarCacheURL,
                         dialExtension: extString
                     )
                     self.draftDisplayName = profile.displayName ?? ""

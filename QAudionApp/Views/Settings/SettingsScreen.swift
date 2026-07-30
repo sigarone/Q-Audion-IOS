@@ -148,7 +148,7 @@ struct SettingsScreen: View {
                         displayName: profileDisplayName,
                         handle: profileHandle,
                         statusMessage: "Disponibile per chiamate sicure.",
-                        avatarUrl: nil,
+                        avatarUrl: AvatarUploader.selfAvatarCacheURL,
                         shortNumber: appState.currentUserDialExtension,
                         onEditTap: { /* navigation handled via row below */ }
                     )

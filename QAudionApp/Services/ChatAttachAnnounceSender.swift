@@ -178,50 +178,26 @@ final class ChatAttachAnnounceSender {
     // MARK: - Helpers
 
     /// Deterministic chain key for the transitional flow: HKDF-SHA256
-    /// over the REAL per-pair PSK, resolved from `SovereignKeyVault` via
-    /// the exact same ladder `ChatMessageSendService` uses
-    /// (`auto:<prefix>:<peerId>`, then the bare `peerId` legacy name).
-    /// Both ends derive the same 32 bytes without extra signaling. This
-    /// will be replaced with the v3 ratchet's per-message chain key once
-    /// the engine surfaces it.
+    /// over the REAL per-pair PSK. Both ends derive the same 32 bytes
+    /// without extra signaling. This will be replaced with the v3
+    /// ratchet's per-message chain key once the engine surfaces it.
     ///
-    /// FIX H1-PARITY (2026-07-30, found while designing E2EE avatar
-    /// transport — see `docs/E2EE_AVATAR_TRANSPORT_DESIGN.md`): this
-    /// function used to derive its "chain key" from
-    /// `SHA256("qaudion-attach-ikm:" + sortedPair)` — a hash of the two
-    /// PUBLIC userIds, no secret material at all, despite this same
-    /// doc comment already (wrongly) claiming it came from the vault.
-    /// `ChatMessageSendService` hit and fixed the IDENTICAL class of bug
-    /// under the name "FIX H1" ("the old deterministic
-    /// SHA-256(sorted(peer,self)) fallback was derivable by the server
-    /// ... so it gave NO confidentiality") — that fix was never ported
-    /// here, so every voice note and file attachment sent through this
-    /// path had zero real confidentiality from the server the whole
-    /// time. Throws `.pskMissing` (fail-closed, same as
-    /// `ChatMessageSendService`) rather than falling back to a
-    /// server-guessable key when no real PSK is bound yet.
+    /// Delegates to ``PairwiseChainKeyResolver`` (factored out
+    /// 2026-07-30 — see that type's doc for why a third copy-paste of
+    /// this exact ladder was refused). Throws `.pskMissing` (fail-closed,
+    /// same as `ChatMessageSendService`'s FIX H1) rather than falling
+    /// back to a server-guessable key when no real PSK is bound yet.
     private static func deterministicChainKey(
         senderId: String, recipientUserId: String, vault: SovereignKeyVault
     ) throws -> Data {
-        let prefix = recipientUserId.count > 8 ? String(recipientUserId.prefix(8)) : recipientUserId
-        let autoName = "auto:\(prefix):\(recipientUserId)"
-        let psk: Data
-        if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
-            psk = stored
-        } else if let stored = try vault.loadPsk(name: recipientUserId), !stored.isEmpty {
-            psk = stored
-        } else {
+        do {
+            return try PairwiseChainKeyResolver.deriveChainKey(
+                selfId: senderId, peerId: recipientUserId,
+                infoLabel: "attach-chain-v1", vault: vault
+            )
+        } catch PairwiseChainKeyResolver.ResolveError.pskMissing {
             throw SendError.pskMissing
         }
-        let pair = [senderId, recipientUserId].sorted().joined(separator: ":")
-        let info = Data("attach-chain-v1:\(pair)".utf8)
-        let derived = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: psk),
-            salt: Data("qaudion-attach-salt-v1".utf8),
-            info: info,
-            outputByteCount: 32
-        )
-        return derived.withUnsafeBytes { Data($0) }
     }
 
     private static func uuidV4Bytes() -> Data {

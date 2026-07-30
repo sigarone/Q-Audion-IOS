@@ -402,7 +402,14 @@ final class NameResolutionService: @unchecked Sendable {
                 // omitting them here would immediately wipe them again on
                 // the very next line of the SAME resolution pass.
                 phoneNumber: s.phoneNumber,
-                extension: s.`extension`
+                extension: s.`extension`,
+                // E2EE avatar transport (2026-07-30) — same reasoning as
+                // presenceAuth/phoneNumber above: this branch only
+                // updates displayName, and `apply()` runs on nearly
+                // every resolved call/message, so omitting this would
+                // wipe a peer's cached-avatar version on the very next
+                // routine name resolution.
+                avatarVersion: s.avatarVersion
             ))
         } else {
             contactsStore.upsert(ContactsStore.StoredContact(

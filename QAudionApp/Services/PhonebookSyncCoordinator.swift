@@ -248,13 +248,21 @@ final class PhonebookSyncCoordinator {
                 ?? entry.phoneNumber.flatMap { pn in normalized.first(where: { $0.phone == pn }) }
             guard let info else { continue }
             let uid = entry.userId
+            // E2EE avatar transport (2026-07-30) — this upsert is a
+            // full-row replace (pre-existing bulk-discovery semantics,
+            // unrelated fields unchanged), which would otherwise wipe
+            // an already-cached avatar for a peer we've been talking to
+            // before this sync ever runs. Preserve just the avatar
+            // pair — everything else keeps today's overwrite behavior.
+            let existingAvatar = contactsStore.load().first(where: { $0.userId == uid })
             let stored = ContactsStore.StoredContact(
                 userId: uid,
                 displayName: info.name,
                 phoneHash: entry.phoneHash ?? "",
-                avatarUrl: nil,
+                avatarUrl: existingAvatar?.avatarUrl,
                 lastSeen: nil,
-                isVerified: false
+                isVerified: false,
+                avatarVersion: existingAvatar?.avatarVersion
             )
             contactsStore.upsert(stored)
             results.append(ResolvedMatch(

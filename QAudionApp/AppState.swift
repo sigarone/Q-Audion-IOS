@@ -6564,6 +6564,16 @@ final class AppState: ObservableObject {
                 )
             }
             decryptedRaw = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
+            // E2EE avatar transport (2026-07-30) — a successful decrypt
+            // from `senderId` proves a real pairwise PSK exists with
+            // them right now. Opportunistically deliver our current
+            // avatar if we haven't already sent them this version —
+            // covers first-contact (this is often the very first real
+            // exchange after a key exchange completes) without needing
+            // to hook ContactKeyExchange's internal handshake-complete
+            // callback directly. Fire-and-forget; never blocks/affects
+            // this message's own processing.
+            maybeAnnounceAvatarTo(senderId)
             // W78: cross-platform attachment placeholder. Desktop and
             // Android send voice notes / files via the qa_ctl:1
             // `attach_announce` envelope (XChaCha20-Poly1305 + TUS).
@@ -6597,6 +6607,22 @@ final class AppState: ObservableObject {
                     handleControlEnvelope(env, senderId: senderId)
                     return
                 }
+            }
+            // E2EE avatar transport (2026-07-30, see
+            // docs/E2EE_AVATAR_TRANSPORT_DESIGN.md) — like delete/edit/
+            // reaction above, this must be routed BEFORE message
+            // persistence: it is never a visible chat row, only a
+            // silent local-cache update. Version-dedup BEFORE even
+            // starting the download so a defensively-resent announce
+            // (same or older version, e.g. on every call-connect) is a
+            // cheap no-op.
+            if let avatarEnv = try? AvatarAnnounceEnvelope.parse(decryptedRaw) {
+                let existingVersion = ContactsStore().load()
+                    .first(where: { $0.userId == senderId })?.avatarVersion ?? -1
+                if avatarEnv.att.version > existingVersion {
+                    handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
+                }
+                return
             }
             // W390: route `qa_grp:1` envelopes (sender_key_init,
             // sender_key_rotate) to the GroupChatService BEFORE
@@ -7079,6 +7105,140 @@ final class AppState: ObservableObject {
             object: nil,
             userInfo: ["peerUserId": envelopeSenderId, "conversationId": convId]
         )
+    }
+
+    // MARK: - E2EE avatar transport (2026-07-30)
+    //
+    // See docs/E2EE_AVATAR_TRANSPORT_DESIGN.md (bcrypto-server) for the
+    // full design. Summary: each peer's avatar is delivered as their
+    // OWN ciphertext, encrypted under a pairwise chain key derived from
+    // the real ContactKeyExchange PSK (never a shared URL any
+    // authenticated account could fetch) — same AttachmentEncryption
+    // primitive already used for voice notes/attachments, same
+    // fail-closed PSK ladder (PairwiseChainKeyResolver).
+
+    private static let selfAvatarVersionKey = "qaudion.selfAvatarVersion"
+    private static let avatarSentVersionsKey = "qaudion.avatarSentVersions"
+
+    /// Current self-avatar version. 0 = no avatar ever set (never
+    /// bumped) — `maybeAnnounceAvatarTo` treats that as "nothing to
+    /// send yet" so a brand-new account with no photo doesn't try to
+    /// broadcast an empty avatar to every peer it talks to.
+    var selfAvatarVersion: Int {
+        UserDefaults.standard.integer(forKey: Self.selfAvatarVersionKey)
+    }
+
+    /// Bumps and persists the self-avatar version. `AvatarUploader`
+    /// calls this once, right after writing the new plaintext bytes to
+    /// the local self-avatar cache file, before broadcasting.
+    func bumpSelfAvatarVersion() -> Int {
+        let next = selfAvatarVersion + 1
+        UserDefaults.standard.set(next, forKey: Self.selfAvatarVersionKey)
+        return next
+    }
+
+    private static func lastAvatarVersionSent(toPeer peerId: String) -> Int {
+        let dict = UserDefaults.standard.dictionary(forKey: avatarSentVersionsKey) as? [String: Int] ?? [:]
+        return dict[peerId] ?? -1
+    }
+
+    private static func markAvatarSent(version: Int, toPeer peerId: String) {
+        var dict = UserDefaults.standard.dictionary(forKey: avatarSentVersionsKey) as? [String: Int] ?? [:]
+        dict[peerId] = version
+        UserDefaults.standard.set(dict, forKey: avatarSentVersionsKey)
+    }
+
+    /// Encrypts the current self-avatar under EVERY currently-known
+    /// peer's own pairwise chain key and sends each their own
+    /// `avatar_announce` — called by `AvatarUploader` right after the
+    /// user changes their avatar. Best-effort per peer: one with no
+    /// real PSK yet (no completed ContactKeyExchange) is skipped here
+    /// and picked up later by `maybeAnnounceAvatarTo` on the next real
+    /// message exchange with them, rather than blocking this whole
+    /// broadcast on a key exchange that may take a while.
+    func broadcastAvatarToKnownPeers(jpegBytes: Data, version: Int) {
+        let peers = ContactsStore().load().map { $0.userId }.filter { !$0.isEmpty }
+        guard !peers.isEmpty else { return }
+        let sender = AvatarAnnounceSender(appState: self)
+        let sendService = ChatMessageSendService(appState: self)
+        Task {
+            for peerId in peers {
+                do {
+                    let json = try await sender.prepareEnvelopeJson(
+                        avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
+                    _ = await sendService.sendEncrypted(
+                        messageId: UUID(), peerUserId: peerId, plaintext: json)
+                    Self.markAvatarSent(version: version, toPeer: peerId)
+                } catch AvatarAnnounceSender.SendError.pskMissing {
+                    continue
+                } catch {
+                    print("[AppState] avatar_announce broadcast failed to \(peerId): \(error)")
+                }
+            }
+        }
+    }
+
+    /// Opportunistic avatar delivery: called after ANY successful
+    /// decrypt from `peerId` (proof a real pairwise PSK exists with
+    /// them right now). If we haven't already sent them our CURRENT
+    /// avatar version, sends it. This is what actually covers
+    /// first-contact (the very first successful exchange after a key
+    /// exchange completes is a normal `msg_receive`, which always
+    /// reaches this call) without needing a dedicated hook into
+    /// `ContactKeyExchange`'s internal OFFER/ACCEPT completion, and
+    /// self-heals a peer `broadcastAvatarToKnownPeers` had to skip for
+    /// lacking a PSK at broadcast time.
+    private func maybeAnnounceAvatarTo(_ peerId: String) {
+        let version = selfAvatarVersion
+        guard version > 0, Self.lastAvatarVersionSent(toPeer: peerId) < version,
+              let cacheURL = AvatarUploader.selfAvatarCacheURL,
+              let jpegBytes = try? Data(contentsOf: cacheURL) else { return }
+        let sender = AvatarAnnounceSender(appState: self)
+        let sendService = ChatMessageSendService(appState: self)
+        Task {
+            do {
+                let json = try await sender.prepareEnvelopeJson(
+                    avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
+                _ = await sendService.sendEncrypted(
+                    messageId: UUID(), peerUserId: peerId, plaintext: json)
+                Self.markAvatarSent(version: version, toPeer: peerId)
+            } catch {
+                // Silent — retried on the next real exchange with this peer.
+            }
+        }
+    }
+
+    /// Downloads + decrypts an inbound `avatar_announce` and caches the
+    /// plaintext locally. Never called for an envelope at or below the
+    /// already-cached version — the caller (`handleIncomingMessage`)
+    /// checks that BEFORE invoking this.
+    private func handleInboundAvatarAnnounce(_ envelope: AvatarAnnounceEnvelope, senderId: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let plaintext = try await AvatarAnnounceReceiver(appState: self)
+                    .downloadAndDecrypt(envelope: envelope, senderId: senderId)
+                let cacheDir = try FileManager.default.url(
+                    for: .applicationSupportDirectory, in: .userDomainMask,
+                    appropriateFor: nil, create: true
+                ).appendingPathComponent("qaudion/avatars", isDirectory: true)
+                try FileManager.default.createDirectory(
+                    at: cacheDir, withIntermediateDirectories: true)
+                let fileURL = cacheDir.appendingPathComponent("\(senderId).jpg")
+                try plaintext.write(to: fileURL, options: [.atomic])
+                _ = ContactsStore().setAvatarLocalPath(
+                    userId: senderId, path: fileURL, version: envelope.att.version)
+                NotificationCenter.default.post(
+                    name: AppState.chatRefreshNotification,
+                    object: nil,
+                    userInfo: ["peerUserId": senderId]
+                )
+            } catch AvatarAnnounceReceiver.ReceiveError.pskMissing {
+                self.triggerKeyExchange(with: senderId)
+            } catch {
+                print("[AppState] avatar_announce receive failed from \(senderId): \(error)")
+            }
+        }
     }
 
     /// Mark the locally-stored copies of delivered messages as

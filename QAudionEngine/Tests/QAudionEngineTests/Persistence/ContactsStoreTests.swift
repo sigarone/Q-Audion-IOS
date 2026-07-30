@@ -529,6 +529,69 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertTrue(result.isVerified)
     }
 
+    // MARK: - E2EE avatar transport (2026-07-30) — setAvatarLocalPath
+
+    func test_setAvatarLocalPath_updatesExistingRow() {
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Mario", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: false
+        ))
+        let path = URL(fileURLWithPath: "/tmp/avatars/u-1.jpg")
+        let ok = store.setAvatarLocalPath(userId: "u-1", path: path, version: 3)
+        XCTAssertTrue(ok)
+        let result = store.load().first(where: { $0.userId == "u-1" })
+        XCTAssertEqual(result?.avatarUrl, path)
+        XCTAssertEqual(result?.avatarVersion, 3)
+    }
+
+    func test_setAvatarLocalPath_returnsFalseWhenRowAbsent() {
+        let path = URL(fileURLWithPath: "/tmp/avatars/missing.jpg")
+        XCTAssertFalse(store.setAvatarLocalPath(userId: "u-missing", path: path, version: 1))
+    }
+
+    func test_setAvatarLocalPath_preservesOtherFields() {
+        let pk = Data(repeating: 0x11, count: 32)
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Mario Rossi", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: true,
+            pubkey: pk, phoneNumber: "+391111111111", extension: "135"
+        ))
+        let path = URL(fileURLWithPath: "/tmp/avatars/u-1.jpg")
+        _ = store.setAvatarLocalPath(userId: "u-1", path: path, version: 1)
+        let result = store.load().first(where: { $0.userId == "u-1" })!
+        XCTAssertEqual(result.displayName, "Mario Rossi")
+        XCTAssertEqual(result.phoneNumber, "+391111111111")
+        XCTAssertEqual(result.`extension`, "135")
+        XCTAssertEqual(result.pubkey, pk)
+        XCTAssertTrue(result.isVerified)
+    }
+
+    /// Regression for the exact bug class `overwriteDisplayName`'s own type
+    /// doc warns about: EVERY reconstruction call site
+    /// (`insertIfAbsentOrFillBlanks`, `overwriteDisplayName`, the
+    /// `applyAssuranceOutcome` → `rebuild` path) must explicitly thread
+    /// `avatarVersion` through, or it silently resets to nil the next
+    /// time any OTHER field on the row is touched — defeating the
+    /// version-dedup `AvatarAnnounceReceiver` relies on to avoid
+    /// re-downloading an already-cached avatar.
+    func test_avatarVersion_survivesUnrelatedFieldUpdates() {
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "135", phoneHash: "abc",
+            avatarUrl: URL(fileURLWithPath: "/tmp/avatars/u-1.jpg"),
+            lastSeen: nil, isVerified: false, avatarVersion: 5
+        ))
+        // overwriteDisplayName touches a different field entirely.
+        _ = store.overwriteDisplayName(userId: "u-1", to: "Mario Rossi")
+        XCTAssertEqual(store.load().first(where: { $0.userId == "u-1" })?.avatarVersion, 5)
+
+        // insertIfAbsentOrFillBlanks's existing-row branch (fill-blanks)
+        // must not wipe it either.
+        _ = store.insertIfAbsentOrFillBlanks(
+            userId: "u-1", fallbackDisplayName: "unused", extensionNumber: "999"
+        )
+        XCTAssertEqual(store.load().first(where: { $0.userId == "u-1" })?.avatarVersion, 5)
+    }
+
     // MARK: - W-AUTOSAVE — CallEnrichmentGate (pure device-lookup gating)
 
     func test_callEnrichmentGate_skipsWhenNotAuthorized() {

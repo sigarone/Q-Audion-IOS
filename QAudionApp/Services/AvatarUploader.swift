@@ -2,6 +2,21 @@ import Foundation
 import UIKit
 import QAudionEngine
 
+/// E2EE avatar transport (2026-07-30, see
+/// `docs/E2EE_AVATAR_TRANSPORT_DESIGN.md` in bcrypto-server).
+///
+/// FIX (avatar plaintext exposure): this used to upload the plaintext
+/// JPEG to the generic `/api/v1/files/upload` endpoint and set the
+/// resulting URL as `PublicUser.avatarUrl` on the profile — readable by
+/// ANY authenticated account that knew this user's id, no relationship
+/// check at all (confirmed against the live server: `handleAvatarServe`
+/// gates only on generic auth). Now the plaintext NEVER leaves the
+/// device unencrypted: it's cached locally for self-display, and a
+/// SEPARATE ciphertext is sent to each currently-known peer, encrypted
+/// under THEIR OWN pairwise chain key (`AvatarAnnounceSender` /
+/// `PairwiseChainKeyResolver`) — the server only ever sees N opaque
+/// blobs, never the image, and a peer with no real PSK yet can't
+/// decrypt any of them even if they somehow fetched the bytes.
 @MainActor
 final class AvatarUploader {
 
@@ -19,69 +34,73 @@ final class AvatarUploader {
         }
     }
 
+    /// Where the plaintext self-avatar is cached for local display
+    /// (Settings screens) — `Application Support` rather than `Caches`
+    /// since this is a durable user choice, not disposable download
+    /// state, and shouldn't be purged under disk pressure. Never
+    /// uploaded anywhere in this form; only the per-peer ciphertexts
+    /// `broadcastAvatarToKnownPeers` produces leave the device.
+    static var selfAvatarCacheURL: URL? {
+        guard let base = try? FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: false
+        ) else { return nil }
+        let path = base.appendingPathComponent("qaudion/avatars/self.jpg")
+        return FileManager.default.fileExists(atPath: path.path) ? path : nil
+    }
+
     private let appState: AppState
 
     init(appState: AppState) {
         self.appState = appState
     }
 
-    /// Upload an image, then update the user's profile avatarUrl.
-    /// Returns the resulting avatarUrl on success.
+    /// Resize + JPEG-encode, cache locally for self-display, bump the
+    /// self-avatar version, and broadcast an `avatar_announce` to every
+    /// currently-known peer (each encrypted under their own pairwise
+    /// chain key — never one shared blob). Returns the LOCAL cache file
+    /// URL (never a server URL) so existing callers that render it via
+    /// `QAudionAvatar`/`AsyncImage` keep working unchanged.
     func uploadAndApply(image: UIImage) async throws -> URL {
         guard let token = appState.authService.loadToken(), !token.isEmpty else {
             throw Error.notAuthenticated
         }
+        // `token` only gates the "authenticated" early-throw above —
+        // this path no longer calls the network directly (broadcasting
+        // goes through AvatarAnnounceSender/ChatMessageSendService,
+        // which resolve their own auth).
+        _ = token
         // Resize to 512x512 max + JPEG-encode at 0.85 quality.
         let resized = Self.resize(image, to: CGSize(width: 512, height: 512))
         guard let jpegData = resized.jpegData(compressionQuality: 0.85) else {
             throw Error.imageEncodingFailed
         }
 
-        // `token` only gates the "authenticated" early-throw above.
-        _ = token
-        // UPLOAD-401 FIX (2026-07-03) — use the refresher-wired provider
-        // builder instead of a bare BCryptoBackendProvider(config: .pinned(
-        // serverUrl:accessToken:)). The bare provider had neither refresh leg
-        // armed, so avatar upload + profile update 401'd permanently once the
-        // access token expired mid-session (same class as ChatVoiceNoteSender,
-        // see AppState.makeUploadProvider).
-        let provider = appState.makeUploadProvider()
-        // BCryptoStorageApiImpl.uploadFile(data:filename:) is not part of StorageApi
-        // protocol, so we cast to the concrete impl.
-        guard let storageImpl = provider.storageApi as? BCryptoStorageApiImpl else {
-            throw Error.uploadFailed("storageApi is not BCryptoStorageApiImpl")
-        }
-
-        // Upload to /files/upload — returns file_id.
-        let fileId: String
+        let cacheDir: URL
         do {
-            fileId = try await storageImpl.uploadFile(
-                data: jpegData,
-                filename: "avatar.jpg"
+            let base = try FileManager.default.url(
+                for: .applicationSupportDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true
             )
+            cacheDir = base.appendingPathComponent("qaudion/avatars", isDirectory: true)
+            if !FileManager.default.fileExists(atPath: cacheDir.path) {
+                try FileManager.default.createDirectory(
+                    at: cacheDir, withIntermediateDirectories: true)
+            }
         } catch {
-            throw Error.uploadFailed("storage: \(error.localizedDescription)")
+            throw Error.uploadFailed("cache dir: \(error.localizedDescription)")
         }
-
-        // Build the avatar URL from the file_id (server convention:
-        // GET /api/v1/files/{file_id} returns the binary).
-        let avatarUrlString = "\(appState.serverUrl)/api/v1/files/\(fileId)"
-        guard let avatarUrl = URL(string: avatarUrlString) else {
-            throw Error.uploadFailed("Could not construct avatarUrl from file_id \(fileId)")
-        }
-
-        // Update profile.
+        let selfURL = cacheDir.appendingPathComponent("self.jpg")
         do {
-            try await provider.accountApi.updateProfile(
-                displayName: nil,
-                statusMessage: nil,
-                avatarUrl: avatarUrl.absoluteString
-            )
+            try jpegData.write(to: selfURL, options: [.atomic])
         } catch {
-            throw Error.uploadFailed("profile update: \(error.localizedDescription)")
+            throw Error.uploadFailed("local cache write: \(error.localizedDescription)")
         }
 
-        return avatarUrl
+        let version = appState.bumpSelfAvatarVersion()
+        appState.broadcastAvatarToKnownPeers(jpegBytes: jpegData, version: version)
+
+        return selfURL
     }
 
     private static func resize(_ image: UIImage, to maxSize: CGSize) -> UIImage {

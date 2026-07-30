@@ -72,6 +72,13 @@ struct LiveInCallScreen: View {
     /// ContactsStore. nil quando il contatto è sconosciuto o non ha
     /// ancora un'estensione registrata — l'avatar ricade su initials().
     @State private var cachedPeerShortNumber: String? = nil
+    /// E2EE avatar transport (2026-07-30) — local `file://` path to the
+    /// peer's decrypted avatar, if `AvatarAnnounceReceiver` has cached
+    /// one. Resolved alongside `cachedPeerDisplayName`/
+    /// `cachedPeerShortNumber` in `resolvePeerDisplayName()` for the
+    /// same reason (avoid a ContactsStore disk read on every
+    /// TimelineView tick).
+    @State private var cachedPeerAvatarUrl: URL? = nil
 
     /// Reference timestamp (UNIX epoch seconds) used to derive a
     /// counting-down rekey clock until the engine surfaces a real
@@ -182,7 +189,7 @@ struct LiveInCallScreen: View {
     private var inCallScreenView: some View {
         InCallScreen(
                 peerDisplayName: cachedPeerDisplayName,
-                avatarUrl: nil,
+                avatarUrl: cachedPeerAvatarUrl,
                 durationSeconds: Int(appState.callService.callDurationSeconds),
                 confidence: Double(appState.confidenceScore),
                 rekeyInSeconds: liveRekeyInSeconds,
@@ -596,6 +603,7 @@ struct LiveInCallScreen: View {
         guard let id = appState.callContactId else {
             cachedPeerDisplayName = "Sconosciuto"
             cachedPeerShortNumber = nil
+            cachedPeerAvatarUrl = nil
             return
         }
         let stored = contactsStore.load()
@@ -608,6 +616,7 @@ struct LiveInCallScreen: View {
         cachedPeerShortNumber = DisplayName.resolvedExtension(
             for: id, serverDisplay: appState.incomingCallerName.isEmpty ? nil : appState.incomingCallerName,
             knownExtension: match?.`extension`, contacts: stored)
+        cachedPeerAvatarUrl = match?.avatarUrl
         // 2026-07-29 fix (same root cause as InCallContainer's — see its
         // doc comment): `DisplayName.forUser`'s async enrichment
         // (`NameResolutionService.ensureResolved` → `enrichFromCallProfile`,

@@ -61,6 +61,12 @@ struct ContentView: View {
     // TimelineView tick. Updated whenever callContactId changes.
     @State private var outgoingDisplayName: String = ""
     @State private var outgoingShortNumber: String? = nil
+    /// E2EE avatar transport (2026-07-30) — local `file://` path to the
+    /// peer's decrypted avatar, resolved alongside `outgoingDisplayName`/
+    /// `outgoingShortNumber` in `resolveOutgoingName`. Closes the
+    /// documented "no 1:1 call surface shows a real avatar photo" gap
+    /// for the incoming-ring and outgoing/connecting screens below.
+    @State private var outgoingAvatarUrl: URL? = nil
     private let contactsStore = ContactsStore()
 
     var body: some View {
@@ -263,15 +269,16 @@ struct ContentView: View {
     /// `.onChange`/`.onAppear` above) that the connecting/active screen
     /// shows a moment later on accept — reusing them means the ring shows
     /// the identical name/number, no separate resolution path to keep in
-    /// sync. `avatarUrl` is nil (falls back to the initials bubble) for
-    /// the same reason `OutgoingCallScreen` never fetches a photo either —
-    /// no 1:1 call surface on iOS shows a real avatar photo today.
+    /// sync. `avatarUrl` comes from the SAME `outgoingAvatarUrl` `@State`
+    /// (E2EE avatar transport, 2026-07-30) — falls back to the initials
+    /// bubble only when no decrypted avatar is cached yet for this peer.
     private func incoming1to1CallScreen() -> some View {
         let name = outgoingDisplayName.isEmpty
             ? appState.incomingCallerName
             : outgoingDisplayName
         return IncomingCallScreen(
             peerDisplayName: name.isEmpty ? "Sconosciuto" : name,
+            avatarUrl: outgoingAvatarUrl,
             callType: appState.isVideoCall ? .video : .audio,
             peerShortNumber: outgoingShortNumber,
             onAccept: { appState.answerIncomingCall() },
@@ -391,6 +398,7 @@ struct ContentView: View {
             : outgoingDisplayName
         return OutgoingCallScreen(
             peerDisplayName: name,
+            avatarUrl: outgoingAvatarUrl,
             state: outState,
             elapsedSeconds: Int(appState.callService.callDurationSeconds),
             peerShortNumber: outgoingShortNumber,
@@ -408,6 +416,7 @@ struct ContentView: View {
         guard let id = contactId else {
             outgoingDisplayName = ""
             outgoingShortNumber = nil
+            outgoingAvatarUrl = nil
             return
         }
         let contacts = contactsStore.load()
@@ -416,5 +425,6 @@ struct ContentView: View {
         outgoingDisplayName = DisplayName.forUser(id, serverDisplay: wireCandidate, contacts: contacts)
         outgoingShortNumber = DisplayName.resolvedExtension(
             for: id, serverDisplay: wireCandidate, knownExtension: match?.`extension`, contacts: contacts)
+        outgoingAvatarUrl = match?.avatarUrl
     }
 }

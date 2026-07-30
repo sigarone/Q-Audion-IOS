@@ -139,31 +139,21 @@ final class ChatAttachAnnounceReceiver {
     // MARK: - Helpers
 
     /// Mirrors `ChatAttachAnnounceSender.deterministicChainKey` exactly
-    /// (same FIX H1-PARITY fail-closed PSK ladder) — from the receiver's
-    /// side, the PEER whose PSK is looked up is `senderId` (the other
-    /// party), not `recipientUserId` (self).
+    /// (same FIX H1-PARITY fail-closed PSK ladder, factored into
+    /// ``PairwiseChainKeyResolver``) — from the receiver's side, the
+    /// PEER whose PSK is looked up is `senderId` (the other party), not
+    /// `recipientUserId` (self).
     private static func deterministicChainKey(
         senderId: String, recipientUserId: String, vault: SovereignKeyVault
     ) throws -> Data {
-        let prefix = senderId.count > 8 ? String(senderId.prefix(8)) : senderId
-        let autoName = "auto:\(prefix):\(senderId)"
-        let psk: Data
-        if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
-            psk = stored
-        } else if let stored = try vault.loadPsk(name: senderId), !stored.isEmpty {
-            psk = stored
-        } else {
+        do {
+            return try PairwiseChainKeyResolver.deriveChainKey(
+                selfId: recipientUserId, peerId: senderId,
+                infoLabel: "attach-chain-v1", vault: vault
+            )
+        } catch PairwiseChainKeyResolver.ResolveError.pskMissing {
             throw ReceiveError.pskMissing
         }
-        let pair = [senderId, recipientUserId].sorted().joined(separator: ":")
-        let info = Data("attach-chain-v1:\(pair)".utf8)
-        let derived = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: psk),
-            salt: Data("qaudion-attach-salt-v1".utf8),
-            info: info,
-            outputByteCount: 32
-        )
-        return derived.withUnsafeBytes { Data($0) }
     }
 
     private static func uuidBytes(from str: String) -> Data? {

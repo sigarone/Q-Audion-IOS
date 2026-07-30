@@ -88,6 +88,15 @@ public final class ContactsStore {
         /// (`PublicUser.extensionNumber`), never bulk-synced. `nil` until
         /// learned.
         public let `extension`: String?
+        /// E2EE avatar transport (2026-07-30, see
+        /// `docs/E2EE_AVATAR_TRANSPORT_DESIGN.md`) — `avatarUrl` above is
+        /// now a LOCAL `file://` path to the decrypted avatar cached by
+        /// `AvatarAnnounceReceiver`, never a server URL. `avatarVersion`
+        /// is the sender's monotonic counter from the last
+        /// `avatar_announce` actually applied — lets a re-sent announce
+        /// (e.g. on every call-connect) be deduped without
+        /// re-downloading. `nil` for a contact with no avatar cached yet.
+        public let avatarVersion: Int?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
@@ -98,7 +107,8 @@ public final class ContactsStore {
                     presenceAuth: PresenceAuth? = nil,
                     presenceFloor: Bool? = nil,
                     phoneNumber: String? = nil,
-                    `extension`: String? = nil) {
+                    `extension`: String? = nil,
+                    avatarVersion: Int? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -113,6 +123,7 @@ public final class ContactsStore {
             self.presenceFloor = presenceFloor
             self.phoneNumber = phoneNumber
             self.`extension` = `extension`
+            self.avatarVersion = avatarVersion
         }
     }
 
@@ -278,7 +289,8 @@ public final class ContactsStore {
                 presenceAuth: existing.presenceAuth,
                 presenceFloor: existing.presenceFloor,
                 phoneNumber: existing.phoneNumber ?? phoneNumber,
-                extension: existing.`extension` ?? extensionNumber
+                extension: existing.`extension` ?? extensionNumber,
+                avatarVersion: existing.avatarVersion
             )
             current[idx] = patched
             save(current)
@@ -332,7 +344,43 @@ public final class ContactsStore {
             presenceAuth: existing.presenceAuth,
             presenceFloor: existing.presenceFloor,
             phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`
+            extension: existing.`extension`,
+            avatarVersion: existing.avatarVersion
+        )
+        save(current)
+        return true
+    }
+
+    /// E2EE avatar transport (2026-07-30) — the ONE write path for a
+    /// freshly decrypted avatar. Sets `avatarUrl` to a LOCAL `file://`
+    /// path (the caller has already written the decrypted bytes there —
+    /// this method never touches the filesystem itself) and bumps
+    /// `avatarVersion` to the sender's announced version, so a later
+    /// re-sent announce at the same-or-older version is a cheap no-op
+    /// for the caller to detect via `avatarVersion` before even calling
+    /// this. No-op (returns false) if no row exists for `userId` — same
+    /// contract as `overwriteDisplayName`, this never creates a contact.
+    @discardableResult
+    public func setAvatarLocalPath(userId: String, path: URL, version: Int) -> Bool {
+        var current = load()
+        guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
+        let existing = current[idx]
+        current[idx] = StoredContact(
+            userId: existing.userId,
+            displayName: existing.displayName,
+            phoneHash: existing.phoneHash,
+            avatarUrl: path,
+            lastSeen: existing.lastSeen,
+            isVerified: existing.isVerified,
+            pubkey: existing.pubkey,
+            verifiedFingerprintHex: existing.verifiedFingerprintHex,
+            verifiedAtMs: existing.verifiedAtMs,
+            verificationMethod: existing.verificationMethod,
+            presenceAuth: existing.presenceAuth,
+            presenceFloor: existing.presenceFloor,
+            phoneNumber: existing.phoneNumber,
+            extension: existing.`extension`,
+            avatarVersion: version
         )
         save(current)
         return true
@@ -479,7 +527,8 @@ public final class ContactsStore {
             presenceAuth: presenceAuth,
             presenceFloor: presenceFloor,
             phoneNumber: base.phoneNumber,
-            extension: base.`extension`
+            extension: base.`extension`,
+            avatarVersion: base.avatarVersion
         )
     }
 }

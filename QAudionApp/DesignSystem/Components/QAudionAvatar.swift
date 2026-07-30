@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Reusable circular avatar. 1:1 port of Android
 /// `qaudion-android-new/core/core-ui/.../components/AvatarImage.kt`.
@@ -24,6 +25,17 @@ import SwiftUI
 struct QAudionAvatar: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
+
+    /// E2EE avatar transport (2026-07-30) — `imageURL` for a peer/self
+    /// avatar is now a LOCAL `file://` path to a decrypted image
+    /// (`AvatarAnnounceReceiver`'s cache, or the self-avatar cache — see
+    /// `docs/E2EE_AVATAR_TRANSPORT_DESIGN.md`), never a server URL. Load
+    /// state for that case lives here rather than going through
+    /// `AsyncImage` (which is built around network fetches with its own
+    /// URLCache — using it for a local file works but adds pointless
+    /// indirection and gives us no control over decode-off-main-thread
+    /// timing for a component rendered in fast-scrolling lists).
+    @State private var localImage: UIImage?
 
     enum Kind {
         case person
@@ -68,7 +80,9 @@ struct QAudionAvatar: View {
 
     @ViewBuilder
     private var avatarBody: some View {
-        if let url = imageURL {
+        if let url = imageURL, url.isFileURL {
+            localFileAvatar(url)
+        } else if let url = imageURL {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .empty:
@@ -86,6 +100,36 @@ struct QAudionAvatar: View {
             }
         } else {
             placeholderCircle
+        }
+    }
+
+    /// Loads a locally-cached decrypted avatar off the main thread.
+    /// `.task(id:)` re-runs whenever `url` changes (e.g. a fresher
+    /// `avatar_announce` version landed and `ContactsStore
+    /// .setAvatarLocalPath` bumped the URL's path) and is automatically
+    /// cancelled if the view disappears mid-load (fast-scrolling lists).
+    @ViewBuilder
+    private func localFileAvatar(_ url: URL) -> some View {
+        Group {
+            if let img = localImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
+            } else {
+                placeholderCircle
+            }
+        }
+        .task(id: url) {
+            localImage = nil
+            let loaded = await Task.detached(priority: .utility) { () -> UIImage? in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                return UIImage(data: data)
+            }.value
+            if !Task.isCancelled {
+                localImage = loaded
+            }
         }
     }
 
