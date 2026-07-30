@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.907",
+              date: "2026-07-30",
+              title: "v1.0.907",
+              bullets: [
+                "fix(avatar): apply adversarial security-review findings",
+              ]),
         .init(id: "v1.0.906",
               date: "2026-07-30",
               title: "v1.0.906",
               bullets: [
+                "chore: regenerate changelog for v1.0.906",
                 "fix(avatar): correct StoredContact argument order + thread avatarVersion in AppState migration",
                 "ci: stop auto-triggering iOS KAT cross-platform scaffold",
               ]),
@@ -144,13 +151,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.888",
                 "fix(groupcall): Desktop ctrl envelopes -- the 1.0.887 sweep was inert, here is why",
-              ]),
-        .init(id: "v1.0.887",
-              date: "2026-07-28",
-              title: "v1.0.887",
-              bullets: [
-                "chore: regenerate changelog for v1.0.887",
-                "fix(call): handshake budget must outlast the ring window (was 30s vs 45s ring)",
               ]),
     ]
 }
