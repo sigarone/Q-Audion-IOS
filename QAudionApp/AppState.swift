@@ -7234,9 +7234,30 @@ final class AppState: ObservableObject {
     private func maybeAnnounceAvatarTo(_ peerId: String) {
         let version = selfAvatarVersion
         let priorSent = Self.lastAvatarVersionSent(toPeer: peerId)
-        guard version > 0, priorSent < version,
-              let cacheURL = AvatarUploader.selfAvatarCacheURL,
-              let jpegBytes = try? Data(contentsOf: cacheURL) else { return }
+        guard version > 0 else {
+            print("[avatar] skip to=\(peerId.prefix(8)) reason=no-self-avatar-yet")
+            return
+        }
+        guard priorSent < version else {
+            // 2026-07-31 (W-AVATARSTUCK): markAvatarSent (below) only means
+            // "upload+ship succeeded", NOT "recipient actually decrypted
+            // it" — a peer whose download silently failed (W-AVATAR404, or
+            // any future transport regression) stays permanently marked
+            // "sent" and every future trigger no-ops forever until
+            // `version` bumps again. The optimistic-mark-then-restore-on-
+            // throw logic below only protects against SEND-side failures,
+            // not this one (the send genuinely succeeds; only the
+            // recipient's download/decrypt fails, which the sender never
+            // learns about). Cost real investigation time on Android
+            // already; logged here so it's the first thing a log-pull shows.
+            print("[avatar] skip to=\(peerId.prefix(8)) reason=already-marked-sent priorSent=\(priorSent) currentVersion=\(version)")
+            return
+        }
+        guard let cacheURL = AvatarUploader.selfAvatarCacheURL,
+              let jpegBytes = try? Data(contentsOf: cacheURL) else {
+            print("[avatar] skip to=\(peerId.prefix(8)) reason=self-file-missing-or-unreadable")
+            return
+        }
         // Security-review fix (2026-07-30): mark optimistically BEFORE
         // starting the async encrypt+upload+send, not only after it
         // succeeds. This method is called unconditionally on every
