@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.912",
+              date: "2026-07-31",
+              title: "v1.0.912",
+              bullets: [
+                "feat(call): shield trust badges, voice-key badge, self-echo guard, auto-enroll+wave",
+                "fix(avatar): diagnose permanently-poisoned sent-version bookkeeping",
+                "fix(avatar): accept + send both att/avatar keys for avatar_announce",
+                "fix(avatar): route avatar_announce through tus + recipient download token",
+              ]),
         .init(id: "v1.0.911",
               date: "2026-07-30",
               title: "v1.0.911",
               bullets: [
+                "chore: regenerate changelog for v1.0.911",
                 "fix(avatar): download client hits the tus blob route, not the legacy uploader-only one",
                 "fix(deepfake): LfccExtractor frameSize mismatch broke enrollment + in-call learning",
               ]),
@@ -148,13 +158,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.893",
                 "fix(build): fix 2 real compile errors from the unverified-by-compilation W-EXTPREFIX pass",
-              ]),
-        .init(id: "v1.0.892",
-              date: "2026-07-29",
-              title: "v1.0.892",
-              bullets: [
-                "chore: regenerate changelog for v1.0.892",
-                "feat(auth): SMS-OTP + extension-only registration onboarding",
               ]),
     ]
 }
