@@ -47,6 +47,28 @@ final class AccountSettingsContainer: ObservableObject {
         return URL(string: base.absoluteString + "#v\(version)")
     }
 
+    private static let iconAvatarKey = "qaudion.profile.iconAvatar"
+    /// Which of the two mutually-exclusive self-avatar choices is
+    /// currently active — "icon" or "photo". Fix (2026-07-31): before this,
+    /// `setIconAvatar` only updated the in-memory `viewModel` — the very
+    /// next `loadFromServer()` (fires on every `.onAppear`, i.e. every time
+    /// the user navigates back into this screen) unconditionally rebuilt
+    /// `avatarUrl` from the LOCAL PHOTO CACHE ONLY, silently discarding the
+    /// icon choice with no error — "set an icon, go back, find the old
+    /// photo again". Now both `setIconAvatar` and a successful photo
+    /// upload record which one is current, and every `avatarUrl`
+    /// computation checks this flag first.
+    private static let avatarKindKey = "qaudion.profile.avatarKind"
+
+    private static func resolveAvatarURL(version: Int) -> URL? {
+        if UserDefaults.standard.string(forKey: avatarKindKey) == "icon",
+           let iconString = UserDefaults.standard.string(forKey: iconAvatarKey),
+           let iconURL = URL(string: iconString) {
+            return iconURL
+        }
+        return selfAvatarCacheURLBusted(version: version)
+    }
+
     init(appState: AppState) {
         self.appState = appState
         // W73: start with an EMPTY state, NOT `.mock` (which had the
@@ -58,7 +80,7 @@ final class AccountSettingsContainer: ObservableObject {
             phoneHash: "",
             displayName: nil,
             statusMessage: nil,
-            avatarUrl: Self.selfAvatarCacheURLBusted(version: appState.selfAvatarVersion),
+            avatarUrl: Self.resolveAvatarURL(version: appState.selfAvatarVersion),
             dialExtension: nil
         )
         self.draftDisplayName = ""
@@ -99,7 +121,8 @@ final class AccountSettingsContainer: ObservableObject {
 
     func setIconAvatar(_ iconName: String) {
         let url: String = "sficon://" + iconName
-        UserDefaults.standard.set(url, forKey: "qaudion.profile.iconAvatar")
+        UserDefaults.standard.set(url, forKey: Self.iconAvatarKey)
+        UserDefaults.standard.set("icon", forKey: Self.avatarKindKey)
         viewModel = AccountSettingsViewModel(
             userId: viewModel.userId,
             phoneHash: viewModel.phoneHash,
@@ -150,7 +173,7 @@ final class AccountSettingsContainer: ObservableObject {
                         // profile.avatarUrl — that field pointed at a
                         // plaintext server URL any authenticated account
                         // could fetch, exactly the gap this replaces.
-                        avatarUrl: Self.selfAvatarCacheURLBusted(version: self.appState?.selfAvatarVersion ?? 0),
+                        avatarUrl: Self.resolveAvatarURL(version: self.appState?.selfAvatarVersion ?? 0),
                         dialExtension: extString
                     )
                     self.draftDisplayName = profile.displayName ?? ""
@@ -307,12 +330,15 @@ final class AccountSettingsContainer: ObservableObject {
                 // bumped the version), so update the preview from that
                 // directly and never gate it on the network.
                 await MainActor.run {
+                    // A freshly-uploaded photo always supersedes a prior
+                    // icon choice — see `avatarKindKey` kdoc.
+                    UserDefaults.standard.set("photo", forKey: Self.avatarKindKey)
                     self.viewModel = AccountSettingsViewModel(
                         userId: self.viewModel.userId,
                         phoneHash: self.viewModel.phoneHash,
                         displayName: self.viewModel.displayName,
                         statusMessage: self.viewModel.statusMessage,
-                        avatarUrl: Self.selfAvatarCacheURLBusted(version: self.appState?.selfAvatarVersion ?? 0),
+                        avatarUrl: Self.resolveAvatarURL(version: self.appState?.selfAvatarVersion ?? 0),
                         dialExtension: self.viewModel.dialExtension
                     )
                     self.isLoading = false
