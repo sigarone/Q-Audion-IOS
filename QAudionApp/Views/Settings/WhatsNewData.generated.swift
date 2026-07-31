@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.917",
+              date: "2026-07-31",
+              title: "v1.0.917",
+              bullets: [
+                "fix(upload): crash in tus chunk-loop Data slicing (100% reproducible on camera avatar upload)",
+              ]),
         .init(id: "v1.0.916",
               date: "2026-07-31",
               title: "v1.0.916",
               bullets: [
+                "chore: regenerate changelog for v1.0.916",
                 "fix(avatar): fix discarded send outcomes, unguarded key-exchange send, silent receive-path failures",
               ]),
         .init(id: "v1.0.915",
@@ -150,14 +157,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.898",
                 "fix(contacts): discover-v2 client decode never matched the real server",
-              ]),
-        .init(id: "v1.0.897",
-              date: "2026-07-29",
-              title: "v1.0.897",
-              bullets: [
-                "chore: regenerate changelog for v1.0.897",
-                "fix(contacts): phone number now outranks extension in identity display",
-                "fix(call): surface dial-by-phone errors, fix misleading group-call count",
               ]),
     ]
 }
