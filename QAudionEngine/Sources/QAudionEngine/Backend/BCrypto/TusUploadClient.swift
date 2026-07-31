@@ -261,7 +261,20 @@ public final class TusUploadClient {
         var offset = Int(startOffset)
         while offset < data.count {
             let end = min(offset + chunkSize, data.count)
-            let chunkData = Data(data[offset..<end])
+            // Crash fix (2026-07-31): confirmed via symbolicated MetricKit
+            // crash (build 1.0.916, camera-capture avatar upload,
+            // reproducible every time) — `Data(data[offset..<end])` was
+            // landing on Foundation's GENERIC Sequence-based `Data`
+            // initializer instead of the direct-copy overload (`Data`'s
+            // range subscript already returns `Data`, so wrapping it in
+            // `Data(...)` again is both redundant and, apparently, unsafe
+            // here). `subdata(in:)` is Foundation's dedicated API for
+            // exactly this — extract a byte range into a fresh
+            // zero-indexed `Data` — and avoids the ambiguous overload
+            // resolution entirely. This is the almost-certain root cause
+            // of the original unsymbolicated "Avatar" crash tag from
+            // build 1.0.913 too (same call path, same operation).
+            let chunkData = data.subdata(in: offset..<end)
             let newOffset = try await patchWithRetry(fileId: fileId, offset: offset, bytes: chunkData)
             offset = newOffset
             onProgress?(Int64(offset), total)
