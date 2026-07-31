@@ -42,6 +42,14 @@ public final class CallSessionKeyBroker {
     private var setPskName: ((String) -> Void)?
     private var setPskMethod: ((String) -> Void)?
     private var setPskFingerprint: ((String) -> Void)?
+    /// Items 2 + 5 (2026-07-31 InCallScreen Android→iOS port) — fired at the
+    /// end of `registerPqcSessionKey`, i.e. the single point every
+    /// handshake-completion path (caller, responder, PSK-metadata variant)
+    /// already converges on, mirroring Android's `CallController.onConnected`.
+    /// AppState uses it to kick off auto voice-enrollment
+    /// (`maybeAutoStartVoiceLearning`) and the VOICE_KEY announce loop
+    /// (`startVoiceKeyAnnounceLoop`) — see `AppState.handleCallSessionEstablished`.
+    private var onSessionEstablished: ((String) -> Void)?
 
     public init() {}
 
@@ -54,7 +62,8 @@ public final class CallSessionKeyBroker {
         setPskActive: @escaping (Bool) -> Void,
         setPskName: ((String) -> Void)? = nil,
         setPskMethod: ((String) -> Void)? = nil,
-        setPskFingerprint: ((String) -> Void)? = nil
+        setPskFingerprint: ((String) -> Void)? = nil,
+        onSessionEstablished: ((String) -> Void)? = nil
     ) {
         self.getCallContactId = getCallContactId
         self.setSessionKey = setSessionKey
@@ -62,6 +71,7 @@ public final class CallSessionKeyBroker {
         self.setPskName = setPskName
         self.setPskMethod = setPskMethod
         self.setPskFingerprint = setPskFingerprint
+        self.onSessionEstablished = onSessionEstablished
     }
 
     /// DISPLAY-ONLY variant of ``registerPqcSessionKey(_:for:)`` that also
@@ -125,6 +135,10 @@ public final class CallSessionKeyBroker {
             name: Self.sasReadyNotification,
             object: nil,
             userInfo: ["peerId": peerId])
+        // Items 2 + 5 — see `onSessionEstablished`'s doc. Fired AFTER the
+        // guards above have already confirmed this is a genuine, current,
+        // valid-length key for the call actually in progress.
+        onSessionEstablished?(peerId)
     }
 
     /// Helper: derive a 32-byte session key from raw HKDF inputs.

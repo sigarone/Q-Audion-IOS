@@ -283,18 +283,27 @@ struct LiveInCallScreen: View {
                 // W-NFCCOMMON follow-up (Pavel decision) — independent of
                 // assurancePresentation too (see AppState.callPskMixedThisCall's doc).
                 pskMixedThisCall: appState.callPskMixedThisCall,
+                // "Voce come chiave" (item 2, 2026-07-31 InCallScreen
+                // Android→iOS port) — the PEER's own device fact, announced
+                // over the opaque_message VOICE_KEY piggy-back (see
+                // AppState.callPeerVoiceKeyEnrolled's doc).
+                peerVoiceKeyEnrolled: appState.callPeerVoiceKeyEnrolled,
                 onAddParticipant: {},
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
                 // W502: toggle the diagnostics overlay.
                 onToggleDiagnostics: handleToggleDiagnostics,
-                // Feature B ("voce verificata") — manual call-time voice
-                // learning, fed from AppState.voiceLearningState (itself fed
-                // from the SAME decoded RX audio the Guardian ribbon above
-                // already uses). nil between calls / before the user taps
-                // "Avvia apprendimento voce".
+                // Feature B ("voce verificata") — W-AUTOLEARN parity (item 5):
+                // fed from AppState.voiceLearningState (itself fed from the
+                // SAME decoded RX audio the Guardian ribbon above already
+                // uses). nil between calls / before auto-enrollment kicks in
+                // (see AppState.maybeAutoStartVoiceLearning) — no more manual
+                // trigger to wire a button to.
                 voiceLearningState: appState.voiceLearningState,
-                onStartVoiceLearning: { appState.startVoiceLearning() }
+                onStartVoiceLearning: { appState.startVoiceLearning() },
+                // Item 5 — live raw per-frame Guardian confidence wave,
+                // replaces the old manual-CTA slot for the rest of the call.
+                voiceConfidenceHistory: appState.voiceConfidenceHistory
             )
     }
 

@@ -330,6 +330,18 @@ public enum CallPiggyBack: Equatable {
     /// printing "unrecognised envelope".
     case caps(callId: String, raw: String)
 
+    /// `<callId>|VOICE_KEY:<state>` — "voce come chiave" cross-device
+    /// attestation: the peer announces whether Voice-as-Key is enrolled on
+    /// THEIR OWN device (self-declared, never a crypto proof on its own —
+    /// see `AppState.routeInboundCallPiggyBack`'s `.voiceKey` case and
+    /// `AppState.announceVoiceKeyEnrollment`). Symmetric and role-agnostic:
+    /// both the caller and the callee send their own announce and listen
+    /// for the peer's. `<state>` is `1` / `true` / `on` → `enrolled=true`,
+    /// anything else → `false`. Mirrors Android's
+    /// `WsCallSignaller.VOICE_KEY_PAYLOAD_PREFIX` / `VoiceKeyAnnounce` byte
+    /// for byte.
+    case voiceKey(callId: String, enrolled: Bool)
+
     /// `<callId>|HANGUP:<reason>` — secondary hangup signal. The
     /// authoritative teardown still arrives on the `call_hangup` WS
     /// envelope; this branch exists so the parser doesn't classify the
@@ -388,6 +400,13 @@ public enum CallPiggyBack: Equatable {
         if let v = stripPrefix(payload, "CAPS:") {
             return .caps(callId: callId, raw: v)
         }
+        // VOICE_KEY:<state> — same case-insensitive active-alias set as
+        // SCREEN_SHARE above, plus the bare "1"/"0" Android also accepts.
+        if let v = stripPrefix(payload, "VOICE_KEY:") {
+            let lower = v.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let enrolled = (lower == "1" || lower == "start" || lower == "on" || lower == "true")
+            return .voiceKey(callId: callId, enrolled: enrolled)
+        }
         if let v = stripPrefix(payload, "HANGUP:") {
             return .hangup(callId: callId, reason: v)
         }
@@ -427,6 +446,13 @@ public enum CallPiggyBack: Equatable {
     /// hook) so AppState doesn't have to know the framing details.
     public static func serializeScreenShare(callId: String, active: Bool) -> String {
         return "\(callId)|SCREEN_SHARE:\(active ? "start" : "stop")"
+    }
+
+    /// Build a wire string for a VOICE_KEY announce — the inverse of the
+    /// `.voiceKey` parse branch. `"1"`/`"0"` byte-for-byte matches Android's
+    /// `WsCallSignaller.sendVoiceKeyAnnounce`.
+    public static func serializeVoiceKey(callId: String, enrolled: Bool) -> String {
+        return "\(callId)|VOICE_KEY:\(enrolled ? "1" : "0")"
     }
 
     /// Build a wire string for an earbud handshake PDU — the inverse of

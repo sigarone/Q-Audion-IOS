@@ -686,6 +686,17 @@ final class AppState: ObservableObject {
     /// call", never "is everything about it fine" — that second question is what
     /// the warning banner is for. `false` only for genuine PQC-only (S10, n==0).
     @Published var callPskMixedThisCall: Bool = false
+    /// "Voce come chiave" cross-device attestation (item 2, 2026-07-31
+    /// InCallScreen Android→iOS port) — `true` once the PEER has announced,
+    /// over the `<callId>|VOICE_KEY:1` opaque_message piggy-back
+    /// (`CallPiggyBack.voiceKey`, see `routeInboundCallPiggyBack`), that
+    /// Voice-as-Key is enrolled on THEIR OWN device. Self-declared, NOT a
+    /// crypto proof — it says nothing about whether THIS call has actually
+    /// recognized their voice (that's the separate live Guardian
+    /// confidence signal). Mirrors Android's
+    /// `CallController.peerVoiceKeyEnrolled`. Reset at the start of every
+    /// new call, same lifecycle as `callMutualNfcInCommon` above.
+    @Published var callPeerVoiceKeyEnrolled: Bool = false
     /// D11 — `sender_device_id` (server-stamped) captured from the most recent
     /// `call_incoming` envelope, keyed by `sender_id`. The OFFER/ACCEPT bundles
     /// arrive over `opaque_message`, which the server relays WITHOUT a device id
@@ -1343,16 +1354,51 @@ final class AppState: ObservableObject {
     /// Reset in endCall().
     @Published var voiceSpectrum: [Float]?
 
-    /// Feature B ("voce verificata") — state of the manually-started,
-    /// per-contact call-time voice-learning session (`VoiceLearningSession`,
-    /// fed from the SAME decoded RX audio as `voiceAnalysis`/`voiceSpectrum`
-    /// above via `QAudionCallIntegration.processIncomingAudio`). nil when no
-    /// session has ever been started this call. `LiveInCallScreen` maps this
-    /// onto the "Avvia apprendimento voce" button + progress indicator.
-    /// Reset in endCall(). On `.completed(contactId:)` this also writes the
-    /// real "voice verified" signal via `ContactsStore.setVoiceVerified` —
-    /// see the observer set up alongside `callService.onVoiceLearningStateChanged`.
+    /// Feature B ("voce verificata") — state of the per-contact call-time
+    /// voice-learning session (`VoiceLearningSession`, fed from the SAME
+    /// decoded RX audio as `voiceAnalysis`/`voiceSpectrum` above via
+    /// `QAudionCallIntegration.processIncomingAudio`). nil when no session
+    /// has ever run this call. W-AUTOLEARN parity (item 5, 2026-07-31
+    /// InCallScreen Android→iOS port): no more manual "Avvia apprendimento
+    /// voce" tap — `maybeAutoStartVoiceLearning` starts this itself, silently,
+    /// the first time `handleCallSessionEstablished` ever fires for a
+    /// contact with no existing `VoiceprintStore` template. `InCallScreen`
+    /// now only ever SHOWS state (a brief progress indicator while
+    /// `.inProgress`, the live `voiceConfidenceHistory` wave otherwise) —
+    /// see `InCallScreen.voiceLearningControl`. Reset in endCall(). On
+    /// `.completed(contactId:)` this also writes the real "voice verified"
+    /// signal via `ContactsStore.setVoiceVerified` — see the observer set up
+    /// alongside `callService.onVoiceLearningStateChanged`.
     @Published var voiceLearningState: VoiceLearningSession.State?
+
+    /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
+    /// of RAW (un-smoothed) per-analyzed-frame Guardian confidence scores
+    /// for the live wave that replaces the old manual voice-learning CTA
+    /// slot (see `InCallScreen.voiceConfidenceWave`). Deliberately NOT
+    /// `confidenceScore` (the alarm-only, heavily-smoothed EMA number the
+    /// CONFIDENCE stat/avatar halo use — see `GuardianMode.onAlert`'s
+    /// 5s-sustained-red gate — which barely moves and would read as a dead
+    /// flat line): this mirrors `ConfidenceIndex.scoreHistory` directly, the
+    /// same raw per-frame values Guardian already computes every ~5th audio
+    /// frame internally but never surfaced to any UI before this pass.
+    /// Sampled by `voiceWaveTimer` (armed/torn down alongside
+    /// `cryptoMeterTimer`, same lifecycle) rather than pushed per-frame —
+    /// polling a `NSLock`-protected snapshot is cheap and avoids adding a
+    /// new per-frame callback across the engine boundary. Empty between
+    /// calls / before the first analyzed frame — the wave then renders its
+    /// neutral flat-line state, never fabricated motion.
+    @Published var voiceConfidenceHistory: [Float] = []
+    /// Sampler for `voiceConfidenceHistory` — same pattern as
+    /// `cryptoMeterTimer` immediately below, just a faster tick (5 Hz) so
+    /// the wave reads as genuinely live rather than stepping once a second.
+    private var voiceWaveTimer: Timer?
+
+    /// "Voce come chiave" (item 2, 2026-07-31 InCallScreen Android→iOS
+    /// port) — in-flight fast-burst + persistent re-announce loop for our
+    /// own VOICE_KEY enrollment state, armed once per call by
+    /// `handleCallSessionEstablished`. See `startVoiceKeyAnnounceLoop`'s doc
+    /// for the retry/persist cadence. Cancelled in `endCall()`.
+    private var voiceKeyAnnounceTask: Task<Void, Never>?
 
     /// Unified call UI — crypto-engine meter. Live count of real AES-256-GCM
     /// frame operations per second, sampled once/sec from the ground-truth
@@ -2991,7 +3037,8 @@ final class AppState: ObservableObject {
                 setPskActive: { [weak self] in self?.pskActive = $0 },
                 setPskName: { [weak self] in self?.pskName = $0 },
                 setPskMethod: { [weak self] in self?.pskMethod = $0 },
-                setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 }
+                setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 },
+                onSessionEstablished: { [weak self] peerId in self?.handleCallSessionEstablished(peerId: peerId) }
             )
             // W383: forward broker notifications to the WebRTC
             // controller so the PQC SRTP sealer (W376/W382) gets
@@ -3843,6 +3890,7 @@ final class AppState: ObservableObject {
             self.callAssuranceExpectedNfc = false
             self.callMutualNfcInCommon = false
             self.callPskMixedThisCall = false
+            self.callPeerVoiceKeyEnrolled = false
             // WIRE_SPEC §8.1: a fresh incoming call clears any stale
             // "peer paused their camera" state from a previous call.
             self.remoteVideoPaused = false
@@ -7712,6 +7760,16 @@ final class AppState: ObservableObject {
         // intact. See AndroidHandshakeBundle.swift `CallPiggyBack`
         // and docs/SCREEN_SHARE_PROTOCOL.md.
         if let piggy = CallPiggyBack.parse(blobStr) {
+            // Self-echo guard (see OpaqueSelfEchoFilter doc) — bcrypto-lite
+            // bounces every opaque_message back to its own sender with
+            // sender_id rewritten to the recipient, so identity comparison
+            // can't catch this here; content-fingerprint the raw wire
+            // string instead. Dropped silently, same as any other
+            // malformed/unexpected piggy-back on this channel.
+            if OpaqueSelfEchoFilter.shared.shouldDropInbound(blobStr) {
+                print("[AppState] piggy-back dropped as self-echo: \(blobStr.prefix(48))…")
+                return
+            }
             Task { @MainActor [weak self] in
                 self?.routeInboundCallPiggyBack(piggy, senderId: senderId)
             }
@@ -8340,6 +8398,19 @@ final class AppState: ObservableObject {
             // actual verify. Still PURE OBSERVATION: `handleInboundKcMac` only
             // ever records a telemetry verdict, never gates/drops the call.
             handleInboundKcMac(callId: callId, raw: raw, senderId: senderId)
+        case .voiceKey(let callId, let enrolled):
+            // "Voce come chiave" cross-device attestation — the peer's own
+            // self-declared local enrollment state. Sender guard mirrors
+            // EARBUDPDU/FPSET: only the current call's peer can update this.
+            // Self-declared, never a crypto proof on its own — see
+            // `callPeerVoiceKeyEnrolled`'s doc and the trust-bar shield's
+            // tap-to-explain copy for the exact caveat shown to the user.
+            guard callContactId == senderId else {
+                print("[AppState] VOICE_KEY dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
+            }
+            callPeerVoiceKeyEnrolled = enrolled
+            print("[AppState] VOICE_KEY received callId=\(callId.prefix(8))… enrolled=\(enrolled) from=\(senderId.prefix(8))…")
         }
     }
 
@@ -8374,6 +8445,10 @@ final class AppState: ObservableObject {
         let roleByte: UInt8 = event.isInitiator ? 0x01 : 0x02
         let wire = CallPiggyBack.serializeKcMac(callId: event.callId, role: roleByte, mac: ownMac)
         let peerId = event.peerId
+        // Item 4 — self-echo guard (see OpaqueSelfEchoFilter doc). KCMAC is
+        // one-shot per handshake, not periodic/symmetric, but marking it is
+        // free and keeps every piggy-back send on this channel consistent.
+        OpaqueSelfEchoFilter.shared.markSent(wire)
         if let provider = liveProvider {
             Task {
                 try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
@@ -8707,6 +8782,8 @@ final class AppState: ObservableObject {
             return
         }
         let wire = CallPiggyBack.serializeScreenShare(callId: callId, active: active)
+        // Item 4 — self-echo guard (see OpaqueSelfEchoFilter doc).
+        OpaqueSelfEchoFilter.shared.markSent(wire)
         do {
             try await provider.callingApi.sendOpaqueMessageString(
                 recipientId: peer, payload: wire)
@@ -8906,7 +8983,8 @@ final class AppState: ObservableObject {
                 setPskActive: { [weak self] in self?.pskActive = $0 },
                 setPskName: { [weak self] in self?.pskName = $0 },
                 setPskMethod: { [weak self] in self?.pskMethod = $0 },
-                setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 }
+                setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 },
+                onSessionEstablished: { [weak self] peerId in self?.handleCallSessionEstablished(peerId: peerId) }
             )
                 CallSessionKeyBroker.shared.registerPqcSessionKey(
                     sharedSecret, for: peerId)
@@ -10027,6 +10105,7 @@ final class AppState: ObservableObject {
         callAssuranceExpectedNfc = false
         callMutualNfcInCommon = false
         callPskMixedThisCall = false
+        callPeerVoiceKeyEnrolled = false
         // WIRE_SPEC §8.1: a fresh outgoing call clears any stale "peer
         // paused their camera" state from a previous call.
         remoteVideoPaused = false
@@ -10065,6 +10144,8 @@ final class AppState: ObservableObject {
         isVideoCall = video
         // Unified call UI — arm the 1 Hz crypto-engine sampler for this call.
         startCryptoMeter()
+        // Item 5 — arm the 5 Hz voice-confidence wave sampler for this call.
+        startVoiceConfidenceWaveSampler()
         // WIRE_SPEC §8.3 — we placed the call → impolite on any later glare.
         originalCallRole = .caller
         // PersistentCallRecord — register outgoing call. Use activeCallKitId if
@@ -10391,7 +10472,8 @@ final class AppState: ObservableObject {
                             setPskActive: { [weak self] in self?.pskActive = $0 },
                             setPskName: { [weak self] in self?.pskName = $0 },
                             setPskMethod: { [weak self] in self?.pskMethod = $0 },
-                            setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 }
+                            setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 },
+                            onSessionEstablished: { [weak self] peerId in self?.handleCallSessionEstablished(peerId: peerId) }
                         )
                         CallSessionKeyBroker.shared.registerPqcSessionKey(
                             sharedSecret, for: peerId)
@@ -10934,6 +11016,8 @@ final class AppState: ObservableObject {
         self.incomingCallRingVisible = false
         // Unified call UI — arm the 1 Hz crypto-engine sampler for this call.
         self.startCryptoMeter()
+        // Item 5 — arm the 5 Hz voice-confidence wave sampler for this call.
+        self.startVoiceConfidenceWaveSampler()
         self.activeCallKitId = uuid
         if self.callState == .ringing {
             self.callState = .active
@@ -11048,6 +11132,157 @@ final class AppState: ObservableObject {
         cryptoMeterTimer = nil
         cryptoMeterLastTotal = 0
         cryptoOpsPerSec = 0
+    }
+
+    // MARK: - Item 5 (2026-07-31 InCallScreen Android→iOS port) — live
+    //         voice-confidence wave sampler
+
+    /// Arm the 5 Hz `voiceConfidenceHistory` sampler for the current call.
+    /// Same idempotent/lifecycle pattern as `startCryptoMeter()` immediately
+    /// above — call from both the outgoing and incoming `isInCall = true`
+    /// sites. Reads `ConfidenceIndex.scoreHistory` off whichever
+    /// `QAudionCallIntegration` is actually active (caller vs responder —
+    /// same fallback `routeInboundCallPiggyBack`'s FPSET branch already
+    /// uses), a pure READ behind that class's own `NSLock`, never touching
+    /// the audio-processing hot path.
+    private func startVoiceConfidenceWaveSampler() {
+        voiceWaveTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let integration = self.callService.callIntegration ?? self.responderCallIntegration
+                self.voiceConfidenceHistory = integration?.getGuardianMode().getConfidenceIndex().scoreHistory ?? []
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        voiceWaveTimer = timer
+    }
+
+    /// Stop the wave sampler and clear its readout. Called from `endCall()`
+    /// so the wave never ticks between calls and the next call starts from
+    /// an empty history (the flat-line neutral state).
+    private func stopVoiceConfidenceWaveSampler() {
+        voiceWaveTimer?.invalidate()
+        voiceWaveTimer = nil
+        voiceConfidenceHistory = []
+    }
+
+    // MARK: - Items 2 + 5 (2026-07-31 InCallScreen Android→iOS port) —
+    //         call-connect hook: auto voice-enrollment + VOICE_KEY announce
+
+    /// Fired once this call's REAL PQC session key is established for
+    /// `peerId` — wired as `CallSessionKeyBroker`'s `onSessionEstablished`
+    /// closure (see `connectPersistentSocket`/the two other
+    /// `CallSessionKeyBroker.shared.bind(...)` call sites), the single
+    /// convergence point every handshake-completion code path (caller,
+    /// responder, PSK-metadata variant) already funnels through — mirrors
+    /// Android's `CallController.onConnected`. May fire more than once for
+    /// the same connect (`onPqcSessionKeyEstablished` and
+    /// `onPqcSessionKeyEstablishedWithPsk` can both land) — both callees
+    /// below are written to be safe under a duplicate call.
+    private func handleCallSessionEstablished(peerId: String) {
+        maybeAutoStartVoiceLearning(for: peerId)
+        startVoiceKeyAnnounceLoop(peerId: peerId)
+    }
+
+    /// W-AUTOLEARN parity (Android 2026-07-31) — "voce verificata" no
+    /// longer waits for a manual tap: the first time this call's session
+    /// key lands for a contact with no existing `VoiceprintStore` template,
+    /// silently start the same ~3s background enrollment against the live
+    /// RX audio `startVoiceLearning()` already uses. No-op on every later
+    /// call once a template exists. Guarded against the double-fire
+    /// `handleCallSessionEstablished` documents: only starts when no
+    /// session is already running/finished for this call.
+    private func maybeAutoStartVoiceLearning(for peerId: String) {
+        guard callContactId == peerId else { return }
+        switch voiceLearningState {
+        case .inProgress, .completed:
+            return
+        default:
+            break
+        }
+        guard !VoiceprintStore().hasTemplate(contactId: peerId) else { return }
+        RTLog.info("call", "auto-starting voice learning for new contact=\(peerId.prefix(8))…")
+        startVoiceLearning()
+    }
+
+    /// W-VOICEKEYRETRY / W-VOICEKEYPERSIST parity (Android 2026-07-30/31) —
+    /// announce THIS device's own Voice-as-Key enrollment to the peer over
+    /// the opaque_message piggy-back channel (`VOICE_KEY:1`/`VOICE_KEY:0`),
+    /// and keep re-announcing for the whole call rather than a single
+    /// fire-and-forget send: a real device-pair repro on Android showed a
+    /// one-shot announce silently lost on the relay for an entire call.
+    /// Fast burst (`voiceKeyAnnounceRetries`× at
+    /// `voiceKeyAnnounceRetryIntervalMs`) covers the common transient-
+    /// packet-loss-at-connect case; after that, a low-rate persistent
+    /// re-announce (`voiceKeyAnnouncePersistIntervalMs` ± jitter) self-heals
+    /// within one interval no matter what caused the original miss — cheap
+    /// (one tiny opaque_message roughly every 20s), never blocks/gates the
+    /// call either way. Jitter is applied ONLY on the persist phase: both
+    /// peers start this loop at roughly the same connect moment, so a FIXED
+    /// persist interval would keep both devices' sends in near-lockstep for
+    /// the rest of the call — if one cycle ever lands inside
+    /// `OpaqueSelfEchoFilter`'s match window it would recur every cycle
+    /// after. Jitter breaks that phase-lock (W-SELFECHOSYMMETRIC parity).
+    private func startVoiceKeyAnnounceLoop(peerId: String) {
+        voiceKeyAnnounceTask?.cancel()
+        let enrolled = VoiceprintStore().hasTemplate(contactId: VoiceprintStore.deviceOwnerId)
+        voiceKeyAnnounceTask = Task { @MainActor [weak self] in
+            var attempt = 0
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.announceVoiceKeyEnrollment(enrolled: enrolled, peerId: peerId)
+                attempt += 1
+                let intervalMs: Int
+                if attempt <= Self.voiceKeyAnnounceRetries {
+                    intervalMs = Self.voiceKeyAnnounceRetryIntervalMs
+                } else {
+                    intervalMs = Self.voiceKeyAnnouncePersistIntervalMs
+                        + Int.random(in: -Self.voiceKeyAnnounceJitterMs...Self.voiceKeyAnnounceJitterMs)
+                }
+                try? await Task.sleep(nanoseconds: UInt64(intervalMs) * 1_000_000)
+            }
+        }
+    }
+
+    /// Fast-burst retry count before switching to the persist-phase cadence.
+    private static let voiceKeyAnnounceRetries = 5
+    /// Fast-burst interval (ms) — matches Android's
+    /// `VOICE_KEY_ANNOUNCE_RETRY_INTERVAL_MS`, deliberately ABOVE
+    /// `OpaqueSelfEchoFilter`'s 2s match window so a device's own pending
+    /// entry always expires between sends.
+    private static let voiceKeyAnnounceRetryIntervalMs = 3_000
+    /// Persist-phase base interval (ms) — matches Android's
+    /// `VOICE_KEY_ANNOUNCE_PERSIST_INTERVAL_MS`.
+    private static let voiceKeyAnnouncePersistIntervalMs = 20_000
+    /// Persist-phase jitter (± ms) — matches Android's
+    /// `VOICE_KEY_ANNOUNCE_JITTER_MS`.
+    private static let voiceKeyAnnounceJitterMs = 4_000
+
+    /// Ship a single VOICE_KEY announce — mirrors `announceScreenShare`'s
+    /// shape exactly (same `getActiveCallId()` guard, same fire-and-forget
+    /// error handling). Marks the wire string as sent in
+    /// `OpaqueSelfEchoFilter` BEFORE sending so the (near-certain) server
+    /// bounce-back is recognized and dropped rather than mistaken for the
+    /// peer's own announce.
+    @MainActor
+    private func announceVoiceKeyEnrollment(enrolled: Bool, peerId: String) async {
+        // Only for the call this loop was armed for — if the call ended (or
+        // a different call started) since the last tick, the loop's own
+        // `Task.isCancelled` check will catch up on the NEXT iteration, but
+        // this guard prevents ever sending a stale-peer announce in the gap.
+        guard callContactId == peerId else { return }
+        guard let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId(), !callId.isEmpty
+        else { return }
+        let wire = CallPiggyBack.serializeVoiceKey(callId: callId, enrolled: enrolled)
+        OpaqueSelfEchoFilter.shared.markSent(wire)
+        do {
+            try await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
+        } catch {
+            print("[AppState] VOICE_KEY announce failed: \(error)")
+        }
     }
 
     func endCall() {
@@ -11181,6 +11416,14 @@ final class AppState: ObservableObject {
         // readout so the meter hides between calls and the next call starts
         // from 0 (mirrors the voiceAnalysis reset directly above).
         stopCryptoMeter()
+        // Item 5 — stop the voice-confidence wave sampler, same lifecycle.
+        stopVoiceConfidenceWaveSampler()
+        // Item 2 — stop re-announcing VOICE_KEY for the call that just ended,
+        // and drop the peer's cached enrollment fact so it doesn't leak into
+        // the next call's trust bar before a fresh announce (if any) arrives.
+        voiceKeyAnnounceTask?.cancel()
+        voiceKeyAnnounceTask = nil
+        callPeerVoiceKeyEnrolled = false
         // W564 — proactively trigger X25519 key exchange with the peer right
         // before clearing callContactId. After a call both sides have done a
         // PQC ML-KEM handshake (strong auth) so this is the ideal moment to

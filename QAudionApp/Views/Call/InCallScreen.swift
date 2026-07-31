@@ -54,6 +54,11 @@ struct InCallScreen: View {
     /// sheet open" UI flag, nothing security-critical is gated by it.
     @State private var showSecuritySheet: Bool = false
 
+    /// W-SHIELDBADGES (item 1, 2026-07-31 InCallScreen Android→iOS parity)
+    /// — which trust-bar shield's tap-to-explain popup is showing, if any.
+    /// Local UI-only state, same posture as `showSecuritySheet` above.
+    @State private var trustBadgeInfo: TrustBadgeInfo?
+
     // MARK: - Cross-platform model types (shared vocabulary)
 
     enum TransportMode: Equatable {
@@ -68,6 +73,21 @@ struct InCallScreen: View {
             case .turn:           return "TURN"
             case .bcryptoWsRelay: return "RELAY"
             case .disconnected:   return "CONNECTING…"
+            }
+        }
+
+        /// W-SHIELDBADGES (item 1, 2026-07-31 InCallScreen Android→iOS
+        /// parity) — short label for the trust-bar transport SHIELD, which
+        /// has room for ~4-5 monospace characters (the same shape as
+        /// Android's `incall_transport_p2p`/`_turn`/`_relay` string
+        /// resources). `label` above is unchanged and keeps feeding the
+        /// full-width transport row further down the screen.
+        var shortLabel: String {
+            switch self {
+            case .p2pSrtp:        return "P2P"
+            case .turn:           return "TURN"
+            case .bcryptoWsRelay: return "RELAY"
+            case .disconnected:   return "…"
             }
         }
     }
@@ -249,20 +269,40 @@ struct InCallScreen: View {
     /// a PSK was mixed, INCLUDING warning states — see the property's doc on
     /// `AppState.callPskMixedThisCall` for the full rationale.
     let pskMixedThisCall: Bool
+    /// "Voce come chiave" cross-device attestation (item 2, 2026-07-31
+    /// InCallScreen Android→iOS port) — `true` once the PEER has announced
+    /// Voice-as-Key is enrolled on THEIR OWN device (self-declared, not a
+    /// crypto proof — see the trust-bar voice-key shield's tap-to-explain
+    /// copy). Drives that shield's visibility; `false`/unannounced ⇒ hidden,
+    /// same "additive, never a gate" posture as `mutualNfcInCommon`/
+    /// `pskMixedThisCall` above. Mirrors `AppState.callPeerVoiceKeyEnrolled`.
+    let peerVoiceKeyEnrolled: Bool
     let onAddParticipant: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
     let onToggleDiagnostics: () -> Void
-    /// Feature B ("voce verificata") — state of the manually-started,
-    /// per-contact call-time voice-learning session, fed from the SAME
-    /// decoded RX audio as `voiceBiometrics`/`voiceSpectrum` above. nil ⇒
-    /// no session started this call ⇒ renders the plain "Avvia apprendimento
-    /// voce" trigger. Mirrors Android's manual in-call learning trigger.
+    /// Feature B ("voce verificata") — state of the per-contact call-time
+    /// voice-learning session, fed from the SAME decoded RX audio as
+    /// `voiceBiometrics`/`voiceSpectrum` above. nil ⇒ no session has run
+    /// this call. Item 5 (2026-07-31 port): auto-started silently by
+    /// `AppState` on first-ever connect to a contact — this view never asks
+    /// for a tap, it only SHOWS state (`voiceLearningControl`'s brief
+    /// progress indicator while `.inProgress`).
     let voiceLearningState: VoiceLearningSession.State?
-    /// Start a `VoiceLearningSession` for the CURRENT call's peer. Shown
-    /// only while `voiceLearningState` is nil/`.idle`/`.failed` — the pill
-    /// hides itself while `.inProgress`/`.completed`.
+    /// Manual re-learn entry point — kept for API parity with
+    /// `AppState.startVoiceLearning()` (mirrors Android's `CallController
+    /// .startVoiceLearning()`, itself kept non-private "in case a future UI
+    /// wants a manual re-learn affordance too"). No control in this view
+    /// calls it any more since item 5 removed the manual CTA — see
+    /// `voiceLearningControl`.
     let onStartVoiceLearning: () -> Void
+    /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
+    /// of RAW per-frame Guardian confidence samples driving
+    /// `voiceConfidenceWave`, the permanent UI slot `voiceLearningControl`
+    /// falls back to whenever no learning session is `.inProgress` (i.e.
+    /// most of any call). Empty ⇒ the wave renders its neutral flat-line
+    /// state. See `AppState.voiceConfidenceHistory`'s doc for the source.
+    let voiceConfidenceHistory: [Float]
 
     init(peerDisplayName: String,
          avatarUrl: URL? = nil,
@@ -299,12 +339,14 @@ struct InCallScreen: View {
          assurancePresentation: AssuranceStateUI.Presentation? = nil,
          mutualNfcInCommon: Bool = false,
          pskMixedThisCall: Bool = false,
+         peerVoiceKeyEnrolled: Bool = false,
          onAddParticipant: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
          onToggleDiagnostics: @escaping () -> Void = {},
          voiceLearningState: VoiceLearningSession.State? = nil,
-         onStartVoiceLearning: @escaping () -> Void = {}) {
+         onStartVoiceLearning: @escaping () -> Void = {},
+         voiceConfidenceHistory: [Float] = []) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
         self.durationSeconds = durationSeconds
@@ -340,12 +382,14 @@ struct InCallScreen: View {
         self.assurancePresentation = assurancePresentation
         self.mutualNfcInCommon = mutualNfcInCommon
         self.pskMixedThisCall = pskMixedThisCall
+        self.peerVoiceKeyEnrolled = peerVoiceKeyEnrolled
         self.onAddParticipant = onAddParticipant
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
         self.onToggleDiagnostics = onToggleDiagnostics
         self.voiceLearningState = voiceLearningState
         self.onStartVoiceLearning = onStartVoiceLearning
+        self.voiceConfidenceHistory = voiceConfidenceHistory
     }
 
     // MARK: - Body
@@ -383,6 +427,30 @@ struct InCallScreen: View {
         .sheet(isPresented: $showSecuritySheet) {
             securitySheet
         }
+        // W-SHIELDBADGES (item 1) — tap-to-explain popup for whichever
+        // trust-bar shield was tapped. A native `.alert`, not a second
+        // sheet: this is a single short paragraph, not a place to drag
+        // around — matches this project's convention of reserving `.sheet`
+        // for genuinely scrollable/aggregating content.
+        .alert(
+            trustBadgeInfo?.title ?? "",
+            isPresented: trustBadgeInfoPresented
+        ) {
+            Button("Ho capito") { trustBadgeInfo = nil }
+        } message: {
+            Text(trustBadgeInfo?.body ?? "")
+        }
+    }
+
+    /// Bridge `trustBadgeInfo` ↔ the SwiftUI `.alert(isPresented:)` API,
+    /// same computed-`Binding` pattern `LiveInCallScreen
+    /// .incomingUpgradeAlertBinding` already uses for the same reason (the
+    /// state driving the alert's CONTENT is richer than a plain `Bool`).
+    private var trustBadgeInfoPresented: Binding<Bool> {
+        Binding(
+            get: { trustBadgeInfo != nil },
+            set: { shown in if !shown { trustBadgeInfo = nil } }
+        )
     }
 
     /// W534 — pill badge surfaced when `peerScreenSharing == true`.
@@ -893,81 +961,97 @@ struct InCallScreen: View {
 
     // MARK: - Trust bar (unified call UI)
 
-    /// Compact row of security chips + an expand shield, matching the
-    /// "Aegis Cipher" trust-bar from call-guardian-reference.html: SAS ✓
-    /// (green, only once actually verified), PQC (accent, only once a
-    /// real ML-KEM session key is live), and the transport chip (reusing
-    /// the exact `transportMode.label` the transport row already shows).
-    /// Tapping the shield opens the aggregating security sheet — the
-    /// single place SAS words / handshake / cipher / transport / voice
-    /// biometrics live together, instead of scattering them across the
-    /// scroll content.
+    /// W-SHIELDBADGES (item 1, 2026-07-31 InCallScreen Android→iOS parity)
+    /// — every trust-bar fact now renders as a colored SHIELD with a small
+    /// icon or short text label centered inside, replacing the old
+    /// text+checkmark `trustChip` pills. The shield's COLOR alone carries
+    /// verified/pending/absent state (green = confirmed/good, `pqcAccent` =
+    /// active-but-neutral/unverified, muted `onSurfaceVariant` = inactive)
+    /// — no checkmark glyph anywhere on the badge itself any more. Tapping
+    /// ANY shield opens a short `.alert` (`trustBadgeInfo`) explaining that
+    /// one fact; the trailing lock button still opens the full aggregating
+    /// security sheet. Mirrors Android's `TrustBar`/`ShieldBadge`
+    /// (`GuardianRibbon.kt`) 1:1 — same six facts, same conditions.
     private var trustBar: some View {
         HStack(spacing: 7) {
+            // "Voce come chiave" (item 2) — the PEER's own device,
+            // self-declared. Independent of every other fact here; see
+            // `peerVoiceKeyEnrolled`'s doc. Placed first, ahead of NFC, to
+            // match Android's ordering.
+            if peerVoiceKeyEnrolled {
+                trustShield(
+                    tint: extras.success,
+                    icon: "mic.fill",
+                    info: .voiceKey,
+                    accessibilityLabel: "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo"
+                )
+            }
             // W-NFCVISIBLE / W-NFCCOMMON — Pavel: an NFC key held in common with
             // this peer must be visible on the always-on trust bar, not only
             // inside the tap-to-open security sheet. Same "wave.3.right.circle"
-            // glyph `NfcExchangeView` already uses for NFC elsewhere in this app.
-            // Placed FIRST — ahead of the SAS chip. Independent fact
+            // glyph `NfcExchangeView` already uses for NFC elsewhere in this app
+            // — this platform's own established NFC icon. Independent fact
             // (`mutualNfcInCommon`, NOT `assurancePresentation?.isPhysicalPresenceProof`
             // anymore): true whenever the peer's OFFER/ACCEPT key-list exchange shows
             // a mutual NFC-tier fingerprint, regardless of which secret THIS call's
             // session key ends up mixing (could be KMS/QR/plain PSK). Never implies
-            // nor requires the "PSK ✓" chip below — both render independently.
+            // nor requires the PSK shield below — both render independently.
             if mutualNfcInCommon {
-                trustChip(
+                trustShield(
+                    tint: extras.success,
                     icon: "wave.3.right.circle.fill",
-                    label: "NFC ✓",
-                    color: extras.success,
-                    filled: true
+                    info: .nfc,
+                    accessibilityLabel: "NFC in comune con il contatto"
                 )
             }
             // W-NFCVISIBLE / W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a
             // pre-shared key of ANY origin (KMS/NFC/QR/manual) is mixed into this call's
             // session key", driven directly by `pskMixedThisCall` (n>=1) — no longer by
-            // `assurancePresentation` at all. Pavel's explicit choice: this chip shows
+            // `assurancePresentation` at all. Pavel's explicit choice: this shield shows
             // in EVERY state a PSK was mixed, INCLUDING warning states (S1 active-attack,
             // S3-S7 NFC-specific problems) — it answers only "does a shared secret exist
             // for this call", never "is everything about it fine" (the warning banner's
             // job). WHICH tier was actually mixed (NFC/KMS/other) is what
-            // `KeyInfoPanel`'s detail row is for, not this compact chip.
+            // `KeyInfoPanel`'s detail row is for, not this compact shield.
             if pskMixedThisCall {
-                trustChip(
-                    icon: "checkmark",
-                    label: "PSK ✓",
-                    color: extras.success,
-                    filled: true
+                trustShield(
+                    tint: extras.success,
+                    label: "PSK",
+                    info: .psk,
+                    accessibilityLabel: "Chiave pre-condivisa mescolata in questa chiamata"
                 )
             }
             // W-UNIFORMKEYINFO — canonical spec (2026-07-24, cross-platform audit):
-            // the SAS chip must be visible as soon as the 6-word code EXISTS
+            // the SAS shield must be visible as soon as the 6-word code EXISTS
             // (mirrors Android's `hasSas = sasWords.size == 6` gate and Desktop's
             // TrustBar.svelte, both of which always render it), with only the
-            // color/label toggling on verification — showing it early is what
-            // invites the user to actually go verify. Gating the whole chip on
-            // `sasVerified` (previous behavior) hid it entirely pre-verification,
-            // a real cross-platform divergence, not a timing artifact.
+            // COLOR toggling on verification (green once verified, pqcAccent while
+            // pending) — showing it early is what invites the user to actually go
+            // verify. Gating the whole shield on `sasVerified` (previous behavior)
+            // hid it entirely pre-verification, a real cross-platform divergence.
             if sasWords.count == 6 {
-                trustChip(
-                    icon: sasVerified ? "checkmark" : nil,
-                    label: sasVerified ? "SAS ✓" : "SAS",
-                    color: sasVerified ? extras.success : scheme.onSurfaceVariant,
-                    filled: sasVerified
+                trustShield(
+                    tint: sasVerified ? extras.success : extras.pqcAccent,
+                    label: "SAS",
+                    info: .sas,
+                    accessibilityLabel: sasVerified ? "Identità verificata (SAS)" : "Verifica identità (SAS) in sospeso"
                 )
             }
-            if pqcActive {
-                trustChip(
-                    icon: "lock.shield.fill",
-                    label: "PQC",
-                    color: extras.pqcAccent,
-                    filled: false
-                )
-            }
-            trustChip(
-                icon: nil,
-                label: transportMode.label,
-                color: scheme.onSurfaceVariant,
-                filled: false
+            // PQC — ALWAYS rendered now (the old `if pqcActive` gate + a
+            // separate "PQC off" text variant are both gone): the shield's
+            // color alone carries active-vs-inactive, matching every other
+            // shield on this bar and Android's identical change.
+            trustShield(
+                tint: pqcActive ? extras.pqcAccent : scheme.onSurfaceVariant,
+                label: "PQC",
+                info: .pqc,
+                accessibilityLabel: pqcActive ? "Scambio post-quantistico attivo" : "Scambio post-quantistico non attivo"
+            )
+            trustShield(
+                tint: transportMode == .disconnected ? scheme.onSurfaceVariant : extras.success,
+                label: transportMode.shortLabel,
+                info: .transport,
+                accessibilityLabel: "Percorso di rete: \(transportMode.label)"
             )
             Spacer(minLength: 0)
             Button {
@@ -997,32 +1081,86 @@ struct InCallScreen: View {
         )
     }
 
-    /// Small monospace chip used only inside `trustBar`. Distinct from
-    /// `MetaPill` (rounded-rect not capsule, smaller, optional leading
-    /// icon) to match the reference's `.chip` visual — kept private and
-    /// local rather than promoted to a shared component since nothing
-    /// else in the call UI needs this exact shape yet.
-    private func trustChip(icon: String?, label: String, color: Color, filled: Bool) -> some View {
-        HStack(spacing: 4) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: 9, weight: .bold))
+    /// One trust-bar fact: a colored shield glyph (SF Symbol `shield.fill`,
+    /// tinted) with a small icon or short label centered on top, tappable
+    /// to open `info`'s tap-to-explain `.alert`. Shape/color language
+    /// shared by every badge on `trustBar` — only `tint`/`icon`/`label`/
+    /// `info` differ per fact, and `tint` ALONE carries the
+    /// verified/pending/absent state (no separate checkmark). Exactly one
+    /// of `icon`/`label` should be passed; the label's contrast color is
+    /// fixed white (not `scheme.background`) because it must read against
+    /// the SHIELD'S own tint, not the screen behind it, same choice
+    /// Android's `ShieldBadge` makes.
+    private func trustShield(
+        tint: Color,
+        icon: String? = nil,
+        label: String? = nil,
+        info: TrustBadgeInfo,
+        accessibilityLabel: String
+    ) -> some View {
+        Button {
+            trustBadgeInfo = info
+        } label: {
+            ZStack {
+                Image(systemName: "shield.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(tint)
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .offset(y: -1)
+                } else if let label {
+                    Text(label)
+                        .font(.system(size: 7, weight: .bold, design: .monospaced))
+                        .tracking(0.2)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .offset(y: -1)
+                }
             }
-            Text(label)
-                .qaudionStyle(type.labelSmall)
-                .tracking(0.4)
+            .frame(width: 30, height: 30)
         }
-        .foregroundStyle(color)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(filled ? color.opacity(0.14) : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(color.opacity(0.4), lineWidth: 1)
-        )
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    /// W-SHIELDBADGES (item 1) — which shield's tap-to-explain popup is
+    /// showing. `title`/`body` are the exact meanings this task specifies,
+    /// translated into Italian matching this screen's own established copy
+    /// style (e.g. `identityChangeBanner`/the SAS panel above) rather than
+    /// a verbatim copy of Android's strings.
+    enum TrustBadgeInfo {
+        case voiceKey, nfc, psk, sas, pqc, transport
+
+        var title: String {
+            switch self {
+            case .voiceKey:  return "Voce come chiave"
+            case .nfc:       return "NFC in comune"
+            case .psk:       return "Chiave pre-condivisa (PSK)"
+            case .sas:       return "Verifica identità (SAS)"
+            case .pqc:       return "Post-quantistico (PQC)"
+            case .transport: return "Percorso di rete"
+            }
+        }
+
+        var body: String {
+            switch self {
+            case .voiceKey:
+                return "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. È un'informazione che dichiara di sé stesso — non significa che questa chiamata abbia riconosciuto la sua voce: quello è l'indicatore di verifica vocale live, separato."
+            case .nfc:
+                return "Tu e il contatto avete in comune un segreto scambiato fisicamente avvicinando i telefoni (NFC). Indipendente da quale chiave stia effettivamente usando questa specifica chiamata."
+            case .psk:
+                return "In questa chiamata è stata mescolata una chiave pre-condivisa — di qualunque origine: NFC, QR, KMS o inserita a mano — nella chiave di sessione. Aggiunge protezione oltre al solo scambio post-quantistico."
+            case .sas:
+                return "La cerimonia di verifica dell'identità per questa chiamata: tu e il contatto confrontate a voce le stesse parole. Il colore indica se è già stata confermata da entrambi o è ancora in sospeso."
+            case .pqc:
+                return "Lo scambio di chiavi post-quantistico (ML-KEM) è attivo per questa chiamata: protegge anche se un computer quantistico del futuro intercettasse oggi il traffico cifrato e provasse a decifrarlo più avanti."
+            case .transport:
+                return "Come viaggia l'audio: direttamente tra i due telefoni (P2P), tramite un server di attraversamento NAT (TURN), oppure tramite il relay del server Q-Audion (RELAY) quando non c'è una via diretta. Il contenuto resta cifrato end-to-end su qualunque percorso."
+            }
+        }
     }
 
     // MARK: - Guardian ribbon (unified call UI)
@@ -1820,9 +1958,16 @@ struct InCallScreen: View {
     /// interpretive convention (the engine itself has no named bands for
     /// this composite score) loosely aligned to common voice-stress
     /// literature: <35 calm, 35-60 elevated, >60 agitated/possible duress.
+    /// W-GAUGEUNITS (2026-07-31 InCallScreen Android→iOS parity, item 3) —
+    /// the compact `guardianGauge`'s bare `Int(...)` used to render with NO
+    /// unit suffix (unlike this same value's use in
+    /// `voiceBiometricsSectionBody`, which already appended "/100" at its
+    /// own call site). Now the unit lives HERE, once, so the compact gauge
+    /// and the security-sheet detail row can never disagree — the sheet's
+    /// call site below no longer appends its own "/100".
     private var stressDisplayValue: String {
         guard let bio = voiceBiometrics else { return "—" }
-        return "\(Int((bio.stressScore * 100).rounded()))"
+        return "\(Int((bio.stressScore * 100).rounded()))/100"
     }
     private var stressStatusWord: String {
         guard let bio = voiceBiometrics else { return "n/d" }
@@ -1845,9 +1990,13 @@ struct InCallScreen: View {
     /// maximally breathy — so >20 dB clear / <10 dB hoarse-or-noisy-link
     /// (breathiness ≥ 0.5) is a direct reading of that formula, not an
     /// invented band.
+    /// W-GAUGEUNITS (item 3) — same fix as `stressDisplayValue` above: the
+    /// unit now lives in the shared helper instead of only at the
+    /// security-sheet call site, so the compact gauge stops rendering a
+    /// bare number.
     private var hnrDisplayValue: String {
         guard let bio = voiceBiometrics else { return "—" }
-        return "\(Int(bio.hnr.rounded()))"
+        return "\(Int(bio.hnr.rounded())) dB"
     }
     private var hnrStatusWord: String {
         guard let bio = voiceBiometrics else { return "n/d" }
@@ -1862,9 +2011,11 @@ struct InCallScreen: View {
         return scheme.onSurfaceVariant
     }
 
+    /// W-GAUGEUNITS (item 3) — same fix as `stressDisplayValue`/
+    /// `hnrDisplayValue` above.
     private var pitchDisplayValue: String {
         guard let bio = voiceBiometrics else { return "—" }
-        return "\(Int(bio.pitchHz.rounded()))"
+        return "\(Int(bio.pitchHz.rounded())) Hz"
     }
     /// SpeechRateAnalyzer/PitchExtractor expose no explicit "steady vs
     /// shifting" band — this is a coarse UI-only heuristic (no baseline
@@ -1894,39 +2045,100 @@ struct InCallScreen: View {
 
     // MARK: - Feature B ("voce verificata") — call-time voice learning
 
-    /// Manual per-contact voice-learning trigger + progress. Fed from the
-    /// SAME decoded RX audio as the Guardian ribbon above (see
-    /// `QAudionCallIntegration.processIncomingAudio` → `voiceLearningSession
-    /// .processRxFrame`) — never local mic. On `.completed`, AppState writes
-    /// the real `ContactsStore.voiceVerifiedAt` signal that
-    /// `ContactDetailScreen`'s "Voce verificata" row reads.
+    /// W-AUTOLEARN parity (item 5, 2026-07-31 InCallScreen Android→iOS
+    /// port) — no more manual "Avvia apprendimento voce" tap. Enrollment is
+    /// started silently by `AppState.maybeAutoStartVoiceLearning` the first
+    /// time this call ever connects to a NEW contact (fed from the SAME
+    /// decoded RX audio the Guardian ribbon above already uses — never
+    /// local mic), so this slot only ever SHOWS state, never asks for one:
+    ///  - `.inProgress` → the brief (~3s) auto-enrollment is running; a
+    ///    determinate progress bar, no button.
+    ///  - every other state (`.none`/`.idle`/`.completed`/`.failed`, or a
+    ///    call where this contact already had a template so no session
+    ///    ever ran) → the live `voiceConfidenceWave` for THIS call — the
+    ///    permanent "is this still really them" signal, driven by real
+    ///    per-frame Guardian data the whole time, not just during the rare
+    ///    first-contact enrollment window.
     @ViewBuilder
     private var voiceLearningControl: some View {
-        switch voiceLearningState {
-        case .none, .idle, .failed:
-            Button(action: onStartVoiceLearning) {
-                Text(voiceLearningState == .failed ? "RIPROVA APPRENDIMENTO" : "AVVIA APPRENDIMENTO VOCE")
-                    .qaudionStyle(type.labelSmall)
-                    .tracking(1.0)
-                    .foregroundStyle(extras.pqcAccent)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .overlay(Capsule().stroke(extras.pqcAccent.opacity(0.55), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-        case .inProgress(let progress):
+        if case .inProgress(let progress) = voiceLearningState {
             HStack(spacing: 6) {
                 ProgressView(value: Double(progress))
                     .frame(width: 44)
                     .tint(extras.pqcAccent)
-                Text("APPRENDIMENTO…")
+                Text("APPRENDIMENTO VOCE…")
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.0)
                     .foregroundStyle(extras.pqcAccent)
             }
-        case .completed:
-            MetaPill("VOCE IMPARATA", accent: extras.success, filled: true)
+        } else {
+            voiceConfidenceWave
         }
+    }
+
+    /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — live moving wave
+    /// of `voiceConfidenceHistory`, the RAW per-frame Guardian confidence
+    /// score (never the smoothed number, which barely moves — see that
+    /// property's doc). W-VOICEWAVE parity (Android 2026-07-31): plotting
+    /// the value against its own absolute 0...1 scale reads as a dead flat
+    /// line — a healthy call's raw score sits in a tight band. Instead this
+    /// auto-scales to the CURRENT window's own deviation from its mean (a
+    /// floor keeps a silent/rock-steady window from blowing tiny noise up
+    /// into fake-looking movement) and draws it as a filled wave around a
+    /// center baseline — same "real data, not decoration" discipline as
+    /// `miniSpectrum`/`drawCipherTube` elsewhere on this screen: it only
+    /// ever moves because a genuinely new sample arrived.
+    private var voiceConfidenceWave: some View {
+        Canvas { ctx, size in
+            drawVoiceConfidenceWave(ctx: &ctx, size: size)
+        }
+        .frame(width: 90, height: 20)
+        .accessibilityLabel("Curva di verifica vocale in tempo reale")
+    }
+
+    /// Floor on the auto-scale window spread — keeps a rock-steady call's
+    /// real micro-noise from being amplified into misleadingly large
+    /// swings. Matches Android's `CONFIDENCE_WAVE_MIN_SPREAD`.
+    private static let voiceConfidenceWaveMinSpread: Float = 0.02
+
+    /// Pure Canvas draw for `voiceConfidenceWave`, extracted per this
+    /// file's own convention (`drawMiniSpectrum`/`drawCipherTube`).
+    /// Mirrors Android's `ConfidenceCurve` algorithm exactly: center
+    /// baseline, per-sample deviation from the window's mean divided by its
+    /// (floored) spread, clipped to ±1, scaled to 85% of half-height.
+    private func drawVoiceConfidenceWave(ctx: inout GraphicsContext, size: CGSize) {
+        let history = voiceConfidenceHistory
+        let midY = size.height / 2
+        let color = extras.pqcAccent
+        guard history.count >= 2 else {
+            var flat = Path()
+            flat.move(to: CGPoint(x: 0, y: midY))
+            flat.addLine(to: CGPoint(x: size.width, y: midY))
+            ctx.stroke(flat, with: .color(color.opacity(0.35)), lineWidth: 1.5)
+            return
+        }
+        let mean = history.reduce(0, +) / Float(history.count)
+        let spread = max(history.map { abs($0 - mean) }.max() ?? 0, Self.voiceConfidenceWaveMinSpread)
+        let stepX = size.width / CGFloat(history.count - 1)
+        var line = Path()
+        var fill = Path()
+        for (i, v) in history.enumerated() {
+            let dev = max(-1, min(1, (v - mean) / spread))
+            let x = CGFloat(i) * stepX
+            let y = midY - CGFloat(dev) * midY * 0.85
+            if i == 0 {
+                line.move(to: CGPoint(x: x, y: y))
+                fill.move(to: CGPoint(x: x, y: midY))
+                fill.addLine(to: CGPoint(x: x, y: y))
+            } else {
+                line.addLine(to: CGPoint(x: x, y: y))
+                fill.addLine(to: CGPoint(x: x, y: y))
+            }
+        }
+        fill.addLine(to: CGPoint(x: size.width, y: midY))
+        fill.closeSubpath()
+        ctx.fill(fill, with: .color(color.opacity(0.16)))
+        ctx.stroke(line, with: .color(color), lineWidth: 2)
     }
 
     // MARK: - Transport row
@@ -2109,7 +2321,9 @@ struct InCallScreen: View {
                 )
                 biometricRow(
                     label: "Stress",
-                    value: "\(stressDisplayValue)/100 · \(stressStatusWord)",
+                    // W-GAUGEUNITS (item 3) — stressDisplayValue now already
+                    // includes "/100" (see its doc), no longer appended here.
+                    value: "\(stressDisplayValue) · \(stressStatusWord)",
                     valueColor: stressStatusColor,
                     meaning: "<35 calmo · 35–60 elevato · >60 agitato — un picco sostenuto può indicare pressione/coercizione."
                 )
@@ -2121,13 +2335,17 @@ struct InCallScreen: View {
                 )
                 biometricRow(
                     label: "Respiro · HNR",
-                    value: "\(hnrDisplayValue) dB · \(String(format: "%.2f", bio.breathiness))",
+                    // W-GAUGEUNITS (item 3) — hnrDisplayValue now already
+                    // includes "dB" (see its doc), no longer appended here.
+                    value: "\(hnrDisplayValue) · \(String(format: "%.2f", bio.breathiness))",
                     valueColor: hnrStatusColor,
                     meaning: ">20 dB chiara · <10 dB rauca o link rumoroso (VoiceHealthMonitor: breathiness = 1 − hnr/20)."
                 )
                 biometricRow(
                     label: "Pitch f0 · rate",
-                    value: "\(pitchDisplayValue) Hz · \(String(format: "%.1f", bio.syllablesPerSec)) syl/s",
+                    // W-GAUGEUNITS (item 3) — pitchDisplayValue now already
+                    // includes "Hz" (see its doc), no longer appended here.
+                    value: "\(pitchDisplayValue) · \(String(format: "%.1f", bio.syllablesPerSec)) syl/s",
                     valueColor: scheme.onSurface,
                     meaning: "Uno scarto improvviso dal basale di \(peerDisplayName) può segnalare una sostituzione/impersonificazione."
                 )
