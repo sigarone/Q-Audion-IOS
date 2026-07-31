@@ -87,7 +87,14 @@ public struct AvatarAnnounceEnvelope: Equatable {
         guard typeStr == typeName else {
             return nil   // a different qa_ctl variant
         }
-        guard let attDict = any["att"] as? [String: Any] else {
+        // 2026-07-31 fix (W-AVATARKEY): Android carries this block under
+        // JSON key "avatar" (its AttachAnnounceMeta field already owns
+        // "att" and kotlinx.serialization forbids two fields sharing a
+        // SerialName). Cross-platform avatar delivery from Android was
+        // silently broken from day one on iOS/Desktop — the envelope
+        // fell through as unrecognized and rendered as raw JSON (found
+        // live in Desktop's chat list). Accept either key on receive.
+        guard let attDict = (any["att"] ?? any["avatar"]) as? [String: Any] else {
             throw Error.missingField("att")
         }
         let att = try AvatarAnnounceMeta.parse(attDict)
@@ -98,10 +105,14 @@ public struct AvatarAnnounceEnvelope: Equatable {
     // MARK: - Encode
 
     public func toJsonDict() -> [String: Any] {
+        // W-AVATARKEY: duplicate under "avatar" too — Android's receiver
+        // only recognizes that key. Same object both places, harmless
+        // redundancy on the wire.
         var dict: [String: Any] = [
             "qa_ctl": Self.qaCtlVersion,
             "t": Self.typeName,
             "att": att.toJsonDict(),
+            "avatar": att.toJsonDict(),
         ]
         if let ts = ts {
             dict["ts"] = ts
