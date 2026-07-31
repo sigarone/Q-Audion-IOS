@@ -167,7 +167,27 @@ public enum AttachmentEncryption {
         if forEncryption {
             do {
                 let sealed = try ChaChaPoly.seal(input, using: symKey, nonce: ccpNonce, authenticating: aad)
-                return sealed.ciphertext + sealed.tag
+                // Crash fix (2026-07-31): confirmed via TWO symbolicated
+                // MetricKit crashes (builds 1.0.916 AND 1.0.917 — the first
+                // fix attempt, replacing `Data(x[range])` with
+                // `x.subdata(in:)` downstream in TusUploadClient, did NOT
+                // resolve it, because `subdata(in:)` makes the exact same
+                // zero-based-index assumption). CryptoKit's
+                // `SealedBox.ciphertext`/`.tag` can return `Data` values
+                // backed by an internal representation whose indices don't
+                // start at 0 — a documented Foundation/CryptoKit footgun.
+                // Concatenating two such values with `+` doesn't reliably
+                // normalize that. Any later 0-based range access (tus
+                // upload chunking, `subdata(in:)`, `data[0..<n]`, etc.)
+                // then traps on a range that's genuinely out of bounds for
+                // THIS particular Data's actual index space, even though
+                // `data.count` looks completely normal. Wrapping in a
+                // fresh `Data(...)` here forces a real, contiguous,
+                // zero-indexed copy at the point of creation — the
+                // correct place to fix this once, for every consumer of
+                // this function's output, rather than requiring every
+                // downstream caller to defensively re-densify it.
+                return Data(sealed.ciphertext + sealed.tag)
             } catch {
                 throw CryptoError.sealFailed
             }

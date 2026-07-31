@@ -145,10 +145,25 @@ public final class TusUploadClient {
         onProgress: ((Int64, Int64) -> Void)? = nil,
         onCreated: ((String) -> Void)? = nil
     ) async throws -> String {
-        let fileId = try await create(totalBytes: data.count)
+        // Crash fix (2026-07-31, defense in depth): `runChunkLoop` assumes
+        // `data`'s valid indices run 0..<data.count. That's true for most
+        // `Data` values but NOT guaranteed — some producers (confirmed:
+        // CryptoKit's `ChaChaPoly.SealedBox.ciphertext`/`.tag`
+        // concatenation, see AttachmentEncryption.swift's own fix for the
+        // same crash) can hand back a `Data` whose actual index base isn't
+        // 0, which traps every 0-based range access downstream even
+        // though `.count` looks completely ordinary. Fixed at that one
+        // known source too, but this client is shared by every tus caller
+        // (avatar, voice notes, file attachments, backups per this
+        // class's own doc) — normalizing here once protects all of them
+        // regardless of what a future/other caller's Data happens to look
+        // like internally, rather than relying on every producer to
+        // remember to do it.
+        let normalized = Data(data)
+        let fileId = try await create(totalBytes: normalized.count)
         onCreated?(fileId)
-        let total = Int64(data.count)
-        try await runChunkLoop(fileId: fileId, data: data, startOffset: 0, total: total, onProgress: onProgress)
+        let total = Int64(normalized.count)
+        try await runChunkLoop(fileId: fileId, data: normalized, startOffset: 0, total: total, onProgress: onProgress)
         return fileId
     }
 
@@ -172,8 +187,10 @@ public final class TusUploadClient {
         fromOffset: Int64,
         onProgress: ((Int64, Int64) -> Void)? = nil
     ) async throws -> String {
-        let total = Int64(data.count)
-        try await runChunkLoop(fileId: fileId, data: data, startOffset: fromOffset, total: total, onProgress: onProgress)
+        // See `upload()`'s kdoc — same 0-based-index normalization.
+        let normalized = Data(data)
+        let total = Int64(normalized.count)
+        try await runChunkLoop(fileId: fileId, data: normalized, startOffset: fromOffset, total: total, onProgress: onProgress)
         return fileId
     }
 
