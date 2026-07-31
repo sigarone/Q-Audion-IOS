@@ -27,6 +27,26 @@ final class AccountSettingsContainer: ObservableObject {
     private weak var appState: AppState?
     private let avatarUploader: AvatarUploader
 
+    /// Cache-busted local avatar URL. `AvatarUploader.selfAvatarCacheURL`
+    /// always resolves to the SAME path (`self.jpg`) — re-uploading a new
+    /// photo overwrites those bytes in place without changing the URL
+    /// string, so `AsyncImage`'s default `URLSession`/`URLCache` (keyed on
+    /// URL equality, not content) can go on serving the OLD image after a
+    /// re-upload. Appending the avatar version as a fragment forces a new
+    /// URL value on every version bump — the fragment is not part of the
+    /// path FileManager/URLSession resolve for a `file://` URL, so the
+    /// actual bytes read are unaffected, only the cache key. `static` (not
+    /// an instance computed property) so it can be called from `init`
+    /// before `self` is fully initialized. Takes the version as a plain
+    /// `Int`, NOT `AppState` — see CLAUDE.md §16: a NEW function taking
+    /// `AppState` directly as a parameter type has caused a silent
+    /// "Build IPA" failure before (bisected v1.0.386→v1.0.397); callers
+    /// already legitimately read `appState.selfAvatarVersion` themselves.
+    private static func selfAvatarCacheURLBusted(version: Int) -> URL? {
+        guard let base = AvatarUploader.selfAvatarCacheURL else { return nil }
+        return URL(string: base.absoluteString + "#v\(version)")
+    }
+
     init(appState: AppState) {
         self.appState = appState
         // W73: start with an EMPTY state, NOT `.mock` (which had the
@@ -38,7 +58,7 @@ final class AccountSettingsContainer: ObservableObject {
             phoneHash: "",
             displayName: nil,
             statusMessage: nil,
-            avatarUrl: AvatarUploader.selfAvatarCacheURL,
+            avatarUrl: Self.selfAvatarCacheURLBusted(version: appState.selfAvatarVersion),
             dialExtension: nil
         )
         self.draftDisplayName = ""
@@ -130,7 +150,7 @@ final class AccountSettingsContainer: ObservableObject {
                         // profile.avatarUrl — that field pointed at a
                         // plaintext server URL any authenticated account
                         // could fetch, exactly the gap this replaces.
-                        avatarUrl: AvatarUploader.selfAvatarCacheURL,
+                        avatarUrl: Self.selfAvatarCacheURLBusted(version: self.appState?.selfAvatarVersion ?? 0),
                         dialExtension: extString
                     )
                     self.draftDisplayName = profile.displayName ?? ""
@@ -274,7 +294,29 @@ final class AccountSettingsContainer: ObservableObject {
             await MainActor.run { self.isLoading = true; self.errorMessage = nil }
             do {
                 _ = try await avatarUploader.uploadAndApply(image: image)
-                loadFromServer()
+                // Settings-avatar fix (2026-07-31): this used to call
+                // `loadFromServer()` here, which does a full `/profile`
+                // network round trip just to re-derive `avatarUrl` — a
+                // field that isn't even server-sourced (see the kdoc in
+                // `loadFromServer`, it always reads the LOCAL cache). A
+                // slow or failing network request left the user staring at
+                // an unchanged preview after a successful local upload,
+                // reading as "avatar setting doesn't work". The upload
+                // itself is 100% local + fire-and-forget broadcast by this
+                // point (`uploadAndApply` already wrote the cache file and
+                // bumped the version), so update the preview from that
+                // directly and never gate it on the network.
+                await MainActor.run {
+                    self.viewModel = AccountSettingsViewModel(
+                        userId: self.viewModel.userId,
+                        phoneHash: self.viewModel.phoneHash,
+                        displayName: self.viewModel.displayName,
+                        statusMessage: self.viewModel.statusMessage,
+                        avatarUrl: Self.selfAvatarCacheURLBusted(version: self.appState?.selfAvatarVersion ?? 0),
+                        dialExtension: self.viewModel.dialExtension
+                    )
+                    self.isLoading = false
+                }
             } catch {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription

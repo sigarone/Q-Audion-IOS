@@ -7191,7 +7191,26 @@ final class AppState: ObservableObject {
     // fail-closed PSK ladder (PairwiseChainKeyResolver).
 
     private static let selfAvatarVersionKey = "qaudion.selfAvatarVersion"
-    private static let avatarSentVersionsKey = "qaudion.avatarSentVersions"
+    // W-AVATARSTUCK (2026-07-31) — renamed (v2 suffix) to orphan every
+    // pre-tus-fix "sent" entry in one step: this device (and Android's
+    // A36/S26 pair, confirmed live) had peers permanently marked as having
+    // received the current avatar version from attempts that predated the
+    // tus + wire-key transport fixes (silently 404ing on the recipient
+    // side) — the version never changed since, so the "already sent" guard
+    // below no-op'd forever with zero indication anything was wrong. A key
+    // rename needs no migration code; the old entries are simply never read
+    // again. Mirrors the identical fix on Android (`AvatarFileStore.kt`
+    // `KEY_SENT_PREFIX`) and Desktop (`AvatarFileStore.ts` `sentVersionsV2`).
+    private static let avatarSentVersionsKey = "qaudion.avatarSentVersions.v2"
+    private static let avatarSentAtKey = "qaudion.avatarSentAt.v2"
+    /// Self-heal ceiling: `markAvatarSent` only proves the SEND succeeded,
+    /// never that the recipient's download+decrypt did — exactly the class
+    /// of bug the key rename above just cleaned up for the CURRENT stuck
+    /// state. Re-announcing periodically even when `version` hasn't changed
+    /// bounds any FUTURE silent transport regression to this many seconds
+    /// of staleness instead of permanent, without needing a real
+    /// delivery-ack protocol.
+    private static let avatarResendIntervalSec: TimeInterval = 3 * 24 * 3600
 
     /// Current self-avatar version. 0 = no avatar ever set (never
     /// bumped) — `maybeAnnounceAvatarTo` treats that as "nothing to
@@ -7215,10 +7234,19 @@ final class AppState: ObservableObject {
         return dict[peerId] ?? -1
     }
 
-    private static func markAvatarSent(version: Int, toPeer peerId: String) {
+    private static func lastAvatarSentAt(toPeer peerId: String) -> Date? {
+        let dict = UserDefaults.standard.dictionary(forKey: avatarSentAtKey) as? [String: Double] ?? [:]
+        guard let ts = dict[peerId] else { return nil }
+        return Date(timeIntervalSince1970: ts)
+    }
+
+    private static func markAvatarSent(version: Int, toPeer peerId: String, at: Date = Date()) {
         var dict = UserDefaults.standard.dictionary(forKey: avatarSentVersionsKey) as? [String: Int] ?? [:]
         dict[peerId] = version
         UserDefaults.standard.set(dict, forKey: avatarSentVersionsKey)
+        var atDict = UserDefaults.standard.dictionary(forKey: avatarSentAtKey) as? [String: Double] ?? [:]
+        atDict[peerId] = at.timeIntervalSince1970
+        UserDefaults.standard.set(atDict, forKey: avatarSentAtKey)
     }
 
     /// Encrypts the current self-avatar under EVERY currently-known
@@ -7282,23 +7310,27 @@ final class AppState: ObservableObject {
     private func maybeAnnounceAvatarTo(_ peerId: String) {
         let version = selfAvatarVersion
         let priorSent = Self.lastAvatarVersionSent(toPeer: peerId)
+        let priorSentAt = Self.lastAvatarSentAt(toPeer: peerId)
         guard version > 0 else {
             print("[avatar] skip to=\(peerId.prefix(8)) reason=no-self-avatar-yet")
             return
         }
-        guard priorSent < version else {
-            // 2026-07-31 (W-AVATARSTUCK): markAvatarSent (below) only means
-            // "upload+ship succeeded", NOT "recipient actually decrypted
-            // it" — a peer whose download silently failed (W-AVATAR404, or
-            // any future transport regression) stays permanently marked
-            // "sent" and every future trigger no-ops forever until
-            // `version` bumps again. The optimistic-mark-then-restore-on-
-            // throw logic below only protects against SEND-side failures,
-            // not this one (the send genuinely succeeds; only the
-            // recipient's download/decrypt fails, which the sender never
-            // learns about). Cost real investigation time on Android
-            // already; logged here so it's the first thing a log-pull shows.
-            print("[avatar] skip to=\(peerId.prefix(8)) reason=already-marked-sent priorSent=\(priorSent) currentVersion=\(version)")
+        // W-AVATARSTUCK fix (2026-07-31): `markAvatarSent` (below) only
+        // means "upload+ship succeeded", NOT "recipient actually decrypted
+        // it" — a peer whose download silently failed (W-AVATAR404, or any
+        // future transport regression) used to stay permanently marked
+        // "sent" and every future trigger no-op'd forever until `version`
+        // bumped again (the exact state that just cost real investigation
+        // time on Android, and the reason `avatarSentVersionsKey` above was
+        // renamed to orphan it). Re-announcing anyway once
+        // `avatarResendIntervalSec` has elapsed, even when `priorSent ==
+        // version`, bounds any FUTURE silent failure to that many seconds
+        // of staleness instead of permanent.
+        let staleEnoughToRetry = priorSentAt.map {
+            Date().timeIntervalSince($0) >= Self.avatarResendIntervalSec
+        } ?? true
+        guard priorSent < version || staleEnoughToRetry else {
+            print("[avatar] skip to=\(peerId.prefix(8)) reason=already-marked-sent priorSent=\(priorSent) currentVersion=\(version) sentAgeSec=\(priorSentAt.map { Int(Date().timeIntervalSince($0)) } ?? -1)")
             return
         }
         guard let cacheURL = AvatarUploader.selfAvatarCacheURL,
@@ -7327,10 +7359,12 @@ final class AppState: ObservableObject {
                 _ = await sendService.sendEncrypted(
                     messageId: UUID(), peerUserId: peerId, plaintext: json)
             } catch {
-                // Failed — restore the prior state so the next real
-                // exchange with this peer retries instead of treating a
-                // failed send as if it had succeeded.
-                Self.markAvatarSent(version: priorSent, toPeer: peerId)
+                // Failed — restore the prior state (INCLUDING its original
+                // timestamp, not now) so the next trigger retries instead of
+                // treating a failed send as if it had succeeded. Restoring
+                // with `at: Date()` here would wrongly refresh the
+                // stale-retry clock on a failure.
+                Self.markAvatarSent(version: priorSent, toPeer: peerId, at: priorSentAt ?? .distantPast)
             }
         }
     }
