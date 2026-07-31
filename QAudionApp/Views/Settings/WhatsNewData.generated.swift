@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.914",
+              date: "2026-07-31",
+              title: "v1.0.914",
+              bullets: [
+                "fix(avatar): icon-avatar infinite spinner, upload crash hardening, camera capture",
+              ]),
         .init(id: "v1.0.913",
               date: "2026-07-31",
               title: "v1.0.913",
               bullets: [
+                "chore: regenerate changelog for v1.0.913",
                 "fix(avatar): unstick sent-version bookkeeping + fix Settings preview (W-AVATARSTUCK)",
               ]),
         .init(id: "v1.0.912",
@@ -151,13 +158,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.895",
                 "fix(call): always route video upgrade through performWebRtcVideoUpgrade",
-              ]),
-        .init(id: "v1.0.894",
-              date: "2026-07-29",
-              title: "v1.0.894",
-              bullets: [
-                "chore: regenerate changelog for v1.0.894",
-                "fix(build): real compile error was a missing import, not the nil-context guess",
               ]),
     ]
 }
