@@ -344,6 +344,12 @@ struct AccountSettingsScreen: View {
     /// W445: shows AvatarIconPicker sheet.
     @State private var showingIconPicker = false
     @State private var showLogoutConfirm = false
+    /// 2026-07-31: camera capture for the avatar — parity with Android
+    /// ("Scatta foto") and Desktop, which both already had a camera option
+    /// alongside the file/library picker. `PhotosPicker` only reaches the
+    /// photo library, never the live camera, so this was a genuine gap,
+    /// not a bug in the existing picker.
+    @State private var showingCamera = false
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -443,6 +449,12 @@ struct AccountSettingsScreen: View {
         .sheet(isPresented: $showingIconPicker) {
             AvatarIconPicker { icon in container.setIconAvatar(icon) }
         }
+        .fullScreenCover(isPresented: $showingCamera) {
+            CameraCapturePicker { image in
+                container.uploadAvatar(image: image)
+            }
+            .ignoresSafeArea()
+        }
         .confirmationDialog(
             "Uscire da Q-Audion?",
             isPresented: $showLogoutConfirm,
@@ -490,6 +502,21 @@ struct AccountSettingsScreen: View {
                 }
                 .disabled(container.isLoading)
 
+                // 2026-07-31: camera capture, parity with Android/Desktop
+                // ("Scatta foto") — PhotosPicker above only reaches the
+                // photo library, never the live camera.
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button {
+                        showingCamera = true
+                    } label: {
+                        Label("Scatta foto", systemImage: "camera")
+                            .qaudionStyle(type.labelSmall)
+                            .foregroundStyle(scheme.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(container.isLoading)
+                }
+
                 // W445: icon avatar alternative (no camera/library needed).
                 Button {
                     showingIconPicker = true
@@ -524,7 +551,26 @@ struct AccountSettingsScreen: View {
 
     @ViewBuilder
     private var avatarImage: some View {
-        if let url = container.viewModel.avatarUrl {
+        if let url = container.viewModel.avatarUrl, url.scheme == "sficon", let iconName = url.host {
+            // Icon-avatar fix (2026-07-31): `setIconAvatar` stores a
+            // pseudo `sficon://<SF-Symbol-name>` URL, never a real
+            // network/file resource — `AsyncImage` has no protocol handler
+            // for that scheme, and its 2-closure initializer has no
+            // `.failure` state to fall back to, so a failed load just kept
+            // showing the placeholder `ProgressView()` FOREVER. That's the
+            // "spinner spins forever, icon never registers" bug. Render
+            // the symbol directly instead of routing it through
+            // AsyncImage/URLSession at all.
+            Circle()
+                .fill(scheme.primary.opacity(0.12))
+                .frame(width: 64, height: 64)
+                .overlay(
+                    Image(systemName: iconName)
+                        .font(.system(size: 28))
+                        .foregroundStyle(scheme.primary)
+                )
+                .overlay(Circle().stroke(scheme.outline.opacity(0.4), lineWidth: 1))
+        } else if let url = container.viewModel.avatarUrl {
             AsyncImage(url: url) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
@@ -838,6 +884,54 @@ private struct MonoIfNeededA: ViewModifier {
             content.font(.system(.caption, design: .monospaced))
         } else {
             content
+        }
+    }
+}
+
+/// Camera capture for the avatar (2026-07-31) — parity with Android/Desktop's
+/// "Scatta foto". SwiftUI has no native camera-capture view; `UIImagePickerController`
+/// with `.sourceType = .camera` is still Apple's own supported path for this
+/// (AVFoundation's own camera UI would be considerably more code for the
+/// same result). `PHPickerViewController`/`PhotosPicker` cannot open the
+/// live camera at all — they're library-only.
+private struct CameraCapturePicker: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCapture: onCapture, onDismiss: { dismiss() })
+    }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let onCapture: (UIImage) -> Void
+        let onDismiss: () -> Void
+
+        init(onCapture: @escaping (UIImage) -> Void, onDismiss: @escaping () -> Void) {
+            self.onCapture = onCapture
+            self.onDismiss = onDismiss
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let image = info[.originalImage] as? UIImage {
+                onCapture(image)
+            }
+            onDismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            onDismiss()
         }
     }
 }

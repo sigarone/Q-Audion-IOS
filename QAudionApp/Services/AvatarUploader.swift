@@ -23,12 +23,14 @@ final class AvatarUploader {
     enum Error: Swift.Error, LocalizedError {
         case notAuthenticated
         case imageEncodingFailed
+        case invalidImage
         case uploadFailed(String)
 
         var errorDescription: String? {
             switch self {
             case .notAuthenticated: return "Not signed in"
             case .imageEncodingFailed: return "Could not encode image"
+            case .invalidImage: return "Immagine non valida"
             case .uploadFailed(let m): return "Upload failed: \(m)"
             }
         }
@@ -71,7 +73,7 @@ final class AvatarUploader {
         // which resolve their own auth).
         _ = token
         // Resize to 512x512 max + JPEG-encode at 0.85 quality.
-        let resized = Self.resize(image, to: CGSize(width: 512, height: 512))
+        let resized = try Self.resize(image, to: CGSize(width: 512, height: 512))
         guard let jpegData = resized.jpegData(compressionQuality: 0.85) else {
             throw Error.imageEncodingFailed
         }
@@ -121,13 +123,34 @@ final class AvatarUploader {
         try? mutableUrl.setResourceValues(values)
     }
 
-    private static func resize(_ image: UIImage, to maxSize: CGSize) -> UIImage {
-        let aspectRatio = image.size.width / image.size.height
+    /// Crash hardening (2026-07-31): a picked/captured image with a
+    /// degenerate source size (zero-height, or a malformed decode that
+    /// leaves `.size` non-finite — both observed in the wild from
+    /// PHPickerViewController/camera edge cases) used to produce a NaN or
+    /// infinite `aspectRatio`, which `UIGraphicsImageRenderer(size:)`
+    /// crashes on with a hard `fatalError` (Core Graphics has no
+    /// recoverable path for a NaN/infinite CGSize). Validated up front and
+    /// surfaced as `Error.invalidImage` instead — matches the live TestFlight
+    /// crash report tagged "Avatar" on build 1.0.913 (iPhone 11), which
+    /// hadn't symbolicated yet when this was written but points squarely
+    /// at this function as the only unguarded UIGraphicsImageRenderer call
+    /// on the avatar upload path.
+    private static func resize(_ image: UIImage, to maxSize: CGSize) throws -> UIImage {
+        let sourceSize = image.size
+        guard sourceSize.width.isFinite, sourceSize.height.isFinite,
+              sourceSize.width > 0, sourceSize.height > 0 else {
+            throw Error.invalidImage
+        }
+        let aspectRatio = sourceSize.width / sourceSize.height
         var newSize = maxSize
         if aspectRatio > 1 {
             newSize.height = maxSize.width / aspectRatio
         } else {
             newSize.width = maxSize.height * aspectRatio
+        }
+        guard newSize.width.isFinite, newSize.height.isFinite,
+              newSize.width > 0, newSize.height > 0 else {
+            throw Error.invalidImage
         }
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 1
