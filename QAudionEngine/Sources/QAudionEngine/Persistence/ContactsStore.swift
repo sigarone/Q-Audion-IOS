@@ -396,7 +396,38 @@ public final class ContactsStore {
     @discardableResult
     public func setAvatarLocalPath(userId: String, path: URL, version: Int) -> Bool {
         var current = load()
-        guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
+        guard let idx = current.firstIndex(where: { $0.userId == userId }) else {
+            // Fix (2026-07-31, found during full-audit): this used to be a
+            // silent no-op — no write, no save(), no `.contactsDidChange`
+            // notification, no log — when the contact row didn't exist yet.
+            // The caller (AppState.handleInboundAvatarAnnounce) had ALREADY
+            // written the decrypted plaintext bytes to disk one statement
+            // earlier, so a first-contact-via-call race (this
+            // avatar_announce arriving before the row this same peer's
+            // profile-fetch/auto-save enrichment creates — no ordering
+            // guarantee between the two) left an orphaned, untracked cache
+            // file and a permanently blank avatar. Receive-side mirror of
+            // the identical Android bug fixed in the same pass today
+            // (ReceiveMessageUseCase.handleInboundAvatarAnnounce). Creates
+            // the same bare-minimum row `insertIfAbsentOrFillBlanks` itself
+            // would create — that function's own "never touch an
+            // already-set field" contract means it won't clobber anything
+            // this creates first.
+            let inserted = StoredContact(
+                userId: userId,
+                displayName: "",
+                phoneHash: "",
+                avatarUrl: path,
+                lastSeen: nil,
+                isVerified: false,
+                phoneNumber: nil,
+                extension: nil,
+                avatarVersion: version
+            )
+            current.append(inserted)
+            save(current)
+            return true
+        }
         let existing = current[idx]
         guard version > (existing.avatarVersion ?? -1) else { return false }
         current[idx] = StoredContact(

@@ -960,6 +960,12 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             if sent > 0 {
                 let rttMs = Int((Date().timeIntervalSinceReferenceDate - sent) * 1000)
                 if rttMs > 0 { cb?(rttMs) }
+                // Fix (2026-07-31, found during full-audit) — see the
+                // ping-sent print in tickKeepalive for why this exists: the
+                // only way to tell "pings aren't leaving the device" from
+                // "pongs aren't arriving" from a device log is having BOTH
+                // sides of the round trip actually print something.
+                print("[BCryptoWS] \(type) received rtt=\(rttMs)ms")
             }
             return
         }
@@ -1027,17 +1033,41 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // If a full ping cycle has passed without any inbound traffic, treat the
         // socket as dead and force a reconnect.
         if age > pingInterval + pongTimeout {
+            // Fix (2026-07-31, found during full-audit): this is the ONE
+            // disconnect path in this file that passed no `reason:` — every
+            // other teardown path records a real one, so `_lastDisconnectReason`
+            // fell through to "unknown" here specifically. This exact branch
+            // is what a live capture (device+server logs, 2026-07-31) showed
+            // firing continuously — authenticate, ~30-90s silence, this
+            // abrupt local self-teardown (matches the server's observed
+            // "read error ... EOF" signature), reconnect, repeat — for an
+            // entire test session. Without a real reason there was no way to
+            // even confirm from logs alone that this was the exact branch
+            // firing versus some other disconnect path with a similar
+            // symptom. Now self-documenting on the next capture.
+            let reason = "keepalive-dead-timeout: no inbound for \(String(format: "%.1f", age))s (pingInterval=\(pingInterval)s pongTimeout=\(pongTimeout)s)"
+            print("[BCryptoWS] \(reason)")
             lock.lock()
             webSocketTask?.cancel(with: .abnormalClosure, reason: nil)
             webSocketTask = nil
             lock.unlock()
-            handleDisconnect(generation: gen)
+            handleDisconnect(generation: gen, reason: reason)
             return
         }
 
         lock.lock()
         pingSentAt = Date().timeIntervalSinceReferenceDate
         lock.unlock()
+        // Fix (2026-07-31, found during full-audit): the send-ping and
+        // receive-pong paths were both completely silent on success — only
+        // failures printed anywhere in this class. That made it impossible
+        // to tell, from a device log alone, "pings genuinely aren't leaving
+        // the device" from "pongs aren't arriving" from "this code isn't
+        // running at all" — three very different explanations for the same
+        // churn symptom. This print + the pong-received one in
+        // handleMessage's "pong"/"heartbeat_ack" branch are the minimum
+        // needed to actually distinguish them on the next capture.
+        print("[BCryptoWS] ping sent (age=\(String(format: "%.1f", age))s)")
         send(type: "ping", data: [:])
     }
 

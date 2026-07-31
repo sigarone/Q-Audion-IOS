@@ -197,10 +197,23 @@ final class AccountSettingsContainer: ObservableObject {
         }
     }
 
-    func saveProfile() {
+    /// Fix (2026-07-31, found during full-audit): this used to be
+    /// fire-and-forget — the caller (`saveButton`) called it then showed a
+    /// "Profilo aggiornato" success toast SYNCHRONOUSLY right after, with
+    /// zero knowledge of whether the network call had even started, let
+    /// alone succeeded. During the confirmed WS/network-instability window
+    /// this session root-caused, a slow or failing `updateProfile` call
+    /// left the user seeing an immediate false "saved" toast while the
+    /// actual save silently failed in the background (the existing
+    /// `errorMessage` banner would eventually appear, but after a toast had
+    /// already told them it worked). Now `async` and returns whether it
+    /// actually succeeded, so the caller can wait for the real result
+    /// before deciding what to show.
+    @discardableResult
+    func saveProfile() async -> Bool {
         guard let provider = makeProvider() else {
             errorMessage = "Not signed in"
-            return
+            return false
         }
         // Persist the local public phone on every save. The setter
         // strips non-digits and clears the key when the field is empty
@@ -210,21 +223,21 @@ final class AccountSettingsContainer: ObservableObject {
         // (handles the case where the user typed e.g. "+39 333 …" and we
         // stripped the punctuation).
         draftLocalPhone = LocalCallerIdSettings.phoneNumber() ?? ""
-        Task {
-            await MainActor.run { self.isLoading = true; self.errorMessage = nil }
-            do {
-                try await provider.accountApi.updateProfile(
-                    displayName: draftDisplayName.isEmpty ? nil : draftDisplayName,
-                    statusMessage: draftStatusMessage.isEmpty ? nil : draftStatusMessage,
-                    avatarUrl: nil
-                )
-                loadFromServer()
-            } catch {
-                await MainActor.run {
-                    self.errorMessage = error.localizedDescription
-                    self.isLoading = false
-                }
+        await MainActor.run { self.isLoading = true; self.errorMessage = nil }
+        do {
+            try await provider.accountApi.updateProfile(
+                displayName: draftDisplayName.isEmpty ? nil : draftDisplayName,
+                statusMessage: draftStatusMessage.isEmpty ? nil : draftStatusMessage,
+                avatarUrl: nil
+            )
+            loadFromServer()
+            return true
+        } catch {
+            await MainActor.run {
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
             }
+            return false
         }
     }
 
@@ -313,6 +326,12 @@ final class AccountSettingsContainer: ObservableObject {
     }
 
     func uploadAvatar(image: UIImage) {
+        // Fix (2026-07-31, found during full-audit): single choke point for
+        // every avatar-set entry path (library picker, camera) — guards
+        // against a second pick racing an upload already in flight,
+        // regardless of which UI path triggered it, instead of duplicating
+        // the check at each call site.
+        guard !isLoading else { return }
         Task {
             await MainActor.run { self.isLoading = true; self.errorMessage = nil }
             do {
@@ -494,11 +513,38 @@ struct AccountSettingsScreen: View {
             Text("Dovrai accedere di nuovo per usare le chat e le chiamate.")
         }
         .onChange(of: selectedItem) { newItem in
+            guard let item = newItem else { return }
+            // Fix (2026-07-31, found during full-audit): guard against a
+            // second pick landing while an upload from the first is still
+            // in flight — camera + library picker + icon picker all funnel
+            // into the same `container.isLoading`/upload state, and nothing
+            // previously stopped a rapid double-pick from racing.
+            guard !container.isLoading else {
+                selectedItem = nil
+                return
+            }
             Task {
-                guard let item = newItem,
-                      let data = try? await item.loadTransferable(type: Data.self),
-                      let img = UIImage(data: data) else { return }
-                container.uploadAvatar(image: img)
+                // Fix (2026-07-31, found during full-audit): `try?` here
+                // swallowed BOTH `loadTransferable` throwing and
+                // `UIImage(data:)` returning nil with zero feedback — the
+                // picker sheet just closed and nothing visibly happened,
+                // reading as "picking a photo doesn't work" with no error
+                // shown anywhere.
+                do {
+                    guard let data = try await item.loadTransferable(type: Data.self) else {
+                        container.errorMessage = "Impossibile leggere la foto selezionata."
+                        selectedItem = nil
+                        return
+                    }
+                    guard let img = UIImage(data: data) else {
+                        container.errorMessage = "Formato immagine non valido."
+                        selectedItem = nil
+                        return
+                    }
+                    container.uploadAvatar(image: img)
+                } catch {
+                    container.errorMessage = error.localizedDescription
+                }
                 selectedItem = nil
             }
         }
@@ -860,15 +906,20 @@ struct AccountSettingsScreen: View {
 
     private var saveButton: some View {
         Button {
-            container.saveProfile()
-            // Optimistic feedback. Il container chiama loadFromServer()
-            // dopo updateProfile e setta errorMessage in caso di
-            // failure. Per ora mostriamo solo il success ottimista
-            // e lasciamo il banner riskHigh esistente per gli errori.
-            snackbar?.show(.init(
-                text: "Profilo aggiornato.",
-                severity: .info
-            ))
+            // Fix (2026-07-31, found during full-audit): the success toast
+            // now fires only after `saveProfile` actually confirms the
+            // server accepted the update — see its kdoc. A failure still
+            // surfaces via the existing `container.errorMessage` banner,
+            // set inside `saveProfile` itself; no separate handling needed
+            // here.
+            Task {
+                if await container.saveProfile() {
+                    snackbar?.show(.init(
+                        text: "Profilo aggiornato.",
+                        severity: .info
+                    ))
+                }
+            }
         } label: {
             HStack {
                 if container.isLoading {

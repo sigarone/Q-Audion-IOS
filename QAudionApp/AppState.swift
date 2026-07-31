@@ -3161,7 +3161,27 @@ final class AppState: ObservableObject {
         let cke = ContactKeyExchange(
             identity: sovereignIdentity,
             vault: SovereignKeyVault(),
-            sendOpaque: { recipientId, wire in
+            // Fix (2026-07-31, found during full-audit): this used to call
+            // `ws.sendOpaqueMessage` directly with no auth-gate at all —
+            // unlike the ordinary chat path (`BCryptoMessageApiImpl
+            // .sendMessage`), which waits up to 5s for a live/authenticated
+            // socket via `ensureAuthenticated` before sending. If the WS was
+            // down (the confirmed churn window this session root-caused, or
+            // any future regression of the same class), `send()` drops the
+            // frame with only a `print` and no throw — so this closure's
+            // `async throws` signature never actually threw, `ContactKey
+            // Exchange.initiate`'s caller never saw a failure, and the
+            // KEY_EXCHANGE_OFFER that starts the entire PSK/avatar chain
+            // for a peer could silently vanish with zero trace and zero
+            // retry. Now waits for a real connection first and throws if
+            // one never arrives, so the existing retry paths this exchange
+            // already has (next call, next contact scan) actually get a
+            // chance to fire instead of assuming the OFFER made it out.
+            sendOpaque: { [weak ws] recipientId, wire in
+                guard let ws else { throw ContactKeyExchangeError.wsNotAuthenticated }
+                guard await ws.ensureAuthenticated() else {
+                    throw ContactKeyExchangeError.wsNotAuthenticated
+                }
                 ws.sendOpaqueMessage(recipientId: recipientId, payload: wire)
             }
         )
@@ -6689,12 +6709,26 @@ final class AppState: ObservableObject {
             // starting the download so a defensively-resent announce
             // (same or older version, e.g. on every call-connect) is a
             // cheap no-op.
-            if let avatarEnv = try? AvatarAnnounceEnvelope.parse(decryptedRaw) {
-                let existingVersion = ContactsStore().load()
-                    .first(where: { $0.userId == senderId })?.avatarVersion ?? -1
-                if avatarEnv.att.version > existingVersion {
-                    handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
+            // Fix (2026-07-31, found during full-audit): `try?` here used to
+            // collapse two very different outcomes into the same silent
+            // `nil` — "this JSON just isn't an avatar_announce" (expected,
+            // falls through to other handlers) and "this IS an
+            // avatar_announce but a required field is missing/malformed" (a
+            // real wire-format bug, e.g. the att/avatar key mismatch fixed
+            // earlier today). The malformed case produced ZERO log anywhere
+            // and fell through to being persisted+rendered as raw garbage
+            // JSON in the chat UI. Distinguish them explicitly.
+            do {
+                if let avatarEnv = try AvatarAnnounceEnvelope.parse(decryptedRaw) {
+                    let existingVersion = ContactsStore().load()
+                        .first(where: { $0.userId == senderId })?.avatarVersion ?? -1
+                    if avatarEnv.att.version > existingVersion {
+                        handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
+                    }
+                    return
                 }
+            } catch {
+                RTLog.error("avatar", "malformed avatar_announce from=\(senderId.prefix(8)): \(error)")
                 return
             }
             // W390: route `qa_grp:1` envelopes (sender_key_init,
@@ -6753,7 +6787,13 @@ final class AppState: ObservableObject {
             }
             plaintext = Self.renderInboundPlaintext(decryptedRaw)
         } catch {
-            print("[AppState] msg_receive decrypt failed from \(senderId): \(error)")
+            // Fix (2026-07-31, found during full-audit): was bare print() —
+            // reaches the Xcode/device console only, no interception
+            // anywhere in the app routes it to telemetry/Loki. A whole test
+            // session's worth of decrypt failures were completely invisible
+            // to remote log pulls because of this single line; RTLog
+            // actually reaches RuntimeLogSink → the real log pipeline.
+            RTLog.error("chat", "msg_receive decrypt failed from=\(senderId.prefix(8)): \(error)")
             plaintext = "[messaggio cifrato non leggibile]"
             // W77b: auto-rekey on decrypt failure. Same pattern as
             // qaudion-desktop's `MessageService.on('needRekey')` → fires
@@ -7267,9 +7307,24 @@ final class AppState: ObservableObject {
                 do {
                     let json = try await sender.prepareEnvelopeJson(
                         avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
-                    _ = await sendService.sendEncrypted(
+                    let outcome = await sendService.sendEncrypted(
                         messageId: UUID(), peerUserId: peerId, plaintext: json)
-                    Self.markAvatarSent(version: version, toPeer: peerId)
+                    // Fix (2026-07-31, found during full-audit): `sendEncrypted`
+                    // NEVER throws — every failure (WS down, auth timeout, PSK
+                    // missing, crypto error) is a RETURNED `.failed(reason:)`,
+                    // not a Swift error. This used to be discarded (`_ = await
+                    // ...`) and `markAvatarSent` ran unconditionally right
+                    // after — so a `.failed` send (a real, recurring outcome
+                    // during the WS-churn window this session root-caused) was
+                    // bookkept identically to a real success, permanently (the
+                    // only recovery was the 3-day TTL self-heal). Only mark on
+                    // an outcome that actually left the device.
+                    switch outcome {
+                    case .delivered, .sent:
+                        Self.markAvatarSent(version: version, toPeer: peerId)
+                    case .failed(let reason):
+                        print("[AppState] avatar_announce broadcast NOT sent to \(peerId): \(reason)")
+                    }
                 } catch AvatarAnnounceSender.SendError.pskMissing {
                     continue
                 } catch {
@@ -7356,8 +7411,21 @@ final class AppState: ObservableObject {
             do {
                 let json = try await sender.prepareEnvelopeJson(
                     avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
-                _ = await sendService.sendEncrypted(
+                let outcome = await sendService.sendEncrypted(
                     messageId: UUID(), peerUserId: peerId, plaintext: json)
+                // Fix (2026-07-31, found during full-audit): `sendEncrypted`
+                // NEVER throws — a `.failed` outcome (WS down, auth timeout,
+                // PSK missing, crypto error) used to hit this same success
+                // path unconditionally, since only a THROWN error reached the
+                // `catch` below. The optimistic mark above already assumed
+                // success; a `.failed` outcome must roll it back exactly like
+                // a thrown error does, or the same permanent-until-3-day-TTL
+                // false-positive this whole fix class exists to prevent
+                // recurs via a different door.
+                if case .failed(let reason) = outcome {
+                    Self.markAvatarSent(version: priorSent, toPeer: peerId, at: priorSentAt ?? .distantPast)
+                    print("[avatar] send NOT delivered to=\(peerId.prefix(8)) reason=\(reason)")
+                }
             } catch {
                 // Failed — restore the prior state (INCLUDING its original
                 // timestamp, not now) so the next trigger retries instead of
@@ -7419,7 +7487,12 @@ final class AppState: ObservableObject {
             } catch AvatarAnnounceReceiver.ReceiveError.pskMissing {
                 self.triggerKeyExchange(with: senderId)
             } catch {
-                print("[AppState] avatar_announce receive failed from \(senderId): \(error)")
+                // Fix (2026-07-31, found during full-audit): was bare
+                // print() — see the msg_receive-decrypt-failed fix above,
+                // same reasoning. This is the ONE line that would have
+                // shown a download/decrypt failure for an inbound avatar,
+                // and it never reached anywhere a remote log pull could see.
+                RTLog.error("avatar", "avatar_announce receive failed from=\(senderId.prefix(8)): \(error)")
             }
         }
     }

@@ -218,4 +218,9 @@ public final class ContactKeyExchange: @unchecked Sendable {
 public enum ContactKeyExchangeError: Error {
     case invalidPeerPubKey(Int)
     case missingLocalIdentity
+    /// 2026-07-31 (full-audit fix): the WS wasn't authenticated within the
+    /// wait budget when a KEY_EXCHANGE_OFFER/ACCEPT tried to send. See
+    /// `AppState`'s `sendOpaque` closure kdoc for why this needed a real
+    /// throw instead of silently vanishing.
+    case wsNotAuthenticated
 }
