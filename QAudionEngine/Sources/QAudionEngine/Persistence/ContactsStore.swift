@@ -338,18 +338,7 @@ public final class ContactsStore {
     /// predictable key — a lost/inaccessible key means `encode`/`decode`
     /// both fail closed rather than silently degrading to plaintext).
     private static func loadOrCreateKey() -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keyService,
-            kSecAttrAccount as String: keyAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecSuccess, let existing = item as? Data, existing.count == CryptoConstants.keySizeBytes {
-            return existing
-        }
+        if let existing = readKey() { return existing }
         // Not found (or corrupted length) — mint a fresh key.
         let fresh = SymmetricKey(size: .bits256)
         let freshData = fresh.withUnsafeBytes { Data($0) }
@@ -363,8 +352,46 @@ public final class ContactsStore {
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
         let addStatus = SecItemAdd(addAttrs as CFDictionary, nil)
-        guard addStatus == errSecSuccess else { return nil }
-        return freshData
+        if addStatus == errSecSuccess { return freshData }
+        // W-CONTACTKEYRACE (2026-08-01): found via CI — every ContactsStoreTests
+        // round-trip test failed (load() after save() came back nil/empty)
+        // the moment this class landed. Root cause: this is a check-then-act
+        // race on a single fixed Keychain item (service+account are
+        // constants, not per-instance). Two ContactsStore callers reaching
+        // this method around the same time (confirmed happening here: each
+        // XCTestCase method gets its own isolated UserDefaults suite but
+        // ALL of them share this ONE Keychain slot, and XCTest can run test
+        // methods concurrently) can both find nothing via the read above,
+        // both mint a DIFFERENT random key, and both call SecItemAdd — the
+        // loser gets errSecDuplicateItem, and the old code treated that as
+        // a hard failure (`return nil`), which cascaded into encode()
+        // returning nil, save() silently no-op'ing, and every subsequent
+        // load() on THAT instance coming back empty, indistinguishable from
+        // "nothing was ever saved". The fix: a duplicate-item error means a
+        // concurrent caller just won this exact race, so the key now
+        // genuinely exists — re-read it instead of giving up. This can also
+        // matter on a real device on a very first launch where multiple
+        // code paths save a contact concurrently before the key exists yet.
+        if addStatus == errSecDuplicateItem, let winner = readKey() { return winner }
+        return nil
+    }
+
+    /// Raw Keychain read for this store's key, shared by both the fast
+    /// path and the duplicate-item race-retry path in `loadOrCreateKey()`.
+    private static func readKey() -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keyService,
+            kSecAttrAccount as String: keyAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess, let existing = item as? Data, existing.count == CryptoConstants.keySizeBytes {
+            return existing
+        }
+        return nil
     }
 
     public func upsert(_ contact: StoredContact) {
