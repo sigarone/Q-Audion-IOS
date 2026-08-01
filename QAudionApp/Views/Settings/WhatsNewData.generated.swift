@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.919",
+              date: "2026-08-01",
+              title: "v1.0.919",
+              bullets: [
+                "feat(voice-auth): port CAM++ Tier 1/Tier 2 voice-auth from Android",
+              ]),
         .init(id: "v1.0.918",
               date: "2026-07-31",
               title: "v1.0.918",
               bullets: [
+                "chore: regenerate changelog for v1.0.918",
                 "fix: real root cause of avatar-upload crash — CryptoKit Data index-base, not tus slicing",
               ]),
         .init(id: "v1.0.917",
@@ -150,13 +157,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.900",
                 "feat(profile): OTP-verify phone numbers added to \"I miei numeri\"",
-              ]),
-        .init(id: "v1.0.899",
-              date: "2026-07-30",
-              title: "v1.0.899",
-              bullets: [
-                "chore: regenerate changelog for v1.0.899",
-                "fix(identity): trigger name enrichment from every DisplayName.forUser call site",
               ]),
     ]
 }
