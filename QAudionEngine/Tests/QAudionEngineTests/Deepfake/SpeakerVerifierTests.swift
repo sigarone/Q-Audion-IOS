@@ -6,7 +6,7 @@ final class SpeakerVerifierTests: XCTestCase {
     // MARK: - Initial State
 
     func testInitialStateIsIdle() {
-        let verifier = SpeakerVerifier()
+        let verifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
         if case .idle = verifier.getState() {} else {
             XCTFail("Expected idle state")
         }
@@ -15,7 +15,7 @@ final class SpeakerVerifierTests: XCTestCase {
     // MARK: - Enrollment Flow
 
     func testStartEnrollmentTransitionsToEnrolling() {
-        let verifier = SpeakerVerifier()
+        let verifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
         verifier.startEnrollment()
         if case .enrolling = verifier.getState() {} else {
             XCTFail("Expected enrolling state after startEnrollment")
@@ -23,7 +23,7 @@ final class SpeakerVerifierTests: XCTestCase {
     }
 
     func testFinishEnrollmentWithTooFewFramesFails() {
-        let verifier = SpeakerVerifier()
+        let verifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
         verifier.startEnrollment()
         // Feed only 10 frames -- well below the 150 minimum
         let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
@@ -39,7 +39,7 @@ final class SpeakerVerifierTests: XCTestCase {
     }
 
     func testFinishEnrollmentWithEnoughFramesSucceeds() {
-        let verifier = SpeakerVerifier()
+        let verifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
         verifier.startEnrollment()
         let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
         for _ in 0..<160 {
@@ -53,7 +53,7 @@ final class SpeakerVerifierTests: XCTestCase {
     }
 
     func testProcessFrameIgnoredWhenNotEnrolling() {
-        let verifier = SpeakerVerifier()
+        let verifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
         // State is idle -- processEnrollmentFrame should be ignored
         let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
         verifier.processEnrollmentFrame(frame)
@@ -66,14 +66,14 @@ final class SpeakerVerifierTests: XCTestCase {
     // MARK: - Verification
 
     func testVerifyReturnsZeroWhenNotReady() {
-        let verifier = SpeakerVerifier()
+        let verifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
         let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
         let score = verifier.verify(pcmFrame: frame)
         XCTAssertEqual(score, 0, "verify should return 0 when not in ready state")
     }
 
     func testVerifyAfterEnrollmentReturnsSimilarityScore() {
-        let verifier = SpeakerVerifier()
+        let verifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
         let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
 
         verifier.startEnrollment()
@@ -96,7 +96,7 @@ final class SpeakerVerifierTests: XCTestCase {
 
     func testVerifyWithTinyDataReturnsZero() {
         let verifier = enrolledVerifier()
-        // Data too small for LfccExtractor to produce features
+        // Data too small for KaldiFbankExtractor to produce features
         let score = verifier.verify(pcmFrame: Data(repeating: 0, count: 4))
         XCTAssertEqual(score, 0, "verify with tiny data should return 0")
     }
@@ -118,7 +118,7 @@ final class SpeakerVerifierTests: XCTestCase {
     // MARK: - Helpers
 
     private func enrolledVerifier() -> SpeakerVerifier {
-        let verifier = SpeakerVerifier()
+        let verifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
         let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
         verifier.startEnrollment()
         for _ in 0..<160 {

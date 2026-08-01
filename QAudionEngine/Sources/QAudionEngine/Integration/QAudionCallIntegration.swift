@@ -73,6 +73,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `processIncomingAudio` on the SAME thread as `guardianMode`/
     /// `voiceAnalysis` above — same never-block, no-extra-dispatch rule.
     private var voiceLearningSession: VoiceLearningSession?
+    /// Tier 1 ("voce come chiave") — TX-side continuous owner-continuity
+    /// self-check. Fed inside `processOutgoingAudio`, pre-encode, from the
+    /// LOCAL mic — never RX/remote audio. Silently stays `.inactive`
+    /// whenever no Voice-as-Key template is enrolled. Built in `init()`
+    /// (needs a `SpeakerVerifier` pre-loaded with the owner's stored
+    /// template, if any) and started there too.
+    private let ownerContinuityMonitor: OwnerContinuityMonitor
+    /// Tier 2 ("voce remota") — RX-side continuous per-contact
+    /// verification. Activated via
+    /// `activateContactVoiceVerification(contactId:)` once the call's peer
+    /// is known; fed inside `processIncomingAudio` UNCONDITIONALLY (a cheap
+    /// no-op with no active contact — see `ContactVoiceVerifier
+    /// .feedContinuous`).
+    private let contactVoiceVerifier = ContactVoiceVerifier()
     private var sendOpaque: ((Data) async throws -> Void)?
     private var resolvedBcryptoUserId: String?
     private var bcryptoUserIdCache: [String: String] = [:]  // recipientId -> BCrypto userId
@@ -194,6 +208,21 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `processIncomingAudio`). Invoked synchronously on the RX thread —
     /// same never-block contract as `onVoiceSpectrum`.
     public var onVoiceLearningStateChanged: ((VoiceLearningSession.State) -> Void)?
+
+    /// Tier 1 ("voce come chiave") — fires whenever the TX-side owner-
+    /// continuity self-check produces a new state. Invoked on
+    /// `OwnerContinuityMonitor`'s OWN private queue, NOT the caller's
+    /// thread (a deliberate difference from `onVoiceSpectrum`/
+    /// `onVoiceLearningStateChanged` above, which fire synchronously on the
+    /// RX/TX audio thread) — see that class's `onStateChanged` kdoc for
+    /// why. Hop to your own thread before touching UI state.
+    public var onOwnerContinuityStateChanged: ((OwnerContinuityMonitor.State) -> Void)?
+
+    /// Tier 2 ("voce remota") — fires whenever the RX-side per-contact
+    /// continuity gate's level changes. Same cross-thread contract as
+    /// `onOwnerContinuityStateChanged` above (fires on
+    /// `ContactVoiceVerifier`'s own private queue).
+    public var onContactVoiceLevelChanged: ((ContactVoiceContinuityGate.Level) -> Void)?
 
     /// W389 — fired the moment the ML-KEM-1024 PQC handshake completes
     /// successfully on EITHER side (caller `case .accept` after
@@ -643,11 +672,31 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private var sentOfferPskRolesByCall: [String: [Int]] = [:]
 
     public init() {
+        // Tier 1 — build a SpeakerVerifier pre-loaded with the owner's
+        // stored Voice-as-Key template, if any (mirrors
+        // `VoiceUnlockController`'s init pattern exactly). No template yet
+        // ⇒ verifier stays `.idle` ⇒ `OwnerContinuityMonitor` stays
+        // `.inactive` forever for this call, matching its own "never nag
+        // an un-enrolled user" contract.
+        let ownerVerifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
+        if let ownerTemplate = VoiceprintStore().load(contactId: VoiceprintStore.deviceOwnerId) {
+            ownerVerifier.importTemplate(ownerTemplate)
+        }
+        ownerContinuityMonitor = OwnerContinuityMonitor(verifier: ownerVerifier)
+
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
+        ownerContinuityMonitor.onStateChanged = { [weak self] state in self?.onOwnerContinuityStateChanged?(state) }
+        contactVoiceVerifier.onLevelChanged = { [weak self] level in self?.onContactVoiceLevelChanged?(level) }
         // Task #11 — head-start the ephemeral ML-KEM keypair off the
         // call-start critical path (the reused responder integration and
         // any caller integration created with lead time get it for free).
         prewarmKeyMaterial()
+        // This `QAudionCallIntegration` instance can be REUSED across
+        // multiple calls (see `onCallEnded`'s M-11 comment) — start once
+        // here rather than per-call; `onCallEnded` stops it, and the next
+        // call's `processOutgoingAudio` feed simply resumes accumulating
+        // once whatever future call reuses this instance.
+        ownerContinuityMonitor.start()
     }
 
     /// Resolve BCrypto userId for a contact. Call before onCallSetupStarted.
@@ -3243,7 +3292,39 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 
     public func processOutgoingAudio(pcmFrame: Data) throws -> Data {
+        // Tier 1 ("voce come chiave") — RAW pre-encode TX PCM, the LOCAL
+        // mic. Enqueues onto its own private queue and returns immediately
+        // (never blocks this real-time path) — see `OwnerContinuityMonitor
+        // .feed` kdoc.
+        ownerContinuityMonitor.feed(pcmFrame: pcmFrame)
         return try engine.processOutgoingAudio(pcmFrame: pcmFrame)
+    }
+
+    /// Tier 2 ("voce remota") — switch the active contact for continuous
+    /// per-contact RX verification (auto-enrolls from live call audio if
+    /// no template exists yet for `contactId`). Call once the call's peer
+    /// is known; safe to call redundantly (a no-op if `contactId` is
+    /// already active). See `deactivateContactVoiceVerification` for the
+    /// call-end counterpart.
+    public func activateContactVoiceVerification(contactId: String) {
+        contactVoiceVerifier.setActiveContact(contactId)
+    }
+
+    /// Tier 2 counterpart to `activateContactVoiceVerification` — stops the
+    /// continuous per-contact check without persisting anything partial.
+    public func deactivateContactVoiceVerification() {
+        contactVoiceVerifier.deactivate()
+    }
+
+    /// True after `OwnerContinuityMonitor`'s own hysteresis streak has
+    /// actually tripped (3 consecutive Mismatch windows), not just the
+    /// current tick. The app layer consults this when mapping a fresh
+    /// `.mismatch` tick for the `OWNER_CONT` wire announce — mirrors
+    /// Android's `onConnected` watcher, which downgrades a single noisy
+    /// Mismatch tick to `Uncertain` on the wire unless this has tripped, so
+    /// the PEER is never false-alarmed by one bad window.
+    public func ownerContinuityShouldAlert() -> Bool {
+        ownerContinuityMonitor.shouldAlert()
     }
 
     /// Feature B ("voce verificata") — start learning `contactId`'s voice
@@ -3268,6 +3349,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public func processIncomingAudio(serializedFrame: Data) throws -> Data {
         let pcm = try engine.processIncomingAudio(serializedFrame: serializedFrame)
         guardianMode.processFrame(pcm)
+        // Tier 2 ("voce remota") — cheap continuous feed, safe to call
+        // unconditionally (a no-op unless `activateContactVoiceVerification`
+        // has set an active contact — see `ContactVoiceVerifier
+        // .feedContinuous` kdoc). Never triggers the expensive embedding
+        // recompute; that runs on `ContactVoiceVerifier`'s own internal
+        // ~1s-throttled timer, off this thread entirely.
+        contactVoiceVerifier.feedContinuous(pcm)
         // Feature B — feed the SAME decoded RX PCM used by the guardian tap
         // above into the per-contact learning session, if one is running.
         // Deliberately the RX path, never TX/mic — see `VoiceLearningSession`'s
@@ -3318,6 +3406,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // so a straggling reference never bleeds into the next call (which
         // may be with a different peer entirely).
         voiceLearningSession = nil
+        // Tier 1/Tier 2 — this integration instance can be REUSED for a
+        // later call (see M-11 comment below), so neither monitor gets a
+        // fresh `init()` next time: deactivate the per-contact verifier
+        // (Tier 2) and stop+immediately restart the owner-continuity
+        // monitor's buffering (Tier 1) here instead, so whichever call
+        // reuses this instance starts with clean, empty buffers rather than
+        // straddling into a prior, unrelated call's leftover audio.
+        contactVoiceVerifier.deactivate()
+        ownerContinuityMonitor.stop()
+        ownerContinuityMonitor.start()
         // M-15 — cancel any pending capability-exchange fallback so it
         // cannot fire on a later, unrelated call.
         capabilityTimeoutWorkItem?.cancel()

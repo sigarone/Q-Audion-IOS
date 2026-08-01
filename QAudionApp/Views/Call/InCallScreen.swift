@@ -303,6 +303,26 @@ struct InCallScreen: View {
     /// most of any call). Empty ⇒ the wave renders its neutral flat-line
     /// state. See `AppState.voiceConfidenceHistory`'s doc for the source.
     let voiceConfidenceHistory: [Float]
+    /// "Voce storica" — the PEER's self-reported
+    /// `AppState.peerOwnerContinuityLevel`: does THEIR live voice still
+    /// match THEIR OWN historical Voice-as-Key enrollment, received over
+    /// the `OWNER_CONT` opaque-message piggy-back (see
+    /// `AppState.routeInboundCallPiggyBack`'s `.ownerContinuity` case).
+    /// `.unknown` for the whole call unless the peer's device actually
+    /// signals a transition — most calls never do, in which case this
+    /// shield falls back to showing just the static `peerVoiceKeyEnrolled`
+    /// fact (see the merged shield in `trustBar`). Matches Android's
+    /// `GuardianRibbon.peerOwnerContinuityLevel` exactly — this is NOT this
+    /// device's own local self-check (see `ContactVoiceVerifier`'s sibling
+    /// engine class `OwnerContinuityMonitor`, which drives the OUTBOUND
+    /// half of this signal from `AppState`, never a trust-bar shield of its
+    /// own — Android doesn't show one either).
+    let peerOwnerContinuityLevel: ContactVoiceContinuityGate.Level
+    /// Tier 2 ("voce remota") — RX-side per-contact continuity level,
+    /// published as `AppState.contactVoiceLevel`. `.unknown` until the
+    /// first real score tick for the active contact — the shield stays
+    /// hidden in that case too.
+    let contactVoiceLevel: ContactVoiceContinuityGate.Level
 
     init(peerDisplayName: String,
          avatarUrl: URL? = nil,
@@ -346,7 +366,9 @@ struct InCallScreen: View {
          onToggleDiagnostics: @escaping () -> Void = {},
          voiceLearningState: VoiceLearningSession.State? = nil,
          onStartVoiceLearning: @escaping () -> Void = {},
-         voiceConfidenceHistory: [Float] = []) {
+         voiceConfidenceHistory: [Float] = [],
+         peerOwnerContinuityLevel: ContactVoiceContinuityGate.Level = .unknown,
+         contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
         self.durationSeconds = durationSeconds
@@ -390,6 +412,8 @@ struct InCallScreen: View {
         self.voiceLearningState = voiceLearningState
         self.onStartVoiceLearning = onStartVoiceLearning
         self.voiceConfidenceHistory = voiceConfidenceHistory
+        self.peerOwnerContinuityLevel = peerOwnerContinuityLevel
+        self.contactVoiceLevel = contactVoiceLevel
     }
 
     // MARK: - Body
@@ -978,12 +1002,45 @@ struct InCallScreen: View {
             // self-declared. Independent of every other fact here; see
             // `peerVoiceKeyEnrolled`'s doc. Placed first, ahead of NFC, to
             // match Android's ordering.
-            if peerVoiceKeyEnrolled {
+            // 2026-08-01 3-tier voice-auth design: this shield is now a
+            // SUPERSET of the old static-only version — it shows whenever
+            // there's anything to say at all (the static `peerVoiceKeyEnrolled`
+            // fact, OR a real live `peerOwnerContinuityLevel` tri-state once
+            // the peer's device has ever signalled a transition — most calls
+            // never do, in which case this renders exactly as before: a flat
+            // green "enrolled" shield). Matches Android's `GuardianRibbon`
+            // merged shield exactly (same single `TrustBadgeInfo.voiceKey`
+            // popup for both facts) — do NOT split this into two shields,
+            // that was this file's own first draft and diverged from the
+            // validated Android UI before being corrected against real
+            // Android source.
+            if peerVoiceKeyEnrolled || peerOwnerContinuityLevel != .unknown {
                 trustShield(
-                    tint: extras.success,
+                    tint: peerOwnerContinuityLevel == .mismatch ? extras.riskHigh
+                        : (peerOwnerContinuityLevel == .uncertain ? extras.pqcAccent : extras.success),
                     icon: "mic.fill",
                     info: .voiceKey,
-                    accessibilityLabel: "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo"
+                    accessibilityLabel: peerOwnerContinuityLevel == .mismatch
+                        ? "Attenzione: la voce del contatto non corrisponde più al suo profilo vocale dichiarato"
+                        : "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo"
+                )
+            }
+            // Tier 2 ("voce remota") — RX-side per-contact continuity, LOCAL
+            // and continuous (this device hears the audio directly, no wire
+            // signal involved). Hidden until the first real score tick for
+            // the active contact (`.unknown` — no template yet / window not
+            // full) — matches Android's `contactVoiceContinuityLevel` shield.
+            if contactVoiceLevel != .unknown {
+                trustShield(
+                    tint: contactVoiceLevel == .mismatch ? extras.riskHigh
+                        : (contactVoiceLevel == .uncertain ? extras.pqcAccent : extras.success),
+                    icon: "ear",
+                    info: .contactVoice,
+                    accessibilityLabel: contactVoiceLevel == .verified
+                        ? "La voce del contatto corrisponde a quella già conosciuta"
+                        : (contactVoiceLevel == .mismatch
+                            ? "Attenzione: la voce del contatto non corrisponde a quella già conosciuta"
+                            : "Verifica della voce del contatto in corso")
                 )
             }
             // W-NFCVISIBLE / W-NFCCOMMON — Pavel: an NFC key held in common with
@@ -1132,23 +1189,26 @@ struct InCallScreen: View {
     /// style (e.g. `identityChangeBanner`/the SAS panel above) rather than
     /// a verbatim copy of Android's strings.
     enum TrustBadgeInfo {
-        case voiceKey, nfc, psk, sas, pqc, transport
+        case voiceKey, contactVoice, nfc, psk, sas, pqc, transport
 
         var title: String {
             switch self {
-            case .voiceKey:  return "Voce come chiave"
-            case .nfc:       return "NFC in comune"
-            case .psk:       return "Chiave pre-condivisa (PSK)"
-            case .sas:       return "Verifica identità (SAS)"
-            case .pqc:       return "Post-quantistico (PQC)"
-            case .transport: return "Percorso di rete"
+            case .voiceKey:         return "Voce come chiave"
+            case .contactVoice:     return "Voce remota"
+            case .nfc:              return "NFC in comune"
+            case .psk:              return "Chiave pre-condivisa (PSK)"
+            case .sas:              return "Verifica identità (SAS)"
+            case .pqc:              return "Post-quantistico (PQC)"
+            case .transport:        return "Percorso di rete"
             }
         }
 
         var body: String {
             switch self {
             case .voiceKey:
-                return "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. È un'informazione che dichiara di sé stesso — non significa che questa chiamata abbia riconosciuto la sua voce: quello è l'indicatore di verifica vocale live, separato."
+                return "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. Quando il suo telefono rileva una transizione live (per esempio uno scambio di persona a metà chiamata), il colore di questo scudo cambia per segnalarlo — altrimenti mostra semplicemente il fatto statico che l'ha attivato. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso."
+            case .contactVoice:
+                return "Verifica continua, durante la chiamata, che la voce che stai ASCOLTANDO corrisponda a quella già imparata per questo contatto nelle chiamate precedenti. Se il contatto parla per la prima volta, l'apprendimento avviene automaticamente in sottofondo nei primi secondi."
             case .nfc:
                 return "Tu e il contatto avete in comune un segreto scambiato fisicamente avvicinando i telefoni (NFC). Indipendente da quale chiave stia effettivamente usando questa specifica chiamata."
             case .psk:

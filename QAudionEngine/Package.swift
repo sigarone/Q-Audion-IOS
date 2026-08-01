@@ -277,7 +277,12 @@ let package = Package(
             path: "Sources/QAudionEngine",
             resources: [
                 .copy("Resources/aasist_raw_base_maxdata_int8.onnx"),
-                .copy("Resources/aasist_raw_small_distill_int8.onnx")
+                .copy("Resources/aasist_raw_small_distill_int8.onnx"),
+                // 2026-08-01: CAM++ speaker embedder (Tier 1/Tier 2 voice
+                // verification) — SAME asset Android already ships
+                // (qaudion-engine/src/main/assets/models/campplus_sv_voxceleb_16k.onnx),
+                // SHA-256 pinned in CamPlusSpeakerEmbedder.swift.
+                .copy("Resources/campplus_sv_voxceleb_16k.onnx")
             ]
         ),
         .testTarget(

@@ -33,12 +33,12 @@ final class VoiceEnrollmentContainer: ObservableObject {
     private var maxDurationSeconds: TimeInterval = 3.0
     private var recordingStartedAt: Date?
 
-    /// Feature A ("Voice-as-Key") real pipeline — the LFCC-mean-embedding
-    /// speaker matcher that consumes the audio captured below. Accumulates
+    /// Feature A ("Voice-as-Key") real pipeline — the CAM++ neural speaker
+    /// matcher that consumes the audio captured below. Accumulates
     /// frames across ALL prompts in this session (one call to
     /// `startEnrollment()` per full `start()`, NOT per prompt); the multi-
     /// prompt flow builds ONE device-owner template.
-    private let speakerVerifier = SpeakerVerifier()
+    private let speakerVerifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
     /// Keychain-backed (`VoiceprintStore`) — persists the finished template
     /// under `VoiceprintStore.deviceOwnerId` so it survives an app restart
     /// and can be loaded later by `VoiceUnlockController`/`VoiceAuthGate`.

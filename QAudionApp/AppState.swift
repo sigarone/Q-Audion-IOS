@@ -1371,6 +1371,37 @@ final class AppState: ObservableObject {
     /// alongside `callService.onVoiceLearningStateChanged`.
     @Published var voiceLearningState: VoiceLearningSession.State?
 
+    /// This device's OWN TX-side owner-continuity self-check state,
+    /// published from `callService.onOwnerContinuityStateChanged`.
+    /// `.inactive` whenever the user has no Voice-as-Key enrollment. NOT
+    /// shown as its own trust-bar shield (Android doesn't either — see
+    /// `InCallScreen.peerOwnerContinuityLevel`'s doc); its only consumer is
+    /// `sendOwnerContinuityAnnounceIfChanged`, which announces real
+    /// transitions to the peer so THEIR device can show `.mismatch` on
+    /// their trust bar. Reset in endCall() alongside `voiceLearningState`.
+    @Published var ownerContinuityState: OwnerContinuityMonitor.State = .inactive
+
+    /// Last level actually sent to the peer via `OWNER_CONT` — dedup guard
+    /// mirroring Android's `lastSentOwnerContinuityLevel`, so a re-fired
+    /// `.onOwnerContinuityStateChanged` callback with the SAME level (e.g.
+    /// another `.scored` tick that didn't cross a threshold) never re-sends.
+    private var lastSentOwnerContinuityLevel: ContactVoiceContinuityGate.Level?
+
+    /// The PEER's self-reported live continuity level, received over the
+    /// `OWNER_CONT` opaque-message piggy-back — see
+    /// `routeInboundCallPiggyBack`'s `.ownerContinuity` case. `.unknown`
+    /// for the whole call unless the peer's device actually signals a
+    /// transition (most calls never do). Drives `InCallScreen`'s merged
+    /// "voce come chiave" shield alongside `callPeerVoiceKeyEnrolled`.
+    /// Reset in endCall().
+    @Published var peerOwnerContinuityLevel: ContactVoiceContinuityGate.Level = .unknown
+
+    /// Tier 2 ("voce remota") — RX-side per-contact continuity level,
+    /// published from `callService.onContactVoiceLevelChanged`. `.unknown`
+    /// until the first real score tick for the active contact. Reset in
+    /// endCall().
+    @Published var contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown
+
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
     /// of RAW (un-smoothed) per-analyzed-frame Guardian confidence scores
     /// for the live wave that replaces the old manual voice-learning CTA
@@ -2363,6 +2394,22 @@ final class AppState: ObservableObject {
                 if case .completed(let contactId) = state {
                     ContactsStore().setVoiceVerified(userId: contactId)
                 }
+            }
+        }
+
+        // Tier 1/Tier 2 — fire on their own private queues (see each
+        // callback's own doc), so hop to MainActor before publishing, same
+        // pattern as every other cross-thread call-engine signal above.
+        callService.onOwnerContinuityStateChanged = { [weak self] state in
+            Task { @MainActor in
+                guard let self else { return }
+                self.ownerContinuityState = state
+                self.maybeAnnounceOwnerContinuity(state)
+            }
+        }
+        callService.onContactVoiceLevelChanged = { [weak self] level in
+            Task { @MainActor in
+                self?.contactVoiceLevel = level
             }
         }
 
@@ -8518,6 +8565,23 @@ final class AppState: ObservableObject {
             }
             callPeerVoiceKeyEnrolled = enrolled
             print("[AppState] VOICE_KEY received callId=\(callId.prefix(8))… enrolled=\(enrolled) from=\(senderId.prefix(8))…")
+        case .ownerContinuity(let callId, let level):
+            // "Voce storica" — the peer's own live tri-state. Sender guard
+            // mirrors VOICE_KEY/EARBUDPDU/FPSET: only the current call's
+            // peer can update this.
+            guard callContactId == senderId else {
+                print("[AppState] OWNER_CONT dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
+            }
+            let mapped: ContactVoiceContinuityGate.Level
+            switch level {
+            case "verified":  mapped = .verified
+            case "uncertain": mapped = .uncertain
+            case "mismatch":  mapped = .mismatch
+            default:          mapped = .unknown
+            }
+            peerOwnerContinuityLevel = mapped
+            print("[AppState] OWNER_CONT received callId=\(callId.prefix(8))… level=\(level) from=\(senderId.prefix(8))…")
         }
     }
 
@@ -9405,7 +9469,7 @@ final class AppState: ObservableObject {
         // integration so the PQC session key negotiated during ringing
         // is the same one the audio codec uses — no re-keying needed.
         do {
-            try callService.activateIncomingCallAudio(engine: eng, integration: intg)
+            try callService.activateIncomingCallAudio(engine: eng, integration: intg, contactId: cid)
         } catch {
             print("[AppState] startIncomingCallAudioOnAnswer: audio activation failed: \(error)")
         }
@@ -11288,6 +11352,16 @@ final class AppState: ObservableObject {
     /// `onPqcSessionKeyEstablishedWithPsk` can both land) — both callees
     /// below are written to be safe under a duplicate call.
     private func handleCallSessionEstablished(peerId: String) {
+        // Tier 2 ("voce remota") — mirrors Android's `onConnected`
+        // (`voicePrintBridge.setActiveContact(peerId.value)`), the same
+        // unified hook Feature B's `maybeAutoStartVoiceLearning` below
+        // already uses. Idempotent (a no-op if `peerId` is already the
+        // active contact) — also wired defensively at the `CallService`
+        // level (`onStateChanged(.active)` for outgoing,
+        // `activateIncomingCallAudio(contactId:)` for incoming) in case a
+        // future call-setup path doesn't funnel through this closure;
+        // calling both is safe, never double-enrolls or double-counts.
+        callService.activateContactVoiceVerification(contactId: peerId)
         maybeAutoStartVoiceLearning(for: peerId)
         startVoiceKeyAnnounceLoop(peerId: peerId)
     }
@@ -11389,6 +11463,54 @@ final class AppState: ObservableObject {
             try await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
         } catch {
             print("[AppState] VOICE_KEY announce failed: \(error)")
+        }
+    }
+
+    /// "Voce storica" — maps `state` to the wire-level scale and sends
+    /// `OWNER_CONT` to the peer only on a real transition (never
+    /// polled/periodic, unlike VOICE_KEY's retry+persist loop above — see
+    /// `CallPiggyBack.ownerContinuity`'s doc for why the wire cost is near
+    /// zero for the overwhelming majority of calls). A single noisy
+    /// `.mismatch` tick is downgraded to `.uncertain` on the wire unless
+    /// `OwnerContinuityMonitor`'s own hysteresis streak has actually
+    /// tripped (`callService.ownerContinuityShouldAlert()`) — mirrors
+    /// Android's `onConnected` watcher exactly, so the PEER is never
+    /// false-alarmed by one bad window.
+    @MainActor
+    private func maybeAnnounceOwnerContinuity(_ state: OwnerContinuityMonitor.State) {
+        let level: ContactVoiceContinuityGate.Level
+        switch state {
+        case .inactive:
+            level = .unknown
+        case .scored(_, let ownerLevel):
+            switch ownerLevel {
+            case .verified:  level = .verified
+            case .uncertain: level = .uncertain
+            case .mismatch:  level = callService.ownerContinuityShouldAlert() ? .mismatch : .uncertain
+            }
+        }
+        guard level != lastSentOwnerContinuityLevel else { return }
+        lastSentOwnerContinuityLevel = level
+        guard let peerId = callContactId else { return }
+        Task { await sendOwnerContinuityAnnounce(level: level, peerId: peerId) }
+    }
+
+    /// Ship a single OWNER_CONT announce — mirrors `announceVoiceKeyEnrollment`'s
+    /// shape exactly (same `getActiveCallId()` guard, same fire-and-forget
+    /// error handling, same `OpaqueSelfEchoFilter` self-echo guard).
+    @MainActor
+    private func sendOwnerContinuityAnnounce(level: ContactVoiceContinuityGate.Level, peerId: String) async {
+        guard callContactId == peerId else { return }
+        guard let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId(), !callId.isEmpty
+        else { return }
+        let wire = CallPiggyBack.serializeOwnerContinuity(callId: callId, level: level.rawValue)
+        OpaqueSelfEchoFilter.shared.markSent(wire)
+        do {
+            try await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
+        } catch {
+            print("[AppState] OWNER_CONT announce failed: \(error)")
         }
     }
 
@@ -11519,6 +11641,13 @@ final class AppState: ObservableObject {
         // stale "Voce imparata" badge doesn't leak into the next call's UI
         // before a new session (if any) reports its own state.
         voiceLearningState = nil
+        // Tier 1/Tier 2 — same reasoning: a stale "voce storica"/"voce
+        // remota" shield state must not leak into the next call's UI before
+        // that call's own first real tick arrives.
+        ownerContinuityState = .inactive
+        lastSentOwnerContinuityLevel = nil
+        peerOwnerContinuityLevel = .unknown
+        contactVoiceLevel = .unknown
         // Unified call UI — stop the 1 Hz crypto-engine sampler and zero its
         // readout so the meter hides between calls and the next call starts
         // from 0 (mirrors the voiceAnalysis reset directly above).

@@ -110,25 +110,57 @@ private final class KeychainVoiceprintBacking: VoiceprintBacking {
         return Self.readIndex()
     }
 
-    // MARK: - Codec — raw little-endian Float32 vector. No cross-platform
-    // wire format needed: templates are opaque, device-local, never parsed
-    // by anything other than this same store on this same device.
+    // MARK: - Codec — `MAGIC(4) | version(4) | dim(4) | little-endian Float32
+    // vector`. No cross-platform wire format needed (templates are opaque,
+    // device-local, never parsed by anything other than this same store on
+    // this same device), but a header IS needed: 2026-08-01 CAM++ migration
+    // replaced the prior classical LFCC-mean embedding (128-dim) with a
+    // 512-dim CAM++ embedding, and a raw unversioned Float32 blob cannot
+    // tell those apart — silently feeding a stale 128-dim LFCC vector into
+    // CAM++ cosine-similarity code would produce a meaningless score instead
+    // of a clear "not enrolled". Same class of gap Android's
+    // `VoicePrintVault` v1->v2 migration closed. `decode` returns `nil` (not
+    // an empty array) for anything that doesn't match this exact header, so
+    // `load`/`hasTemplate` correctly report "no valid template" and the UI
+    // re-prompts enrollment rather than silently mis-scoring.
+    private static let magic: UInt32 = 0x5150_4156 // "QAVP" packed big-endian-in-source, stored little-endian below
+    private static let formatVersion: UInt32 = 2 // 2 == CAM++ 512-dim (2026-08-01); no version 1 header ever existed — pre-migration blobs are unversioned and rejected by decode()
+    private static let headerSize = 12 // magic(4) + version(4) + dim(4)
 
     private static func encode(_ template: [Float]) -> Data {
-        var data = Data(capacity: template.count * MemoryLayout<Float>.size)
+        var data = Data(capacity: headerSize + template.count * MemoryLayout<Float>.size)
+        withUnsafeBytes(of: magic.littleEndian) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: formatVersion.littleEndian) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt32(template.count).littleEndian) { data.append(contentsOf: $0) }
         for f in template {
             withUnsafeBytes(of: f) { data.append(contentsOf: $0) }
         }
         return data
     }
 
-    private static func decode(_ data: Data) -> [Float] {
-        let count = data.count / MemoryLayout<Float>.size
-        guard count > 0 else { return [] }
-        var result = [Float](repeating: 0, count: count)
+    /// Returns `nil` for anything that isn't a well-formed, current-version
+    /// header (too short, bad magic, wrong version, or a byte count that
+    /// doesn't match the declared dim) — including every blob written before
+    /// this header existed. Never returns a partially-decoded/garbage vector.
+    private static func decode(_ data: Data) -> [Float]? {
+        guard data.count >= headerSize else { return nil }
+        var readMagic: UInt32 = 0
+        var readVersion: UInt32 = 0
+        var readDim: UInt32 = 0
         data.withUnsafeBytes { raw in
-            let ptr = raw.bindMemory(to: Float.self)
-            for i in 0..<count { result[i] = ptr[i] }
+            readMagic = UInt32(littleEndian: raw.load(fromByteOffset: 0, as: UInt32.self))
+            readVersion = UInt32(littleEndian: raw.load(fromByteOffset: 4, as: UInt32.self))
+            readDim = UInt32(littleEndian: raw.load(fromByteOffset: 8, as: UInt32.self))
+        }
+        guard readMagic == magic, readVersion == formatVersion else { return nil }
+        let dim = Int(readDim)
+        let expectedCount = headerSize + dim * MemoryLayout<Float>.size
+        guard dim > 0, data.count == expectedCount else { return nil }
+        var result = [Float](repeating: 0, count: dim)
+        data.withUnsafeBytes { raw in
+            let base = raw.baseAddress!.advanced(by: headerSize)
+            let ptr = base.bindMemory(to: Float.self, capacity: dim)
+            for i in 0..<dim { result[i] = ptr[i] }
         }
         return result
     }

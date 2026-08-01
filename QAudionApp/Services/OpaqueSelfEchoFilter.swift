@@ -1,8 +1,8 @@
 import Foundation
 
 /// Self-echo guard for the `opaque_message` call-signaling PIGGY-BACK
-/// channel (`CallPiggyBack` — SCREEN_SHARE / VOICE_KEY / CAPS / HANGUP /
-/// KCMAC / …, see `AndroidHandshakeBundle.swift`). Mirrors Android's
+/// channel (`CallPiggyBack` — SCREEN_SHARE / VOICE_KEY / OWNER_CONT / CAPS /
+/// HANGUP / KCMAC / …, see `AndroidHandshakeBundle.swift`). Mirrors Android's
 /// `WsSelfEchoFilter` (`core-data/.../ws/WsSelfEchoFilter.kt`) 1:1 for the
 /// self-echo half of its job.
 ///

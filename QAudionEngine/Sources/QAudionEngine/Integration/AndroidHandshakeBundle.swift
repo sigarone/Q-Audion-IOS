@@ -342,6 +342,21 @@ public enum CallPiggyBack: Equatable {
     /// for byte.
     case voiceKey(callId: String, enrolled: Bool)
 
+    /// `<callId>|OWNER_CONT:<level>` — "voce storica" live cross-device
+    /// signal (2026-08-01 3-tier voice-auth design). Piggy-backed like
+    /// `.voiceKey`, but where that one is a static "did they enroll"
+    /// boolean sent once, this one carries the SENDER's own
+    /// `OwnerContinuityMonitor` tri-state (does the sender's live TX voice
+    /// still match their own historical Voice-as-Key enrollment) and is
+    /// only ever sent on a real state TRANSITION — never polled/periodic,
+    /// so the wire cost is near zero for the overwhelming majority of
+    /// calls where nobody ever hands off the phone. `level` is one of
+    /// `unknown`/`verified`/`uncertain`/`mismatch` (lowercased) — anything
+    /// unrecognized parses as `unknown`. Mirrors Android's
+    /// `WsCallSignaller.OWNER_CONTINUITY_PAYLOAD_PREFIX`/
+    /// `OwnerContinuityAnnounce` byte for byte.
+    case ownerContinuity(callId: String, level: String)
+
     /// `<callId>|HANGUP:<reason>` — secondary hangup signal. The
     /// authoritative teardown still arrives on the `call_hangup` WS
     /// envelope; this branch exists so the parser doesn't classify the
@@ -407,6 +422,14 @@ public enum CallPiggyBack: Equatable {
             let enrolled = (lower == "1" || lower == "start" || lower == "on" || lower == "true")
             return .voiceKey(callId: callId, enrolled: enrolled)
         }
+        // OWNER_CONT:<level> — sender's own live tri-state; unrecognized
+        // text parses as "unknown" rather than failing the whole envelope,
+        // matching Android's receive-side fallback.
+        if let v = stripPrefix(payload, "OWNER_CONT:") {
+            let lower = v.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let level = ["unknown", "verified", "uncertain", "mismatch"].contains(lower) ? lower : "unknown"
+            return .ownerContinuity(callId: callId, level: level)
+        }
         if let v = stripPrefix(payload, "HANGUP:") {
             return .hangup(callId: callId, reason: v)
         }
@@ -453,6 +476,15 @@ public enum CallPiggyBack: Equatable {
     /// `WsCallSignaller.sendVoiceKeyAnnounce`.
     public static func serializeVoiceKey(callId: String, enrolled: Bool) -> String {
         return "\(callId)|VOICE_KEY:\(enrolled ? "1" : "0")"
+    }
+
+    /// Build a wire string for an OWNER_CONT announce — the inverse of the
+    /// `.ownerContinuity` parse branch. `level` should already be one of
+    /// `unknown`/`verified`/`uncertain`/`mismatch` (lowercased) — callers
+    /// map from `OwnerContinuityMonitor.State` before calling this, see
+    /// `AppState`'s send-side wiring.
+    public static func serializeOwnerContinuity(callId: String, level: String) -> String {
+        return "\(callId)|OWNER_CONT:\(level)"
     }
 
     /// Build a wire string for an earbud handshake PDU — the inverse of

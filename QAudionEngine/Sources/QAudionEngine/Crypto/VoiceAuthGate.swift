@@ -18,7 +18,7 @@ public final class VoiceAuthGate {
     private var frameCount = 0
     private var cumulativeScore: Float = 0
 
-    public init(verifier: SpeakerVerifier = SpeakerVerifier(), threshold: Float = VoiceAuthGate.defaultThreshold) {
+    public init(verifier: SpeakerVerifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared), threshold: Float = VoiceAuthGate.defaultThreshold) {
         self.verifier = verifier
         self.threshold = threshold
     }

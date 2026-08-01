@@ -39,6 +39,18 @@ final class CallService: @unchecked Sendable {
     /// `activateIncomingCallAudio` responder) so a manually-started
     /// learning session works on either call direction.
     var onVoiceLearningStateChanged: ((VoiceLearningSession.State) -> Void)?
+    /// Tier 1 ("voce come chiave") — bridges
+    /// `QAudionCallIntegration.onOwnerContinuityStateChanged` to AppState.
+    /// Wired 1:1 alongside `onVoiceLearningStateChanged` on BOTH
+    /// integration binding sites. Fires on `OwnerContinuityMonitor`'s own
+    /// private queue — AppState must hop to `@MainActor` itself before
+    /// publishing, same as every other cross-thread call-engine callback.
+    var onOwnerContinuityStateChanged: ((OwnerContinuityMonitor.State) -> Void)?
+    /// Tier 2 ("voce remota") — bridges
+    /// `QAudionCallIntegration.onContactVoiceLevelChanged` to AppState.
+    /// Same wiring/threading contract as `onOwnerContinuityStateChanged`
+    /// above.
+    var onContactVoiceLevelChanged: ((ContactVoiceContinuityGate.Level) -> Void)?
 
     /// W65+W66: Full audio capture + processing pipeline.
     ///
@@ -472,6 +484,31 @@ final class CallService: @unchecked Sendable {
         callIntegration?.startVoiceLearning(contactId: contactId)
     }
 
+    /// Tier 2 ("voce remota") — activate continuous per-contact RX
+    /// verification for `contactId`. No-op if there is no active
+    /// `callIntegration`. Wired from both call directions: outgoing calls
+    /// call this from the `.active` handler below (contactId already in
+    /// scope from `startCall`'s own parameter); incoming calls call it from
+    /// `activateIncomingCallAudio` once `contactId` is passed in.
+    func activateContactVoiceVerification(contactId: String) {
+        callIntegration?.activateContactVoiceVerification(contactId: contactId)
+    }
+
+    /// Tier 2 counterpart — deactivate continuous per-contact RX
+    /// verification. `endCall`/`teardownAudioStack` already tear down the
+    /// whole `callIntegration` (whose own `onCallEnded` calls the
+    /// equivalent cleanup internally), so this is only needed for an
+    /// explicit mid-call contact switch, if one is ever added.
+    func deactivateContactVoiceVerification() {
+        callIntegration?.deactivateContactVoiceVerification()
+    }
+
+    /// See `QAudionCallIntegration.ownerContinuityShouldAlert` — `false`
+    /// (never alert) if there is no active `callIntegration`.
+    func ownerContinuityShouldAlert() -> Bool {
+        callIntegration?.ownerContinuityShouldAlert() ?? false
+    }
+
     /// Cancel an in-flight voice-learning session for the current call.
     func cancelVoiceLearning() {
         callIntegration?.cancelVoiceLearning()
@@ -608,6 +645,14 @@ final class CallService: @unchecked Sendable {
                     bitrateKbps: AudioCodecPrefs.bitrateKbps,
                     plp:         AudioCodecPrefs.plp
                 )
+                // Tier 2 ("voce remota") — outgoing side: `contactId` is
+                // this closure's own capture from `startCall`'s parameter,
+                // so it's always the CURRENT call's peer. Routed through
+                // `self.callIntegration?` (not the captured `integration`
+                // local) to match this handler's own existing
+                // `reconfigureAudioCodec` call just above — same
+                // stale-closure guard.
+                self.callIntegration?.activateContactVoiceVerification(contactId: contactId)
             case .error:
                 self.endCall()
             case .fallback:
@@ -676,6 +721,15 @@ final class CallService: @unchecked Sendable {
         integration.onVoiceLearningStateChanged = { [weak self] state in
             self?.onVoiceLearningStateChanged?(state)
         }
+        // Tier 1/Tier 2 — unconditional, same reasoning as
+        // `onVoiceLearningStateChanged` above: these are not a per-frame
+        // battery-cost pipeline gated on `enableVoiceAnalysis`.
+        integration.onOwnerContinuityStateChanged = { [weak self] state in
+            self?.onOwnerContinuityStateChanged?(state)
+        }
+        integration.onContactVoiceLevelChanged = { [weak self] level in
+            self?.onContactVoiceLevelChanged?(level)
+        }
 
         // NOTE: do NOT call `integration.onCallSetupStarted` here.
         // That legacy entry point flipped the engine state machine into
@@ -740,8 +794,15 @@ final class CallService: @unchecked Sendable {
     ///   - engine: The shared QAudionEngine instance (unused directly here;
     ///     kept symmetric with `startCall` for future use).
     ///   - integration: The responder integration built during ringing.
+    ///   - contactId: The caller's contactId, if already known (AppState's
+    ///     `callContactId` is set by the `call_incoming` WS handler before
+    ///     this method ever runs — see this method's own doc above). `nil`
+    ///     is tolerated (Tier 2 activation is simply skipped) rather than
+    ///     required, so a caller that genuinely doesn't have it yet never
+    ///     has to fail the whole answer path over a Tier-2-only gap.
     func activateIncomingCallAudio(engine: QAudionEngine,
-                                   integration: QAudionCallIntegration) throws {
+                                   integration: QAudionCallIntegration,
+                                   contactId: String? = nil) throws {
         // W-GRPVPIO-CRASH-3 — refuse to build a 1:1 audio engine while a
         // group call owns the VP-IO unit (see `isGroupCallActive` kdoc). A
         // stray/redelivered 1:1 accept-path message during a group call
@@ -869,12 +930,28 @@ final class CallService: @unchecked Sendable {
         integration.onVoiceLearningStateChanged = { [weak self] state in
             self?.onVoiceLearningStateChanged?(state)
         }
+        // Tier 1/Tier 2 — mirror the outgoing-side wiring 1:1, same
+        // reasoning as `onVoiceLearningStateChanged` immediately above.
+        integration.onOwnerContinuityStateChanged = { [weak self] state in
+            self?.onOwnerContinuityStateChanged?(state)
+        }
+        integration.onContactVoiceLevelChanged = { [weak self] level in
+            self?.onContactVoiceLevelChanged?(level)
+        }
         // For incoming calls the PQC handshake started before answer, so
         // engine.initialize() has already run — apply tuner prefs now.
         integration.reconfigureAudioCodec(
             bitrateKbps: AudioCodecPrefs.bitrateKbps,
             plp:         AudioCodecPrefs.plp
         )
+        // Tier 2 ("voce remota") — incoming side, same reasoning as
+        // `reconfigureAudioCodec` immediately above: the handshake (and
+        // therefore the session) is already up by the time this runs, so
+        // activation can happen unconditionally here rather than needing
+        // its own `.active`-state hook like the outgoing side does.
+        if let contactId {
+            integration.activateContactVoiceVerification(contactId: contactId)
+        }
         drainRxPreBuffer()  // W481 — replay any frames that arrived before binding
         startDurationTimer()
 

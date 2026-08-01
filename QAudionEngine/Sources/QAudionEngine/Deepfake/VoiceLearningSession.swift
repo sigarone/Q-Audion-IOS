@@ -1,10 +1,10 @@
 import Foundation
 
 /// Per-contact, call-time voice-learning session — Feature B ("voce
-/// verificata"). Wraps `SpeakerVerifier` (LFCC-mean-embedding speaker
-/// matcher) + `VoiceprintStore` (Keychain-backed persistence) to build a
-/// per-contact voiceprint template from the REMOTE peer's decoded RX audio
-/// during a live call.
+/// verificata"). Wraps `SpeakerVerifier` (2026-08-01: CAM++ neural speaker
+/// embedding, replacing the prior LFCC-mean matcher) + `VoiceprintStore`
+/// (Keychain-backed persistence) to build a per-contact voiceprint template
+/// from the REMOTE peer's decoded RX audio during a live call.
 ///
 /// Mirrors the Android `VoiceLearningSession` design 1:1 for cross-platform
 /// consistency: a manual "Avvia apprendimento voce" trigger in the live
@@ -39,7 +39,10 @@ public final class VoiceLearningSession {
     private let requiredFrames = 150
     private var frameCount = 0
 
-    public init(verifier: SpeakerVerifier = SpeakerVerifier(), store: VoiceprintStore = VoiceprintStore()) {
+    public init(
+        verifier: SpeakerVerifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared),
+        store: VoiceprintStore = VoiceprintStore()
+    ) {
         self.verifier = verifier
         self.store = store
     }

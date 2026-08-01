@@ -48,7 +48,7 @@ final class VoiceUnlockController: ObservableObject {
     private var pendingSamples: [Float] = []
 
     init() {
-        let verifier = SpeakerVerifier()
+        let verifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
         if let template = VoiceprintStore().load(contactId: VoiceprintStore.deviceOwnerId) {
             verifier.importTemplate(template)
         }

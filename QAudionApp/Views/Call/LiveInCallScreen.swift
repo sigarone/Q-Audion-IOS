@@ -303,7 +303,17 @@ struct LiveInCallScreen: View {
                 onStartVoiceLearning: { appState.startVoiceLearning() },
                 // Item 5 — live raw per-frame Guardian confidence wave,
                 // replaces the old manual-CTA slot for the rest of the call.
-                voiceConfidenceHistory: appState.voiceConfidenceHistory
+                voiceConfidenceHistory: appState.voiceConfidenceHistory,
+                // "Voce storica" (peer's self-reported live continuity,
+                // received over the OWNER_CONT piggy-back) / "Voce remota"
+                // (this device's own local per-contact continuity) — fed
+                // from AppState.peerOwnerContinuityLevel/contactVoiceLevel.
+                // `.unknown` between calls / before the first real tick —
+                // the shields stay hidden or fall back to the static
+                // `peerVoiceKeyEnrolled` fact in that case, see
+                // InCallScreen's own gating.
+                peerOwnerContinuityLevel: appState.peerOwnerContinuityLevel,
+                contactVoiceLevel: appState.contactVoiceLevel
             )
     }
 
