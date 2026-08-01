@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.920",
+              date: "2026-08-01",
+              title: "v1.0.920",
+              bullets: [
+                "fix(security): encrypt contacts store at rest (was plaintext UserDefaults)",
+              ]),
         .init(id: "v1.0.919",
               date: "2026-08-01",
               title: "v1.0.919",
               bullets: [
+                "chore: regenerate changelog for v1.0.919",
                 "feat(voice-auth): port CAM++ Tier 1/Tier 2 voice-auth from Android",
               ]),
         .init(id: "v1.0.918",
@@ -150,13 +157,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.901",
                 "fix(identity): stop synthetic bare-extension rubrica name from sticking forever",
-              ]),
-        .init(id: "v1.0.900",
-              date: "2026-07-30",
-              title: "v1.0.900",
-              bullets: [
-                "chore: regenerate changelog for v1.0.900",
-                "feat(profile): OTP-verify phone numbers added to \"I miei numeri\"",
               ]),
     ]
 }
