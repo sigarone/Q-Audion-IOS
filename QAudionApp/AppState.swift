@@ -11136,13 +11136,33 @@ final class AppState: ObservableObject {
     /// next chat message.
     @MainActor
     private func maybeExchangeAvatarOnCallConnect() {
-        guard let peerId = self.callContactId else { return }
+        // W-AVATARCALLEE (2026-08-01): every branch here logs. This whole
+        // feature spent days un-diagnosable because its paths either exited
+        // silently or logged via raw print() (which never reaches the remote
+        // pipeline), so "no evidence" could not be told apart from "never
+        // ran". A nil callContactId here used to be a completely silent
+        // return, which would make the callee hook added in
+        // performAcceptIncoming look like it had done nothing at all.
+        guard let peerId = self.callContactId else {
+            RTLog.warn("avatar", "call-connect exchange skipped — callContactId is nil")
+            return
+        }
         let hasPsk = (try? PairwiseChainKeyResolver.resolvePsk(
             peerId: peerId, vault: SovereignKeyVault()
         )) != nil
+        RTLog.info("avatar", "call-connect exchange peer=\(peerId.prefix(8)) hasPsk=\(hasPsk)")
         if hasPsk {
             maybeAnnounceAvatarTo(peerId)
         } else {
+            // No pairwise PSK yet (the call's own PQC handshake does NOT
+            // produce one — it persists a separate "call-<id>" key that
+            // PairwiseChainKeyResolver deliberately does not look up). Kick
+            // the X25519 OFFER now, at connect: Android answers with a QUAD
+            // KEY_EXCHANGE_ACCEPT (0x0a), which dispatchInboundOpaque's
+            // Path-A handler already follows with maybeAnnounceAvatarTo.
+            // Before this hook reached the callee, the only OFFER a
+            // call-only relationship ever sent came from endCall() — far too
+            // late, with the app heading to background.
             triggerKeyExchange(with: peerId)
         }
     }
@@ -11247,6 +11267,21 @@ final class AppState: ObservableObject {
         if let calling = self.liveProvider?.callingApi {
             Task { try? await calling.sendCallAccepted(callId: uuid.uuidString.lowercased()) }
         }
+        // W-AVATARCALLEE (2026-08-01): the CALLEE's avatar hook. Until now
+        // `maybeExchangeAvatarOnCallConnect()` was reachable ONLY from
+        // `finalizeCallActive()`, whose three inbound edges (the call_answer
+        // WS handler, `handleCallAccepted`, and the accept-gate timeout) all
+        // fire on frames that only the CALLER ever receives — the callee
+        // SENDS call_answer/call_accepted and the server relays them to the
+        // peer only. So on every call where this device answered, the avatar
+        // exchange never even started. Proven on call 83ef71fa (2026-08-01
+        // 19:59 UTC, Android→iOS): the server saw ZERO msg_send and ZERO blob
+        // uploads for the whole call, and this device's own log has none of
+        // finalizeCallActive's "call_answer:" markers (tag "call", shipped
+        // since v1.0.570 — their absence is affirmative proof, not a logging
+        // gap). Fire it here, on the single point every accept path converges
+        // through, so answering a call is as good a trigger as placing one.
+        self.maybeExchangeAvatarOnCallConnect()
         // W450 + cold-start race: boot audio + notify caller (latched/replayed
         // when the responder integration isn't ready yet).
         self.consumeDeferredAnswerIfReady("performAcceptIncoming")
