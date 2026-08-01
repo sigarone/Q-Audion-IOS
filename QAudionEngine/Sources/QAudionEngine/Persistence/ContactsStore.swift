@@ -291,7 +291,23 @@ public final class ContactsStore {
     }
 
     public func save(_ contacts: [StoredContact]) {
-        guard let blob = Self.encode(contacts) else { return }
+        guard let blob = Self.encode(contacts) else {
+            // W-CONTACTSAVELOST (2026-08-01): encode() only returns nil when
+            // the Keychain key is unavailable, and this used to drop the
+            // whole write on the floor without a word — the contact list
+            // simply did not persist and nothing said so. CI proved this is
+            // not hypothetical: since the at-rest encryption landed, EVERY
+            // ContactsStoreTests case fails with "expected a stored blob"
+            // because the simulator test bundle has no usable Keychain, so
+            // save() is a silent no-op there. The same shape can occur on a
+            // real device: the key is stored
+            // kSecAttrAccessibleWhenUnlockedThisDeviceOnly, so a write that
+            // happens while the phone is LOCKED (e.g. auto-saving a contact
+            // right after answering a call on the lock screen) cannot read
+            // the key and would lose that write just as quietly.
+            print("[ContactsStore] SAVE LOST — could not encrypt (Keychain key unavailable); \(contacts.count) contact(s) not persisted")
+            return
+        }
         defaults.set(blob, forKey: key)
         // Notify observers (e.g. AppState.cachedContacts) so they can
         // refresh without polling. All writes funnel through save(), so
@@ -353,6 +369,14 @@ public final class ContactsStore {
         ]
         let addStatus = SecItemAdd(addAttrs as CFDictionary, nil)
         if addStatus == errSecSuccess { return freshData }
+        // W-CONTACTSAVELOST (2026-08-01): report the real OSStatus. Without
+        // it, "the key could not be obtained" is indistinguishable from
+        // every other cause of an empty contact list, which is exactly why
+        // the CI failure took a full investigation to even localise.
+        // -34018 = errSecMissingEntitlement (no usable keychain, the
+        // simulator test-bundle case), -25308 = errSecInteractionNotAllowed
+        // (device locked — the data-loss case on a real phone).
+        print("[ContactsStore] Keychain SecItemAdd failed status=\(addStatus)")
         // W-CONTACTKEYRACE (2026-08-01): found via CI — every ContactsStoreTests
         // round-trip test failed (load() after save() came back nil/empty)
         // the moment this class landed. Root cause: this is a check-then-act
