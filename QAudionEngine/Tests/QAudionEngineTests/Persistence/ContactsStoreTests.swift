@@ -26,6 +26,33 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertTrue(store.load().isEmpty)
     }
 
+    /// 2026-08-01 security fix pin: the raw bytes actually written to
+    /// UserDefaults must NOT be plaintext JSON (nor contain the raw phone
+    /// number in the clear) — this is the property the whole fix exists to
+    /// guarantee. Does not assert on the exact byte format (that's
+    /// `decode(blob:)`'s own internal contract), only that a naive
+    /// JSON-decode of the on-disk bytes fails and the sensitive substring
+    /// doesn't appear verbatim in them.
+    func test_save_writesEncryptedBlob_notPlaintextJson() {
+        let c = ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Alice",
+            phoneHash: String(repeating: "ab", count: 32),
+            avatarUrl: nil, lastSeen: nil, isVerified: true,
+            phoneNumber: "+391234567890"
+        )
+        store.save([c])
+        guard let raw = defaults.data(forKey: "qaudion.contacts.list") else {
+            XCTFail("expected a stored blob")
+            return
+        }
+        XCTAssertNil(try? JSONDecoder().decode([ContactsStore.StoredContact].self, from: raw),
+                     "on-disk bytes must not be directly JSON-decodable — they must be the encrypted envelope")
+        XCTAssertFalse(raw.starts(with: Data("[{\"".utf8)),
+                       "on-disk bytes must not start with plain JSON")
+        let phoneBytes = Data("+391234567890".utf8)
+        XCTAssertNil(raw.range(of: phoneBytes), "the raw phone number must never appear verbatim in the on-disk bytes")
+    }
+
     func test_save_then_load() {
         let c = ContactsStore.StoredContact(
             userId: "u-1", displayName: "Alice",

@@ -1,10 +1,38 @@
 import Foundation
+import CryptoKit
+#if canImport(Security)
+import Security
+#endif
 
 /// Local persistence for the contacts list (peppered hash → user metadata).
 ///
 /// Stores the result of a discover-v2 fetch so subsequent app launches show
 /// contacts immediately without re-fetching. Refresh re-runs the peppered
 /// hash + discover-v2 flow.
+///
+/// 2026-08-01 SECURITY FIX: the on-disk blob is now AES-256-GCM encrypted
+/// (`AeadCipher`, this codebase's already-validated AEAD wrapper — same
+/// primitive `MessageCrypto`/`BackupCipher` use) under a key held in the
+/// iOS Keychain (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, never
+/// `.Always`/synchronizable — same access-control choice as
+/// `KeychainRatchetVault`). Before this fix the entire contact list —
+/// including raw phone numbers (`StoredContact.phoneNumber`), display
+/// names, and identity pubkeys — was stored as a PLAIN JSON blob directly
+/// in `UserDefaults`, unencrypted at the app layer (found via a
+/// cross-platform contacts-encryption audit: Android's `ContactEntity`
+/// table is SQLCipher-encrypted, Desktop's `ContactsStore.ts` wraps
+/// `EncryptedJsonStore` — iOS was the only unencrypted outlier). The
+/// storage LOCATION is unchanged (still `UserDefaults`, same key) — only
+/// the bytes written there changed from plaintext JSON to an encrypted
+/// envelope; see `encode(contacts:)`/`decode(blob:)`.
+///
+/// **Migration:** `load()` transparently reads a pre-fix plaintext blob
+/// (detected by the absence of this format's magic header — see
+/// `decode(blob:)`) and re-persists it encrypted on the very next
+/// `save()`/mutation, so existing users' contact lists survive the
+/// upgrade instead of silently vanishing. There is no separate migration
+/// entry point to call — any normal read-then-write through this class
+/// completes it.
 public final class ContactsStore {
 
     public struct StoredContact: Codable, Equatable {
@@ -228,22 +256,115 @@ public final class ContactsStore {
     private let defaults: UserDefaults
     private let key = "qaudion.contacts.list"
 
+    /// Keychain `kSecAttrService` for the AES-256-GCM master key protecting
+    /// this store's blob. Own dedicated service (distinct from
+    /// `KeychainRatchetVault`/PSK vaults/`VoiceprintStore`) so a future
+    /// keychain-dump migration can target it independently.
+    private static let keyService = "com.bcrypto.qaudion.contacts.key.v1"
+    private static let keyAccount = "masterKey"
+
+    /// Magic prefix identifying an AES-256-GCM-encrypted blob written by
+    /// this class — lets `decode(blob:)` tell "our new encrypted format"
+    /// apart from a pre-fix plaintext JSON blob without throwing. Mirrors
+    /// this codebase's other magic/version-tagged formats
+    /// (`VoiceprintStore`'s header, `EncryptedJsonStore.ts`'s "Q2\0").
+    private static let magic: [UInt8] = [0x51, 0x43, 0x31, 0x00] // "QC1\0"
+    private static let cipher = AeadCipher()
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
 
     public func load() -> [StoredContact] {
-        guard let data = defaults.data(forKey: key) else { return [] }
-        return (try? JSONDecoder().decode([StoredContact].self, from: data)) ?? []
+        guard let blob = defaults.data(forKey: key) else { return [] }
+        if let contacts = Self.decode(blob) {
+            return contacts
+        }
+        // Migration path: a pre-fix (2026-08-01) install wrote plain JSON
+        // directly, with no magic header. Decode it the old way so an
+        // existing user's contact list survives the upgrade — the next
+        // save() call (from any normal mutation) persists it encrypted.
+        if let legacy = try? JSONDecoder().decode([StoredContact].self, from: blob) {
+            return legacy
+        }
+        return []
     }
 
     public func save(_ contacts: [StoredContact]) {
-        guard let data = try? JSONEncoder().encode(contacts) else { return }
-        defaults.set(data, forKey: key)
+        guard let blob = Self.encode(contacts) else { return }
+        defaults.set(blob, forKey: key)
         // Notify observers (e.g. AppState.cachedContacts) so they can
         // refresh without polling. All writes funnel through save(), so
         // a single post here covers upsert(), remove(), and bulk saves.
         NotificationCenter.default.post(name: .contactsDidChange, object: nil)
+    }
+
+    // MARK: - Encrypted-at-rest codec
+
+    private static func encode(_ contacts: [StoredContact]) -> Data? {
+        guard let plaintext = try? JSONEncoder().encode(contacts) else { return nil }
+        guard let key = loadOrCreateKey() else { return nil }
+        guard let sealed = try? cipher.encrypt(plaintext: plaintext, key: key) else { return nil }
+        var out = Data(magic)
+        out.append(sealed.nonce)
+        out.append(sealed.tag)
+        out.append(sealed.ciphertext)
+        return out
+    }
+
+    /// Returns `nil` for anything that isn't a well-formed blob under THIS
+    /// format (too short, wrong magic, decrypt/auth failure) — including
+    /// every blob written before this format existed. Callers (`load()`)
+    /// interpret `nil` as "try the legacy plaintext path" rather than a
+    /// hard failure.
+    private static func decode(_ blob: Data) -> [StoredContact]? {
+        let headerLen = magic.count + CryptoConstants.nonceSize + CryptoConstants.tagSize
+        guard blob.count > headerLen, Array(blob.prefix(magic.count)) == magic else { return nil }
+        var offset = blob.startIndex.advanced(by: magic.count)
+        let nonce = blob[offset..<offset.advanced(by: CryptoConstants.nonceSize)]
+        offset = offset.advanced(by: CryptoConstants.nonceSize)
+        let tag = blob[offset..<offset.advanced(by: CryptoConstants.tagSize)]
+        offset = offset.advanced(by: CryptoConstants.tagSize)
+        let ciphertext = blob[offset...]
+        guard let key = loadOrCreateKey() else { return nil }
+        let sealed = AeadCipher.CipherOutput(nonce: Data(nonce), ciphertext: Data(ciphertext), tag: Data(tag))
+        guard let plaintext = try? cipher.decrypt(cipherOutput: sealed, key: key) else { return nil }
+        return try? JSONDecoder().decode([StoredContact].self, from: plaintext)
+    }
+
+    /// Loads this store's AES-256-GCM key from the Keychain, generating and
+    /// persisting a fresh random one on first use. `nil` only on a genuine
+    /// Keychain failure (never falls back to an in-memory-only or
+    /// predictable key — a lost/inaccessible key means `encode`/`decode`
+    /// both fail closed rather than silently degrading to plaintext).
+    private static func loadOrCreateKey() -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keyService,
+            kSecAttrAccount as String: keyAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess, let existing = item as? Data, existing.count == CryptoConstants.keySizeBytes {
+            return existing
+        }
+        // Not found (or corrupted length) — mint a fresh key.
+        let fresh = SymmetricKey(size: .bits256)
+        let freshData = fresh.withUnsafeBytes { Data($0) }
+        let addAttrs: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keyService,
+            kSecAttrAccount as String: keyAccount,
+            kSecValueData as String: freshData,
+            // SECURITY — this key never leaves the device, unreadable while
+            // locked: no `.Always`, no synchronizable/iCloud variant.
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ]
+        let addStatus = SecItemAdd(addAttrs as CFDictionary, nil)
+        guard addStatus == errSecSuccess else { return nil }
+        return freshData
     }
 
     public func upsert(_ contact: StoredContact) {
