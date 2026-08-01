@@ -7370,12 +7370,12 @@ final class AppState: ObservableObject {
                     case .delivered, .sent:
                         Self.markAvatarSent(version: version, toPeer: peerId)
                     case .failed(let reason):
-                        print("[AppState] avatar_announce broadcast NOT sent to \(peerId): \(reason)")
+                        RTLog.warn("avatar", "broadcast NOT sent to=\(peerId.prefix(8)) reason=\(reason)")
                     }
                 } catch AvatarAnnounceSender.SendError.pskMissing {
                     continue
                 } catch {
-                    print("[AppState] avatar_announce broadcast failed to \(peerId): \(error)")
+                    RTLog.warn("avatar", "broadcast failed to=\(peerId.prefix(8)) error=\(error)")
                 }
                 // Security-review fix (2026-07-30): this loop is the only
                 // place in the app that fires one HTTP upload per known
@@ -7414,7 +7414,7 @@ final class AppState: ObservableObject {
         let priorSent = Self.lastAvatarVersionSent(toPeer: peerId)
         let priorSentAt = Self.lastAvatarSentAt(toPeer: peerId)
         guard version > 0 else {
-            print("[avatar] skip to=\(peerId.prefix(8)) reason=no-self-avatar-yet")
+            RTLog.debug("avatar", "skip to=\(peerId.prefix(8)) reason=no-self-avatar-yet")
             return
         }
         // W-AVATARSTUCK fix (2026-07-31): `markAvatarSent` (below) only
@@ -7432,12 +7432,12 @@ final class AppState: ObservableObject {
             Date().timeIntervalSince($0) >= Self.avatarResendIntervalSec
         } ?? true
         guard priorSent < version || staleEnoughToRetry else {
-            print("[avatar] skip to=\(peerId.prefix(8)) reason=already-marked-sent priorSent=\(priorSent) currentVersion=\(version) sentAgeSec=\(priorSentAt.map { Int(Date().timeIntervalSince($0)) } ?? -1)")
+            RTLog.debug("avatar", "skip to=\(peerId.prefix(8)) reason=already-marked-sent priorSent=\(priorSent) currentVersion=\(version) sentAgeSec=\(priorSentAt.map { Int(Date().timeIntervalSince($0)) } ?? -1)")
             return
         }
         guard let cacheURL = AvatarUploader.selfAvatarCacheURL,
               let jpegBytes = try? Data(contentsOf: cacheURL) else {
-            print("[avatar] skip to=\(peerId.prefix(8)) reason=self-file-missing-or-unreadable")
+            RTLog.warn("avatar", "skip to=\(peerId.prefix(8)) reason=self-file-missing-or-unreadable")
             return
         }
         // Security-review fix (2026-07-30): mark optimistically BEFORE
@@ -7471,7 +7471,7 @@ final class AppState: ObservableObject {
                 // recurs via a different door.
                 if case .failed(let reason) = outcome {
                     Self.markAvatarSent(version: priorSent, toPeer: peerId, at: priorSentAt ?? .distantPast)
-                    print("[avatar] send NOT delivered to=\(peerId.prefix(8)) reason=\(reason)")
+                    RTLog.warn("avatar", "send NOT delivered to=\(peerId.prefix(8)) reason=\(reason)")
                 }
             } catch {
                 // Failed — restore the prior state (INCLUDING its original
@@ -7479,7 +7479,16 @@ final class AppState: ObservableObject {
                 // treating a failed send as if it had succeeded. Restoring
                 // with `at: Date()` here would wrongly refresh the
                 // stale-retry clock on a failure.
+                //
+                // W-AVATARSHIP (2026-08-01): this catch had NO logging at
+                // all before — a thrown error (pskMissing, or a
+                // crypto/network exception from prepareEnvelopeJson) was
+                // silently swallowed down to just the state rollback,
+                // exactly the "failure looks identical to nothing having
+                // happened" class this whole file's 2026-07-31 audit fixes
+                // exist to close, just missed here.
                 Self.markAvatarSent(version: priorSent, toPeer: peerId, at: priorSentAt ?? .distantPast)
+                RTLog.warn("avatar", "send threw to=\(peerId.prefix(8)) error=\(error)")
             }
         }
     }
@@ -7525,7 +7534,10 @@ final class AppState: ObservableObject {
                 try plaintext.write(to: fileURL, options: [.atomic])
                 let applied = ContactsStore().setAvatarLocalPath(
                     userId: senderId, path: fileURL, version: envelope.att.version)
-                guard applied else { return }
+                guard applied else {
+                    RTLog.debug("avatar", "receive applied=false from=\(senderId.prefix(8)) version=\(envelope.att.version) — stale/duplicate announce, row already at this version or newer")
+                    return
+                }
                 NotificationCenter.default.post(
                     name: AppState.chatRefreshNotification,
                     object: nil,

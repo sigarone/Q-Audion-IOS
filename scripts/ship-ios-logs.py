@@ -567,6 +567,18 @@ TAG_SCOPE_PREFIXES = [
     ("voicenote", "voicenote"),
     ("livelog", "livelog"),
     ("stdout", "stdout"),
+    # W-AVATARSHIP (2026-08-01): AppState.swift's avatar_announce dispatch
+    # (broadcastAvatarToKnownPeers / maybeAnnounceAvatarTo /
+    # handleInboundAvatarAnnounce) tags its RTLog calls "avatar" — this
+    # prefix was missing here, so every one of those lines (e.g. the
+    # malformed-envelope RTLog.error at AppState.swift:6778) was silently
+    # dropped before ever reaching Loki. Found while investigating Pavel's
+    # "avatar exchange still not working on iOS" report: zero avatar-tagged
+    # evidence in 180 min of real iOS activity including a live call, with
+    # no way to tell whether that meant "never fired" or "fired but
+    # invisible". Message bodies are still gated by redact_body's own
+    # structured-shape check below — this only fixes the tag-level drop.
+    ("avatar", "avatar"),
 ]
 
 
