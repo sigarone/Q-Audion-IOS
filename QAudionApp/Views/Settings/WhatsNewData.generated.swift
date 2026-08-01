@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.921",
+              date: "2026-08-01",
+              title: "v1.0.921",
+              bullets: [
+                "fix(avatar): ship avatar-tagged logs to Loki, log silent failure paths",
+              ]),
         .init(id: "v1.0.920",
               date: "2026-08-01",
               title: "v1.0.920",
               bullets: [
+                "chore: regenerate changelog for v1.0.920",
                 "fix(security): encrypt contacts store at rest (was plaintext UserDefaults)",
               ]),
         .init(id: "v1.0.919",
@@ -150,13 +157,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.902",
                 "fix(identity): tier-1 defer must also trigger for a real serverDisplay",
-              ]),
-        .init(id: "v1.0.901",
-              date: "2026-07-30",
-              title: "v1.0.901",
-              bullets: [
-                "chore: regenerate changelog for v1.0.901",
-                "fix(identity): stop synthetic bare-extension rubrica name from sticking forever",
               ]),
     ]
 }
