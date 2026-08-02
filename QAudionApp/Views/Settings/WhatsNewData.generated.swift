@@ -9,6 +9,21 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.925",
+              date: "2026-08-02",
+              title: "v1.0.925",
+              bullets: [
+                "fix(avatar): bind the call-derived PSK to the peer, like Android does",
+              ]),
+        .init(id: "v1.0.924",
+              date: "2026-08-02",
+              title: "v1.0.924",
+              bullets: [
+                "chore: regenerate changelog for v1.0.924",
+                "fix(avatar): port Android's working announce coordinator to iOS",
+                "fix(audio): move per-frame RX analysis off the audio path (iOS starvation)",
+                "fix(contacts): surface the silent save-lost path in the encrypted store",
+              ]),
         .init(id: "v1.0.923",
               date: "2026-08-01",
               title: "v1.0.923",
@@ -144,20 +159,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.906",
                 "fix(avatar): correct StoredContact argument order + thread avatarVersion in AppState migration",
                 "ci: stop auto-triggering iOS KAT cross-platform scaffold",
-              ]),
-        .init(id: "v1.0.905",
-              date: "2026-07-30",
-              title: "v1.0.905",
-              bullets: [
-                "chore: regenerate changelog for v1.0.905",
-                "feat(avatar): E2EE avatar transport — replace plaintext server-hosted avatars",
-              ]),
-        .init(id: "v1.0.904",
-              date: "2026-07-30",
-              title: "v1.0.904",
-              bullets: [
-                "chore: regenerate changelog for v1.0.904",
-                "fix(crypto): close H1-class guessable-key fallback in attachment/voice-note encryption",
               ]),
     ]
 }
