@@ -100,8 +100,12 @@ final class AvatarUploader {
             throw Error.uploadFailed("local cache write: \(error.localizedDescription)")
         }
 
-        let version = appState.bumpSelfAvatarVersion()
-        appState.broadcastAvatarToKnownPeers(jpegBytes: jpegData, version: version)
+        // Bump FIRST — `broadcastAvatarToKnownPeers` (and every later
+        // opportunistic trigger) reads `selfAvatarVersion` and the cache
+        // file written just above, so both must already reflect the new
+        // photo before the fan-out starts.
+        _ = appState.bumpSelfAvatarVersion()
+        appState.broadcastAvatarToKnownPeers()
 
         return selfURL
     }

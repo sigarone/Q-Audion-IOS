@@ -6713,7 +6713,7 @@ final class AppState: ObservableObject {
             // to hook ContactKeyExchange's internal handshake-complete
             // callback directly. Fire-and-forget; never blocks/affects
             // this message's own processing.
-            maybeAnnounceAvatarTo(senderId)
+            maybeAnnounceAvatarTo(senderId, trigger: .chatDecrypt)
             // W78: cross-platform attachment placeholder. Desktop and
             // Android send voice notes / files via the qa_ctl:1
             // `attach_announce` envelope (XChaCha20-Poly1305 + TUS).
@@ -6752,10 +6752,15 @@ final class AppState: ObservableObject {
             // docs/E2EE_AVATAR_TRANSPORT_DESIGN.md) — like delete/edit/
             // reaction above, this must be routed BEFORE message
             // persistence: it is never a visible chat row, only a
-            // silent local-cache update. Version-dedup BEFORE even
-            // starting the download so a defensively-resent announce
-            // (same or older version, e.g. on every call-connect) is a
-            // cheap no-op.
+            // silent local-cache update.
+            //
+            // 2026-08-02: the version-dedup pre-check that used to sit here
+            // moved INTO the coordinator, where it runs inside the per-sender
+            // serialisation. Checking it out here was racy against a second
+            // announce from the same peer (both could read the same cached
+            // version and both proceed), and — worse for diagnosis — a skip
+            // produced no log at all, which is precisely the "did it run or
+            // not?" ambiguity that made this feature so hard to debug.
             // Fix (2026-07-31, found during full-audit): `try?` here used to
             // collapse two very different outcomes into the same silent
             // `nil` — "this JSON just isn't an avatar_announce" (expected,
@@ -6767,11 +6772,7 @@ final class AppState: ObservableObject {
             // JSON in the chat UI. Distinguish them explicitly.
             do {
                 if let avatarEnv = try AvatarAnnounceEnvelope.parse(decryptedRaw) {
-                    let existingVersion = ContactsStore().load()
-                        .first(where: { $0.userId == senderId })?.avatarVersion ?? -1
-                    if avatarEnv.att.version > existingVersion {
-                        handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
-                    }
+                    handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
                     return
                 }
             } catch {
@@ -7277,6 +7278,14 @@ final class AppState: ObservableObject {
     // primitive already used for voice notes/attachments, same
     // fail-closed PSK ladder (PairwiseChainKeyResolver).
 
+    /// The ONE place that decides whether to announce, and the ONE place
+    /// that applies an inbound announce — a direct port of Android's
+    /// `AvatarAnnounceCoordinator` (per-trigger cooldown, per-peer
+    /// serialisation, mark-on-success-only). Everything in this MARK
+    /// section now delegates to it; see that file's doc for why each of
+    /// those three properties is load-bearing.
+    lazy var avatarAnnounceCoordinator = AvatarAnnounceCoordinator(appState: self)
+
     private static let selfAvatarVersionKey = "qaudion.selfAvatarVersion"
     // W-AVATARSTUCK (2026-07-31) — renamed (v2 suffix) to orphan every
     // pre-tus-fix "sent" entry in one step: this device (and Android's
@@ -7288,16 +7297,14 @@ final class AppState: ObservableObject {
     // rename needs no migration code; the old entries are simply never read
     // again. Mirrors the identical fix on Android (`AvatarFileStore.kt`
     // `KEY_SENT_PREFIX`) and Desktop (`AvatarFileStore.ts` `sentVersionsV2`).
-    private static let avatarSentVersionsKey = "qaudion.avatarSentVersions.v2"
-    private static let avatarSentAtKey = "qaudion.avatarSentAt.v2"
-    /// Self-heal ceiling: `markAvatarSent` only proves the SEND succeeded,
-    /// never that the recipient's download+decrypt did — exactly the class
-    /// of bug the key rename above just cleaned up for the CURRENT stuck
-    /// state. Re-announcing periodically even when `version` hasn't changed
-    /// bounds any FUTURE silent transport regression to this many seconds
-    /// of staleness instead of permanent, without needing a real
-    /// delivery-ack protocol.
-    private static let avatarResendIntervalSec: TimeInterval = 3 * 24 * 3600
+    // W-AVATARCOOLDOWN (2026-08-02): the sent-version bookkeeping and the
+    // self-heal resend ceiling that used to live here moved verbatim into
+    // `AvatarAnnounceCoordinator` (same UserDefaults keys, so existing
+    // device state carries over unchanged). The ceiling itself was the bug:
+    // one flat 3-DAY interval for every trigger, which Android measured to
+    // be a guaranteed no-op for both peers of any call inside a normal
+    // usage session. It is now per-trigger — 1 h for a background
+    // chat-decrypt, 2 min for a real call or a completed key exchange.
 
     /// Current self-avatar version. 0 = no avatar ever set (never
     /// bumped) — `maybeAnnounceAvatarTo` treats that as "nothing to
@@ -7316,26 +7323,6 @@ final class AppState: ObservableObject {
         return next
     }
 
-    private static func lastAvatarVersionSent(toPeer peerId: String) -> Int {
-        let dict = UserDefaults.standard.dictionary(forKey: avatarSentVersionsKey) as? [String: Int] ?? [:]
-        return dict[peerId] ?? -1
-    }
-
-    private static func lastAvatarSentAt(toPeer peerId: String) -> Date? {
-        let dict = UserDefaults.standard.dictionary(forKey: avatarSentAtKey) as? [String: Double] ?? [:]
-        guard let ts = dict[peerId] else { return nil }
-        return Date(timeIntervalSince1970: ts)
-    }
-
-    private static func markAvatarSent(version: Int, toPeer peerId: String, at: Date = Date()) {
-        var dict = UserDefaults.standard.dictionary(forKey: avatarSentVersionsKey) as? [String: Int] ?? [:]
-        dict[peerId] = version
-        UserDefaults.standard.set(dict, forKey: avatarSentVersionsKey)
-        var atDict = UserDefaults.standard.dictionary(forKey: avatarSentAtKey) as? [String: Double] ?? [:]
-        atDict[peerId] = at.timeIntervalSince1970
-        UserDefaults.standard.set(atDict, forKey: avatarSentAtKey)
-    }
-
     /// Encrypts the current self-avatar under EVERY currently-known
     /// peer's own pairwise chain key and sends each their own
     /// `avatar_announce` — called by `AvatarUploader` right after the
@@ -7344,39 +7331,22 @@ final class AppState: ObservableObject {
     /// and picked up later by `maybeAnnounceAvatarTo` on the next real
     /// message exchange with them, rather than blocking this whole
     /// broadcast on a key exchange that may take a while.
-    func broadcastAvatarToKnownPeers(jpegBytes: Data, version: Int) {
+    ///
+    /// 2026-08-02: the per-peer encrypt/upload/send/mark body moved into
+    /// `AvatarAnnounceCoordinator` so this broadcast shares the SAME
+    /// per-peer serialisation and mark-on-success bookkeeping as the
+    /// opportunistic triggers. Without that, a broadcast racing a
+    /// call-connect announce for the same peer could double-upload and the
+    /// two would write the sent-version bookkeeping out of order. The
+    /// bytes/version parameters are gone with it: the coordinator reads the
+    /// self-avatar cache file and `selfAvatarVersion`, both of which
+    /// `AvatarUploader` has already written by the time this is called.
+    func broadcastAvatarToKnownPeers() {
         let peers = ContactsStore().load().map { $0.userId }.filter { !$0.isEmpty }
         guard !peers.isEmpty else { return }
-        let sender = AvatarAnnounceSender(appState: self)
-        let sendService = ChatMessageSendService(appState: self)
-        Task {
+        Task { [weak self] in
             for (index, peerId) in peers.enumerated() {
-                do {
-                    let json = try await sender.prepareEnvelopeJson(
-                        avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
-                    let outcome = await sendService.sendEncrypted(
-                        messageId: UUID(), peerUserId: peerId, plaintext: json)
-                    // Fix (2026-07-31, found during full-audit): `sendEncrypted`
-                    // NEVER throws — every failure (WS down, auth timeout, PSK
-                    // missing, crypto error) is a RETURNED `.failed(reason:)`,
-                    // not a Swift error. This used to be discarded (`_ = await
-                    // ...`) and `markAvatarSent` ran unconditionally right
-                    // after — so a `.failed` send (a real, recurring outcome
-                    // during the WS-churn window this session root-caused) was
-                    // bookkept identically to a real success, permanently (the
-                    // only recovery was the 3-day TTL self-heal). Only mark on
-                    // an outcome that actually left the device.
-                    switch outcome {
-                    case .delivered, .sent:
-                        Self.markAvatarSent(version: version, toPeer: peerId)
-                    case .failed(let reason):
-                        RTLog.warn("avatar", "broadcast NOT sent to=\(peerId.prefix(8)) reason=\(reason)")
-                    }
-                } catch AvatarAnnounceSender.SendError.pskMissing {
-                    continue
-                } catch {
-                    RTLog.warn("avatar", "broadcast failed to=\(peerId.prefix(8)) error=\(error)")
-                }
+                await self?.avatarAnnounceCoordinator.announce(to: peerId, trigger: .avatarChanged)
                 // Security-review fix (2026-07-30): this loop is the only
                 // place in the app that fires one HTTP upload per known
                 // contact in a tight sequence — every other send path
@@ -7399,161 +7369,33 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Opportunistic avatar delivery: called after ANY successful
-    /// decrypt from `peerId` (proof a real pairwise PSK exists with
-    /// them right now). If we haven't already sent them our CURRENT
-    /// avatar version, sends it. This is what actually covers
-    /// first-contact (the very first successful exchange after a key
-    /// exchange completes is a normal `msg_receive`, which always
-    /// reaches this call) without needing a dedicated hook into
-    /// `ContactKeyExchange`'s internal OFFER/ACCEPT completion, and
-    /// self-heals a peer `broadcastAvatarToKnownPeers` had to skip for
-    /// lacking a PSK at broadcast time.
-    private func maybeAnnounceAvatarTo(_ peerId: String) {
-        let version = selfAvatarVersion
-        let priorSent = Self.lastAvatarVersionSent(toPeer: peerId)
-        let priorSentAt = Self.lastAvatarSentAt(toPeer: peerId)
-        guard version > 0 else {
-            RTLog.debug("avatar", "skip to=\(peerId.prefix(8)) reason=no-self-avatar-yet")
-            return
-        }
-        // W-AVATARSTUCK fix (2026-07-31): `markAvatarSent` (below) only
-        // means "upload+ship succeeded", NOT "recipient actually decrypted
-        // it" — a peer whose download silently failed (W-AVATAR404, or any
-        // future transport regression) used to stay permanently marked
-        // "sent" and every future trigger no-op'd forever until `version`
-        // bumped again (the exact state that just cost real investigation
-        // time on Android, and the reason `avatarSentVersionsKey` above was
-        // renamed to orphan it). Re-announcing anyway once
-        // `avatarResendIntervalSec` has elapsed, even when `priorSent ==
-        // version`, bounds any FUTURE silent failure to that many seconds
-        // of staleness instead of permanent.
-        let staleEnoughToRetry = priorSentAt.map {
-            Date().timeIntervalSince($0) >= Self.avatarResendIntervalSec
-        } ?? true
-        guard priorSent < version || staleEnoughToRetry else {
-            RTLog.debug("avatar", "skip to=\(peerId.prefix(8)) reason=already-marked-sent priorSent=\(priorSent) currentVersion=\(version) sentAgeSec=\(priorSentAt.map { Int(Date().timeIntervalSince($0)) } ?? -1)")
-            return
-        }
-        guard let cacheURL = AvatarUploader.selfAvatarCacheURL,
-              let jpegBytes = try? Data(contentsOf: cacheURL) else {
-            RTLog.warn("avatar", "skip to=\(peerId.prefix(8)) reason=self-file-missing-or-unreadable")
-            return
-        }
-        // Security-review fix (2026-07-30): mark optimistically BEFORE
-        // starting the async encrypt+upload+send, not only after it
-        // succeeds. This method is called unconditionally on every
-        // successful decrypt from a peer — a burst of messages from the
-        // same peer arriving before the first Task's network round trip
-        // completes (e.g. the offline pending-sync replay loop, which
-        // processes up to 50 buffered messages in a tight synchronous
-        // loop) used to re-read the still-stale "last sent" state and
-        // spawn a fresh redundant full avatar re-upload for EACH message
-        // in the burst. Marking first closes that window; on failure we
-        // restore the prior value so a later real exchange still retries.
-        Self.markAvatarSent(version: version, toPeer: peerId)
-        let sender = AvatarAnnounceSender(appState: self)
-        let sendService = ChatMessageSendService(appState: self)
-        Task {
-            do {
-                let json = try await sender.prepareEnvelopeJson(
-                    avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
-                let outcome = await sendService.sendEncrypted(
-                    messageId: UUID(), peerUserId: peerId, plaintext: json)
-                // Fix (2026-07-31, found during full-audit): `sendEncrypted`
-                // NEVER throws — a `.failed` outcome (WS down, auth timeout,
-                // PSK missing, crypto error) used to hit this same success
-                // path unconditionally, since only a THROWN error reached the
-                // `catch` below. The optimistic mark above already assumed
-                // success; a `.failed` outcome must roll it back exactly like
-                // a thrown error does, or the same permanent-until-3-day-TTL
-                // false-positive this whole fix class exists to prevent
-                // recurs via a different door.
-                if case .failed(let reason) = outcome {
-                    Self.markAvatarSent(version: priorSent, toPeer: peerId, at: priorSentAt ?? .distantPast)
-                    RTLog.warn("avatar", "send NOT delivered to=\(peerId.prefix(8)) reason=\(reason)")
-                }
-            } catch {
-                // Failed — restore the prior state (INCLUDING its original
-                // timestamp, not now) so the next trigger retries instead of
-                // treating a failed send as if it had succeeded. Restoring
-                // with `at: Date()` here would wrongly refresh the
-                // stale-retry clock on a failure.
-                //
-                // W-AVATARSHIP (2026-08-01): this catch had NO logging at
-                // all before — a thrown error (pskMissing, or a
-                // crypto/network exception from prepareEnvelopeJson) was
-                // silently swallowed down to just the state rollback,
-                // exactly the "failure looks identical to nothing having
-                // happened" class this whole file's 2026-07-31 audit fixes
-                // exist to close, just missed here.
-                Self.markAvatarSent(version: priorSent, toPeer: peerId, at: priorSentAt ?? .distantPast)
-                RTLog.warn("avatar", "send threw to=\(peerId.prefix(8)) error=\(error)")
-            }
-        }
+    /// Opportunistic avatar delivery: called after ANY event that proves a
+    /// real pairwise PSK exists with `peerId` right now — a successful chat
+    /// decrypt, a call reaching the connected state, or a completed
+    /// `ContactKeyExchange`. Delegates to `AvatarAnnounceCoordinator`,
+    /// which owns the version guard, the per-trigger cooldown, the per-peer
+    /// serialisation and the sent-version bookkeeping (a direct port of
+    /// Android's class of the same name — see its doc for why each of those
+    /// is load-bearing and which of them iOS was missing).
+    ///
+    /// `trigger` is what decides the re-announce cooldown, so it must
+    /// reflect the REAL cause: a call is rare and explicit and gets a
+    /// 2-minute floor, while the chat-decrypt path can fire many times a
+    /// minute and keeps 1 hour.
+    private func maybeAnnounceAvatarTo(
+        _ peerId: String,
+        trigger: AvatarAnnounceCoordinator.Trigger = .chatDecrypt
+    ) {
+        avatarAnnounceCoordinator.maybeAnnounce(to: peerId, trigger: trigger)
     }
 
     /// Downloads + decrypts an inbound `avatar_announce` and caches the
-    /// plaintext locally. Never called for an envelope at or below the
-    /// already-cached version — the caller (`handleIncomingMessage`)
-    /// checks that BEFORE invoking this.
+    /// plaintext locally. Delegates to `AvatarAnnounceCoordinator`, which
+    /// serialises per sender and re-checks the version INSIDE that
+    /// serialisation — the caller's own pre-check is only an optimisation
+    /// to avoid queueing work for an announce that is already stale.
     private func handleInboundAvatarAnnounce(_ envelope: AvatarAnnounceEnvelope, senderId: String) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let plaintext = try await AvatarAnnounceReceiver(appState: self)
-                    .downloadAndDecrypt(envelope: envelope, senderId: senderId)
-                let cacheDir = try FileManager.default.url(
-                    for: .applicationSupportDirectory, in: .userDomainMask,
-                    appropriateFor: nil, create: true
-                ).appendingPathComponent("qaudion/avatars", isDirectory: true)
-                try FileManager.default.createDirectory(
-                    at: cacheDir, withIntermediateDirectories: true)
-                // Security-review fix (2026-07-30): exclude from iCloud/
-                // iTunes device backup — see AvatarUploader
-                // .excludeFromBackup's doc for why decrypted E2EE avatar
-                // plaintext must never ride into a device backup, unlike
-                // the codebase's other decrypted-media caches which
-                // already get this for free via .cachesDirectory/
-                // temporaryDirectory.
-                AvatarUploader.excludeFromBackup(cacheDir)
-                // Security-review fix (2026-07-30): never write an
-                // unvalidated wire-supplied identifier into a filesystem
-                // path — mirrors ChatAttachAnnounceReceiver's own pattern
-                // of only ever using a self-validated identifier
-                // (att.id) in a cache filename, never a peer/sender
-                // string directly. senderId is a server-issued UUID
-                // today (the server overwrites sender_id with the
-                // authenticated connection's own userID before relay),
-                // but this is defense-in-depth against ever trusting
-                // that invariant implicitly.
-                let safeName = UUID(uuidString: senderId) != nil
-                    ? senderId
-                    : Data(SHA256.hash(data: Data(senderId.utf8))).map { String(format: "%02x", $0) }.joined()
-                let fileURL = cacheDir.appendingPathComponent("\(safeName).jpg")
-                try plaintext.write(to: fileURL, options: [.atomic])
-                let applied = ContactsStore().setAvatarLocalPath(
-                    userId: senderId, path: fileURL, version: envelope.att.version)
-                guard applied else {
-                    RTLog.debug("avatar", "receive applied=false from=\(senderId.prefix(8)) version=\(envelope.att.version) — stale/duplicate announce, row already at this version or newer")
-                    return
-                }
-                NotificationCenter.default.post(
-                    name: AppState.chatRefreshNotification,
-                    object: nil,
-                    userInfo: ["peerUserId": senderId]
-                )
-            } catch AvatarAnnounceReceiver.ReceiveError.pskMissing {
-                self.triggerKeyExchange(with: senderId)
-            } catch {
-                // Fix (2026-07-31, found during full-audit): was bare
-                // print() — see the msg_receive-decrypt-failed fix above,
-                // same reasoning. This is the ONE line that would have
-                // shown a download/decrypt failure for an inbound avatar,
-                // and it never reached anywhere a remote log pull could see.
-                RTLog.error("avatar", "avatar_announce receive failed from=\(senderId.prefix(8)): \(error)")
-            }
-        }
+        avatarAnnounceCoordinator.handleInbound(envelope, senderId: senderId)
     }
 
     /// Mark the locally-stored copies of delivered messages as
@@ -7889,6 +7731,9 @@ final class AppState: ObservableObject {
             case .keyExchangeOffer(let pub):
                 Task { [weak self] in
                     await cke.handleOffer(senderId: senderId, peerPubKey: pub)
+                    // Trigger `.keyExchange` — as rare and as explicit as a
+                    // call, so it gets the SHORT re-announce cooldown, not
+                    // the background chat-decrypt one.
                     // E2EE avatar transport (2026-07-30) — the moment a
                     // pairwise PSK becomes available for this peer (for
                     // ANY reason: a call just triggered this exchange, a
@@ -7897,12 +7742,12 @@ final class AppState: ObservableObject {
                     // the NEXT chat message. Safe no-op if the derive
                     // above actually failed (maybeAnnounceAvatarTo fails
                     // closed on a missing PSK).
-                    await self?.maybeAnnounceAvatarTo(senderId)
+                    await self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
                 }
             case .keyExchangeAccept(let pub):
                 Task { [weak self] in
                     await cke.handleAccept(senderId: senderId, peerPubKey: pub)
-                    await self?.maybeAnnounceAvatarTo(senderId)
+                    await self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
                 }
             case .offer:
                 Task { @MainActor [weak self] in
@@ -11150,9 +10995,14 @@ final class AppState: ObservableObject {
         let hasPsk = (try? PairwiseChainKeyResolver.resolvePsk(
             peerId: peerId, vault: SovereignKeyVault()
         )) != nil
-        RTLog.info("avatar", "call-connect exchange peer=\(peerId.prefix(8)) hasPsk=\(hasPsk)")
+        // W-AVATARCOOLDOWN (2026-08-02): the redaction in the log shipper
+        // eats `hasPsk=<bool>` (the substring "psk" is on the deny list), so
+        // the branch is logged as its own word instead — this is the ONE
+        // line that says which way a call-connect went.
+        let pskState: String = hasPsk ? "psk-present" : "psk-absent"
+        RTLog.info("avatar", "call-connect exchange peer=\(peerId.prefix(8)) state=\(pskState)")
         if hasPsk {
-            maybeAnnounceAvatarTo(peerId)
+            maybeAnnounceAvatarTo(peerId, trigger: .callConnect)
         } else {
             // No pairwise PSK yet (the call's own PQC handshake does NOT
             // produce one — it persists a separate "call-<id>" key that
