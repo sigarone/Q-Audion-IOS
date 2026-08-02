@@ -126,7 +126,7 @@ public func shouldWriteGroupTombstone(after outcome: GroupLeaveOutcome) -> Bool 
 /// Every way a deleted group can come back into local state. Each one is
 /// classified as either passive (must respect the tombstone) or an explicit
 /// re-add (clears it).
-public enum GroupResurrectionSource: Sendable, Equatable, CaseIterable {
+public enum GroupResurrectionSource: Sendable, Hashable, CaseIterable {
     /// `GET /api/v1/groups` on launch / WS reconnect merely listing the
     /// group. The server still has this user as a member whenever the leave
     /// call failed — this is THE resurrection path.

@@ -22,7 +22,11 @@ final class AeadCipherTests: XCTestCase {
     func testDecryptWithTamperedCiphertext() {
         let cipher = AeadCipher()
         var output = try! cipher.encrypt(plaintext: Data("Audio".utf8), key: Data(repeating: 0x42, count: 32))
-        var tampered = output.ciphertext; tampered[0] ^= 0xFF
+        // Relative to startIndex: a CryptoKit-derived Data may be an offset
+        // view, and Data keeps absolute indices on a slice. Identical
+        // behaviour when the view starts at 0, a trap when it does not —
+        // the crash that killed BackupCipherTests' tampered case.
+        var tampered = output.ciphertext; tampered[tampered.startIndex] ^= 0xFF
         output = AeadCipher.CipherOutput(nonce: output.nonce, ciphertext: tampered, tag: output.tag)
         XCTAssertThrowsError(try cipher.decrypt(cipherOutput: output, key: Data(repeating: 0x42, count: 32)))
     }

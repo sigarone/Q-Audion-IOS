@@ -117,7 +117,8 @@ final class GroupDeletionPolicyTests: XCTestCase {
     /// server still lists the user as a member and the next reconcile would
     /// otherwise bring the chat straight back.
     func testTheTombstoneIsWrittenNoMatterWhatTheServerSaid() {
-        for outcome: GroupLeaveOutcome in [.left, .unreachable, .notAttempted, .rejected(status: 503)] {
+        let outcomes: [GroupLeaveOutcome] = [.left, .unreachable, .notAttempted, .rejected(status: 503)]
+        for outcome in outcomes {
             XCTAssertTrue(shouldWriteGroupTombstone(after: outcome), "\(outcome)")
         }
     }
@@ -152,9 +153,11 @@ final class GroupDeletionPolicyTests: XCTestCase {
     /// classified deliberately instead of inheriting whichever side the
     /// author happened to write first.
     func testExactlyThreeSourcesCountAsAnExplicitReAdd() {
-        XCTAssertEqual(
-            Set(GroupResurrectionSource.allCases.filter { clearsGroupTombstone($0) }),
-            Set([.membershipEventAddingSelf, .p2pMemberAddedNamingSelf, .acceptedInvite]))
+        let expected: Set<GroupResurrectionSource> = [
+            .membershipEventAddingSelf, .p2pMemberAddedNamingSelf, .acceptedInvite,
+        ]
+        let actual = Set(GroupResurrectionSource.allCases.filter { clearsGroupTombstone($0) })
+        XCTAssertEqual(actual, expected)
     }
 
     // MARK: - shouldSkipGroupResurrection

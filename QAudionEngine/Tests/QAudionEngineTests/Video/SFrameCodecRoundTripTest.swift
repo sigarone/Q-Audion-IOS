@@ -103,7 +103,7 @@ final class SFrameCodecRoundTripTest: XCTestCase {
         )
         // Flip a bit in the extension byte (KEY flag) — AAD changes, GCM rejects
         // (or the layer/CTR mux mismatch trips first; both are acceptable rejections).
-        wire[1] ^= 0x10
+        wire[wire.startIndex + 1] ^= 0x10   // startIndex-relative: see AeadCipherTests
         XCTAssertThrowsError(try SFrameCodec.open(master: master, wire: wire))
     }
 
