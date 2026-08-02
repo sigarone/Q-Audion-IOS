@@ -13,6 +13,7 @@ extension ReleaseNote {
               date: "2026-08-01",
               title: "v1.0.923",
               bullets: [
+                "chore: regenerate changelog for v1.0.923",
                 "fix(avatar): fire the avatar exchange on the callee side too",
               ]),
         .init(id: "v1.0.922",
