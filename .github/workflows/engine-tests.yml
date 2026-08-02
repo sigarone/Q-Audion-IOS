@@ -132,6 +132,21 @@ jobs:
           cd QAudionEngine
           xcodebuild -list 2>&1 || true
 
+      # 2026-08-02 — three SpeakerVerifierTests cases are skipped below, and
+      # ONLY those three. CamPlusSpeakerEmbedder.loadModel is
+      # `#if !targetEnvironment(simulator) ... #else return false #endif`, so
+      # on any simulator ensureLoaded() throws .runtimeUnavailable and the
+      # cases that need a real CAM++ embedding cannot pass here by
+      # construction — not a model or asset problem (the .onnx is present and
+      # its SHA-256 matches the pinned trustedHash exactly, no LFS) and not a
+      # regression. db8be20 un-skipped the whole suite on 2026-07-30 expecting
+      # it to guard the frameSize contract; the effect was 40+ consecutive red
+      # runs, which is precisely the masking that let a real ContactsStore
+      # breakage sit unnoticed a day later. Deliberately NOT the old blanket
+      # suite-level skip: the state-machine cases (idle/enrolling transitions,
+      # too-few-frames rejection) run and pass, and those are the ones that
+      # would have caught the frameSize bug. Real inference stays covered on
+      # device, where the embedder actually exists.
       - name: Run Tests (iOS Simulator)
         run: |
           cd QAudionEngine
@@ -249,6 +264,9 @@ jobs:
             -skip-testing "QAudionEngineTests/PitchExtractorTests" \
             -skip-testing "QAudionEngineTests/QAudionCapabilityExchangeTests" \
             -skip-testing "QAudionEngineTests/VoiceHealthMonitorTests" \
+            -skip-testing "QAudionEngineTests/SpeakerVerifierTests/testFinishEnrollmentWithEnoughFramesSucceeds" \
+            -skip-testing "QAudionEngineTests/SpeakerVerifierTests/testReEnrollmentResetsState" \
+            -skip-testing "QAudionEngineTests/SpeakerVerifierTests/testVerifyAfterEnrollmentReturnsSimilarityScore" \
             -skip-testing "QAudionEngineTests/QAudionEngineTests/testProcessRoundTrip" &
           XCODEBUILD_PID=$!
           ( sleep 900; echo "::error::xcodebuild test exceeded 15min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
