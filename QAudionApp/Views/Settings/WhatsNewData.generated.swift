@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.932",
+              date: "2026-08-02",
+              title: "v1.0.932",
+              bullets: [
+                "fix(build): add the GroupCreationPolicy definition its callers already use",
+              ]),
         .init(id: "v1.0.931",
               date: "2026-08-02",
               title: "v1.0.931",
               bullets: [
+                "chore: regenerate changelog for v1.0.931",
                 "fix(crypto): agree with Android on which pairwise PSK encrypts a 1:1 message",
               ]),
         .init(id: "v1.0.930",
@@ -146,16 +153,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.913",
                 "fix(avatar): unstick sent-version bookkeeping + fix Settings preview (W-AVATARSTUCK)",
-              ]),
-        .init(id: "v1.0.912",
-              date: "2026-07-31",
-              title: "v1.0.912",
-              bullets: [
-                "chore: regenerate changelog for v1.0.912",
-                "feat(call): shield trust badges, voice-key badge, self-echo guard, auto-enroll+wave",
-                "fix(avatar): diagnose permanently-poisoned sent-version bookkeeping",
-                "fix(avatar): accept + send both att/avatar keys for avatar_announce",
-                "fix(avatar): route avatar_announce through tus + recipient download token",
               ]),
     ]
 }
