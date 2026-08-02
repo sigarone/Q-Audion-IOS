@@ -146,6 +146,12 @@ struct GroupMetadataResult {
 /// Fase 1C — reply of `GET /api/v1/groups/{gid}` (group load/join
 /// recovery). `metadataBlobB64`/`metadataVersion` are omitted server-side
 /// when unset — nil / 0 here means "this group has no metadata yet".
+///
+/// W-GRPNAME (2026-08-02): also the reply of `POST /api/v1/groups`. Create
+/// used to hand-build a DIFFERENT shape (no metadata fields) from the one
+/// `toGroupResponse` returns for GET; that divergence was itself a defect —
+/// a client could not read back the metadata it had just published — and it
+/// is gone. One shape, one parser (`parseGroupResponse`).
 struct GroupFetchResult {
     let groupEpoch: UInt32
     let members: [String]
@@ -187,37 +193,65 @@ final class GroupMembershipApi {
         return GroupMembershipApi(serverUrl: serverUrl, accessToken: token)
     }
 
-    /// POST /api/v1/groups — register the group server-side (Fase 1A).
+    /// POST /api/v1/groups — register the group server-side (Fase 1A),
+    /// COMPLETE with its encrypted name (W-GRPNAME, 2026-08-02).
     ///
     /// Body is byte-identical to the Android/Desktop `createGroupRequest`
     /// (`bcrypto-server/cmd/bcrypto-lite/groups.go` — `{group_id, members,
-    /// admins}`); the server assigns `group_epoch = 1` and requires the
-    /// caller to be present in BOTH `members` and `admins`. Reply is
-    /// `groupResponse {group_id, created_at, group_epoch, members, admins}`
-    /// — the same `group_epoch`/`members`/`admins` fields `fire` parses.
+    /// admins}`) plus the two optional metadata fields; the server assigns
+    /// `group_epoch = 1` and requires the caller to be present in BOTH
+    /// `members` and `admins`.
+    ///
+    /// `metadataBlobB64` is the base64 of the ENCRYPTED (0xE4 wire) blob —
+    /// byte-for-byte the same artefact `PUT …/metadata` takes, opaque to the
+    /// server, which never parses it. Sent only together with a
+    /// `metadataVersion >= 1` (server contract); omitting BOTH is valid and
+    /// reproduces the pre-W-GRPNAME behaviour exactly, so no client is broken
+    /// by a peer that does not publish at creation.
+    ///
+    /// Why it belongs HERE and not in a follow-up PUT: the server persists
+    /// the blob in the SAME transaction as the group row, so the group is
+    /// never visible without its name. The old two-call sequence left group
+    /// `1a751eae` nameless for 38 seconds — and permanently so had the second
+    /// call failed, since a member who learns of a group from a server
+    /// snapshot has no other source for its name and renders the raw hex id.
+    /// The separate PUT stays for RENAME, which is a different operation with
+    /// a different (signed) envelope.
     ///
     /// Idempotent by contract of the CALLER: an already-existing group
     /// (Android/Desktop created it first, iOS re-creates) surfaces as a
-    /// non-2xx `GroupMembershipResult` (the caller keeps its local crypto
-    /// state and does not hard-fail). `groupIdWire` is the DASHED-UUID wire
-    /// form the server + Android key on (`AppState.hexToDashedUUID`).
+    /// non-2xx result (the caller keeps its local crypto state and does not
+    /// hard-fail). `groupIdWire` is the DASHED-UUID wire form the server +
+    /// Android key on (`AppState.hexToDashedUUID`).
     func createGroup(
         groupIdWire: String,
         members: [String],
-        admins: [String]
-    ) async -> GroupMembershipResult? {
+        admins: [String],
+        metadataBlobB64: String? = nil,
+        metadataVersion: UInt32 = 0
+    ) async -> GroupFetchResult? {
         guard let url = endpoint("/api/v1/groups") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         addAuth(&req)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "group_id": groupIdWire,
             "members": members,
             "admins": admins,
         ]
+        // Both fields or neither: a blob without a version >= 1 is rejected
+        // (400) by the server, and a version without a blob means nothing.
+        // `Int(...)` rather than the raw UInt32 — JSONSerialization only
+        // accepts NSNumber-bridged values and Int is the unambiguous one.
+        if let blob = metadataBlobB64, !blob.isEmpty, metadataVersion >= 1 {
+            body["metadata_blob_b64"] = blob
+            body["metadata_version"] = Int(metadataVersion)
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return await fire(req, label: "groups.create[\(groupIdWire)]")
+        guard let (data, status) = await fireRaw(
+            req, label: "groups.create[\(groupIdWire)]") else { return nil }
+        return parseGroupResponse(data, status: status)
     }
 
     /// POST /api/v1/groups/{gid}/members — admin adds `userId`.
@@ -392,21 +426,28 @@ final class GroupMembershipApi {
         req.httpMethod = "GET"
         addAuth(&req)
         guard let (data, status) = await fireRaw(req, label: "groups.fetch[\(groupIdWire)]") else { return nil }
+        return parseGroupResponse(data, status: status)
+    }
+
+    /// Parse one server `groupResponse` — the shape BOTH `GET
+    /// /api/v1/groups/{gid}` and (since W-GRPNAME) the `POST /api/v1/groups`
+    /// 201 return. A non-2xx yields an empty result carrying the status, so
+    /// the caller branches on `isSuccess`/`statusCode` rather than on nil
+    /// (which stays reserved for "no HTTP response at all").
+    private func parseGroupResponse(_ data: Data, status: Int) -> GroupFetchResult {
         guard (200..<300).contains(status) else {
             return GroupFetchResult(groupEpoch: 0, members: [], admins: [],
-                                     metadataBlobB64: nil, metadataVersion: 0, statusCode: status)
+                                    metadataBlobB64: nil, metadataVersion: 0, statusCode: status)
         }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        let epochAny = json?["group_epoch"]
         let epoch: UInt32
-        if let n = epochAny as? NSNumber {
+        if let n = json?["group_epoch"] as? NSNumber {
             epoch = UInt32(truncatingIfNeeded: n.int64Value)
         } else {
             epoch = 0
         }
-        let versionAny = json?["metadata_version"]
         let version: UInt32
-        if let n = versionAny as? NSNumber {
+        if let n = json?["metadata_version"] as? NSNumber {
             version = UInt32(truncatingIfNeeded: n.int64Value)
         } else {
             version = 0

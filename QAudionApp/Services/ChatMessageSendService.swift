@@ -111,7 +111,26 @@ final class ChatMessageSendService {
                 // exists, refuse the send and kick off a key exchange.
                 let prefix = peerUserId.count > 8 ? String(peerUserId.prefix(8)) : peerUserId
                 let autoName = "auto:\(prefix):\(peerUserId)"
-                if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
+                // W-MSGPSKPICK (2026-08-02): send under the NEWEST PSK bound
+                // to this contact, which is the rule Android decrypts by
+                // (`SovereignKeyVault.findNewestForContact`). The fixed
+                // `auto:` → bare ladder was the cross-platform break: Android
+                // re-binds a call-derived PSK after every call, so after one
+                // call the two platforms chose different keys and every
+                // iOS→Android message died on the Android side with
+                // "MessageCrypto.decrypt returned null — invalid key/payload"
+                // (observed 23:09:15, at the exact second of an iOS send).
+                // The avatar envelope rides inside those messages, so the
+                // announce never reached Android's handler at all.
+                //
+                // Fail-closed is unchanged: `orderedPskCandidates` only ever
+                // returns keys genuinely bound to this peer, and an empty
+                // list still falls through to the key-exchange branch below —
+                // never to a derivable fallback (FIX H1).
+                if let newest = PairwiseChainKeyResolver
+                    .orderedPskCandidates(peerId: peerUserId, vault: vault).first {
+                    psk = newest
+                } else if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
                     psk = stored
                 } else if let stored = try vault.loadPsk(name: peerUserId), !stored.isEmpty {
                     psk = stored

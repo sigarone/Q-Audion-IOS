@@ -107,6 +107,32 @@ enum PairwiseChainKeyResolver {
         throw ResolveError.pskMissing
     }
 
+    /// Every PSK bound to `peerId`, newest first, de-duplicated by value.
+    ///
+    /// W-MSGPSKPICK (2026-08-02) — the 1:1 message path needs the whole list,
+    /// not just the winner. Android re-binds a call-derived PSK to the
+    /// contact after every call and decrypts with
+    /// `findNewestForContact`, while iOS used a fixed
+    /// `auto:` → bare ladder on both send and receive. After any call the
+    /// two picked DIFFERENT keys and every iOS→Android message failed with
+    /// "MessageCrypto.decrypt returned null — invalid key/payload"; the
+    /// avatar envelope rides inside those messages, which is why the
+    /// announce never reached Android's handler even though iOS sent it.
+    ///
+    /// Ordering by recency makes the two platforms agree on the common case.
+    /// Handing the caller the full list makes the receive side tolerant of a
+    /// peer that still picks differently — trying the remaining candidates
+    /// costs one AEAD open each and can only turn a hard failure into a
+    /// success, never the reverse.
+    static func orderedPskCandidates(peerId: String, vault: SovereignKeyVault) -> [Data] {
+        var out: [Data] = []
+        for name in candidatesNewestFirst(peerId: peerId, vault: vault) {
+            guard let stored = (try? vault.loadPsk(name: name)) ?? nil, !stored.isEmpty else { continue }
+            if !out.contains(stored) { out.append(stored) }
+        }
+        return out
+    }
+
     /// Resolves the real pairwise PSK (throws `.pskMissing` if none
     /// bound) and derives a 32-byte chain key via
     /// `HKDF-SHA256(psk, salt: "qaudion-attach-salt-v1", info: "<infoLabel>:<sortedPair>")`.

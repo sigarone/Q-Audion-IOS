@@ -6706,7 +6706,19 @@ final class AppState: ObservableObject {
         let psk: Data
         let prefix = senderId.count > 8 ? String(senderId.prefix(8)) : senderId
         let autoName = "auto:\(prefix):\(senderId)"
-        if let stored = (try? vault.loadPsk(name: autoName)) ?? nil, !stored.isEmpty {
+        // W-MSGPSKPICK (2026-08-02): prefer whichever pairwise PSK is NEWEST,
+        // matching Android's `SovereignKeyVault.findNewestForContact`. Fixed
+        // ladder order was the cross-platform break: Android re-binds a
+        // call-derived PSK to the contact after every call, so its newest is
+        // that one, while iOS kept picking `auto:` — proven on the 23:09:15
+        // message (`MessageCrypto.decrypt returned null — invalid key/payload`
+        // on the Android side, at the exact second iOS sent). `psk` here is
+        // only the FIRST attempt; `pskCandidates` below feeds the retry.
+        let pskCandidates: [Data] = PairwiseChainKeyResolver
+            .orderedPskCandidates(peerId: senderId, vault: vault)
+        if let newest = pskCandidates.first {
+            psk = newest
+        } else if let stored = (try? vault.loadPsk(name: autoName)) ?? nil, !stored.isEmpty {
             psk = stored
         } else if let stored = (try? vault.loadPsk(name: senderId)) ?? nil, !stored.isEmpty {
             psk = stored
@@ -6730,7 +6742,14 @@ final class AppState: ObservableObject {
         // marker JSON would already have been replaced by the
         // "(download in arrivo)" placeholder before we get to parse.
         var decryptedRaw: String = ""
-        do {
+        // W-MSGPSKPICK (2026-08-02): the decrypt attempt is a closure so it
+        // can be re-run against the OTHER PSKs bound to this peer. A peer on
+        // an older build still picks `auto:` where we now pick the newest,
+        // and a mismatch used to surface as a permanent
+        // "[messaggio cifrato non leggibile]". Each retry is one AEAD open
+        // against a key already bound to this same contact — it can turn a
+        // hard failure into a success, never the reverse.
+        func attemptDecrypt(withPsk psk: Data) throws -> Data {
             // W351 + W374: route by wire-format magic byte.
             //   0xE3 → v3.1 ratchet (forward secrecy, canonical CBOR AAD)
             //   0xE2 → v2 epoch-routed (W374 cross-platform compat)
@@ -6785,6 +6804,24 @@ final class AppState: ObservableObject {
                     recipientId: currentUserId ?? "",
                     msgId: clientMsgId ?? serverMsgId
                 )
+            }
+            return pt
+        }
+        do {
+            // First attempt uses the newest PSK; on failure walk the rest of
+            // the keys bound to this peer before declaring the message
+            // unreadable.
+            var pt: Data
+            do {
+                pt = try attemptDecrypt(withPsk: psk)
+            } catch {
+                var recovered: Data?
+                for alt in pskCandidates.dropFirst() where recovered == nil {
+                    recovered = try? attemptDecrypt(withPsk: alt)
+                }
+                guard let ok = recovered else { throw error }
+                RTLog.warn("chat", "msg_receive undec=0 alt=1 from=\(senderId.prefix(8))")
+                pt = ok
             }
             decryptedRaw = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
             // E2EE avatar transport (2026-07-30) — a successful decrypt
@@ -12910,6 +12947,23 @@ extension AppState {
             groupId: gidBytes, members: fullMembers, selfId: selfId)
         GroupRegistry.shared.markBootstrapped(groupId: gidBytes)
 
+        // W-GRPNAME (2026-08-02) — THIS MUST STAY ABOVE `sealCreationMetadata`
+        // (called in the server-registration block below). LOAD-BEARING:
+        // `pendingInitsAfterBootstrap` builds each `sender_key_init` from our
+        // send chain AS IT STANDS NOW (CK_n at index n) and the receiver's
+        // `handleSenderKeyInit` installs `lastSeen = n-1`; chain keys ratchet
+        // forward only. Seal the metadata blob first and it sits at an index
+        // BELOW what every member installs — permanently undecryptable for
+        // them, i.e. the nameless group this whole change exists to remove,
+        // wearing a crypto disguise. Ship first, seal second.
+        //
+        // Shipping the inits here (createGroup never did — the first TEXT
+        // send used to be the trigger) is also strictly better on its own:
+        // the recipient buffers the ctl envelope until they accept the
+        // invite (W395 `bufferCtl`), so their recv chain is installed the
+        // moment they join instead of at our first message.
+        shipSenderKeyInits(groupHex: gidBytes, members: fullMembers, selfId: selfId)
+
         // SERVER REGISTRATION (Fase 1A, best-effort) — POST /api/v1/groups
         // BEFORE/alongside the P2P fan-out below. Android + Desktop both
         // register the group server-side on create; iOS previously skipped
@@ -12921,22 +12975,42 @@ extension AppState {
         // on (NOT the dash-stripped hex `GroupRegistry` keys on). Idempotent:
         // if Android already created this group, the duplicate is rejected
         // (non-2xx) and we keep our local crypto state — never a hard-fail.
+        //
+        // W-GRPNAME: the same call now also carries the sealed name, stored
+        // by the server in the SAME transaction as the group row, so this
+        // group is never visible to anybody without it. The separate
+        // `PUT …/metadata` stays — it is the RENAME path.
         if let groupIdWire = Self.hexToDashedUUID(gidBytes),
            let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken) {
             let regMembers = fullMembers
             let regAdmins = fullAdmins
-            Task { @MainActor in
-                guard let res = await api.createGroup(
-                    groupIdWire: groupIdWire, members: regMembers, admins: regAdmins) else { return }
-                if res.isSuccess {
-                    GroupRegistry.shared.setEpoch(groupId: gidBytes, epoch: res.groupEpoch)
-                    NotificationCenter.default.post(
-                        name: AppState.groupRegistryChangedNotification,
-                        object: nil, userInfo: ["groupId": gidBytes])
-                } else {
-                    // Already-exists / other server error — local state stays.
-                    print("[AppState] createGroup: server registration HTTP \(res.statusCode) for \(groupIdWire) (kept local state)")
-                }
+            // Sealed HERE and not above so a P2P-only creation (no auth / bad
+            // id ⇒ no server call at all) does not consume a send-chain index
+            // for a blob nobody will ever receive. Still strictly after
+            // `shipSenderKeyInits` — that ordering is the load-bearing one.
+            let sealedMetadata = sealCreationMetadata(
+                groupHex: gidBytes, name: name, members: fullMembers, selfId: selfId)
+            let regBlob = sealedMetadata?.blobB64
+            let regVersion: UInt32 = (regBlob == nil) ? 0 : initialGroupMetadataVersion
+            let regPublished: Bool = (regBlob != nil)
+            // The epoch the blob was ACTUALLY sealed at (not an assumption):
+            // the 0xE4 wire binds it into the AAD, so if the server minted a
+            // different one the blob is unreadable and the name has to be
+            // republished — `groupCreatePublishVerdict` decides that.
+            let regSealEpoch: UInt32 = sealedMetadata?.epoch ?? initialGroupEpoch
+            // Body extracted to a helper so this closure stays at
+            // `closure → Task → one call` (SWIFT6_PATTERNS rule 4). `[weak
+            // self]` rather than the value-only capture the other REST Tasks
+            // in this file use: the fallback path needs the instance (it
+            // reaches `updateGroupMetadata`, which needs serverUrl / token /
+            // sovereign identity).
+            Task { @MainActor [weak self] in
+                let res = await api.createGroup(
+                    groupIdWire: groupIdWire, members: regMembers, admins: regAdmins,
+                    metadataBlobB64: regBlob, metadataVersion: regVersion)
+                self?.applyGroupCreationResult(
+                    res, groupHex: gidBytes, publishedBlob: regPublished,
+                    sealedEpoch: regSealEpoch)
             }
         }
 
@@ -12994,6 +13068,139 @@ extension AppState {
             object: nil,
             userInfo: ["groupId": gidBytes])
         return gidBytes
+    }
+
+    /// W-GRPNAME — apply the `POST /api/v1/groups` reply, and make sure the
+    /// group ends up NAMED whatever the server did with the blob.
+    ///
+    /// `res == nil` is a transport failure (no HTTP response at all) and a
+    /// non-2xx is usually the idempotent already-exists: both keep the local
+    /// crypto state untouched, exactly as before — server registration has
+    /// always been best-effort here and a failure must never cost the user
+    /// the group they just created.
+    ///
+    /// The interesting half is the verdict (`groupCreatePublishVerdict`,
+    /// shared with Desktop's `createGroupPublishVerdict` case for case):
+    /// "the name did not get published" is never a terminal state. Whatever
+    /// the reason — no blob sealed, a server build that ignores the fields, a
+    /// server epoch we did not seal for — the fallback is the ordinary
+    /// `PUT …/metadata`, i.e. exactly the two-call behaviour that shipped
+    /// before this change. Worst case we are back where we started; we never
+    /// end up worse.
+    @MainActor
+    fileprivate func applyGroupCreationResult(
+        _ res: GroupFetchResult?, groupHex: String, publishedBlob: Bool, sealedEpoch: UInt32
+    ) {
+        let gShort: String = String(groupHex.prefix(8))
+        guard let res = res else {
+            let unreachableLine: String = "create unreachable (no response) g=" + gShort
+            RTLog.warn("group", unreachableLine)
+            return
+        }
+        guard res.isSuccess else {
+            // Already-exists / other server error — local state stays.
+            let statusText: String = String(describing: res.statusCode)
+            let failLine: String = "create rejected http=" + statusText + " g=" + gShort
+            RTLog.warn("group", failLine)
+            return
+        }
+        GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: res.groupEpoch)
+        let verdict = groupCreatePublishVerdict(
+            sentBlob: publishedBlob, localEpoch: sealedEpoch,
+            serverEpoch: res.groupEpoch, serverMetadataVersion: res.metadataVersion)
+        if verdict.namePublished {
+            GroupRegistry.shared.setMetadataVersion(
+                groupId: groupHex, version: verdict.publishedVersion)
+            let versionText: String = String(describing: verdict.publishedVersion)
+            let okLine: String = "create published name v=" + versionText + " g=" + gShort
+            RTLog.info("group", okLine)
+        }
+        if let rebuild = verdict.rebuildAtEpoch {
+            // Desktop rebuilds its local GroupState at the server's epoch here.
+            // iOS has no in-place rebuild primitive, and the branch is
+            // unreachable in practice (the server creates at epoch 1 and
+            // answers 409 for an existing group, which never reaches this
+            // success path) — so it is LOGGED rather than silently ignored,
+            // and the PUT below still republishes the name at the epoch we
+            // actually hold.
+            let serverText: String = String(describing: rebuild)
+            let localText: String = String(describing: sealedEpoch)
+            let epochLine: String = "create epoch mismatch server=" + serverText + " sealed=" + localText + " g=" + gShort
+            RTLog.warn("group", epochLine)
+        }
+        if verdict.needsMetadataPut {
+            let reasonText: String = verdict.reason.rawValue
+            let currentName: String = GroupRegistry.shared.entry(for: groupHex)?.name ?? ""
+            if groupNameToPublishAtCreation(currentName) != nil {
+                let putLine: String = "create name unpublished (" + reasonText + ") — falling back to metadata PUT g=" + gShort
+                RTLog.warn("group", putLine)
+                // `newName: nil` = keep the name already in the registry (the
+                // one the user typed), re-seal it, and PUT it — the same
+                // self-heal call `applyRemovalRekey` /
+                // `maybeReSealStaleGroupMetadata` use.
+                updateGroupMetadata(groupId: groupHex, newName: nil, avatarData: nil)
+            } else {
+                // Nothing publishable to fall back WITH. The rule that stopped
+                // us sealing a blank/placeholder name into the create call
+                // applies just as much to the retry — otherwise the group ends
+                // up server-named "Gruppo a1b2c3d4…" for everybody, which is
+                // strictly worse than having no server-side name at all.
+                let noNameLine: String = "create name unpublished (" + reasonText + ") and nothing publishable to PUT g=" + gShort
+                RTLog.warn("group", noNameLine)
+            }
+        }
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil, userInfo: ["groupId": groupHex])
+    }
+
+    /// W-GRPNAME — seal `{name}` with THIS device's 0xE4 group send-chain so
+    /// the group's name can ride the CREATE call itself. Returns the base64
+    /// of the encrypted wire PLUS the group epoch it was sealed at (the wire
+    /// binds that epoch into its AAD, so the caller has to know it), or nil
+    /// when there is nothing worth publishing (blank / placeholder name) or
+    /// the seal failed. Nil is never fatal: creation then proceeds as it did
+    /// before this change and the name is published by the fallback PUT.
+    ///
+    /// Same primitive as `updateGroupMetadata` (`GroupChatService.
+    /// encryptForWire` — the CURRENT sender's send-chain), so no new key and
+    /// no new wire format is introduced: the blob is byte-for-byte the
+    /// artefact `PUT …/metadata` takes, and every consumer path
+    /// (`group_metadata_changed`, the GET recovery,
+    /// `decryptAndApplyGroupMetadataBlob`) already handles it unchanged.
+    ///
+    /// **CALLER CONTRACT** — the `sender_key_init` fan-out for `members` MUST
+    /// already have been shipped when this is called. See the ordering
+    /// comment in `createGroup`: an init built after this seal installs
+    /// `lastSeen` ABOVE the blob's index and every member loses the name for
+    /// good.
+    @MainActor
+    fileprivate func sealCreationMetadata(
+        groupHex: String, name: String, members: [String], selfId: String
+    ) -> (blobB64: String, epoch: UInt32)? {
+        let gShort: String = String(groupHex.prefix(8))
+        guard let publishName = groupNameToPublishAtCreation(name) else {
+            let skipLine: String = "create publishes no name (blank/placeholder) g=" + gShort
+            RTLog.info("group", skipLine)
+            return nil
+        }
+        // `avatar_ref` is omitted (nil) at creation — a brand-new group has no
+        // avatar yet, and the contract's shape is `{name, avatar_ref?}`.
+        let payload = GroupMetadataPayload(name: publishName, avatarRef: nil)
+        guard let payloadData = try? JSONEncoder().encode(payload),
+              let payloadJson = String(data: payloadData, encoding: .utf8) else {
+            let encLine: String = "create metadata encode failed g=" + gShort
+            RTLog.warn("group", encLine)
+            return nil
+        }
+        guard let sealed = GroupChatService.shared.encryptForWire(
+            plaintext: payloadJson, groupId: groupHex,
+            members: members, selfId: selfId) else {
+            let sealLine: String = "create metadata seal failed g=" + gShort
+            RTLog.warn("group", sealLine)
+            return nil
+        }
+        return (blobB64: sealed.wire.base64EncodedString(), epoch: sealed.groupEpoch)
     }
 
     /// W403 — inbound `member_added` (Desktop-aligned wire).
@@ -13578,6 +13785,16 @@ extension AppState {
             name: AppState.groupRegistryChangedNotification,
             object: nil, userInfo: ["groupId": groupHex])
 
+        // 2c) W-GRPNAME — the new members' recv chains start ABOVE the index
+        //     the current metadata blob was sealed at, so the name they fetch
+        //     from the server is undecryptable for them. Re-publish it now,
+        //     from the device that made the change, rather than waiting for
+        //     the server to echo our own add back at us (which is also
+        //     handled, for OTHER admins' adds, in
+        //     `handleGroupMembershipChanged`). Full mechanism in
+        //     `republishGroupMetadataForNewMember`.
+        republishGroupMetadataForNewMember(groupHex: groupHex, selfId: selfId)
+
         // 3) SERVER REST (best-effort, one signed envelope per new member).
         guard let groupIdWire = Self.hexToDashedUUID(groupHex),
               let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken),
@@ -13971,18 +14188,68 @@ extension AppState {
             // `fanOutMembershipChanged`, parsed above) is the only thing
             // that separates them. Ignore it and every deploy resurrects
             // every deleted group chat.
+            // W-GRPNAME (2026-08-02) — the server now fans this event out at
+            // CREATION too, so a member added at creation learns of the group
+            // live instead of waiting for the next reconcile poll (which is
+            // why an iOS log showed "reconciled 2 group(s)" where an event
+            // belonged). That is a WELCOME event and it bootstraps the group
+            // below exactly like any other add.
+            //
+            // What it must NOT do is clear a tombstone, and that is not
+            // hypothetical: the creation fan-out is an `operation: "add"`
+            // naming a member of the founding roster (verified against the
+            // Desktop twin's `groupCreationFanout.spec.ts`, which pins the
+            // same wire), i.e. field for field the same shape as an admin
+            // adding this user back — the ONE event allowed to lift a
+            // tombstone. What separates them is attestation: nothing signs a
+            // group into existence, so `POST /groups` has no signed envelope
+            // and the fan-out carries empty `envelope_canonical_b64` /
+            // `envelope_signature_b64`, while `handleAddMember` fans out the
+            // admin's real signed one. A re-add is a claim an admin KEY
+            // makes; a bare server assertion is not one. Hence the
+            // `isAttested` overload.
+            //
+            // HONEST SCOPE: this is a presence check, NOT verification — iOS
+            // still does not verify the signature (see this extension's kdoc),
+            // and a hostile server could fill both fields with noise. It
+            // therefore defends against the server's own legitimately-unsigned
+            // frames being misread as user actions — the same class of guard
+            // as `replay`, and the class that actually bites — not against a
+            // hostile server, which on iOS has more direct paths anyway since
+            // the roster is applied verbatim. Real Ed25519 verification (which
+            // Desktop already does) is the follow-up that would make this a
+            // security boundary; until then it must not be described as one.
+            //
+            // A legitimately re-added user is not locked out: the attested
+            // live path still clears, and the offline-proof
+            // `reconcileTombstoneDecision` needs no event at all.
+            let attested = membershipEventIsAttested(
+                envelopeB64: (data["envelope_canonical_b64"] as? String) ?? "",
+                signatureB64: (data["envelope_signature_b64"] as? String) ?? "")
             let source = classifyMembershipEventForTombstone(
                 operation: operation, subjectUserId: subject, selfUserId: selfId,
-                isReplay: replay)
+                isReplay: replay, isAttested: attested)
+            if !attested {
+                // Pre-bound locals — SWIFT6_PATTERNS rule 1/2/4.
+                let gShortUnattested: String = String(groupHex.prefix(8))
+                let actorShort: String = String(actor.prefix(8))
+                let unattestedLine: String = "unattested membership frame g=" + gShortUnattested + " op=" + operation + " actor=" + actorShort
+                RTLog.info("group", unattestedLine)
+            }
             bootstrapGroupFromServer(
                 groupHex: groupHex, members: members, admins: admins,
                 actor: actor, selfId: selfId, replay: replay, serverEpoch: serverEpoch,
                 source: source)
+            // The bootstrap above may have been REFUSED (tombstone); this is
+            // a no-op when no local entry exists, so it can never be the
+            // resurrection path — see `decryptAndApplyGroupMetadataBlob`.
+            applyInlineGroupMetadataIfPresent(data, groupHex: groupHex, selfId: selfId)
             return
         }
 
         // Server-authoritative roster.
         applyServerRoster(groupHex: groupHex, members: members, admins: admins, serverEpoch: serverEpoch)
+        applyInlineGroupMetadataIfPresent(data, groupHex: groupHex, selfId: selfId)
 
         // Crypto side-effects. Fase 1C — admin promote/demote ("admin_add" /
         // "admin_remove") reuse this SAME event but never touch membership
@@ -14012,6 +14279,20 @@ extension AppState {
             // `pendingInitsAfterBootstrap` is idempotent — it returns only the
             // members we have not shipped to yet (i.e. the new one).
             shipSenderKeyInits(groupHex: groupHex, members: members, selfId: selfId)
+            // W-GRPNAME — the newcomer's recv chain starts ABOVE the index the
+            // current metadata blob was sealed at, so the name they fetch is
+            // undecryptable for them (full mechanism in
+            // `republishGroupMetadataForNewMember`). Re-publish it.
+            //   • `!replay` — the catch-up burst re-emits the last membership
+            //     log entry at EVERY server start, and that entry is often an
+            //     add; without this guard every deploy would fire a metadata
+            //     PUT per group per admin for nobody's benefit.
+            //   • `actor != selfId` — when WE did the add, `addGroupMembers`
+            //     already re-published locally; this event is just the server
+            //     echoing our own action back.
+            if !replay, actor != selfId {
+                republishGroupMetadataForNewMember(groupHex: groupHex, selfId: selfId)
+            }
         }
 
         NotificationCenter.default.post(
@@ -14057,9 +14338,21 @@ extension AppState {
             GroupTombstoneStore.shared.clear(groupHex, reason: String(describing: source))
         }
         let adminForName = admins.first ?? actor
+        // W-GRPNAME (2026-08-02) — the interim name, shown only until the
+        // real (encrypted) one arrives. This used to be the BARE hex fragment
+        // ("3fedc2e7…"), which is the "raw id as the chat name" every
+        // group-naming bug report describes, and which no placeholder check
+        // in the app recognises: `DisplayName.looksLikeUUID` needs 32/36
+        // chars and `isPlaceholderName` keys on the "Gruppo …" shape, so a
+        // bare fragment was treated as a REAL name everywhere downstream.
+        // `shortGroupFallback` is the documented form ("Gruppo a1b2c3d4…"),
+        // it is the SAME string every other unnamed-group surface renders,
+        // and — the load-bearing part — `DisplayName.isPlaceholderName` and
+        // `isSynthesizedGroupPlaceholderName` both recognise it, so it can
+        // never be mistaken for a chosen name or republished as one.
         let entry = GroupRegistry.Entry(
             id: groupHex,
-            name: String(groupHex.prefix(8)) + "…",  // placeholder; renameable
+            name: DisplayName.shortGroupFallback(groupHex),  // placeholder; renameable
             members: members,
             admins: admins.isEmpty ? [actor] : admins,
             joinedAt: Date(),
@@ -14122,6 +14415,42 @@ extension AppState {
         if serverEpoch > 0 {
             GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: serverEpoch)
         }
+    }
+
+    /// W-GRPNAME — apply an opaque metadata blob that arrived INLINE on a
+    /// `group_membership_changed` event, for the case where the server
+    /// attaches one (it has the blob in hand at creation, so the creation
+    /// fan-out can carry it and save the member a GET round-trip). Absent
+    /// fields are the normal case and a silent no-op, so this is safe against
+    /// either server shape.
+    ///
+    /// Everything downstream is unchanged and already correct: the same
+    /// version-gated, buffer-on-undecryptable path the GET recovery and the
+    /// live `group_metadata_changed` use. In particular the blob will NOT
+    /// decrypt yet if the actor's `sender_key_init` has not landed — that is
+    /// expected at creation time, and `decryptAndApplyGroupMetadataBlob`
+    /// buffers it for `retryBufferedGroupMetadata` to re-run the moment the
+    /// chain installs.
+    @MainActor
+    private func applyInlineGroupMetadataIfPresent(
+        _ data: [String: Any], groupHex: String, selfId: String
+    ) {
+        guard let blobB64 = data["metadata_blob_b64"] as? String, !blobB64.isEmpty else { return }
+        // Explicit, even though `decryptAndApplyGroupMetadataBlob` guards the
+        // same thing: no local entry means either an unknown group or a
+        // bootstrap the tombstone just refused, and neither may be re-created
+        // here — a metadata blob is not consent to have a deleted group back.
+        // Stated at THIS level so the refusal is silent rather than logging a
+        // line that reads as if something was applied.
+        guard GroupRegistry.shared.entry(for: groupHex) != nil else { return }
+        let version: UInt32 = Self.uint32Field(data["metadata_version"])
+        // Pre-bound locals — SWIFT6_PATTERNS rule 1/2/4.
+        let versionText: String = String(describing: version)
+        let gShortInline: String = String(groupHex.prefix(8))
+        let inlineLine: String = "inline metadata v=" + versionText + " g=" + gShortInline
+        RTLog.info("group", inlineLine)
+        decryptAndApplyGroupMetadataBlob(
+            groupHex: groupHex, blobB64: blobB64, version: version, selfId: selfId)
     }
 
     /// Reconciliation backstop (2026-07-17) — lists every group the server
@@ -14336,7 +14665,7 @@ extension AppState {
     /// that correctly and must be left alone) or an equal-epoch AEAD
     /// failure (genuine corruption/attack — must still be rejected, never
     /// papered over). Requires self to be admin AND to already hold a real
-    /// cached name (not the "xxxxxxxx…" bootstrap placeholder) so a
+    /// cached name (not a synthesized bootstrap placeholder) so a
     /// still-uninitialized joiner never republishes garbage over a
     /// legitimate rename it just hasn't seen yet.
     @MainActor
@@ -14347,11 +14676,58 @@ extension AppState {
             groupId: groupHex, members: entry.members, selfId: selfId) else { return }
         let liveEpoch = state.groupEpoch
         guard wireGroupEpoch < liveEpoch else { return }
-        let bootstrapPlaceholder = String(groupHex.prefix(8)) + "…"
-        guard !entry.name.isEmpty, entry.name != bootstrapPlaceholder else { return }
+        // W-GRPNAME — this used to compare against ONE hardcoded string, the
+        // bare-hex placeholder this file happened to write at the time. The
+        // check now goes through the shared, tested predicate, so it covers
+        // BOTH the current "Gruppo a1b2c3d4…" form and the legacy bare-hex
+        // one an older build may still have persisted. Getting this wrong is
+        // not cosmetic: re-sealing a placeholder republishes it as the
+        // group's real, server-stored, encrypted name for every member.
+        guard !entry.name.isEmpty,
+              !isSynthesizedGroupPlaceholderName(entry.name) else { return }
         if attemptedEpochReseal[groupHex] == liveEpoch { return }
         attemptedEpochReseal[groupHex] = liveEpoch
         print("[AppState] proactively re-sealing stale group metadata g=\(groupHex.prefix(8)) wireEpoch=\(wireGroupEpoch) liveEpoch=\(liveEpoch)")
+        updateGroupMetadata(groupId: groupHex, newName: nil, avatarData: nil)
+    }
+
+    /// W-GRPNAME — after a member is ADDED, re-seal and re-publish the group's
+    /// metadata so the newcomer can actually read the name.
+    ///
+    /// Verified mechanism, not a precaution. A metadata blob is sealed with an
+    /// admin's group send-chain at index `k`. The newcomer installs that chain
+    /// from a `sender_key_init` built at our CURRENT index `m` (add does NOT
+    /// bump the crypto epoch, §7.1), so `handleSenderKeyInit` sets
+    /// `lastSeen = m-1` and `decryptFromGroupOrThrow` answers "replay or
+    /// unknown message at idx=k (last_seen=m-1)" for anything below it — chain
+    /// keys ratchet forward only and a fresh member's skipped-key cache is
+    /// empty. The stored blob is therefore permanently unreadable for them:
+    /// they sit on the "Gruppo a1b2c3d4…" placeholder until somebody happens
+    /// to rename the group. Publishing the name at CREATION does not fix that
+    /// for anyone who joins later — index 0 is the earliest possible one, so
+    /// every later member is behind it by construction.
+    ///
+    /// This is the exact mirror of `applyRemovalRekey`'s existing re-seal on
+    /// REMOVE, and reuses the same call: `newName: nil` keeps the current name
+    /// and republishes it at a sender index the newcomer can reach. Runs on
+    /// every admin device that sees the add (the same multiplicity the removal
+    /// re-seal already has); `metadata_version` is monotonic, so redundant
+    /// publishes converge instead of fighting.
+    ///
+    /// Guarded on holding a REAL name: an admin still sitting on the bootstrap
+    /// placeholder must never republish it as the group's canonical name.
+    @MainActor
+    fileprivate func republishGroupMetadataForNewMember(groupHex: String, selfId: String) {
+        guard let entry = GroupRegistry.shared.entry(for: groupHex),
+              entry.admins.contains(selfId) else { return }
+        let gShortReseal: String = String(groupHex.prefix(8))
+        guard groupNameToPublishAtCreation(entry.name) != nil else {
+            let skipLine: String = "add re-seal skipped (no real name yet) g=" + gShortReseal
+            RTLog.info("group", skipLine)
+            return
+        }
+        let sealLine: String = "re-sealing metadata for new member g=" + gShortReseal
+        RTLog.info("group", sealLine)
         updateGroupMetadata(groupId: groupHex, newName: nil, avatarData: nil)
     }
 
