@@ -1418,10 +1418,24 @@ public final class AudioCapture {
     }
 
     /// The in-flight target: how many 20 ms buffers may sit on the player node at
-    /// once. Two is 40 ms — enough that a late pump does not underrun the node,
-    /// small enough that the node stops being a hidden elastic store. Depth beyond
-    /// this lives in [PlayoutJitterBuffer], where the catch-up tiers can see it.
-    private static let playoutInFlightTarget = 2
+    /// once. Depth beyond this lives in [PlayoutJitterBuffer], where the catch-up
+    /// tiers can see it.
+    ///
+    /// W-IOSAUDIOSTARVE (2026-08-02): raised 2 → 4 (40 ms → 80 ms). Two buffers
+    /// assumed the pump is never more than 40 ms late, and the pump runs on the
+    /// same queue that — until the companion fix in
+    /// `QAudionCallIntegration.processIncomingAudio` — also ran the entire
+    /// per-frame analysis stack. Whenever that assumption broke the node ran dry
+    /// and rendered literal SILENCE, which is not even counted as a jitter-buffer
+    /// underrun because `pop()` is never reached; on device this was audible as
+    /// continuous "seghettato" with the handset running hot.
+    ///
+    /// Four matches [PlayoutJitterBuffer]'s own `nominalWatermark`, so a transient
+    /// 40–60 ms hitch is absorbed instead of rendered, while everything above that
+    /// still belongs to the tier logic. This is defence in depth for the real fix
+    /// (analysis moved off the audio path) — not a substitute for it: a permanently
+    /// overloaded consumer will still starve any finite buffer.
+    private static let playoutInFlightTarget = 4
 
     /// Drain the jitter buffer onto the player node up to the in-flight target.
     ///

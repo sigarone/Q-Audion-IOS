@@ -73,6 +73,62 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `processIncomingAudio` on the SAME thread as `guardianMode`/
     /// `voiceAnalysis` above — same never-block, no-extra-dispatch rule.
     private var voiceLearningSession: VoiceLearningSession?
+
+    // MARK: - W-IOSAUDIOSTARVE (2026-08-02) — analysis off the audio path
+    //
+    // `processIncomingAudio` used to run the ENTIRE analysis stack inline,
+    // synchronously, once per 20 ms RX frame: guardianMode.processFrame,
+    // contactVoiceVerifier.feedContinuous, voiceLearningSession.processRxFrame,
+    // voiceAnalysis.processFrame and spectrumExtractor.compute, on top of the
+    // unseal + AES-GCM open + Opus decode that function already owes. And
+    // `CallService` invokes the whole chain from `DispatchQueue.main.async`.
+    //
+    // The main queue is also what refills the playout node, and that node
+    // holds `playoutInFlightTarget = 2` buffers = 40 ms. So any main-queue
+    // hitch longer than 40 ms renders literal silence at the speaker — and it
+    // is not even counted as a jitter-buffer underrun, because `pop()` is
+    // never reached. At 50 frames/s the analysis stack had to fit in under
+    // 20 ms every time, forever, with zero headroom.
+    //
+    // Measured on device 2026-08-02: choppy audio on iOS<->iOS calls as well
+    // as Android->iOS (so NOT an interop problem — the receiver is the common
+    // factor), with the handset becoming very hot, i.e. sustained CPU
+    // saturation. The Android sender was verified clean in the same session
+    // (MEDIADIAG tx enc+250 sent+250 every 5 s, zero DataChannel backpressure
+    // drops, no transport oscillation), and Android->Android was fine because
+    // Android had already fixed this exact class of bug one day earlier in
+    // commit 074b8898, "spread voice-analysis CPU load to stop audio
+    // starvation".
+    //
+    // The old comments here ("no extra dispatch, no Task per frame", "the
+    // exact flood pattern that froze Android") were guarding against the
+    // right hazard and drew the wrong conclusion: they removed per-frame
+    // DISPATCH but kept per-frame WORK on the audio thread, which is the part
+    // that actually starves playout. The fix is not to dispatch less, it is
+    // to do less ON THIS THREAD.
+    //
+    // Now: `processIncomingAudio` decodes and returns. A copy of the PCM goes
+    // into a bounded drop-oldest ring drained on the serial queue below.
+    // Dropping under load is correct and deliberate — every consumer here is
+    // an advisory UI/telemetry signal that self-throttles anyway; none of them
+    // is a security gate, and none is worth a silent gap in the call audio.
+
+    /// Serial queue owning every RX analysis consumer. `.utility` so it can
+    /// never preempt audio; serial so the consumers keep the single-threaded
+    /// contract their own docs already assume.
+    private let rxAnalysisQueue = DispatchQueue(label: "qaudion.rx.analysis", qos: .utility)
+
+    /// Bounded backlog of decoded RX PCM awaiting analysis. Guarded by
+    /// `rxRingLock`; never grows past `rxRingCapacity` (oldest is dropped).
+    private var rxRing: [Data] = []
+    private let rxRingLock = NSLock()
+    /// ~200 ms at 50 fps. Deep enough to ride out a scheduling hiccup on the
+    /// analysis queue, shallow enough that analysis can never lag the call by
+    /// a perceptible amount and start reporting stale state.
+    private let rxRingCapacity = 10
+    /// True while a drain is already scheduled — keeps the queue from being
+    /// flooded with 50 no-op work items per second.
+    private var rxDrainScheduled = false
     /// Tier 1 ("voce come chiave") — TX-side continuous owner-continuity
     /// self-check. Fed inside `processOutgoingAudio`, pre-encode, from the
     /// LOCAL mic — never RX/remote audio. Silently stays `.inactive`
@@ -3331,23 +3387,94 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// from THIS call's decoded RX audio, from this point forward. Replaces
     /// any previously in-flight session for this integration instance
     /// (there is only ever one active call per integration).
+    /// W-IOSAUDIOSTARVE thread-safety note: `voiceLearningSession` and the
+    /// `VoiceLearningSession` it points at are owned EXCLUSIVELY by
+    /// `rxAnalysisQueue`. Unlike its siblings (`GuardianMode`,
+    /// `ContactVoiceVerifier`, `VoiceAnalysisEngine`, `SpectrumExtractor`)
+    /// that class carries no internal lock, and `processRxFrame` now runs on
+    /// the analysis queue — so start/cancel must hop onto that same queue
+    /// rather than mutating it from whatever thread the UI happens to call
+    /// from. Before this change every one of these ran on the main queue and
+    /// the single-thread assumption held for free; it no longer does.
     public func startVoiceLearning(contactId: String) {
-        let session = VoiceLearningSession()
-        voiceLearningSession = session
-        session.start(contactId: contactId)
-        onVoiceLearningStateChanged?(session.state)
+        rxAnalysisQueue.async { [weak self] in
+            guard let self else { return }
+            let session = VoiceLearningSession()
+            self.voiceLearningSession = session
+            session.start(contactId: contactId)
+            let state = session.state
+            DispatchQueue.main.async { self.onVoiceLearningStateChanged?(state) }
+        }
     }
 
     /// Cancel an in-flight voice-learning session without persisting
-    /// anything partial.
+    /// anything partial. See `startVoiceLearning` for why this hops queues.
     public func cancelVoiceLearning() {
-        voiceLearningSession?.cancel()
-        voiceLearningSession = nil
-        onVoiceLearningStateChanged?(.idle)
+        rxAnalysisQueue.async { [weak self] in
+            guard let self else { return }
+            self.voiceLearningSession?.cancel()
+            self.voiceLearningSession = nil
+            DispatchQueue.main.async { self.onVoiceLearningStateChanged?(.idle) }
+        }
     }
 
+    /// Decode one incoming audio frame and return the PCM.
+    ///
+    /// AUDIO-CRITICAL PATH — keep this function to unseal + decode + return.
+    /// It runs on the caller's thread, which today is the MAIN queue (see
+    /// `CallService`), and that same queue refills a playout node holding only
+    /// 40 ms. Anything expensive added here is rendered as silence at the
+    /// speaker. Analysis belongs on `rxAnalysisQueue` — see the
+    /// W-IOSAUDIOSTARVE note on that property for the measured incident.
     public func processIncomingAudio(serializedFrame: Data) throws -> Data {
         let pcm = try engine.processIncomingAudio(serializedFrame: serializedFrame)
+        enqueueForAnalysis(pcm)
+        return pcm
+    }
+
+    /// Hand decoded RX PCM to the analysis queue. Bounded and drop-oldest:
+    /// under load this discards analysis frames rather than letting the
+    /// backlog grow or blocking the audio thread. Every consumer downstream
+    /// is an advisory signal that already self-throttles, so a dropped frame
+    /// costs nothing a listener can hear — unlike the alternative.
+    private func enqueueForAnalysis(_ pcm: Data) {
+        var shouldSchedule = false
+        rxRingLock.lock()
+        rxRing.append(pcm)
+        if rxRing.count > rxRingCapacity {
+            rxRing.removeFirst(rxRing.count - rxRingCapacity)
+        }
+        if !rxDrainScheduled {
+            rxDrainScheduled = true
+            shouldSchedule = true
+        }
+        rxRingLock.unlock()
+
+        guard shouldSchedule else { return }
+        rxAnalysisQueue.async { [weak self] in
+            self?.drainAnalysisRing()
+        }
+    }
+
+    /// Drain the RX ring on `rxAnalysisQueue`. Serial by construction, so the
+    /// consumers below keep the single-thread contract their own docs assume —
+    /// it is simply no longer the audio thread.
+    private func drainAnalysisRing() {
+        while true {
+            rxRingLock.lock()
+            guard let pcm = rxRing.first else {
+                rxDrainScheduled = false
+                rxRingLock.unlock()
+                return
+            }
+            rxRing.removeFirst()
+            rxRingLock.unlock()
+            analyze(pcm)
+        }
+    }
+
+    /// The former body of `processIncomingAudio`, now off the audio path.
+    private func analyze(_ pcm: Data) {
         guardianMode.processFrame(pcm)
         // Tier 2 ("voce remota") — cheap continuous feed, safe to call
         // unconditionally (a no-op unless `activateContactVoiceVerification`
@@ -3359,12 +3486,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // Feature B — feed the SAME decoded RX PCM used by the guardian tap
         // above into the per-contact learning session, if one is running.
         // Deliberately the RX path, never TX/mic — see `VoiceLearningSession`'s
-        // type doc for why that distinction matters. Runs inline on the same
-        // thread, same never-block contract as the rest of this function.
+        // type doc for why that distinction matters.
         if let session = voiceLearningSession {
             session.processRxFrame(pcm)
-            onVoiceLearningStateChanged?(session.state)
-            switch session.state {
+            let state = session.state
+            // UI-facing: hop to main. The callback drives SwiftUI state and
+            // must not be invoked from the analysis queue.
+            DispatchQueue.main.async { [weak self] in
+                self?.onVoiceLearningStateChanged?(state)
+            }
+            switch state {
             case .completed, .failed:
                 voiceLearningSession = nil
             case .idle, .inProgress:
@@ -3376,14 +3507,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // analyze the TX mic (YOUR OWN voice), while the Guardian ribbon
         // gauges are explicitly about the INTERLOCUTOR — Android has always
         // analyzed the decoded RX path (CallAudioBridge → feedVoiceAnalysis).
-        // Same thread as the guardian tap; the engine self-throttles
-        // (analysisRate) and runs synchronously — no per-frame dispatch.
+        // The engine self-throttles (analysisRate) and runs synchronously.
         voiceAnalysis.processFrame(pcm)
         // Unified call UI — REAL remote-voice spectrum, ≤15 Hz (66 ms
-        // monotonic throttle). Runs INLINE on the same thread as the
-        // guardian tap above: no Task/DispatchQueue per frame (the exact
-        // flood pattern that froze Android — 2026-07-04 never-block rules).
-        // Skipped entirely while nothing is wired to consume it.
+        // monotonic throttle). Skipped entirely while nothing is wired to
+        // consume it.
         if let spectrumSink = onVoiceSpectrum {
             let nowNs = DispatchTime.now().uptimeNanoseconds
             if nowNs &- lastSpectrumUptimeNs >= 66_000_000 {
@@ -3393,19 +3521,29 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 let samples: [Int16] = pcm.withUnsafeBytes { raw in
                     Array(raw.bindMemory(to: Int16.self))
                 }
-                spectrumSink(spectrumExtractor.compute(samples, sampleRate: 48_000))
+                let bands = spectrumExtractor.compute(samples, sampleRate: 48_000)
+                DispatchQueue.main.async { spectrumSink(bands) }
             }
         }
-        return pcm
     }
 
     public func onCallEnded() {
         engine.destroySession()
         engine.release()
+        // W-IOSAUDIOSTARVE — drop any decoded RX audio still queued for
+        // analysis. It is plaintext call audio and must not outlive the call,
+        // and analysing the tail of a finished call against the NEXT call's
+        // contact would be wrong anyway.
+        rxRingLock.lock()
+        rxRing.removeAll()
+        rxRingLock.unlock()
         // Feature B — drop any in-flight per-contact voice-learning session
         // so a straggling reference never bleeds into the next call (which
-        // may be with a different peer entirely).
-        voiceLearningSession = nil
+        // may be with a different peer entirely). On rxAnalysisQueue, which
+        // owns this object — see startVoiceLearning's note.
+        rxAnalysisQueue.async { [weak self] in
+            self?.voiceLearningSession = nil
+        }
         // Tier 1/Tier 2 — this integration instance can be REUSED for a
         // later call (see M-11 comment below), so neither monitor gets a
         // fresh `init()` next time: deactivate the per-contact verifier
