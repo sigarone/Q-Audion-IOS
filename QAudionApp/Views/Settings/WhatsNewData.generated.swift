@@ -9,6 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.927",
+              date: "2026-08-02",
+              title: "v1.0.927",
+              bullets: [
+                "fix(storage): encrypt message content at rest, unblock the invisible failures",
+              ]),
+        .init(id: "v1.0.926",
+              date: "2026-08-02",
+              title: "v1.0.926",
+              bullets: [
+                "chore: regenerate changelog for v1.0.925",
+                "feat(telemetry): make iOS playout health measurable at last",
+              ]),
         .init(id: "v1.0.925",
               date: "2026-08-02",
               title: "v1.0.925",
@@ -145,21 +158,6 @@ extension ReleaseNote {
                 "fix(kat): dedupe SPM resource basename collision",
                 "fix(kat): vendor cross-platform vectors instead of CI curl",
                 "feat(kat): wire real cross-platform KAT against bcrypto-server vectors",
-              ]),
-        .init(id: "v1.0.907",
-              date: "2026-07-30",
-              title: "v1.0.907",
-              bullets: [
-                "chore: regenerate changelog for v1.0.907",
-                "fix(avatar): apply adversarial security-review findings",
-              ]),
-        .init(id: "v1.0.906",
-              date: "2026-07-30",
-              title: "v1.0.906",
-              bullets: [
-                "chore: regenerate changelog for v1.0.906",
-                "fix(avatar): correct StoredContact argument order + thread avatarVersion in AppState migration",
-                "ci: stop auto-triggering iOS KAT cross-platform scaffold",
               ]),
     ]
 }
