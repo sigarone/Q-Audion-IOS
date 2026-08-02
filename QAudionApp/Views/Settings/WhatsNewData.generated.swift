@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.931",
+              date: "2026-08-02",
+              title: "v1.0.931",
+              bullets: [
+                "fix(crypto): agree with Android on which pairwise PSK encrypts a 1:1 message",
+              ]),
         .init(id: "v1.0.930",
               date: "2026-08-02",
               title: "v1.0.930",
               bullets: [
+                "chore: regenerate changelog for v1.0.930",
                 "fix(avatar): fire the exchange from call state, not from two transition sites",
               ]),
         .init(id: "v1.0.929",
@@ -149,14 +156,6 @@ extension ReleaseNote {
                 "fix(avatar): diagnose permanently-poisoned sent-version bookkeeping",
                 "fix(avatar): accept + send both att/avatar keys for avatar_announce",
                 "fix(avatar): route avatar_announce through tus + recipient download token",
-              ]),
-        .init(id: "v1.0.911",
-              date: "2026-07-30",
-              title: "v1.0.911",
-              bullets: [
-                "chore: regenerate changelog for v1.0.911",
-                "fix(avatar): download client hits the tus blob route, not the legacy uploader-only one",
-                "fix(deepfake): LfccExtractor frameSize mismatch broke enrollment + in-call learning",
               ]),
     ]
 }
