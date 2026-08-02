@@ -363,9 +363,13 @@ public final class ContactsStore {
             kSecAttrService as String: keyService,
             kSecAttrAccount as String: keyAccount,
             kSecValueData as String: freshData,
-            // SECURITY — this key never leaves the device, unreadable while
-            // locked: no `.Always`, no synchronizable/iCloud variant.
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            // SECURITY — never leaves the device, never syncs to iCloud: no
+            // `.Always`, no synchronizable variant. `AfterFirstUnlock` rather
+            // than `WhenUnlocked` so a background write with the phone locked
+            // (avatar announce stamping a contact row, auto-save right after
+            // a lock-screen answer) can still encrypt instead of being
+            // silently dropped — see `upgradeAccessibilityIfNeeded`.
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         let addStatus = SecItemAdd(addAttrs as CFDictionary, nil)
         if addStatus == errSecSuccess { return freshData }
@@ -413,9 +417,48 @@ public final class ContactsStore {
         var item: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecSuccess, let existing = item as? Data, existing.count == CryptoConstants.keySizeBytes {
+            upgradeAccessibilityIfNeeded()
             return existing
         }
         return nil
+    }
+
+    /// W-CONTACTLOCKED (2026-08-02) — moves an already-created key from
+    /// `WhenUnlockedThisDeviceOnly` to `AfterFirstUnlockThisDeviceOnly`.
+    ///
+    /// The original class looked like the safer choice and was, in practice,
+    /// a data-loss bug: this store is written from background paths that run
+    /// with the phone locked — an inbound `avatar_announce` stamping a
+    /// contact row, an auto-save right after answering a call on the lock
+    /// screen — and under `WhenUnlocked` the key is unreadable exactly then,
+    /// so `encode()` returns nil and the write is dropped. That is the
+    /// `-25308 errSecInteractionNotAllowed` case already documented at the
+    /// `save()` call site; the CI failures show the sibling `-34018` shape.
+    /// The write silently not happening is worse than the key being readable
+    /// while the device sits locked-but-booted, which is also exactly the
+    /// exposure the message database already carries
+    /// (`completeUntilFirstUserAuthentication`) and now the message content
+    /// key too (`LocalStoreCipher`), so this brings the three into line
+    /// rather than making the contact list an outlier in either direction.
+    ///
+    /// Idempotent, and never destructive: this is a `SecItemUpdate` on the
+    /// attribute only — the key bytes are not touched, not re-generated, and
+    /// never deleted-then-re-added (a delete that succeeded followed by an
+    /// add that failed would make every stored contact permanently
+    /// unreadable).
+    private static func upgradeAccessibilityIfNeeded() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keyService,
+            kSecAttrAccount as String: keyAccount,
+        ]
+        let attrs: [String: Any] = [
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound {
+            print("[ContactsStore] key accessibility upgrade status=\(status)")
+        }
     }
 
     public func upsert(_ contact: StoredContact) {

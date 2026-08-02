@@ -6235,6 +6235,16 @@ final class AppState: ObservableObject {
         guard let plaintext = GroupChatService.shared.decrypt(
             wire: wire, senderId: senderId, groupId: groupHex,
             members: entry.members, selfId: selfId) else {
+            // W-GRPSILENT (2026-08-02): this buffer-and-return had NO log of
+            // any kind. A group text frame that never becomes decryptable
+            // (recv chain never installed, epoch moved past it) is not shown
+            // as a placeholder like the 1:1 path — it simply never appears,
+            // and `bufferedGroupWires` silently evicts it once the bound is
+            // hit. "The message never arrived" and "the message arrived and
+            // could not be opened" looked identical from outside, on the
+            // exact path Pavel reports messages going missing.
+            let bufDepth: Int = bufferedGroupWires.count
+            RTLog.warn("group", "text undec=1 g=\(groupHex.prefix(8)) buffered=\(bufDepth)")
             bufferGroupWire(data, live: live)
             return
         }
@@ -6841,7 +6851,15 @@ final class AppState: ObservableObject {
             // session's worth of decrypt failures were completely invisible
             // to remote log pulls because of this single line; RTLog
             // actually reaches RuntimeLogSink → the real log pipeline.
-            RTLog.error("chat", "msg_receive decrypt failed from=\(senderId.prefix(8)): \(error)")
+            // W-TAGDROP (2026-08-02): "chat" was NOT in the shipper's
+            // TAG_SCOPE_PREFIXES, so even after the 2026-07-31 print()→RTLog
+            // fix this line still never reached Loki — the one record of a
+            // message the user actually sees as "[messaggio cifrato non
+            // leggibile]" was dropped at the tag gate. Tag now allowed, and
+            // the counters carry a numeric tail because the redactor blobs
+            // every non-numeric token (see PairwiseChainKeyResolver's own
+            // note): `undec=1` is what survives the trip.
+            RTLog.error("chat", "msg_receive undec=1 from=\(senderId.prefix(8)): \(error)")
             plaintext = "[messaggio cifrato non leggibile]"
             // W77b: auto-rekey on decrypt failure. Same pattern as
             // qaudion-desktop's `MessageService.on('needRekey')` → fires
@@ -13804,7 +13822,11 @@ extension AppState {
             // TEXT frames. Before this fix, a decrypt failure here was
             // final — the placeholder/stale name lingered forever even
             // once the key eventually arrived.
-            print("[AppState] decryptAndApplyGroupMetadataBlob: decrypt failed g=\(groupHex.prefix(8)) sender=\(parsed.senderId.prefix(8)) — buffering for retry")
+            // W-TAGDROP: was print() — it reached the device console and the
+            // "stdout" tee only, which is why a log pull showed it as an
+            // unattributed blob. Tagged "group" now (allow-listed), with the
+            // redaction-proof numeric tail.
+            RTLog.warn("group", "metadata undec=1 g=\(groupHex.prefix(8))")
             bufferedGroupMetadata[groupHex] = (blobB64: blobB64, version: version, selfId: selfId)
             maybeReSealStaleGroupMetadata(groupHex: groupHex, wireGroupEpoch: parsed.groupEpoch, selfId: selfId)
             return

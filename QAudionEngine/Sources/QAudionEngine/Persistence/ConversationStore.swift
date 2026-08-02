@@ -3,8 +3,22 @@ import GRDB
 
 /// Local persistence for conversation list + message history.
 ///
-/// **Hardened Storage.** Uses SQLCipher-encrypted SQLite with secure_delete
-/// and auto_vacuum. Migrates from legacy plaintext UserDefaults on first run.
+/// **Storage.** SQLite (GRDB) with `secure_delete` + `auto_vacuum`, the file
+/// carrying the iOS Data Protection class
+/// `completeUntilFirstUserAuthentication`. Migrates from legacy plaintext
+/// UserDefaults on first run.
+///
+/// This comment used to claim "SQLCipher-encrypted SQLite". It was never
+/// true — `QAudionDatabase` says so in its own header ("GRDB-SQLCipher is
+/// not available as an SPM product ... deferred to a future sprint") — and a
+/// false claim of encryption in the one place a reader looks for it is worse
+/// than no claim at all. What IS true since 2026-08-02: message bodies and
+/// the conversation preview are sealed field-by-field with a device-held
+/// AES-256-GCM key before they reach a row (`LocalStoreCipher`), so the
+/// content is encrypted at rest even though the surrounding database file
+/// is not. Non-content metadata (timestamps, status, ids) stays in the
+/// clear so the list can still be ordered and filtered without unsealing
+/// anything.
 public final class ConversationStore {
 
     private let db: QAudionDatabase
@@ -20,6 +34,40 @@ public final class ConversationStore {
 
         // One-time migration from UserDefaults
         migrateIfNeeded()
+        // W-MSGATREST (2026-08-02) — one-time seal of rows written before
+        // message bodies were encrypted at rest.
+        sealExistingRowsIfNeeded()
+    }
+
+    private static let atRestMigrationKey = "qaudion.store.atrest.v1.done"
+
+    /// Rewrites every existing message and conversation row so the mapper
+    /// seals its content column. Reading a legacy row returns the plaintext
+    /// verbatim (no marker) and saving it back runs it through
+    /// `LocalStoreCipher`, so a plain fetch-all/save-all is the whole
+    /// migration — no bespoke SQL, no second code path that could disagree
+    /// with the mapper about the format.
+    ///
+    /// The done-flag is set ONLY after the write actually succeeds. If the
+    /// Keychain key is unreachable (first launch after a reboot, before the
+    /// device has been unlocked once) `seal` throws, the transaction rolls
+    /// back untouched, and the next launch tries again — rather than marking
+    /// the migration done over a history that is still in the clear.
+    private func sealExistingRowsIfNeeded() {
+        guard !defaults.bool(forKey: Self.atRestMigrationKey) else { return }
+        do {
+            try db.writer.write { db in
+                for msg in try Message.fetchAll(db) {
+                    try msg.save(db)
+                }
+                for conv in try Conversation.fetchAll(db) {
+                    try conv.save(db)
+                }
+            }
+            defaults.set(true, forKey: Self.atRestMigrationKey)
+        } catch {
+            print("[ConversationStore] at-rest seal migration deferred: \(error)")
+        }
     }
 
     private static let conversationsKey = "qaudion.conv.list"

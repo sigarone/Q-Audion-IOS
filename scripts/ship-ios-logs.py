@@ -579,6 +579,28 @@ TAG_SCOPE_PREFIXES = [
     # invisible". Message bodies are still gated by redact_body's own
     # structured-shape check below — this only fixes the tag-level drop.
     ("avatar", "avatar"),
+    # W-TAGDROP (2026-08-02): the "avatar" fix above was one instance of a
+    # class, not the whole class. Every RTLog tag actually used in the app was
+    # enumerated and diffed against this list; ten more were being dropped at
+    # the tag gate, including the ONE line that records a chat message failing
+    # to decrypt (AppState.swift `RTLog.error("chat", "msg_receive decrypt
+    # failed from=...")`) — the exact evidence for Pavel's "ogni tanto vedo
+    # ancora messaggi non decifrati", invisible in every log pull to date, and
+    # `NameResolve`, which owns the rubrica auto-save from calls. Tag matching
+    # is `startswith` on the lowercased tag, so these cover their own
+    # variants. Bodies still go through redact_body's structured-shape gate
+    # below; this only fixes the tag-level drop.
+    ("chat", "chat"),
+    ("group", "group"),
+    ("nameresolve", "nameresolve"),
+    ("dial", "dial"),
+    ("security", "security"),
+    ("privacy", "privacy"),
+    ("keymgmt", "keymgmt"),
+    ("settings", "settings"),
+    ("featureflags", "featureflags"),
+    ("bugreport", "bugreport"),
+    ("videodiag", "videodiag"),
 ]
 
 

@@ -1,4 +1,5 @@
 import Foundation
+import QAudionEngine
 
 /// W-GRPMSG — persistent local store for group TEXT messages
 /// (both the sender's optimistic bubbles AND decrypted inbound text).
@@ -130,10 +131,25 @@ public final class GroupMessageStore: ObservableObject {
 
     private init() { load() }
 
+    /// W-MSGATREST (2026-08-02) — group message bodies were the weakest
+    /// storage in the app: a plain JSON blob in UserDefaults, while 1:1
+    /// messages at least sat in the SQLite file and contacts were already
+    /// encrypted. They now ride the same device-held AES-256-GCM key as
+    /// everything else (`LocalStoreCipher`). The sealed form is a String, so
+    /// the legacy `data(forKey:)` blob is still read on first launch after
+    /// the upgrade and re-persisted sealed by the next mutation — plus an
+    /// explicit re-persist here so it converts even without one.
     private func load() {
-        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
-           let decoded = try? JSONDecoder().decode([String: [Stored]].self, from: data) {
+        if let sealed = UserDefaults.standard.string(forKey: Self.storageKey),
+           let json = LocalStoreCipher.open(sealed),
+           let decoded = try? JSONDecoder().decode([String: [Stored]].self, from: Data(json.utf8)) {
             byGroup = decoded
+        } else if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+                  let decoded = try? JSONDecoder().decode([String: [Stored]].self, from: data) {
+            byGroup = decoded
+            // Legacy plaintext blob just read — convert it now rather than
+            // waiting for the next message to arrive.
+            persist()
         } else {
             byGroup = [:]
         }
@@ -146,8 +162,18 @@ public final class GroupMessageStore: ObservableObject {
     }
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(byGroup) else { return }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        guard let data = try? JSONEncoder().encode(byGroup),
+              let json = String(data: data, encoding: .utf8) else { return }
+        // Fail closed: if the key is unreachable the blob is NOT written in
+        // the clear. The previous (sealed) value stays on disk and the next
+        // persist retries — losing one write is recoverable, silently
+        // reverting the whole group history to plaintext is not.
+        let attempt: String?? = try? LocalStoreCipher.seal(json)
+        guard let unwrapped = attempt, let sealed = unwrapped else {
+            RTLog.warn("group", "message store persist deferred sealed=0")
+            return
+        }
+        UserDefaults.standard.set(sealed, forKey: Self.storageKey)
     }
 
     private func persistReadMarkers() {
