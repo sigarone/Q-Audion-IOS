@@ -9,6 +9,14 @@ final class ConversationStoreTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        // Message bodies and the conversation preview are sealed at rest
+        // (2026-08-02). A simulator test bundle has no usable keychain, so
+        // without an injected key `seal` throws, every write is refused —
+        // correctly, it must never fall back to storing plaintext — and the
+        // assertions below fail on rows that were never persisted. Same
+        // seam as ContactsStoreTests; the cipher path under test is the
+        // production one, only the key source differs.
+        LocalStoreCipher.testKeyOverride = Data(repeating: 0x5c, count: 32)
         let suite = "test.convstore.\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: suite)
         // Suite name is a freshly generated, well-formed non-empty string; UserDefaults(suiteName:) never returns nil for it.
@@ -19,6 +27,7 @@ final class ConversationStoreTests: XCTestCase {
     }
 
     override func tearDown() {
+        LocalStoreCipher.testKeyOverride = nil
         store = nil
         defaults = nil
         super.tearDown()

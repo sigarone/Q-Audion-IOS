@@ -581,9 +581,24 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertEqual(result?.avatarVersion, 3)
     }
 
-    func test_setAvatarLocalPath_returnsFalseWhenRowAbsent() {
+    /// 2026-08-02: this used to assert `false` — "no row, no write". That
+    /// expectation was already stale: the 2026-07-31 fix deliberately makes
+    /// this path CREATE a bare row, because an avatar_announce for a
+    /// call-only contact routinely arrives before the row that peer's
+    /// profile enrichment creates, and dropping it left an orphaned cache
+    /// file and a permanently blank avatar. The test kept "passing" only
+    /// because the store itself was failing closed on the missing keychain,
+    /// so every call returned false for the wrong reason — the exact
+    /// masking a red suite produces. Now that the key is injected, it
+    /// asserts the real contract.
+    func test_setAvatarLocalPath_createsBareRowWhenAbsent() {
         let path = URL(fileURLWithPath: "/tmp/avatars/missing.jpg")
-        XCTAssertFalse(store.setAvatarLocalPath(userId: "u-missing", path: path, version: 1))
+        XCTAssertTrue(store.setAvatarLocalPath(userId: "u-missing", path: path, version: 1))
+        let created = store.load().first { $0.userId == "u-missing" }
+        XCTAssertNotNil(created, "the announce must have somewhere to land")
+        XCTAssertEqual(created?.avatarVersion, 1)
+        XCTAssertEqual(created?.avatarUrl, path)
+        XCTAssertEqual(created?.displayName, "", "row is bare — naming is owned by the enrichment path")
     }
 
     /// Security-review regression (2026-07-30): two overlapping

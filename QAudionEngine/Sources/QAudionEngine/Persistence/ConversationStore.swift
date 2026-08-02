@@ -128,7 +128,14 @@ public final class ConversationStore {
                 try safe.save(db)
             }
         } catch {
-            print("[ConversationStore] upsertConversation failed: \(error)")
+            // saved=0 is the greppable marker. The engine module has no
+            // access to RTLog (it lives in the app target), but the app tees
+            // stdout into the ring buffer under the allow-listed "stdout"
+            // tag, so this does reach a log pull. It matters because a
+            // sealed-store write can legitimately fail — before the first
+            // unlock after a reboot the key is unreachable — and a lost
+            // conversation row must not be silent.
+            print("[ConversationStore] upsertConversation saved=0 error: \(error)")
         }
     }
 
@@ -220,7 +227,7 @@ public final class ConversationStore {
                 try msg.save(db)
             }
         } catch {
-            print("[ConversationStore] appendMessage failed: \(error)")
+            print("[ConversationStore] appendMessage saved=0 error: \(error)")
         }
     }
 
