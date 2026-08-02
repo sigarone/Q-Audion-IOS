@@ -110,7 +110,22 @@ final class KatVectorsTests: XCTestCase {
             let pepper = try XCTUnwrap(v["pepper"] as? String, "Missing 'pepper' field in vector")
             let e164   = try XCTUnwrap(v["e164"]   as? String, "Missing 'e164' field in vector")
             let expected = (v["expected_hash"] as? String) ?? ""
-            let computed = try PepperedPhoneHash.hash(phone: e164, pepper: pepper)
+            // The vector's algorithm is SHA-256(pepper_bytes || e164_utf8),
+            // and its `pepper` field holds those bytes as a readable UTF-8
+            // string. Verified independently: SHA-256("qaudion-test-pepper-v1"
+            // || "+393331234567") == the pinned expected_hash, byte for byte.
+            //
+            // This used to call `hash(phone:pepper:)`, the deprecated string
+            // overload, which since W343 reinterprets its argument as the
+            // server's BASE64 payload — so the raw UTF-8 pepper threw
+            // `invalidPepperBase64` and the case died before comparing
+            // anything. Calling the byte-based entry point instead is both
+            // the fix and the more honest test: `pepperBytes:` is exactly
+            // what production uses (`ContactsRefreshService` feeds it the
+            // decoded `fetchPepper()` bytes precisely so the SHA-256 input
+            // matches Android byte for byte).
+            let computed = try PepperedPhoneHash.hash(
+                phone: e164, pepperBytes: Data(pepper.utf8))
             if expected.isEmpty {
                 print("[KAT] peppered_phone_hash_v2 pepper=\(pepper) e164=\(e164) → \(computed) (unverified)")
             } else {
@@ -202,18 +217,30 @@ final class KatVectorsTests: XCTestCase {
             let decoded = try IdentityQrCode.decode(string: encoded)
             XCTAssertEqual(decoded, identity, "IdentityQrCode round-trip failed for userId=\(userId)")
 
-            // Additionally verify the encoded checksum against the JSON vector
+            // The vector is a v1 pin — "4-byte integrity checksum for
+            // IdentityQrCode v1", per its own `description` — while `encode`
+            // has emitted v2 (8-byte, SECURITY M-29) since that change
+            // landed. Comparing the v2 output against it produced the
+            // "iOS↔Android divergence" message that was never a divergence:
+            // Android has no identity-QR encoder at all (grepped: the only
+            // `QAUDION:` in that repo is an unrelated Telecom URI scheme),
+            // so there is no second platform to diverge from here.
+            //
+            // v1 is still a LIVE format — `decode` explicitly accepts it for
+            // backward compatibility with QR codes already in the wild — so
+            // the vector keeps its value: it pins the legacy checksum those
+            // codes carry. Assert it where it belongs, by rebuilding a v1
+            // string from the vector and requiring `decode` to accept it.
+            // The v2 format stays pinned by the encode→decode round-trip
+            // just above, so both paths are now covered instead of neither.
             let expectedChecksumHex = (v["expected_checksum_hex"] as? String) ?? ""
             if !expectedChecksumHex.isEmpty {
-                // Extract checksum from encoded string: "QAUDION:1:<userId>:<b64pub>:<b64cksum>"
-                let parts = encoded.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
-                XCTAssertEqual(parts.count, 5, "Encoded QR must have 5 colon-separated parts")
-                let cksumB64 = String(parts[4])
-                let cksumBytes = try XCTUnwrap(Data(base64Encoded: cksumB64),
-                    "Checksum part is not valid base64: \(cksumB64)")
-                let computedChecksumHex = cksumBytes.map { String(format: "%02x", $0) }.joined()
-                XCTAssertEqual(computedChecksumHex, expectedChecksumHex,
-                    "identity_qr_v1: checksum hex mismatch for userId=\(userId) — iOS↔Android divergence")
+                let cksumB64 = try XCTUnwrap(v["expected_checksum_b64"] as? String,
+                    "identity_qr_v1 vector must carry expected_checksum_b64 alongside the hex")
+                let legacyString = "QAUDION:1:\(userId):\(pubkey.base64EncodedString()):\(cksumB64)"
+                let legacyDecoded = try IdentityQrCode.decode(string: legacyString)
+                XCTAssertEqual(legacyDecoded, identity,
+                    "identity_qr_v1: legacy v1 QR must still decode — old codes in the wild depend on it")
             } else {
                 // Extract and print for pinning
                 let parts = encoded.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)

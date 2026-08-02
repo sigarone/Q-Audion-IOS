@@ -53,6 +53,7 @@ final class SovereignKeyVaultNotificationTests: XCTestCase {
     }
 
     func testStorePsk_postsSovereignVaultDidChange() throws {
+        try KeychainAvailability.requireKeychain()
         let vault = SovereignKeyVault()
         let posted = expectation(description: "sovereignVaultDidChange posted on storePsk")
         let observer = NotificationCenter.default.addObserver(
@@ -66,6 +67,7 @@ final class SovereignKeyVaultNotificationTests: XCTestCase {
     }
 
     func testDeletePsk_postsSovereignVaultDidChange() throws {
+        try KeychainAvailability.requireKeychain()
         let vault = SovereignKeyVault()
         try vault.storePsk(name: testName, key: Data(repeating: 0x02, count: 32), fingerprint: "cafebabe")
 
@@ -86,6 +88,7 @@ final class SovereignKeyVaultNotificationTests: XCTestCase {
     /// aside, `storePsk` re-called for the SAME name (e.g. re-tapping the
     /// same NFC peer) takes.
     func testStorePsk_updateExistingEntry_alsoPostsNotification() throws {
+        try KeychainAvailability.requireKeychain()
         let vault = SovereignKeyVault()
         try vault.storePsk(name: testName, key: Data(repeating: 0x03, count: 32), fingerprint: "fp1")
 

@@ -155,6 +155,23 @@ public struct GroupMemberAddedPackage: Equatable {
 public protocol GroupSessionVault: AnyObject {
     func save(_ state: GroupState)
     func load(groupIdBytes: Data, groupEpoch: UInt32, selfId: String) -> GroupState?
+    /// W-GRPDEL (2026-08-02) — drop EVERY persisted snapshot of one group
+    /// for one identity, across all epochs.
+    ///
+    /// Until this existed the vault was append-only: snapshots were written
+    /// per `(groupId, groupEpoch, selfId)` and never removed, which
+    /// `GroupChatService.loadFromVault`'s descending epoch probe (and
+    /// `AppState.applyRemovalRekey`'s comment about it) actively relies on
+    /// while the user is still in the group. Deleting the chat is the one
+    /// case where keeping them is wrong: the sender-key material of a group
+    /// the user left would otherwise sit in the Keychain indefinitely, and
+    /// the next `session(...)` would happily reload it.
+    ///
+    /// Scoped to `(groupIdBytes, selfId)` on purpose — no other group and no
+    /// other identity may be affected. Silent no-op when nothing matches
+    /// (deleting a group that never got as far as bootstrapping crypto is a
+    /// normal case), and idempotent.
+    func purge(groupIdBytes: Data, selfId: String)
 }
 
 public final class InMemoryGroupSessionVault: GroupSessionVault, @unchecked Sendable {
@@ -172,6 +189,20 @@ public final class InMemoryGroupSessionVault: GroupSessionVault, @unchecked Send
     public func load(groupIdBytes: Data, groupEpoch: UInt32, selfId: String) -> GroupState? {
         lock.lock(); defer { lock.unlock() }
         return store[Self.key(groupIdBytes, groupEpoch, selfId)]
+    }
+
+    public func purge(groupIdBytes: Data, selfId: String) {
+        // Match on the SAME composite key `save`/`load` build, minus the
+        // epoch segment, so the two can never drift apart: prefix pins the
+        // group, suffix pins the identity, and whatever epoch sits between
+        // them is what we are deleting.
+        let prefix = "\(GroupSenderKey.toHex(groupIdBytes))|"
+        let suffix = "|\(selfId)"
+        lock.lock()
+        for key in store.keys where key.hasPrefix(prefix) && key.hasSuffix(suffix) {
+            store.removeValue(forKey: key)
+        }
+        lock.unlock()
     }
 
     private static func key(_ gid: Data, _ epoch: UInt32, _ selfId: String) -> String {

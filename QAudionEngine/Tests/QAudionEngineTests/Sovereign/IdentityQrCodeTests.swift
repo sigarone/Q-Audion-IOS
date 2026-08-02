@@ -5,10 +5,21 @@ final class IdentityQrCodeTests: XCTestCase {
 
     private let pub32 = Data((0..<32).map { UInt8($0) })
 
+    /// Deliberately pinned to the literal current version rather than
+    /// interpolating `IdentityQrCode.version` — a version bump changes what
+    /// every other client must parse, so it should break this line and be
+    /// updated by hand, not silently follow the constant.
+    ///
+    /// 2026-08-02: the pin said `QAUDION:1:` while `encode` has emitted v2
+    /// since the M-29 8-byte-checksum change. The pin did exactly its job
+    /// and went red; nobody saw it, because this whole class was excluded
+    /// from CI on 2026-06-19. Correcting the pin, not the encoder — the
+    /// sibling round-trip and wrong-length cases pass, so the format itself
+    /// is sound.
     func test_encode_producesQaudionPrefixedString() throws {
         let id = IdentityQrCode.Identity(userId: "user-aabbcc", pubkey: pub32)
         let s = try IdentityQrCode.encode(identity: id)
-        XCTAssertTrue(s.hasPrefix("QAUDION:1:"))
+        XCTAssertTrue(s.hasPrefix("QAUDION:2:"), "unexpected prefix: \(s.prefix(16))")
     }
 
     func test_encodeDecode_roundTrip() throws {

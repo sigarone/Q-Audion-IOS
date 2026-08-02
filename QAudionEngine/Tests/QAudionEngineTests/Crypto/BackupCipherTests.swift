@@ -46,7 +46,17 @@ final class BackupCipherTests: XCTestCase {
         let sealed = try BackupCipher.aeadEncrypt(plaintext: plaintext, key: key, nonce: nonce, aad: nil)
         // Tamper with one byte of ciphertext.
         var tamperedCt = sealed.ciphertext
-        tamperedCt[0] ^= 0x01
+        // `sealed.ciphertext` comes straight from `AES.GCM.SealedBox
+        // .ciphertext`, and CryptoKit hands that back as a Data VIEW whose
+        // indices need not start at 0. Swift's Data keeps absolute indices
+        // on a slice, so `tamperedCt[0]` is an out-of-bounds subscript the
+        // moment the view is offset — the exact hazard this repo already
+        // documents in `FuzzCorpus.sliced`. That is what killed the whole
+        // xctest process here (the run reported "0 failures" AND "** TEST
+        // FAILED **": XCTest restarts after a crash and never counts the
+        // case that died), and it is why this one test was excluded on
+        // 2026-06-19. Index relative to `startIndex` instead.
+        tamperedCt[tamperedCt.startIndex] ^= 0x01
         let tampered = BackupCipher.SealedBox(nonce: sealed.nonce, ciphertext: tamperedCt, tag: sealed.tag)
         XCTAssertThrowsError(try BackupCipher.aeadDecrypt(tampered, key: key, aad: nil))
     }

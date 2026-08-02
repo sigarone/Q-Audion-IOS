@@ -238,18 +238,7 @@ jobs:
             OTHER_LDFLAGS="\$(inherited) -lresolv" \
             -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
             -derivedDataPath /tmp/dd-ios-sim \
-            -resultBundlePath /tmp/ios-sim-results.xcresult \
-            -skip-testing "QAudionEngineTests/BackupCipherTests/test_aeadDecrypt_tampered_throws" \
-            -skip-testing "QAudionEngineTests/CrossPlatformTestVectors" \
-            -skip-testing "QAudionEngineTests/FrameEncoderTests" \
-            -skip-testing "QAudionEngineTests/IdentityQrCodeTests" \
-            -skip-testing "QAudionEngineTests/KatVectorsTests" \
-            -skip-testing "QAudionEngineTests/SovereignKeyVaultNotificationTests" \
-            -skip-testing "QAudionEngineTests/MessageRatchetWireFuzzTests/testMutatedRealFrameFailsSoft" \
-            -skip-testing "QAudionEngineTests/PitchExtractorTests" \
-            -skip-testing "QAudionEngineTests/QAudionCapabilityExchangeTests" \
-            -skip-testing "QAudionEngineTests/VoiceHealthMonitorTests" \
-            -skip-testing "QAudionEngineTests/QAudionEngineTests/testProcessRoundTrip" &
+            -resultBundlePath /tmp/ios-sim-results.xcresult &
           XCODEBUILD_PID=$!
           ( sleep 900; echo "::error::xcodebuild test exceeded 15min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
           WATCHDOG_PID=$!

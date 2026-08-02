@@ -119,7 +119,25 @@ final class MessageRatchetWireFuzzTests: XCTestCase {
         let rxSess = try rxRatchet.ensureSession(
             epochId: epoch, selfId: "bob", peerId: "alice", pskRoot: psk)
 
-        for m in FuzzCorpus.mutations(of: wire, count: 4000, rngSeed: 0xF00D) {
+        // `mutations(of:)` does NOT guarantee its output differs from the
+        // input: the "random splice" case assigns `m[i] = rng.byte()`, which
+        // reproduces the byte already there 1 time in 256, and the
+        // zero-a-region / 0xFF-a-region cases are no-ops over a region that
+        // already holds those bytes. Across 4000 draws an identity copy is
+        // expected a couple of times, and an UNMODIFIED frame decrypting
+        // correctly is the ratchet behaving exactly as it must — it is not a
+        // fuzz finding. That is the whole reason this case failed
+        // (`XCTAssertNil failed: "5 bytes"`, the length of the "hello"
+        // plaintext) and, on 2026-06-19, got switched off in CI instead of
+        // read: the AEAD cannot produce a valid 5-byte plaintext from a
+        // genuinely altered ciphertext, so the one output that reached the
+        // assertion had to be the original frame.
+        //
+        // Filtering the identity keeps the real property — every ACTUAL
+        // mutation must fail soft — and drops only the case that was never
+        // a mutation. Nothing here is weakened: the flip/truncate/extend
+        // corpus still runs in full.
+        for m in FuzzCorpus.mutations(of: wire, count: 4000, rngSeed: 0xF00D) where m != wire {
             XCTAssertNil(rxRatchet.decrypt(session: rxSess, wire: m, aad: aad))
         }
         // Also feed the un-mutated frame through a slice view — a
