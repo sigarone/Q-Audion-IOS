@@ -613,6 +613,22 @@ public final class ContactsStore {
     /// the write, not only at the caller's one-time pre-Task check.
     /// No-op (returns false, does NOT touch the row) if `version` is not
     /// strictly greater than the currently-stored `avatarVersion`.
+    /// Re-reads the store and confirms the avatar version actually landed.
+    ///
+    /// W-AVATARSAVE (2026-08-03): `setAvatarLocalPath` used to `return true`
+    /// straight after `save(current)`, but `save` is deliberately
+    /// fail-closed and SWALLOWS an encode failure — the documented
+    /// W-CONTACTSAVELOST path, which happens for real whenever the Keychain
+    /// key is unreachable (device locked while a background announce lands).
+    /// So `true` meant "we asked to write", not "it is stored", and the
+    /// caller logged `recv applied=1` over a write that never happened.
+    /// That is precisely the "arrived, decrypted, still no avatar in the
+    /// rubrica" report. Confirm against a fresh read instead.
+    private static func persisted(userId: String, version: Int, in store: ContactsStore) -> Bool {
+        let row = store.load().first { $0.userId == userId }
+        return (row?.avatarVersion ?? -1) >= version
+    }
+
     @discardableResult
     public func setAvatarLocalPath(userId: String, path: URL, version: Int) -> Bool {
         var current = load()
@@ -646,7 +662,7 @@ public final class ContactsStore {
             )
             current.append(inserted)
             save(current)
-            return true
+            return Self.persisted(userId: userId, version: version, in: self)
         }
         let existing = current[idx]
         guard version > (existing.avatarVersion ?? -1) else { return false }
@@ -669,7 +685,7 @@ public final class ContactsStore {
             voiceVerifiedAt: existing.voiceVerifiedAt
         )
         save(current)
-        return true
+        return Self.persisted(userId: userId, version: version, in: self)
     }
 
     /// Feature B ("voce verificata") — the ONE write path for

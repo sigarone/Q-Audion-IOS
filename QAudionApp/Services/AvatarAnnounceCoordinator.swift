@@ -280,6 +280,12 @@ final class AvatarAnnounceCoordinator {
             let applied = ContactsStore().setAvatarLocalPath(
                 userId: senderId, path: fileURL, version: version)
             guard applied else {
+                // code=3 now covers BOTH "stale/duplicate announce" and "the
+                // store refused to persist" — `setAvatarLocalPath` stopped
+                // reporting success for a write it only attempted (see
+                // ContactsStore.persisted). The plaintext is already on disk
+                // at this point, so a later announce at a higher version
+                // still recovers it.
                 RTLog.info("avatar", "recv applied=0 code=3 from=\(peer8) version=\(version)")
                 return
             }
