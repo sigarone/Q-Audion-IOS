@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.930",
+              date: "2026-08-02",
+              title: "v1.0.930",
+              bullets: [
+                "fix(avatar): fire the exchange from call state, not from two transition sites",
+              ]),
         .init(id: "v1.0.929",
               date: "2026-08-02",
               title: "v1.0.929",
               bullets: [
+                "chore: regenerate changelog for v1.0.929",
                 "feat(groups): delete a group chat from this device (leave + purge + tombstone)",
               ]),
         .init(id: "v1.0.928",
@@ -150,14 +157,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.911",
                 "fix(avatar): download client hits the tus blob route, not the legacy uploader-only one",
                 "fix(deepfake): LfccExtractor frameSize mismatch broke enrollment + in-call learning",
-              ]),
-        .init(id: "v1.0.910",
-              date: "2026-07-30",
-              title: "v1.0.910",
-              bullets: [
-                "chore: regenerate changelog for v1.0.910",
-                "refactor(deepfake): remove unused DeepfakeClassifier ref, document real fusion state",
-                "test(voice): fix stale 5-prompt assertion after 3-phrase Italian rewrite",
               ]),
     ]
 }
