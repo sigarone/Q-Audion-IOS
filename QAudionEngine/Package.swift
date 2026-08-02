@@ -294,7 +294,19 @@ let package = Package(
             dependencies: ["QAudionEngine", "CLiboqs"],
             path: "Tests/QAudionEngineTests",
             resources: [
-                .copy("../Resources/cross_platform_vectors.json"),
+                // 2026-08-02: was "../Resources/cross_platform_vectors.json".
+                // A resource declared OUTSIDE the target directory does not
+                // end up in Bundle.module, so KatVectorsTests' five cases all
+                // failed with "cross_platform_vectors.json not found in
+                // Bundle.module" — which is why the whole class was skipped
+                // on 2026-06-19 rather than root-caused. The file (and the two
+                // kat/ vectors that sat beside it, declared with in-target
+                // paths that did not exist) now lives inside the target.
+                // These are the vectors that pin iOS byte-compatibility with
+                // Android; having them excluded is what left the
+                // cross-platform breakage this codebase keeps hitting without
+                // any automated guard.
+                .copy("Resources/cross_platform_vectors.json"),
                 .copy("Video/Resources/sframe-video-kat.json"),
                 .copy("Crypto/Resources/handshake-sig-kat.json"),
                 .copy("Crypto/Resources/psk-mix-v1-kat.json"),
