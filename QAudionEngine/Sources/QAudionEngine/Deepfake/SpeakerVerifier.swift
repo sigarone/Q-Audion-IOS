@@ -83,7 +83,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// than re-deriving/guessing a new one.
     private static let voiceActivityRmsThreshold: Float = 360.0 / 32_768.0
 
-    private let embedder: CamPlusSpeakerEmbedder
+    private let embedder: any SpeakerEmbedding
     private let lock = NSLock()
 
     private var state: State = .idle
@@ -108,12 +108,22 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// `PendingAutoEnrollComplete`.
     private struct PendingAutoEnrollComplete { let contactId: String; let frames: [[Float]] }
 
-    /// - Parameter embedder: REQUIRED, no default — must be the shared
-    ///   `CamPlusSpeakerEmbedder.shared` instance. A default-constructed
-    ///   fallback here would silently load a second ~30MB ONNX session per
-    ///   call site, exactly the "processing weight/overload" outcome this
-    ///   migration was explicitly asked to avoid.
-    public init(embedder: CamPlusSpeakerEmbedder) {
+    /// - Parameter embedder: REQUIRED, no default. In the app this is
+    ///   ALWAYS `CamPlusSpeakerEmbedder.shared` — a default-constructed
+    ///   fallback would silently load a second ~30MB ONNX session per call
+    ///   site, exactly the "processing weight/overload" outcome the Android
+    ///   port was asked to avoid.
+    ///
+    ///   Typed as the `SpeakerEmbedding` protocol rather than the concrete
+    ///   class (2026-08-02) so this state machine can be tested without a
+    ///   live ONNX session. `CamPlusSpeakerEmbedder.loadModel` is
+    ///   `#if !targetEnvironment(simulator) … #else return false`, so on a
+    ///   simulator every embedding throws `.runtimeUnavailable` — which made
+    ///   three SpeakerVerifierTests cases impossible to pass in CI and left
+    ///   the whole suite red for 40+ runs, hiding real breakage elsewhere.
+    ///   The production path is byte-identical; only the test target ever
+    ///   passes anything else.
+    public init(embedder: any SpeakerEmbedding) {
         self.embedder = embedder
     }
 
